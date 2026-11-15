@@ -1,0 +1,199 @@
+// 知覚: プレイヤーの視界と知識（knowledge_updated）、モンスターの視認、騒音、起床、モンスターの思い出。
+import type { Entity, FloorKey, MonsterMemory, PlayerId, PlayerRecord, Pos, RememberedEntity } from '@muse/shared';
+import { indicesToRanges } from '@muse/shared';
+import type { Ctx } from './ctx';
+import { computeFov, hasLos, inCircle } from './geom';
+
+export function isOpaqueFn(ctx: Ctx, key: FloorKey): (x: number, y: number) => boolean {
+  const f = ctx.world.floors[key];
+  const table = ctx.world.meta.terrainTable;
+  const cache = new Map<number, boolean>();
+  return (x, y) => {
+    if (x < 0 || y < 0 || x >= f.width || y >= f.height) return true;
+    const t = f.terrain[y * f.width + x];
+    let o = cache.get(t);
+    if (o === undefined) {
+      o = ctx.content.terrain[ctx.content.terrainIndex[table[t]]]?.opaque ?? true;
+      cache.set(t, o);
+    }
+    return o;
+  };
+}
+
+export function playerFov(ctx: Ctx, pr: PlayerRecord): number[] {
+  const e = ctx.world.entities[pr.entityId];
+  if (!e?.pos) return [];
+  const key = `${e.pos.floor}|${e.pos.x},${e.pos.y}|${ctx.terrainVer.get(e.pos.floor) ?? 0}|${e.stats!.sight}`;
+  const c = ctx.fovCache.get(pr.id);
+  if (c && c.key === key) return c.cells;
+  const f = ctx.world.floors[e.pos.floor];
+  const cells = computeFov(f.width, f.height, isOpaqueFn(ctx, e.pos.floor), e.pos.x, e.pos.y, e.stats!.sight);
+  ctx.fovCache.set(pr.id, { key, cells });
+  return cells;
+}
+
+function sameArr(a: readonly number[], b: readonly number[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+export function emptyMemory(kind: string): MonsterMemory {
+  return { kind, encounters: 0, kills: 0, maxDamageToYou: 0, maxDamageByYou: 0, abilities: [] };
+}
+
+/** モンスターの思い出を更新（変化があればイベント） */
+export function updateMemory(ctx: Ctx, pid: PlayerId, kind: string, fn: (m: MonsterMemory) => void): void {
+  const pr = ctx.world.players[pid];
+  if (!pr) return;
+  const cur = pr.knowledge.monsterMemory[kind] ?? emptyMemory(kind);
+  const next: MonsterMemory = { ...cur, abilities: [...cur.abilities] };
+  fn(next);
+  next.abilities = [...new Set(next.abilities)].sort();
+  if (JSON.stringify(next) === JSON.stringify(cur) && pr.knowledge.monsterMemory[kind]) return;
+  ctx.emit({ type: 'monster_memory_updated', player: pid, kind, memoryAfter: next, seenBy: [pid] });
+}
+
+const OBVIOUS_ABILITIES = ['fast', 'slow', 'stationary', 'pack'];
+
+function visibleAbilities(ctx: Ctx, m: Entity): string[] {
+  const def = ctx.content.monsters[m.kind];
+  const out = (def?.abilities ?? []).filter((a) => OBVIOUS_ABILITIES.includes(a));
+  for (const a of m.scale?.affixes ?? []) for (const ab of ctx.content.affixes[a]?.abilities ?? []) if (OBVIOUS_ABILITIES.includes(ab)) out.push(ab);
+  return out;
+}
+
+/** フロア上の全生存プレイヤーの視界・記憶を更新する */
+export function updateKnowledge(ctx: Ctx, key: FloorKey): void {
+  const f = ctx.world.floors[key];
+  if (!f) return;
+  const players = ctx.playersOn(key);
+  if (!players.length) return;
+  const ents = ctx.entitiesOn(key);
+  for (const pr of players) {
+    const fov = playerFov(ctx, pr);
+    const fovSet = new Set(fov);
+    const k = pr.knowledge;
+    const fk = k.floors[key];
+    const visChanged = !sameArr(fov, k.visible) || !fk;
+    const newlySeen: number[] = [];
+    for (const i of fov) if ((fk?.seen[i] ?? 0) !== f.terrain[i]) newlySeen.push(i, f.terrain[i]);
+    const rememberedSet: RememberedEntity[] = [];
+    const visibleIds = new Set<string>();
+    const met: string[] = [];
+    const metSet = new Set(k.met);
+    for (const e of ents) {
+      if (!e.pos) continue;
+      const idx = e.pos.y * f.width + e.pos.x;
+      if (!fovSet.has(idx)) continue;
+      if (e.actor && !e.player && (e.stats?.hp ?? 0) > 0) {
+        if (!metSet.has(e.id)) met.push(e.id);
+        continue;
+      }
+      let cat: RememberedEntity['cat'] | null = null;
+      if (e.item) cat = 'item';
+      else if (e.trap) cat = e.trap.revealedTo.includes(pr.id) ? 'trap' : null;
+      else if (e.feature) cat = 'feature';
+      if (!cat) continue;
+      visibleIds.add(e.id);
+      const prev = fk?.remembered.find((r) => r.id === e.id);
+      const state = e.feature?.state;
+      const qty = e.item?.qty ?? 1;
+      if (!prev || prev.pos.x !== e.pos.x || prev.pos.y !== e.pos.y || prev.qty !== qty || prev.state !== state || prev.kind !== e.kind) {
+        const r: RememberedEntity = { id: e.id, kind: e.kind, cat, pos: { x: e.pos.x, y: e.pos.y }, qty, ft: f.time };
+        if (state !== undefined) r.state = state;
+        rememberedSet.push(r);
+      }
+    }
+    const rememberedDel: string[] = [];
+    for (const r of fk?.remembered ?? []) {
+      if (fovSet.has(r.pos.y * f.width + r.pos.x) && !visibleIds.has(r.id)) rememberedDel.push(r.id);
+    }
+    if (visChanged || newlySeen.length || rememberedSet.length || rememberedDel.length || met.length) {
+      ctx.emit({
+        type: 'knowledge_updated', player: pr.id, floorKey: key,
+        visible: visChanged ? indicesToRanges(fov) : null,
+        newlySeen, rememberedSet, rememberedDel, metAdd: met, seenBy: [pr.id], floor: key,
+      });
+    }
+    for (const id of met) {
+      const m = ctx.world.entities[id];
+      updateMemory(ctx, pr.id, m.kind, (mm) => {
+        mm.encounters += 1;
+        mm.abilities.push(...visibleAbilities(ctx, m));
+      });
+    }
+  }
+}
+
+/** モンスターがプレイヤーを視認できるか（プレイヤーの視界と対称、半径外は射線） */
+export function monsterSees(ctx: Ctx, m: Entity, target: Entity): boolean {
+  if (!m.pos || !target.pos || m.pos.floor !== target.pos.floor) return false;
+  if (!inCircle(m.pos, target.pos, m.stats!.sight)) return false;
+  const pr = target.player ? ctx.world.players[target.player] : undefined;
+  if (pr) {
+    const f = ctx.world.floors[m.pos.floor];
+    const idx = m.pos.y * f.width + m.pos.x;
+    if (ctx.visibleSet(pr.id).has(idx)) return true;
+    if (inCircle(m.pos, target.pos, target.stats!.sight)) return false;
+  }
+  return hasLos(m.pos, target.pos, isOpaqueFn(ctx, m.pos.floor));
+}
+
+/** 睡眠中（休眠）のモンスターを起こす */
+export function wakeMonster(ctx: Ctx, m: Entity, targetPos: Pos | null): void {
+  const ai = m.actor?.ai;
+  if (!ai) return;
+  if (!m.actor!.dormant && ai.state !== 'asleep' && ai.state !== 'unaware') {
+    if (targetPos && ai.state === 'searching') {
+      ctx.emit({ type: 'ai_state_changed', id: m.id, ai: { ...ai, targetPos: { ...targetPos } }, dormant: false, nextActAt: m.actor!.nextActAt, seenBy: [] });
+    }
+    return;
+  }
+  const f = ctx.world.floors[m.pos!.floor];
+  const nextActAt = m.actor!.dormant ? Math.max(m.actor!.nextActAt, f.time + ctx.rng('runtime').int(60)) : m.actor!.nextActAt;
+  ctx.emit({
+    type: 'ai_state_changed', id: m.id,
+    ai: { ...ai, state: targetPos ? 'searching' : 'unaware', targetPos: targetPos ? { ...targetPos } : null, lostTurns: 0 },
+    dormant: false, nextActAt, seenBy: [], floor: m.pos!.floor,
+  });
+}
+
+/** 騒音: 聞こえたプレイヤーへのイベントと、周囲のモンスターの起床 */
+export function makeNoise(ctx: Ctx, key: FloorKey, pos: Pos, loudness: number, source: Entity | null): void {
+  const hearers = ctx.playersOn(key).filter((pr) => {
+    const e = ctx.world.entities[pr.entityId];
+    return e.pos && inCircle(e.pos, pos, loudness) && e.id !== source?.id;
+  }).map((p) => p.id);
+  if (hearers.length) ctx.emit({ type: 'noise', pos: { ...pos }, loudness, source: null, seenBy: hearers, floor: key });
+  const rng = ctx.rng('runtime');
+  for (const m of ctx.entitiesOn(key)) {
+    if (!m.actor || m.player || m.id === source?.id || !m.pos) continue;
+    const ai = m.actor.ai;
+    if (!ai || (ai.state !== 'asleep' && ai.state !== 'unaware')) continue;
+    if (!inCircle(m.pos, pos, loudness)) continue;
+    if (ai.state === 'asleep' && !rng.chance(50)) continue;
+    wakeMonster(ctx, m, pos);
+  }
+}
+
+/** プレイヤーの手番ごとに: 視界内の睡眠中モンスターが目を覚ますか */
+export function wakeChecks(ctx: Ctx, key: FloorKey): void {
+  const players = ctx.playersOn(key);
+  if (!players.length) return;
+  const rng = ctx.rng('runtime');
+  for (const m of ctx.entitiesOn(key)) {
+    if (!m.actor?.dormant || !m.pos) continue;
+    for (const pr of players) {
+      const pe = ctx.world.entities[pr.entityId];
+      if (!pe.pos || !inCircle(m.pos, pe.pos, m.stats!.sight)) continue;
+      if (!monsterSees(ctx, m, pe)) continue;
+      const stealth = ctx.content.classes[pr.classId]?.stealthPct ?? 0;
+      const pct = Math.max(3, 20 - Math.trunc((20 * stealth) / 100));
+      if (rng.chance(pct)) {
+        wakeMonster(ctx, m, { x: pe.pos.x, y: pe.pos.y });
+        break;
+      }
+    }
+  }
+}

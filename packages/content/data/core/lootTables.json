@@ -1,0 +1,25 @@
+[
+  {
+    "id": "core:common_loot",
+    "entries": [
+      { "category": "potion", "weight": 30 },
+      { "category": "scroll", "weight": 22 },
+      { "category": "weapon", "weight": 10 },
+      { "category": "armor", "weight": 8 },
+      { "category": "throwing", "weight": 12 }
+    ],
+    "depthBonus": 0, "affixChancePct": 10
+  },
+  {
+    "id": "core:vault_loot",
+    "entries": [
+      { "category": "potion", "weight": 25 },
+      { "category": "scroll", "weight": 20 },
+      { "category": "weapon", "weight": 18 },
+      { "category": "armor", "weight": 15 },
+      { "category": "throwing", "weight": 10 },
+      { "item": "core:potion_vigor", "weight": 6 }
+    ],
+    "depthBonus": 3, "affixChancePct": 40
+  }
+]

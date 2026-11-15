@@ -1,0 +1,83 @@
+[
+  {
+    "id": "core:vault_small", "tags": ["vault", "treasure"], "depth": { "min": 2 }, "weight": 3,
+    "map": [
+      "#######",
+      "#!.M.!#",
+      "#.#.#.#",
+      "#..!..#",
+      "###+###"
+    ],
+    "legend": {
+      "#": { "terrain": "$wall" }, ".": { "terrain": "$floor" }, "+": { "terrain": "$door" },
+      "!": { "terrain": "$floor", "item": "$loot", "loot": "core:vault_loot" },
+      "M": { "terrain": "$floor", "monster": "$spawn", "asleep": true }
+    }
+  },
+  {
+    "id": "core:altar_shrine", "tags": ["shrine"], "depth": { "min": 1 }, "weight": 4,
+    "map": [
+      ".......",
+      ".P...P.",
+      "...A...",
+      ".P...P.",
+      "......."
+    ],
+    "legend": {
+      ".": { "terrain": "$floor" }, "P": { "terrain": "core:pillar" },
+      "A": { "terrain": "$floor", "feature": "core:altar" }
+    }
+  },
+  {
+    "id": "core:fountain_court", "tags": ["shrine", "garden"], "depth": { "min": 1 }, "weight": 4,
+    "map": [
+      ",,,,,",
+      ",,F,,",
+      ",,,,,"
+    ],
+    "legend": {
+      ",": { "terrain": "core:grass" },
+      "F": { "terrain": "core:grass", "feature": "core:fountain" }
+    }
+  },
+  {
+    "id": "core:pillar_hall", "tags": ["hall"], "depth": { "min": 1 }, "weight": 5,
+    "map": [
+      ".........",
+      ".P.P.P.P.",
+      ".........",
+      ".P.P.P.P.",
+      "........."
+    ],
+    "legend": { ".": { "terrain": "$floor" }, "P": { "terrain": "core:pillar" } }
+  },
+  {
+    "id": "core:monster_den", "tags": ["den"], "depth": { "min": 3 }, "weight": 2,
+    "map": [
+      ".........",
+      "..M...M..",
+      "....!....",
+      "..M...M..",
+      "........."
+    ],
+    "legend": {
+      ".": { "terrain": "$floor" },
+      "M": { "terrain": "$floor", "monster": "$spawn", "asleep": true },
+      "!": { "terrain": "$floor", "item": "$loot", "loot": "core:common_loot" }
+    }
+  },
+  {
+    "id": "core:hidden_cache", "tags": ["treasure"], "depth": { "min": 1 }, "weight": 3,
+    "map": [
+      "#####",
+      "#!^!#",
+      "#...#",
+      "##+##"
+    ],
+    "legend": {
+      "#": { "terrain": "$wall" }, ".": { "terrain": "$floor" }, "+": { "terrain": "$door" },
+      "!": { "terrain": "$floor", "item": "$loot", "loot": "core:common_loot" },
+      "^": { "terrain": "$floor", "feature": "core:trap_dart" }
+    }
+  }
+]

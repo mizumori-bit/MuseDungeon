@@ -1,0 +1,8 @@
+{
+  "name": "@muse/content",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": { "@muse/shared": "0.1.0", "zod": "^3.25.76" }
+}

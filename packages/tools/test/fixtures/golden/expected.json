@@ -1,0 +1,8 @@
+{
+  "seed": "golden-1",
+  "runId": "run_96d3b6adf6",
+  "lastSeq": 5669,
+  "finalHash": "0bc58bc2cfc0012dea9415cff47c73fd",
+  "contentVersion": "1250508f79cf",
+  "note": "reducer の後方互換性を守るためのゴールデンリプレイ。意図して形式を変えたときだけ npm run golden で作り直す"
+}

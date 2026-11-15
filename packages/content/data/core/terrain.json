@@ -1,0 +1,14 @@
+[
+  { "id": "core:unknown", "name": { "ja": "未知", "en": "unknown" }, "passable": false, "opaque": true, "layer": "ground", "tags": ["unknown"] },
+  { "id": "core:floor", "name": { "ja": "床", "en": "floor" }, "passable": true, "opaque": false, "layer": "ground", "tags": ["floor"] },
+  { "id": "core:wall", "name": { "ja": "壁", "en": "wall" }, "passable": false, "opaque": true, "layer": "ground", "tags": ["wall"] },
+  { "id": "core:door_closed", "name": { "ja": "閉じた扉", "en": "closed door" }, "passable": false, "opaque": true, "layer": "object", "door": "closed", "tags": ["door"] },
+  { "id": "core:door_open", "name": { "ja": "開いた扉", "en": "open door" }, "passable": true, "opaque": false, "layer": "object", "door": "open", "tags": ["door"] },
+  { "id": "core:stairs_down", "name": { "ja": "下り階段", "en": "stairs down" }, "passable": true, "opaque": false, "layer": "object", "stairs": "down", "tags": ["stairs"] },
+  { "id": "core:stairs_up", "name": { "ja": "上り階段", "en": "stairs up" }, "passable": true, "opaque": false, "layer": "object", "stairs": "up", "tags": ["stairs"] },
+  { "id": "core:shallow_water", "name": { "ja": "浅い水たまり", "en": "shallow water" }, "passable": true, "opaque": false, "layer": "ground", "tags": ["water", "floor"] },
+  { "id": "core:grass", "name": { "ja": "草地", "en": "grass" }, "passable": true, "opaque": false, "layer": "ground", "tags": ["grass", "floor"] },
+  { "id": "core:tall_grass", "name": { "ja": "背の高い草", "en": "tall grass" }, "passable": true, "opaque": true, "layer": "ground", "tags": ["tall_grass", "floor"] },
+  { "id": "core:rubble", "name": { "ja": "瓦礫", "en": "rubble" }, "passable": false, "opaque": false, "layer": "ground", "tags": ["obstacle"] },
+  { "id": "core:pillar", "name": { "ja": "柱", "en": "pillar" }, "passable": false, "opaque": true, "layer": "ground", "tags": ["wall"] }
+]

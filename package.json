@@ -1,0 +1,41 @@
+{
+  "name": "muse-dungeon",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/shared",
+    "packages/content",
+    "packages/engine",
+    "packages/server",
+    "packages/client",
+    "packages/tools"
+  ],
+  "scripts": {
+    "server": "node packages/server/bin/muse-server.mjs",
+    "mcp:stdio": "node packages/server/bin/muse-mcp-stdio.mjs",
+    "dev:client": "npm --workspace @muse/client run dev",
+    "build": "npm --workspace @muse/client run build",
+    "start": "npm run build && npm run server",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p packages/client/tsconfig.json --noEmit",
+    "lint": "eslint packages",
+    "test": "vitest run",
+    "test:full": "vitest run --mode full",
+    "bot": "tsx packages/tools/src/cli.ts bot",
+    "seed": "tsx packages/tools/src/cli.ts seed",
+    "gen:check": "tsx packages/tools/src/cli.ts gen-check",
+    "replay:verify": "tsx packages/tools/src/cli.ts replay-verify",
+    "assets:checklist": "tsx packages/tools/src/cli.ts assets-checklist",
+    "assets:check": "tsx packages/tools/src/cli.ts assets-check",
+    "golden": "tsx packages/tools/src/cli.ts golden"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@types/node": "^22.10.0",
+    "@types/ws": "^8.18.1",
+    "eslint": "^9.39.5",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.46.0",
+    "vitest": "^3.2.7"
+  }
+}

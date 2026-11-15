@@ -1,0 +1,6 @@
+[
+  { "id": "core:poison", "name": { "ja": "毒", "en": "poisoned" }, "handler": "dot", "params": {} },
+  { "id": "core:haste", "name": { "ja": "加速", "en": "hasted" }, "handler": "speed_pct", "params": { "pct": 200 } },
+  { "id": "core:slow", "name": { "ja": "減速", "en": "slowed" }, "handler": "speed_pct", "params": { "pct": 50 } },
+  { "id": "core:sleep", "name": { "ja": "睡眠", "en": "asleep" }, "handler": "incapacitate", "params": { "wakeOnDamage": 1 } }
+]

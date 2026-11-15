@@ -1,0 +1,13 @@
+export { loadConfig } from './config';
+export type { ServerConfig } from './config';
+export { createApp } from './http/api';
+export type { App } from './http/api';
+export { SessionManager } from './session/SessionManager';
+export { RunSession } from './session/RunSession';
+export type { SessionDeps, SubmitResult } from './session/RunSession';
+export { SessionPlayerPort } from './session/PlayerPort';
+export type { PlayerPort, ActionPayload } from './session/PlayerPort';
+export { SpectatorPort } from './session/SpectatorPort';
+export { RunStore, spectatorEvent } from './log/RunStore';
+export { createMcpServer } from './mcp/server';
+export { rulesText } from './mcp/rules';

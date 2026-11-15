@@ -1,0 +1,13 @@
+[
+  { "id": "core:potion_look_01", "name": { "ja": "赤い薬", "en": "red potion" }, "category": "potion" },
+  { "id": "core:potion_look_02", "name": { "ja": "青い薬", "en": "blue potion" }, "category": "potion" },
+  { "id": "core:potion_look_03", "name": { "ja": "緑色の薬", "en": "green potion" }, "category": "potion" },
+  { "id": "core:potion_look_04", "name": { "ja": "濁った薬", "en": "murky potion" }, "category": "potion" },
+  { "id": "core:potion_look_05", "name": { "ja": "金色の薬", "en": "golden potion" }, "category": "potion" },
+  { "id": "core:potion_look_06", "name": { "ja": "泡立つ薬", "en": "fizzing potion" }, "category": "potion" },
+  { "id": "core:scroll_look_01", "name": { "ja": "銀の封蝋の巻物", "en": "scroll with a silver seal" }, "category": "scroll" },
+  { "id": "core:scroll_look_02", "name": { "ja": "焦げ跡のある巻物", "en": "scorched scroll" }, "category": "scroll" },
+  { "id": "core:scroll_look_03", "name": { "ja": "赤い紐の巻物", "en": "scroll tied with red cord" }, "category": "scroll" },
+  { "id": "core:scroll_look_04", "name": { "ja": "星図の描かれた巻物", "en": "star-charted scroll" }, "category": "scroll" },
+  { "id": "core:scroll_look_05", "name": { "ja": "古びた羊皮紙", "en": "brittle vellum" }, "category": "scroll" }
+]

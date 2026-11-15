@@ -1,0 +1,29 @@
+[
+  {
+    "id": "core:fountain", "name": { "ja": "泉", "en": "fountain" }, "category": "feature",
+    "states": ["idle", "used"], "initialState": "idle", "passable": true,
+    "onInteract": [{ "effect": "heal", "amount": "3d6+2" }, { "effect": "cure", "status": "core:poison" }],
+    "afterInteract": "used"
+  },
+  {
+    "id": "core:altar", "name": { "ja": "祭壇", "en": "altar" }, "category": "feature",
+    "states": ["idle", "used"], "initialState": "idle", "passable": true,
+    "onInteract": [{ "effect": "identify", "count": 99 }],
+    "afterInteract": "used"
+  },
+  {
+    "id": "core:trap_dart", "name": { "ja": "毒矢の罠", "en": "poison dart trap" }, "category": "trap",
+    "passable": true, "depth": { "min": 1 }, "rarity": 1,
+    "onEnter": [{ "effect": "damage", "amount": "1d4" }, { "effect": "status", "status": "core:poison", "turns": "1d4+2", "power": 1, "chancePct": 70 }]
+  },
+  {
+    "id": "core:trap_teleport", "name": { "ja": "転移の罠", "en": "teleport trap" }, "category": "trap",
+    "passable": true, "depth": { "min": 3 }, "rarity": 2,
+    "onEnter": [{ "effect": "teleport" }]
+  },
+  {
+    "id": "core:trap_alarm", "name": { "ja": "警報の罠", "en": "alarm trap" }, "category": "trap",
+    "passable": true, "depth": { "min": 1 }, "rarity": 2,
+    "onEnter": [{ "effect": "noise", "loudness": 18 }]
+  }
+]

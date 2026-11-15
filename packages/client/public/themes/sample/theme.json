@@ -1,0 +1,40 @@
+{
+  "id": "sample",
+  "name": "sample（検証用ダミー画像）",
+  "formatVersion": 1,
+  "cellSize": 32,
+  "scaling": "nearest",
+  "background": "#000000",
+  "fallbackTheme": "glyph",
+  "assets": {
+    "terrain": {
+      "core:floor": {
+        "file": "terrain/floor.png",
+        "variants": 3
+      },
+      "core:floor@core:damp_caves": {
+        "file": "terrain/caves_floor.png",
+        "variants": 2
+      },
+      "core:wall": {
+        "file": "terrain/wall.png",
+        "variants": 2
+      }
+    },
+    "actor": {
+      "core:goblin": {
+        "file": "actors/goblin.png",
+        "facings": 2
+      },
+      "core:warrior": {
+        "file": "actors/warrior.png"
+      }
+    },
+    "appearance": {
+      "core:potion_look_01": {
+        "file": "items/potion_01.png"
+      }
+    }
+  },
+  "categoryFallbacks": {}
+}

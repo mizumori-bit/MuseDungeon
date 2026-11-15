@@ -1,0 +1,29 @@
+[
+  {
+    "id": "core:warrior", "name": { "ja": "戦士", "en": "warrior" },
+    "desc": { "ja": "頑丈で一撃が重い。正面からの殴り合いが得意", "en": "Sturdy and hard-hitting. Excels in straight melee" },
+    "stats": { "hp": 30, "acc": 3, "eva": 1, "might": 2, "armor": 0, "sight": 8 },
+    "speed": 100, "capacity": 20, "unarmed": "1d3",
+    "startItems": [
+      { "item": "core:short_sword", "equip": true },
+      { "item": "core:leather_armor", "equip": true },
+      { "item": "core:potion_healing", "qty": 1 }
+    ],
+    "levelUp": { "hp": 6, "accEvery": 2, "mightEvery": 3, "evaEvery": 5 },
+    "searchPct": 10, "stealthPct": 0
+  },
+  {
+    "id": "core:scout", "name": { "ja": "斥候", "en": "scout" },
+    "desc": { "ja": "身軽で目ざとい。投擲と罠の発見が得意", "en": "Nimble and observant. Good with thrown weapons and finding traps" },
+    "stats": { "hp": 22, "acc": 4, "eva": 4, "might": 0, "armor": 0, "sight": 9 },
+    "speed": 100, "capacity": 20, "unarmed": "1d3",
+    "startItems": [
+      { "item": "core:dagger", "equip": true },
+      { "item": "core:leather_armor", "equip": true },
+      { "item": "core:throwing_knife", "qty": 8 },
+      { "item": "core:potion_healing", "qty": 2 }
+    ],
+    "levelUp": { "hp": 4, "accEvery": 2, "mightEvery": 4, "evaEvery": 3 },
+    "searchPct": 30, "stealthPct": 40
+  }
+]

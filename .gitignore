@@ -1,0 +1,5 @@
+node_modules/
+dist/
+runs/
+*.tmp.ts
+.claude/settings.local.json

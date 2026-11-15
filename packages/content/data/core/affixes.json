@@ -1,0 +1,14 @@
+[
+  { "id": "core:swift", "name": { "ja": "俊敏な", "en": "swift" }, "target": "monster", "depth": { "min": 3 }, "rarity": 2,
+    "mods": { "speed": 30, "eva": 1, "xpPct": 30 }, "abilities": ["fast"] },
+  { "id": "core:ancient", "name": { "ja": "古の", "en": "ancient" }, "target": "monster", "depth": { "min": 5 }, "rarity": 3,
+    "mods": { "hpPct": 60, "acc": 2, "might": 1, "xpPct": 100 } },
+  { "id": "core:venomous", "name": { "ja": "毒牙の", "en": "venomous" }, "target": "monster", "depth": { "min": 2 }, "rarity": 2,
+    "mods": { "xpPct": 40 }, "onHit": [{ "effect": "status", "status": "core:poison", "turns": "1d4+2", "power": 1, "chancePct": 35 }], "abilities": ["poison"] },
+  { "id": "core:keen", "name": { "ja": "鋭い", "en": "keen" }, "target": "item", "depth": { "min": 2 }, "rarity": 1, "categories": ["weapon"],
+    "mods": { "acc": 2 } },
+  { "id": "core:heavy", "name": { "ja": "重厚な", "en": "heavy" }, "target": "item", "depth": { "min": 3 }, "rarity": 2, "categories": ["weapon"],
+    "mods": { "dmgBonus": 2, "acc": -1 } },
+  { "id": "core:reinforced", "name": { "ja": "補強された", "en": "reinforced" }, "target": "item", "depth": { "min": 2 }, "rarity": 2, "categories": ["armor"],
+    "mods": { "armor": 1 } }
+]

@@ -1,0 +1,29 @@
+[
+  {
+    "id": "core:stone_halls", "name": { "ja": "石の広間", "en": "Stone Halls" },
+    "depth": { "min": 1 }, "weight": 10,
+    "palette": { "floor": "core:floor", "wall": "core:wall", "doorClosed": "core:door_closed", "doorOpen": "core:door_open",
+      "extra": [{ "terrain": "core:rubble", "pct": 2, "clusters": 3 }] },
+    "layouts": { "core:rooms_corridors": 85, "core:cellular_cave": 15 },
+    "spawnTags": { "humanoid": 150, "halls": 160 },
+    "features": [{ "feature": "core:fountain", "chancePct": 15 }, { "feature": "core:altar", "chancePct": 10 }]
+  },
+  {
+    "id": "core:damp_caves", "name": { "ja": "湿った洞窟", "en": "Damp Caves" },
+    "depth": { "min": 1 }, "weight": 8,
+    "palette": { "floor": "core:floor", "wall": "core:wall", "doorClosed": "core:door_closed", "doorOpen": "core:door_open",
+      "extra": [{ "terrain": "core:shallow_water", "pct": 7, "clusters": 4 }] },
+    "layouts": { "core:cellular_cave": 80, "core:rooms_corridors": 20 },
+    "spawnTags": { "cave": 160, "animal": 130 },
+    "features": [{ "feature": "core:fountain", "chancePct": 20 }]
+  },
+  {
+    "id": "core:overgrown_ruins", "name": { "ja": "苔むした遺跡", "en": "Overgrown Ruins" },
+    "depth": { "min": 2 }, "weight": 7,
+    "palette": { "floor": "core:floor", "wall": "core:wall", "doorClosed": "core:door_closed", "doorOpen": "core:door_open",
+      "extra": [{ "terrain": "core:grass", "pct": 18, "clusters": 6 }, { "terrain": "core:tall_grass", "pct": 6, "clusters": 3 }] },
+    "layouts": { "core:rooms_corridors": 70, "core:cellular_cave": 30 },
+    "spawnTags": { "ruins": 160, "plant": 140, "pack": 130 },
+    "features": [{ "feature": "core:altar", "chancePct": 20 }, { "feature": "core:fountain", "chancePct": 10 }]
+  }
+]

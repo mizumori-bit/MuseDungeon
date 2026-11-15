@@ -1,0 +1,9 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`rng > cyrb128 is stable across runs (golden value) 1`] = `
+[
+  4000748158,
+  765169045,
+  3444407678,
+]
+`;
