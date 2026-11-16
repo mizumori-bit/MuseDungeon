@@ -17,6 +17,8 @@
     },
     "lifeline": { "turns": 0, "pct": 50 },
     "teleport": { "minDistance": 12 },
+    "perks": { "options": 3 },
+    "curse": { "chancePct": 6 },
     "guardian": {
       "ranks": [
         { "hpPct": 50, "minHpBase": 6, "minHpPerDepth": 2 },

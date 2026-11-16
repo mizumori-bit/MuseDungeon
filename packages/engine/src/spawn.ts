@@ -6,7 +6,7 @@ import type { Ctx } from './ctx';
 import type { SpawnSpec } from './gen/generate';
 
 export function sumAffixMods(content: Content, affixes: readonly string[]) {
-  const m = { hpPct: 0, speed: 0, acc: 0, eva: 0, might: 0, armor: 0, dmgBonus: 0, xpPct: 0 };
+  const m = { hpPct: 0, speed: 0, acc: 0, eva: 0, might: 0, armor: 0, dmgBonus: 0, xpPct: 0, maxHp: 0, sight: 0 };
   for (const id of affixes) {
     const a = content.affixes[id];
     if (!a) continue;
@@ -55,9 +55,10 @@ export function makeMonster(ctx: Ctx, floor: FloorKey, spec: Extract<SpawnSpec, 
   return e;
 }
 
-export function makeItem(floor: FloorKey | null, kind: string, x: number, y: number, qty: number, affixes: string[], id: string, sid: number, value?: number): Entity {
+export function makeItem(floor: FloorKey | null, kind: string, x: number, y: number, qty: number, affixes: string[], id: string, sid: number, value?: number, hidden?: string[]): Entity {
   const e: Entity = { id, kind, sid, item: { qty, affixes: [...affixes] } };
   if (value !== undefined) e.item!.value = value;
+  if (hidden?.length) e.item!.hidden = [...hidden];
   if (floor) e.pos = { floor, x, y };
   return e;
 }
@@ -77,7 +78,7 @@ export function spawnFromSpec(ctx: Ctx, floor: FloorKey, spec: SpawnSpec, reason
   let e: Entity;
   if (spec.type === 'monster') e = makeMonster(ctx, floor, spec, id, sid);
   else if (spec.type === 'item') {
-    e = makeItem(floor, spec.kind, spec.x, spec.y, spec.qty, spec.affixes, id, sid, spec.value);
+    e = makeItem(floor, spec.kind, spec.x, spec.y, spec.qty, spec.affixes, id, sid, spec.value, spec.hidden);
     if (spec.role) e.role = spec.role;
   } else e = makeFeature(ctx, floor, spec.kind, spec.x, spec.y, id, sid);
   const seen = ctx.perceive(floor, [{ field: 'entity', pos: e.pos }]);

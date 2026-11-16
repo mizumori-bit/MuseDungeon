@@ -86,6 +86,15 @@ describe('information hiding (leak property test)', () => {
           const n = content.items[kind].name;
           expect(text.includes(n.ja)).toBe(false);
         }
+        // (e) 見えていない呪い（V3-4）: 装備・鑑定する前の呪いの接辞は、ID も名前も出ない（同じ呪いが見えている品が無い限り）
+        const shownAffixes = new Set(Object.values(world.entities).flatMap((e) => e.item?.affixes ?? []));
+        for (const e of Object.values(world.entities)) {
+          for (const a of e.item?.hidden ?? []) {
+            if (shownAffixes.has(a)) continue;
+            expect(json.includes(a)).toBe(false);
+            expect(text.includes(content.affixes[a].name.ja)).toBe(false);
+          }
+        }
         const cmd = greedyDecide(port, rng, memo);
         const out = await port.act(cmd, { source: 'bot' });
         if (out.ok) expect(JSON.stringify(out).includes(seed)).toBe(false);

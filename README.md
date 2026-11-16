@@ -132,6 +132,7 @@ PowerShell では `npm run <script> -- --flag` の `--` が npm に届かずオ�
 | `npm run pacing -- --runs 100` | テンポの計測（階段発見までの手番・判断間隔・1 階あたりの手番・最初の遠征の長さ） |
 | `npm run choices -- --runs 40` | 選択の計測（粘るか帰るか・遠征候補の 3 枠を方針別の bot で比べ、確定点の中央値・死亡率を出す。合格の根拠にはしない） |
 | `npm run budget -- --runs 30` | V3-2R〜V3-2R3b の計測（踏破 1 階あたりの「綱か死」の率・踏破の期待値の比・深度ごとのレベルと推奨・枠と種類ごとの達成率・全部と戦う bot と直行 bot の比較（点の割合・呼び出しあたりの確定点・キャンプでの推奨との差）・推奨レベルの表の作り直し・呼び出しの予算・斥候の投擲の割合）。`--slot-runs 40` で枠ごとのランだけ増やせる |
+| `npm run builds -- --runs 20` | V3-4 の計測（特技の系統ごとに取り続ける bot の到達深度と、職業ごとの撃破に占める投擲の割合） |
 | `npm run drive -- --token <player_token>` / `--new-run <name>` | 参照ドライバ（ターンフィードを購読してエージェントを呼ぶ） |
 | `npm run assets:checklist` / `npm run assets:check -- <themeDir>` | 画像アセットの発注表 / テーマの検証 |
 | `npm run dev:client` | クライアントの開発サーバー（Vite。API は 7777 へプロキシ） |

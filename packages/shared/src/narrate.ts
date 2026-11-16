@@ -126,6 +126,45 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
     }
     case 'xp_gained':
       return null;
+    // ビルド（V3-4）
+    case 'perk_offered': {
+      if (ev.target !== self) return null;
+      const opts = (ev.options as string[]).map((id, i) => `${i + 1} ${nameOf(ctx.catalog.perks[id]?.name, L, id)}`);
+      if (!opts.length) return ja ? `Lv${ev.level} の特技は、前の候補を選んだ後に出る。` : `The Lv${ev.level} perk is offered after you choose the earlier one.`;
+      return ja ? `特技を選べる（Lv${ev.level}）: ${opts.join(' / ')}（choose_perk。手番は使わない）` : `Choose a perk (Lv${ev.level}): ${opts.join(' / ')} (choose_perk; takes no turn)`;
+    }
+    case 'perk_chosen': {
+      if (ev.target !== self) return null;
+      const pk = nameOf(ctx.catalog.perks[ev.perk]?.name, L, ev.perk);
+      const ab = ev.ability ? nameOf(ctx.catalog.abilities[ev.ability]?.name, L, ev.ability) : null;
+      return ja ? `特技「${pk}」を取った。${ab ? `能動技「${ab}」を覚えた（use_ability）。` : ''}` : `You take the perk ${pk}.${ab ? ` You learn ${ab} (use_ability).` : ''}`;
+    }
+    case 'ability_used': {
+      const ab = nameOf(ctx.catalog.abilities[ev.ability]?.name, L, ev.ability);
+      const tg = ev.target ? who(ctx, ev.target, ev.targetKind) : null;
+      const cd = ev.actor === self && ev.cooldownLeft > 0 ? (ja ? `（再使用まで ${ev.cooldownLeft} 手番）` : ` (ready again in ${ev.cooldownLeft} turns)`) : '';
+      if (ev.actor === self) return ja ? `${ab}を使った${tg ? `（${tg}へ）` : ''}。${cd}` : `You use ${ab}${tg ? ` on ${tg}` : ''}.${cd}`;
+      return ja ? `${who(ctx, ev.actor, ev.actorKind)}は${ab}を使った。` : `${cap(who(ctx, ev.actor, ev.actorKind))} uses ${ab}.`;
+    }
+    case 'curse_revealed': {
+      const n = kindName(ctx.catalog, L, (ev.kind as string | null) ?? null, (ev.appearanceId as string | null) ?? null);
+      const cs = (ev.affixes as string[]).map((a) => nameOf(ctx.catalog.affixes[a]?.name, L, a)).join(ja ? '・' : ', ');
+      if (ev.actor !== self) return null;
+      return ev.via === 'equip'
+        ? (ja ? `${n}は呪われていた（${cs}）。外せない（解呪の巻物か祭壇で解ける）。` : `The ${n} is cursed (${cs}). It will not come off (a scroll of remove curse or an altar lifts it).`)
+        : (ja ? `${n}は呪われている（${cs}）。装備すると外せない。` : `The ${n} is cursed (${cs}). It will not come off once equipped.`);
+    }
+    case 'item_inspected': {
+      if (ev.actor !== self) return null;
+      const n = kindName(ctx.catalog, L, (ev.kind as string | null) ?? null, (ev.appearanceId as string | null) ?? null);
+      return ja ? `${n}に呪いは無い。` : `The ${n} is not cursed.`;
+    }
+    case 'curse_lifted': {
+      if (ev.actor !== self) return null;
+      const n = kindName(ctx.catalog, L, (ev.kind as string | null) ?? null, (ev.appearanceId as string | null) ?? null);
+      const cs = (ev.affixes as string[]).map((a) => nameOf(ctx.catalog.affixes[a]?.name, L, a)).join(ja ? '・' : ', ');
+      return ja ? `${n}の呪いが解けた（${cs}）。` : `The curse on the ${n} is lifted (${cs}).`;
+    }
     case 'item_picked_up': {
       const n = itemName(ctx, ev);
       const q = ev.qty > 1 ? ` x${ev.qty}` : '';

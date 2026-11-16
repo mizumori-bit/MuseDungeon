@@ -3,6 +3,7 @@ import type { Entity, FloorHint, FloorKey, MonsterMemory, PlayerId, PlayerRecord
 import { cheb, compassDir, currentExpedition, indicesToRanges, memoryKey } from '@muse/shared';
 import type { Ctx } from './ctx';
 import { computeFov, hasLos, inCircle, line } from './geom';
+import { gearOf, stealthOf } from './build';
 
 /**
  * 投げ物・射撃の経路（始点を含まず終点を含む）。from→to の直線か、to→from の直線を逆にたどったもののうち、
@@ -273,12 +274,14 @@ export function makeNoise(ctx: Ctx, key: FloorKey, pos: Pos, loudness: number, s
   }).map((p) => p.id);
   if (hearers.length) ctx.emit({ type: 'noise', pos: { ...pos }, loudness, source: null, seenBy: hearers, floor: key });
   const rng = ctx.rng('runtime');
+  // 静寂の指輪の欠点: 自分の立てた音では、眠っている敵が必ず起きる（V3-4）
+  const always = !!source?.player && gearOf(ctx, source).noiseWakes;
   for (const m of ctx.entitiesOn(key)) {
     if (!m.actor || m.player || m.id === source?.id || !m.pos) continue;
     const ai = m.actor.ai;
     if (!ai || (ai.state !== 'asleep' && ai.state !== 'unaware')) continue;
     if (!inCircle(m.pos, pos, loudness)) continue;
-    if (ai.state === 'asleep' && !rng.chance(50)) continue;
+    if (ai.state === 'asleep' && !always && !rng.chance(50)) continue;
     wakeMonster(ctx, m, pos);
   }
 }
@@ -294,8 +297,9 @@ export function wakeChecks(ctx: Ctx, key: FloorKey): void {
       const pe = ctx.world.entities[pr.entityId];
       if (!pe.pos || !inCircle(m.pos, pe.pos, m.stats!.sight)) continue;
       if (!monsterSees(ctx, m, pe)) continue;
-      const stealth = ctx.content.classes[pr.classId]?.stealthPct ?? 0;
-      const pct = Math.max(3, 20 - Math.trunc((20 * stealth) / 100));
+      // 起こしにくさ = 職業 + 特技（忍び足）+ 装備。重い鎧は起きる確率を足す（V3-4）
+      const stealth = stealthOf(ctx, pr);
+      const pct = Math.max(3, 20 - Math.trunc((20 * stealth) / 100)) + gearOf(ctx, pe).wakePct;
       if (rng.chance(pct)) {
         wakeMonster(ctx, m, { x: pe.pos.x, y: pe.pos.y });
         break;

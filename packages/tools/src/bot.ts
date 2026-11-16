@@ -1,10 +1,11 @@
 // ベースライン bot（ランダム／貪欲）。AI と同じ PlayerPort・同じ Command・同じ観測だけを使う。
 // 貪欲 bot は遠征を遊ぶ: 目的を追い、達成したら階段の上で extract、キャンプでは次の遠征を選ぶ。
 import type { Command, Dir, ExpeditionEndReason, OfferSlot, PlayerView } from '@muse/shared';
-import { buildNavGrid, cheb, compassDir, dirTo, DIRS, distanceField, offerGap, Rng } from '@muse/shared';
+import { abilityStatus, buildNavGrid, cheb, compassDir, dirTo, DIRS, distanceField, isCursedItem, offerGap, perkChoice, Rng } from '@muse/shared';
+import type { Catalog } from '@muse/shared';
 import type { PlayerPort, SessionManager } from '@muse/server';
 
-const WEAPON_RANK = ['core:dagger', 'core:short_sword', 'core:mace', 'core:war_axe'];
+const WEAPON_RANK = ['core:dagger', 'core:short_sword', 'core:spear', 'core:mace', 'core:war_axe'];
 const ARMOR_RANK = ['core:leather_armor', 'core:scale_mail', 'core:plate_armor'];
 
 export type BotKind = 'greedy' | 'random';
@@ -37,6 +38,8 @@ export interface BotResult {
   /** スコア版 2 の確定点 */
   banked: number;
   died: boolean;
+  /** 撃破の内訳（自分が倒した敵の、最後の一撃の種類。V3-4 §10 の「投擲と近接」） */
+  killsBy?: { total: number; melee: number; thrown: number };
 }
 
 function hpPct(v: PlayerView): number {
@@ -57,13 +60,37 @@ export interface BotMemo {
   levelAware: boolean;
   /** 方針: 直行（V3-2R3 §20.2）。道をふさぐ・隣に来た敵とだけ戦い、下り階段を見つけたらすぐ向かう */
   direct: boolean;
+  /** 方針: 取り続ける特技の系統（V3-4 §10 の計測）。無ければ既定の好み */
+  perkLineage?: string;
 }
 
-export function newMemo(policy: { overreach?: number; offerSlot?: OfferSlot; cautious?: boolean; levelAware?: boolean; direct?: boolean } = {}): BotMemo {
+export function newMemo(policy: { overreach?: number; offerSlot?: OfferSlot; cautious?: boolean; levelAware?: boolean; direct?: boolean; perkLineage?: string } = {}): BotMemo {
   return {
     restFails: 0, avoid: new Set<string>(), blocked: 0, descend: false, gaveUp: null, senseTries: 0, senseNo: 0, overreach: policy.overreach ?? 0, offerSlot: policy.offerSlot,
     cautious: policy.cautious ?? true, levelAware: policy.levelAware ?? false, direct: policy.direct ?? false,
+    ...(policy.perkLineage ? { perkLineage: policy.perkLineage } : {}),
   };
+}
+
+/** 既定の好み（系統の方針が無いとき・方針の系統が候補に無いとき）: 能力値の特技を先に */
+const PERK_PREF = ['core:perk_hardy', 'core:perk_precise', 'core:perk_strong', 'core:perk_nimble'];
+
+/** 特技の候補から選ぶ（V3-4）: 方針の系統 → 既定の好み → 最初の候補 */
+export function pickPerk(v: PlayerView, catalog: Catalog, lineage?: string): number | null {
+  const o = perkChoice(v);
+  if (!o) return null;
+  const idx = (pred: (id: string) => boolean) => o.options.findIndex(pred);
+  let i = lineage ? idx((id) => catalog.perks[id]?.lineage === lineage) : -1;
+  if (i < 0) for (const want of PERK_PREF) { i = idx((id) => id === want); if (i >= 0) break; }
+  if (i < 0) i = idx((id) => catalog.perks[id]?.lineage !== 'common');
+  return (i < 0 ? 0 : i) + 1;
+}
+
+/** 能動技が今使えるか（覚えていて、残りの手番 0、遠征ごとの回数が残っている） */
+function ready(v: PlayerView, catalog: Catalog, id: string): boolean {
+  if (!v.self.build.abilities.some((a) => a.id === id)) return false;
+  const s = abilityStatus(v, catalog, id);
+  return s.cooldownLeft === 0 && s.usesLeft !== 0;
 }
 
 /** 既知の階段のうち一番近い到達可能なものへの travel（無ければ null） */
@@ -120,6 +147,9 @@ function crossedEnough(x: NonNullable<PlayerView['expedition']>, memo: BotMemo):
 
 export function greedyDecide(port: PlayerPort, rng: Rng, memo: BotMemo): Command {
   const v = port.view();
+  // 特技は手番を使わずに選べるので、候補が出たらすぐ選ぶ（V3-4）
+  const perk = pickPerk(v, port.catalog, memo.perkLineage);
+  if (perk !== null) return { type: 'choose_perk', option: perk };
   if (v.status === 'at_camp') {
     let o = (memo.offerSlot ? v.camp?.offers.find((x) => x.slot === memo.offerSlot) : undefined) ?? v.camp?.offers[0];
     // 推奨レベルに届いていなければ堅実で育つ（公開の表と自分のレベルだけで判断）
@@ -147,6 +177,8 @@ export function greedyDecide(port: PlayerPort, rng: Rng, memo: BotMemo): Command
   const done = complete && (x!.objective.targetDepth === null || crossedEnough(x!, memo) || (memo.cautious && x!.maxDepth > x!.objective.targetDepth && hp < 60));
   const onTarget = !!x && x.objective.targetDepth !== null && v.floor?.depth === x.objective.targetDepth;
 
+  // 立て直し（遠征ごとに 1 回）は薬より先に使う
+  if (hp < 40 && (adj || hostiles.length) && ready(v, port.catalog, 'core:second_wind')) return { type: 'ability', id: 'second_wind' };
   if (hp < 35 && healing && (adj || hostiles.length)) return { type: 'use', slot: healing.slot };
   if (hp < 25 && unknownPotion && adj) return { type: 'use', slot: unknownPotion.slot };
   // 退く（V3-2R2 §18.1）: 余力が無く、群れ（追跡中 2 体以上）か一撃で倒されうる相手がいる。
@@ -160,15 +192,26 @@ export function greedyDecide(port: PlayerPort, rng: Rng, memo: BotMemo): Command
     if (danger && onStairs) return { type: 'extract', confirm: true };
     if (danger && lifeline) return { type: 'use', slot: lifeline.slot };
   }
+  // 能動技は fight に載せる（使える手番ごとに fight が使う。V3-4a §25.3）
+  const meleeAbilities = v.self.build.abilities.map((a) => a.id).filter((id) => ['strike', 'cleave'].includes(port.catalog.abilities[id]?.handler ?? ''));
+  const withAb = (ids: string[]) => (ids.length ? { abilities: ids } : {});
   // 隣の敵: 余力があれば fight（1 回の呼び出しで殴り続ける）、無ければ 1 発ずつ
   if (adj && (adj.awareness !== 'asleep' || hp > 50)) {
     const floor = Math.trunc((v.self.stats.maxHp * 35) / 100);
-    return v.self.stats.hp > floor ? { type: 'fight', target: adj.id, hpFloor: floor } : { type: 'move', dir: dirTo(pos, adj.pos)! };
+    return v.self.stats.hp > floor ? { type: 'fight', target: adj.id, hpFloor: floor, ...withAb(meleeAbilities) } : { type: 'move', dir: dirTo(pos, adj.pos)! };
   }
   const hunting = hostiles.filter((h) => h.awareness === 'hunting');
+  // 投擲が得意な職業（習熟が正）は 2 マス先の相手にも投げる（それ以外は近接に任せる）
+  const minThrow = (port.catalog.classes[v.self.classId]?.proficiency?.thrown ?? 0) > 0 ? 2 : 3;
+  // 狙い撃ち（V3-4）: まだ気づいていない相手には、先に命中 +4・会心の一投（追跡中の相手には fight に載せる）
+  const aimedKnown = v.self.build.abilities.some((a) => a.id === 'core:aimed_throw');
+  if (!memo.direct && throwable && ready(v, port.catalog, 'core:aimed_throw')) {
+    const tg = hostiles.find((h) => h.awareness === 'unaware' && h.shot && cheb(h.pos, pos) >= minThrow && cheb(h.pos, pos) <= 6 && !memo.avoid.has(h.id));
+    if (tg) return { type: 'ability', id: 'aimed_throw', target: tg.id, slot: throwable.slot };
+  }
   // 投擲は fight { with } で決着まで（射程に入るまで待つ。V3-2R2 §18.5）。2 マス先の相手はすぐ隣に来るので近接に任せる。直行は投げない
-  if (!memo.direct && hunting.length && throwable && cheb(hunting[0].pos, pos) <= 6 && cheb(hunting[0].pos, pos) > 2 && !memo.avoid.has(hunting[0].id)) {
-    return { type: 'fight', target: hunting[0].id, with: throwable.slot, hpFloor: Math.trunc((v.self.stats.maxHp * 35) / 100) };
+  if (!memo.direct && hunting.length && throwable && cheb(hunting[0].pos, pos) <= 6 && cheb(hunting[0].pos, pos) >= minThrow && !memo.avoid.has(hunting[0].id)) {
+    return { type: 'fight', target: hunting[0].id, with: throwable.slot, hpFloor: Math.trunc((v.self.stats.maxHp * 35) / 100), ...withAb(aimedKnown ? ['core:aimed_throw'] : []) };
   }
   // 射撃して距離を取る敵: 投げる物が無ければ HP によらず近づく（寄られると下がり、下がる間は撃たない。V3-2R3a §22.2）
   const shooter = hunting.find((h) => !h.fleeing && !!h.kind && !!port.catalog.monsters[h.kind]?.tags.includes('ranged') && cheb(h.pos, pos) <= 8 && !memo.avoid.has(h.id));
@@ -223,15 +266,20 @@ export function greedyDecide(port: PlayerPort, rng: Rng, memo: BotMemo): Command
       if (seen && !memo.avoid.has(seen.id) && !pursuers.length) return { type: 'travel', to: seen.id };
     }
   }
-  // 装備の更新（公開情報: 名前の序列のみ）
+  // 装備の更新（公開情報: 名前の序列のみ）。呪われて外せない場所は替えない（V3-4）
+  const stuck = (slot: 'weapon' | 'armor' | 'accessory') => { const c = inv.find((i) => i.equipped === slot); return !!c && isCursedItem(port.catalog, c.affixes); };
   for (const it of inv) {
-    if (!it.kind || it.equipped) continue;
+    if (it.equipped) continue;
+    // 装飾品: 何も付けていなければ付けてみる（正体と呪いの有無は付けると分かる）
+    const cat = it.kind ? port.catalog.items[it.kind]?.category : it.appearanceId ? port.catalog.appearances[it.appearanceId]?.category : undefined;
+    if ((cat === 'ring' || cat === 'amulet') && !inv.some((i) => i.equipped === 'accessory')) return { type: 'equip', slot: it.slot };
+    if (!it.kind) continue;
     const wr = WEAPON_RANK.indexOf(it.kind);
     const cur = inv.find((i) => i.equipped === 'weapon');
-    if (wr >= 0 && (!cur || WEAPON_RANK.indexOf(cur.kind ?? '') < wr)) return { type: 'equip', slot: it.slot };
+    if (wr >= 0 && !stuck('weapon') && (!cur || WEAPON_RANK.indexOf(cur.kind ?? '') < wr)) return { type: 'equip', slot: it.slot };
     const ar = ARMOR_RANK.indexOf(it.kind);
     const curA = inv.find((i) => i.equipped === 'armor');
-    if (ar >= 0 && (!curA || ARMOR_RANK.indexOf(curA.kind ?? '') < ar)) return { type: 'equip', slot: it.slot };
+    if (ar >= 0 && !stuck('armor') && (!curA || ARMOR_RANK.indexOf(curA.kind ?? '') < ar)) return { type: 'equip', slot: it.slot };
   }
   // 経路が塞がれていたら一番近い敵を排除しに行く／ランダムに動いて抜ける
   if (memo.blocked > 0) {
@@ -282,6 +330,8 @@ export interface BotOptions {
   levelAware?: boolean;
   /** 方針: 直行（道をふさぐ敵とだけ戦い、下り階段へ直行する） */
   direct?: boolean;
+  /** 方針: 取り続ける特技の系統（V3-4） */
+  perkLineage?: string;
 }
 
 /** 1 ランを最後まで（死亡・終了・上限）bot で遊ぶ */
@@ -291,12 +341,21 @@ export async function runBot(manager: SessionManager, opts: BotOptions): Promise
   const r = await manager.createRun({ name: `${opts.kind}-bot`, classId: opts.classId, seed: opts.seed, controller: { kind: 'agent', label: `${opts.kind}-bot` }, objective: opts.objective === 'auto' ? undefined : opts.objective });
   if ('error' in r) throw new Error(r.error.message);
   const res = await playWithPort(r.port, opts);
-  return { ...res, runId: r.session.runId, seed: opts.seed, ms: Date.now() - t0 };
+  // 撃破の内訳（俯瞰の履歴から。計測用）
+  const meId = r.session.world.players[r.port.playerId]?.entityId;
+  const killsBy = { total: 0, melee: 0, thrown: 0 };
+  for (const ev of r.session.history) {
+    if (ev.type !== 'died' || ev.killer !== meId || ev.id === meId) continue;
+    killsBy.total++;
+    if (ev.via === 'melee') killsBy.melee++;
+    else if (ev.via === 'thrown') killsBy.thrown++;
+  }
+  return { ...res, runId: r.session.runId, seed: opts.seed, ms: Date.now() - t0, killsBy };
 }
 
 export async function playWithPort(port: PlayerPort, opts: BotOptions): Promise<Omit<BotResult, 'runId' | 'seed' | 'ms'>> {
   const rng = Rng.fromSeed(`bot|${opts.seed}`);
-  const memo = newMemo({ overreach: opts.overreach, offerSlot: opts.offerSlot, cautious: opts.cautious, levelAware: opts.levelAware, direct: opts.direct });
+  const memo = newMemo({ overreach: opts.overreach, offerSlot: opts.offerSlot, cautious: opts.cautious, levelAware: opts.levelAware, direct: opts.direct, perkLineage: opts.perkLineage });
   const maxActs = opts.maxActs ?? 2500;
   const brief: number[] = [];
   const full: number[] = [];
@@ -358,7 +417,8 @@ export async function playWithPort(port: PlayerPort, opts: BotOptions): Promise<
       }
     }
     const xno = v.expedition?.no ?? 0;
-    expCalls.set(xno, (expCalls.get(xno) ?? 0) + 1);
+    // 呼び出しの予算は choose_perk を除いて数える（特技の選択は呼び出しを使う価値のある判断。V3-4a §25.3）
+    if (cmd.type !== 'choose_perk') expCalls.set(xno, (expCalls.get(xno) ?? 0) + 1);
     if (v.status !== 'at_camp') {
       const tt = expTurns.get(xno);
       expTurns.set(xno, { first: tt?.first ?? v.self.turns, last: v.self.turns });

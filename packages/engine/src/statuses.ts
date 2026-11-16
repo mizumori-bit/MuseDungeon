@@ -5,6 +5,7 @@ import { applyDamage } from './combat';
 import type { Ctx } from './ctx';
 import { lifelineReturn } from './expedition';
 import { Registry } from './registry';
+import { perkHook } from './build';
 
 export interface StatusHandler {
   /** 手番開始時の処理（毒ダメージなど） */
@@ -26,6 +27,10 @@ statusHandlers.register('dot', {
 });
 statusHandlers.register('speed_pct', {});
 statusHandlers.register('incapacitate', { incapacitates: true });
+// V3-4: 身かわし（近接が当たらない）・構え（次の一撃の装甲。power が上乗せ）・怯え（逃げ出す HP の閾値に power を足す）。効果は戦闘と AI が読む
+statusHandlers.register('evade', {});
+statusHandlers.register('brace', {});
+statusHandlers.register('cowed', {});
 // 帰還の綱（V3-2R2 §18.1）: その間は行動できず、切れたらキャンプへ戻る。被害は受ける
 statusHandlers.register('recall', { incapacitates: true, expire: (ctx, e) => lifelineReturn(ctx, e) });
 
@@ -35,6 +40,11 @@ function statusSeen(ctx: Ctx, e: Entity) {
 
 export function addStatus(ctx: Ctx, e: Entity, id: string, turns: number, power: number, source: string | null = null): void {
   if (!ctx.content.statuses[id] || turns <= 0) return;
+  // 鉄の胃: 毒の手番が短くなる（V3-4 §4.1）
+  if (id === 'core:poison') {
+    const h = perkHook(ctx, e, 'poison_resist');
+    if (h) turns = Math.max(1, Math.ceil((turns * (h.pct ?? 50)) / 100));
+  }
   const cur = (e.statuses ?? []).map((s) => ({ ...s }));
   const existing = cur.find((s) => s.id === id);
   let inst: StatusInst;

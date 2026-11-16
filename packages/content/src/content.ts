@@ -1,8 +1,8 @@
 // 検証済みコンテンツの束。ID → 定義の表と、決定的な走査用の ID 順リストを持つ。
 import { canonicalHash } from '@muse/shared';
 import type {
-  AffixDef, AppearanceDef, BalanceDef, BiomeDef, ClassDef, ExpeditionTraitDef, FeatureDef, FileKind, FloorTypeDef, ItemDef,
-  LootTableDef, MonsterDef, PrefabDef, SpawnTableDef, StatusDef, TerrainDef,
+  AbilityDef, AffixDef, AppearanceDef, BalanceDef, BiomeDef, ClassDef, ExpeditionTraitDef, FeatureDef, FileKind, FloorTypeDef, ItemDef,
+  LootTableDef, MonsterDef, PerkDef, PrefabDef, SpawnTableDef, StatusDef, TerrainDef, WeaponTraitDef,
 } from './schema';
 import { FILE_SCHEMAS } from './schema';
 
@@ -27,11 +27,15 @@ export interface Content {
   /** 調整値（core:balance。後の pack が同じ ID で上書きできる） */
   balance: BalanceDef;
   expeditionTraits: Record<string, ExpeditionTraitDef>;
+  /** ビルド（V3-4）: 特技・能動技・武器の特性 */
+  perks: Record<string, PerkDef>;
+  abilities: Record<string, AbilityDef>;
+  weaponTraits: Record<string, WeaponTraitDef>;
   /** 各表の ID 昇順リスト（決定的な走査用） */
   lists: {
     monsters: MonsterDef[]; items: ItemDef[]; appearances: AppearanceDef[]; affixes: AffixDef[];
     biomes: BiomeDef[]; floorTypes: FloorTypeDef[]; prefabs: PrefabDef[]; classes: ClassDef[]; features: FeatureDef[];
-    expeditionTraits: ExpeditionTraitDef[];
+    expeditionTraits: ExpeditionTraitDef[]; perks: PerkDef[]; abilities: AbilityDef[]; weaponTraits: WeaponTraitDef[];
   };
   /** 定義済みの最深の出現深度（深層スケーリングの基準） */
   deepestDefined: number;
@@ -100,11 +104,15 @@ export function buildContent(packs: RawPack[]): Content {
     features: table(list('features') as FeatureDef[], 'features'),
     balance: merged.balance.get('core:balance') as BalanceDef,
     expeditionTraits: table(list('expeditionTraits') as ExpeditionTraitDef[], 'expeditionTraits'),
+    perks: table(list('perks') as PerkDef[], 'perks'),
+    abilities: table(list('abilities') as AbilityDef[], 'abilities'),
+    weaponTraits: table(list('weaponTraits') as WeaponTraitDef[], 'weaponTraits'),
     lists: {
       monsters: list('monsters') as MonsterDef[], items: list('items') as ItemDef[], appearances: list('appearances') as AppearanceDef[],
       affixes: list('affixes') as AffixDef[], biomes: list('biomes') as BiomeDef[], floorTypes: list('floorTypes') as FloorTypeDef[],
       prefabs: list('prefabs') as PrefabDef[], classes: list('classes') as ClassDef[], features: list('features') as FeatureDef[],
       expeditionTraits: list('expeditionTraits') as ExpeditionTraitDef[],
+      perks: list('perks') as PerkDef[], abilities: list('abilities') as AbilityDef[], weaponTraits: list('weaponTraits') as WeaponTraitDef[],
     },
     deepestDefined: 1,
   };
@@ -115,6 +123,7 @@ export function buildContent(packs: RawPack[]): Content {
     affixes: c.lists.affixes, statuses: c.statuses, biomes: c.lists.biomes, floorTypes: c.lists.floorTypes,
     prefabs: c.lists.prefabs, spawnTables: c.spawnTables, lootTables: c.lootTables, classes: c.lists.classes, features: c.lists.features,
     balance: c.balance, expeditionTraits: c.lists.expeditionTraits,
+    perks: c.lists.perks, abilities: c.lists.abilities, weaponTraits: c.lists.weaponTraits,
   }).slice(0, 12);
   return c;
 }
@@ -175,6 +184,16 @@ function crossValidate(c: Content): void {
     }
   }
   for (const cl of c.lists.classes) for (const si of cl.startItems) need(!!c.items[si.item], `${cl.id}: 未定義の item ${si.item}`);
+  // ビルド（V3-4）
+  for (const cl of c.lists.classes) for (const pk of cl.startPerks) need(!!c.perks[pk], `${cl.id}: 未定義の perk ${pk}`);
+  const lineages = new Set(['common', ...c.lists.classes.flatMap((cl) => cl.lineages.map((l) => l.id))]);
+  for (const pk of c.lists.perks) {
+    need(lineages.has(pk.lineage), `${pk.id}: 未定義の系統 ${pk.lineage}`);
+    if (pk.ability) need(!!c.abilities[pk.ability], `${pk.id}: 未定義の ability ${pk.ability}`);
+    for (const r of pk.requires) need(!!c.perks[r], `${pk.id}: 未定義の前提 ${r}`);
+  }
+  for (const it of c.lists.items) for (const tr of it.equip?.traits ?? []) need(!!c.weaponTraits[tr], `${it.id}: 未定義の weaponTrait ${tr}`);
+  for (const s of ['core:stun', 'core:evasive', 'core:braced', 'core:cowed']) need(!!c.statuses[s], `状態 ${s} が必要（V3-4）`);
   for (const it of c.lists.items) {
     if (it.equip?.slot === 'weapon') need(!!it.equip.dmg, `${it.id}: 武器は equip.dmg が必要`);
   }

@@ -6,6 +6,8 @@ import { effects } from './effects';
 import { validators } from './gen/generate';
 import { layoutGenerators } from './gen/layouts';
 import { statusHandlers } from './statuses';
+import { abilityHandlers, weaponTraits } from './build';
+import './abilities';
 
 export { createRun, joinPlayer, step, isPlayersTurn, ENGINE_VERSION } from './run';
 export type { CreateRunParams, StepResult } from './run';
@@ -13,7 +15,7 @@ export { generateFloor, selectBiome, selectFloorType } from './gen/generate';
 export type { GeneratedFloor, SpawnSpec } from './gen/generate';
 export { computeFov, hasLos, line } from './geom';
 export { shotLine } from './perception';
-export { actions, archetypes, effects, validators, layoutGenerators, statusHandlers };
+export { actions, archetypes, effects, validators, layoutGenerators, statusHandlers, abilityHandlers, weaponTraits };
 
 /** コンテンツが参照するハンドラ ID が全てレジストリに登録されているか検証する */
 export function validateContentHandlers(content: Content): string[] {
@@ -30,6 +32,8 @@ export function validateContentHandlers(content: Content): string[] {
   for (const f of content.lists.features) { eff(f.onInteract, f.id); eff(f.onEnter, f.id); }
   for (const s of Object.values(content.statuses)) if (!statusHandlers.has(s.handler)) errs.push(`${s.id}: 未登録の status handler ${s.handler}`);
   for (const b of content.lists.biomes) for (const l of Object.keys(b.layouts)) if (!layoutGenerators.has(l)) errs.push(`${b.id}: 未登録の layout ${l}`);
+  for (const ab of content.lists.abilities) if (ab.target !== 'throw' && !abilityHandlers.has(ab.handler)) errs.push(`${ab.id}: 未登録の ability handler ${ab.handler}`);
+  for (const w of content.lists.weaponTraits) if (!weaponTraits.has(w.handler)) errs.push(`${w.id}: 未登録の weaponTrait handler ${w.handler}`);
   for (const ft of content.lists.floorTypes) {
     for (const l of Object.keys(ft.layouts ?? {})) if (!layoutGenerators.has(l)) errs.push(`${ft.id}: 未登録の layout ${l}`);
     for (const v of ft.validators) if (!validators.has(v)) errs.push(`${ft.id}: 未登録の validator ${v}`);

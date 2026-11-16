@@ -1,0 +1,12 @@
+[
+  { "id": "core:quick", "name": { "ja": "速い", "en": "quick" }, "handler": "attack_cost", "params": { "cost": 70 },
+    "desc": { "ja": "近接攻撃の手番コスト 70", "en": "Melee attacks cost 70 instead of 100" } },
+  { "id": "core:reach", "name": { "ja": "長柄", "en": "reach" }, "handler": "reach", "params": { "range": 2 },
+    "desc": { "ja": "2 マス先の敵を攻撃できる（縦・横・斜めの直線で、間のマスが通れて誰もいないこと。attack で指定）", "en": "Attack an enemy 2 cells away in a straight line if the cell between is open and empty (use attack)" } },
+  { "id": "core:sweep", "name": { "ja": "薙ぐ", "en": "sweep" }, "handler": "sweep", "params": {},
+    "desc": { "ja": "近接攻撃が、対象と自分の両方に隣接する敵 1 体にも当たる（別に命中を判定）", "en": "A melee attack also strikes one enemy adjacent to both you and the target (rolled separately)" } },
+  { "id": "core:crush", "name": { "ja": "砕く", "en": "crush" }, "handler": "on_hit_stun", "params": { "chancePct": 20, "turns": 1 },
+    "desc": { "ja": "近接で当たれば 20% で 1 手番の朦朧", "en": "A melee hit stuns for 1 turn 20% of the time" } },
+  { "id": "core:balanced", "name": { "ja": "扱いやすい", "en": "balanced" }, "handler": "none", "params": {},
+    "desc": { "ja": "特別な効果は無い（命中の補正は武器の値に含まれる）", "en": "No special effect (its accuracy bonus is part of the weapon)" } }
+]

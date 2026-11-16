@@ -8,7 +8,7 @@
   {
     "id": "core:altar", "name": { "ja": "祭壇", "en": "altar" }, "category": "feature",
     "states": ["idle", "used"], "initialState": "idle", "passable": true,
-    "onInteract": [{ "effect": "identify", "count": 99 }],
+    "onInteract": [{ "effect": "identify", "count": 99 }, { "effect": "uncurse" }],
     "afterInteract": "used"
   },
   {

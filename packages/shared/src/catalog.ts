@@ -36,14 +36,41 @@ export interface CatalogItem {
   weapon?: { dmg: string; acc: number };
   armorStats?: { armor: number; eva: number };
   throwStats?: { dmg: string; acc: number; range: number };
+  /** 装備の性能（V3-4。鑑定済みなら定義の値をそのまま見せる）。0 / 既定値の項目は省く */
+  equipStats?: CatalogEquipStats;
 }
+
+/** 装備の修正（V3-4 §4.4・§14.5）。traits は武器の特性の ID */
+export interface CatalogEquipStats {
+  acc?: number; eva?: number; might?: number; armor?: number; maxHp?: number; sight?: number;
+  meleeAcc?: number; thrownAcc?: number; stealthPct?: number; wakePct?: number; moveCost?: number; noiseWakes?: boolean;
+  traits?: string[];
+}
+
+/** 特技（V3-4 §4.1） */
+export interface CatalogPerk {
+  name: Names; desc: Names; lineage: string; maxRanks: number; requires: string[];
+  mods: { maxHp: number; acc: number; eva: number; might: number; armor: number; capacity: number; stealthPct: number };
+  ability?: string;
+  hooks: string[];
+}
+
+/** 能動技（V3-4 §4.2） */
+export interface CatalogAbility { name: Names; desc: Names; target: 'adjacent' | 'throw' | 'dir' | 'none'; cooldown: number; perExpedition?: number; /** 振る舞いの種類（strike / cleave / heal_pct / aimed_throw / slip） */ handler: string }
 
 export interface CatalogClass {
   name: Names;
   desc: Names;
   base: { maxHp: number; acc: number; eva: number; might: number; armor: number; sight: number; speed: number; capacity: number };
   startItems: { item: string; qty: number; equip: boolean }[];
-  growth: { maxHpPerLevel: number; accEvery: number; mightEvery: number; evaEvery: number };
+  /** レベルごとの固定成長は最大 HP だけ（命中・威力・回避は特技。V3-4） */
+  growth: { maxHpPerLevel: number };
+  /** 習熟: 近接・投擲の命中の修正 */
+  proficiency: { melee: number; thrown: number };
+  /** 特技の系統（共通の表に加えて候補に出る） */
+  lineages: { id: string; name: Names }[];
+  /** Lv1 から持つ特技 */
+  startPerks: string[];
 }
 
 export interface Catalog {
@@ -59,7 +86,12 @@ export interface Catalog {
   /** speedPct: 速度を変える状態異常の倍率（%）。公開ルール（加速 x2 など） */
   statuses: Record<string, { name: Names; speedPct?: number }>;
   /** itemMods: 品物の接辞の効果（自分の持ち物の性能表示に使う。敵の接辞の値は出さない） */
-  affixes: Record<string, { name: Names; target: 'monster' | 'item' | 'guardian'; itemMods?: { acc: number; dmgBonus: number; armor: number } }>;
+  affixes: Record<string, { name: Names; target: 'monster' | 'item' | 'guardian'; itemMods?: { acc: number; dmgBonus: number; armor: number; eva?: number; might?: number; maxHp?: number; sight?: number }; cursed?: boolean }>;
+  /** ビルド（V3-4） */
+  perks: Record<string, CatalogPerk>;
+  abilities: Record<string, CatalogAbility>;
+  /** reach: 近接の届く距離（長柄）、attackCost: 近接の手番コスト（速い） */
+  weaponTraits: Record<string, { name: Names; desc: Names; reach?: number; attackCost?: number }>;
   biomes: Record<string, { name: Names }>;
   floorTypes: Record<string, { name: Names }>;
   /** 公開ルールの数値（content の balance.json から。ルールブックと実際の挙動を一致させる） */
@@ -98,6 +130,9 @@ export interface CatalogRules {
   teleport: { minDistance: number };
   /** 守護者の格ごとの体力の上乗せ（%。V3-2R3 §20.1） */
   guardianRanks?: { hpPct: number }[];
+  /** 特技の候補の数・生成された装備が呪われる確率（V3-4） */
+  perkOptions?: number;
+  curseChancePct?: number;
   /** 遠征の条件（公開） */
   traits: Record<string, { name: Names; desc: Names; multiplierPct: number; danger: number }>;
 }

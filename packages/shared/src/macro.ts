@@ -7,6 +7,13 @@ import { actionError } from './commands';
 import type { ProjectedEvent } from './filter';
 import { memoryKey } from './catalog';
 import { worstTurnOf } from './danger';
+import { abilityStatus, weaponReach } from './build';
+
+/** 能動技が今使えるか（残りの手番 0・遠征ごとの回数が残っている） */
+function abilityReady(view: PlayerView, catalog: Catalog, id: string): boolean {
+  const s = abilityStatus(view, catalog, id);
+  return s.cooldownLeft === 0 && s.usesLeft !== 0;
+}
 import { buildNavGrid, dirBetween, findFrontiers, findPath } from './nav';
 import type { Dir, Pos } from './types';
 import { DIRS } from './types';
@@ -26,10 +33,41 @@ export type MacroStop =
   // fight の拡張（V3-2R2 §18.5）
   | 'target_adjacent' | 'out_of_ammo' | 'no_line_of_sight' | 'target_not_approaching' | 'target_not_hunting' | 'not_throwable'
   // 被弾の前に止まる（V3-2R3 §20.4）: 次の手番に最悪の被害を受けると hp_floor を割る / 記録の無い種族から初めて被弾した
-  | 'hp_risk' | 'first_hit';
+  | 'hp_risk' | 'first_hit'
+  // fight に載せた能動技（V3-4a §25.3）: 覚えていない / 載せられない（立て直し・身をかわす） / 狙い撃ちには with が要る
+  | 'ability_unknown' | 'ability_not_allowed' | 'ability_needs_with';
+
+/** fight に載せられる能動技の振る舞い（V3-4a §25.3）。立て直し・身をかわすは、いつ使うかが判断そのものなので載せない */
+export const FIGHT_ABILITY_HANDLERS: readonly string[] = ['strike', 'cleave', 'aimed_throw'];
+
+/** fight の abilities を解決する（短い ID でもよい） */
+export function resolveFightAbilities(view: PlayerView, catalog: Catalog, ids: readonly string[], withSlot: string | undefined): { ids: string[]; error?: 'unknown' | 'not_allowed' | 'needs_with' } {
+  const out: string[] = [];
+  for (const raw of ids) {
+    const id = view.self.build.abilities.map((a) => a.id).find((k) => k === raw || k.split(':')[1] === raw);
+    if (!id) return { ids: out, error: 'unknown' };
+    const h = catalog.abilities[id]?.handler;
+    if (!h || !FIGHT_ABILITY_HANDLERS.includes(h)) return { ids: out, error: 'not_allowed' };
+    if (h === 'aimed_throw' && !withSlot) return { ids: out, error: 'needs_with' };
+    if (!out.includes(id)) out.push(id);
+  }
+  return { ids: out };
+}
 
 /** 自然に終わった（中断ではない）停止理由 */
 export const MACRO_COMPLETED_STOPS: ReadonlySet<MacroStop> = new Set<MacroStop>(['arrived', 'explored', 'full_hp', 'target_hp', 'max_turns', 'collected', 'target_down']);
+
+/** 直線で 2 マス先、間のマスが既知の地形で通れて、見えている者がいない（長柄。engine の reachLine と同じ判定） */
+export function reachMidOpen(view: PlayerView, catalog: Catalog, from: Pos, to: Pos): boolean {
+  const f = view.floor;
+  if (!f) return false;
+  const dx = to.x - from.x, dy = to.y - from.y;
+  if (cheb(from, to) !== 2 || (dx !== 0 && Math.abs(dx) !== 2) || (dy !== 0 && Math.abs(dy) !== 2)) return false;
+  const mid = { x: from.x + Math.sign(dx), y: from.y + Math.sign(dy) };
+  const tr = catalog.terrain[view.terrainTable[view.memory.terrain[mid.y * f.width + mid.x]]];
+  if (!tr?.passable || tr.door === 'closed') return false;
+  return !view.entities.some((e) => (e.cat === 'monster' || e.cat === 'player') && e.pos.x === mid.x && e.pos.y === mid.y);
+}
 
 /** fight が相手を待つ最大の手番（近づいてくるまで・射程に入るまで） */
 export const FIGHT_WAIT_MAX = 10;
@@ -54,6 +92,9 @@ export interface MacroState {
   /** fight: 投げる品のスロットと、開始時のその品の種類（尽きたら止まる） */
   fightWith?: string;
   fightKind?: string | null;
+  /** fight: 使える手番ごとに使う能動技（解決した ID）と、使えない指定（覚えていない・載せられない。V3-4a §25.3） */
+  fightAbilities?: string[];
+  fightAbilityError?: 'unknown' | 'not_allowed' | 'needs_with';
   /** fight: 一度でも隣で殴り合ったか・待った手番・隣から離れていた手番・射線が通らなかった手番 */
   engaged?: boolean;
   waits?: number;
@@ -212,6 +253,10 @@ export function macroStart(view: PlayerView, cmd: Command, catalog: Catalog): Ma
     collectWhat: cmd.type === 'collect' ? (cmd.what ?? 'thrown') : 'thrown',
     ...(cmd.type === 'fight' ? { fightTarget: cmd.target, engaged: false, waits: 0, apart: 0, blocked: 0 } : {}),
     ...(withSlot ? { fightWith: withSlot, fightKind: withItem ? (withItem.kind ?? withItem.appearanceId) : null } : {}),
+    ...(cmd.type === 'fight' && cmd.abilities?.length ? (() => {
+      const r = resolveFightAbilities(view, catalog, cmd.abilities, withSlot);
+      return { fightAbilities: r.ids, ...(r.error ? { fightAbilityError: r.error } : {}) };
+    })() : {}),
     floorKey: view.floor?.key ?? '',
     lastHp: view.self.stats.hp,
     knownHostiles: hostileIds(view),
@@ -372,6 +417,7 @@ export function macroNext(state: MacroState, view: PlayerView, catalog: Catalog,
 
   // 戦う（V3-2R2 §18.5）: 隣の相手を殴り続ける／そのスロットの品を投げ続ける。追跡中で届かない相手は待つ
   if (kind === 'fight') {
+    if (state.fightAbilityError) return { stop: state.fightAbilityError === 'unknown' ? 'ability_unknown' : state.fightAbilityError === 'needs_with' ? 'ability_needs_with' : 'ability_not_allowed' };
     const tg = hostiles.find((h) => h.id === state.fightTarget);
     if (!tg) return { stop: 'target_gone' };
     if (state.steps >= state.limit) return { stop: 'step_limit' };
@@ -393,6 +439,9 @@ export function macroNext(state: MacroState, view: PlayerView, catalog: Catalog,
       if (tg.shot && d <= range) {
         state.blocked = 0;
         state.steps += 1;
+        // 狙い撃ち（載せていて使えるなら。V3-4a §25.3）
+        const aimed = (state.fightAbilities ?? []).find((id) => catalog.abilities[id]?.handler === 'aimed_throw' && abilityReady(view, catalog, id));
+        if (aimed) return { command: { type: 'ability', id: aimed, target: tg.id, slot } };
         return { command: { type: 'throw', slot, target: tg.id } };
       }
       // 射程外か射線なし: 追跡中で近づいてくるなら待つ
@@ -412,7 +461,21 @@ export function macroNext(state: MacroState, view: PlayerView, catalog: Catalog,
       const dir = dirBetween(pos, tg.pos);
       if (!dir) return { stop: 'error' };
       state.steps += 1;
+      // 載せた能動技（V3-4a §25.3）: なぎ払いは起きている敵が隣に 2 体以上、強打は標的が隣にいて使える手番に。条件を満たさなければ通常の攻撃
+      const abil = state.fightAbilities ?? [];
+      const awakeAdj = hostiles.filter((h) => cheb(h.pos, pos) <= 1 && h.awareness !== 'asleep').length;
+      const cleave = abil.find((id) => catalog.abilities[id]?.handler === 'cleave' && abilityReady(view, catalog, id));
+      if (cleave && awakeAdj >= 2) return { command: { type: 'ability', id: cleave } };
+      const strike = abil.find((id) => catalog.abilities[id]?.handler === 'strike' && abilityReady(view, catalog, id));
+      if (strike) return { command: { type: 'ability', id: strike, target: tg.id } };
       return { command: { type: 'move', dir } };
+    }
+    // 長柄（V3-4 §4.4）: 直線で 2 マス先、間のマスが通れて誰もいなければ、そこから突く
+    if (d === 2 && weaponReach(view, catalog) >= 2 && reachMidOpen(view, catalog, pos, tg.pos)) {
+      state.engaged = true;
+      state.apart = 0;
+      state.steps += 1;
+      return { command: { type: 'attack', target: tg.id } };
     }
     if (state.engaged) {
       // 当てて逃げる相手: 追跡中で 2 マス以内なら 2 手番まで待つ（追わない）
@@ -456,6 +519,13 @@ export function macroNext(state: MacroState, view: PlayerView, catalog: Catalog,
 
   const grid = buildNavGrid(view, catalog)!;
   const here = pos.y * grid.width + pos.x;
+  // 見えて「拾わない」と分かった品（同じか劣る装備・有害品）は、視界を出て記憶に戻っても、この呼び出しの間は行き先にしない
+  // （記憶の中の品は接辞が分からないので拾える側に数えられ、見える・見えないの間を往復しないように）
+  // （travel_to の目的地に指定した品は除く。明示した行き先は有害品・遺物でも拾う）
+  {
+    const ok = new Set(pickableItems(view, catalog).map((x) => x.id));
+    for (const e of view.entities) if (e.cat === 'item' && e.id !== state.target && !ok.has(e.id) && !state.skipItems.includes(e.id)) state.skipItems.push(e.id);
+  }
   // 足元のアイテムを拾う（通り道と目的地。1 手番）
   if (state.pickup) {
     const items = pickableItems(view, catalog, state.skipItems).filter((x) => x.cell === here && view.entities.some((e) => e.id === x.id));
@@ -568,6 +638,12 @@ export function macroStopError(L: Locale, stop: MacroStop, cmd: Command): Action
       return actionError('no_target', t(L, 'その相手は動かないので、待っても近づいてこない。', 'That target does not move, so waiting will not bring it closer.'), t(L, 'travel_to で隣へ行くか、投擲で戦う（fight { target, with }）。', 'Walk next to it with travel_to, or fight it with throws (fight { target, with }).'));
     case 'target_adjacent':
       return actionError('blocked', t(L, '相手は隣にいる（投擲の fight は隣に来た相手には止まる）。', 'The target is adjacent (throwing fight stops once it is next to you).'), t(L, '近接で戦うなら fight { target }（with なし）、それでも投げるなら throw_item。', 'Melee with fight { target } (no with), or throw once with throw_item.'));
+    case 'ability_unknown':
+      return actionError('cannot_use', t(L, 'abilities に、覚えていない能動技がある。', 'abilities lists an ability you do not know.'), t(L, 'self.abilities の id を並べる。', 'List ids from self.abilities.'));
+    case 'ability_not_allowed':
+      return actionError('cannot_use', t(L, 'fight に載せられるのは強打・なぎ払い・狙い撃ちだけ（立て直し・身をかわすは use_ability で使う）。', 'fight can only carry bash, cleave and aimed_throw (use second_wind and slip with use_ability).'), t(L, 'abilities から外す。', 'Remove it from abilities.'));
+    case 'ability_needs_with':
+      return actionError('cannot_use', t(L, '狙い撃ちは投擲で戦うときだけ載せられる。', 'aimed_throw can only be carried when fighting with a thrown item.'), t(L, 'fight { target, with: <スロット>, abilities: [aimed_throw] }。', 'Use fight { target, with: <slot>, abilities: [aimed_throw] }.'));
     case 'out_of_ammo':
     case 'not_throwable':
       return actionError('cannot_use', t(L, 'そのスロットに投げられる物が無い。', 'There is nothing throwable in that slot.'), t(L, 'self.attack.throws のスロットを with に指定する。', 'Pass a slot from self.attack.throws as with.'));

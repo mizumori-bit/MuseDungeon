@@ -8,6 +8,7 @@ import { assetsCheck, assetsChecklist } from './assets';
 import { commandInvoker, drive, dummyInvoker, httpInvoker } from './drive';
 import { formatPacing, pacingReport } from './pacing';
 import { choicesReport, formatChoices } from './choices';
+import { buildsReport, formatBuilds } from './builds';
 import { budgetReport, formatBudget } from './budget';
 import { verifyRunDir, writeGolden } from './replay';
 import { resolve } from 'node:path';
@@ -167,6 +168,14 @@ async function main() {
       const manager = new SessionManager(content, loadConfig({ runsDir: null }));
       const rep = await budgetReport(manager, { runs: Number(flag('runs', '30')), maxActs: Number(flag('max-acts', '600')), seed: flag('seed', 'budget')!, ...(flag('slot-runs', '') ? { slotRuns: Number(flag('slot-runs', '')) } : {}), log: has('verbose') ? (s) => console.log(s) : undefined });
       console.log(has('json') ? JSON.stringify(rep, null, 2) : formatBudget(rep));
+      break;
+    }
+    case 'builds': {
+      // V3-4 §10: 特技の系統ごとの到達深度と、撃破に占める投擲の割合
+      const manager = new SessionManager(content, loadConfig({ runsDir: null }));
+      const rep = await buildsReport(manager, { runs: Number(flag('runs', '20')), maxActs: Number(flag('max-acts', '1500')), seed: flag('seed', 'builds')!, log: (s) => console.log(s) });
+      console.log('');
+      console.log(has('json') ? JSON.stringify(rep, null, 2) : formatBuilds(rep));
       break;
     }
     case 'choices': {

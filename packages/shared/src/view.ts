@@ -2,7 +2,7 @@
 // projectPlayerView はルール無しの純粋なフィルタ。仕様: docs/PROTOCOL.md §4
 import type {
   CampState, Controller, Entity, EntityId, EntityRole, EquipSlot, Expedition, ExpeditionEndReason, ExpeditionResult, FloorKey,
-  Locale, MonsterMemory, Objective, OfferSlot, PlayerId, PlayerState, Pos, RememberedEntity, Stats, StatusInst, World, Sense, FloorHint,
+  Locale, MonsterMemory, Objective, OfferSlot, PlayerBuild, PlayerId, PlayerState, Pos, RememberedEntity, Stats, StatusInst, World, Sense, FloorHint,
 } from './types';
 
 export type HpState = 'healthy' | 'wounded' | 'badly_wounded' | 'near_death';
@@ -23,6 +23,8 @@ export interface ItemView {
   equipped: EquipSlot | null;
   /** 宝の価値（見えた時点で分かる） */
   value?: number;
+  /** 呪いの有無を確かめた（装備・鑑定・初期装備。V3-4）。見えていない呪いそのものは渡さない */
+  inspected?: boolean;
 }
 
 export interface EntityView {
@@ -93,6 +95,8 @@ export interface SelfView {
   turns: number;
   /** 自然回復の蓄積値 */
   regen: number;
+  /** ビルド（V3-4）: 取った特技・選んでいない候補・覚えた能動技（readyAt は手番数 turns と比べる） */
+  build: PlayerBuild;
 }
 
 export interface PartyMemberView {
@@ -220,7 +224,8 @@ export function deepestGenerated(world: World): number {
  * 閾値は wounded / near_death などの HP 4 段階と同じ程度の公開情報。
  */
 export function isFleeing(e: Entity): boolean {
-  const at = e.actor?.ai?.params.fleeBelowHpPct ?? 0;
+  // 怯え（威圧。V3-4）は閾値に power を足す
+  const at = (e.actor?.ai?.params.fleeBelowHpPct ?? 0) + ((e.statuses ?? []).find((s) => s.id === 'core:cowed')?.power ?? 0);
   if (at <= 0 || !e.stats) return false;
   return Math.trunc((e.stats.hp * 100) / Math.max(1, e.stats.maxHp)) < at;
 }
@@ -277,6 +282,7 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
       qty: it.item.qty, affixes: [...it.item.affixes], equipped: equippedBy[id] ?? null,
     };
     if (it.item.value !== undefined) iv.value = it.item.value;
+    if (it.item.inspected) iv.inspected = true;
     inventory.push(iv);
   }
   inventory.sort((a, b) => (a.slot < b.slot ? -1 : a.slot > b.slot ? 1 : 0));
@@ -394,6 +400,7 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
       capacity: me.inv?.capacity ?? 0,
       turns: me.actor?.turns ?? 0,
       regen: me.actor?.regen ?? 0,
+      build: me.build ? structuredClone(me.build) : { perks: [], pending: [], abilities: [] },
     },
     inventory,
     floor: floor ? {

@@ -8,6 +8,8 @@ import type { Ctx } from './ctx';
 import { hasLos } from './geom';
 import { isOpaqueFn, makeNoise, monsterSees, shotLine, updateMemory, wakeMonster } from './perception';
 import { Registry } from './registry';
+import { perkHook } from './build';
+import { addStatus } from './statuses';
 
 export interface AiInput { target: Entity | null; ai: AiState; def: MonsterDef }
 /** 1 手番の行動を行い、行動コスト（標準 100）を返す */
@@ -150,10 +152,15 @@ function noTarget(ctx: Ctx, m: Entity, ai: AiState): number {
   return 100;
 }
 
+/** 怯え（威圧。V3-4）の上乗せ: 逃げ出す HP の閾値に足す */
+function cowedPct(m: Entity): number {
+  return (m.statuses ?? []).find((s) => s.id === 'core:cowed')?.power ?? 0;
+}
+
 function chaser(defaultFlee: number): Archetype {
   return (ctx, m, { target, ai }) => {
     if (!target) return noTarget(ctx, m, ai);
-    const fleeAt = ai.params.fleeBelowHpPct ?? defaultFlee;
+    const fleeAt = (ai.params.fleeBelowHpPct ?? defaultFlee) + cowedPct(m);
     const adjacent = cheb(m.pos!, target.pos!) === 1;
     if (fleeAt > 0 && hpPct(m) < fleeAt) {
       if (flee(ctx, m, target.pos!)) return 100;
@@ -215,6 +222,15 @@ export function monsterTurn(ctx: Ctx, m: Entity): number {
     if (!monsterSees(ctx, m, pe)) continue;
     const d = cheb(m.pos!, pe.pos!);
     if (d < bestD) { bestD = d; target = pe; }
+  }
+  // 威圧（V3-4 §4.1）: 威圧を持つプレイヤーの隣にいる敵は怯える（逃げ出す HP の閾値が上がる）
+  for (const pr of ctx.playersOn(key)) {
+    const pe = ctx.world.entities[pr.entityId];
+    const h = perkHook(ctx, pe, 'intimidate');
+    if (h && pe.pos && cheb(pe.pos, m.pos!) === 1 && !(m.statuses ?? []).some((s) => s.id === 'core:cowed')) {
+      addStatus(ctx, ctx.world.entities[m.id], 'core:cowed', h.turns ?? 3, h.fleePct ?? 25, pe.id);
+      break;
+    }
   }
   const next: AiState = { ...ai, targetPos: ai.targetPos ? { ...ai.targetPos } : null };
   if (target) {

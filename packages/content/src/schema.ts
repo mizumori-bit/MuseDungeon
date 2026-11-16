@@ -58,6 +58,22 @@ export const EquipSchema = z.object({
   eva: z.number().int().default(0),
   might: z.number().int().default(0),
   armor: z.number().int().default(0),
+  /** 以下 V3-4（IMPROVEMENTS_V3 §4.4・§14.5） */
+  maxHp: z.number().int().default(0),
+  sight: z.number().int().default(0),
+  /** 近接・投擲だけの命中の修正（習熟と同じ扱い） */
+  meleeAcc: z.number().int().default(0),
+  thrownAcc: z.number().int().default(0),
+  /** 起こしにくさ（職業の stealthPct に足す） */
+  stealthPct: z.number().int().default(0),
+  /** 眠っている敵が起きる確率に足す（%。重い鎧） */
+  wakePct: z.number().int().default(0),
+  /** 歩く手番のコスト（標準 100。重い鎧） */
+  moveCost: z.number().int().min(50).default(100),
+  /** 自分の立てた音で、眠っている敵が必ず起きる（静寂の指輪の欠点） */
+  noiseWakes: z.boolean().default(false),
+  /** 武器の特性（weaponTraits の ID） */
+  traits: z.array(IdSchema).default([]),
 });
 
 export const ItemSchema = z.object({
@@ -98,9 +114,13 @@ export const AffixSchema = z.object({
     hpPct: z.number().int().default(0), speed: z.number().int().default(0), acc: z.number().int().default(0),
     eva: z.number().int().default(0), might: z.number().int().default(0), armor: z.number().int().default(0),
     dmgBonus: z.number().int().default(0), xpPct: z.number().int().default(0),
+    /** 品物の接辞だけ: 最大 HP・視界（V3-4） */
+    maxHp: z.number().int().default(0), sight: z.number().int().default(0),
   }).default({}),
   onHit: z.array(EffectSchema).default([]),
   abilities: z.array(z.string()).default([]),
+  /** 呪い（V3-4 §4.4）: 装備するか鑑定するまで見えず、装備すると外せない */
+  cursed: z.boolean().default(false),
 });
 
 export const StatusSchema = z.object({
@@ -203,11 +223,59 @@ export const ClassSchema = z.object({
   capacity: z.number().int().min(1).max(26).default(20),
   unarmed: DiceSchema.default('1d3'),
   startItems: z.array(z.object({ item: IdSchema, qty: z.number().int().min(1).default(1), equip: z.boolean().default(false) })).default([]),
-  levelUp: z.object({ hp: z.number().int().min(0), accEvery: z.number().int().min(0).default(2), mightEvery: z.number().int().min(0).default(3), evaEvery: z.number().int().min(0).default(4) }),
+  /** レベルごとの固定成長は HP だけ。命中・威力・回避は特技で選ぶ（V3-4 §4.1） */
+  levelUp: z.object({ hp: z.number().int().min(0) }),
+  /** 習熟（V3-4 §4.3）: 近接・投擲の命中の修正 */
+  proficiency: z.object({ melee: z.number().int().default(0), thrown: z.number().int().default(0) }).default({}),
+  /** 職業の特技の系統（共通の表に加えて候補に出る）。perks.json の lineage と対応 */
+  lineages: z.array(z.object({ id: z.string().min(1), name: NamesSchema })).default([]),
+  /** Lv1 から持つ特技（能動技 1 つを含む） */
+  startPerks: z.array(IdSchema).default([]),
   /** 罠を見つける確率（隣接時、毎手番） */
   searchPct: z.number().int().min(0).max(100).default(15),
   /** 寝ているモンスターを起こしにくさ（起床判定の確率補正 %） */
   stealthPct: z.number().int().min(0).max(100).default(0),
+});
+
+/** 特技（V3-4 §4.1）。lineage: 'common' か職業の系統 ID。mods は取った時点で基本値に入る。hooks はエンジンのレジストリ（perkHooks）の ID と引数 */
+export const PerkSchema = z.object({
+  id: IdSchema,
+  name: NamesSchema,
+  desc: NamesSchema,
+  lineage: z.string().min(1),
+  maxRanks: z.number().int().min(1).default(1),
+  requires: z.array(IdSchema).default([]),
+  mods: z.object({
+    maxHp: z.number().int().default(0), acc: z.number().int().default(0), eva: z.number().int().default(0),
+    might: z.number().int().default(0), armor: z.number().int().default(0), capacity: z.number().int().default(0),
+    stealthPct: z.number().int().default(0),
+  }).default({}),
+  /** 取ると覚える能動技 */
+  ability: IdSchema.optional(),
+  hooks: z.array(z.object({ hook: z.string().min(1) }).catchall(z.number())).default([]),
+});
+
+/** 能動技（V3-4 §4.2）。資源は持たず、再使用までの手番（cooldown）だけ。handler はエンジンのレジストリ（abilities） */
+export const AbilitySchema = z.object({
+  id: IdSchema,
+  name: NamesSchema,
+  desc: NamesSchema,
+  handler: z.string().min(1),
+  /** 対象の取り方: adjacent 隣の敵 / throw 投擲の射程と射線が通る敵 / dir 方向 / none 自分 */
+  target: z.enum(['adjacent', 'throw', 'dir', 'none']),
+  cooldown: z.number().int().min(0),
+  /** 遠征ごとの回数の上限（立て直し） */
+  perExpedition: z.number().int().min(1).optional(),
+  params: z.record(z.number()).default({}),
+});
+
+/** 武器の特性（V3-4 §4.4）。handler はエンジンのレジストリ（weaponTraits） */
+export const WeaponTraitSchema = z.object({
+  id: IdSchema,
+  name: NamesSchema,
+  desc: NamesSchema,
+  handler: z.string().min(1),
+  params: z.record(z.number()).default({}),
 });
 
 const Int = z.number().int();
@@ -251,6 +319,10 @@ export const BalanceSchema = z.object({
     /** 持ち場の範囲（V3-2R3b §23.2）: 気づいていない守護者は持ち場からこのマス数（チェビシェフ）以内だけを動く */
     leash: Int.min(0).default(3),
   }),
+  /** 特技の候補の数（V3-4 §4.1） */
+  perks: z.object({ options: Int.min(1) }).default({ options: 3 }),
+  /** 呪い（V3-4 §4.4）: 武器・防具・装飾品が生成されるときに呪われる確率（%）。呪われた品は必ず良い接辞も持つ */
+  curse: z.object({ chancePct: Int.min(0).max(100) }).default({ chancePct: 0 }),
   expedition: z.object({
     /** 最初の遠征の目標深度（枠ごと） */
     firstTargetDepth: z.object({ safe: Int.min(2), standard: Int.min(2), ambitious: Int.min(2) }),
@@ -322,6 +394,9 @@ export type FeatureDef = z.infer<typeof FeatureSchema>;
 export type BalanceDef = z.infer<typeof BalanceSchema>;
 export type PacingDef = z.infer<typeof PacingSchema>;
 export type ExpeditionTraitDef = z.infer<typeof ExpeditionTraitSchema>;
+export type PerkDef = z.infer<typeof PerkSchema>;
+export type AbilityDef = z.infer<typeof AbilitySchema>;
+export type WeaponTraitDef = z.infer<typeof WeaponTraitSchema>;
 
 /** ファイル名 → スキーマ。新しい定義ファイル種別はここに 1 行足す */
 export const FILE_SCHEMAS = {
@@ -340,6 +415,9 @@ export const FILE_SCHEMAS = {
   features: FeatureSchema,
   balance: BalanceSchema,
   expeditionTraits: ExpeditionTraitSchema,
+  perks: PerkSchema,
+  abilities: AbilitySchema,
+  weaponTraits: WeaponTraitSchema,
 } as const;
 
 export type FileKind = keyof typeof FILE_SCHEMAS;

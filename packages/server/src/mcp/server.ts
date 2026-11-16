@@ -378,19 +378,34 @@ export function createMcpServer(ctx: McpContext): McpServer {
     inputSchema: { ...actionCommon, what: z.enum(['thrown', 'items']).optional(), ...moveArgs },
   }, async (a) => act('collect', a, { type: 'collect', what: a.what, mode: a.mode, hpFloor: a.hp_floor }));
   server.registerTool('fight', {
-    title: '戦う', description: 'マクロ: その相手と決着を付ける。with なしは近接（追跡中の相手が隣に来るまで待つ。最大 10 手番）、with にスロットを渡すとその品を投げて戦う（射程と射線が通るまで待つ）。相手が倒れた・離れた、（with）隣に来た・品が尽きた、HP が hp_floor（既定 50%）を下回った、追跡中の別の敵が現れた、状態異常を受けたら止まる。眠っている・気付いていない相手は待たない。結果に与えた・受けた攻撃の回数と合計。',
-    inputSchema: { ...actionCommon, target: z.string().regex(/^e_[0-9a-z]{6}$/), with: z.string().regex(/^[a-z]$/).optional().describe('投げて戦う品の所持品スロット（self.attack.throws）'), hp_floor: z.number().int().min(0).optional() },
-  }, async (a) => act('fight', a, { type: 'fight', target: a.target, ...(a.with ? { with: a.with } : {}), hpFloor: a.hp_floor }));
+    title: '戦う', description: 'マクロ: その相手と決着を付ける。with なしは近接（追跡中の相手が隣に来るまで待つ。最大 10 手番）、with にスロットを渡すとその品を投げて戦う（射程と射線が通るまで待つ）。相手が倒れた・離れた、（with）隣に来た・品が尽きた、HP が hp_floor（既定 50%）を下回った、追跡中の別の敵が現れた、状態異常を受けたら止まる。眠っている・気付いていない相手は待たない。abilities に能動技（強打・なぎ払い・狙い撃ち）を並べると、使える手番ごとに使う（強打は標的が隣、なぎ払いは起きている敵が隣に 2 体以上、狙い撃ちは with の品で射程と射線が通るとき。それ以外の手番は通常の攻撃）。結果に与えた・受けた攻撃の回数と合計、使った能動技の回数。',
+    inputSchema: {
+      ...actionCommon, target: z.string().regex(/^e_[0-9a-z]{6}$/), with: z.string().regex(/^[a-z]$/).optional().describe('投げて戦う品の所持品スロット（self.attack.throws）'), hp_floor: z.number().int().min(0).optional(),
+      abilities: z.array(z.string().min(1)).max(4).optional().describe('使える手番ごとに使う能動技（bash・cleave・aimed_throw。aimed_throw は with と一緒に。second_wind・slip は載せられない）'),
+    },
+  }, async (a) => act('fight', a, { type: 'fight', target: a.target, ...(a.with ? { with: a.with } : {}), hpFloor: a.hp_floor, ...(a.abilities?.length ? { abilities: a.abilities } : {}) }));
+  server.registerTool('attack', {
+    title: '攻撃', description: '近接攻撃。隣の敵か、長柄の武器（槍）なら縦・横・斜めの直線で 2 マス先の敵（間のマスが通れて誰もいないこと）。隣の敵なら move でも攻撃できる。',
+    inputSchema: { ...actionCommon, target: z.string().regex(/^e_[0-9a-z]{6}$/) },
+  }, async (a) => act('attack', a, { type: 'attack', target: a.target }));
+  server.registerTool('use_ability', {
+    title: '能動技', description: '能動技を使う（self.abilities。再使用までの手番 cooldown だけで管理）。target: 隣の敵・投擲の対象なら ID、身をかわすなら方向。slot: 狙い撃ちで投げる品（省略時は投擲用の品の最初のスロット）。使えない・対象が無いときは手番を使わずに拒否する。',
+    inputSchema: { ...actionCommon, id: z.string().min(1).describe('能動技の ID（bash / cleave / second_wind / aimed_throw / slip など。self.abilities の id）'), target: z.string().optional().describe('敵の ID（e_xxxxxx）か方向（n ne e se s sw w nw）'), slot: z.string().regex(/^[a-z]$/).optional() },
+  }, async (a) => act('use_ability', a, { type: 'ability', id: a.id, ...(a.target ? { target: a.target as never } : {}), ...(a.slot ? { slot: a.slot } : {}) }));
+  server.registerTool('choose_perk', {
+    title: '特技を選ぶ', description: 'レベルアップの特技の候補から 1 つ選ぶ（self.perk_choice。手番を消費しない。選ぶまで進行は止まらない）。option は候補の番号（1 から）か特技の ID。',
+    inputSchema: { ...common, option: z.union([z.number().int().min(1).max(9), z.string().min(1)]) },
+  }, async (a) => act('choose_perk', a, { type: 'choose_perk', option: a.option }));
   server.registerTool('pickup', { title: '拾う', description: '足元のアイテムを拾う（省略時は全て）。', inputSchema: { ...actionCommon, item: z.string().regex(/^e_[0-9a-z]{6}$/).optional() } },
     async (a) => act('pickup', a, { type: 'pickup', item: a.item }));
   server.registerTool('drop', { title: '置く', description: '所持品を足元に置く。', inputSchema: { ...actionCommon, slot: SlotZ, qty: z.number().int().positive().optional() } },
     async (a) => act('drop', a, { type: 'drop', slot: a.slot, qty: a.qty }));
-  server.registerTool('equip', { title: '装備', description: '武器・防具を装備する。', inputSchema: { ...actionCommon, slot: SlotZ } },
+  server.registerTool('equip', { title: '装備', description: '武器・防具・装飾品を装備する。装備すると正体と呪いの有無が分かる（呪われていれば外せない）。', inputSchema: { ...actionCommon, slot: SlotZ } },
     async (a) => act('equip', a, { type: 'equip', slot: a.slot }));
   server.registerTool('unequip', { title: '装備解除', description: '装備を外す（スロット文字か weapon/armor/accessory）。', inputSchema: { ...actionCommon, slot: z.union([SlotZ, z.enum(['weapon', 'armor', 'accessory'])]) } },
     async (a) => act('unequip', a, { type: 'unequip', slot: a.slot }));
   server.registerTool('use_item', {
-    title: '使う', description: '薬を飲む・巻物を読む・帰還の綱を使う（2 手番後にキャンプへ。戦利品の半分が確定。1 回の呼び出しで最後まで進む）。鑑定の巻物は target_slot で対象を選べる（省略時はスロット順で最初の未鑑定品）。',
+    title: '使う', description: '薬を飲む・巻物を読む・帰還の綱を使う（その場でキャンプへ。戦利品の半分が確定）。鑑定の巻物は target_slot で対象を選べる（省略時はスロット順で最初の未鑑定品か、呪いの有無を確かめていない装備品）。',
     inputSchema: { ...actionCommon, slot: z.string().describe(SlotZ.description ?? ''), target: z.any().optional().describe(TargetZ.description ?? ''), target_slot: z.string().optional().describe('鑑定の巻物などの対象の所持品スロット') },
   }, async (a) => act('use_item', a, { type: 'use', slot: a.slot, target: a.target as never, targetSlot: a.target_slot }));
   server.registerTool('throw_item', {

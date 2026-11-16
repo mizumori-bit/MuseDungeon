@@ -6,6 +6,8 @@ import type {
 } from '@muse/shared';
 import { actionError, CAMP_COMMANDS, emptyWorld, EVENT_VERSION, FREE_COMMANDS, MACRO_COMMANDS, Rng, t } from '@muse/shared';
 import { actions, freeCommand } from './actions';
+import './abilities';
+import { initialBuild } from './build';
 import { Ctx } from './ctx';
 import { accrueHaul, checkObjective, huntingInView, offerExpeditions, startExpedition } from './expedition';
 import { ensureFloor, findFreeCell } from './floors';
@@ -13,7 +15,7 @@ import { updateKnowledge } from './perception';
 import { advance, endTurn } from './scheduler';
 import { recomputeStats } from './stats';
 
-export const ENGINE_VERSION = '0.7.0';
+export const ENGINE_VERSION = '0.8.0';
 
 export interface CreateRunParams {
   runId: string;
@@ -91,6 +93,8 @@ export function joinPlayer(world: World, content: Content, join: JoinCommand, me
     const id = ctx.newEntityId();
     const slot = String.fromCharCode(slotCode++);
     const it: Entity = { id, kind: si.item, sid: ctx.nextSid(), item: { qty: si.qty, affixes: [], heldBy: eid, slot } };
+    // 初期装備は呪われていないと分かっている（V3-4 §4.4）
+    if (content.items[si.item]?.equip) it.item!.inspected = true;
     ctx.emit({ type: 'entity_spawned', entity: it, reason: 'start_item', seenBy: [], floor: key });
     items.push(id);
     const def = content.items[si.item];
@@ -109,6 +113,9 @@ export function joinPlayer(world: World, content: Content, join: JoinCommand, me
     player: pid,
     level: { level: 1, xp: 0 },
   };
+  // ビルド（V3-4 §4.1）: 職業の Lv1 の特技と能動技
+  initialBuild(ctx, entity, classId);
+  entity.stats = { hp: entity.base!.maxHp, ...entity.base! };
   const record: PlayerRecord = {
     id: pid, name: join.name, classId, locale: loc, controller: { ...join.controller }, entityId: eid, state: 'alive',
     joinedSeq: world.seq + 1,

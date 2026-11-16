@@ -15,9 +15,39 @@ function classesText(c: Catalog, locale: 'ja' | 'en'): string {
     const b = k.base;
     const items = k.startItems.map((s) => `${nm(c.items[s.item]?.name ?? { ja: s.item, en: s.item })}${s.qty > 1 ? ` x${s.qty}` : ''}${s.equip ? (ja ? '(装備)' : ' (equipped)') : ''}`).join(', ');
     const g = k.growth;
+    const sg = (n: number) => (n >= 0 ? `+${n}` : `${n}`);
+    const par = (s: string) => (ja ? `（${s}）` : ` (${s})`);
+    const start = k.startPerks.map((pk) => { const d = c.perks[pk]; const ab = d?.ability ? c.abilities[d.ability] : undefined; return ab ? `${nm(d.name)}${par(`${ja ? '能動技' : 'ability'} ${d.ability!.split(':')[1]}`)}` : nm(d?.name ?? { ja: pk, en: pk }); }).join(', ');
+    const lin = k.lineages.map((l) => `${nm(l.name)}${par(l.id)}`).join(ja ? '・' : ', ');
     lines.push(ja
-      ? `- ${id.split(':')[1]}（${k.name.ja}）: ${k.desc.ja}\n  初期値: HP ${b.maxHp} 命中+${b.acc} 回避${b.eva} 威力${b.might} 装甲${b.armor} 視界${b.sight} 速さ${b.speed} 所持枠${b.capacity}\n  初期装備: ${items}\n  成長: レベルごとに HP +${g.maxHpPerLevel}${g.accEvery ? `、${g.accEvery} レベルごとに命中 +1` : ''}${g.mightEvery ? `、${g.mightEvery} レベルごとに威力 +1` : ''}${g.evaEvery ? `、${g.evaEvery} レベルごとに回避 +1` : ''}`
-      : `- ${id.split(':')[1]} (${k.name.en}): ${k.desc.en}\n  base: HP ${b.maxHp} acc+${b.acc} eva ${b.eva} might ${b.might} armor ${b.armor} sight ${b.sight} speed ${b.speed} capacity ${b.capacity}\n  start: ${items}\n  growth: HP +${g.maxHpPerLevel}/level${g.accEvery ? `, acc +1 every ${g.accEvery}` : ''}${g.mightEvery ? `, might +1 every ${g.mightEvery}` : ''}${g.evaEvery ? `, eva +1 every ${g.evaEvery}` : ''}`);
+      ? `- ${id.split(':')[1]}（${k.name.ja}）: ${k.desc.ja}\n  初期値: HP ${b.maxHp} 命中+${b.acc} 回避${b.eva} 威力${b.might} 装甲${b.armor} 視界${b.sight} 速さ${b.speed} 所持枠${b.capacity}\n  初期装備: ${items}\n  成長: レベルごとに HP +${g.maxHpPerLevel}。命中・威力・回避などは特技で選ぶ\n  習熟: 近接の命中 ${sg(k.proficiency.melee)}・投擲の命中 ${sg(k.proficiency.thrown)}\n  Lv1 の特技: ${start || 'なし'}\n  特技の系統: ${lin}＋共通`
+      : `- ${id.split(':')[1]} (${k.name.en}): ${k.desc.en}\n  base: HP ${b.maxHp} acc+${b.acc} eva ${b.eva} might ${b.might} armor ${b.armor} sight ${b.sight} speed ${b.speed} capacity ${b.capacity}\n  start: ${items}\n  growth: HP +${g.maxHpPerLevel}/level; accuracy, might, evasion and more come from perks\n  proficiency: melee acc ${sg(k.proficiency.melee)}, thrown acc ${sg(k.proficiency.thrown)}\n  level 1 perks: ${start || 'none'}\n  perk lineages: ${lin} + common`);
+  }
+  // 特技（V3-4 §4.1）
+  const n = c.rules.perkOptions ?? 3;
+  lines.push(ja
+    ? `\n# 特技（choose_perk）\n- レベルが上がるたびに、共通の表と職業の 2 系統から ${n} つの候補が出る（同じランなら同じ候補。取った特技・段階の上限・前提を満たさないものは除く）。choose_perk { option: 番号 } で 1 つ選ぶ。手番を消費せず、選ぶまで進行は止まらない（保留できる。alerts に perk_pending、self.perk_choice に候補）。保留が重なれば古い順に選び、次の候補はその後に引く。\n- 能動技を覚える特技を取ると self.abilities に入り、use_ability で使える。`
+    : `\n# Perks (choose_perk)\n- Each level up offers ${n} perks from the common table and your class's two lineages (the same run always offers the same; perks you have at their rank limit or whose prerequisites you lack are left out). Pick one with choose_perk { option: number }. It takes no turn and nothing waits for it (you may hold it: alerts carry perk_pending and self.perk_choice lists the options). Pending choices are resolved oldest first; the next options are drawn after that.\n- Perks that teach an ability add it to self.abilities; use it with use_ability.`);
+  const lineageName = (lid: string) => {
+    if (lid === 'common') return ja ? '共通' : 'common';
+    for (const k of Object.values(c.classes)) { const l = k.lineages.find((x) => x.id === lid); if (l) return ja ? `${nm(l.name)}（${nm(k.name)}）` : `${nm(l.name)} (${nm(k.name)})`; }
+    return lid;
+  };
+  const byLineage = new Map<string, string[]>();
+  for (const [pid, pk] of Object.entries(c.perks)) {
+    const s = `${nm(pk.name)}${ja ? `（${pid.split(':')[1].replace(/^perk_/, '')}）` : ` (${pid.split(':')[1].replace(/^perk_/, '')})`}: ${nm(pk.desc)}${pk.maxRanks > 1 ? (ja ? `（${pk.maxRanks} 段まで）` : ` (up to ${pk.maxRanks} ranks)`) : ''}`;
+    byLineage.set(pk.lineage, [...(byLineage.get(pk.lineage) ?? []), s]);
+  }
+  for (const [lid, list] of byLineage) lines.push(`- ${lineageName(lid)}: ${list.join(ja ? '／' : ' / ')}`);
+  // 能動技（V3-4 §4.2）
+  lines.push(ja
+    ? `\n# 能動技（use_ability { id, target?, slot? }）\n- 資源は使わず、再使用までの手番（cooldown）だけで管理する。使うと 1 手番。self.abilities に cooldown_left（0 なら使える）と、遠征ごとの回数があれば uses_left。valid_actions に使えるものは対象付き（use_ability bash -> e_xxx）、使えないものは残りの手番付きで出る。使えない・対象が無いときは手番を使わずに拒否される。`
+    : `\n# Abilities (use_ability { id, target?, slot? })\n- No resource: only a cooldown in turns. Using one takes a turn. self.abilities shows cooldown_left (0 = ready) and uses_left when limited per expedition. valid_actions lists ready ones with targets (use_ability bash -> e_xxx) and the others with turns left. If unusable or without a target it is refused without spending a turn.`);
+  for (const [aid, ab] of Object.entries(c.abilities)) {
+    const tg = ja ? { adjacent: '対象: 隣の敵（ID か方向。隣に 1 体なら省略可）', throw: '対象: 投擲の射程と射線が通る敵の ID（slot で投げる品。省略時は投擲用の品の最初のスロット）', dir: '対象: 方向', none: '対象なし' }[ab.target]
+      : { adjacent: 'target: an adjacent enemy (id or direction; may be omitted if only one)', throw: 'target: an enemy id in throwing range with a clear line (slot picks the item; default the first throwing item)', dir: 'target: a direction', none: 'no target' }[ab.target];
+    const cd = ab.perExpedition ? (ja ? `遠征ごとに ${ab.perExpedition} 回` : `${ab.perExpedition} per expedition`) : (ja ? `再使用まで ${ab.cooldown} 手番` : `cooldown ${ab.cooldown}`);
+    lines.push(ja ? `- ${aid.split(':')[1]}（${nm(ab.name)}）: ${nm(ab.desc)}。${tg}。${cd}` : `- ${aid.split(':')[1]} (${nm(ab.name)}): ${nm(ab.desc)}. ${tg}. ${cd}`);
   }
   return lines.join('\n');
 }
@@ -96,11 +126,13 @@ ${traitsLines(r, true)}
 - 接続が切れても遠征は終わらない（中断）。resume_run で続きから再開できる。
 - 観測の expedition に目的・進捗・can_extract（今この場で extract できるか）が毎回付く。`,
     actions: `# 行動
-手番を消費する: move{dir} / wait{turns?} / rest{until_hp?,max_turns?} / explore{mode?,hp_floor?,pickup?} / travel_to{to,mode?,hp_floor?,pickup?} / collect{what?,mode?} / fight{target,with?,hp_floor?} / pickup{item?} / drop{slot,qty?} / equip{slot} / unequip{slot} / use_item{slot,target?,target_slot?} / throw_item{slot,target} / interact{dir?} / use_stairs / extract{confirm?}
+手番を消費する: move{dir} / attack{target} / wait{turns?} / rest{until_hp?,max_turns?} / explore{mode?,hp_floor?,pickup?} / travel_to{to,mode?,hp_floor?,pickup?} / collect{what?,mode?} / fight{target,with?,hp_floor?,abilities?} / use_ability{id,target?,slot?} / pickup{item?} / drop{slot,qty?} / equip{slot} / unequip{slot} / use_item{slot,target?,target_slot?} / throw_item{slot,target} / interact{dir?} / use_stairs / extract{confirm?}
 キャンプで: start_expedition{offer} / retire
-手番を消費しない: observe / wait_for_turn / expedition / look / get_map / inventory / recall / get_messages / notes / say / set_options / get_rules
+手番を消費しない: choose_perk{option} / observe / wait_for_turn / expedition / look / get_map / inventory / recall / get_messages / notes / say / set_options / get_rules
 - 方向は n ne e se s sw w nw。座標は左上原点、x は東、y は南へ増える。
 - move: 敵がいれば近接攻撃（バンプ攻撃）、閉じた扉なら開ける（その手番は移動しない）、味方なら位置交換。
+- attack{target}: 近接攻撃。隣の敵か、長柄の武器（槍）なら縦・横・斜めの直線で 2 マス先の敵（間のマスが通れて誰もいないこと）。fight も長柄なら 2 マス先から突く。
+- use_ability{id,target?,slot?}: 能動技（get_rules classes）。choose_perk{option}: レベルアップの特技を選ぶ（手番を消費しない）。
 - 原則: 1 回の呼び出しは 1 つの判断に対応する。マクロが 1 歩も進めないと分かるときは、手番を使わずに理由付きのエラー（hostile_adjacent / hostile_in_view / hp_floor / blocked / nothing_to_do など）で拒否される。
 - explore: 未見の区画へ自動移動するマクロ（最大 ${r.macroStepLimit} 手）。pickup（既定 true）なら通り道と見えている・記憶したアイテムも拾う（遺物・鑑定済みの有害品・装備中の品と同じ種類で性能が同じか下の装備は拾わない。所持品が一杯なら拾わない）。toward: 'draft' なら下への風の方角の未探索を優先する。steady・flee では、1 マス幅の通路をふさぐ逃走中の敵を攻撃して進む。地図の巻物で地形だけ知った区画も「未見」として行き先になる。
 - travel_to: {x,y} / "stairs_down" / "stairs_up" / エンティティ ID へ既知地図上で移動するマクロ。目的地がアイテムなら着いて拾う。既知の階段には path_len（既知地図上の経路長）が付く。
@@ -110,12 +142,12 @@ ${traitsLines(r, true)}
   - flee: 到着／進路をふさがれた／HP が hp_floor（既定 25%）を下回ったで止まる。隣に敵がいても動く（退却。途中で受けた攻撃はすべて結果に出る）。
   - careful と steady は、その階の下り階段を初めて見たときにも止まる（踏破の判断の起点）。経路は、見えている動かない敵の隣を罠と同じく避ける（ほかに道が無ければ通る）。
   - どの mode も 1 歩ずつ通常の move として行い、敵は通常どおり攻撃してくる。マクロは攻撃しない（次のマスに敵がいれば blocked で止まる）。valid_actions にはその場で進める mode だけが出る。
-- fight{target,with?,hp_floor?}: その相手と決着を付けるマクロ。with なし: 隣の相手に近接攻撃を繰り返す。相手が追跡中で届かない間は隣に来るまで待つ（最大 10 手番）。当てて逃げる相手は、追跡中で 2 マス以内なら 2 手番まで待つ（追わない）。with にスロットを渡すと、その品を投げて戦う（射程と射線が通るまで待つ）。止まるのは: 相手が倒れた／離れた・逃げて射程を出た／（with のとき）相手が隣に来た・品が尽きた・射線が 3 手番続けて通らない／HP が hp_floor（既定 50%）以下／**次の手番に、届く追跡中の敵（隣・飛び道具）から 1 手の最悪の被害を受けると hp_floor を割る（被弾の前に止まる。hp_risk）**／被弾の記録の無い種族から初めて被弾した（first_hit。一度だけ）／追跡中の別の敵が現れた／状態異常を受けた。眠っている・気付いていない相手を待つことはしない（近づくなら travel_to、先手なら throw_item）。結果に与えた・受けた攻撃の回数と合計。
+- fight{target,with?,hp_floor?,abilities?}: その相手と決着を付けるマクロ。abilities に能動技（bash・cleave・aimed_throw）を並べると、使える手番ごとに使う（強打は標的が隣、なぎ払いは起きている敵が隣に 2 体以上、狙い撃ちは with の品で射程と射線が通るとき。それ以外の手番は通常の攻撃。立て直し・身をかわすは載せられない）。with なし: 隣の相手に近接攻撃を繰り返す。相手が追跡中で届かない間は隣に来るまで待つ（最大 10 手番）。当てて逃げる相手は、追跡中で 2 マス以内なら 2 手番まで待つ（追わない）。with にスロットを渡すと、その品を投げて戦う（射程と射線が通るまで待つ）。止まるのは: 相手が倒れた／離れた・逃げて射程を出た／（with のとき）相手が隣に来た・品が尽きた・射線が 3 手番続けて通らない／HP が hp_floor（既定 50%）以下／**次の手番に、届く追跡中の敵（隣・飛び道具）から 1 手の最悪の被害を受けると hp_floor を割る（被弾の前に止まる。hp_risk）**／被弾の記録の無い種族から初めて被弾した（first_hit。一度だけ）／追跡中の別の敵が現れた／状態異常を受けた。眠っている・気付いていない相手を待つことはしない（近づくなら travel_to、先手なら throw_item）。結果に与えた・受けた攻撃の回数と合計。
 - wait{turns?}: 1 手番待つ。turns（2〜10）を渡すと、敵が見えた・隣に来た・攻撃や毒以外の被害を受けたら止まりつつ、その手数だけ待つ。
 - rest: 全快（かつ毒が抜ける）まで、または until_hp / max_turns まで休むマクロ（最大 ${r.restMaxTurns} 手）。敵が視界に入ると（状態によらず）止まる（すでに見た個体が逃げながら視界を出入りする場合は止まらない）。追跡中の敵が見えている間は休めない（動かない敵は隣にいなければ妨げない）。
 - throw_item: 対象（ID）までの投擲の経路が通っていないときは no_line_of_sight、射程外なら out_of_range で拒否される（手番も品物も失わない。visible.monsters の shots に品目ごとの clear / blocked / out_of_range）。座標を狙えば遮られた位置か射程の端に落ちる。結果は必ず「命中／外れ／壁や他の者に遮られた／届かなかった」と落下地点で示される。
 - 自分が投げた物は、そのマスに入るだけで拾う（追加の手番なし。所持品がいっぱいなら拾わない）。collect は既知の自分が投げた物（what: thrown、既定）か、見えている・記憶したアイテム（what: items）を近い順に回って拾うマクロ。
-- use_item の target_slot: 鑑定の巻物で鑑定する品のスロット。省略するとスロット順で最初の未鑑定品（読んだ巻物自身の種類を除く）。
+- use_item の target_slot: 鑑定の巻物で鑑定する品のスロット。省略するとスロット順で最初の「未鑑定の品」か「呪いの有無を確かめていない装備品」（読んだ巻物自身の種類を除く）。
 - set_options: 応答テキストの出し方。map（auto: 階が変わった・新しいセルを知った・敵の出入りがあった応答だけ地図を付ける）、inventory（on_change: 所持品の行は変わったときだけ）、status_line（short: 状態が変わらない間の ▶ 行を短く）。ゲームには影響しない。
 - observe は待たずに返る。自分の番を待つには wait_for_turn（COOP 用）。
 - 所持品はスロット文字 a〜z で指す。装備品は所持品に入ったまま装備される。
@@ -128,8 +160,9 @@ ${traitsLines(r, true)}
 - 会心: ダメージダイスが最大値になり（＋威力）、相手の装甲を無視する。一度見た最大の一撃が、その種族の最悪の目安になる。
 - 眠っている相手には命中 +5。攻撃すると相手は目を覚ます。
 - 近接ダメージ: 武器ダイス + 威力(might) - 相手の装甲(armor)、最低 1。投擲: 投擲ダイス - 装甲、最低 1。表示されるダメージは実際に減った HP（とどめの超過分は含まない）。
-- 状態異常: 毒（毎手番 1 ダメージ）、加速（速度 2 倍）、減速（速度半分）、睡眠（行動不能、ダメージで解ける）、帰還中（帰還の綱。行動不能、切れるとキャンプへ）。手番開始時に処理。毒で倒れた敵は、毒を与えた者が倒した扱い（賞金・撃破点・経験値）。視界の外で毒が効いている間は相手の名前・体力・位置は出ず、倒れたときだけ「あなたの毒で何かが倒れた」と知らされる。
-- 経験値でレベルアップ（次のレベルに必要な累計 XP = 15×Lv²）。HP 上限・命中・威力・回避が上がる。
+- 習熟: 職業ごとに近接・投擲の命中の修正がある（戦士は投擲 −2、斥候は投擲 +2。get_rules classes）。装備の「近接の命中」「投擲の命中」も足す。
+- 状態異常: 毒（毎手番 1 ダメージ）、加速（速度 2 倍）、減速（速度半分）、睡眠（行動不能、ダメージで解ける）、朦朧（行動不能。強打・鎚矛）、身かわし（次の自分の手番まで近接が当たらない）、構え（次の自分の手番までに受ける最初の一撃の装甲が上がる）、怯え（逃げ出す HP の閾値が上がる。威圧）、帰還中（帰還の綱。行動不能、切れるとキャンプへ）。手番開始時に処理。毒で倒れた敵は、毒を与えた者が倒した扱い（賞金・撃破点・経験値）。視界の外で毒が効いている間は相手の名前・体力・位置は出ず、倒れたときだけ「あなたの毒で何かが倒れた」と知らされる。
+- 経験値でレベルアップ（次のレベルに必要な累計 XP = 15×Lv²）。最大 HP が上がり、特技を 1 つ選べる（choose_perk。get_rules classes）。
 - 自然回復: max(${rg.minInterval}, ${rg.baseInterval} - floor(Lv/${rg.levelDiv})) 手番ごとに 1 HP。追跡中の敵が見えない状態での wait（rest の各手を含む）は休息となり ${rg.restMultiplier} 倍の速さで回復する。観測の self.rest_estimate に全快までの手数・時間・その間の徘徊の目安が出る。
 - 敵の HP は 4 段階でしか分からない: healthy（${b1}% 以上）/ wounded（${b2}% 以上）/ badly_wounded（${b3}% 以上）/ near_death（それ未満）。
 - 敵の HP は個体ごとにダイスで決まり幅がある。接辞・深層強化（tier）で増え、守護者は通常の個体より大幅に頑丈。
@@ -145,10 +178,14 @@ ${traitsLines(r, true)}
 - 群れの被害見込み: 追跡中の敵が 2 体以上見えると alerts に incoming（追跡中の数・記録の最大被害の合計・記録の無い数・あなたの HP）。逃げ道: 追跡中の敵が見えていて既知の階段に辿り着けるとき、alerts に escape（最寄りの階段・経路長・あなたより速い追跡中の敵の数）。そのとき valid_actions の travel_to stairs_* に「階段まで 7 歩。追われたままなら最悪 21 の被害（HP 9）」が付く（歩数 × 追跡中の敵の 1 手の最悪の被害の合計。記録の無い敵がいれば不明）。一番近い階段でもそれが HP 以上で綱を持っていれば、綱の候補が階段より前に並ぶ。
 - 浅い階の群れは小さい: 群れの数は最大で 深度 + 1（地下1階は 2、地下2階は 3）。
 - 転移の巻物: 着地点は元の位置から ${r.teleport.minDistance} マス以上離れ、追跡中の敵から見えないマスを優先する（無ければ距離だけ、それも無ければどこでも）。
-- 経験値: 敵を倒す、新しい深度に初めて着く、遠征の目的を達成する。レベルアップの文に上がった能力値が並ぶ。
+- 経験値: 敵を倒す、新しい深度に初めて着く、遠征の目的を達成する。レベルアップの文に上がった最大 HP と、特技の候補が並ぶ。
 - 騒音: 戦闘・扉の開閉は音を立て、近くの眠っている敵を起こすことがある。`,
     items: `# アイテム
-- 武器・防具: equip で装備。接辞（例: 鋭い = 命中+2）付きのものもある。
+- 武器・防具・装飾品（指輪・護符）: equip で装備。接辞（例: 鋭い = 命中+2）付きのものもある。
+- 武器の特性: 速い（短剣。近接の手番コスト 70）、長柄（槍。直線で 2 マス先を attack）、薙ぐ（戦斧。対象と自分の両方に隣接する敵 1 体にも当たる）、砕く（鎚矛。当たれば 20% で 1 手番の朦朧）、扱いやすい（小剣。特別な効果なし）。
+- 重い鎧（鱗鎧・板金鎧）: 歩く手番のコストが増え（110・125）、眠っている敵が起きやすい。
+- 装飾品は未鑑定（外見名）で、効果は得失の組（例: 視界 +1・回避 −1）。装備すると正体が分かる。
+- 呪い: 武器・防具・装飾品は生成時に ${r.curseChancePct ?? 0}% で呪われる。呪いは装備するか鑑定するまで見えず（呪われた品は必ず良い接辞も持つ）、装備すると外せない（同じ場所に別の品も付けられない・捨てられない）。所持品の行の「呪い?」は、まだ呪いの有無を確かめていない装備品。解呪の巻物か祭壇で解く（呪いの接辞が消える）。
 - 自分の鑑定済みの持ち物は性能が分かる（所持品の行に「小剣[1d6・命中+1]」「投げナイフx8[投擲1d4+1・射程7・命中+1]」「鱗鎧[装甲3・回避-1]」。接辞込み）。self.attack.throws に投げられる物の命中（自分の命中込み）・ダイス・射程。
 - 宝（treasure）: 使い道は無く、価値（value）だけを持つ。見えた時点で価値が分かる（「銀の杯（価値 180）」）。所持している間は戦利品に入り、帰還・撤退で換金される。所持枠を 1 つ使う。
 - 薬・巻物は最初は未鑑定で、「赤い薬」のような外見名でしか分からない（外見と正体の対応はランごとに異なる）。使うと正体が判明する。鑑定の巻物・祭壇でも判明する。
@@ -156,7 +193,7 @@ ${traitsLines(r, true)}
 - 投擲武器（投げナイフ・投げ槍）は throw_item で対象（エンティティ ID か座標か方向）へ投げる。投げた物は着地点に落ちるので拾い直せる。
 - 遺物（retrieve_relic の目的の品）は効果を持たない。持ったまま階段の上で extract すると持ち帰れる。
 - 帰還の綱: 遠征ごとにキャンプが 1 本持たせる。use_item で使うと${r.lifeline.turns > 0 ? ` ${r.lifeline.turns} 手番後に` : 'その場で'}キャンプへ戻る（戦利品の ${r.lifeline.pct}% が確定。達成した遠征の数には入らない）。捨てる・投げることはできず、所持数に数えない。
-- 地物: 泉（回復、1 回）、祭壇（所持品を鑑定、1 回）。罠は見つけるまで見えない（隣接すると発見判定）。発見済みの罠は経路探索で避ける。`,
+- 地物: 泉（回復、1 回）、祭壇（所持品を鑑定し呪いを解く、1 回）。罠は見つけるまで見えない（隣接すると発見判定）。発見済みの罠は経路探索で避ける。`,
     observation: `# 観測と turn ブロック
 - 全応答の turn: state（your_turn / waiting_others / at_camp / expedition_ended / run_ended）、turn_no、reason、awaiting（action / camp_choice / nothing）、changes（前回の応答からの重要な変化）。テキストでは末尾の ▶ 行が同じ内容。
 - changes のコード: new_hostile（このランで初めて見た）, reappeared（前に見た個体が再び見えた）, killed（あなたが倒した）, died_seen（目の前で倒れた）, hostile_gone（倒れた以外の理由で見えなくなった）, hp_dropped, hp_low, status_gained, status_lost, level_up, item_found, stairs_found, floor_changed, objective_progress, objective_complete, can_extract。alerts は「現在の状態」、changes は「前回からの差分」。
@@ -242,11 +279,13 @@ ${traitsLines(r, false)}
 - A disconnect does not end an expedition; resume_run continues it.
 - Every observation includes expedition (objective, progress, can_extract).`,
     actions: `# Actions
-Turn-consuming: move{dir} / wait{turns?} / rest{until_hp?,max_turns?} / explore{mode?,hp_floor?,pickup?} / travel_to{to,mode?,hp_floor?,pickup?} / collect{what?,mode?} / fight{target,with?,hp_floor?} / pickup{item?} / drop{slot,qty?} / equip{slot} / unequip{slot} / use_item{slot,target?,target_slot?} / throw_item{slot,target} / interact{dir?} / use_stairs / extract{confirm?}
+Turn-consuming: move{dir} / attack{target} / wait{turns?} / rest{until_hp?,max_turns?} / explore{mode?,hp_floor?,pickup?} / travel_to{to,mode?,hp_floor?,pickup?} / collect{what?,mode?} / fight{target,with?,hp_floor?,abilities?} / use_ability{id,target?,slot?} / pickup{item?} / drop{slot,qty?} / equip{slot} / unequip{slot} / use_item{slot,target?,target_slot?} / throw_item{slot,target} / interact{dir?} / use_stairs / extract{confirm?}
 At camp: start_expedition{offer} / retire
-Free: observe / wait_for_turn / expedition / look / get_map / inventory / recall / get_messages / notes / say / set_options / get_rules
+Free: choose_perk{option} / observe / wait_for_turn / expedition / look / get_map / inventory / recall / get_messages / notes / say / set_options / get_rules
 - Directions: n ne e se s sw w nw. Origin is top-left; x grows east, y grows south.
 - move attacks a hostile in that cell, opens a closed door (without moving), or swaps with an ally.
+- attack{target}: melee an adjacent enemy, or with a reach weapon (spear) one 2 cells away in a straight line (the cell between must be open and empty). fight also strikes from 2 cells with a reach weapon.
+- use_ability{id,target?,slot?}: abilities (get_rules classes). choose_perk{option}: pick your level-up perk (takes no turn).
 - Principle: one call, one decision. When a macro cannot take a single step it is refused without spending a turn, with a reason (hostile_adjacent / hostile_in_view / hp_floor / blocked / nothing_to_do ...).
 - explore: macro that walks to the nearest unseen area (max ${r.macroStepLimit} steps). With pickup (default true) it also picks up items on the way and known items (not the relic, not identified harmful items, not when full). Areas known only from a mapping scroll still count as unseen.
 - travel_to: macro to {x,y}, "stairs_down", "stairs_up" or an entity id over the known map; if the destination is an item it picks it up. Known stairs carry path_len.
@@ -256,12 +295,12 @@ Free: observe / wait_for_turn / expedition / look / get_map / inventory / recall
   - flee: stops on arrival, a blocked path or HP below hp_floor (default 25%). Moves even with enemies adjacent (a retreat; every attack taken shows in the result).
   - Every mode walks with ordinary moves and enemies attack as usual. Macros never attack (an enemy in the next cell stops them: blocked). valid_actions only lists modes that can move right now.
   - careful and steady also stop when you first see the floor's down stairs (where the crossing decision starts). Paths avoid cells next to visible stationary monsters like traps (unless there is no other way).
-- fight{target,with?,hp_floor?}: settle it with that target. Without with: keep attacking it in melee; while it is hunting you but not adjacent, wait until it is (max 10 turns); a hit-and-run target hunting within 2 cells is waited for up to 2 turns (never chased). With a slot in with: fight by throwing that item, waiting until it is in range with a clear line. Stops when it falls, moves away / flees out of range, (with) it becomes adjacent, the item runs out, or the line is blocked 3 turns in a row, your HP is at or below hp_floor (default 50%), **one more turn of the worst damage from hunters in reach (adjacent or ranged) would drop you below hp_floor (stops before being hit: hp_risk)**, you take a first hit from a creature with no record (first_hit, once), another hunting enemy appears, or you get a status. It never waits for sleeping/unaware targets (approach with travel_to or open with throw_item). The result reports swings, hits and damage both ways.
+- fight{target,with?,hp_floor?,abilities?}: settle it with that target. List abilities (bash, cleave, aimed_throw) in abilities and fight uses each whenever it is ready (bash when the target is adjacent, cleave with 2+ awake enemies adjacent, aimed_throw when the with item has range and a clear line; otherwise a normal attack). second_wind and slip cannot be carried. Without with: keep attacking it in melee; while it is hunting you but not adjacent, wait until it is (max 10 turns); a hit-and-run target hunting within 2 cells is waited for up to 2 turns (never chased). With a slot in with: fight by throwing that item, waiting until it is in range with a clear line. Stops when it falls, moves away / flees out of range, (with) it becomes adjacent, the item runs out, or the line is blocked 3 turns in a row, your HP is at or below hp_floor (default 50%), **one more turn of the worst damage from hunters in reach (adjacent or ranged) would drop you below hp_floor (stops before being hit: hp_risk)**, you take a first hit from a creature with no record (first_hit, once), another hunting enemy appears, or you get a status. It never waits for sleeping/unaware targets (approach with travel_to or open with throw_item). The result reports swings, hits and damage both ways.
 - wait{turns?}: wait one turn. With turns (2-10) it keeps waiting, stopping when a monster appears, one becomes adjacent, or you are attacked / take non-poison damage.
 - rest: waits until HP is full and poison is gone, or until until_hp / max_turns (max ${r.restMaxTurns} turns). It stops when any monster comes into view (but not when an already-seen fleeing monster wanders in and out). Stationary monsters do not block resting unless adjacent.
 - throw_item at an entity id is refused with no_line_of_sight when the path is blocked and out_of_range when it is too far (no turn, no item lost; shots in visible.monsters gives clear / blocked / out_of_range per item). Targeting a position lands where it is blocked or at the end of the range. The result always says hit / missed / blocked / fell short and where it landed.
 - Items you threw are picked up just by stepping on them (free). collect visits your known thrown items (what: thrown, default) or known items (what: items) in order.
-- use_item target_slot: the item an identify scroll identifies. Without it, the first unidentified item by slot order (other than the scroll's own kind).
+- use_item target_slot: the item an identify scroll identifies. Without it, the first unidentified item or equipment whose curse is unchecked, by slot order (other than the scroll's own kind).
 - set_options: response verbosity (map auto/always/never, inventory on_change/always, status_line short/long). No game effect.
 - observe returns immediately; use wait_for_turn to wait for your turn (COOP).
 - Inventory slots are letters a-z. Equipped items stay in the inventory.
@@ -273,8 +312,9 @@ Free: observe / wait_for_turn / expedition / look / get_map / inventory / recall
 - Critical hit: the damage dice roll their maximum (plus might) and armor is ignored. The biggest hit you have seen is the worst case for that species.
 - +5 to hit sleeping targets; attacking wakes them.
 - Melee damage: weapon dice + might - armor (min 1). Thrown: thrown dice - armor (min 1). Reported damage is the HP actually lost (overkill excluded).
-- Statuses: poison (1 dmg/turn), haste (x2 speed), slow (x0.5), sleep (helpless, damage wakes), recalling (lifeline; helpless, then back to camp). Processed at turn start. A monster killed by poison counts as killed by whoever poisoned it (bounty, kill points, XP). While your poison works on something out of sight you learn nothing about it; only its death is reported ("something fell to your poison").
-- Level up at total XP = 15*Lv^2: more max HP, acc, might, eva.
+- Proficiency: each class has melee and thrown accuracy modifiers (warrior thrown -2, scout thrown +2; get_rules classes). Equipment "melee acc" / "thrown acc" add to them.
+- Statuses: poison (1 dmg/turn), haste (x2 speed), slow (x0.5), sleep (helpless, damage wakes), stunned (helpless; bash, mace), evasive (melee misses you until your next turn), braced (the first hit before your next turn meets more armor), cowed (flees at more HP; intimidate), recalling (lifeline; helpless, then back to camp). Processed at turn start. A monster killed by poison counts as killed by whoever poisoned it (bounty, kill points, XP). While your poison works on something out of sight you learn nothing about it; only its death is reported ("something fell to your poison").
+- Level up at total XP = 15*Lv^2: more max HP and one perk of your choice (choose_perk; get_rules classes).
 - Regeneration: 1 HP every max(${rg.minInterval}, ${rg.baseInterval} - floor(Lv/${rg.levelDiv})) turns. wait with no hunting enemy in view (each rest turn too) counts as resting and regenerates ${rg.restMultiplier}x faster. self.rest_estimate shows turns/time to full and expected wanderers.
 - Monster HP is shown in 4 bands: healthy (>= ${b1}%), wounded (>= ${b2}%), badly_wounded (>= ${b3}%), near_death (below).
 - Monster HP is rolled per individual; affixes and tiers raise it, and guardians are far sturdier.
@@ -290,10 +330,14 @@ Free: observe / wait_for_turn / expedition / look / get_map / inventory / recall
 - Pack danger: with 2+ hunting enemies in view, alerts carry incoming (how many, the sum of their recorded worst hits, how many have no record, your HP). Escape: with hunting enemies in view and known reachable stairs, alerts carry escape (nearest stairs, path length, how many hunters are faster than you), and the travel_to stairs_* candidates say "7 steps to the stairs. If they keep chasing you, worst 21 damage (HP 9)" (steps x the sum of the hunters' worst damage per turn; unknown if one has no record). If even the nearest stairs could cost your HP and you hold the lifeline, the lifeline candidate is listed before the stairs.
 - Packs are small on shallow floors: at most depth + 1 (2 on depth 1, 3 on depth 2).
 - Teleport scroll: prefers a landing cell at least ${r.teleport.minDistance} cells away that no hunting enemy can see (then distance only, then anywhere).
-- XP comes from kills, first arrival at a new depth and completing an expedition objective. Level-up messages list the stat gains.
+- XP comes from kills, first arrival at a new depth and completing an expedition objective. Level-up messages list the max HP gained and the perk options.
 - Noise from combat and doors may wake nearby sleepers.`,
     items: `# Items
-- Weapons/armor: equip them. Some have affixes (e.g. keen = +2 acc).
+- Weapons, armor and accessories (rings, amulets): equip them. Some have affixes (e.g. keen = +2 acc).
+- Weapon traits: quick (dagger; melee costs 70), reach (spear; attack 2 cells away in a straight line), sweep (war axe; also hits one enemy adjacent to both you and the target), crush (mace; 20% to stun for 1 turn on a hit), balanced (short sword; nothing special).
+- Heavy armor (scale, plate): walking costs more (110, 125) and sleepers wake more easily.
+- Accessories start unidentified and trade one stat for another (e.g. sight +1, evasion -1). Equipping one identifies it.
+- Curses: weapons, armor and accessories are cursed ${r.curseChancePct ?? 0}% of the time when generated. A curse stays hidden until you equip or identify the item (a cursed item always has a good affix too); once equipped it will not come off (nothing else can go in that slot and it cannot be dropped). "curse?" in the inventory marks equipment whose curse is still unchecked. A scroll of remove curse or an altar lifts curses (the curse affix disappears).
 - Your identified items show their stats (affixes included): "short sword[1d6, acc +1]", "throwing knife x8[thrown 1d4+1, range 7, acc +1]", "scale mail[armor 3, eva -1]". self.attack.throws lists throwables with total acc, dice and range.
 - Treasure: no use, only a value, known as soon as you see it ("silver goblet (value 180)"). Counts toward the haul while carried and is cashed in on extract. Takes an inventory slot.
 - Potions and scrolls start unidentified ("red potion"); the mapping is shuffled per run. Using one identifies it; so do identify scrolls and altars.
@@ -301,7 +345,7 @@ Free: observe / wait_for_turn / expedition / look / get_map / inventory / recall
 - Throwing weapons: throw_item at an entity id, position or direction. They land and can be picked up again.
 - The relic (retrieve_relic) has no effect; extract on stairs while carrying it.
 - Lifeline: camp gives one per expedition. use_item it to return to camp${r.lifeline.turns > 0 ? ` after ${r.lifeline.turns} turns` : ' at once'} (${r.lifeline.pct}% of the haul is banked; it does not count as a completed expedition). It cannot be dropped or thrown and does not count toward capacity.
-- Features: fountain (heal, once), altar (identify inventory, once). Traps are hidden until found (search happens when adjacent). Known traps are avoided by pathing.`,
+- Features: fountain (heal, once), altar (identify inventory and lift curses, once). Traps are hidden until found (search happens when adjacent). Known traps are avoided by pathing.`,
     observation: `# Observation and the turn block
 - Every response has turn: state (your_turn / waiting_others / at_camp / expedition_ended / run_ended), turn_no, reason, awaiting (action / camp_choice / nothing), changes (important changes since your last response). The final ▶ line of the text says the same.
 - change codes: new_hostile (first time this run), reappeared, killed (by you), died_seen, hostile_gone (left view without dying), hp_dropped, hp_low, status_gained, status_lost, level_up, item_found, stairs_found, floor_changed, objective_progress, objective_complete, can_extract. alerts = current state, changes = what changed.

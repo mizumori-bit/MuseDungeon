@@ -6,8 +6,8 @@ import type {
   RememberedEntity, RngState, RunMeta, RunSummary, Sense, Stats, StatusInst, WorldSecret, FloorHint,
 } from './types';
 
-/** 2: 遠征・実ダメージ・回復の蓄積値（IMPROVEMENTS_V2）。1 のログもそのまま畳み込める */
-export const EVENT_VERSION = 2;
+/** 2: 遠征・実ダメージ・回復の蓄積値（IMPROVEMENTS_V2）。3: ビルド（特技・能動技・呪い。V3-4）。古いログもそのまま畳み込める */
+export const EVENT_VERSION = 3;
 
 export interface EventBase {
   seq: number;
@@ -82,6 +82,19 @@ export type GameEvent =
   | E<'stats_changed', { target: EntityId; statsAfter: Stats; baseAfter: BaseStats | null; speedAfter: number | null; reason: string }>
   | E<'xp_gained', { target: EntityId; amount: number; xpAfter: number }>
   | E<'level_up', { target: EntityId; levelAfter: number; xpAfter: number; statsAfter: Stats; baseAfter: BaseStats; gains?: { maxHp: number; acc: number; might: number; eva: number } }>
+  // ビルド（V3-4。状態変化は put で表す）
+  /** 特技の候補が出た（options が空なら前の候補を選んだ後に引く） */
+  | E<'perk_offered', { target: EntityId; level: number; options: string[] }>
+  /** 特技を取った。ability は覚えた能動技 */
+  | E<'perk_chosen', { target: EntityId; perk: string; level: number; ability?: string | null }>
+  /** 能動技を使った。cooldownLeft はこの手番の後の残り手番 */
+  | E<'ability_used', { actor: EntityId; actorKind: string; ability: string; target: EntityId | null; targetKind: string | null; cooldownLeft: number }>
+  /** 呪いが分かった（装備した・鑑定した）。affixes は見えるようになった呪いの接辞 */
+  | E<'curse_revealed', { actor: EntityId; item: EntityId; kind: string | null; appearanceId: string | null; affixes: string[]; via: 'equip' | 'identify' }>
+  /** 呪いの有無を確かめた（呪いは無かった） */
+  | E<'item_inspected', { actor: EntityId; item: EntityId; kind: string | null; appearanceId: string | null; via: 'equip' | 'identify' }>
+  /** 呪いが解けた（接辞が消えた） */
+  | E<'curse_lifted', { actor: EntityId; item: EntityId; kind: string | null; appearanceId: string | null; affixes: string[] }>
   // アイテム（状態変化は put/del で表す）
   | E<'item_picked_up', { actor: EntityId; item: EntityId; kind: string | null; appearanceId: string | null; qty: number; slot: string; affixes?: string[]; auto?: boolean }>
   | E<'item_dropped', { actor: EntityId; item: EntityId; kind: string | null; appearanceId: string | null; qty: number; pos: Pos; affixes?: string[] }>

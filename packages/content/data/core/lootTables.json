@@ -7,6 +7,8 @@
       { "category": "weapon", "weight": 10 },
       { "category": "armor", "weight": 8 },
       { "category": "throwing", "weight": 12 },
+      { "category": "ring", "weight": 3 },
+      { "category": "amulet", "weight": 3 },
       { "category": "treasure", "weight": 6 }
     ],
     "depthBonus": 0, "affixChancePct": 10
@@ -20,6 +22,8 @@
       { "category": "armor", "weight": 15 },
       { "category": "throwing", "weight": 10 },
       { "item": "core:potion_vigor", "weight": 6 },
+      { "category": "ring", "weight": 5 },
+      { "category": "amulet", "weight": 5 },
       { "category": "treasure", "weight": 15 }
     ],
     "depthBonus": 3, "affixChancePct": 40

@@ -14,13 +14,18 @@ export function effectiveStats(ctx: Ctx, e: Entity): Stats {
     const it = ctx.world.entities[id];
     const def = it ? ctx.content.items[it.kind] : undefined;
     if (!def?.equip) continue;
-    const mods = sumAffixMods(ctx.content, it.item?.affixes ?? []);
+    // 見えていない呪い（hidden）も効く（装備すると見えるようになる。V3-4 §4.4）
+    const mods = sumAffixMods(ctx.content, [...(it.item?.affixes ?? []), ...(it.item?.hidden ?? [])]);
     s.acc += def.equip.acc + mods.acc;
     s.eva += def.equip.eva + mods.eva;
     s.might += def.equip.might + mods.might;
     s.armor += def.equip.armor + mods.armor;
+    s.maxHp += (def.equip.maxHp ?? 0) + mods.maxHp;
+    s.sight += (def.equip.sight ?? 0) + mods.sight;
     if (slot === 'weapon' && def.equip.dmg) s.dmg = addDiceBonus(def.equip.dmg, mods.dmgBonus);
   }
+  s.maxHp = Math.max(1, s.maxHp);
+  s.sight = Math.max(1, s.sight);
   if (s.hp > s.maxHp) s.hp = s.maxHp;
   // 遠征の条件（薄暗い階層など）
   if (e.player) {

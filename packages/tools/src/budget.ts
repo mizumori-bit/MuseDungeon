@@ -57,6 +57,8 @@ interface Tracker {
   approach: number; shortApproach: number;
   policy: number;
   firstExpCalls: number | null; firstExpDone: boolean;
+  /** choose_perk の呼び出し（最初の遠征の呼び出しの目安から除く。V3-4a §25.3） */
+  perkCalls: number;
   levelAt: Map<number, number>;
   // 踏破
   crossing: { floor: number; done: boolean; died: boolean; lifeline: boolean }[];
@@ -78,6 +80,7 @@ function instrument(port: PlayerPort, tr: Tracker): PlayerPort {
         return async (cmd: Command, meta: { source: 'bot' }) => {
           const v = target.view();
           tr.calls++;
+          if (cmd.type === 'choose_perk') tr.perkCalls++;
           // 対象: fight / 敵への travel / 投擲 / 体当たり
           let tgt: string | null = null;
           if (cmd.type === 'fight') tgt = cmd.target;
@@ -130,7 +133,7 @@ function instrument(port: PlayerPort, tr: Tracker): PlayerPort {
           const ax = after.expedition;
           if (!tr.firstExpDone && ax && ax.no === 1 && ax.status === 'ended') {
             tr.firstExpDone = true;
-            if (ax.endReason === 'completed') tr.firstExpCalls = tr.calls;
+            if (ax.endReason === 'completed') tr.firstExpCalls = tr.calls - tr.perkCalls;
           }
           // 踏破の試み（目的達成後に目標より深い階へ着いた）と、その結果
           const bx = before.expedition && before.expedition.status !== 'ended' ? before.expedition : null;
@@ -166,7 +169,7 @@ function newTracker(policy: number, direct = false): Tracker {
   return {
     calls: 0, macroCalls: 0, zeroStep: 0, moveMacros: 0, shortMoves: 0, callsOnTarget: new Map(), pickupCalls: 0, shortBy: {}, pickupBy: {},
     approach: 0, shortApproach: 0, policy,
-    firstExpCalls: null, firstExpDone: false, levelAt: new Map(), crossing: [], decisions: [], throws: 0, direct, campGaps: new Map(),
+    firstExpCalls: null, firstExpDone: false, perkCalls: 0, levelAt: new Map(), crossing: [], decisions: [], throws: 0, direct, campGaps: new Map(),
   };
 }
 
@@ -382,7 +385,7 @@ export function formatBudget(r: BudgetReport): string {
     `| （参考）敵へ近づく travel | ${c.approachCalls} 回、5 歩未満 ${c.approachShortPct}% | - |`,
     `| 敵 1 体を倒すのに使った呼び出しの中央値 | ${c.callsPerKillMedian} | 3 以下: ${ok(c.callsPerKillMedian <= 3)} |`,
     `| アイテム 1 個を拾うのに使った呼び出し | ${c.callsPerPickup} | 0.5 以下: ${ok(c.callsPerPickup <= 0.5)} |`,
-    `| 最初の遠征を帰還まで終える呼び出しの中央値 | ${c.firstExpeditionCallsMedian ?? '-'}（達成 ${c.firstExpeditionCompleted} ラン） | 60 以下: ${ok((c.firstExpeditionCallsMedian ?? 999) <= 60)} |`,
+    `| 最初の遠征を帰還まで終える呼び出しの中央値（choose_perk を除く） | ${c.firstExpeditionCallsMedian ?? '-'}（達成 ${c.firstExpeditionCompleted} ラン） | 60 以下: ${ok((c.firstExpeditionCallsMedian ?? 999) <= 60)} |`,
     `| 遠征の終わりに残った回復の薬（中央値） | ${c.healingLeftMedian} | 参考 |`,
     `| 斥候の bot の呼び出しに投擲が占める割合 | ${r.scoutThrows.pct}%（${r.scoutThrows.throws}/${r.scoutThrows.calls}） | 30% 以下: ${ok(r.scoutThrows.pct <= 30)} |`,
     '',

@@ -11,7 +11,7 @@ import { layoutGenerators } from './layouts';
 
 export type SpawnSpec =
   | { type: 'monster'; kind: string; x: number; y: number; hp: number; affixes: string[]; tier: number; asleep: boolean; delay: number; role?: EntityRole; bounty?: number; minHp?: number; hpBonusPct?: number }
-  | { type: 'item'; kind: string; x: number; y: number; qty: number; affixes: string[]; role?: EntityRole; value?: number }
+  | { type: 'item'; kind: string; x: number; y: number; qty: number; affixes: string[]; role?: EntityRole; value?: number; hidden?: string[] }
   | { type: 'feature'; kind: string; x: number; y: number };
 
 /** 遠征の目標階に置くもの */
@@ -156,7 +156,7 @@ export function rollMonsterAffixes(content: Content, depth: number, rng: Rng): s
   return out;
 }
 
-export function pickLoot(content: Content, tableId: string, depth: number, rng: Rng): { kind: string; qty: number; affixes: string[]; value?: number } | null {
+export function pickLoot(content: Content, tableId: string, depth: number, rng: Rng): { kind: string; qty: number; affixes: string[]; value?: number; hidden?: string[] } | null {
   const table = content.lootTables[tableId];
   if (!table) return null;
   const d = depth + table.depthBonus;
@@ -175,9 +175,18 @@ export function pickLoot(content: Content, tableId: string, depth: number, rng: 
     let qty = 1;
     if (def.stack) qty = def.category === 'throwing' ? rng.range(2, 6) : rng.chance(20) ? 2 : 1;
     const affixes: string[] = [];
+    const good = () => rng.weighted(content.lists.affixes.filter((x) => x.target === 'item' && !x.cursed && x.categories.includes(def.category) && d >= x.depth.min), (x) => floorDiv(100, x.rarity));
     if (def.equip && rng.chance(table.affixChancePct)) {
-      const a = rng.weighted(content.lists.affixes.filter((x) => x.target === 'item' && x.categories.includes(def.category) && d >= x.depth.min), (x) => floorDiv(100, x.rarity));
+      const a = good();
       if (a) affixes.push(a.id);
+    }
+    // 呪い（V3-4 §4.4）: 装備品が呪われる。呪いは見えない接辞（hidden）に入り、呪われた品は必ず良い接辞も持つ（「強いかもしれないが外せないかもしれない」）
+    if (def.equip && rng.chance(content.balance.curse.chancePct)) {
+      const c = rng.weighted(content.lists.affixes.filter((x) => x.target === 'item' && x.cursed && x.categories.includes(def.category) && d >= x.depth.min), (x) => floorDiv(100, x.rarity));
+      if (c) {
+        if (!affixes.length) { const a = good(); if (a) affixes.push(a.id); }
+        return { kind, qty, affixes, hidden: [c.id] };
+      }
     }
     if (def.value) {
       // 宝の価値: dice × mult を深さで伸ばす（見えた時点で分かる）
@@ -254,7 +263,7 @@ function stampPrefab(s: GenState, pf: PrefabDef, map: string[], x0: number, y0: 
         const irng = s.stream('items');
         if (cell.item === '$loot') {
           const l = pickLoot(s.content, cell.loot ?? 'core:common_loot', s.depth, irng);
-          if (l) s.spawns.push({ type: 'item', kind: l.kind, x: gx, y: gy, qty: l.qty, affixes: l.affixes, value: l.value });
+          if (l) s.spawns.push({ type: 'item', kind: l.kind, x: gx, y: gy, qty: l.qty, affixes: l.affixes, value: l.value, ...(l.hidden ? { hidden: l.hidden } : {}) });
         } else s.spawns.push({ type: 'item', kind: cell.item, x: gx, y: gy, qty: 1, affixes: [] });
       }
     }
@@ -408,7 +417,7 @@ function populate(s: GenState): void {
     if (!l) continue;
     const at = take(spawnable, irng);
     if (at === null) break;
-    s.spawns.push({ type: 'item', kind: l.kind, x: at % g.w, y: Math.trunc(at / g.w), qty: l.qty, affixes: l.affixes, value: l.value });
+    s.spawns.push({ type: 'item', kind: l.kind, x: at % g.w, y: Math.trunc(at / g.w), qty: l.qty, affixes: l.affixes, value: l.value, ...(l.hidden ? { hidden: l.hidden } : {}) });
   }
   // 条件「宝が多い」: 宝を追加で置く（treasurePct 150 で 1 個、以後 50 ごとに 1 個）
   if (s.mods && s.mods.treasurePct > 100) {

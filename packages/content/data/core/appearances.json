@@ -9,5 +9,13 @@
   { "id": "core:scroll_look_02", "name": { "ja": "焦げ跡のある巻物", "en": "scorched scroll" }, "category": "scroll" },
   { "id": "core:scroll_look_03", "name": { "ja": "赤い紐の巻物", "en": "scroll tied with red cord" }, "category": "scroll" },
   { "id": "core:scroll_look_04", "name": { "ja": "星図の描かれた巻物", "en": "star-charted scroll" }, "category": "scroll" },
-  { "id": "core:scroll_look_05", "name": { "ja": "古びた羊皮紙", "en": "brittle vellum" }, "category": "scroll" }
+  { "id": "core:scroll_look_05", "name": { "ja": "古びた羊皮紙", "en": "brittle vellum" }, "category": "scroll" },
+  { "id": "core:ring_look_01", "name": { "ja": "銅の指輪", "en": "copper ring" }, "category": "ring" },
+  { "id": "core:ring_look_02", "name": { "ja": "骨の指輪", "en": "bone ring" }, "category": "ring" },
+  { "id": "core:ring_look_03", "name": { "ja": "翡翠の指輪", "en": "jade ring" }, "category": "ring" },
+  { "id": "core:ring_look_04", "name": { "ja": "ねじれた指輪", "en": "twisted ring" }, "category": "ring" },
+  { "id": "core:amulet_look_01", "name": { "ja": "黒い護符", "en": "black amulet" }, "category": "amulet" },
+  { "id": "core:amulet_look_02", "name": { "ja": "琥珀の護符", "en": "amber amulet" }, "category": "amulet" },
+  { "id": "core:amulet_look_03", "name": { "ja": "銀鎖の護符", "en": "silver-chained amulet" }, "category": "amulet" },
+  { "id": "core:amulet_look_04", "name": { "ja": "石の護符", "en": "stone amulet" }, "category": "amulet" }
 ]

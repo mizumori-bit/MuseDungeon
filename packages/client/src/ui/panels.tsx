@@ -1,12 +1,16 @@
 // 情報パネル（Preact）。表示名は公開カタログ、状態は PlayerView / World から。
 import type { AgentActivity, Alert, Catalog, CommandRecord, ObsMonster, Observation, PlayerView, RunSummary, World } from '@muse/shared';
 import {
-  dealtText, dirLabel, endReasonText, hitsText, hpEstimateText, hpState, itemDisplayName, itemStats, itemStatsText, kindName, nameOf, objectiveText, sameOrWorseEquip, xpForLevel,
+  abilityStatus, accBonuses, curseUnknown, dealtText, dirLabel, endReasonText, hitsText, hpEstimateText, hpState, isCursedItem, itemDisplayName, itemStats, itemStatsText, kindName, nameOf,
+  objectiveText, sameOrWorseEquip, shortId, xpForLevel,
 } from '@muse/shared';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { PLAYER_COLORS } from '../render/scene';
 import { getLocale, tr } from '../util';
-import { DIR_ARROW, exploredLabel, lifelineEffectText, monsterLooksText, monsterSpeedLabel, playerStateLabel, threatText, worstTurnText } from './labels';
+import {
+  abilityStateLabel, buildRowLabels, curseLabel, cursedRemoveText, DIR_ARROW, exploredLabel, lifelineEffectText, monsterLooksText, monsterSpeedLabel, playerStateLabel, reachAttackTitle,
+  threatText, worstTurnText,
+} from './labels';
 
 /** 手放せない品（帰還の綱）か。捨てる・投げることができず、所持数に数えない（V3-2R2 §18.1） */
 export function isBoundItem(catalog: Catalog | null | undefined, kind: string | null): boolean {
@@ -38,6 +42,12 @@ export function StatusPanel({ view, catalog, speed, floor }: { view: PlayerView;
   const rec = view.record;
   const explored = floor?.explored;
   const draft = floor?.draft;
+  // ビルド（V3-4）: 取った特技（段階の数）・能動技の状態・習熟と装備による命中の修正
+  const rows = buildRowLabels();
+  const ranks = new Map<string, number>();
+  for (const id of s.build.perks) ranks.set(id, (ranks.get(id) ?? 0) + 1);
+  const bonus = accBonuses(view, catalog);
+  const sgn = (n: number) => (n >= 0 ? `+${n}` : `${n}`);
   return (
     <section class="panel">
       <h3>{s.name} <small>{kindName(catalog, L, s.classId)} Lv{s.level}</small></h3>
@@ -67,6 +77,39 @@ export function StatusPanel({ view, catalog, speed, floor }: { view: PlayerView;
         <span>{tr('速さ', 'Speed')}</span><span>{sp}{sp !== 100 ? <small class="muted"> {tr('（標準 100）', '(normal 100)')}</small> : null}</span>
         <span>{tr('状態', 'Status')}</span>
         <span>{s.statuses.length ? s.statuses.map((x) => `${nameOf(catalog.statuses[x.id]?.name, L, x.id)}(${x.turnsLeft})`).join(' ') : tr('なし', 'none')}</span>
+        {(bonus.melee !== 0 || bonus.thrown !== 0) && (
+          <>
+            <span>{rows.bonus}</span>
+            <span title={rows.bonusTitle}>{tr(`近接 ${sgn(bonus.melee)}・投擲 ${sgn(bonus.thrown)}`, `melee ${sgn(bonus.melee)}, thrown ${sgn(bonus.thrown)}`)}</span>
+          </>
+        )}
+        {ranks.size > 0 && (
+          <>
+            <span>{rows.perks}</span>
+            <span class="perklist">
+              {[...ranks].map(([id, n]) => (
+                <span key={id} class="perk" title={nameOf(catalog.perks[id]?.desc, L, '')}>{nameOf(catalog.perks[id]?.name, L, shortId(id))}{n > 1 ? `×${n}` : ''}</span>
+              ))}
+            </span>
+          </>
+        )}
+        {s.build.abilities.length > 0 && (
+          <>
+            <span>{rows.abilities}</span>
+            <span class="perklist">
+              {s.build.abilities.map((a) => {
+                const st = abilityStatus(view, catalog, a.id);
+                const def = catalog.abilities[a.id];
+                const ready = st.cooldownLeft <= 0 && st.usesLeft !== 0;
+                return (
+                  <span key={a.id} class={`abil ${ready ? 'ready' : 'cooling'}`} title={nameOf(def?.desc, L, '')}>
+                    {nameOf(def?.name, L, shortId(a.id))} <small>{abilityStateLabel({ cooldown_left: st.cooldownLeft, uses_left: st.usesLeft ?? undefined })}</small>
+                  </span>
+                );
+              })}
+            </span>
+          </>
+        )}
         <span>{tr('時刻', 'Time')}</span><span>{f?.time ?? 0}</span>
       </div>
     </section>
@@ -100,18 +143,29 @@ export function InventoryPanel({ view, catalog, onAction, focused, selected, onS
           const bound = !!ci?.bound;
           const throwable = !bound && (ci?.throwable || cat === 'throwing' || cat === 'potion');
           const name = itemDisplayName(catalog, L, it.kind, it.appearanceId, it.affixes);
-          // 鑑定済みの自分の持ち物は性能をそのまま見せる（V3-2R §14.3）
-          const stats = itemStatsText(L, itemStats(catalog, it.kind, it.affixes));
+          // 鑑定済みの自分の持ち物は性能をそのまま見せる（V3-2R §14.3）。武器の特性・重い鎧・装飾品の修正も（V3-4）
+          const st = itemStats(catalog, it.kind, it.affixes);
+          const stats = itemStatsText(L, st, catalog);
+          const traits = (st?.weapon?.traits ?? []).map((id) => catalog.weaponTraits[id]).filter((x) => !!x)
+            .map((x) => `${nameOf(x.name, L, '')}: ${nameOf(x.desc, L, '')}`);
+          // 呪い（V3-4）: 呪われている（装備中は外せない）か、呪いの有無をまだ確かめていない装備品か
+          const curse = isCursedItem(catalog, it.affixes) ? 'cursed' as const : curseUnknown(catalog, it) ? 'unknown' as const : null;
+          const curseTag = curse ? curseLabel(curse, !!it.equipped) : null;
+          const stuck = curse === 'cursed' && !!it.equipped;
+          // 同じ部位に呪われた装備があると付け替えられない
+          const slotStuck = !!ci?.slot && !it.equipped && view.inventory.some((x) => x.equipped === ci.slot && isCursedItem(catalog, x.affixes));
+          const desc = ci ? nameOf(ci.desc, L, '') : tr('未鑑定', 'unidentified');
           // 装備中の品と種類が同じで性能が同じか下の装備は「装備」を出さない（観測の valid_actions と同じ。V3-2R3 §20.6）
           const worse = !!ci?.slot && !it.equipped && sameOrWorseEquip(view, catalog, it);
           // 使う間に隣の敵が行動する（帰還の綱は除く: 即時なら使った手番で盤面を離れる）
           const risky = !!exposed && !bound;
           return (
-            <li key={it.id} class={`${selected === it.slot ? 'sel' : ''} ${bound ? 'bound' : ''}`} onClick={() => onSelect?.(it.slot)} title={ci ? nameOf(ci.desc, L, '') : tr('未鑑定', 'unidentified')}>
+            <li key={it.id} class={`${selected === it.slot ? 'sel' : ''} ${bound ? 'bound' : ''}`} onClick={() => onSelect?.(it.slot)} title={[desc, ...traits].join('\n')}>
               <span class="slot">{it.slot})</span>
               <span class="name">
                 {name}{it.qty > 1 ? ` x${it.qty}` : ''}{it.equipped ? <em> [{tr('装備', 'eq')}]</em> : null}{it.kind === null ? <em class="muted"> ?</em> : null}{cat === 'relic' ? <em class="relic"> ［{tr('遺物', 'relic')}］</em> : null}{it.value !== undefined ? <em class="treasure"> ［{tr(`宝・価値 ${it.value}`, `treasure ${it.value}`)}］</em> : null}
                 {bound && <em class="bound"> ［{tr('手放せない・所持数に数えない', 'bound, not counted')}］</em>}
+                {curseTag && <em class={`curse ${curse}`} title={curseTag.title}> ［{curseTag.text}］</em>}
                 {worse && <em class="worse" title={tr('装備中の品と同じ種類で、性能が同じか下（装備しても良くならない）', 'Same kind as your equipped item, with the same or worse stats (equipping it gains nothing)')}> ［{tr('装備中と同じか劣る', 'same or worse')}］</em>}
                 {stats && <span class="istats">{stats}</span>}
               </span>
@@ -124,10 +178,17 @@ export function InventoryPanel({ view, catalog, onAction, focused, selected, onS
                       {bound ? tr('綱を使う', 'Use') : tr('使う', 'Use')}{risky ? ' ⚠' : ''}
                     </button>
                   )}
-                  {ci?.slot && !it.equipped && !worse && <button class="tiny" onClick={(e) => { e.stopPropagation(); onAction('equip', it.slot); }}>{tr('装備', 'Equip')}</button>}
-                  {it.equipped && <button class="tiny" onClick={(e) => { e.stopPropagation(); onAction('unequip', it.slot); }}>{tr('外す', 'Remove')}</button>}
+                  {ci?.slot && !it.equipped && !worse && (
+                    <button class="tiny" disabled={slotStuck} title={slotStuck ? tr('その部位の装備が呪われていて外せない', 'The item in that slot is cursed and cannot be removed') : curseTag?.title}
+                      onClick={(e) => { e.stopPropagation(); onAction('equip', it.slot); }}>{tr('装備', 'Equip')}{curse === 'cursed' ? ' ⚠' : curse ? ' ?' : ''}</button>
+                  )}
+                  {it.equipped && (
+                    <button class="tiny" disabled={stuck} title={stuck ? cursedRemoveText() : undefined} onClick={(e) => { e.stopPropagation(); onAction('unequip', it.slot); }}>{tr('外す', 'Remove')}</button>
+                  )}
                   {throwable && !it.equipped && <button class="tiny" onClick={(e) => { e.stopPropagation(); onAction('throw', it.slot); }}>{tr('投げる', 'Throw')}</button>}
-                  {!bound && <button class="tiny" onClick={(e) => { e.stopPropagation(); onAction('drop', it.slot); }}>{tr('置く', 'Drop')}</button>}
+                  {!bound && (
+                    <button class="tiny" disabled={stuck} title={stuck ? cursedRemoveText() : undefined} onClick={(e) => { e.stopPropagation(); onAction('drop', it.slot); }}>{tr('置く', 'Drop')}</button>
+                  )}
                 </span>
               )}
             </li>
@@ -219,10 +280,12 @@ function reachesYou(m: ObsMonster): boolean {
  * 命中と通りの記録・推定残り HP・投擲の可否を並べる。
  * 届く追跡中の敵で、1 手番の最悪の被害（worst_turn）が今の HP 以上なら「1 手で」、2 倍で HP 以上なら「2 手で」倒されうる印を付ける。
  * onFight(id): 隣の相手には「戦う」、追跡中で届かない相手には「迎え撃つ」（隣に来るまで待つ）。
- * onFight(id, slot): 「投擲で決着」（その品を投げ続ける。射程と射線が通るまで待つ）。throwSlotFor が投げる品のスロットを返す相手だけに出す
+ * onFight(id, slot): 「投擲で決着」（その品を投げ続ける。射程と射線が通るまで待つ）。throwSlotFor が投げる品のスロットを返す相手だけに出す。
+ * onReach(id): 長柄で 2 マス先から突く（attack。reach に入っている相手だけ。V3-4 §4.4）
  */
-export function MonstersPanel({ monsters, hp, onFight, throwSlotFor }: {
+export function MonstersPanel({ monsters, hp, onFight, throwSlotFor, reach, onReach }: {
   monsters: ObsMonster[]; hp: number; onFight?: (id: string, withSlot?: string) => void; throwSlotFor?: (m: ObsMonster) => string | null;
+  reach?: ReadonlySet<string>; onReach?: (id: string) => void;
 }) {
   if (!monsters.length) return null;
   const L = getLocale();
@@ -248,6 +311,7 @@ export function MonstersPanel({ monsters, hp, onFight, throwSlotFor }: {
           const perTurn = worstTurnText(m);
           const meet = m.dist > 1 && isApproaching(m);
           const withSlot = throwSlotFor?.(m) ?? null;
+          const strike = !!onReach && !!reach?.has(m.id);
           return (
             <li key={m.id} class={`${lethal ? 'lethal' : lethal2 ? 'lethal2' : ''} ${m.role ?? ''}`}>
               <div class="mhead">
@@ -256,19 +320,22 @@ export function MonstersPanel({ monsters, hp, onFight, throwSlotFor }: {
                 <small>{dirLabel(L, m.dir)} {m.dist}</small>
                 {aw && <span class={`maw ${m.awareness}`}>{tr(aw[0], aw[1])}{m.fleeing ? tr('・逃走中', ', fleeing') : ''}</span>}
                 {hs && <span class={`mhp ${m.hp_state}`}>{tr(hs[0], hs[1])}</span>}
-                {onFight && (m.dist === 1 || meet || withSlot) && (
+                {((onFight && (m.dist === 1 || meet || withSlot)) || strike) && (
                   <span class="right macts">
-                    {m.dist === 1 && (
+                    {strike && (
+                      <button class="tiny fight" onClick={() => onReach!(m.id)} title={reachAttackTitle()}>{tr('突く', 'Strike')}</button>
+                    )}
+                    {onFight && m.dist === 1 && (
                       <button class="tiny" onClick={() => onFight(m.id)} title={tr('倒れる・離れる・HP が半分を下回るまで殴り続ける（F）', 'Keep attacking until it falls, moves away, or your HP drops below half (F)')}>
                         {tr('戦う', 'Fight')}
                       </button>
                     )}
-                    {meet && (
+                    {onFight && meet && (
                       <button class="tiny" onClick={() => onFight(m.id)} title={tr('隣に来るまで待ち（最大 10 手番）、来たら殴り続ける（F）。HP が半分を下回る・別の追跡中の敵で止まる', 'Wait until it comes adjacent (up to 10 turns), then keep attacking (F). Stops below half HP or on another hunting enemy')}>
                         {tr('迎え撃つ', 'Meet')}
                       </button>
                     )}
-                    {withSlot && (
+                    {onFight && withSlot && (
                       <button class="tiny" onClick={() => onFight(m.id, withSlot)} title={tr(`${withSlot} を倒れるまで投げ続ける（射程と射線が通るまで待つ）。隣に来た・品が尽きた・射線が 3 手番通らない・HP が半分を下回ると止まる`, `Keep throwing ${withSlot} until it falls (waits for range and a clear line). Stops when it comes adjacent, you run out, the line stays blocked for 3 turns, or HP drops below half`)}>
                         {tr(`投擲で決着（${withSlot}）`, `Throw it down (${withSlot})`)}
                       </button>

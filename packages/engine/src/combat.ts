@@ -11,11 +11,36 @@ import { roll } from './registry';
 import { makeItem } from './spawn';
 import { effectiveStats } from './stats';
 import { hasStatus, removeStatus } from './statuses';
+import { meleeAccOf, offerPerk, perkHook, sweeps, weaponOnHit } from './build';
 
 export interface AttackOutcome { hit: boolean; crit: boolean; roll: number }
 
 function isSleeping(e: Entity): boolean {
   return !!e.actor?.dormant || e.actor?.ai?.state === 'asleep' || hasStatus(e, 'core:sleep');
+}
+
+/** 気づいていない・眠っている（不意打ち・狙い撃ちの会心） */
+export function isUnaware(e: Entity): boolean {
+  return isSleeping(e) || e.actor?.ai?.state === 'unaware';
+}
+
+/** 構え（盾の構え）の装甲の上乗せ。当たったら構えは解ける */
+function bracedArmor(e: Entity): number {
+  return (e.statuses ?? []).find((s) => s.id === 'core:braced')?.power ?? 0;
+}
+
+/** 踏みとどまる: HP が閾値以下なら威力の上乗せ */
+function lastStandMight(ctx: Ctx, e: Entity): number {
+  const h = perkHook(ctx, e, 'last_stand');
+  if (!h || !e.stats) return 0;
+  return e.stats.hp * 100 <= e.stats.maxHp * (h.belowPct ?? 25) ? h.might ?? 0 : 0;
+}
+
+export interface MeleeOpts {
+  /** 命中の上乗せ（能動技） */
+  accBonus?: number;
+  /** なぎ払いの 2 体目など: 武器の「薙ぐ」を重ねない */
+  noSweep?: boolean;
 }
 
 export function rollToHit(ctx: Ctx, attacker: Entity, target: Entity, accBonus: number): AttackOutcome {
@@ -81,19 +106,39 @@ export function recordHit(ctx: Ctx, attacker: Entity, target: Entity, hit: boole
   }
 }
 
-/** 近接攻撃（バンプ攻撃） */
-export function melee(ctx: Ctx, attacker: Entity, target: Entity): void {
-  const o = rollToHit(ctx, attacker, target, 0);
+/**
+ * 近接攻撃（バンプ攻撃・attack・能動技）。V3-4: 習熟と装備の命中、不意打ち（気づいていない相手に必ず会心）、
+ * 踏みとどまる（威力）、構え（装甲）、身かわし（当たらない）、武器の特性（砕く・薙ぐ）
+ */
+export function melee(ctx: Ctx, attacker: Entity, target: Entity, opts: MeleeOpts = {}): AttackOutcome {
+  const tpos = { x: target.pos!.x, y: target.pos!.y };
+  const unaware = isUnaware(target);
+  let o = rollToHit(ctx, attacker, target, (opts.accBonus ?? 0) + meleeAccOf(ctx, attacker));
+  if (attacker.player && unaware && perkHook(ctx, attacker, 'ambush')) o = { hit: true, crit: true, roll: o.roll };
+  // 身をかわした相手には近接が当たらない（次のその者の手番まで）
+  if (hasStatus(target, 'core:evasive')) o = { hit: false, crit: false, roll: o.roll };
   emitAttack(ctx, attacker, target, o, false);
   recordHit(ctx, attacker, target, o.hit, 'melee');
   makeNoise(ctx, attacker.pos!.floor, target.pos!, 5, attacker);
   if (o.hit) {
+    const might = attacker.stats!.might + lastStandMight(ctx, attacker);
+    const brace = bracedArmor(target);
     const dmg = o.crit
-      ? Math.max(1, diceMax(attacker.stats!.dmg) + attacker.stats!.might)
-      : Math.max(1, roll(ctx.rng('runtime'), attacker.stats!.dmg) + attacker.stats!.might - (target.stats?.armor ?? 0));
-    applyDamage(ctx, target, dmg, attacker, 'melee');
+      ? Math.max(1, diceMax(attacker.stats!.dmg) + might)
+      : Math.max(1, roll(ctx.rng('runtime'), attacker.stats!.dmg) + might - (target.stats?.armor ?? 0) - brace);
+    if (brace) removeStatus(ctx, target, 'core:braced');
+    applyDamage(ctx, ctx.world.entities[target.id], dmg, attacker, 'melee');
     if ((ctx.world.entities[target.id]?.stats?.hp ?? 0) > 0) onHitEffects(ctx, attacker, ctx.world.entities[target.id]);
+    if (attacker.player) weaponOnHit(ctx, ctx.world.entities[attacker.id] ?? attacker, ctx.world.entities[target.id] ?? target);
   } else provoke(ctx, target, attacker);
+  // 薙ぐ: 対象と自分の両方に隣接する敵 1 体にも当たる（挿入順で最初の 1 体）
+  const me = ctx.world.entities[attacker.id];
+  if (!opts.noSweep && me?.pos && attacker.player && sweeps(ctx, me)) {
+    const other = ctx.entitiesOn(me.pos.floor).filter((m) => m.actor && !m.player && m.id !== target.id && m.pos && (m.stats?.hp ?? 0) > 0
+      && cheb(m.pos, me.pos!) === 1 && cheb(m.pos, tpos) === 1).sort((a, b) => a.sid - b.sid)[0];
+    if (other) melee(ctx, me, other, { noSweep: true });
+  }
+  return o;
 }
 
 /** 遠隔攻撃（モンスターの射撃） */
@@ -110,8 +155,10 @@ export function rangedAttack(ctx: Ctx, attacker: Entity, target: Entity, dice: s
     updateMemory(ctx, pr.id, attacker, (m) => { m.abilities.push('ranged'); m.rangeMax = Math.max(m.rangeMax ?? 0, dist); });
   }
   if (o.hit) {
-    const dmg = o.crit ? Math.max(1, diceMax(dice)) : Math.max(1, roll(ctx.rng('runtime'), dice) - (target.stats?.armor ?? 0));
-    applyDamage(ctx, target, dmg, attacker, 'ranged');
+    const brace = bracedArmor(target);
+    const dmg = o.crit ? Math.max(1, diceMax(dice)) : Math.max(1, roll(ctx.rng('runtime'), dice) - (target.stats?.armor ?? 0) - brace);
+    if (brace) removeStatus(ctx, target, 'core:braced');
+    applyDamage(ctx, ctx.world.entities[target.id], dmg, attacker, 'ranged');
   } else provoke(ctx, target, attacker);
 }
 
@@ -248,7 +295,7 @@ export function kill(ctx: Ctx, victim: Entity, killer: Entity | null, via: Damag
     if (!rng.chance(d.chancePct)) continue;
     const l = pickLoot(ctx.content, d.table, depth, rng);
     if (!l) continue;
-    const it = makeItem(key, l.kind, pos.x, pos.y, l.qty, l.affixes, ctx.newEntityId(), ctx.nextSid(), l.value);
+    const it = makeItem(key, l.kind, pos.x, pos.y, l.qty, l.affixes, ctx.newEntityId(), ctx.nextSid(), l.value, l.hidden);
     ctx.emit({ type: 'entity_spawned', entity: it, reason: 'drop', floor: key, seenBy: ctx.seersOf(key, pos) });
   }
   ctx.emit({ type: 'entity_removed', id: victim.id, kind: victim.kind, reason: 'died', seenBy: ctx.seersOf(key, pos), floor: key });
@@ -271,16 +318,15 @@ export function grantXp(ctx: Ctx, e: Entity, amount: number): void {
   const cls = ctx.content.classes[ctx.world.players[e.player!]?.classId ?? ''];
   while (cur.level && cur.level.xp >= xpForLevel(cur.level.level)) {
     const lv = cur.level.level + 1;
-    const lu = cls?.levelUp ?? { hp: 4, accEvery: 2, mightEvery: 3, evaEvery: 4 };
+    // 固定成長は HP だけ。命中・威力・回避は特技で選ぶ（V3-4 §4.1）
+    const lu = cls?.levelUp ?? { hp: 4 };
     const base = { ...cur.base! };
     base.maxHp += lu.hp;
-    if (lu.accEvery && lv % lu.accEvery === 0) base.acc += 1;
-    if (lu.mightEvery && lv % lu.mightEvery === 0) base.might += 1;
-    if (lu.evaEvery && lv % lu.evaEvery === 0) base.eva += 1;
     const tmp: Entity = { ...cur, base, stats: { ...cur.stats!, hp: cur.stats!.hp + lu.hp } };
     const stats = effectiveStats(ctx, tmp);
-    const gains = { maxHp: base.maxHp - cur.base!.maxHp, acc: base.acc - cur.base!.acc, might: base.might - cur.base!.might, eva: base.eva - cur.base!.eva };
+    const gains = { maxHp: base.maxHp - cur.base!.maxHp, acc: 0, might: 0, eva: 0 };
     ctx.emit({ type: 'level_up', target: e.id, levelAfter: lv, xpAfter: cur.level.xp, statsAfter: stats, baseAfter: base, gains, seenBy: e.player ? [e.player] : [] });
+    offerPerk(ctx, ctx.world.entities[e.id], lv);
     cur = ctx.world.entities[e.id];
   }
 }

@@ -285,10 +285,14 @@ export class SessionPlayerPort implements PlayerPort {
         if (e.type === 'item_thrown' && e.actor === view.self.id) { swings++; if (e.hit === cmd.target) hits++; }
         if (e.type === 'damaged' && e.source === view.self.id && e.target === cmd.target) dealt += e.dealt ?? e.amount;
       }
+      // 載せた能動技を使った回数（V3-4a §25.3）
+      const used = new Map<string, number>();
+      for (const e of r.events) if (e.type === 'ability_used' && e.actor === view.self.id) used.set(e.ability, (used.get(e.ability) ?? 0) + 1);
       const waits = Math.max(0, (r.steps ?? 0) - swings);
       const verb = cmd.with ? t(L, '投げ', 'threw') : t(L, '攻撃し', 'swung');
-      outcome += ' ' + t(L, `${swings} 回${verb} ${hits} 回命中・合計 ${dealt} ダメージを与えた${waits ? `（待った手番 ${waits}）` : ''}。`,
-        `${cmd.with ? 'Threw' : 'Swung'} ${swings} times, ${hits} hit for ${dealt} total${waits ? ` (waited ${waits} turns)` : ''}.`);
+      const abText = [...used].map(([id, n]) => `${nameOf(this.catalog.abilities[id]?.name, L, id)} ${n} ${t(L, '回', '')}`.trim()).join(t(L, '・', ', '));
+      outcome += ' ' + t(L, `${swings} 回${verb} ${hits} 回命中・合計 ${dealt} ダメージを与えた${abText ? `（能動技: ${abText}）` : ''}${waits ? `（待った手番 ${waits}）` : ''}。`,
+        `${cmd.with ? 'Threw' : 'Swung'} ${swings} times, ${hits} hit for ${dealt} total${abText ? ` (abilities: ${abText})` : ''}${waits ? ` (waited ${waits} turns)` : ''}.`);
     }
     // 帰還の綱で戻った: 確定点
     const lifelined = r.events.some((e) => e.type === 'player_state' && e.player === this.playerId && e.reason === 'lifeline');

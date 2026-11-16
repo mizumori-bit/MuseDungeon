@@ -1,6 +1,7 @@
 // Observation: PlayerView に AI が使いやすい派生情報を足して整形したもの。
 // 派生情報は PlayerView（とカタログ）だけから計算する。仕様: docs/PROTOCOL.md §3
-import type { Catalog } from './catalog';
+import type { Catalog, CatalogEquipStats } from './catalog';
+import { abilityStatus, accBonuses, curseUnknown, isCursedItem, perkChoice, shortId, weaponReach } from './build';
 import { haulTotal, nameOf, nextCampOf, nextOverreach, offerGap, overreachPoints, payoutOf, regenInterval, regenStep } from './catalog';
 import { multText, objectiveText, offerText, partsText, progressText, resultText } from './expedition';
 import { isStationary, pickableItems, sameOrWorseEquip } from './macro';
@@ -128,9 +129,18 @@ export interface ObsCamp {
 }
 export interface ObsPlayer { id: string; name: string; pos: Pos; dir: Dir | null; dist: number; hp_state: HpState }
 export interface ObsFeature { type: string; name: string; pos: Pos; dir: Dir | null; dist: number; state?: string }
-/** 自分の持ち物の性能（鑑定済みのみ。接辞込み） */
-export interface ItemStats { weapon?: { dmg: string; acc: number }; armor?: { armor: number; eva: number }; throw?: { dmg: string | null; acc: number; range: number } }
-export interface ObsInvItem { slot: string; name: string; qty: number; category: string; identified: boolean; equipped: boolean; value?: number; stats?: ItemStats }
+/**
+ * 自分の持ち物の性能（鑑定済みのみ。接辞込み）。weapon.traits は武器の特性（V3-4）、armor の move_cost / wake_pct は重い鎧、
+ * mods は装飾品の修正と、接辞による追加の修正（最大 HP・視界など）
+ */
+export interface ItemStats {
+  weapon?: { dmg: string; acc: number; traits?: string[] };
+  armor?: { armor: number; eva: number; move_cost?: number; wake_pct?: number };
+  throw?: { dmg: string | null; acc: number; range: number };
+  mods?: CatalogEquipStats;
+}
+/** curse: 'unknown' は呪いの有無をまだ確かめていない装備品、'cursed' は呪われている（外せない。V3-4） */
+export interface ObsInvItem { slot: string; name: string; qty: number; category: string; identified: boolean; equipped: boolean; value?: number; stats?: ItemStats; curse?: 'unknown' | 'cursed' }
 /** 推定残り HP。record は記録した個体の体力の範囲（標本であって種族の範囲ではない） */
 export interface HpEstimate { min: number; max: number | null; samples: number; record: { min: number; max: number } }
 
@@ -158,6 +168,11 @@ export interface Observation {
     score: { banked: number; expeditions_completed: number };
     /** HP が減っているときのみ: 全快まで休んだ場合の見積もり */
     rest_estimate?: RestEstimate;
+    /** ビルド（V3-4）: 取った特技（ranks は段階）・覚えた能動技（cooldown_left 0 なら使える。uses_left は遠征ごとの回数の残り） */
+    perks: { id: string; name: string; ranks: number }[];
+    abilities: { id: string; name: string; cooldown_left: number; uses_left?: number; target: 'adjacent' | 'throw' | 'dir' | 'none' }[];
+    /** 選べる特技の候補（choose_perk { option }）。more は後に控えている候補の数 */
+    perk_choice?: { level: number; options: { option: number; id: string; name: string; desc: string; lineage: string }[]; more: number };
   };
   /** items_omitted: 記憶の中の遠いアイテムのうち省いた件数 */
   visible: { monsters: ObsMonster[]; items: ObsItem[]; players: ObsPlayer[]; features: ObsFeature[]; items_omitted?: number };
@@ -289,30 +304,64 @@ export function itemStats(catalog: Catalog, kind: string | null, affixes: readon
   if (!kind) return undefined;
   const ci = catalog.items[kind];
   if (!ci) return undefined;
-  let acc = 0, dmgBonus = 0, armor = 0;
+  let acc = 0, dmgBonus = 0, armor = 0, eva = 0, might = 0, maxHp = 0, sight = 0;
   for (const a of affixes) {
     const m = catalog.affixes[a]?.itemMods;
-    if (m) { acc += m.acc; dmgBonus += m.dmgBonus; armor += m.armor; }
+    if (m) { acc += m.acc; dmgBonus += m.dmgBonus; armor += m.armor; eva += m.eva ?? 0; might += m.might ?? 0; maxHp += m.maxHp ?? 0; sight += m.sight ?? 0; }
   }
+  const es = ci.equipStats ?? {};
   const out: ItemStats = {};
   if (ci.weapon) {
     const d = parseDice(ci.weapon.dmg);
-    out.weapon = { dmg: formatDice({ ...d, bonus: d.bonus + dmgBonus }), acc: ci.weapon.acc + acc };
+    out.weapon = { dmg: formatDice({ ...d, bonus: d.bonus + dmgBonus }), acc: ci.weapon.acc + acc, ...(es.traits?.length ? { traits: [...es.traits] } : {}) };
   }
-  if (ci.armorStats) out.armor = { armor: ci.armorStats.armor + armor, eva: ci.armorStats.eva };
+  if (ci.armorStats) {
+    out.armor = { armor: ci.armorStats.armor + armor, eva: ci.armorStats.eva + eva, ...(es.moveCost ? { move_cost: es.moveCost } : {}), ...(es.wakePct ? { wake_pct: es.wakePct } : {}) };
+  }
   if (ci.throwStats) out.throw = { dmg: ci.throwStats.dmg, acc: ci.throwStats.acc, range: ci.throwStats.range };
   else if (ci.throwRange !== null && ci.category === 'potion') out.throw = { dmg: null, acc: 0, range: ci.throwRange };
-  return out.weapon || out.armor || out.throw ? out : undefined;
+  // 装飾品の修正と、接辞による追加の修正（武器の命中・ダメージ、防具の装甲・回避は上に含めた）
+  const mods: CatalogEquipStats = {};
+  const add = (k: keyof CatalogEquipStats, v: number) => { if (v) (mods as Record<string, number>)[k] = ((mods as Record<string, number>)[k] ?? 0) + v; };
+  if (ci.slot === 'accessory') {
+    for (const k of ['acc', 'eva', 'might', 'armor', 'maxHp', 'sight', 'meleeAcc', 'thrownAcc', 'stealthPct'] as const) add(k, (es[k] as number | undefined) ?? 0);
+    if (es.noiseWakes) mods.noiseWakes = true;
+    add('acc', acc); add('armor', armor); add('eva', eva);
+  } else if (ci.weapon) {
+    // 武器: 命中・ダメージは weapon に含めた
+    add('armor', armor); add('eva', eva);
+  } else if (ci.armorStats) {
+    // 防具: 装甲・回避は armor に含めた
+    add('acc', acc);
+  } else { add('acc', acc); add('armor', armor); add('eva', eva); }
+  add('might', might); add('maxHp', maxHp); add('sight', sight);
+  if (Object.keys(mods).length) out.mods = mods;
+  return out.weapon || out.armor || out.throw || out.mods ? out : undefined;
 }
 
 const sgn = (n: number): string => (n >= 0 ? `+${n}` : `${n}`);
 
 /** 性能の短い文章（「1d6・命中+1」「装甲3・回避-1」「投擲1d4+1・射程7・命中+1」） */
-export function itemStatsText(L: Locale, s: ItemStats | undefined): string {
+export function itemStatsText(L: Locale, s: ItemStats | undefined, catalog?: Catalog): string {
   if (!s) return '';
   const parts: string[] = [];
-  if (s.weapon) parts.push(t(L, `${s.weapon.dmg}・命中${sgn(s.weapon.acc)}`, `${s.weapon.dmg}, acc ${sgn(s.weapon.acc)}`));
-  if (s.armor) parts.push(t(L, `装甲${s.armor.armor}${s.armor.eva ? `・回避${sgn(s.armor.eva)}` : ''}`, `armor ${s.armor.armor}${s.armor.eva ? `, eva ${sgn(s.armor.eva)}` : ''}`));
+  const traits = (s.weapon?.traits ?? []).map((id) => nameOf(catalog?.weaponTraits[id]?.name, L, id.split(':')[1] ?? id));
+  if (s.weapon) parts.push(t(L, `${s.weapon.dmg}・命中${sgn(s.weapon.acc)}${traits.length ? `・${traits.join('・')}` : ''}`, `${s.weapon.dmg}, acc ${sgn(s.weapon.acc)}${traits.length ? `, ${traits.join(', ')}` : ''}`));
+  if (s.armor) {
+    const heavy = s.armor.move_cost ? t(L, `・歩く手番${s.armor.move_cost}`, `, move cost ${s.armor.move_cost}`) : '';
+    const wake = s.armor.wake_pct ? t(L, `・起こしやすい+${s.armor.wake_pct}%`, `, wakes sleepers +${s.armor.wake_pct}%`) : '';
+    parts.push(t(L, `装甲${s.armor.armor}${s.armor.eva ? `・回避${sgn(s.armor.eva)}` : ''}${heavy}${wake}`, `armor ${s.armor.armor}${s.armor.eva ? `, eva ${sgn(s.armor.eva)}` : ''}${heavy}${wake}`));
+  }
+  if (s.mods) {
+    const m = s.mods;
+    const ja: string[] = [], en: string[] = [];
+    const push = (v: number | undefined, j: string, e: string) => { if (v) { ja.push(`${j}${sgn(v)}`); en.push(`${e} ${sgn(v)}`); } };
+    push(m.acc, '命中', 'acc'); push(m.eva, '回避', 'eva'); push(m.might, '威力', 'might'); push(m.armor, '装甲', 'armor');
+    push(m.maxHp, '最大HP', 'max HP'); push(m.sight, '視界', 'sight'); push(m.meleeAcc, '近接の命中', 'melee acc'); push(m.thrownAcc, '投擲の命中', 'thrown acc');
+    push(m.stealthPct, '起こしにくさ', 'stealth');
+    if (m.noiseWakes) { ja.push('自分の音で眠りが必ず覚める'); en.push('your noise always wakes sleepers'); }
+    if (ja.length) parts.push(L === 'en' ? en.join(', ') : ja.join('・'));
+  }
   if (s.throw) parts.push(s.throw.dmg ? t(L, `投擲${s.throw.dmg}・射程${s.throw.range}・命中${sgn(s.throw.acc)}`, `thrown ${s.throw.dmg}, range ${s.throw.range}, acc ${sgn(s.throw.acc)}`)
     : t(L, `投げると割れる・射程${s.throw.range}`, `shatters when thrown, range ${s.throw.range}`));
   return parts.join(' / ');
@@ -779,16 +828,19 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
   };
   const invItems: ObsInvItem[] = view.inventory.map((it) => {
     const st = itemStats(catalog, it.kind, it.affixes);
+    const curse = isCursedItem(catalog, it.affixes) ? 'cursed' as const : curseUnknown(catalog, it) ? 'unknown' as const : undefined;
     return {
       slot: it.slot, name: itemDisplayName(catalog, L, it.kind, it.appearanceId, it.affixes), qty: it.qty,
       category: itemCategory(catalog, it.kind, it.appearanceId), identified: it.kind !== null, equipped: it.equipped !== null,
       ...(it.value !== undefined ? { value: it.value } : {}),
       ...(st ? { stats: st } : {}),
+      ...(curse ? { curse } : {}),
     };
   });
   const invBrief = invItems.map((i) => {
-    const st = itemStatsText(L, i.stats);
-    return `${i.slot})${i.name}${i.qty > 1 ? `x${i.qty}` : ''}${i.equipped ? '*' : ''}${i.value !== undefined ? `(${i.value})` : ''}${st ? `[${st}]` : ''}`;
+    const st = itemStatsText(L, i.stats, catalog);
+    const cu = i.curse === 'cursed' ? t(L, '{呪い:外せない}', '{cursed}') : i.curse === 'unknown' ? t(L, '{呪い?}', '{curse?}') : '';
+    return `${i.slot})${i.name}${i.qty > 1 ? `x${i.qty}` : ''}${i.equipped ? '*' : ''}${i.value !== undefined ? `(${i.value})` : ''}${st ? `[${st}]` : ''}${cu}`;
   }).join(' ');
 
   const biomeName = f ? nameOf(catalog.biomes[f.biome]?.name, L, f.biome) : '';
@@ -898,6 +950,35 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
     const ev = e.event as Record<string, unknown>;
     if (e.type === 'attack' && ev.target === me.id && typeof ev.attacker === 'string') attackers.add(ev.attacker);
   }
+  // ビルド（V3-4）: 特技・能動技・特技の候補
+  const bonuses = accBonuses(view, catalog);
+  const rankCount = new Map<string, number>();
+  for (const id of view.self.build.perks) rankCount.set(id, (rankCount.get(id) ?? 0) + 1);
+  const perksList = [...rankCount].map(([id, ranks]) => ({ id, name: nameOf(catalog.perks[id]?.name, L, shortId(id)), ranks }));
+  const abilitiesList: Observation['self']['abilities'] = view.self.build.abilities.map((a) => {
+    const st = abilityStatus(view, catalog, a.id);
+    const def = catalog.abilities[a.id];
+    return { id: shortId(a.id), name: nameOf(def?.name, L, shortId(a.id)), cooldown_left: st.cooldownLeft, ...(st.usesLeft !== null ? { uses_left: st.usesLeft } : {}), target: def?.target ?? 'none' };
+  });
+  const offer = perkChoice(view);
+  const lineageName = (lid: string) => {
+    if (lid === 'common') return t(L, '共通', 'common');
+    const l = catalog.classes[view.self.classId]?.lineages?.find((x) => x.id === lid);
+    return l ? nameOf(l.name, L, lid) : lid;
+  };
+  const perkChoiceObs = offer ? {
+    level: offer.level,
+    options: offer.options.map((id, i) => ({ option: i + 1, id, name: nameOf(catalog.perks[id]?.name, L, shortId(id)), desc: nameOf(catalog.perks[id]?.desc, L, ''), lineage: lineageName(catalog.perks[id]?.lineage ?? '') })),
+    more: view.self.build.pending.length - 1,
+  } : undefined;
+  if (perkChoiceObs && view.status !== 'dead' && view.status !== 'ended') {
+    alerts.push({
+      code: 'perk_pending',
+      text: t(L, `特技を選べる（Lv${offer!.level}）: ${perkChoiceObs.options.map((o) => `${o.option} ${o.name}`).join(' / ')}（choose_perk。手番は使わない）`,
+        `Perk to choose (Lv${offer!.level}): ${perkChoiceObs.options.map((o) => `${o.option} ${o.name}`).join(' / ')} (choose_perk; takes no turn)`),
+      data: { level: offer!.level, options: [...offer!.options], more: perkChoiceObs.more },
+    });
+  }
   const mineCount = items.filter((i) => i.mine).reduce((a, i) => a + i.qty, 0);
   const pickables = pickableItems(view, catalog).length;
   const valid_actions = buildValidActions(view, catalog, {
@@ -906,6 +987,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
     attackers, mineCount, pickables, huntingReach, worstSum, unrecorded,
     draft: view.floorHint?.draft ?? null,
     ifLifeline: expedition?.haul?.if_lifeline_now,
+    perkChoice: perkChoiceObs, abilities: abilitiesList, bonuses,
   });
 
   const statusLabel: Record<ViewStatus, [string, string]> = {
@@ -941,8 +1023,8 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
         } : {}),
       } : null,
       attack: {
-        acc: me.stats.acc, dmg: `${me.stats.dmg}${me.stats.might ? (me.stats.might > 0 ? `+${me.stats.might}` : `${me.stats.might}`) : ''}`,
-        ...(throwables.length ? { throws: throwables.map((tw) => ({ slot: tw.slot, name: itemDisplayName(catalog, L, tw.item.kind, tw.item.appearanceId, tw.item.affixes), dmg: tw.dmg, acc: me.stats.acc + tw.acc, range: tw.range })) } : {}),
+        acc: me.stats.acc + bonuses.melee, dmg: `${me.stats.dmg}${me.stats.might ? (me.stats.might > 0 ? `+${me.stats.might}` : `${me.stats.might}`) : ''}`,
+        ...(throwables.length ? { throws: throwables.map((tw) => ({ slot: tw.slot, name: itemDisplayName(catalog, L, tw.item.kind, tw.item.appearanceId, tw.item.affixes), dmg: tw.dmg, acc: me.stats.acc + tw.acc + bonuses.thrown, range: tw.range })) } : {}),
       },
       defense: { eva: me.stats.eva, armor: me.stats.armor },
       equipment: { weapon: equipName(me.equip.weapon), armor: equipName(me.equip.armor), accessory: equipName(me.equip.accessory) },
@@ -950,6 +1032,9 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       turns: me.turns,
       speed: effectiveSpeed(view, catalog),
       score: { banked: view.record.banked, expeditions_completed: view.record.expeditions },
+      perks: perksList,
+      abilities: abilitiesList,
+      ...(perkChoiceObs ? { perk_choice: perkChoiceObs } : {}),
     },
     visible: { monsters, items, players, features, ...(itemsOmitted ? { items_omitted: itemsOmitted } : {}) },
     navigation: { here, passable_dirs, frontiers, known_stairs, ...(view.memory.unsighted?.length ? { unsighted: view.memory.unsighted.length } : {}) },
@@ -985,19 +1070,31 @@ interface VAInput {
   ifLifeline?: number;
   /** 下への風（今いる階の下り階段が未発見のとき） */
   draft: Dir | null;
+  /** ビルド（V3-4） */
+  perkChoice?: Observation['self']['perk_choice'];
+  abilities: Observation['self']['abilities'];
+  bonuses: { melee: number; thrown: number };
+}
+
+/** 能動技の振る舞い（短い ID からも引く） */
+function abilityHandlerOf(catalog: Catalog, id: string): string | undefined {
+  return Object.entries(catalog.abilities).find(([k]) => k === id || k.endsWith(`:${id}`))?.[1].handler;
 }
 
 function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): string[] {
   const L = view.locale;
   const out: string[] = [];
+  // 特技の候補（手番を消費しない。V3-4 §4.1）
+  const perkLines = (x.perkChoice?.options ?? []).map((o) => `choose_perk ${o.option} (${o.name}: ${o.desc})`);
   if (view.status === 'at_camp') {
-    if (!view.camp) return ['wait_for_turn'];
+    if (!view.camp) return [...perkLines, 'wait_for_turn'];
     return [
+      ...perkLines,
       ...view.camp.offers.map((o) => `start_expedition ${o.index} (${objectiveText(L, o.objective)})`),
       'start_expedition endless', 'retire',
     ];
   }
-  if (view.status !== 'your_turn' || !view.self.pos || !view.floor) return view.status === 'dead' || view.status === 'ended' ? [] : ['wait_for_turn'];
+  if (view.status !== 'your_turn' || !view.self.pos || !view.floor) return view.status === 'dead' || view.status === 'ended' ? [] : [...perkLines, 'wait_for_turn'];
   const pos = view.self.pos;
   const f = view.floor;
   const byPos = new Map<number, EntityView>();
@@ -1047,11 +1144,53 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
     if (x.huntingReach.length) return `travel_to stairs_${type} mode:steady (${stopText}${risk ? sep + risk : ''})`;
     return `travel_to stairs_${type}`;
   };
-  for (const m of x.hostiles.filter((h) => h.dist <= 1)) out.push(`fight ${m.id} (${m.name}・${stopText})`);
+  // fight に載せられる能動技（強打・なぎ払い。使える手番ごとに使う。V3-4a §25.3）
+  const meleeAb = x.abilities.filter((a) => { const h = abilityHandlerOf(catalog, a.id); return (h === 'strike' || h === 'cleave') && a.uses_left !== 0; });
+  const abArg = meleeAb.length ? ` abilities:${meleeAb.map((a) => a.id).join(',')}` : '';
+  const abNote = meleeAb.length ? t(L, `・${meleeAb.map((a) => `${a.name}${a.cooldown_left ? `(あと${a.cooldown_left})` : ''}`).join('・')}を使える手番に使う`, `, uses ${meleeAb.map((a) => `${a.name}${a.cooldown_left ? ` (in ${a.cooldown_left})` : ''}`).join(', ')} when ready`) : '';
+  for (const m of x.hostiles.filter((h) => h.dist <= 1)) out.push(`fight ${m.id}${abArg} (${m.name}・${stopText}${abNote})`);
+  out.unshift(...perkLines);
+  // 長柄: 直線で 2 マス先の敵を突ける（間のマスが通れて誰もいない。V3-4 §4.4）
+  if (weaponReach(view, catalog) >= 2) {
+    for (const m of x.hostiles) {
+      if (m.dist !== 2) continue;
+      const dx = m.pos.x - pos.x, dy = m.pos.y - pos.y;
+      if ((dx !== 0 && Math.abs(dx) !== 2) || (dy !== 0 && Math.abs(dy) !== 2)) continue;
+      const mid = { x: pos.x + Math.sign(dx), y: pos.y + Math.sign(dy) };
+      const mi = mid.y * f.width + mid.x;
+      const mt = catalog.terrain[view.terrainTable[view.memory.terrain[mi]]];
+      if (!mt?.passable || mt.door === 'closed' || byPos.has(mi)) continue;
+      out.push(`attack ${m.id} (${t(L, `${m.name} を 2 マス先から突く`, `strike ${m.name} from 2 cells`)})`);
+    }
+  }
+  // 能動技（V3-4 §4.2）: 使えるものは対象付き、使えないものは残りの手番付き
+  const adjFoes = x.hostiles.filter((h) => h.dist <= 1);
+  for (const a of x.abilities) {
+    const def = Object.entries(catalog.abilities).find(([k]) => k === a.id || k.endsWith(`:${a.id}`))?.[1];
+    if (a.uses_left === 0) { out.push(`use_ability ${a.id} (${t(L, `${a.name}: この遠征では使い切った`, `${a.name}: used up this expedition`)})`); continue; }
+    if (a.cooldown_left > 0) { out.push(`use_ability ${a.id} (${t(L, `${a.name}: あと ${a.cooldown_left} 手番`, `${a.name}: ready in ${a.cooldown_left} turns`)})`); continue; }
+    const desc = def ? nameOf(def.desc, L, '') : '';
+    if (a.target === 'adjacent') {
+      for (const m of adjFoes.slice(0, 2)) out.push(`use_ability ${a.id} -> ${m.id} (${a.name}: ${m.name}・${desc})`);
+    } else if (a.target === 'throw') {
+      const tg = x.hostiles.filter((m) => m.shots.some((s) => s.state === 'clear')).sort((p1, p2) => Number(x.attackers.has(p2.id)) - Number(x.attackers.has(p1.id)) || p1.dist - p2.dist).slice(0, 2);
+      for (const m of tg) out.push(`use_ability ${a.id} -> ${m.id} (${a.name}: ${m.name}${m.awareness !== 'hunting' ? t(L, '・気づいていないので会心', ', unaware: a critical hit') : ''}・${desc})`);
+    } else if (a.target === 'dir') {
+      // 身をかわす: 隣に起きている敵がいるときだけ、離れる向きを例に出す
+      const near = adjFoes.find((m) => m.awareness !== 'asleep');
+      if (near) {
+        const away = x.passable_dirs.filter((d) => { const v = DIR_VEC[d]; return cheb({ x: pos.x + v[0], y: pos.y + v[1] }, near.pos) > 1; }).slice(0, 2);
+        for (const d of away) out.push(`use_ability ${a.id} ${d} (${a.name}: ${desc})`);
+      }
+    } else if (def && a.target === 'none') {
+      if (def.handler === 'cleave') { if (adjFoes.length) out.push(`use_ability ${a.id} (${t(L, `${a.name}: 隣の ${adjFoes.length} 体`, `${a.name}: ${adjFoes.length} adjacent`)})`); }
+      else if (def.handler !== 'heal_pct' || view.self.stats.hp < view.self.stats.maxHp) out.push(`use_ability ${a.id} (${a.name}: ${desc})`);
+    }
+  }
   // 迎え撃つ: 追跡中で届かない相手は、隣に来るまで待って戦う（最大 10 手番）。射撃する相手は待ち受けない（V3-2R3a §22.2）
   if (!adjAwake.length) {
     const comer = x.huntingReach.filter((m) => m.dist > 1 && !m.traits.includes('stationary') && !m.traits.includes('ranged'))[0];
-    if (comer) out.push(`fight ${comer.id} (${t(L, `${comer.name} を迎え撃つ: 隣に来るまで待つ・${stopText}`, `meet ${comer.name}: waits until it is adjacent, ${stopText}`)})`);
+    if (comer) out.push(`fight ${comer.id}${abArg} (${t(L, `${comer.name} を迎え撃つ: 隣に来るまで待つ・${stopText}`, `meet ${comer.name}: waits until it is adjacent, ${stopText}`)}${abNote})`);
     const shooter = x.huntingReach.filter((m) => m.dist > 1 && m.traits.includes('ranged'))[0];
     if (shooter) out.push(`travel_to ${shooter.id} (${t(L, `${shooter.name}: 近づく（寄られると下がり、下がる間は撃たない）／視線を切る`, `${shooter.name}: close in (it backs off when approached and does not shoot while backing off) / break line of sight`)})`);
   }
@@ -1115,7 +1254,8 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
   for (const g of throwGroups) {
     const far = g.targets.find((m) => m.dist > 1);
     if (!far) continue;
-    out.push(`fight ${far.id} with:${g.slots[0]} (${t(L, `投擲で決着まで・${stopText}`, `throw until it falls, ${stopText}`)})`);
+    const aimed = x.abilities.find((a) => abilityHandlerOf(catalog, a.id) === 'aimed_throw' && a.uses_left !== 0);
+    out.push(`fight ${far.id} with:${g.slots[0]}${aimed ? ` abilities:${aimed.id}` : ''} (${t(L, `投擲で決着まで・${stopText}`, `throw until it falls, ${stopText}`)}${aimed ? t(L, `・${aimed.name}を使える手番に使う`, `, uses ${aimed.name} when ready`) : ''})`);
     break;
   }
   // 隣接する扉・地物
@@ -1190,6 +1330,11 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
   lines.push(t(L,
     `能力: 命中+${s.attack.acc} ダメージ${s.attack.dmg} 回避${s.defense.eva} 装甲${s.defense.armor} 速さ${s.speed} XP ${s.xp}/${s.xp_next} 状態:${st}`,
     `Stats: acc+${s.attack.acc} dmg ${s.attack.dmg} eva ${s.defense.eva} armor ${s.defense.armor} speed ${s.speed} XP ${s.xp}/${s.xp_next} status:${st}`));
+  if (s.abilities.length || s.perks.length) {
+    const ab = s.abilities.map((a) => `${a.name}(${a.id}${a.uses_left === 0 ? t(L, '・使い切った', ', used up') : a.cooldown_left ? t(L, `・あと${a.cooldown_left}`, `, ${a.cooldown_left} left`) : t(L, '・使える', ', ready')})`).join(' ');
+    const pk = s.perks.map((x) => `${x.name}${x.ranks > 1 ? `×${x.ranks}` : ''}`).join(t(L, '・', ', '));
+    lines.push(t(L, `能動技: ${ab || 'なし'} | 特技: ${pk || 'なし'}`, `Abilities: ${ab || 'none'} | Perks: ${pk || 'none'}`));
+  }
   const re = s.rest_estimate;
   const alive = obs.status !== 'dead' && obs.status !== 'ended';
   if (re && alive) {
@@ -1254,7 +1399,7 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
   if (fmt.inventory !== false) {
     if (s.inventory) {
       lines.push(t(L, `所持品 (${s.inventory_count}/${s.inventory_capacity}、* は装備中):`, `Inventory (${s.inventory_count}/${s.inventory_capacity}, * = equipped):`));
-      for (const it of s.inventory) lines.push(`  ${it.slot}) ${it.name}${it.qty > 1 ? ` x${it.qty}` : ''}${it.equipped ? '*' : ''}${it.identified ? '' : t(L, ' (未鑑定)', ' (unidentified)')}`);
+      for (const it of s.inventory) lines.push(`  ${it.slot}) ${it.name}${it.qty > 1 ? ` x${it.qty}` : ''}${it.equipped ? '*' : ''}${it.identified ? '' : t(L, ' (未鑑定)', ' (unidentified)')}${it.curse === 'cursed' ? t(L, ' {呪い:外せない}', ' {cursed}') : it.curse === 'unknown' ? t(L, ' {呪い?}', ' {curse?}') : ''}`);
     } else {
       lines.push(t(L, `所持品 (${s.inventory_count}/${s.inventory_capacity}、* は装備中): `, `Inventory (${s.inventory_count}/${s.inventory_capacity}, * = equipped): `) + (s.inventory_brief || '-'));
     }

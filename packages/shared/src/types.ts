@@ -65,7 +65,11 @@ export interface Entity {
   inv?: { items: EntityId[]; capacity: number };
   equip?: Partial<Record<EquipSlot, EntityId>>;
   /** thrownBy: 床に落ちている投げた物の持ち主（その人が上に入ると自動で拾う） */
-  item?: { qty: number; affixes: string[]; heldBy?: EntityId; slot?: string; thrownBy?: PlayerId; value?: number };
+  /**
+   * hidden: まだ見えていない接辞（呪い。V3-4 §4.4）。装備するか鑑定すると affixes へ移る。プレイヤーには渡さない。
+   * inspected: 呪いの有無を確かめた（装備した・鑑定した・初期装備）。武器・防具・装飾品だけが使う
+   */
+  item?: { qty: number; affixes: string[]; heldBy?: EntityId; slot?: string; thrownBy?: PlayerId; value?: number; hidden?: string[]; inspected?: boolean };
   statuses?: StatusInst[];
   trap?: { revealedTo: PlayerId[] };
   feature?: { state: string };
@@ -80,7 +84,16 @@ export interface Entity {
   bounty?: number;
   /** 持ち場（守護者が置かれたマス。V3-2R3b §23.2）。気づいていない間はここから guardian.leash マス以内だけを動く。プレイヤーには渡さない */
   home?: { x: number; y: number };
+  /** ビルド（プレイヤー。V3-4 §4.1・§4.2） */
+  build?: PlayerBuild;
 }
+
+/** 特技の候補（レベルアップごとに 1 つ）。options が空なのは、前の候補を選ぶまで引いていないもの */
+export interface PerkOffer { level: number; options: string[] }
+/** 覚えた能動技。readyAt: 自分の手番数（actor.turns）がこの値以上なら使える。usedNo: 最後に使った遠征の番号、uses: その遠征で使った回数 */
+export interface AbilityState { id: string; readyAt: number; usedNo?: number; uses?: number }
+/** perks: 取った特技（段階のある特技は段階の数だけ並ぶ）、pending: 選んでいない候補（古い順） */
+export interface PlayerBuild { perks: string[]; pending: PerkOffer[]; abilities: AbilityState[] }
 
 export type EntityRole = 'guardian' | 'relic';
 

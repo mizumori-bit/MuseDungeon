@@ -1,0 +1,16 @@
+[
+  { "id": "core:bash", "name": { "ja": "強打", "en": "Bash" }, "handler": "strike", "target": "adjacent", "cooldown": 8,
+    "params": { "stunTurns": 1 },
+    "desc": { "ja": "隣の敵に近接攻撃。当たれば 1 手番の朦朧（行動不能）", "en": "Melee attack an adjacent enemy. On a hit it is stunned (cannot act) for 1 turn" } },
+  { "id": "core:cleave", "name": { "ja": "なぎ払い", "en": "Cleave" }, "handler": "cleave", "target": "none", "cooldown": 6,
+    "desc": { "ja": "隣にいる敵すべてに近接攻撃", "en": "Melee attack every adjacent enemy" } },
+  { "id": "core:second_wind", "name": { "ja": "立て直し", "en": "Second wind" }, "handler": "heal_pct", "target": "none", "cooldown": 0, "perExpedition": 1,
+    "params": { "pct": 25 },
+    "desc": { "ja": "最大 HP の 25% を回復する。遠征ごとに 1 回", "en": "Recover 25% of max HP. Once per expedition" } },
+  { "id": "core:aimed_throw", "name": { "ja": "狙い撃ち", "en": "Aimed throw" }, "handler": "aimed_throw", "target": "throw", "cooldown": 5,
+    "params": { "acc": 4 },
+    "desc": { "ja": "投擲。命中 +4、気づいていない・眠っている相手には会心", "en": "A throw with accuracy +4 that crits against unaware or sleeping targets" } },
+  { "id": "core:slip", "name": { "ja": "身をかわす", "en": "Slip" }, "handler": "slip", "target": "dir", "cooldown": 10,
+    "params": { "steps": 2 },
+    "desc": { "ja": "その方向へ 2 マスまで移動し、次の自分の手番まで近接攻撃を受けない", "en": "Move up to 2 cells that way; melee attacks miss you until your next turn" } }
+]

@@ -9,7 +9,13 @@
       { "item": "core:leather_armor", "equip": true },
       { "item": "core:potion_healing", "qty": 1 }
     ],
-    "levelUp": { "hp": 6, "accEvery": 2, "mightEvery": 3, "evaEvery": 5 },
+    "levelUp": { "hp": 6 },
+    "proficiency": { "melee": 0, "thrown": -2 },
+    "lineages": [
+      { "id": "warrior_front", "name": { "ja": "前衛", "en": "vanguard" } },
+      { "id": "warrior_tough", "name": { "ja": "不屈", "en": "unyielding" } }
+    ],
+    "startPerks": ["core:perk_bash"],
     "searchPct": 10, "stealthPct": 0
   },
   {
@@ -23,7 +29,13 @@
       { "item": "core:throwing_knife", "qty": 8 },
       { "item": "core:potion_healing", "qty": 2 }
     ],
-    "levelUp": { "hp": 4, "accEvery": 2, "mightEvery": 4, "evaEvery": 3 },
+    "levelUp": { "hp": 4 },
+    "proficiency": { "melee": 0, "thrown": 2 },
+    "lineages": [
+      { "id": "scout_archer", "name": { "ja": "射手", "en": "marksman" } },
+      { "id": "scout_shadow", "name": { "ja": "影", "en": "shadow" } }
+    ],
+    "startPerks": ["core:perk_aimed_throw"],
     "searchPct": 30, "stealthPct": 40
   }
 ]

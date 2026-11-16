@@ -344,3 +344,36 @@ button.draft { border-color: #3f8fa0; background: #15323a; color: #bff0ff; }
 /* 隣に追跡中の敵がいるときの「使う」（使う間に隣の敵が行動する） */
 button.exposed { border-color: #c07a2e; }
 .inv em.worse { color: var(--muted); }
+
+/* ---- V3-4: ビルド（特技の候補・能動技・長柄・呪い） ---- */
+/* 特技の候補（地図の上。キャンプでも出る） */
+.perkbox { margin: 6px 8px 0; padding: 8px 10px; border: 1px solid #7a5ab5; border-radius: 8px; background: #1c1730; }
+.perkbox.focused { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.perkbox.collapsed { display: flex; align-items: center; gap: 8px; padding: 3px 10px; font-size: 12.5px; color: #d9c8ff; }
+.perkbox .phead { display: flex; align-items: center; gap: 4px 10px; flex-wrap: wrap; margin-bottom: 6px; }
+.perkbox .phead b { color: #e1d2ff; }
+.perkbox .phead .right { margin-left: auto; }
+.perkopts { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.perkopts li { flex: 1 1 160px; display: flex; flex-direction: column; gap: 3px; padding: 6px 8px; border: 1px solid #3a3150; border-radius: 6px; background: #15121e; font-size: 12.5px; }
+.perkopts .pname { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.perkopts .pidx, .abilitybar .aidx { display: inline-block; min-width: 1.4em; text-align: center; border-radius: 4px; background: #2a2e3a; color: var(--muted); font-family: Consolas, monospace; font-size: 11px; }
+.perkopts .plin { font-size: 11px; padding: 0 6px; border-radius: 8px; background: #2e2a45; color: #c9b8f0; }
+.perkopts .pab { font-size: 11px; color: #8fe0a0; }
+.perkopts .pdesc { color: #cfd6e6; flex: 1; }
+.perkopts button { align-self: flex-start; }
+/* 能動技の並び（地図の下） */
+.abilitybar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 6px 8px; border-top: 1px solid var(--line); }
+.abilitybar.focused { background: rgba(79,195,247,0.07); }
+.abilitybar .lbl { font-size: 11px; color: var(--muted); margin-right: 2px; }
+button.ability.ready { border-color: #4f8fb5; background: #15283a; }
+button.ability .astate { margin-left: 2px; }
+/* 能動技の対象（方向） */
+.dirpad { display: grid; grid-template-columns: repeat(3, 2.4em); gap: 3px; margin: 4px 0; }
+.dirpad button { padding: 2px 0; font-size: 13px; }
+.dirpad button.away { border-color: #8fe0a0; color: #c8f5d2; }
+/* 状態パネルの特技・能動技 */
+.kv .perklist { display: inline-flex; flex-wrap: wrap; gap: 0 10px; }
+.kv .abil.cooling { color: var(--muted); }
+/* 呪い（?: 確かめていない装備品） */
+.inv em.curse.unknown { color: #ce93d8; }
+.inv em.curse.cursed { color: #ff6e6e; font-weight: 700; }

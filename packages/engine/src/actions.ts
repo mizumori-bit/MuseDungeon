@@ -1,8 +1,14 @@
 // プレイヤーの基本行動。各ハンドラは「検証（イベント無し）→ 実行」の二段。
 // 不正なコマンドはイベントを出さず時間も消費しない（ActionError を返す）。
 import type { ActionError, Command, Entity, EquipSlot, PlayerRecord, Pos } from '@muse/shared';
-import { actionError, currentExpedition, diceMax, DIR_VEC, EQUIP_SLOTS, stepPos, t } from '@muse/shared';
-import { endRun, grantXp, melee, recordHit, rollToHit, applyDamage, checkRunEnd } from './combat';
+import { actionError, cheb, currentExpedition, diceMax, DIR_VEC, DIRS, EQUIP_SLOTS, stepPos, t } from '@muse/shared';
+import { endRun, grantXp, isUnaware, melee, recordHit, rollToHit, applyDamage, checkRunEnd } from './combat';
+import {
+  abilityHandlers, abilityReadyError, abilityState, attackCostOf, choosePerk, cursedSlot, gearOf, inspectItem, isCursed, markAbilityUsed,
+  perkHook, reachLine, reachOf, resolveAbilityId, thrownAccOf,
+} from './build';
+import { huntingInView } from './expedition';
+import { addStatus } from './statuses';
 import type { Ctx } from './ctx';
 import { applyEffects } from './effects';
 import { doExtract, extractError, invCount, maybeEndExpedition } from './expedition';
@@ -90,7 +96,8 @@ actions.register('move', (ctx, e, pr, cmd: Extract<Command, { type: 'move' }>) =
       },
     };
   }
-  if (occ) return { run: () => { melee(ctx, e, occ); return { cost: 100 }; } };
+  // 武器の「速い」は攻撃の手番コストが下がる（V3-4 §4.4）
+  if (occ) return { run: () => { melee(ctx, e, occ); return { cost: attackCostOf(ctx, e) }; } };
   const tr = ctx.terrainAt(key, to.x, to.y);
   if (tr.door === 'closed') return { run: () => { openDoor(ctx, e, to); return { cost: 100 }; } };
   if (!tr.passable) {
@@ -102,18 +109,27 @@ actions.register('move', (ctx, e, pr, cmd: Extract<Command, { type: 'move' }>) =
       ctx.emit({ type: 'entity_moved', id: e.id, kind: e.kind, from, to, mode: 'walk', ...ctx.perceive(key, [{ field: 'from', pos: from }, { field: 'to', pos: to }], [e.player!]), floor: key });
       const trap = ctx.featureAt(key, to.x, to.y);
       if (trap?.trap) triggerTrap(ctx, ctx.world.entities[e.id], trap);
-      // 自分が投げた物は、移動の一部として拾う（追加の手番なし。入らなければ拾わない）
+      // 自分が投げた物は、移動の一部として拾う（追加の手番なし。入らなければ拾わない）。回収の手なら隣のマスからも
       const me = ctx.world.entities[e.id];
       if (me?.pos && ctx.world.players[pr.id].state === 'alive') {
-        const mine = ctx.itemsAt(key, me.pos.x, me.pos.y).filter((it) => it.item?.thrownBy === pr.id);
+        const cells = perkHook(ctx, me, 'collect_adjacent') ? [null, ...DIRS] : [null];
+        const mine = cells.flatMap((d) => ctx.itemsAt(key, me.pos!.x + (d ? DIR_VEC[d][0] : 0), me.pos!.y + (d ? DIR_VEC[d][1] : 0))).filter((it) => it.item?.thrownBy === pr.id);
         if (mine.length) { pickUpItems(ctx, me, mine, true); updateKnowledge(ctx, key); }
       }
-      return { cost: 100 };
+      // 重い鎧は歩く手番のコストが増える（V3-4 §14.5）
+      return { cost: gearOf(ctx, ctx.world.entities[e.id] ?? e).moveCost };
     },
   };
 });
 
-actions.register('wait', () => ({ run: () => ({ cost: 100 }) }));
+actions.register('wait', (ctx, e, pr) => ({
+  run: () => {
+    // 盾の構え: 追跡中の敵が見えているときの待機は、次の自分の手番までに受ける最初の一撃の装甲を上げる（V3-4 §4.1）
+    const h = perkHook(ctx, e, 'brace');
+    if (h && huntingInView(ctx, pr)) addStatus(ctx, ctx.world.entities[e.id], 'core:braced', 1, h.armor ?? 2);
+    return { cost: 100 };
+  },
+}));
 
 actions.register('pickup', (ctx, e, pr, cmd: Extract<Command, { type: 'pickup' }>) => {
   const key = e.pos!.floor;
@@ -197,6 +213,7 @@ actions.register('drop', (ctx, e, pr, cmd: Extract<Command, { type: 'drop' }>) =
   const it = invItem(ctx, e, cmd.slot);
   if (!it) return fail(pr, 'no_such_item', `スロット ${cmd.slot} にアイテムは無い。`, `No item in slot ${cmd.slot}.`, 'inventory で所持品のスロットを確認する。', 'Check slots with inventory.');
   if (ctx.content.items[it.kind]?.bound) return fail(pr, 'cannot_use', 'それは手放せない。', 'You cannot let go of that.', '帰還の綱は所持数に数えない。使うなら use_item。', 'The lifeline does not count toward capacity. Use it with use_item.');
+  if (equippedSlotOf(e, it.id) && isCursed(ctx, it)) return cursedFail(pr);
   return {
     run: () => {
       const eq = equippedSlotOf(ctx.world.entities[e.id], it.id);
@@ -233,6 +250,8 @@ actions.register('equip', (ctx, e, pr, cmd: Extract<Command, { type: 'equip' }>)
   const def = ctx.content.items[it.kind];
   if (!def?.equip) return fail(pr, 'cannot_use', 'それは装備できない。', 'You cannot equip that.', '武器・防具を選ぶ。薬や巻物は use_item。', 'Pick a weapon or armor. Use use_item for potions and scrolls.');
   if (equippedSlotOf(e, it.id)) return fail(pr, 'cannot_use', 'それは既に装備している。', 'Already equipped.', '別のアイテムを選ぶ。', 'Choose another item.');
+  // 呪われた装備は外せないので、同じ場所に別の品も付けられない（V3-4 §4.4）
+  if (cursedSlot(ctx, e, def.equip.slot)) return cursedFail(pr);
   return {
     run: () => {
       const slotName = def.equip!.slot;
@@ -241,11 +260,20 @@ actions.register('equip', (ctx, e, pr, cmd: Extract<Command, { type: 'equip' }>)
       const actor = structuredClone(me);
       actor.equip = { ...(actor.equip ?? {}), [slotName]: it.id };
       ctx.emit({ type: 'item_equipped', actor: e.id, item: it.id, kind: it.kind, appearanceId: appearanceOf(ctx, it.kind), slotName, affixes: [...(it.item?.affixes ?? [])], put: [actor], ...selfSeen(ctx, me), floor: me.pos!.floor });
+      // 装備すると正体（装飾品）と呪いの有無が分かる（呪われていれば外せなくなる。V3-4 §4.4）
+      if (appearanceOf(ctx, it.kind) && !ctx.world.players[pr.id].knowledge.identified.includes(it.kind)) {
+        ctx.emit({ type: 'item_identified', player: pr.id, kind: it.kind, appearanceId: appearanceOf(ctx, it.kind), seenBy: [pr.id], floor: me.pos!.floor });
+      }
+      inspectItem(ctx, ctx.world.entities[e.id], ctx.world.entities[it.id], 'equip');
       recomputeStats(ctx, ctx.world.entities[e.id], 'equip');
       return { cost: 100 };
     },
   };
 });
+
+function cursedFail(pr: PlayerRecord): Prepared {
+  return fail(pr, 'cannot_use', '呪われていて外せない。', 'It is cursed and will not come off.', '解呪の巻物か祭壇で呪いを解く。', 'Lift the curse with a scroll of remove curse or an altar.');
+}
 
 actions.register('unequip', (ctx, e, pr, cmd: Extract<Command, { type: 'unequip' }>) => {
   let slotName: EquipSlot | null = null;
@@ -255,6 +283,7 @@ actions.register('unequip', (ctx, e, pr, cmd: Extract<Command, { type: 'unequip'
     if (it) slotName = equippedSlotOf(e, it.id);
   }
   if (!slotName || !e.equip?.[slotName]) return fail(pr, 'no_such_item', 'それは装備していない。', 'That is not equipped.', 'inventory で装備中のアイテムを確認する。', 'Check equipped items with inventory.');
+  if (cursedSlot(ctx, e, slotName)) return cursedFail(pr);
   const sn = slotName;
   return { run: () => { unequipEvents(ctx, e, sn); return { cost: 100 }; } };
 });
@@ -275,8 +304,11 @@ actions.register('use', (ctx, e, pr, cmd: Extract<Command, { type: 'use' }>) => 
   if (cmd.targetSlot && def.onUse.some((x) => x.effect === 'identify')) {
     const tgt = invItem(ctx, e, cmd.targetSlot);
     if (!tgt) return fail(pr, 'no_such_item', `スロット ${cmd.targetSlot} にアイテムは無い。`, `No item in slot ${cmd.targetSlot}.`, 'inventory で確認する。', 'Check with inventory.');
-    if (!ctx.world.secret.appearances[tgt.kind] || pr.knowledge.identified.includes(tgt.kind)) {
-      return fail(pr, 'cannot_use', 'それは鑑定の必要が無い。', 'That needs no identification.', '未鑑定の品のスロットを指定する。', 'Pick the slot of an unidentified item.');
+    // 鑑定できるもの: 未鑑定の種類、または呪いの有無を確かめていない装備品（V3-4）
+    const unknownKind = !!ctx.world.secret.appearances[tgt.kind] && !pr.knowledge.identified.includes(tgt.kind);
+    const uninspected = !!ctx.content.items[tgt.kind]?.equip && !tgt.item?.inspected;
+    if (!unknownKind && !uninspected) {
+      return fail(pr, 'cannot_use', 'それは鑑定の必要が無い。', 'That needs no identification.', '未鑑定の品か、呪いの有無を確かめていない装備品のスロットを指定する。', 'Pick the slot of an unidentified item or of equipment whose curse is unchecked.');
     }
     identifySlot = cmd.targetSlot;
   }
@@ -347,7 +379,20 @@ function resolveTarget(ctx: Ctx, e: Entity, pr: PlayerRecord, target: unknown, r
   return { x: p.x, y: p.y };
 }
 
-actions.register('throw', (ctx, e, pr, cmd: Extract<Command, { type: 'throw' }>) => {
+actions.register('throw', (ctx, e, pr, cmd: Extract<Command, { type: 'throw' }>) => prepareThrow(ctx, e, pr, cmd.slot, cmd.target, {}));
+
+export interface ThrowOpts {
+  /** 命中の上乗せ（狙い撃ち） */
+  accBonus?: number;
+  /** 気づいていない・眠っている相手には会心（狙い撃ち） */
+  critIfUnaware?: boolean;
+  /** 実行の直前（能動技の使用を記録する） */
+  before?: () => void;
+}
+
+/** 投擲の検証と実行（throw_item と狙い撃ち）。命中 = 品物の命中 + 習熟 + 装備（V3-4 §4.3） */
+export function prepareThrow(ctx: Ctx, e: Entity, pr: PlayerRecord, slot: string, target: unknown, opts: ThrowOpts): Prepared {
+  const cmd = { slot, target } as { slot: string; target: Extract<Command, { type: 'throw' }>['target'] };
   const it = invItem(ctx, e, cmd.slot);
   if (!it) return fail(pr, 'no_such_item', `スロット ${cmd.slot} にアイテムは無い。`, `No item in slot ${cmd.slot}.`, 'inventory で確認する。', 'Check with inventory.');
   if (equippedSlotOf(e, it.id)) return fail(pr, 'cannot_use', '装備中のものは投げられない。', 'You cannot throw an equipped item.', '先に unequip する。', 'unequip it first.');
@@ -359,6 +404,7 @@ actions.register('throw', (ctx, e, pr, cmd: Extract<Command, { type: 'throw' }>)
   if (tp.x === e.pos!.x && tp.y === e.pos!.y) return fail(pr, 'no_target', '自分には投げられない。', 'You cannot throw at yourself.', '方向・座標・対象 ID を指定する。', 'Give a direction, position or target id.');
   return {
     run: () => {
+      opts.before?.();
       const me = ctx.world.entities[e.id];
       const key = me.pos!.floor;
       const from = { x: me.pos!.x, y: me.pos!.y };
@@ -378,7 +424,8 @@ actions.register('throw', (ctx, e, pr, cmd: Extract<Command, { type: 'throw' }>)
       let hit: Entity | null = null;
       let crit = false;
       if (hitEnt) {
-        const o = rollToHit(ctx, me, hitEnt, def?.throw?.acc ?? 0);
+        let o = rollToHit(ctx, me, hitEnt, (def?.throw?.acc ?? 0) + thrownAccOf(ctx, me) + (opts.accBonus ?? 0));
+        if (opts.critIfUnaware && isUnaware(hitEnt)) o = { hit: true, crit: true, roll: o.roll };
         if (o.hit) { hit = hitEnt; crit = o.crit; }
         recordHit(ctx, me, hitEnt, o.hit, 'thrown');
       }
@@ -442,9 +489,58 @@ actions.register('throw', (ctx, e, pr, cmd: Extract<Command, { type: 'throw' }>)
         applyDamage(ctx, hitEnt, 0, null, 'thrown');
       }
       updateKnowledge(ctx, key);
-      return { cost: 100 };
+      // 早投げ: 投擲の手番コストが下がる（V3-4 §4.1）
+      return { cost: perkHook(ctx, me, 'throw_cost')?.cost ?? 100 };
     },
   };
+}
+
+// 近接攻撃（V3-4）: 隣の敵、または長柄の武器なら直線で 2 マス先（間のマスが通れて誰もいない）
+actions.register('attack', (ctx, e, pr, cmd: Extract<Command, { type: 'attack' }>) => {
+  const key = e.pos!.floor;
+  const f = ctx.world.floors[key];
+  const te = ctx.world.entities[cmd.target];
+  if (!te?.pos || te.pos.floor !== key || !te.actor || te.player || !ctx.visibleSet(pr.id).has(te.pos.y * f.width + te.pos.x)) {
+    return fail(pr, 'no_target', 'その敵は見えていない。', 'You cannot see that enemy.', 'visible.monsters の id を指定する。', 'Use an id from visible.monsters.');
+  }
+  const d = cheb(e.pos!, te.pos);
+  if (d > 1 && !(reachOf(ctx, e) >= 2 && reachLine(ctx, e.pos!, te.pos))) {
+    return fail(pr, 'out_of_range', '近接攻撃が届かない。', 'Out of melee reach.',
+      reachOf(ctx, e) >= 2 ? '長柄の武器は縦・横・斜めの直線で 2 マス先まで（間のマスが通れて誰もいないこと）。' : '隣の敵を指定するか、近づく（fight で決着まで）。',
+      reachOf(ctx, e) >= 2 ? 'A reach weapon hits 2 cells away in a straight line if the cell between is open and empty.' : 'Pick an adjacent enemy or close in (fight).');
+  }
+  return { run: () => { melee(ctx, e, te); return { cost: attackCostOf(ctx, e) }; } };
+});
+
+// 能動技（V3-4 §4.2）: 再使用までの手番だけで管理する。使えない・対象が無いなら手番を使わずに拒否する
+actions.register('ability', (ctx, e, pr, cmd: Extract<Command, { type: 'ability' }>) => {
+  const id = resolveAbilityId(ctx, e, cmd.id);
+  if (!id) {
+    const known = (e.build?.abilities ?? []).map((a) => a.id.split(':')[1]).join(', ') || '-';
+    return fail(pr, 'cannot_use', `その能動技は覚えていない: ${cmd.id}`, `You do not know that ability: ${cmd.id}`, `覚えている能動技: ${known}（self.abilities）`, `Known abilities: ${known} (self.abilities)`);
+  }
+  const notReady = abilityReadyError(ctx, e, pr, id);
+  if (notReady) return { error: notReady };
+  const def = ctx.content.abilities[id];
+  const markUsed = (target: Entity | null) => {
+    const body = markAbilityUsed(ctx, e, id);
+    const after = abilityState(ctx, body, id);
+    ctx.emit({
+      type: 'ability_used', actor: e.id, actorKind: e.kind, ability: id, target: target?.id ?? null, targetKind: target?.kind ?? null,
+      cooldownLeft: Math.max(0, after.cooldownLeft - 1), put: [body], ...selfSeen(ctx, ctx.world.entities[e.id]), floor: e.pos!.floor,
+    });
+  };
+  // 狙い撃ち: 投擲と同じ検証（射程・射線）。品は slot か、投擲用の品の最初のスロット
+  if (def.target === 'throw') {
+    const slot = cmd.slot ?? (e.inv?.items ?? []).map((x) => ctx.world.entities[x]).filter((x) => x?.item && ctx.content.items[x.kind]?.category === 'throwing')
+      .sort((a, b) => (a.item!.slot ?? '').localeCompare(b.item!.slot ?? ''))[0]?.item?.slot;
+    if (!slot) return fail(pr, 'no_such_item', '投げる物を持っていない。', 'You have nothing to throw.', '投げナイフなどを拾う。', 'Pick up throwing weapons first.');
+    if (typeof cmd.target !== 'string' || !cmd.target.startsWith('e_')) return fail(pr, 'no_target', '狙う相手の ID を target に渡す。', 'Pass the target id as target.', 'visible.monsters の shots が clear の相手。', 'A monster whose shots entry is clear.');
+    return prepareThrow(ctx, e, pr, slot, cmd.target, { accBonus: def.params.acc ?? 0, critIfUnaware: true, before: () => markUsed(ctx.world.entities[cmd.target as string] ?? null) });
+  }
+  const prep = abilityHandlers.get(def.handler)(ctx, e, pr, def, cmd);
+  if ('error' in prep) return { error: prep.error };
+  return { run: () => { markUsed(prep.target); prep.run(); return { cost: 100 }; } };
 });
 
 actions.register('interact', (ctx, e, pr, cmd: Extract<Command, { type: 'interact' }>) => {
@@ -540,6 +636,7 @@ export function freeCommand(ctx: Ctx, pr: PlayerRecord, cmd: Command): ActionErr
     ctx.emit({ type: 'notes_updated', player: pr.id, notesAfter: notes, seenBy: [pr.id], floor: null });
     return null;
   }
+  if (cmd.type === 'choose_perk') return choosePerk(ctx, pr, cmd.option);
   if (cmd.type === 'retire') {
     if (pr.state !== 'alive' && pr.state !== 'at_camp') return actionError('dead', t(pr.locale, '既にランから外れている。', 'You are no longer in the run.'), '');
     const me = ctx.world.entities[pr.entityId];

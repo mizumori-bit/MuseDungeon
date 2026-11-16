@@ -4,7 +4,7 @@ import type {
   ActionError, ActionErrorCode, Catalog, Change, Command, Dir, EntityView, ObsMonster, Observation, PerceivedEvent, PlayerView, Pos, RunSummary, ServerMsg, TurnSnapshot,
 } from '@muse/shared';
 import {
-  buildNavGrid, buildObservation, buildTurnBlock, diffChanges, dirLabel, findPath, itemDisplayName, itemStats, monsterDisplayName, pickableItems, sameOrWorseEquip, turnLine,
+  buildNavGrid, buildObservation, buildTurnBlock, curseUnknown, diffChanges, dirLabel, findPath, isCursedItem, itemDisplayName, itemStats, monsterDisplayName, pickableItems, sameOrWorseEquip, turnLine,
   turnSnapshot,
 } from '@muse/shared';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
@@ -17,7 +17,11 @@ import {
 } from '../ui/panels';
 import { ErrorBanner, Header, MapView, ThemePicker, useCatalog, useLocaleRefresh, useTheme } from '../ui/common';
 import { BriefingCard, CampPanel, completesOnExtract, ExpeditionPanel, extractConfirmText, lifelineConfirmText, RestEstimateLine, rulesOf, TurnBar } from '../ui/expedition';
-import { DIR_ARROW, extractBlockLabel, lifelineEffectText, viewStatusLabel } from '../ui/labels';
+import { abilityDisplayName, AbilityBar, DirPad, PerkChoicePanel } from '../ui/build';
+import {
+  abilityModeHint, abilityNoTargetText, abilityNotReadyText, abilityPickHint, abilityReady, cursedRemoveText, DIR_ARROW, extractBlockLabel, lifelineEffectText, perkModeHint, reachAttackLabel,
+  reachAttackTitle, viewStatusLabel,
+} from '../ui/labels';
 import { perceivedLines } from '../ui/narration';
 import { getLocale, getPref, getToken, setPref, tr } from '../util';
 
@@ -29,14 +33,22 @@ const MOVE_KEYS: Record<string, Dir> = {
 };
 const DIR_D: Record<Dir, [number, number]> = { n: [0, -1], ne: [1, -1], e: [1, 0], se: [1, 1], s: [0, 1], sw: [-1, 1], w: [-1, 0], nw: [-1, -1] };
 
-/** pick: 鑑定の巻物の対象を選ぶ */
-type Mode = 'normal' | 'target' | 'dir' | 'inv' | 'pick';
+/**
+ * pick: 鑑定の巻物の対象を選ぶ。perk: 特技の候補を番号で選ぶ。ability: 能動技を番号で選ぶ。
+ * abtarget: 能動技の対象（隣の敵・狙い撃ちの相手・方向）を選ぶ（V3-4）
+ */
+type Mode = 'normal' | 'target' | 'dir' | 'inv' | 'pick' | 'perk' | 'ability' | 'abtarget';
+
+/** 能動技の対象の候補（隣の敵・狙い撃ちの相手）。slot: 狙い撃ちで投げる品 */
+interface AbOption { id: string; label: string; pos: Pos; dir: Dir | null; slot?: string }
+/** 能動技の対象を選んでいる間（abtarget モード）。sel: Tab・Enter で使う、いま指している候補 */
+interface AbPick { id: string; name: string; target: 'adjacent' | 'throw' | 'dir'; options: AbOption[]; sel: number }
 
 /** 移動マクロ（explore / travel / collect）の慎重さ。flee は退くときの専用ボタンで使う */
 type MoveMode = 'careful' | 'steady';
 
-/** 手番を消費しないコマンド（いつでも送れる） */
-const FREE: ReadonlySet<Command['type']> = new Set<Command['type']>(['say', 'note', 'retire']);
+/** 手番を消費しないコマンド（いつでも送れる。特技の選択はキャンプでも・手番でなくても） */
+const FREE: ReadonlySet<Command['type']> = new Set<Command['type']>(['say', 'note', 'retire', 'choose_perk']);
 
 /** 地図の上の注意に出さないエラー（手番のずれ等の雑音、確認ダイアログやバナーで扱うもの） */
 const QUIET_ERRORS: ReadonlySet<ActionErrorCode> = new Set<ActionErrorCode>(['not_your_turn', 'stale_turn', 'confirm_required', 'no_session', 'bad_request', 'dead', 'run_ended']);
@@ -102,6 +114,38 @@ function fleeActions(obs: Observation | null): NoticeAction[] {
 
 const HP_ORDER: Record<string, number> = { near_death: 0, badly_wounded: 1, wounded: 2, healthy: 3 };
 
+/** 長柄で 2 マス先から突ける相手（観測の valid_actions の attack。V3-4 §4.4） */
+function reachTargets(obs: Observation | null): ObsMonster[] {
+  if (!obs) return [];
+  const ids = new Set(obs.valid_actions.map((l) => /^attack (\S+)/.exec(l)?.[1]).filter((x): x is string => !!x));
+  return ids.size ? obs.visible.monsters.filter((m) => ids.has(m.id)) : [];
+}
+
+/** 特技の候補を見分ける鍵（同じ候補を二度選ばない・畳んだ候補を覚える） */
+function perkKey(pc: Observation['self']['perk_choice']): string {
+  return pc ? `${pc.level}:${pc.options.map((o) => o.id).join(',')}:${pc.more}` : '';
+}
+
+/** 身をかわす向きの目安: 1 歩でどの隣の起きている敵からも離れる、通れる向き（観測の valid_actions と同じ考え方） */
+function slipAway(obs: Observation | null): Dir[] {
+  const me = obs?.self.pos;
+  const near = adjacentAwake(obs);
+  if (!obs || !me || !near.length) return [];
+  return obs.navigation.passable_dirs.filter((d) => {
+    const p = { x: me.x + DIR_D[d][0], y: me.y + DIR_D[d][1] };
+    return near.every((m) => Math.max(Math.abs(m.pos.x - p.x), Math.abs(m.pos.y - p.y)) > 1);
+  });
+}
+
+/** 自分から見たそのマスの向き（縦・横・斜めの直線で 2 マス以内のときだけ。身をかわすの向きをクリックで選ぶ） */
+function dirToward(from: Pos, to: Pos): Dir | null {
+  const dx = to.x - from.x, dy = to.y - from.y;
+  if ((dx === 0 && dy === 0) || Math.max(Math.abs(dx), Math.abs(dy)) > 2) return null;
+  if (dx !== 0 && dy !== 0 && Math.abs(dx) !== Math.abs(dy)) return null;
+  const sx = Math.sign(dx), sy = Math.sign(dy);
+  return (Object.keys(DIR_D) as Dir[]).find((d) => DIR_D[d][0] === sx && DIR_D[d][1] === sy) ?? null;
+}
+
 export function Play({ runId }: { runId: string }) {
   useLocaleRefresh();
   const { catalog, error: catErr } = useCatalog();
@@ -122,6 +166,11 @@ export function Play({ runId }: { runId: string }) {
   const [moveMode, setMoveModeState] = useState<MoveMode>(getPref('moveMode', 'careful') === 'steady' ? 'steady' : 'careful');
   /** 鑑定の巻物の対象の候補（pick モードの間だけ） */
   const [pick, setPickState] = useState<{ slot: string; options: { slot: string; name: string }[] } | null>(null);
+  /** 能動技の対象の候補（abtarget モードの間だけ） */
+  const [abPick, setAbPickState] = useState<AbPick | null>(null);
+  /** 選んで返事を待っている特技の候補（同じ候補を二度選ばない）と、「あとで」で畳んだ候補（perkKey） */
+  const [perkSent, setPerkSentState] = useState<string | null>(null);
+  const [perkHidden, setPerkHidden] = useState<string | null>(null);
 
   const viewRef = useRef<PlayerView | null>(null);
   const catalogRef = useRef(catalog);
@@ -135,6 +184,9 @@ export function Play({ runId }: { runId: string }) {
   const throwSlotRef = useRef<string | null>(null);
   const moveModeRef = useRef<MoveMode>(moveMode);
   const pickRef = useRef<typeof pick>(null);
+  const abPickRef = useRef<AbPick | null>(null);
+  const perkSentRef = useRef<string | null>(null);
+  const perkTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** 直近に描画した観測（キー操作の判定で使う。seq が今の view と違えば作り直す） */
   const obsRef = useRef<Observation | null>(null);
   const obsViewRef = useRef<PlayerView | null>(null);
@@ -166,12 +218,21 @@ export function Play({ runId }: { runId: string }) {
   const modeArg = (force?: MoveMode): { mode?: 'steady' } => ((force ?? moveModeRef.current) === 'steady' ? { mode: 'steady' } : {});
 
   const setPick = (p: typeof pick) => { pickRef.current = p; setPickState(p); };
+  const setAbPick = (p: AbPick | null) => { abPickRef.current = p; setAbPickState(p); };
+  /** 返事が来ないまま（拒否の通知も無く）止まらないよう、数秒で選び直せるようにする */
+  const setPerkSent = (k: string | null) => {
+    perkSentRef.current = k;
+    setPerkSentState(k);
+    if (perkTimer.current) clearTimeout(perkTimer.current);
+    if (k) perkTimer.current = setTimeout(() => { perkSentRef.current = null; setPerkSentState(null); }, 4000);
+  };
 
   const setMode = (m: Mode) => {
     modeRef.current = m;
     setModeState(m);
     if (m !== 'target') { cursorRef.current = null; setAim(null); }
     if (m !== 'pick' && pickRef.current) setPick(null);
+    if (m !== 'abtarget' && abPickRef.current) setAbPick(null);
     redraw();
   };
 
@@ -206,6 +267,8 @@ export function Play({ runId }: { runId: string }) {
           break;
         case 'error':
           pendingRef.current = false;
+          // 特技の選択が拒否されたら選び直せるようにする
+          if (perkSentRef.current) setPerkSent(null);
           addLog([{ seq: viewRef.current?.seq ?? 0, text: `⚠ ${errorLine(m.error)}`, kind: 'error' }]);
           // 手番を使わずに拒否されたもの（射線が通らない・射程外の相手を ID で狙った、マクロが 1 歩も進めない等）は地図の上にもはっきり出す。
           // 隣に起きている敵がいて移動マクロが拒否されたら、退く（flee）を選べるようにする
@@ -313,11 +376,20 @@ export function Play({ runId }: { runId: string }) {
    * withSlot: その品を倒れるまで投げ続ける（射程と射線が通るまで待つ）。止まる条件はサーバーが判定する。
    * id を省くと、隣の敵（地図で指している → 追跡中 → 弱っている順）、いなければ追ってくる敵（指している → 近い順）を選ぶ
    */
+  /** fight に載せる能動技（覚えているもの。強打・なぎ払い、投擲なら狙い撃ち。使える手番ごとに fight が使う。V3-4a §25.3） */
+  const fightAbilities = (v: PlayerView, withSlot?: string): { abilities?: string[] } => {
+    const c = catalogRef.current;
+    if (!c) return {};
+    const want = withSlot ? ['aimed_throw'] : ['strike', 'cleave'];
+    const ids = v.self.build.abilities.map((a) => a.id).filter((id) => want.includes(c.abilities[id]?.handler ?? ''));
+    return ids.length ? { abilities: ids } : {};
+  };
+
   const doFight = (id?: string, withSlot?: string) => {
     const v = viewRef.current;
     const o = obsNow();
     if (!v || !o) return;
-    const w = withSlot ? { with: withSlot } : {};
+    const w = { ...(withSlot ? { with: withSlot } : {}), ...fightAbilities(v, withSlot) };
     if (id) {
       if (!o.visible.monsters.some((m) => m.id === id)) { flash(tr('その敵は見えていない。', 'That enemy is not in view.')); return; }
       send({ type: 'fight', target: id, ...w });
@@ -520,20 +592,29 @@ export function Play({ runId }: { runId: string }) {
     const ent = monsterAt(v, p);
     if (!ent) { flash(tr('「投擲で決着」は敵を狙ったときだけ使える（Tab で敵に合わせる）。', 'Throw-it-down needs an enemy under the aim (Tab cycles enemies).')); return; }
     setMode('normal');
-    send({ type: 'fight', target: ent.id, with: slot });
+    send({ type: 'fight', target: ent.id, with: slot, ...fightAbilities(v, slot) });
   };
 
-  /** 鑑定の対象の候補: 未鑑定の持ち物（同じ外見は 1 つにまとめる。巻物自身を除く） */
+  /**
+   * 鑑定の対象の候補: 未鑑定の持ち物（同じ外見は 1 つにまとめる。巻物自身を除く）と、
+   * 呪いの有無をまだ確かめていない装備品（鑑定すると分かる。V3-4）
+   */
   const identifyOptions = (v: PlayerView, scrollSlot: string) => {
     const c = catalogRef.current;
     const seen = new Set<string>();
     const out: { slot: string; name: string }[] = [];
     for (const it of v.inventory) {
-      if (it.slot === scrollSlot || it.kind !== null) continue;
-      const key = it.appearanceId ?? it.id;
+      if (it.slot === scrollSlot) continue;
+      const curseQ = !!c && curseUnknown(c, it);
+      if (it.kind !== null && !curseQ) continue;
+      // 呪いは品ごとなので、正体が分かっている品はまとめない
+      const key = it.kind === null ? it.appearanceId ?? it.id : it.id;
       if (seen.has(key)) continue;
       seen.add(key);
-      out.push({ slot: it.slot, name: (c ? itemDisplayName(c, getLocale(), it.kind, it.appearanceId, it.affixes) : it.slot) + (it.qty > 1 ? ` x${it.qty}` : '') });
+      out.push({
+        slot: it.slot,
+        name: (c ? itemDisplayName(c, getLocale(), it.kind, it.appearanceId, it.affixes) : it.slot) + (it.qty > 1 ? ` x${it.qty}` : '') + (it.kind !== null && curseQ ? tr('（呪い?）', ' (curse?)') : ''),
+      });
     }
     return out;
   };
@@ -558,6 +639,146 @@ export function Play({ runId }: { runId: string }) {
     send({ type: 'use', slot: p.slot, targetSlot });
   };
 
+  // ---- ビルド（V3-4）: 特技の選択・能動技・長柄 ----
+
+  /** 特技を選ぶ（choose_perk。手番を使わない。キャンプでも・手番でなくても送れる） */
+  const choosePerk = (option: number) => {
+    const pc = obsNow()?.self.perk_choice;
+    if (!pc || !pc.options.some((o) => o.option === option)) return;
+    const key = perkKey(pc);
+    // 返事（新しい view）が来るまで同じ候補は選ばない（連打で次の候補まで選ばないように）
+    if (perkSentRef.current === key) return;
+    setPerkSent(key);
+    // 後に控えている候補が無ければ番号の受付を終える（あれば次の候補が届いたらそのまま選べる）
+    if (modeRef.current === 'perk' && pc.more <= 0) setMode('normal');
+    send({ type: 'choose_perk', option });
+  };
+
+  /** p: 特技の候補に番号の受付を向ける（もう一度 p で戻る） */
+  const togglePerk = () => {
+    if (modeRef.current === 'perk') { setMode('normal'); return; }
+    if (!obsNow()?.self.perk_choice) {
+      flash(tr('選べる特技の候補は無い（レベルが上がると出る）。', 'No perk to choose (you get one at each level up).'));
+      return;
+    }
+    setPerkHidden(null);
+    setMode('perk');
+  };
+
+  /** 隣の敵（地図で指している → 追跡中 → 弱っている順）。強打などの対象 */
+  const adjacentOptions = (o: Observation): AbOption[] => {
+    const hov = rRef.current?.hover;
+    const at = (m: ObsMonster) => Number(!!hov && m.pos.x === hov.x && m.pos.y === hov.y);
+    return o.visible.monsters.filter((m) => m.dist <= 1)
+      .sort((a, b) => at(b) - at(a) || Number(b.awareness === 'hunting') - Number(a.awareness === 'hunting') || (HP_ORDER[a.hp_state] ?? 9) - (HP_ORDER[b.hp_state] ?? 9) || (a.id < b.id ? -1 : 1))
+      .map((m) => ({ id: m.id, label: `${m.dir ? DIR_ARROW[m.dir] : ''} ${m.name}`.trim(), pos: m.pos, dir: m.dir }));
+  };
+
+  /**
+   * 狙い撃ちの候補: 投擲用の品で射線が通り射程内の相手（近い順）。投げる品は選択中の投擲物 → 最初に狙える品。
+   * 薬は投げない（割れて無くなる）
+   */
+  const aimedOptions = (v: PlayerView, o: Observation): AbOption[] => {
+    const c = catalogRef.current;
+    const L = getLocale();
+    const isThrowing = (slot: string) => {
+      const it = v.inventory.find((x) => x.slot === slot);
+      if (!it || it.equipped) return false;
+      const cat = it.kind ? c?.items[it.kind]?.category : it.appearanceId ? c?.appearances[it.appearanceId]?.category : undefined;
+      return cat === 'throwing';
+    };
+    const out: AbOption[] = [];
+    for (const m of [...o.visible.monsters].sort((a, b) => a.dist - b.dist || (a.id < b.id ? -1 : 1))) {
+      const clear = m.shots.filter((s) => s.state === 'clear' && isThrowing(s.slot));
+      if (!clear.length) continue;
+      const s = clear.find((x) => x.slot === selSlot) ?? clear[0];
+      const it = v.inventory.find((x) => x.slot === s.slot);
+      const iname = it && c ? itemDisplayName(c, L, it.kind, it.appearanceId, it.affixes) : s.slot;
+      const unaware = m.awareness !== 'hunting' ? tr('・気づいていない: 会心', ', unaware: critical') : '';
+      out.push({
+        id: m.id, pos: m.pos, dir: m.dir, slot: s.slot,
+        label: tr(`${m.name}（距離 ${m.dist}${unaware}）← ${s.slot}) ${iname}`, `${m.name} (dist ${m.dist}${unaware}) <- ${s.slot}) ${iname}`),
+      });
+    }
+    return out;
+  };
+
+  const openAbPick = (p: AbPick) => {
+    setMode('abtarget');
+    setAbPick(p);
+    const o = p.options[p.sel];
+    cursorRef.current = o ? { ...o.pos } : null;
+    redraw();
+  };
+
+  /** 候補を指す（Tab・ボタンに乗せたとき）。地図の狙いもそこへ動かす */
+  const selectAb = (i: number) => {
+    const p = abPickRef.current;
+    if (!p || !p.options.length) return;
+    const sel = ((i % p.options.length) + p.options.length) % p.options.length;
+    setAbPick({ ...p, sel });
+    cursorRef.current = { ...p.options[sel].pos };
+    redraw();
+  };
+
+  const chooseAbTarget = (targetId: string) => {
+    const p = abPickRef.current;
+    const opt = p?.options.find((x) => x.id === targetId);
+    if (!p || !opt) return;
+    setMode('normal');
+    send({ type: 'ability', id: p.id, target: opt.id, ...(opt.slot ? { slot: opt.slot } : {}) });
+  };
+
+  const chooseAbDir = (d: Dir) => {
+    const p = abPickRef.current;
+    if (!p || p.target !== 'dir') return;
+    setMode('normal');
+    send({ type: 'ability', id: p.id, target: d });
+  };
+
+  /**
+   * 能動技を使う（V3-4 §4.2）。対象なしはそのまま。隣の敵は 1 体ならそのまま、複数なら選ばせる。
+   * 狙い撃ちは狙える相手を選ばせる（投げる品も見せる）。身をかわすは方向を選ばせる。使えるか・届くかの最終判定はサーバー
+   */
+  const doAbility = (id: string) => {
+    const v = viewRef.current, o = obsNow();
+    if (!v || !o) return;
+    const a = o.self.abilities.find((x) => x.id === id);
+    if (!a) return;
+    const name = abilityDisplayName(catalogRef.current, a);
+    if (v.status === 'at_camp') { setMode('normal'); flash(tr('キャンプでは能動技を使えない。', 'Abilities cannot be used at camp.')); return; }
+    if (!abilityReady(a)) { setMode('normal'); flash(abilityNotReadyText(name, a)); return; }
+    if (a.target === 'none') { setMode('normal'); send({ type: 'ability', id }); return; }
+    if (a.target === 'dir') { openAbPick({ id, name, target: 'dir', options: [], sel: 0 }); return; }
+    const options = a.target === 'adjacent' ? adjacentOptions(o) : aimedOptions(v, o);
+    if (!options.length) { setMode('normal'); flash(abilityNoTargetText(name, a.target)); return; }
+    if (a.target === 'adjacent' && options.length === 1) { setMode('normal'); send({ type: 'ability', id, target: options[0].id }); return; }
+    openAbPick({ id, name, target: a.target, options, sel: 0 });
+  };
+
+  /** a: 能動技が 1 つならそのまま使う。2 つ以上なら番号の受付を向ける（もう一度 a で戻る） */
+  const openAbilities = () => {
+    if (modeRef.current === 'ability') { setMode('normal'); return; }
+    const o = obsNow();
+    const abs = o?.self.abilities ?? [];
+    if (!abs.length) { flash(tr('能動技を覚えていない（能動技を覚える特技を取ると使える）。', 'You know no abilities (some perks teach one).')); return; }
+    if (viewRef.current?.status === 'at_camp') { flash(tr('キャンプでは能動技を使えない。', 'Abilities cannot be used at camp.')); return; }
+    if (abs.length === 1) { doAbility(abs[0].id); return; }
+    setMode('ability');
+  };
+
+  /** 長柄で 2 マス先の敵を突く（attack）。id を省くと地図で指している相手 → 最初の相手 */
+  const doReach = (id?: string) => {
+    const ts = reachTargets(obsNow());
+    const hov = rRef.current?.hover;
+    const t = id ? ts.find((m) => m.id === id) : (hov ? ts.find((m) => m.pos.x === hov.x && m.pos.y === hov.y) : undefined) ?? ts[0];
+    if (!t) {
+      flash(tr('2 マス先から突ける敵がいない（長柄の武器で、縦・横・斜めの直線上、間のマスが空いている相手）。', 'No enemy to strike from 2 cells (needs a reach weapon, a straight line, and an open cell between).'));
+      return;
+    }
+    send({ type: 'attack', target: t.id });
+  };
+
   const invAction = (a: InvAction, slot: string) => {
     setSelSlot(slot);
     if (a === 'throw') { startThrow(slot); return; }
@@ -573,7 +794,9 @@ export function Play({ runId }: { runId: string }) {
     if (!v || !it) return;
     const ci = it.kind ? catalogRef.current?.items[it.kind] : undefined;
     const cat = ci?.category ?? (it.appearanceId ? catalogRef.current?.appearances[it.appearanceId]?.category : undefined);
-    if (it.equipped) invAction('unequip', slot);
+    // 呪われた装備は外せない（V3-4）
+    if (it.equipped && catalogRef.current && isCursedItem(catalogRef.current, it.affixes)) flash(cursedRemoveText());
+    else if (it.equipped) invAction('unequip', slot);
     // 装備中の品と同じ種類で性能が同じか下なら、装備しても良くならない（V3-2R3 §20.6）
     else if (ci?.slot && catalogRef.current && sameOrWorseEquip(v, catalogRef.current, it)) flash(tr('装備中の品と同じ種類で、性能が同じか下。装備しても良くならない。', 'Same kind as your equipped item with the same or worse stats; equipping it gains nothing.'));
     else if (ci?.slot) invAction('equip', slot);
@@ -621,6 +844,32 @@ export function Play({ runId }: { runId: string }) {
       } else if (md === 'pick') {
         if (/^[a-z]$/.test(e.key)) choosePick(e.key);
         else handled = false;
+      } else if (md === 'perk') {
+        // 番号で特技を選ぶ（テンキーの数字も移動ではなく番号として扱う）
+        if (/^[1-9]$/.test(e.key)) choosePerk(Number(e.key));
+        else if (e.key === 'p') setMode('normal');
+        else handled = false;
+      } else if (md === 'ability') {
+        if (/^[1-9]$/.test(e.key)) {
+          const a = obsNow()?.self.abilities[Number(e.key) - 1];
+          if (a) doAbility(a.id);
+        } else if (e.key === 'a') setMode('normal');
+        else handled = false;
+      } else if (md === 'abtarget') {
+        const p = abPickRef.current;
+        if (!p) setMode('normal');
+        else if (p.target === 'dir') {
+          if (dir) chooseAbDir(dir);
+          else handled = false;
+        } else if (e.key === 'Tab') selectAb(p.sel + (e.shiftKey ? -1 : 1));
+        else if (e.key === 'Enter') { const o = p.options[p.sel]; if (o) chooseAbTarget(o.id); }
+        else if (dir) {
+          // 方向キー: その向きの隣の敵
+          const me = v.self.pos;
+          const o = me ? p.options.find((x) => x.pos.x === me.x + DIR_D[dir][0] && x.pos.y === me.y + DIR_D[dir][1]) : undefined;
+          if (o) chooseAbTarget(o.id);
+          else flash(tr('その向きに選べる敵はいない。', 'No enemy to pick that way.'));
+        } else handled = false;
       } else if (dir) send({ type: 'move', dir });
       else if (e.key === '.' || e.key === '5' || e.key === 'Clear') send({ type: 'wait' });
       // W: 数手待つ（変化があれば止まる）
@@ -645,6 +894,12 @@ export function Play({ runId }: { runId: string }) {
       // c は従来どおり「操作」の別名。回収は C（Shift+c）
       else if (e.key === 'C') doCollect();
       else if (e.key === 'o' || e.key === 'c') setMode('dir');
+      // p: 特技の候補を番号で選ぶ（手番を使わない。キャンプでも）
+      else if (e.key === 'p') togglePerk();
+      // a: 能動技（1 つならそのまま、2 つ以上なら番号で選ぶ）
+      else if (e.key === 'a') openAbilities();
+      // A（Shift+a）: 長柄で 2 マス先の敵を突く
+      else if (e.key === 'A') doReach();
       else handled = false;
       if (handled) e.preventDefault();
     };
@@ -671,6 +926,13 @@ export function Play({ runId }: { runId: string }) {
     if (!v?.floor || !v.self.pos) return;
     if (modeRef.current === 'target') { fireThrow(p, ev.shiftKey); return; }
     if (modeRef.current === 'pick') return;
+    // 能動技の対象: 候補の敵のマス、身をかわすならその向き（直線で 2 マス以内）
+    if (modeRef.current === 'abtarget') {
+      const ab = abPickRef.current;
+      if (ab?.target === 'dir') { const d = dirToward(v.self.pos, p); if (d) chooseAbDir(d); }
+      else { const o = ab?.options.find((x) => x.pos.x === p.x && x.pos.y === p.y); if (o) chooseAbTarget(o.id); }
+      return;
+    }
     if (p.x === v.self.pos.x && p.y === v.self.pos.y) return;
     if (!v.memory.terrain[p.y * v.floor.width + p.x]) return;
     // Shift+クリック: 退く（flee。隣に敵がいても動く）
@@ -695,6 +957,16 @@ export function Play({ runId }: { runId: string }) {
   const draft = obs?.self.floor?.draft;
   // 隣に起きている追跡中の敵がいる: 薬・巻物を使う間にその敵が行動する（V3-2R3 §20.4）
   const exposed = adjAwake.some((m) => m.awareness === 'hunting');
+  // ビルド（V3-4）: 特技の候補・長柄で突ける相手
+  const perkChoice = view && view.status !== 'dead' && view.status !== 'ended' ? obs?.self.perk_choice : undefined;
+  const perkK = perkKey(perkChoice);
+  const reach = view?.status === 'at_camp' ? [] : reachTargets(obs);
+  const reachIds = new Set(reach.map((m) => m.id));
+
+  // 特技の候補が無くなったら番号の受付を終える
+  useEffect(() => {
+    if (modeRef.current === 'perk' && !perkChoice) setMode('normal');
+  }, [perkK]);
 
   // 前回の自分の手番以降の変化（turnSnapshot / diffChanges。撃破の判定に基準以降の出来事を渡す）
   useEffect(() => {
@@ -732,7 +1004,10 @@ export function Play({ runId }: { runId: string }) {
       'Throw: aim with keys/Tab (Tab cycles targets in range with a clear line), Enter to throw, Shift+Enter at the cell, F to keep throwing until it falls (Esc cancels)')
     : mode === 'dir' ? tr('操作する方向を選ぶ（. で足元、Esc 取消）', 'Pick a direction (. for here, Esc cancels)')
       : mode === 'inv' ? tr('スロットの文字で既定の操作（i/Esc で戻る）', 'Press a slot letter (i/Esc to exit)')
-        : mode === 'pick' ? tr('鑑定する品のスロットの文字を押す（Esc 取消）', 'Press the slot letter of the item to identify (Esc cancels)') : null;
+        : mode === 'pick' ? tr('鑑定する品のスロットの文字を押す（Esc 取消）', 'Press the slot letter of the item to identify (Esc cancels)')
+          : mode === 'perk' ? perkModeHint()
+            : mode === 'ability' ? abilityModeHint()
+              : mode === 'abtarget' && abPick ? abilityPickHint(abPick.name, abPick.target) : null;
 
   if (!token) {
     return (
@@ -759,7 +1034,16 @@ export function Play({ runId }: { runId: string }) {
       <ErrorBanner error={error ?? catErr ?? th.error} onClose={() => setError(null)} />
       <div class="layout">
         <div class="main">
-          {obs && <AlertsBar alerts={obs.alerts} onEscape={(stairs) => send({ type: 'travel', to: stairs === 'up' ? 'stairs_up' : 'stairs_down', mode: 'flee' })} />}
+          {/* 特技の候補は下の枠で選ぶので、同じ内容の注意（perk_pending）は出さない */}
+          {obs && (
+            <AlertsBar alerts={perkChoice ? obs.alerts.filter((a) => a.code !== 'perk_pending') : obs.alerts}
+              onEscape={(stairs) => send({ type: 'travel', to: stairs === 'up' ? 'stairs_up' : 'stairs_down', mode: 'flee' })} />
+          )}
+          {view && perkChoice && (
+            <PerkChoicePanel choice={perkChoice} catalog={catalog} classId={view.self.classId} focused={mode === 'perk'} sent={perkSent === perkK}
+              collapsed={perkHidden === perkK} onChoose={choosePerk}
+              onCollapse={() => { setPerkHidden(perkK); if (mode === 'perk') setMode('normal'); }} onExpand={() => setPerkHidden(null)} />
+          )}
           <TurnBar line={turnText} changes={changes} />
           <MapView
             theme={th.theme}
@@ -805,6 +1089,21 @@ export function Play({ runId }: { runId: string }) {
                     <div class="row end"><button class="small" onClick={() => setMode('normal')}>{tr('取消（Esc）', 'Cancel (Esc)')}</button></div>
                   </div>
                 )}
+                {mode === 'abtarget' && abPick && (
+                  <div class="pickbox abpick">
+                    <div class="head">{abPick.name}</div>
+                    {abPick.target === 'dir'
+                      ? <DirPad passable={obs?.navigation.passable_dirs ?? []} away={slipAway(obs)} onPick={chooseAbDir} />
+                      : (
+                        <div class="row">
+                          {abPick.options.map((o, i) => (
+                            <button key={o.id} class={`small ${i === abPick.sel ? 'on' : ''}`} onMouseEnter={() => selectAb(i)} onClick={() => chooseAbTarget(o.id)}>{o.label}</button>
+                          ))}
+                        </div>
+                      )}
+                    <div class="row end"><button class="small" onClick={() => setMode('normal')}>{tr('取消（Esc）', 'Cancel (Esc)')}</button></div>
+                  </div>
+                )}
                 {macro?.state === 'running' && <div class="macro">{tr('自動行動中', 'Auto')}: {macro.kind} ({macro.steps})</div>}
                 {view && view.status === 'waiting_others' && <div class="macro">{tr('他のプレイヤーの手番を待っています…', 'Waiting for other players…')}</div>}
                 {view && atCamp && <div class="campwrap"><CampPanel view={view} catalog={catalog} onStart={startExpedition} onRetire={retire} /></div>}
@@ -815,6 +1114,9 @@ export function Play({ runId }: { runId: string }) {
               </>
             }
           />
+          {obs && !atCamp && (
+            <AbilityBar abilities={obs.self.abilities} catalog={catalog} focused={mode === 'ability' || mode === 'abtarget'} onUse={doAbility} />
+          )}
           <div class="actions">
             <span class="seg mmode" title={tr('探索・移動・回収のマクロの止まり方。慎重: 初見の種族・追跡してくる敵・攻撃を受けたら止まる。強行: 隣接・進路をふさがれる・HP が半分を下回る・初見の種族でだけ止まる（弱い射撃や毒は受けながら進む）',
               'How explore/travel/collect stop. Careful: on a new species, a hunting enemy, or being attacked. Steady: only when an enemy is adjacent or blocks the way, HP drops below half, or a new species appears')}>
@@ -840,6 +1142,9 @@ export function Play({ runId }: { runId: string }) {
                 {tr('迎え撃つ', 'Meet')} (F)
               </button>
             )}
+            {reach.map((m) => (
+              <button key={`reach-${m.id}`} class="small fight" onClick={() => doReach(m.id)} title={reachAttackTitle()}>{reachAttackLabel(m.name)} (A)</button>
+            ))}
             {flee.map((a, i) => (
               <button key={`flee-${i}`} class="small flee" title={a.title} onClick={() => { if (a.command) send(a.command); }}>{a.label}</button>
             ))}
@@ -898,7 +1203,7 @@ export function Play({ runId }: { runId: string }) {
               onLifeline={expActive && lifeSlot ? doLifeline : undefined} />
           )}
           {view && catalog && <StatusPanel view={view} catalog={catalog} speed={obs?.self.speed} floor={atCamp ? null : obs?.self.floor} />}
-          {obs && !atCamp && <MonstersPanel monsters={obs.visible.monsters} hp={obs.self.hp} onFight={doFight} throwSlotFor={throwSlotFor} />}
+          {obs && !atCamp && <MonstersPanel monsters={obs.visible.monsters} hp={obs.self.hp} onFight={doFight} throwSlotFor={throwSlotFor} reach={reachIds} onReach={doReach} />}
           {view && catalog && <InventoryPanel view={view} catalog={catalog} onAction={invAction} focused={mode === 'inv'} selected={selSlot} onSelect={setSelSlot} exposed={exposed} />}
           <MessageLog lines={log} />
           <form class="chat" onSubmit={(e) => { e.preventDefault(); if (chat.trim()) { send({ type: 'say', text: chat.trim().slice(0, 280) }); setChat(''); } }}>
@@ -908,8 +1213,8 @@ export function Play({ runId }: { runId: string }) {
             <div class="muted small">{tr('選択中', 'Selected')}: {(() => { const it = view.inventory.find((x) => x.slot === selSlot); return it ? itemDisplayName(catalog, L, it.kind, it.appearanceId, it.affixes) : '-'; })()}</div>
           )}
           <div class="help muted">
-            {tr('移動: 矢印/テンキー/hjklyubn　待機: .　数手待つ: W　探索: x（強行: X・風の方へ: D）　戦う: F（隣の敵。いなければ追ってくる敵を迎え撃つ）　休憩: R　拾う: g　拾い集める: G　回収: C　階段: >　帰還/撤退: E（階段の上）　帰還の綱: L　投擲: t（狙い中に F で投擲で決着）　操作: o　所持品: i　クリック: その場所へ移動（Shift+クリック: 退く）',
-              'Move: arrows/numpad/hjklyubn  Wait: .  Wait a few: W  Explore: x (steady: X, toward the draft: D)  Fight: F (adjacent; otherwise meet a hunter)  Rest: R  Pick up: g  Collect items: G  Collect thrown: C  Stairs: >  Extract: E (on stairs)  Lifeline: L  Throw: t (F while aiming: throw until it falls)  Interact: o  Inventory: i  Click: travel (Shift+click: flee)')}
+            {tr('移動: 矢印/テンキー/hjklyubn　待機: .　数手待つ: W　探索: x（強行: X・風の方へ: D）　戦う: F（隣の敵。いなければ追ってくる敵を迎え撃つ）　休憩: R　拾う: g　拾い集める: G　回収: C　階段: >　帰還/撤退: E（階段の上）　帰還の綱: L　投擲: t（狙い中に F で投擲で決着）　操作: o　所持品: i　能動技: a（2 つ以上なら番号で選ぶ）　特技を選ぶ: p → 番号　長柄で突く: A　クリック: その場所へ移動（Shift+クリック: 退く）',
+              'Move: arrows/numpad/hjklyubn  Wait: .  Wait a few: W  Explore: x (steady: X, toward the draft: D)  Fight: F (adjacent; otherwise meet a hunter)  Rest: R  Pick up: g  Collect items: G  Collect thrown: C  Stairs: >  Extract: E (on stairs)  Lifeline: L  Throw: t (F while aiming: throw until it falls)  Interact: o  Inventory: i  Abilities: a (then a number if you have several)  Choose a perk: p, then a number  Reach strike: A  Click: travel (Shift+click: flee)')}
           </div>
         </aside>
       </div>

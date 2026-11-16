@@ -64,7 +64,7 @@ turn: {
 
 | ツール | 引数 | 結果 |
 |---|---|---|
-| `get_rules` | `topic?: 'overview'|'expedition'|'actions'|'combat'|'items'|'classes'|'observation'|'all'`, `locale?` | ルールブック。式・操作・遠征（戦利品・確定点・候補の枠と条件・危険度）・観測の読み方のみで、個別のモンスター数値は含めない。数値は `balance.json`（公開カタログの `rules`）から生成。`classes` は職業ごとの初期値・初期装備・成長（v3） |
+| `get_rules` | `topic?: 'overview'|'expedition'|'actions'|'combat'|'items'|'classes'|'observation'|'all'`, `locale?` | ルールブック。式・操作・遠征（戦利品・確定点・候補の枠と条件・危険度）・観測の読み方のみで、個別のモンスター数値は含めない。数値は `balance.json`（公開カタログの `rules`）から生成。`classes` は職業ごとの初期値・初期装備・成長（v3）と、習熟・特技の系統・特技の一覧・能動技の一覧（V3-4） |
 | `list_runs` | – | 参加可能・再開可能なラン一覧 |
 | `new_run` | `character_name`, `class?`（`warrior`/`scout`）, `mode?: 'solo'|'coop'`, `seed?`, `locale?`, `objective?: 'auto'|'reach_depth'|'slay_guardian'|'retrieve_relic'|'endless'`, `brief_map?`, `map?`, `inventory?`, `status_line?` | `objective` を省くと**キャンプから始まる**（`at_camp`・`awaiting: 'camp_choice'`。最初の遠征も 3 候補から `start_expedition` で選ぶ。V3-2R）。`objective` を渡せば従来どおり最初の遠征まで始める（`auto` は 1 番目の候補 = 堅実・到達）。`{ run_id, player_token, player_id, briefing, observation, turn }`。`seed` を指定しても結果には返さない。`map` 以下は `set_options` と同じ（`brief_map: false` は `map: 'never'`）。不明な `class` のエラーは職業の一覧を返す |
 | `join_run` | `run_id`, `character_name`, `class?` | 同上（COOP。進行中の遠征に加わる） |
@@ -108,21 +108,24 @@ turn: {
 
 | ツール | 引数 | 備考 |
 |---|---|---|
-| `move` | `dir` | 敵対者がいれば近接攻撃、閉じた扉は開ける |
+| `move` | `dir` | 敵対者がいれば近接攻撃、閉じた扉は開ける。近接の手番コストは武器の「速い」で 70、歩く手番のコストは重い鎧で 110・125（V3-4） |
+| `attack` | `target: entity_id` | 近接攻撃（V3-4）。隣の敵か、長柄の武器（槍）なら縦・横・斜めの直線で 2 マス先の敵（間のマスが通れて誰もいない）。届かなければ `out_of_range`（手番を使わない）。`fight` も長柄なら 2 マス先から突く |
+| `use_ability` | `id`, `target?: dir | entity_id`, `slot?` | 能動技（V3-4 §4.2）。`id` は `self.abilities` の短い ID（`bash`）か完全な ID（`core:bash`）。資源は無く、再使用までの手番（`cooldown`）と、立て直しだけ遠征ごとの回数で管理する。覚えていない・残りの手番がある・回数を使い切った・対象が無いときは手番を使わずに拒否（`cannot_use` / `no_target` / `invalid_direction` / `blocked`）。対象: 隣の敵（強打。ID か方向、隣に 1 体なら省略可）、投擲の対象（狙い撃ち。射程と射線は `throw_item` と同じ検証、`slot` 省略時は投擲用の品の最初のスロット）、方向（身をかわす）、なし（なぎ払い・立て直し）。結果のイベントに `ability_used`（`cooldownLeft` はこの手番の後の残り） |
 | `wait` | `turns?: 1..10` | 追跡中の敵が見えなければ休息（回復が `restMultiplier` 倍）。`turns` が 2 以上ならマクロ（V3-2R2）: 敵が新たに見えた（`hostile_in_view`）・起きている敵が隣に来た（`hostile_adjacent`）・攻撃や毒以外の被害・状態異常で止まり、指定の手数で `max_turns` |
 | `rest` | `until_hp?`, `max_turns?` | マクロ。全快（かつ毒が抜ける）か、指定の HP・手数か、中断まで（上限 `rest.maxTurns`） |
 | `explore` | `mode?`, `hp_floor?`, `pickup?`（既定 true）, `toward?: 'draft'` | マクロ。未見の区画（地図の巻物で地形だけ知った区画を含む）へ自動移動。pickup なら通り道と見えている・記憶したアイテムも拾う（遺物・鑑定済みの有害品・装備中の品と同じ種類で接辞が含まれる＝同じか劣る装備は拾わない。V3-2R3）。`toward: 'draft'` は下への風の方角（と隣り合う方角）の未探索を優先する（V3-2R3） |
 | `travel_to` | `to: {x,y} | 'stairs_down' | 'stairs_up' | entity_id`, `mode?`, `hp_floor?`, `pickup?` | マクロ。既知地図上のみ。目的地がアイテムなら着いて拾う |
 | `collect` | `what?: 'thrown'|'items'`, `mode?`, `hp_floor?` | マクロ（v3）。`thrown`（既定）は既知の自分が投げた物、`items` は見えている・記憶したアイテムを近い順に回って拾う。結果に `collected: { picked, remaining }` |
-| `fight` | `target: entity_id`, `with?: slot`, `hp_floor?` | マクロ（V3-2R、V3-2R2 で拡張）。その相手と決着を付ける。`with` なし: 隣なら近接攻撃を繰り返す。相手が追跡中で届かない間は隣に来るまで待つ（最大 10 手番、`target_not_approaching`）。当てて逃げる相手は追跡中で 2 マス以内なら 2 手番まで待つ（追わない）。`with`: そのスロットの品を投げて戦う（射程と射線が通るまで待つ）。止まるのは: 相手が倒れた（`target_down`）・離れた／逃げて射程を出た（`target_moved`）・見えなくなった（`target_gone`）・（`with`）隣に来た（`target_adjacent`）・品が尽きた（`out_of_ammo`）・射線が 3 手番続けて通らない（`no_line_of_sight`）・HP が `hp_floor`（既定 50%）以下・**次の手番に、届く追跡中の敵（隣・飛び道具）から 1 手の最悪の被害（`worst_turn` の合計）を受けると `hp_floor` を割る（`hp_risk`。被弾の前に止まる。始める前なら `hp_floor` のエラーで拒否）**・被弾の記録の無い種族から初めて被弾した（`first_hit`。一度だけ）・追跡中の別の敵・状態異常（V3-2R3）。眠っている・気付いていない相手は待たない（`target_not_hunting` で拒否）。結果の `outcome` に与えた攻撃（投げた）回数・命中・合計・待った手番 |
+| `fight` | `target: entity_id`, `with?: slot`, `hp_floor?`, `abilities?: string[]` | マクロ（V3-2R、V3-2R2 で拡張）。`abilities`（V3-4a）: 並べた能動技を使える手番ごとに使う。強打は標的が隣、なぎ払いは起きている敵が隣に 2 体以上、狙い撃ちは `with` の品で射程と射線が通るとき（それ以外の手番は通常の攻撃）。立て直し・身をかわすは載せられない、覚えていない、`with` の無い狙い撃ちは手番を使わずに `cannot_use`。結果の文に使った能動技と回数。その相手と決着を付ける。`with` なし: 隣なら近接攻撃を繰り返す。相手が追跡中で届かない間は隣に来るまで待つ（最大 10 手番、`target_not_approaching`）。当てて逃げる相手は追跡中で 2 マス以内なら 2 手番まで待つ（追わない）。`with`: そのスロットの品を投げて戦う（射程と射線が通るまで待つ）。止まるのは: 相手が倒れた（`target_down`）・離れた／逃げて射程を出た（`target_moved`）・見えなくなった（`target_gone`）・（`with`）隣に来た（`target_adjacent`）・品が尽きた（`out_of_ammo`）・射線が 3 手番続けて通らない（`no_line_of_sight`）・HP が `hp_floor`（既定 50%）以下・**次の手番に、届く追跡中の敵（隣・飛び道具）から 1 手の最悪の被害（`worst_turn` の合計）を受けると `hp_floor` を割る（`hp_risk`。被弾の前に止まる。始める前なら `hp_floor` のエラーで拒否）**・被弾の記録の無い種族から初めて被弾した（`first_hit`。一度だけ）・追跡中の別の敵・状態異常（V3-2R3）。眠っている・気付いていない相手は待たない（`target_not_hunting` で拒否）。結果の `outcome` に与えた攻撃（投げた）回数・命中・合計・待った手番 |
 | `pickup` | `item?: entity_id` | 省略時は足元の全て（入る分だけ） |
 | `drop` | `slot`, `qty?` | |
-| `equip` / `unequip` | `slot` | |
-| `use_item` | `slot`, `target?: dir | {x,y} | entity_id`, `target_slot?` | 帰還の綱（`core:lifeline`。V3-2R2）は使うと、`lifeline.turns` が 0（V3-2R3 の既定）ならその手番でキャンプへ戻る。1 以上ならその手番のあいだ行動できず（状態 `core:recall`、その間も攻撃は受ける）、切れるとキャンプへ戻る。達成した遠征の数には入らない。遠征の開始時にキャンプが 1 本にそろえる。捨てる・投げることはできず（`cannot_use`）、所持数に数えない。`target_slot`: 鑑定の巻物で鑑定する品（省略時はスロット順で最初の未鑑定品。読んだ巻物自身の種類は除く）。引数の形が合わないときもゲームのエラー形式（`bad_request`・hint・valid_actions）で返す |
+| `equip` / `unequip` | `slot` | 装備すると、未鑑定の種類（装飾品）は正体が、装備品は呪いの有無が分かる（V3-4）。呪われた装備は外せない・同じ場所に別の品を付けられない・捨てられない（`cannot_use`） |
+| `use_item` | `slot`, `target?: dir | {x,y} | entity_id`, `target_slot?` | 帰還の綱（`core:lifeline`。V3-2R2）は使うと、`lifeline.turns` が 0（V3-2R3 の既定）ならその手番でキャンプへ戻る。1 以上ならその手番のあいだ行動できず（状態 `core:recall`、その間も攻撃は受ける）、切れるとキャンプへ戻る。達成した遠征の数には入らない。遠征の開始時にキャンプが 1 本にそろえる。捨てる・投げることはできず（`cannot_use`）、所持数に数えない。`target_slot`: 鑑定の巻物で鑑定する品（省略時はスロット順で最初の未鑑定品か、呪いの有無を確かめていない装備品。読んだ巻物自身の種類は除く。V3-4）。解呪の巻物と祭壇は所持品すべての呪いを解く。引数の形が合わないときもゲームのエラー形式（`bad_request`・hint・valid_actions）で返す |
 | `throw_item` | `slot`, `target: {x,y} | entity_id` | 投擲の経路は双方向（自分→相手の直線か、相手→自分の直線を逆にたどったもののうち通る方。敵の射撃も同じ経路。V3-2R2）。ID 指定で経路が通らない相手は `no_line_of_sight`、射程外は `out_of_range`（どちらも手番も品物も失わない。観測の `shots`）。座標指定は遮られた位置か射程の端に落ちる。結果は必ず 命中 / 外れ / 遮られた / 届かない / 誰もいない と落下地点で書く。自分が投げた物はそのマスに入るだけで拾う（追加の手番なし） |
 | `interact` | `dir?` | 扉の開閉、地物の操作。省略時は足元 |
 | `use_stairs` | – | 足元の階段 |
 | `say` | `text` | COOP 用チャット。手番を消費しない |
+| `choose_perk` | `option: 1..n | perk_id` | 特技を選ぶ（V3-4 §4.1）。**手番を消費しない**。自分の手番でなくても、キャンプでも呼べる。選ぶまで進行は止まらない（保留できる）。候補は `self.perk_choice`。保留が重なれば古い順で、次の候補はその後に引く。候補が無ければ `nothing_to_do` |
 
 行動結果:
 
@@ -174,14 +177,17 @@ Observation {
     pos: {x,y}, floor: { depth, biome_name, time, draft?: Dir, explored?: 1|2|3|4, hint_text? }
                                     // draft: 下への風（今いる階の下り階段を見ていない間の 8 方向。遠近は出さない）、explored: 通れるマスのうち見た割合の 4 段階（約 1/4・半分・3/4・ほぼ全て）。V3-2R2
     equipment: { weapon?, armor?, accessory? }     // 表示名
-    attack: { acc, dmg, throws?: { slot, name, dmg: string|null, acc, range }[] }, defense: { eva, armor }   // throws: 投げられる持ち物（acc は自分の命中込み。V3-2R）
+    attack: { acc, dmg, throws?: { slot, name, dmg: string|null, acc, range }[] }, defense: { eva, armor }   // throws: 投げられる持ち物（acc は自分の命中込み。V3-2R）。V3-4: attack.acc に近接の習熟と装備、throws[].acc に投擲の習熟と装備を含む
     inventory_count, inventory_capacity   // inventory_count は手放せない品（帰還の綱）を数えない
-    inventory?: { slot, name, qty, category, identified, equipped, value?, stats? }[]   // full のみ。value は宝の価値、stats は鑑定済みの性能（weapon {dmg,acc} / armor {armor,eva} / throw {dmg,acc,range}。接辞込み）
+    inventory?: { slot, name, qty, category, identified, equipped, value?, stats?, curse? }[]   // full のみ。value は宝の価値、stats は鑑定済みの性能（weapon {dmg,acc,traits?} / armor {armor,eva,move_cost?,wake_pct?} / throw {dmg,acc,range} / mods（装飾品の修正と接辞の追加の修正）。接辞込み）。curse: 'unknown'（呪いの有無を確かめていない装備品）/ 'cursed'（呪われている。外せない）。V3-4
     inventory_brief?: string        // brief のみ（例 "a)小剣*[1d6・命中+1] c)投げナイフx8[投擲1d4+1・射程7・命中+1]"。* は装備中）
     turns: number                   // 自分が行動した手番数
     speed: number                   // 実効の速さ（標準 100。状態異常込み。v3）
     score: { banked, expeditions_completed }   // 確定済みの点と達成した遠征の数（v3）
     rest_estimate?: { hp_to_full, turns, time, wander_expected: string /* 例 "0〜1" */, blocked_by?: 'poisoned', lowest_hp?: number /* 毒のとき、抜けるまでの最低 HP（V3-2R2） */ }  // HP が減っていて、休めるときのみ（追跡中の敵が見えている間は出さない。V3-2R）
+    perks: { id, name, ranks }[]                                 // 取った特技（V3-4）
+    abilities: { id /* 短い ID */, name, cooldown_left, uses_left?, target: 'adjacent'|'throw'|'dir'|'none' }[]   // 覚えた能動技。cooldown_left 0 なら使える。uses_left は遠征ごとの回数の残り（立て直し）
+    perk_choice?: { level, options: { option, id, name, desc, lineage }[], more }   // 選べる特技の候補（choose_perk）。more は後に控えている候補の数
   }
   visible: {
     monsters: { id, name, pos, dir, dist, hp_state: 'healthy'|'wounded'|'badly_wounded'|'near_death',
@@ -243,7 +249,7 @@ Observation {
 ```
 
 - `threat` は「自分の現在 HP」と「思い出にある観測済み最大ダメージ／未知なら深度からの控えめな推定」から出す。PlayerView 外の値は使わない。
-- `alerts` の主なコード: `low_hp`, `critical_hp`, `enemy_adjacent`, `incoming`, `lethal_range`, `escape`, `poisoned`, `on_stairs`, `item_here`, `inventory_full`, `new_floor`, `can_extract`, `at_camp`。
+- `alerts` の主なコード: `low_hp`, `critical_hp`, `enemy_adjacent`, `incoming`, `lethal_range`, `escape`, `poisoned`, `on_stairs`, `item_here`, `inventory_full`, `new_floor`, `can_extract`, `at_camp`, `perk_pending`（V3-4。`data: { level, options, more }`）。
   - `incoming`（V3-2R2。`multiple_enemies` を置き換え）: 自分に届く追跡中の敵（逃走中を除く。動かない敵は隣にいるときだけ）が 2 体以上。`data: { hunting, worst_sum, unrecorded, hp }`。worst_sum は種族ごとの `worst_hit` を個体ごとに足したもの（思い出の記録だけ）。
   - `lethal_range`: 追跡中の敵の `worst_turn`、または記録のある追跡中の敵の `worst_turn` の合計が今の HP 以上（V3-2R3 で `worst_hit` から変更）。`lethal_2turns`: 合計の 2 倍が今の HP 以上。
   - `escape`（V3-2R2）: 追跡中の敵が見えていて、既知の階段に辿り着けるとき（階段の上では出さない）。`data: { stairs: 'up'|'down', path_len, faster, worst_if_chased, hp }`（faster = 自分より速い追跡中の敵の数。worst_if_chased = 歩数 × 追跡中の敵の 1 手の最悪の被害の合計、記録の無い敵がいれば null。V3-2R3b）。人間向け UI にも同じものを表示する。`alerts` は現在の状態、`turn.changes` は前回からの差分。
@@ -252,7 +258,7 @@ Observation {
 - `fleeing`: 逃走の閾値（種族データの `fleeBelowHpPct`）を下回った追跡中の敵。逃走中の敵は `extract` と休息を妨げない。
 - 目安: brief は約 400 トークン以内、full は約 1,500 トークン以内。`map` は brief では既定で付け、`new_run` のオプション `brief_map: false` で外せる。
 - 地図（v3）: モンスターは種族ごとに固定の 1 文字（content の `glyph`。一意）。テキストでは上の 2 行が x 座標の 10 の位・1 の位、行頭が y 座標の目盛り。`get_map` も同じ。
-- 帰還の綱を持っていれば `valid_actions` に「use_item <slot>（帰還の綱: その場でキャンプへ戻る・+N 確定・追跡中の 1 手の最悪の被害 …）」（危なくないときは短い行）。階段の上の extract には「次の遠征はこの階段から始まる。階の敵は追跡をやめて全快する」、綱には「次の遠征はこの遠征を始めた階段から」、射撃する敵には fight の待ち受けではなく「travel_to <id>（近づく／視線を切る）」（V3-2R3a）、追跡中の敵が届くときの階段への移動には「階段まで N 歩。追われたままなら最悪 M の被害（HP h）」（M が HP 以上で綱を持っていれば綱の候補を先に。V3-2R3b）、隣に起きている追跡中の敵がいるときの薬・巻物には「使う間に隣の敵が行動する」を添える。同じか劣る装備には equip を出さない。下への風があれば「explore toward:draft」（V3-2R3）。投擲の候補があれば「fight <id> with:<slot>（投擲で決着まで）」、追跡中で届かない相手がいれば「fight <id>（迎え撃つ）」を足す（V3-2R2）。
+- 帰還の綱を持っていれば `valid_actions` に「use_item <slot>（帰還の綱: その場でキャンプへ戻る・+N 確定・追跡中の 1 手の最悪の被害 …）」（危なくないときは短い行）。階段の上の extract には「次の遠征はこの階段から始まる。階の敵は追跡をやめて全快する」、綱には「次の遠征はこの遠征を始めた階段から」、射撃する敵には fight の待ち受けではなく「travel_to <id>（近づく／視線を切る）」（V3-2R3a）、追跡中の敵が届くときの階段への移動には「階段まで N 歩。追われたままなら最悪 M の被害（HP h）」（M が HP 以上で綱を持っていれば綱の候補を先に。V3-2R3b）、隣に起きている追跡中の敵がいるときの薬・巻物には「使う間に隣の敵が行動する」を添える。同じか劣る装備には equip を出さない。下への風があれば「explore toward:draft」（V3-2R3）。特技の候補は「choose_perk <n>（名前: 説明）」（自分の手番でなくても・キャンプでも出る）、能動技は使えるものを対象付き（「use_ability bash -> e_xxx」「use_ability slip <dir>」「use_ability cleave」）、使えないものを残りの手番付き（「use_ability bash（あと 3 手番）」）、長柄なら「attack <id>（2 マス先から突く）」（V3-4）。投擲の候補があれば「fight <id> with:<slot>（投擲で決着まで）」、追跡中で届かない相手がいれば「fight <id>（迎え撃つ）」を足す（V3-2R2）。
 - 投擲の候補（`valid_actions`）は、射程内で経路が通る相手だけを、自分を攻撃している相手から順に最大 3 件出す。有害と分かっている薬（`harmful`）は使う代わりに投げる候補になる。自分が投げた物を知っていれば `collect` が出る。
 - 推定残り HP の文章: 記録が足りない間は「3 以上（記録 1 体）」のように下限だけを書く。
 - キャンプの観測テキストは、遠征の観測の欄（見えるもの・地図など）を出さず、確定点・前回の払い戻し・候補（枠・倍率・危険度・推奨レベル）だけを書く。
@@ -402,6 +408,16 @@ V3-2R で足した項目（同じく後方互換。会心と経験値のルー�
 - `StatusInst.source`（状態異常を与えた者。毒で倒したときの撃破者になる）、`status_applied.targetAffixes`
 - `player_state.reason: 'joined'`（キャンプから始まる参加）。参加コマンドの `atCamp`
 - プレイヤー向けの射影で、見えていた個体が視界の外へ動いた `entity_moved` に `dirOut`（向きだけ。行き先は伏せたまま）
+
+V3-4 で足した項目（同じく後方互換。成長・戦闘・生成が変わったので `engineVersion` は 0.8.0、新しいイベントがあるので `eventVersion` は 3）:
+
+- コマンド: `attack { target }`・`ability { id, target?, slot? }`・`choose_perk { option }`（手番を消費しない。`FREE_COMMANDS`）・`fight` の `abilities`（V3-4a）。MCP ツール `attack`・`use_ability`・`choose_perk`
+- World State のプレイヤーのエンティティに `build { perks, pending: { level, options }[], abilities: { id, readyAt, usedNo?, uses? }[] }`。`readyAt` は自分の手番数（`actor.turns`）と比べ、使った手番に `turns + 1 + cooldown` になる。PlayerView の `self.build` はその写し（自分のものだけ）
+- 品物に `item.hidden`（見えていない呪いの接辞）と `item.inspected`（呪いの有無を確かめた）。`hidden` はプレイヤーに渡さない（PlayerView・観測・イベントのどこにも出ない。漏洩テストで確かめる）。ItemView の `inspected`
+- イベント（状態の変化は `put`）: `perk_offered { target, level, options }`（options が空なら前の候補を選んだ後に引く）・`perk_chosen { target, perk, level, ability }`・`ability_used { actor, ability, target, cooldownLeft }`・`curse_revealed { actor, item, kind, appearanceId, affixes, via: 'equip'|'identify' }`・`item_inspected { ..., via }`・`curse_lifted { ..., affixes }`。`level_up.gains` の命中・威力・回避は常に 0（固定成長は最大 HP だけ）
+- 特技の候補は状態を持たないハッシュ（`seed|perk|プレイヤー|レベル`）で引き、`perk_offered` の after 値として World に入る
+- 観測: `self.perks`・`self.abilities`・`self.perk_choice`・alerts の `perk_pending`・`self.attack.acc` と `throws[].acc` に習熟と装備の命中・所持品の `curse`（`unknown` / `cursed`）と `stats`（`weapon.traits`・`armor.move_cost` / `wake_pct`・`mods`）・`valid_actions` の `choose_perk` / `use_ability` / `attack`
+- 公開カタログ: `perks`・`abilities`（`handler` を含む）・`weaponTraits`（`reach`・`attackCost`）・`classes[*].proficiency / lineages / startPerks`・`classes[*].growth` は `maxHpPerLevel` だけ・`items[*].equipStats`・`affixes[*].cursed` と `itemMods` の追加項目・`rules.perkOptions` / `curseChancePct`
 
 V3-2R3b で足した項目（同じく後方互換。守護者の動きが変わったので `engineVersion` は 0.7.0）:
 

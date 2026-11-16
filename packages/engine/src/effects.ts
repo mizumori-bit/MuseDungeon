@@ -9,6 +9,7 @@ import { isOpaqueFn, makeNoise, updateMemory } from './perception';
 import { Registry, roll } from './registry';
 import { lifelineReturn } from './expedition';
 import { addStatus, removeStatus } from './statuses';
+import { inspectItem, liftCurses } from './build';
 
 export interface EffectCtx {
   /** 効果の使い手（薬を飲んだ者、攻撃者、罠なら null） */
@@ -106,18 +107,34 @@ effects.register('identify', (ctx, p, ec) => {
   const user = ec.user ?? ec.target;
   if (!user.player) return;
   const pr = ctx.world.players[user.player];
-  // 対象: target_slot があればその品。無ければスロット順で最初の未鑑定品（使った巻物自身の種類は除く。公開ルール）
+  // 対象: target_slot があればその品。無ければスロット順で最初の「未鑑定の種類」か「呪いの有無を確かめていない装備品」（使った巻物自身の種類は除く。公開ルール）。
+  // 1 品で 1 回: 未鑑定の種類なら正体が、装備品なら呪いの有無も分かる（V3-4 §4.4）
   const items = (user.inv?.items ?? []).map((id) => ctx.world.entities[id]).filter((it): it is Entity => !!it?.item)
     .sort((a, b) => (a.item!.slot ?? '').localeCompare(b.item!.slot ?? ''));
-  const kinds: string[] = [];
+  const unknownKind = (it: Entity) => !!ctx.world.secret.appearances[it.kind] && !ctx.world.players[pr.id].knowledge.identified.includes(it.kind);
+  const uninspected = (it: Entity) => !!ctx.content.items[it.kind]?.equip && !ctx.world.entities[it.id]?.item?.inspected;
+  const picked: Entity[] = [];
+  const kinds = new Set<string>();
   const pick = (it: Entity) => {
-    if (ctx.world.secret.appearances[it.kind] && !pr.knowledge.identified.includes(it.kind) && !kinds.includes(it.kind)) kinds.push(it.kind);
+    if (picked.some((x) => x.id === it.id)) return;
+    const k = unknownKind(it) && !kinds.has(it.kind);
+    if (!k && !uninspected(it)) return;
+    picked.push(it);
+    if (k) kinds.add(it.kind);
   };
   if (ec.itemSlot) { const it = items.find((x) => x.item!.slot === ec.itemSlot); if (it) pick(it); }
   for (const it of items) if (it.kind !== ec.usedKind) pick(it);
-  for (const k of kinds.slice(0, num(p.count, 1))) {
-    ctx.emit({ type: 'item_identified', player: pr.id, kind: k, appearanceId: ctx.world.secret.appearances[k] ?? null, seenBy: [pr.id] });
+  for (const it of picked.slice(0, num(p.count, 1))) {
+    if (unknownKind(it)) ctx.emit({ type: 'item_identified', player: pr.id, kind: it.kind, appearanceId: ctx.world.secret.appearances[it.kind] ?? null, seenBy: [pr.id] });
+    if (uninspected(it)) inspectItem(ctx, ctx.world.entities[user.id], ctx.world.entities[it.id], 'identify');
   }
+});
+
+// 呪いを解く（解呪の巻物・祭壇。V3-4 §4.4）: 所持品すべての呪いの接辞を消す
+effects.register('uncurse', (ctx, _p, ec) => {
+  const user = ec.user ?? ec.target;
+  if (!user.player) return;
+  liftCurses(ctx, ctx.world.entities[user.id]);
 });
 
 effects.register('map', (ctx, _p, ec) => {

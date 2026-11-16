@@ -39,7 +39,12 @@ export const CommandSchema = z.discriminatedUnion('type', [
    * その相手と決着を付ける（V3-2R2 §18.5）。with なし: 近接（追跡中の相手は隣に来るまで待つ）。with: そのスロットの品を投げて戦う（射程と射線が通るまで待つ）。
    * 倒れた・離れた・HP が hpFloor を下回った・別の追跡中の敵・状態異常で止まる
    */
-  z.object({ type: z.literal('fight'), target: EntityRefSchema, with: SlotSchema.optional(), hpFloor: HpFloorSchema.optional() }),
+  /** abilities: 使える手番ごとに使う能動技（強打・なぎ払い・狙い撃ち。V3-4a §25.3） */
+  z.object({ type: z.literal('fight'), target: EntityRefSchema, with: SlotSchema.optional(), hpFloor: HpFloorSchema.optional(), abilities: z.array(z.string().min(1)).max(4).optional() }),
+  /** 近接攻撃（V3-4）。隣の敵か、長柄の武器なら直線で 2 マス先の敵（間のマスが通れて誰もいない） */
+  z.object({ type: z.literal('attack'), target: EntityRefSchema }),
+  /** 能動技（V3-4 §4.2）。target: 隣の敵・投擲の対象なら ID、身をかわすなら方向。slot: 狙い撃ちで投げる品（省略時は投擲用の品の最初のスロット） */
+  z.object({ type: z.literal('ability'), id: z.string().min(1), target: z.union([DirSchema, EntityRefSchema]).optional(), slot: SlotSchema.optional() }),
   // 遠征
   z.object({ type: z.literal('extract'), confirm: z.boolean().optional() }),
   z.object({ type: z.literal('start_expedition'), offer: z.union([z.number().int().min(1).max(9), z.literal('endless')]) }),
@@ -47,6 +52,8 @@ export const CommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('say'), text: z.string().min(1).max(280) }),
   z.object({ type: z.literal('note'), add: z.string().min(1).max(280).optional(), remove: z.number().int().nonnegative().optional() }),
   z.object({ type: z.literal('retire') }),
+  /** 特技を選ぶ（手番を消費しない。V3-4 §4.1）。option は候補の番号（1 から）か特技の ID */
+  z.object({ type: z.literal('choose_perk'), option: z.union([z.number().int().min(1).max(9), z.string().min(1)]) }),
 ]);
 
 export type Command = z.infer<typeof CommandSchema>;
@@ -55,7 +62,7 @@ export type Target = z.infer<typeof TargetSchema>;
 export type TravelTarget = z.infer<typeof TravelTargetSchema>;
 
 export const MACRO_COMMANDS: ReadonlySet<CommandType> = new Set<CommandType>(['explore', 'travel', 'rest', 'collect', 'fight']);
-export const FREE_COMMANDS: ReadonlySet<CommandType> = new Set<CommandType>(['say', 'note', 'retire']);
+export const FREE_COMMANDS: ReadonlySet<CommandType> = new Set<CommandType>(['say', 'note', 'retire', 'choose_perk']);
 /** キャンプでのみ有効（手番に関係しない） */
 export const CAMP_COMMANDS: ReadonlySet<CommandType> = new Set<CommandType>(['start_expedition']);
 

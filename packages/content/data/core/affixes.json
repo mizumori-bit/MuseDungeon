@@ -12,5 +12,13 @@
   { "id": "core:heavy", "name": { "ja": "重厚な", "en": "heavy" }, "target": "item", "depth": { "min": 3 }, "rarity": 2, "categories": ["weapon"],
     "mods": { "dmgBonus": 2, "acc": -1 } },
   { "id": "core:reinforced", "name": { "ja": "補強された", "en": "reinforced" }, "target": "item", "depth": { "min": 2 }, "rarity": 2, "categories": ["armor"],
-    "mods": { "armor": 1 } }
+    "mods": { "armor": 1 } },
+  { "id": "core:bright", "name": { "ja": "冴えた", "en": "bright" }, "target": "item", "depth": { "min": 2 }, "rarity": 1, "categories": ["ring", "amulet"],
+    "mods": { "acc": 1, "eva": 1 } },
+  { "id": "core:cursed_frail", "name": { "ja": "命を削る", "en": "life-draining" }, "target": "item", "depth": { "min": 1 }, "rarity": 1, "categories": ["weapon", "armor", "ring", "amulet"],
+    "cursed": true, "mods": { "maxHp": -6 } },
+  { "id": "core:cursed_clumsy", "name": { "ja": "足をもつれさせる", "en": "stumbling" }, "target": "item", "depth": { "min": 1 }, "rarity": 1, "categories": ["weapon", "armor", "ring", "amulet"],
+    "cursed": true, "mods": { "eva": -2 } },
+  { "id": "core:cursed_dim", "name": { "ja": "目を曇らせる", "en": "clouding" }, "target": "item", "depth": { "min": 1 }, "rarity": 1, "categories": ["weapon", "armor", "ring", "amulet"],
+    "cursed": true, "mods": { "sight": -2 } }
 ]

@@ -131,6 +131,12 @@ export function applyEvent(world: World, ev: GameEvent): void {
     case 'item_unequipped':
     case 'item_used':
     case 'item_thrown':
+    case 'perk_offered':
+    case 'perk_chosen':
+    case 'ability_used':
+    case 'curse_revealed':
+    case 'item_inspected':
+    case 'curse_lifted':
       break;
     case 'died':
       // 生存中の個体だけを追う記録の後始末（削除のみ）
