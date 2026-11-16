@@ -7,7 +7,7 @@ import type {
 import { actionError, CAMP_COMMANDS, emptyWorld, EVENT_VERSION, FREE_COMMANDS, MACRO_COMMANDS, Rng, t } from '@muse/shared';
 import { actions, freeCommand } from './actions';
 import { Ctx } from './ctx';
-import { checkObjective, huntingInView, offerExpeditions, startExpedition } from './expedition';
+import { accrueHaul, checkObjective, huntingInView, offerExpeditions, startExpedition } from './expedition';
 import { ensureFloor, findFreeCell } from './floors';
 import { updateKnowledge } from './perception';
 import { advance, endTurn } from './scheduler';
@@ -180,6 +180,7 @@ export function step(world: World, content: Content, playerId: PlayerId, cmd: Co
     checkObjective(ctx);
     for (const k of touched) advance(ctx, k);
     checkObjective(ctx);
+    accrueHaul(ctx);
     return { ok: true, events: ctx.finish() };
   } catch (err) {
     const events = ctx.finish();

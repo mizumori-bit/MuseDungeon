@@ -2,6 +2,7 @@
 import type { Entity, Stats } from '@muse/shared';
 import { addDiceBonus, floorDiv } from '@muse/shared';
 import type { Ctx } from './ctx';
+import { activeEffects } from './expedition';
 import { sumAffixMods } from './spawn';
 
 export function effectiveStats(ctx: Ctx, e: Entity): Stats {
@@ -21,6 +22,11 @@ export function effectiveStats(ctx: Ctx, e: Entity): Stats {
     if (slot === 'weapon' && def.equip.dmg) s.dmg = addDiceBonus(def.equip.dmg, mods.dmgBonus);
   }
   if (s.hp > s.maxHp) s.hp = s.maxHp;
+  // 遠征の条件（薄暗い階層など）
+  if (e.player) {
+    const d = activeEffects(ctx).sightDelta;
+    if (d) s.sight = Math.max(1, s.sight + d);
+  }
   return s;
 }
 

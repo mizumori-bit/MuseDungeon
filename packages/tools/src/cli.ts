@@ -7,6 +7,7 @@ import type { BotKind } from './bot';
 import { assetsCheck, assetsChecklist } from './assets';
 import { commandInvoker, drive, dummyInvoker, httpInvoker } from './drive';
 import { formatPacing, pacingReport } from './pacing';
+import { choicesReport, formatChoices } from './choices';
 import { verifyRunDir, writeGolden } from './replay';
 import { resolve } from 'node:path';
 
@@ -161,6 +162,13 @@ async function main() {
       else console.log(formatPacing(rep));
       break;
     }
+    case 'choices': {
+      const manager = new SessionManager(content, loadConfig({ runsDir: null }));
+      const rep = await choicesReport(manager, { runs: Number(flag('runs', '40')), maxActs: Number(flag('max-acts', '1500')), seed: flag('seed', 'choices')!, log: (s) => console.log(s) });
+      console.log('');
+      console.log(has('json') ? JSON.stringify(rep, null, 2) : formatChoices(rep));
+      break;
+    }
     case 'drive': {
       // 参照ドライバ: npm run drive -- --token <player_token> [--agent dummy|--agent-cmd "<command>"|--agent-url <url>] [--base http://127.0.0.1:7777]
       const base = flag('base', `http://127.0.0.1:${process.env.MUSE_PORT ?? 7777}`)!;
@@ -189,7 +197,7 @@ async function main() {
       break;
     }
     default:
-      console.log('usage: tsx packages/tools/src/cli.ts <bot|seed|gen-check|replay-verify|golden|assets-checklist|assets-check|validate|pacing|drive> [options]');
+      console.log('usage: tsx packages/tools/src/cli.ts <bot|seed|gen-check|replay-verify|golden|assets-checklist|assets-check|validate|pacing|choices|drive> [options]');
   }
 }
 

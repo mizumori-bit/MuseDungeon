@@ -38,6 +38,17 @@ export interface SubmitOpts {
   expectSeq?: number;
 }
 
+/** 応答テキストの表示オプション（IMPROVEMENTS_V3 §1.8） */
+export interface PlayerOptions {
+  /** auto: 階が変わった・新しいセルを知った・敵の出入りがあった応答だけ地図を付ける */
+  map: 'auto' | 'always' | 'never';
+  /** on_change: 所持品の行は変わったときだけ */
+  inventory: 'on_change' | 'always';
+  /** short: 状態が変わらない間は「▶ あなたの番（手番 N）」 */
+  status_line: 'short' | 'long';
+}
+export const DEFAULT_PLAYER_OPTIONS: PlayerOptions = { map: 'auto', inventory: 'on_change', status_line: 'short' };
+
 /** マクロの実績（結果の報告用。PlayerView から計算） */
 export interface MacroReport {
   kind: string;
@@ -83,6 +94,8 @@ export class RunSession {
   private readonly macroActive = new Set<PlayerId>();
   /** 最後に入力（コマンド投入）があった時刻 */
   private readonly lastInput = new Map<PlayerId, number>();
+  /** 応答テキストの表示オプション（ゲームには影響しない。World の外） */
+  private readonly options = new Map<PlayerId, PlayerOptions>();
   private readonly log: LogWriter | null;
   private lastKeyframeSeq = 0;
   private metaFile: RunMetaFile;
@@ -302,6 +315,16 @@ export class RunSession {
   addListener(l: SessionListener): () => void {
     this.listeners.add(l);
     return () => this.listeners.delete(l);
+  }
+
+  playerOptions(pid: PlayerId): PlayerOptions {
+    return this.options.get(pid) ?? DEFAULT_PLAYER_OPTIONS;
+  }
+
+  setPlayerOptions(pid: PlayerId, o: Partial<PlayerOptions>): PlayerOptions {
+    const next = { ...this.playerOptions(pid), ...Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) } as PlayerOptions;
+    this.options.set(pid, next);
+    return next;
   }
 
   turnSnapshot(pid: PlayerId): TurnSnapshot | null {

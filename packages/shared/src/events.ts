@@ -1,7 +1,7 @@
 // Event の型。仕様: docs/PROTOCOL.md §5
 // 規約: イベントは結果値（after 値）を持ち、applyEvent は代入・追加・削除しかしない。
 import type {
-  AiState, BaseStats, CampState, Entity, EntityId, EquipSlot, Expedition, ExpeditionEndReason, ExpeditionResult, Floor,
+  AiState, BaseStats, CampState, Dir, Entity, EntityId, EquipSlot, Expedition, ExpeditionHaul, ExpeditionEndReason, ExpeditionResult, Floor,
   FloorKey, FloorPos, MonsterMemory, Objective, ObjectiveProgress, PlayerId, PlayerRecord, PlayerStats, Pos,
   RememberedEntity, RngState, RunMeta, RunSummary, Stats, StatusInst, WorldSecret,
 } from './types';
@@ -58,6 +58,8 @@ export type GameEvent =
       target: EntityId | null; targetKind: string | null;
       roll: number; hit: boolean; crit: boolean; ranged: boolean;
       from: Pos | null; to: Pos;
+      /** 攻撃者が見えていない被害者にだけ残す、攻撃が来た方向 */
+      fromDir?: Dir | null;
     }>
   | E<'damaged', {
       /** amount は出目どおりのダメージ、dealt は実際に減った HP（とどめの超過分を含まない） */
@@ -65,10 +67,12 @@ export type GameEvent =
       source: EntityId | null; sourceKind: string | null; via: DamageVia;
       /** 見ていたプレイヤーごとの、その個体への累計実ダメージ（after 値。プレイヤーには渡さない） */
       seenTotals?: Record<PlayerId, number>;
+      /** 攻撃元が見えていない被害者にだけ残す、攻撃が来た方向 */
+      fromDir?: Dir | null;
     }>
   | E<'healed', { target: EntityId; targetKind: string; amount: number; hpAfter: number; via: string }>
   | E<'max_hp_changed', { target: EntityId; targetKind: string; maxHpAfter: number; hpAfter: number }>
-  | E<'died', { id: EntityId; kind: string; killer: EntityId | null; killerKind: string | null; via: DamageVia; pos: Pos; maxHp?: number | null }>
+  | E<'died', { id: EntityId; kind: string; killer: EntityId | null; killerKind: string | null; via: DamageVia; pos: Pos; maxHp?: number | null; bounty?: number }>
   | E<'status_applied', { target: EntityId; targetKind: string; status: StatusInst; statusesAfter: StatusInst[] }>
   | E<'status_expired', { target: EntityId; targetKind: string; statusId: string; statusesAfter: StatusInst[] }>
   | E<'status_ticked', { target: EntityId; statusesAfter: StatusInst[] }>
@@ -76,14 +80,19 @@ export type GameEvent =
   | E<'xp_gained', { target: EntityId; amount: number; xpAfter: number }>
   | E<'level_up', { target: EntityId; levelAfter: number; xpAfter: number; statsAfter: Stats; baseAfter: BaseStats }>
   // アイテム（状態変化は put/del で表す）
-  | E<'item_picked_up', { actor: EntityId; item: EntityId; kind: string | null; appearanceId: string | null; qty: number; slot: string }>
-  | E<'item_dropped', { actor: EntityId; item: EntityId; kind: string | null; appearanceId: string | null; qty: number; pos: Pos }>
-  | E<'item_equipped', { actor: EntityId; item: EntityId; kind: string | null; appearanceId: string | null; slotName: EquipSlot }>
-  | E<'item_unequipped', { actor: EntityId; item: EntityId; kind: string | null; appearanceId: string | null; slotName: EquipSlot }>
+  | E<'item_picked_up', { actor: EntityId; item: EntityId; kind: string | null; appearanceId: string | null; qty: number; slot: string; affixes?: string[]; auto?: boolean }>
+  | E<'item_dropped', { actor: EntityId; item: EntityId; kind: string | null; appearanceId: string | null; qty: number; pos: Pos; affixes?: string[] }>
+  | E<'item_equipped', { actor: EntityId; item: EntityId; kind: string | null; appearanceId: string | null; slotName: EquipSlot; affixes?: string[] }>
+  | E<'item_unequipped', { actor: EntityId; item: EntityId; kind: string | null; appearanceId: string | null; slotName: EquipSlot; affixes?: string[] }>
   | E<'item_used', { actor: EntityId; item: EntityId; kind: string | null; appearanceId: string | null; category: string; qtyAfter: number }>
   | E<'item_thrown', {
       actor: EntityId | null; actorKind: string | null; item: EntityId; kind: string | null; appearanceId: string | null;
       from: Pos; to: Pos; landed: Pos | null; hit: EntityId | null; hitKind: string | null; broke: boolean;
+      /** 結果（v3）: hit 命中 / missed 外れ / blocked 途中で遮られた / fell_short 射程が足りない / no_target 狙った場所に誰もいない */
+      outcome?: 'hit' | 'missed' | 'blocked' | 'fell_short' | 'no_target';
+      blockedBy?: 'terrain' | 'actor' | null;
+      /** 遮った・外れた相手（命中しなかった場合も含む） */
+      reached?: EntityId | null; reachedKind?: string | null;
     }>
   | E<'item_identified', { player: PlayerId; kind: string; appearanceId: string | null }>
   // 地物・罠
@@ -100,6 +109,10 @@ export type GameEvent =
       rememberedSet: RememberedEntity[];
       rememberedDel: EntityId[];
       metAdd: EntityId[];
+      /** 射線が通る視界内の敵（after 値。変化したときだけ） */
+      shotsAfter?: EntityId[];
+      /** metAdd の各個体を初めて見た seq（after 値。v3 以降） */
+      metAtAfter?: Record<EntityId, number>;
     }>
   | E<'monster_memory_updated', { player: PlayerId; kind: string; memoryAfter: MonsterMemory }>
   | E<'notes_updated', { player: PlayerId; notesAfter: string[] }>
@@ -111,6 +124,8 @@ export type GameEvent =
       targetsAfter?: Expedition['targets']; extractedAfter?: Expedition['extracted'];
     }>
   | E<'objective_completed', { no: number; objective: Objective }>
+  /** 戦利品の共有部分が増えた（after 値） */
+  | E<'haul_changed', { no: number; haulAfter: ExpeditionHaul; gains: Partial<ExpeditionHaul>; reasons: string[] }>
   | E<'expedition_ended', { no: number; reason: ExpeditionEndReason; result: ExpeditionResult; summary: RunSummary }>
   // 知覚（状態を変えない）
   | E<'noise', { pos: Pos; loudness: number; source: EntityId | null }>

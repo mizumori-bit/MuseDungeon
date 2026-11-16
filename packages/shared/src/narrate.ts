@@ -39,8 +39,14 @@ function who(ctx: NarrateCtx, id: unknown, kind: unknown): string {
 }
 
 function itemName(ctx: NarrateCtx, ev: Record<string, unknown>): string {
-  return kindName(ctx.catalog, ctx.locale, (ev.kind as string | null) ?? null, (ev.appearanceId as string | null) ?? null);
+  const base = kindName(ctx.catalog, ctx.locale, (ev.kind as string | null) ?? null, (ev.appearanceId as string | null) ?? null);
+  const affixes = Array.isArray(ev.affixes) && ev.kind ? (ev.affixes as string[]) : [];
+  if (!affixes.length) return base;
+  const af = affixes.map((a) => nameOf(ctx.catalog.affixes[a]?.name, ctx.locale, a));
+  return ctx.locale === 'en' ? `${af.join(' ')} ${base}` : `${af.join('')}${base}`;
 }
+
+const DIR_FROM_JA: Record<string, string> = { n: '北', ne: '北東', e: '東', se: '南東', s: '南', sw: '南西', w: '西', nw: '北西' };
 
 function cap(s: string): string {
   return s.length ? s[0].toUpperCase() + s.slice(1) : s;
@@ -55,7 +61,8 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
   switch (ev.type) {
     case 'attack': {
       if (ev.hit && !ev.crit) return null;
-      const a = who(ctx, ev.attacker, ev.attackerKind);
+      const unseen = ev.attacker === null && ev.fromDir ? (ja ? `${DIR_FROM_JA[ev.fromDir]}からの何か` : `something from the ${DIR_EN[ev.fromDir]}`) : null;
+      const a = unseen ?? who(ctx, ev.attacker, ev.attackerKind);
       const tg = who(ctx, ev.target, ev.targetKind);
       if (ev.crit) return ja ? `${a}の会心の一撃！` : `${cap(a)} land${ev.attacker === self ? '' : 's'} a critical hit!`;
       if (ja) return ev.attacker === self ? `${tg}への攻撃は外れた。` : `${a}の${ev.ranged ? '射撃' : '攻撃'}は${tg === 'あなた' ? 'あなたに' : tg + 'に'}当たらなかった。`;
@@ -70,7 +77,13 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
       if (ev.via === 'poison') return ja ? `${tg}は毒で ${amt} ダメージを受けた。` : `${cap(tg)} take${ev.target === self ? '' : 's'} ${amt} poison damage.`;
       if (ev.via === 'trap') return ja ? `${tg}は罠で ${amt} ダメージを受けた。` : `${cap(tg)} take${ev.target === self ? '' : 's'} ${amt} damage from a trap.`;
       if (ev.source === self) return ja ? `あなたは${tg}に ${amt} ダメージを与えた。` : `You hit ${tg} for ${amt}.`;
-      if (ev.target === self) return ja ? `${src ?? '何か'}の攻撃。あなたは ${amt} ダメージを受けた。` : `${cap(src ?? 'something')} hits you for ${amt}.`;
+      const verb = ev.via === 'ranged' ? (ja ? '射撃' : 'shot') : (ja ? '攻撃' : 'attack');
+      if (ev.target === self) {
+        if (!src && ev.fromDir) {
+          return ja ? `${DIR_FROM_JA[ev.fromDir]}から${ev.via === 'ranged' ? '飛んできた何か' : '何か'}の${verb}。あなたは ${amt} ダメージを受けた。` : `A ${verb} from the ${DIR_EN[ev.fromDir]} hits you for ${amt}.`;
+        }
+        return ja ? `${src ?? '何か'}の${verb}。あなたは ${amt} ダメージを受けた。` : `${cap(src ?? 'something')}'s ${verb} hits you for ${amt}.`;
+      }
       return ja ? `${src ?? '何か'}が${tg}に ${amt} ダメージを与えた。` : `${cap(src ?? 'something')} hits ${tg} for ${amt}.`;
     }
     case 'healed': {
@@ -105,6 +118,7 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
     case 'item_picked_up': {
       const n = itemName(ctx, ev);
       const q = ev.qty > 1 ? ` x${ev.qty}` : '';
+      if (ev.actor === self && ev.auto) return ja ? `${n}${q}を回収した（${ev.slot}）。` : `You recover ${n}${q} (${ev.slot}).`;
       if (ev.actor === self) return ja ? `${n}${q}を拾った（${ev.slot}）。` : `You pick up ${n}${q} (${ev.slot}).`;
       return ja ? `${who(ctx, ev.actor, null)}は${n}を拾った。` : `${cap(who(ctx, ev.actor, null))} picks up ${n}.`;
     }
@@ -130,8 +144,33 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
       const n = itemName(ctx, ev);
       const a = who(ctx, ev.actor, ev.actorKind);
       const hit = ev.hit ? who(ctx, ev.hit, ev.hitKind) : null;
-      if (ja) return `${a}は${n}を投げた。${hit ? `${hit}に命中した。` : ''}${ev.broke ? '砕け散った。' : ''}`;
-      return `${cap(a)} throw${ev.actor === self ? '' : 's'} ${n}.${hit ? ` It hits ${hit}.` : ''}${ev.broke ? ' It shatters.' : ''}`;
+      const reached = ev.reached ? who(ctx, ev.reached, ev.reachedKind) : (ja ? '何か' : 'something');
+      const at = ev.landed ? `(${ev.landed.x},${ev.landed.y})` : '';
+      const fall = ev.broke ? (ja ? '砕け散った。' : ' It shatters.') : at ? (ja ? `${at} に落ちた。` : ` It lands at ${at}.`) : '';
+      if (!ev.outcome) {
+        if (ja) return `${a}は${n}を投げた。${hit ? `${hit}に命中した。` : ''}${ev.broke ? '砕け散った。' : ''}`;
+        return `${cap(a)} throw${ev.actor === self ? '' : 's'} ${n}.${hit ? ` It hits ${hit}.` : ''}${ev.broke ? ' It shatters.' : ''}`;
+      }
+      if (ja) {
+        const head = `${a}は${n}を投げた。`;
+        switch (ev.outcome) {
+          case 'hit': return `${head}${hit ?? reached}に命中した。${fall}`;
+          case 'missed': return `${head}${reached}には当たらず、${fall || '消えた。'}`;
+          case 'blocked': return ev.blockedBy === 'actor'
+            ? `${head}途中の${reached}${hit ? 'に当たった。' : 'に阻まれ、'}${hit ? fall : fall || '消えた。'}`
+            : `${head}壁に当たり、${fall || '砕けた。'}`;
+          case 'fell_short': return `${head}届かず、${fall || '消えた。'}`;
+          default: return `${head}${fall || ''}`;
+        }
+      }
+      const head = `${cap(a)} throw${ev.actor === self ? '' : 's'} ${n}.`;
+      switch (ev.outcome) {
+        case 'hit': return `${head} It hits ${hit ?? reached}.${fall}`;
+        case 'missed': return `${head} It misses ${reached}.${fall}`;
+        case 'blocked': return ev.blockedBy === 'actor' ? `${head} ${cap(reached)} is in the way${hit ? ' and is hit' : ''}.${fall}` : `${head} It hits a wall.${fall}`;
+        case 'fell_short': return `${head} It falls short.${fall}`;
+        default: return `${head}${fall}`;
+      }
     }
     case 'item_identified': {
       const real = kindName(ctx.catalog, L, ev.kind);
@@ -193,8 +232,22 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
       return ja ? `遠征 ${ev.no} が終了した（${endReasonText(L, ev.reason)}）。` : `Expedition ${ev.no} has ended (${endReasonText(L, ev.reason)}).`;
     case 'expedition_offered':
       return null;
-    case 'run_ended':
-      return ja ? `ランが終了した（${ev.reason}）。` : `The run has ended (${ev.reason}).`;
+    case 'haul_changed': {
+      // 撃破だけの増加は頻繁なので文章にしない（観測の戦利品の行に出る）
+      const g = ev.gains ?? {};
+      const parts: string[] = [];
+      if (g.bounty) parts.push(ja ? `賞金 +${g.bounty}` : `bounty +${g.bounty}`);
+      if (g.discovery) parts.push(ja ? `発見 +${g.discovery}` : `discovery +${g.discovery}`);
+      if (!parts.length) return null;
+      return ja ? `戦利品に ${parts.join('・')}（未確定）。` : `Haul: ${parts.join(', ')} (not banked yet).`;
+    }
+    case 'run_ended': {
+      const why: Record<string, [string, string]> = {
+        all_players_gone: ['盤面にもキャンプにも誰もいなくなった', 'no one is left on the board or at camp'],
+      };
+      const w = why[ev.reason];
+      return ja ? `ランが終了した（${w ? w[0] : ev.reason}）。` : `The run has ended (${w ? w[1] : ev.reason}).`;
+    }
     case 'entity_removed':
       return null;
     default:

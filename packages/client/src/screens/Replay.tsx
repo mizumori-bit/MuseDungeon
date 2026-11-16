@@ -300,7 +300,16 @@ export function Replay({ runId }: { runId: string }) {
   const pct = (s: number) => (lastSeq > firstSeq ? ((s - firstSeq) / (lastSeq - firstSeq)) * 100 : 0);
   const exps = index?.expeditions ?? [];
   const curExp = expeditionAt(exps, seq);
-  const expOption = (x: ExpeditionBrief) => `${tr(`遠征 ${x.no}`, `Expedition ${x.no}`)}: ${objectiveText(L, x.objective)} — ${x.status === 'ended' ? endReasonText(L, x.endReason) : expStatusLabel(x).text}`;
+  /** 終了した遠征の確定・失った点（表示中の時点の World に結果があるときだけ。追従中はその人の分） */
+  const payoutOfExp = (no: number): string => {
+    const pay = w?.expeditions?.find((e) => e.no === no)?.result?.payout;
+    if (!pay) return '';
+    const p = mode === 'follow' && follow ? pay.players.find((pp) => pp.player === follow) : undefined;
+    const banked = p ? p.banked : pay.banked;
+    const lost = p ? p.lost : pay.lost;
+    return tr(` 確定 +${banked}${lost ? `・失 ${lost}` : ''}`, ` banked +${banked}${lost ? `, lost ${lost}` : ''}`);
+  };
+  const expOption = (x: ExpeditionBrief) => `${tr(`遠征 ${x.no}`, `Expedition ${x.no}`)}: ${objectiveText(L, x.objective)} — ${x.status === 'ended' ? endReasonText(L, x.endReason) : expStatusLabel(x).text}${payoutOfExp(x.no)}`;
   const jumpExpedition = (no: number) => {
     const x = exps.find((e) => e.no === no);
     if (!x) return;
@@ -311,10 +320,10 @@ export function Replay({ runId }: { runId: string }) {
   let expInfo: ExpInfo | null = null;
   if (w) {
     try {
-      if (mode === 'follow' && follow && w.players[follow]) expInfo = followExpInfo(projectPlayerView(w, follow));
+      if (mode === 'follow' && follow && w.players[follow]) expInfo = followExpInfo(projectPlayerView(w, follow), catalog);
       else {
         const fk = directorFloor(w, follow).floorKey;
-        expInfo = directorExpInfo(w, fk ? w.floors[fk]?.depth ?? null : null);
+        expInfo = directorExpInfo(w, fk ? w.floors[fk]?.depth ?? null : null, catalog);
       }
     } catch {
       expInfo = null;
@@ -361,7 +370,9 @@ export function Replay({ runId }: { runId: string }) {
         {curExp && (
           <span class="muted">
             #{curExp.startSeq}〜{curExp.endSeq !== null ? `#${curExp.endSeq}` : tr('進行中', 'ongoing')}
-            {' '}{curExp.status === 'ended' ? `（${endReasonText(L, curExp.endReason)}${curExp.endReason === 'completed' ? ` +${curExp.points}` : ''}）` : ''}
+            {' '}{curExp.status === 'ended'
+              ? `（${endReasonText(L, curExp.endReason)}${payoutOfExp(curExp.no) || (curExp.endReason === 'completed' ? ` +${curExp.points}` : '')}）`
+              : ''}
           </span>
         )}
       </div>

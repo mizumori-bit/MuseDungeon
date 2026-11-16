@@ -24,7 +24,7 @@
     "onUse": [{ "effect": "status", "status": "core:haste", "turns": "2d6+10", "power": 1 }],
     "desc": { "ja": "しばらく素早く動ける", "en": "Temporarily doubles your speed" } },
   { "id": "core:potion_poison", "name": { "ja": "毒薬", "en": "potion of poison" }, "category": "potion", "unidentified": true,
-    "depth": { "min": 1 }, "rarity": 2, "stack": true, "shatter": true,
+    "depth": { "min": 1 }, "rarity": 2, "stack": true, "shatter": true, "harmful": true,
     "onUse": [{ "effect": "status", "status": "core:poison", "turns": "2d4+4", "power": 1 }],
     "desc": { "ja": "飲むと毒に冒される。投げれば敵に効く", "en": "Poisons the drinker. Better thrown at enemies" } },
   { "id": "core:potion_vigor", "name": { "ja": "活力の薬", "en": "potion of vigor" }, "category": "potion", "unidentified": true,
@@ -48,5 +48,17 @@
     "throw": { "dmg": "1d8+1", "range": 6 } },
 
   { "id": "core:relic", "name": { "ja": "古の遺物", "en": "ancient relic" }, "category": "relic", "depth": { "min": 1 }, "rarity": 1,
-    "desc": { "ja": "遠征の目的の品。持ったまま階段の上で extract すると持ち帰れる。効果は無い", "en": "The object of your expedition. Extract on stairs while carrying it. It has no effect" } }
+    "desc": { "ja": "遠征の目的の品。持ったまま階段の上で extract すると持ち帰れる。効果は無い", "en": "The object of your expedition. Extract on stairs while carrying it. It has no effect" } },
+  { "id": "core:silver_goblet", "name": { "ja": "銀の杯", "en": "silver goblet" }, "category": "treasure", "depth": { "min": 1 }, "rarity": 1,
+    "value": { "dice": "2d6", "mult": 10 }, "desc": { "ja": "持ち帰れば点になる宝。使い道は無い", "en": "Treasure worth points when carried out. No other use" } },
+  { "id": "core:coin_pouch", "name": { "ja": "古い金貨袋", "en": "pouch of old coins" }, "category": "treasure", "depth": { "min": 1 }, "rarity": 1,
+    "value": { "dice": "2d4", "mult": 15 }, "desc": { "ja": "持ち帰れば点になる宝。使い道は無い", "en": "Treasure worth points when carried out. No other use" } },
+  { "id": "core:ivory_figurine", "name": { "ja": "象牙の小像", "en": "ivory figurine" }, "category": "treasure", "depth": { "min": 2 }, "rarity": 2,
+    "value": { "dice": "3d6", "mult": 10 }, "desc": { "ja": "持ち帰れば点になる宝。使い道は無い", "en": "Treasure worth points when carried out. No other use" } },
+  { "id": "core:silver_candlestick", "name": { "ja": "銀の燭台", "en": "silver candlestick" }, "category": "treasure", "depth": { "min": 2 }, "rarity": 2,
+    "value": { "dice": "2d6", "mult": 12 }, "desc": { "ja": "持ち帰れば点になる宝。使い道は無い", "en": "Treasure worth points when carried out. No other use" } },
+  { "id": "core:gem_necklace", "name": { "ja": "宝石の首飾り", "en": "jeweled necklace" }, "category": "treasure", "depth": { "min": 4 }, "rarity": 3,
+    "value": { "dice": "4d6", "mult": 10 }, "desc": { "ja": "持ち帰れば点になる宝。使い道は無い", "en": "Treasure worth points when carried out. No other use" } },
+  { "id": "core:crown_shard", "name": { "ja": "王冠の欠片", "en": "shard of a crown" }, "category": "treasure", "depth": { "min": 6 }, "rarity": 3,
+    "value": { "dice": "5d6", "mult": 12 }, "desc": { "ja": "持ち帰れば点になる宝。使い道は無い", "en": "Treasure worth points when carried out. No other use" } }
 ]

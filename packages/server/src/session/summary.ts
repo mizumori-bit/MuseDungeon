@@ -12,6 +12,8 @@ export function summaryMarkdown(summary: RunSummary, history: readonly GameEvent
   if (summary.seed) lines.push(`- シード: \`${summary.seed}\`（同じシードで同じダンジョンを再現できる）`);
   lines.push(`- 最終 seq: ${summary.endedSeq}`);
   lines.push('');
+  lines.push(`- スコア: ${summary.scoreVersion === 2 ? '版 2（確定点 = 遠征で持ち帰った戦利品の払い戻しの合計）' : '版 1（深度×1000 ほか）'}`);
+  lines.push('');
   lines.push('| 名前 | クラス | 操作 | 達成した遠征 | 到達深度 | Lv | 撃破 | 手数 | 死因 | スコア |');
   lines.push('|---|---|---|---|---|---|---|---|---|---|');
   for (const p of summary.players) {
@@ -44,7 +46,8 @@ export function summaryMarkdown(summary: RunSummary, history: readonly GameEvent
       lines.push(`- seq ${ev.seq}: 目的を達成した`);
     } else if (ev.type === 'expedition_ended') {
       const r = ev.result;
-      lines.push(`- seq ${ev.seq}: 遠征 ${ev.no} 終了（${endReasonText(L, ev.reason)}）。獲得 +${r.points} 点、最深 地下${r.deepest}階、撃破 ${r.kills}、手番 ${r.turns}`);
+      const pay = r.payout ? `確定 +${r.payout.banked}${r.payout.lost ? `（失った戦利品 ${r.payout.lost}）` : ''}` : `獲得 +${r.points} 点`;
+      lines.push(`- seq ${ev.seq}: 遠征 ${ev.no} 終了（${endReasonText(L, ev.reason)}）。${pay}、最深 地下${r.deepest}階、撃破 ${r.kills}、手番 ${r.turns}`);
     } else if (ev.type === 'player_state' && ev.state === 'at_camp') {
       lines.push(`- seq ${ev.seq}: ${summary.players.find((p) => p.id === ev.player)?.name ?? ev.player} がキャンプに戻った（${ev.reason === 'extracted' ? '帰還' : '撤退'}）`);
     } else if (ev.type === 'entity_changed_floor' && entityToPlayer.has(ev.id)) {

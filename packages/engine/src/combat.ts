@@ -1,7 +1,7 @@
 // 戦闘（整数のみ）。命中: d20 + acc >= 10 + eva。20 は必中＋クリティカル（ダイス 2 倍）、1 は必ず外れ。
 // ダメージ: ダイス + might - armor、最低 1。
-import type { DamageVia, Entity, PlayerId, PlayerRecord, RunSummary, RunSummaryPlayer } from '@muse/shared';
-import { xpForLevel } from '@muse/shared';
+import type { DamageVia, Dir, Entity, PlayerId, PlayerRecord, RunSummary, RunSummaryPlayer } from '@muse/shared';
+import { cheb, dirTo, xpForLevel } from '@muse/shared';
 import type { Ctx } from './ctx';
 import { applyEffects } from './effects';
 import { maybeEndExpedition } from './expedition';
@@ -38,8 +38,16 @@ function emitAttack(ctx: Ctx, attacker: Entity, target: Entity, o: AttackOutcome
   ctx.emit({
     type: 'attack', attacker: attacker.id, attackerKind: attacker.kind, target: target.id, targetKind: target.kind,
     roll: o.roll, hit: o.hit, crit: o.crit, ranged,
-    from: { x: attacker.pos!.x, y: attacker.pos!.y }, to: { x: target.pos!.x, y: target.pos!.y }, ...seen,
+    from: { x: attacker.pos!.x, y: attacker.pos!.y }, to: { x: target.pos!.x, y: target.pos!.y },
+    ...fromDirFor(target, attacker, seen.masks, 'attacker'), ...seen,
   });
+}
+
+/** 攻撃者が見えていない被害者（プレイヤー）にだけ、攻撃が来た方向を残す */
+function fromDirFor(target: Entity, source: Entity | null, masks: Record<string, string[]> | undefined, field: string): { fromDir?: Dir | null } {
+  if (!target.player || !source?.pos || !target.pos || source.pos.floor !== target.pos.floor) return {};
+  if (!masks?.[target.player]?.includes(field)) return {};
+  return { fromDir: dirTo(target.pos, source.pos) };
 }
 
 /** 近接攻撃（バンプ攻撃） */
@@ -58,7 +66,14 @@ export function melee(ctx: Ctx, attacker: Entity, target: Entity): void {
 export function rangedAttack(ctx: Ctx, attacker: Entity, target: Entity, dice: string, accBonus: number): void {
   const o = rollToHit(ctx, attacker, target, accBonus);
   emitAttack(ctx, attacker, target, o, true);
-  for (const pr of ctx.playersOn(attacker.pos!.floor)) updateMemory(ctx, pr.id, attacker.kind, (m) => { m.abilities.push('ranged'); });
+  // 遠隔攻撃を見た者（撃った側が見えている者）の思い出に、能力と観測した距離を残す
+  const key = attacker.pos!.floor;
+  const f = ctx.world.floors[key];
+  const dist = cheb(attacker.pos!, target.pos!);
+  for (const pr of ctx.playersOn(key)) {
+    if (!ctx.visibleSet(pr.id).has(attacker.pos!.y * f.width + attacker.pos!.x)) continue;
+    updateMemory(ctx, pr.id, attacker.kind, (m) => { m.abilities.push('ranged'); m.rangeMax = Math.max(m.rangeMax ?? 0, dist); });
+  }
   if (o.hit) {
     const dmg = Math.max(1, roll(ctx.rng('runtime'), dice, o.crit) - (target.stats?.armor ?? 0));
     applyDamage(ctx, target, dmg, attacker, 'ranged');
@@ -103,7 +118,8 @@ export function applyDamage(ctx: Ctx, target: Entity, amount: number, source: En
   }
   ctx.emit({
     type: 'damaged', target: t.id, targetKind: t.kind, amount, hpAfter, dealt,
-    source: source?.id ?? null, sourceKind: source?.kind ?? null, via, ...(seenTotals ? { seenTotals } : {}), ...seen,
+    source: source?.id ?? null, sourceKind: source?.kind ?? null, via, ...(seenTotals ? { seenTotals } : {}),
+    ...fromDirFor(t, source, seen.masks, 'source'), ...seen,
   });
   // 思い出（受けたダメージは脅威の見積もり用に出目どおり、与えたダメージは実ダメージ）
   if (source && t.player && !source.player) {
@@ -162,6 +178,7 @@ export function kill(ctx: Ctx, victim: Entity, killer: Entity | null, via: Damag
   for (const pid of seen.seenBy) if (masks[pid]?.includes('id')) masks[pid] = [...masks[pid], 'maxHp'];
   ctx.emit({
     type: 'died', id: victim.id, kind: victim.kind, killer: killer?.id ?? null, killerKind: killer?.kind ?? null, via, pos, maxHp,
+    ...(victim.bounty ? { bounty: victim.bounty } : {}),
     seenBy: seen.seenBy, ...(Object.keys(masks).length ? { masks } : {}),
   });
   if (maxHp !== null && victim.role !== 'guardian') {
@@ -178,11 +195,14 @@ export function kill(ctx: Ctx, victim: Entity, killer: Entity | null, via: Damag
   const def = ctx.content.monsters[victim.kind];
   const rng = ctx.rng('runtime');
   const depth = ctx.world.floors[key].depth;
-  for (const d of def?.drops ?? []) {
+  const drops = [...(def?.drops ?? [])];
+  // 守護者は宝を必ず落とす
+  if (victim.role === 'guardian') drops.push({ table: 'core:treasure_loot', chancePct: 100 });
+  for (const d of drops) {
     if (!rng.chance(d.chancePct)) continue;
     const l = pickLoot(ctx.content, d.table, depth, rng);
     if (!l) continue;
-    const it = makeItem(key, l.kind, pos.x, pos.y, l.qty, l.affixes, ctx.newEntityId(), ctx.nextSid());
+    const it = makeItem(key, l.kind, pos.x, pos.y, l.qty, l.affixes, ctx.newEntityId(), ctx.nextSid(), l.value);
     ctx.emit({ type: 'entity_spawned', entity: it, reason: 'drop', floor: key, seenBy: ctx.seersOf(key, pos) });
   }
   ctx.emit({ type: 'entity_removed', id: victim.id, kind: victim.kind, reason: 'died', seenBy: ctx.seersOf(key, pos), floor: key });
@@ -235,14 +255,16 @@ export function buildSummary(ctx: Ctx, reason: string, hideSeed = false): RunSum
       id: pid, name: pr.name, classId: pr.classId, controller: pr.controller, level,
       deepest: pr.stats.deepest, turns: e?.actor?.turns ?? 0, kills: pr.stats.kills, state: pr.state,
       deathCause: pr.stats.deathCause, equipment,
-      score: scoreOf(ctx, { deepest: pr.stats.deepest, kills: pr.stats.kills, level, expeditionPoints: pr.stats.expeditionPoints }),
+      // スコア版 2: 確定点（遠征で持ち帰った戦利品の払い戻しの合計）
+      score: pr.stats.banked ?? 0,
       expeditions: pr.stats.expeditions ?? 0,
+      banked: pr.stats.banked ?? 0,
     };
   });
   const expeditions = (ctx.world.expeditions ?? []).map((x) => ({
     no: x.no, objective: { ...x.objective }, status: x.status, endReason: x.endReason, points: x.points, startSeq: x.startSeq, endSeq: x.endSeq,
   }));
-  return { runId: ctx.world.meta.runId, reason, seed: hideSeed ? '' : ctx.world.secret.seed, endedSeq: ctx.world.seq + 1, players, expeditions };
+  return { runId: ctx.world.meta.runId, reason, seed: hideSeed ? '' : ctx.world.secret.seed, endedSeq: ctx.world.seq + 1, players, expeditions, scoreVersion: 2 };
 }
 
 export function endRun(ctx: Ctx, reason: string): void {

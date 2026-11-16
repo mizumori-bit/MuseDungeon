@@ -31,14 +31,21 @@ export function buildCatalog(c: Content): Catalog {
     items[it.id] = {
       name: it.name, category: it.category, unidentified: it.unidentified, stack: it.stack,
       slot: it.equip?.slot, usable: it.onUse.length > 0, throwable: !!it.throw || it.shatter,
-      targeted: it.target !== 'none', desc: itemDesc(it),
+      targeted: it.target !== 'none', desc: itemDesc(it), harmful: it.harmful, treasure: it.category === 'treasure',
+      throwRange: it.throw?.range ?? (it.shatter ? 4 : null),
     };
   }
   return {
     contentVersion: c.version,
     terrain: Object.fromEntries(c.terrain.map((t) => [t.id, { name: t.name, passable: t.passable, opaque: t.opaque, layer: t.layer, door: t.door, stairs: t.stairs, tags: t.tags }])),
-    monsters: Object.fromEntries(c.lists.monsters.map((m) => [m.id, { name: m.name, tags: m.tags }])),
-    classes: Object.fromEntries(c.lists.classes.map((k) => [k.id, { name: k.name, desc: k.desc }])),
+    monsters: Object.fromEntries(c.lists.monsters.map((m) => [m.id, { name: m.name, tags: m.tags, glyph: m.glyph }])),
+    classes: Object.fromEntries(c.lists.classes.map((k) => [k.id, {
+      name: k.name, desc: k.desc,
+      // 自キャラの初期値と成長は公開情報（キー名 hp は使わない: 能力値を出さないカタログの検査に合わせる）
+      base: { maxHp: k.stats.hp, acc: k.stats.acc, eva: k.stats.eva, might: k.stats.might, armor: k.stats.armor, sight: k.stats.sight, speed: k.speed, capacity: k.capacity },
+      startItems: k.startItems.map((s) => ({ item: s.item, qty: s.qty, equip: s.equip })),
+      growth: { maxHpPerLevel: k.levelUp.hp, accEvery: k.levelUp.accEvery, mightEvery: k.levelUp.mightEvery, evaEvery: k.levelUp.evaEvery },
+    }])),
     items,
     appearances: Object.fromEntries(c.lists.appearances.map((a) => [a.id, { name: a.name, category: a.category }])),
     features: Object.fromEntries(c.lists.features.map((f) => [f.id, {
@@ -54,6 +61,20 @@ export function buildCatalog(c: Content): Catalog {
       macroStepLimit: c.balance.macro.stepLimit,
       wander: { intervalMin: c.balance.wander.intervalMin, intervalMax: c.balance.wander.intervalMax },
       score: { ...c.balance.score },
+      estimateMinSamples: c.balance.estimate.minSamples,
+      haul: {
+        overreachFirst: c.balance.haul.overreachFirst, overreachStep: c.balance.haul.overreachStep, perKill: c.balance.haul.perKill,
+        withdrawPct: c.balance.haul.withdrawPct, discovery: { ...c.balance.haul.discovery },
+        guardianBounty: { ...c.balance.haul.guardianBounty },
+      },
+      slots: {
+        safe: { ...c.balance.expedition.slots.safe },
+        standard: { ...c.balance.expedition.slots.standard },
+        ambitious: { ...c.balance.expedition.slots.ambitious },
+      },
+      afterObjectiveWanderPct: c.balance.expedition.afterObjective.wanderIntervalPct,
+      recommendedLevel: { ...c.balance.expedition.recommendedLevel },
+      traits: Object.fromEntries(c.lists.expeditionTraits.map((t) => [t.id, { name: t.name, desc: t.desc, multiplierPct: t.multiplierPct, danger: t.danger }])),
       expedition: {
         firstTargetDepth: c.balance.expedition.firstTargetDepth, aheadMin: c.balance.expedition.aheadMin, aheadMax: c.balance.expedition.aheadMax,
         points: { ...c.balance.expedition.points }, pointsPerExtraDepth: c.balance.expedition.pointsPerExtraDepth,

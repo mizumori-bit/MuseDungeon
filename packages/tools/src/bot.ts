@@ -1,6 +1,6 @@
 // ベースライン bot（ランダム／貪欲）。AI と同じ PlayerPort・同じ Command・同じ観測だけを使う。
 // 貪欲 bot は遠征を遊ぶ: 目的を追い、達成したら階段の上で extract、キャンプでは次の遠征を選ぶ。
-import type { Command, Dir, ExpeditionEndReason, PlayerView } from '@muse/shared';
+import type { Command, Dir, ExpeditionEndReason, OfferSlot, PlayerView } from '@muse/shared';
 import { cheb, dirTo, DIRS, Rng } from '@muse/shared';
 import type { PlayerPort, SessionManager } from '@muse/server';
 
@@ -34,16 +34,25 @@ export interface BotResult {
   /** マクロ 1 回あたりの手数（判断間隔の計測用） */
   macroSteps: number[];
   floors: BotFloorStat[];
+  /** スコア版 2 の確定点 */
+  banked: number;
+  died: boolean;
 }
 
 function hpPct(v: PlayerView): number {
   return Math.trunc((v.self.stats.hp * 100) / Math.max(1, v.self.stats.maxHp));
 }
 
-export interface BotMemo { restFails: number; avoid: Set<string>; blocked: number; descend: boolean; gaveUp: number | null }
+export interface BotMemo {
+  restFails: number; avoid: Set<string>; blocked: number; descend: boolean; gaveUp: number | null;
+  /** 方針: 目的を達成した後、目標より何階深く潜ってから帰るか */
+  overreach: number;
+  /** 方針: キャンプで選ぶ枠（無ければ 1 番目） */
+  offerSlot?: OfferSlot;
+}
 
-export function newMemo(): BotMemo {
-  return { restFails: 0, avoid: new Set<string>(), blocked: 0, descend: false, gaveUp: null };
+export function newMemo(policy: { overreach?: number; offerSlot?: OfferSlot } = {}): BotMemo {
+  return { restFails: 0, avoid: new Set<string>(), blocked: 0, descend: false, gaveUp: null, overreach: policy.overreach ?? 0, offerSlot: policy.offerSlot };
 }
 
 /** 既知の階段のうち一番近い到達可能なものへの travel（無ければ null） */
@@ -55,7 +64,10 @@ function toNearestStairs(port: PlayerPort): Command | null {
 
 export function greedyDecide(port: PlayerPort, rng: Rng, memo: BotMemo): Command {
   const v = port.view();
-  if (v.status === 'at_camp') return { type: 'start_expedition', offer: v.camp?.offers[0]?.index ?? 'endless' };
+  if (v.status === 'at_camp') {
+    const o = (memo.offerSlot ? v.camp?.offers.find((x) => x.slot === memo.offerSlot) : undefined) ?? v.camp?.offers[0];
+    return { type: 'start_expedition', offer: o?.index ?? 'endless' };
+  }
   const me = v.self;
   const pos = me.pos!;
   const hostiles = v.entities.filter((e) => e.cat === 'monster').sort((a, b) => cheb(a.pos, pos) - cheb(b.pos, pos));
@@ -67,7 +79,9 @@ export function greedyDecide(port: PlayerPort, rng: Rng, memo: BotMemo): Command
   const throwable = inv.find((i) => i.kind === 'core:throwing_knife' || i.kind === 'core:javelin');
   const hp = hpPct(v);
   const x = v.expedition && v.expedition.status !== 'ended' ? v.expedition : null;
-  const done = !!x && x.status === 'objective_complete' && (x.objective.type !== 'retrieve_relic' || x.progress.relicHeldByYou);
+  const complete = !!x && x.status === 'objective_complete' && (x.objective.type !== 'retrieve_relic' || x.progress.relicHeldByYou);
+  // 深追いの方針: 目標より overreach 階深く着くまでは帰らない。ただし余力（HP 60% 以上）が無くなったらその場で帰る
+  const done = complete && (x!.objective.targetDepth === null || x!.maxDepth >= x!.objective.targetDepth + memo.overreach || (x!.maxDepth > x!.objective.targetDepth && hp < 60));
   const onTarget = !!x && x.objective.targetDepth !== null && v.floor?.depth === x.objective.targetDepth;
 
   if (hp < 35 && healing && (adj || hostiles.length)) return { type: 'use', slot: healing.slot };
@@ -149,12 +163,18 @@ export interface BotOptions {
   maxExpeditions?: number;
   /** 最初の遠征の目的（既定 auto） */
   objective?: 'auto' | 'reach_depth' | 'slay_guardian' | 'retrieve_relic' | 'endless';
+  /** 方針: 達成後に深追いする階数 */
+  overreach?: number;
+  /** 方針: キャンプで選ぶ枠 */
+  offerSlot?: OfferSlot;
 }
 
 /** 1 ランを最後まで（死亡・終了・上限）bot で遊ぶ */
 export async function runBot(manager: SessionManager, opts: BotOptions): Promise<BotResult> {
   const t0 = Date.now();
-  const r = await manager.createRun({ name: `${opts.kind}-bot`, classId: opts.classId, seed: opts.seed, controller: { kind: 'agent', label: `${opts.kind}-bot` }, objective: opts.objective });
+  // 最初の遠征も方針の枠で選ぶ（safe=到達、standard=守護者、ambitious=遺物）
+  const first = opts.objective ?? (opts.offerSlot === 'standard' ? 'slay_guardian' : opts.offerSlot === 'ambitious' ? 'retrieve_relic' : undefined);
+  const r = await manager.createRun({ name: `${opts.kind}-bot`, classId: opts.classId, seed: opts.seed, controller: { kind: 'agent', label: `${opts.kind}-bot` }, objective: first });
   if ('error' in r) throw new Error(r.error.message);
   const res = await playWithPort(r.port, opts);
   return { ...res, runId: r.session.runId, seed: opts.seed, ms: Date.now() - t0 };
@@ -162,7 +182,7 @@ export async function runBot(manager: SessionManager, opts: BotOptions): Promise
 
 export async function playWithPort(port: PlayerPort, opts: BotOptions): Promise<Omit<BotResult, 'runId' | 'seed' | 'ms'>> {
   const rng = Rng.fromSeed(`bot|${opts.seed}`);
-  const memo = newMemo();
+  const memo = newMemo({ overreach: opts.overreach, offerSlot: opts.offerSlot });
   const maxActs = opts.maxActs ?? 2500;
   const brief: number[] = [];
   const full: number[] = [];
@@ -183,6 +203,7 @@ export async function playWithPort(port: PlayerPort, opts: BotOptions): Promise<
       if (opts.kind === 'greedy' && opts.maxExpeditions !== undefined && doneCount >= opts.maxExpeditions) break;
       memo.gaveUp = null;
       memo.descend = false;
+      memo.restFails = 0;
       explored = false;
     } else if (v.status !== 'your_turn') { await port.waitForTurn(2000); continue; }
     if (opts.maxDepth && (v.floor?.depth ?? 0) >= opts.maxDepth) break;
@@ -252,6 +273,8 @@ export async function playWithPort(port: PlayerPort, opts: BotOptions): Promise<
       return { no: x.no, type: x.objective.type, targetDepth: x.objective.targetDepth, reason: x.endReason, turns: tt ? tt.last - tt.first : null, calls: expCalls.get(x.no) ?? 0 };
     });
   return {
+    banked: w.record.banked,
+    died: w.status === 'dead' || (me?.state === 'dead'),
     depth: me?.deepest ?? w.deepestDepth,
     turns: me?.turns ?? w.self.turns,
     kills: me?.kills ?? 0,

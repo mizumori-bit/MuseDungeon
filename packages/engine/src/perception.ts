@@ -2,7 +2,18 @@
 import type { Entity, FloorKey, MonsterMemory, PlayerId, PlayerRecord, Pos, RememberedEntity } from '@muse/shared';
 import { indicesToRanges } from '@muse/shared';
 import type { Ctx } from './ctx';
-import { computeFov, hasLos, inCircle } from './geom';
+import { computeFov, hasLos, inCircle, line } from './geom';
+
+/** 投擲の経路が通るか: from から to までの直線上（終点を除く）が通行可能で、他のアクターがいない */
+export function shotClear(ctx: Ctx, key: FloorKey, from: Pos, to: Pos): boolean {
+  const path = line(from, to);
+  for (let i = 0; i < path.length; i++) {
+    const p = path[i];
+    if (!ctx.terrainAt(key, p.x, p.y).passable) return false;
+    if (i < path.length - 1 && ctx.actorAt(key, p.x, p.y)) return false;
+  }
+  return true;
+}
 
 export function isOpaqueFn(ctx: Ctx, key: FloorKey): (x: number, y: number) => boolean {
   const f = ctx.world.floors[key];
@@ -82,12 +93,15 @@ export function updateKnowledge(ctx: Ctx, key: FloorKey): void {
     const visibleIds = new Set<string>();
     const met: string[] = [];
     const metSet = new Set(k.met);
+    const shots: string[] = [];
+    const me = ctx.world.entities[pr.entityId];
     for (const e of ents) {
       if (!e.pos) continue;
       const idx = e.pos.y * f.width + e.pos.x;
       if (!fovSet.has(idx)) continue;
       if (e.actor && !e.player && (e.stats?.hp ?? 0) > 0) {
         if (!metSet.has(e.id)) met.push(e.id);
+        if (me?.pos && shotClear(ctx, key, me.pos, e.pos)) shots.push(e.id);
         continue;
       }
       let cat: RememberedEntity['cat'] | null = null;
@@ -109,11 +123,16 @@ export function updateKnowledge(ctx: Ctx, key: FloorKey): void {
     for (const r of fk?.remembered ?? []) {
       if (fovSet.has(r.pos.y * f.width + r.pos.x) && !visibleIds.has(r.id)) rememberedDel.push(r.id);
     }
-    if (visChanged || newlySeen.length || rememberedSet.length || rememberedDel.length || met.length) {
+    const prevShots = k.shots ?? [];
+    const shotsChanged = shots.length !== prevShots.length || shots.some((s, i) => s !== prevShots[i]);
+    if (visChanged || newlySeen.length || rememberedSet.length || rememberedDel.length || met.length || shotsChanged) {
       ctx.emit({
         type: 'knowledge_updated', player: pr.id, floorKey: key,
         visible: visChanged ? indicesToRanges(fov) : null,
-        newlySeen, rememberedSet, rememberedDel, metAdd: met, seenBy: [pr.id], floor: key,
+        newlySeen, rememberedSet, rememberedDel, metAdd: met, ...(shotsChanged ? { shotsAfter: shots } : {}),
+        // このイベントの seq（emit が world.seq + 1 を振る）を初見の時点として記録する
+        ...(met.length ? { metAtAfter: Object.fromEntries(met.map((id) => [id, ctx.world.seq + 1])) } : {}),
+        seenBy: [pr.id], floor: key,
       });
     }
     for (const id of met) {

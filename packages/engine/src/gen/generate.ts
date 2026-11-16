@@ -10,12 +10,15 @@ import { DOOR, FLOOR, GenGrid, WALL } from './grid';
 import { layoutGenerators } from './layouts';
 
 export type SpawnSpec =
-  | { type: 'monster'; kind: string; x: number; y: number; hp: number; affixes: string[]; tier: number; asleep: boolean; delay: number; role?: EntityRole }
-  | { type: 'item'; kind: string; x: number; y: number; qty: number; affixes: string[]; role?: EntityRole }
+  | { type: 'monster'; kind: string; x: number; y: number; hp: number; affixes: string[]; tier: number; asleep: boolean; delay: number; role?: EntityRole; bounty?: number }
+  | { type: 'item'; kind: string; x: number; y: number; qty: number; affixes: string[]; role?: EntityRole; value?: number }
   | { type: 'feature'; kind: string; x: number; y: number };
 
 /** 遠征の目標階に置くもの */
 export interface ObjectiveSpec { guardian: boolean; relic: boolean }
+
+/** 遠征の条件による生成の修飾（目標階までの新しい階に効く） */
+export interface GenMods { monstersPct: number; itemsPct: number; treasurePct: number; noFountain: boolean }
 
 /** 深度帯ごとのテンポ（floorType.pacing の一致した帯、無ければ既定値） */
 export interface Pacing {
@@ -53,6 +56,7 @@ export interface GenState {
   floorType: FloorTypeDef;
   biome: BiomeDef;
   pacing: Pacing;
+  mods?: GenMods;
   grid: GenGrid;
   entry: Pos;
   up: Pos | null;
@@ -151,7 +155,7 @@ export function rollMonsterAffixes(content: Content, depth: number, rng: Rng): s
   return out;
 }
 
-export function pickLoot(content: Content, tableId: string, depth: number, rng: Rng): { kind: string; qty: number; affixes: string[] } | null {
+export function pickLoot(content: Content, tableId: string, depth: number, rng: Rng): { kind: string; qty: number; affixes: string[]; value?: number } | null {
   const table = content.lootTables[tableId];
   if (!table) return null;
   const d = depth + table.depthBonus;
@@ -173,6 +177,11 @@ export function pickLoot(content: Content, tableId: string, depth: number, rng: 
     if (def.equip && rng.chance(table.affixChancePct)) {
       const a = rng.weighted(content.lists.affixes.filter((x) => x.target === 'item' && x.categories.includes(def.category) && d >= x.depth.min), (x) => floorDiv(100, x.rarity));
       if (a) affixes.push(a.id);
+    }
+    if (def.value) {
+      // 宝の価値: dice × mult を深さで伸ばす（見えた時点で分かる）
+      const v = floorDiv(roll(rng, def.value.dice) * def.value.mult * (100 + depth * def.value.perDepthPct), 100);
+      return { kind, qty, affixes, value: Math.max(1, v) };
     }
     return { kind, qty, affixes };
   }
@@ -244,7 +253,7 @@ function stampPrefab(s: GenState, pf: PrefabDef, map: string[], x0: number, y0: 
         const irng = s.stream('items');
         if (cell.item === '$loot') {
           const l = pickLoot(s.content, cell.loot ?? 'core:common_loot', s.depth, irng);
-          if (l) s.spawns.push({ type: 'item', kind: l.kind, x: gx, y: gy, qty: l.qty, affixes: l.affixes });
+          if (l) s.spawns.push({ type: 'item', kind: l.kind, x: gx, y: gy, qty: l.qty, affixes: l.affixes, value: l.value });
         } else s.spawns.push({ type: 'item', kind: cell.item, x: gx, y: gy, qty: 1, affixes: [] });
       }
     }
@@ -364,6 +373,7 @@ function populate(s: GenState): void {
   const mrng = s.stream('monsters');
   if (s.pacing.monstersPer1000 > 0) {
     let n = floorDiv(floorCount * s.pacing.monstersPer1000, 1000) + floorDiv(s.depth, 3) + mrng.range(-1, 2);
+    if (s.mods) n = floorDiv(n * s.mods.monstersPct, 100);
     n = Math.max(1, n);
     for (let k = 0; k < n; k++) {
       const pick = pickMonster(s, mrng);
@@ -388,13 +398,24 @@ function populate(s: GenState): void {
 
   // アイテム
   const irng = s.stream('items');
-  const ni = floorDiv(floorCount * s.pacing.itemsPer1000, 1000) + irng.range(0, 2);
+  let ni = floorDiv(floorCount * s.pacing.itemsPer1000, 1000) + irng.range(0, 2);
+  if (s.mods) ni = floorDiv(ni * s.mods.itemsPct, 100);
   for (let k = 0; k < ni; k++) {
     const l = pickLoot(s.content, ft.items.table, s.depth, irng);
     if (!l) continue;
     const at = take(spawnable, irng);
     if (at === null) break;
-    s.spawns.push({ type: 'item', kind: l.kind, x: at % g.w, y: Math.trunc(at / g.w), qty: l.qty, affixes: l.affixes });
+    s.spawns.push({ type: 'item', kind: l.kind, x: at % g.w, y: Math.trunc(at / g.w), qty: l.qty, affixes: l.affixes, value: l.value });
+  }
+  // 条件「宝が多い」: 宝を追加で置く（treasurePct 150 で 1 個、以後 50 ごとに 1 個）
+  if (s.mods && s.mods.treasurePct > 100) {
+    const extra = 1 + floorDiv(Math.max(0, s.mods.treasurePct - 150), 50);
+    for (let k = 0; k < extra; k++) {
+      const l = pickLoot(s.content, 'core:treasure_loot', s.depth, irng);
+      const at = take(spawnable, irng);
+      if (!l || at === null) break;
+      s.spawns.push({ type: 'item', kind: l.kind, x: at % g.w, y: Math.trunc(at / g.w), qty: l.qty, affixes: l.affixes, value: l.value });
+    }
   }
 
   // 地物・罠
@@ -475,6 +496,8 @@ function placeObjective(s: GenState, obj: ObjectiveSpec): boolean {
     if (spec.type === 'monster') {
       spec.affixes = [...(guardAffix ? [guardAffix.id] : []), ...spec.affixes];
       spec.role = 'guardian';
+      const gb = s.content.balance.haul.guardianBounty;
+      spec.bounty = gb.base + gb.perDepth * s.depth;
     }
     s.spawns.push(spec);
   }
@@ -511,7 +534,7 @@ validators.register('stairs_path', (s) => {
 
 export const MAX_ATTEMPTS = 8;
 
-export function generateFloor(content: Content, seed: string, branch: string, depth: number, terrainTable: string[], objective?: ObjectiveSpec): GeneratedFloor {
+export function generateFloor(content: Content, seed: string, branch: string, depth: number, terrainTable: string[], objective?: ObjectiveSpec, mods?: GenMods): GeneratedFloor {
   const floorType = selectFloorType(content, seed, branch, depth);
   const biome = selectBiome(content, seed, branch, depth);
   const pacing = resolvePacing(floorType, depth);
@@ -524,7 +547,7 @@ export function generateFloor(content: Content, seed: string, branch: string, de
     const layoutId = fallback ? 'core:fallback' : (layoutRng.weighted(Object.keys(layouts).sort(), (k) => layouts[k]) ?? 'core:rooms_corridors');
     const grid = layoutGenerators.get(layoutId)({ w, h, rng: layoutRng });
     const s: GenState = {
-      content, seed, branch, depth, attempt, floorType, biome, pacing, grid,
+      content, seed, branch, depth, attempt, floorType, biome, pacing, grid, ...(mods ? { mods } : {}),
       entry: { x: 1, y: 1 }, up: null, down: [], spawns: [], stream,
       passable: (i: number) => {
         const o = grid.override.get(i);
@@ -538,6 +561,8 @@ export function generateFloor(content: Content, seed: string, branch: string, de
     placeStairs(s);
     populate(s);
     if (objective && !placeObjective(s, objective) && !fallback) continue;
+    // 条件「泉が無い」
+    if (mods?.noFountain) s.spawns = s.spawns.filter((sp) => !(sp.type === 'feature' && sp.kind.includes('fountain')));
     const vs = fallback ? ['stairs_connected'] : [...floorType.validators, 'stairs_path'];
     if (!fallback && !vs.every((v) => validators.get(v)(s))) continue;
     // 地形 index へ変換

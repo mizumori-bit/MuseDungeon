@@ -1,7 +1,7 @@
 // 検証済みコンテンツの束。ID → 定義の表と、決定的な走査用の ID 順リストを持つ。
 import { canonicalHash } from '@muse/shared';
 import type {
-  AffixDef, AppearanceDef, BalanceDef, BiomeDef, ClassDef, FeatureDef, FileKind, FloorTypeDef, ItemDef,
+  AffixDef, AppearanceDef, BalanceDef, BiomeDef, ClassDef, ExpeditionTraitDef, FeatureDef, FileKind, FloorTypeDef, ItemDef,
   LootTableDef, MonsterDef, PrefabDef, SpawnTableDef, StatusDef, TerrainDef,
 } from './schema';
 import { FILE_SCHEMAS } from './schema';
@@ -26,10 +26,12 @@ export interface Content {
   features: Record<string, FeatureDef>;
   /** 調整値（core:balance。後の pack が同じ ID で上書きできる） */
   balance: BalanceDef;
+  expeditionTraits: Record<string, ExpeditionTraitDef>;
   /** 各表の ID 昇順リスト（決定的な走査用） */
   lists: {
     monsters: MonsterDef[]; items: ItemDef[]; appearances: AppearanceDef[]; affixes: AffixDef[];
     biomes: BiomeDef[]; floorTypes: FloorTypeDef[]; prefabs: PrefabDef[]; classes: ClassDef[]; features: FeatureDef[];
+    expeditionTraits: ExpeditionTraitDef[];
   };
   /** 定義済みの最深の出現深度（深層スケーリングの基準） */
   deepestDefined: number;
@@ -97,10 +99,12 @@ export function buildContent(packs: RawPack[]): Content {
     classes: table(list('classes') as ClassDef[], 'classes'),
     features: table(list('features') as FeatureDef[], 'features'),
     balance: merged.balance.get('core:balance') as BalanceDef,
+    expeditionTraits: table(list('expeditionTraits') as ExpeditionTraitDef[], 'expeditionTraits'),
     lists: {
       monsters: list('monsters') as MonsterDef[], items: list('items') as ItemDef[], appearances: list('appearances') as AppearanceDef[],
       affixes: list('affixes') as AffixDef[], biomes: list('biomes') as BiomeDef[], floorTypes: list('floorTypes') as FloorTypeDef[],
       prefabs: list('prefabs') as PrefabDef[], classes: list('classes') as ClassDef[], features: list('features') as FeatureDef[],
+      expeditionTraits: list('expeditionTraits') as ExpeditionTraitDef[],
     },
     deepestDefined: 1,
   };
@@ -110,7 +114,7 @@ export function buildContent(packs: RawPack[]): Content {
     terrain: c.terrain, monsters: c.lists.monsters, items: c.lists.items, appearances: c.lists.appearances,
     affixes: c.lists.affixes, statuses: c.statuses, biomes: c.lists.biomes, floorTypes: c.lists.floorTypes,
     prefabs: c.lists.prefabs, spawnTables: c.spawnTables, lootTables: c.lootTables, classes: c.lists.classes, features: c.lists.features,
-    balance: c.balance,
+    balance: c.balance, expeditionTraits: c.lists.expeditionTraits,
   }).slice(0, 12);
   return c;
 }
@@ -125,6 +129,9 @@ function crossValidate(c: Content): void {
     need(c.balance.wander.intervalMax >= c.balance.wander.intervalMin, 'balance.wander: intervalMax >= intervalMin');
   }
   need(!!c.items['core:relic'], '遠征の遺物 core:relic が必要');
+  for (const it of c.lists.items) if (it.category === 'treasure') need(!!it.value, `${it.id}: 宝には value が必要`);
+  need(!!c.lootTables['core:treasure_loot'], '守護者の確定ドロップ core:treasure_loot が必要');
+  if (c.balance) for (const k of ['safe', 'standard', 'ambitious']) need(k in c.balance.expedition.slots, `balance.expedition.slots に ${k} が必要`);
   need(c.lists.affixes.some((a) => a.target === 'guardian'), '守護者用の接辞（target: guardian）が必要');
   const t = (id: string, where: string) => need(id in c.terrainIndex, `${where}: 未定義の terrain ${id}`);
   for (const b of c.lists.biomes) {
@@ -133,6 +140,12 @@ function crossValidate(c: Content): void {
     for (const f of b.features) need(!!c.features[f.feature], `${b.id}: 未定義の feature ${f.feature}`);
   }
   for (const m of c.lists.monsters) for (const d of m.drops) need(!!c.lootTables[d.table], `${m.id}: 未定義の lootTable ${d.table}`);
+  const glyphs = new Map<string, string>();
+  for (const m of c.lists.monsters) {
+    const other = glyphs.get(m.glyph);
+    need(!other, `${m.id}: 地図の文字 '${m.glyph}' が ${other} と重複`);
+    glyphs.set(m.glyph, m.id);
+  }
   for (const lt of Object.values(c.lootTables)) {
     for (const e of lt.entries) {
       need(!!e.item !== !!e.category, `${lt.id}: entry は item か category のどちらか一方`);

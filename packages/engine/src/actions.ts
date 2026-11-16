@@ -8,7 +8,8 @@ import { applyEffects } from './effects';
 import { doExtract, extractError, maybeEndExpedition } from './expedition';
 import { ensureFloor, findFreeCell } from './floors';
 import { line } from './geom';
-import { isOpaqueFn, makeNoise, updateKnowledge } from './perception';
+import { makeNoise, shotClear, updateKnowledge, wakeMonster } from './perception';
+import { hasStatus, removeStatus } from './statuses';
 import { Registry, roll } from './registry';
 import { regenTick } from './scheduler';
 import { recomputeStats } from './stats';
@@ -101,6 +102,12 @@ actions.register('move', (ctx, e, pr, cmd: Extract<Command, { type: 'move' }>) =
       ctx.emit({ type: 'entity_moved', id: e.id, kind: e.kind, from, to, mode: 'walk', ...ctx.perceive(key, [{ field: 'from', pos: from }, { field: 'to', pos: to }], [e.player!]), floor: key });
       const trap = ctx.featureAt(key, to.x, to.y);
       if (trap?.trap) triggerTrap(ctx, ctx.world.entities[e.id], trap);
+      // 自分が投げた物は、移動の一部として拾う（追加の手番なし。入らなければ拾わない）
+      const me = ctx.world.entities[e.id];
+      if (me?.pos && ctx.world.players[pr.id].state === 'alive') {
+        const mine = ctx.itemsAt(key, me.pos.x, me.pos.y).filter((it) => it.item?.thrownBy === pr.id);
+        if (mine.length) { pickUpItems(ctx, me, mine, true); updateKnowledge(ctx, key); }
+      }
       return { cost: 100 };
     },
   };
@@ -124,33 +131,56 @@ actions.register('pickup', (ctx, e, pr, cmd: Extract<Command, { type: 'pickup' }
   if (!canTakeAny) return fail(pr, 'inventory_full', '所持品がいっぱいだ。', 'Your inventory is full.', 'drop で何かを置いてから拾う。', 'drop something first.');
   return {
     run: () => {
-      for (const it0 of items) {
-        const me = ctx.world.entities[e.id];
-        const it = ctx.world.entities[it0.id];
-        const def = ctx.content.items[it.kind];
-        const stackWith = def?.stack ? (me.inv?.items ?? []).map((id) => ctx.world.entities[id]).find((x) => x?.kind === it.kind && JSON.stringify(x.item?.affixes) === JSON.stringify(it.item?.affixes)) : undefined;
-        const base = { type: 'item_picked_up' as const, actor: e.id, item: it.id, kind: it.kind, appearanceId: appearanceOf(ctx, it.kind), qty: it.item!.qty, ...selfSeen(ctx, me), floor: key };
-        if (stackWith) {
-          const merged = structuredClone(stackWith);
-          merged.item!.qty += it.item!.qty;
-          ctx.emit({ ...base, slot: stackWith.item!.slot!, put: [merged], del: [it.id] });
-          continue;
-        }
-        const slot = freeSlot(ctx, me);
-        if (!slot || me.inv!.items.length >= me.inv!.capacity) break;
-        const held = structuredClone(it);
-        delete held.pos;
-        held.item!.heldBy = e.id;
-        held.item!.slot = slot;
-        const actor = structuredClone(me);
-        actor.inv!.items.push(it.id);
-        ctx.emit({ ...base, slot, put: [held, actor] });
-      }
+      pickUpItems(ctx, e, items, false);
       updateKnowledge(ctx, key);
       return { cost: 100 };
     },
   };
 });
+
+/** 足元のアイテムを所持品へ（重ねられるものは重ねる。入らなければそこで止める）。拾った数を返す */
+export function pickUpItems(ctx: Ctx, e: Entity, items: Entity[], auto: boolean): number {
+  let n = 0;
+  for (const it0 of items) {
+    const me = ctx.world.entities[e.id];
+    const it = ctx.world.entities[it0.id];
+    if (!me?.pos || !it?.pos) continue;
+    const key = me.pos.floor;
+    const def = ctx.content.items[it.kind];
+    const stackWith = def?.stack ? (me.inv?.items ?? []).map((id) => ctx.world.entities[id]).find((x) => x?.kind === it.kind && JSON.stringify(x.item?.affixes) === JSON.stringify(it.item?.affixes)) : undefined;
+    const base = {
+      type: 'item_picked_up' as const, actor: e.id, item: it.id, kind: it.kind, appearanceId: appearanceOf(ctx, it.kind), qty: it.item!.qty,
+      affixes: [...it.item!.affixes], ...(auto ? { auto: true } : {}), ...selfSeen(ctx, me), floor: key,
+    };
+    if (stackWith) {
+      const merged = structuredClone(stackWith);
+      merged.item!.qty += it.item!.qty;
+      ctx.emit({ ...base, slot: stackWith.item!.slot!, put: [merged], del: [it.id] });
+      n++;
+      continue;
+    }
+    const slot = freeSlot(ctx, me);
+    if (!slot || me.inv!.items.length >= me.inv!.capacity) break;
+    const held = structuredClone(it);
+    delete held.pos;
+    held.item!.heldBy = e.id;
+    held.item!.slot = slot;
+    delete held.item!.thrownBy;
+    const actor = structuredClone(me);
+    actor.inv!.items.push(it.id);
+    ctx.emit({ ...base, slot, put: [held, actor] });
+    n++;
+    // 遺物を拾うと、その階の眠っている・気づいていない敵が目を覚まし、遺物の場所へ向かう（公開ルール）
+    if (it.role === 'relic') {
+      for (const m of ctx.entitiesOn(key)) {
+        if (!m.actor?.ai || m.player || !m.pos) continue;
+        if (hasStatus(m, 'core:sleep')) removeStatus(ctx, m, 'core:sleep');
+        wakeMonster(ctx, ctx.world.entities[m.id], { x: me.pos.x, y: me.pos.y });
+      }
+    }
+  }
+  return n;
+}
 
 function unequipEvents(ctx: Ctx, e: Entity, slotName: EquipSlot): void {
   const me = ctx.world.entities[e.id];
@@ -159,7 +189,7 @@ function unequipEvents(ctx: Ctx, e: Entity, slotName: EquipSlot): void {
   const it = ctx.world.entities[id];
   const actor = structuredClone(me);
   delete actor.equip![slotName];
-  ctx.emit({ type: 'item_unequipped', actor: e.id, item: id, kind: it.kind, appearanceId: appearanceOf(ctx, it.kind), slotName, put: [actor], ...selfSeen(ctx, me), floor: me.pos!.floor });
+  ctx.emit({ type: 'item_unequipped', actor: e.id, item: id, kind: it.kind, appearanceId: appearanceOf(ctx, it.kind), slotName, affixes: [...(it.item?.affixes ?? [])], put: [actor], ...selfSeen(ctx, me), floor: me.pos!.floor });
   recomputeStats(ctx, ctx.world.entities[e.id], 'unequip');
 }
 
@@ -174,7 +204,7 @@ actions.register('drop', (ctx, e, pr, cmd: Extract<Command, { type: 'drop' }>) =
       const key = me.pos!.floor;
       const qty = Math.min(cmd.qty ?? it.item!.qty, it.item!.qty);
       const pos = { x: me.pos!.x, y: me.pos!.y };
-      const base = { type: 'item_dropped' as const, actor: e.id, kind: it.kind, appearanceId: appearanceOf(ctx, it.kind), qty, pos, ...selfSeen(ctx, me), floor: key };
+      const base = { type: 'item_dropped' as const, actor: e.id, kind: it.kind, appearanceId: appearanceOf(ctx, it.kind), qty, pos, affixes: [...it.item!.affixes], ...selfSeen(ctx, me), floor: key };
       if (qty < it.item!.qty) {
         const stack = structuredClone(it);
         stack.item!.qty -= qty;
@@ -209,7 +239,7 @@ actions.register('equip', (ctx, e, pr, cmd: Extract<Command, { type: 'equip' }>)
       const me = ctx.world.entities[e.id];
       const actor = structuredClone(me);
       actor.equip = { ...(actor.equip ?? {}), [slotName]: it.id };
-      ctx.emit({ type: 'item_equipped', actor: e.id, item: it.id, kind: it.kind, appearanceId: appearanceOf(ctx, it.kind), slotName, put: [actor], ...selfSeen(ctx, me), floor: me.pos!.floor });
+      ctx.emit({ type: 'item_equipped', actor: e.id, item: it.id, kind: it.kind, appearanceId: appearanceOf(ctx, it.kind), slotName, affixes: [...(it.item?.affixes ?? [])], put: [actor], ...selfSeen(ctx, me), floor: me.pos!.floor });
       recomputeStats(ctx, ctx.world.entities[e.id], 'equip');
       return { cost: 100 };
     },
@@ -284,6 +314,10 @@ function resolveTarget(ctx: Ctx, e: Entity, pr: PlayerRecord, target: unknown, r
     if (!te?.pos || te.pos.floor !== key || !vis.has(te.pos.y * f.width + te.pos.x)) {
       return actionError('no_target', t(pr.locale, 'その対象は見えていない。', 'You cannot see that target.'), t(pr.locale, 'visible.monsters の id を指定する。', 'Use an id from visible.monsters.'));
     }
+    if (!shotClear(ctx, key, e.pos!, te.pos)) {
+      return actionError('no_line_of_sight', t(pr.locale, 'そこまで投擲の経路が通っていない（壁か他の者に遮られる）。', 'No clear throwing line to that target (blocked by a wall or someone).'),
+        t(pr.locale, 'visible.monsters の shot が clear の相手を選ぶか、位置を変える。座標を狙えば遮られた位置に落ちる。', 'Pick a monster whose shot is clear, or move. Targeting a position lands where it is blocked.'));
+    }
     return { x: te.pos.x, y: te.pos.y };
   }
   const p = target as Pos;
@@ -305,13 +339,14 @@ actions.register('throw', (ctx, e, pr, cmd: Extract<Command, { type: 'throw' }>)
       const me = ctx.world.entities[e.id];
       const key = me.pos!.floor;
       const from = { x: me.pos!.x, y: me.pos!.y };
-      const opaque = isOpaqueFn(ctx, key);
-      const path = line(from, tp).slice(0, range);
+      const full = line(from, tp);
+      const path = full.slice(0, range);
       let landed: Pos = from;
       let hitEnt: Entity | null = null;
+      let wall = false;
       for (const p of path) {
         const tr = ctx.terrainAt(key, p.x, p.y);
-        if (!tr.passable || opaque(p.x, p.y) && !tr.passable) break;
+        if (!tr.passable) { wall = true; break; }
         landed = p;
         const occ = ctx.actorAt(key, p.x, p.y);
         if (occ && occ.id !== me.id) { hitEnt = occ; break; }
@@ -322,6 +357,15 @@ actions.register('throw', (ctx, e, pr, cmd: Extract<Command, { type: 'throw' }>)
         const o = rollToHit(ctx, me, hitEnt, def?.throw?.acc ?? 0);
         if (o.hit) { hit = hitEnt; crit = o.crit; }
       }
+      // 結果の分類（文章で必ず伝える）
+      const intended = typeof cmd.target === 'string' && cmd.target.startsWith('e_') ? cmd.target : (ctx.actorAt(key, tp.x, tp.y)?.id ?? null);
+      let outcome: 'hit' | 'missed' | 'blocked' | 'fell_short' | 'no_target';
+      let blockedBy: 'terrain' | 'actor' | null = null;
+      if (hitEnt && intended && hitEnt.id !== intended) { outcome = 'blocked'; blockedBy = 'actor'; }
+      else if (hitEnt) outcome = hit ? 'hit' : 'missed';
+      else if (wall) { outcome = 'blocked'; blockedBy = 'terrain'; }
+      else if (full.length > range) outcome = 'fell_short';
+      else outcome = 'no_target';
       const broke = !!def?.shatter;
       const put: Entity[] = [];
       const del: string[] = [];
@@ -332,7 +376,7 @@ actions.register('throw', (ctx, e, pr, cmd: Extract<Command, { type: 'throw' }>)
         put.push(s);
         if (!broke) {
           thrownId = ctx.newEntityId();
-          put.push({ id: thrownId, kind: it.kind, sid: ctx.nextSid(), pos: { floor: key, ...landed }, item: { qty: 1, affixes: [...it.item!.affixes] } });
+          put.push({ id: thrownId, kind: it.kind, sid: ctx.nextSid(), pos: { floor: key, ...landed }, item: { qty: 1, affixes: [...it.item!.affixes], thrownBy: pr.id } });
         }
       } else {
         const actor = structuredClone(me);
@@ -343,6 +387,7 @@ actions.register('throw', (ctx, e, pr, cmd: Extract<Command, { type: 'throw' }>)
           const moved = structuredClone(it);
           delete moved.item!.heldBy;
           delete moved.item!.slot;
+          moved.item!.thrownBy = pr.id;
           moved.pos = { floor: key, ...landed };
           put.push(moved);
         }
@@ -350,10 +395,12 @@ actions.register('throw', (ctx, e, pr, cmd: Extract<Command, { type: 'throw' }>)
       const seen = ctx.perceive(key, [
         { field: 'actor', pos: from, entity: me.id }, { field: 'from', pos: from, entity: me.id },
         { field: 'hit', pos: hitEnt?.pos ?? landed, entity: hitEnt?.id ?? null }, { field: 'landed', pos: landed },
+        { field: 'reached', pos: hitEnt?.pos ?? landed, entity: hitEnt?.id ?? null },
       ], [pr.id]);
       ctx.emit({
         type: 'item_thrown', actor: me.id, actorKind: me.kind, item: thrownId, kind: it.kind, appearanceId: appearanceOf(ctx, it.kind),
         from, to: tp, landed: broke ? null : landed, hit: hit?.id ?? null, hitKind: hit?.kind ?? null, broke, put, del, ...seen, floor: key,
+        outcome, blockedBy, reached: hitEnt?.id ?? null, reachedKind: hitEnt?.kind ?? null,
       });
       makeNoise(ctx, key, landed, 4, me);
       if (hit) {

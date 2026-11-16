@@ -62,12 +62,14 @@ npm run server     # http://127.0.0.1:7777
 
 1. `get_rules` でルールを読む（式・操作・遠征・観測の読み方。個別の敵の数値は含まない）
 2. `new_run { character_name, class?: "warrior"|"scout", objective?: "auto"|"reach_depth"|"slay_guardian"|"retrieve_relic"|"endless", locale?, seed? }` → 最初の遠征まで始まる。`player_token` を控える（接続が切れても `resume_run` で再開ブリーフィング付きで再開できる）
-3. 行動ツール（`move` / `explore` / `travel_to` / `rest` / `pickup` / `use_item` / `throw_item` / `use_stairs` / `extract` …）を呼ぶ。結果に「何が起きたか」と次の観測が付く
+3. 行動ツール（`move` / `explore` / `travel_to` / `rest` / `collect` / `pickup` / `use_item` / `throw_item` / `use_stairs` / `extract` …）を呼ぶ。結果に「何が起きたか」（受けた攻撃の回数・命中・合計ダメージを含む）と次の観測が付く
 4. **全応答に `turn` ブロック**が付く。`turn.state` が `your_turn` の間はゲームが次の行動を待っている。`expedition_ended` / `at_camp` / `run_ended` はやめてよい合図。`turn.changes` に前回からの変化
-5. 目的を達成したら、いずれかの階段の上で `extract`（帰還）。未達成で切り上げるなら `extract { confirm: true }`（撤退）。キャンプでは `start_expedition { offer }` で次の遠征
+5. 目的を達成したら、いずれかの階段の上で `extract`（帰還）。未達成で切り上げるなら `extract { confirm: true }`（撤退）。キャンプでは `start_expedition { offer }` で次の遠征（堅実／標準／野心の 3 枠。条件・倍率・危険度が付く）
+   - スコア（版 2）は**確定点**の合計。遠征中の点（目的・深追い・宝・賞金・発見・撃破）は未確定の戦利品で、帰還で × 倍率、撤退で半分（目的を除く）が確定し、死ねば失う。観測の `expedition.haul.if_extract_now` が「今帰れば何点確定するか」
 6. 迷ったら観測の `valid_actions`・`alerts`・`expedition` を見る。不正な行動は状態を変えず、`error.hint` と `valid_actions` が返る
 7. 任意引数 `thought` に判断理由を書くと、観戦画面とリプレイに吹き出しで表示される（裁定には使われない）
 8. `expect_seq` を渡すと、前提にした観測より状態が進んでいた場合に二重実行せず `stale_turn` を返す
+9. 応答テキストが長ければ `set_options { map, inventory, status_line }` で減らせる（既定は変化があったときだけ地図と所持品を出す）
 
 ### ホスト駆動（AI を外から回す）
 
@@ -104,7 +106,7 @@ MCP は「AI が呼んだら返す」方式なので、ゲーム側から AI を
 
 ロビー（`/`）から:
 
-- **新しいラン**: 名前・クラス・最初の遠征の目的を選んで開始。キー操作: 矢印／テンキー／`hjklyubn` で移動（敵にぶつかると攻撃）、`.` 待機、`x` 自動探索、`R` 休憩、`g` 拾う、`>` 階段、`T` 下り階段へ移動、`E` 帰還／撤退（階段の上）、`t` 投擲、`o` 操作、`i` 所持品。既知のマスをクリックするとそこまで移動。遠征が終わるとキャンプ画面で次の遠征を選ぶ。
+- **新しいラン**: 名前・クラス・最初の遠征の目的を選んで開始。キー操作: 矢印／テンキー／`hjklyubn` で移動（敵にぶつかると攻撃）、`.` 待機、`x` 自動探索、`R` 休憩、`g` 拾う、`>` 階段、`T` 下り階段へ移動、`E` 帰還／撤退（階段の上。確定する点を確認してから）、`t` 投擲（Tab で射線の通る相手を切り替え）、`C` 投げた物の回収、`o` 操作、`i` 所持品。既知のマスをクリックするとそこまで移動。遠征が終わるとキャンプ画面で次の遠征を選ぶ。
 - **観戦**: 進行中のランを俯瞰（全情報）／追従（そのプレイヤーの視界だけ）で見る。AI パネルに thought・ツール呼び出し・AI が受け取った観測テキスト。
 - **リプレイ**: 再生／停止、0.25x〜16x、1 イベント／1 手番送り、タイムラインのシーク、マーカー（階移動・Lv up・撃破・瀕死・死亡・思考）ジャンプ、視点切替。進行中のランも巻き戻せる。
 - **COOP**: モード「COOP」で開始したランには、ロビーや MCP の `join_run` から参加できる（同じフロアでは手番順に交代。放置は 30 秒でタイムアウトして待機扱い）。
@@ -126,6 +128,7 @@ PowerShell では `npm run <script> -- --flag` の `--` が npm に届かずオ�
 | `npm run replay:verify -- <runId>` | events.jsonl の畳み込みとキーフレームの一致、commands.jsonl の再実行と events.jsonl の一致を検証 |
 | `npm run golden` | ゴールデンリプレイ（reducer 互換性テスト用）を作り直す |
 | `npm run pacing -- --runs 100` | テンポの計測（階段発見までの手番・判断間隔・1 階あたりの手番・最初の遠征の長さ） |
+| `npm run choices -- --runs 40` | 選択の計測（粘るか帰るか・遠征候補の 3 枠を方針別の bot で比べ、確定点の中央値・死亡率を出す） |
 | `npm run drive -- --token <player_token>` / `--new-run <name>` | 参照ドライバ（ターンフィードを購読してエージェントを呼ぶ） |
 | `npm run assets:checklist` / `npm run assets:check -- <themeDir>` | 画像アセットの発注表 / テーマの検証 |
 | `npm run dev:client` | クライアントの開発サーバー（Vite。API は 7777 へプロキシ） |

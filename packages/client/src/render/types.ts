@@ -31,6 +31,8 @@ export interface SceneEntity {
   hidden?: boolean;
   /** 遠征の目的に関わる個体（守護者・遺物）。テーマに依らずレンダラーが印を重ねる */
   role?: 'guardian' | 'relic';
+  /** 宝（持ち帰ると点になるアイテム）。テーマに依らずレンダラーが印を重ねる */
+  treasure?: boolean;
 }
 
 export interface Scene {

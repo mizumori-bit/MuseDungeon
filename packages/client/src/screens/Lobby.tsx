@@ -69,7 +69,31 @@ export function Lobby() {
   const ended = (runs ?? []).filter((r) => r.status === 'ended').sort((a, b) => b.updatedAt - a.updatedAt);
   const classes = catalog ? Object.entries(catalog.classes) : [];
 
-  const playersText = (r: RunListing) => r.players.map((p) => `${p.name}(${p.controller.kind === 'agent' ? 'AI' : tr('人', 'H')}${p.depth ? ` B${p.depth}` : ''} Lv${p.level}${p.state !== 'alive' ? ` ${playerStateLabel(p.state)}` : ''})`).join(', ');
+  const playersText = (r: RunListing) => r.players.map((p) => {
+    const sp = r.summary?.players.find((x) => x.id === p.id);
+    const banked = sp?.banked !== undefined ? tr(` 確定${sp.banked}`, ` banked ${sp.banked}`) : '';
+    return `${p.name}(${p.controller.kind === 'agent' ? 'AI' : tr('人', 'H')}${p.depth ? ` B${p.depth}` : ''} Lv${p.level}${p.state !== 'alive' ? ` ${playerStateLabel(p.state)}` : ''}${banked})`;
+  }).join(', ');
+
+  // スコアの版ごとに別の表（版 2: 確定点 → 達成した遠征の数 → 最深。版 1 は旧スコア）
+  const boardV2 = board.filter((b) => b.scoreVersion === 2)
+    .sort((a, b) => b.score - a.score || (b.expeditions ?? 0) - (a.expeditions ?? 0) || b.deepest - a.deepest);
+  const boardV1 = board.filter((b) => b.scoreVersion !== 2); // 旧表はサーバーの並び順のまま
+
+  const boardRow = (b: LeaderboardEntry, i: number, v2: boolean) => (
+    <tr key={`${b.runId}-${b.playerId}`} class={b.ongoing ? 'ongoing' : ''}>
+      <td>{i + 1}</td>
+      <td>
+        {b.name} <span class={`tag ${b.controller.kind}`}>{b.controller.kind === 'agent' ? 'AI' : tr('人間', 'human')}</span> <small>{catalog ? kindName(catalog, L, b.classId) : b.classId}</small>
+        {b.ongoing && <span class="tag ongoing" title={tr('ランは終了していない（キャンプ中の記録）', 'The run has not ended (recorded at camp)')}>{tr('継続中', 'ongoing')}</span>}
+      </td>
+      {v2 && <td class="primary-col">{b.score}</td>}
+      <td class={v2 ? '' : 'primary-col'}>{b.expeditions ?? 0}</td>
+      <td>{b.deepest}</td><td>{b.level}</td><td>{b.kills}</td>
+      {!v2 && <td>{b.score}</td>}
+      <td><a href={`#/replay/${b.runId}`}>▶</a></td>
+    </tr>
+  );
 
   /** 遠征の要約: 達成数と、今の遠征（またはキャンプ・最後の遠征の結果） */
   const expeditionText = (r: RunListing): string | null => {
@@ -165,23 +189,34 @@ export function Lobby() {
           <h3>{tr('リーダーボード', 'Leaderboard')}</h3>
           {board.length === 0 && <div class="muted">{tr('記録なし', 'No records')}</div>}
           {board.length > 0 && (
-            <table class="board">
-              <thead><tr><th>#</th><th>{tr('名前', 'Name')}</th><th title={tr('達成した遠征の数', 'Completed expeditions')}>{tr('遠征', 'Exp.')}</th><th>{tr('到達', 'Depth')}</th><th>Lv</th><th>{tr('撃破', 'Kills')}</th><th>{tr('スコア', 'Score')}</th><th></th></tr></thead>
-              <tbody>
-                {board.slice(0, 20).map((b, i) => (
-                  <tr key={`${b.runId}-${b.playerId}`} class={b.ongoing ? 'ongoing' : ''}>
-                    <td>{i + 1}</td>
-                    <td>
-                      {b.name} <span class={`tag ${b.controller.kind}`}>{b.controller.kind === 'agent' ? 'AI' : tr('人間', 'human')}</span> <small>{catalog ? kindName(catalog, L, b.classId) : b.classId}</small>
-                      {b.ongoing && <span class="tag ongoing" title={tr('ランは終了していない（キャンプ中の記録）', 'The run has not ended (recorded at camp)')}>{tr('継続中', 'ongoing')}</span>}
-                    </td>
-                    <td class="primary-col">{b.expeditions ?? 0}</td>
-                    <td>{b.deepest}</td><td>{b.level}</td><td>{b.kills}</td><td>{b.score}</td>
-                    <td><a href={`#/replay/${b.runId}`}>▶</a></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <>
+              <h4 title={tr('持ち帰って確定した点の合計。同点なら達成した遠征の数、最深の順', 'Sum of banked points; ties by completed expeditions, then deepest')}>
+                {tr('スコア（確定点）', 'Score (banked points)')}
+              </h4>
+              {boardV2.length === 0 && <div class="muted">{tr('まだ記録なし', 'No records yet')}</div>}
+              {boardV2.length > 0 && (
+                <table class="board">
+                  <thead><tr>
+                    <th>#</th><th>{tr('名前', 'Name')}</th><th>{tr('確定点', 'Banked')}</th><th title={tr('達成した遠征の数', 'Completed expeditions')}>{tr('遠征', 'Exp.')}</th>
+                    <th>{tr('到達', 'Depth')}</th><th>Lv</th><th>{tr('撃破', 'Kills')}</th><th></th>
+                  </tr></thead>
+                  <tbody>{boardV2.slice(0, 20).map((b, i) => boardRow(b, i, true))}</tbody>
+                </table>
+              )}
+              {boardV1.length > 0 && (
+                <details class="board-old">
+                  <summary>{tr(`旧スコア（版1）の記録 ${boardV1.length} 件`, `Old score (v1): ${boardV1.length} records`)}</summary>
+                  <p class="muted small">{tr('深度などから計算した旧方式のスコア。確定点とは比べられない。', 'Depth-based old scoring; not comparable with banked points.')}</p>
+                  <table class="board">
+                    <thead><tr>
+                      <th>#</th><th>{tr('名前', 'Name')}</th><th title={tr('達成した遠征の数', 'Completed expeditions')}>{tr('遠征', 'Exp.')}</th>
+                      <th>{tr('到達', 'Depth')}</th><th>Lv</th><th>{tr('撃破', 'Kills')}</th><th>{tr('スコア（版1）', 'Score (v1)')}</th><th></th>
+                    </tr></thead>
+                    <tbody>{boardV1.slice(0, 20).map((b, i) => boardRow(b, i, false))}</tbody>
+                  </table>
+                </details>
+              )}
+            </>
           )}
         </section>
       </div>

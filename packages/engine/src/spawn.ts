@@ -49,11 +49,13 @@ export function makeMonster(ctx: Ctx, floor: FloorKey, spec: Extract<SpawnSpec, 
   if (spec.asleep) e.actor!.dormant = true;
   if (tier > 0 || spec.affixes.length) e.scale = { tier, affixes: [...spec.affixes] };
   if (spec.role) e.role = spec.role;
+  if (spec.bounty) e.bounty = spec.bounty;
   return e;
 }
 
-export function makeItem(floor: FloorKey | null, kind: string, x: number, y: number, qty: number, affixes: string[], id: string, sid: number): Entity {
+export function makeItem(floor: FloorKey | null, kind: string, x: number, y: number, qty: number, affixes: string[], id: string, sid: number, value?: number): Entity {
   const e: Entity = { id, kind, sid, item: { qty, affixes: [...affixes] } };
+  if (value !== undefined) e.item!.value = value;
   if (floor) e.pos = { floor, x, y };
   return e;
 }
@@ -73,7 +75,7 @@ export function spawnFromSpec(ctx: Ctx, floor: FloorKey, spec: SpawnSpec, reason
   let e: Entity;
   if (spec.type === 'monster') e = makeMonster(ctx, floor, spec, id, sid);
   else if (spec.type === 'item') {
-    e = makeItem(floor, spec.kind, spec.x, spec.y, spec.qty, spec.affixes, id, sid);
+    e = makeItem(floor, spec.kind, spec.x, spec.y, spec.qty, spec.affixes, id, sid, spec.value);
     if (spec.role) e.role = spec.role;
   } else e = makeFeature(ctx, floor, spec.kind, spec.x, spec.y, id, sid);
   const seen = ctx.perceive(floor, [{ field: 'entity', pos: e.pos }]);

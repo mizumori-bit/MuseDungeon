@@ -14,19 +14,27 @@ function HpBar({ hp, max }: { hp: number; max: number }) {
   );
 }
 
-export function StatusPanel({ view, catalog }: { view: PlayerView; catalog: Catalog }) {
+/** speed: 実効の速さ（観測の self.speed。状態異常込み）。無ければ基本の速さ */
+export function StatusPanel({ view, catalog, speed }: { view: PlayerView; catalog: Catalog; speed?: number }) {
   const L = getLocale();
   const s = view.self;
   const f = view.floor;
+  const sp = speed ?? s.speed;
+  const rec = view.record;
   return (
     <section class="panel">
       <h3>{s.name} <small>{kindName(catalog, L, s.classId)} Lv{s.level}</small></h3>
       <HpBar hp={s.stats.hp} max={s.stats.maxHp} />
       <div class="kv">
+        <span>{tr('確定点', 'Banked')}</span>
+        <span class="banked">
+          <b>{rec.banked}</b> <small class="muted">{tr(`遠征達成 ${rec.expeditions}`, `${rec.expeditions} completed`)}{rec.lost ? tr(`・失った戦利品 ${rec.lost}`, `, lost ${rec.lost}`) : ''}</small>
+        </span>
         <span>XP</span><span>{s.xp} / {xpForLevel(s.level)}</span>
         <span>{tr('階層', 'Depth')}</span><span>{f ? `${tr('地下', 'B')}${f.depth}${tr('階', 'F')} ${nameOf(catalog.biomes[f.biome]?.name, L, f.biome)}` : '-'}</span>
         <span>{tr('命中/ダメージ', 'Acc/Dmg')}</span><span>+{s.stats.acc} / {s.stats.dmg}{s.stats.might ? (s.stats.might > 0 ? `+${s.stats.might}` : s.stats.might) : ''}</span>
         <span>{tr('回避/装甲', 'Eva/Armor')}</span><span>{s.stats.eva} / {s.stats.armor}</span>
+        <span>{tr('速さ', 'Speed')}</span><span>{sp}{sp !== 100 ? <small class="muted"> {tr('（標準 100）', '(normal 100)')}</small> : null}</span>
         <span>{tr('状態', 'Status')}</span>
         <span>{s.statuses.length ? s.statuses.map((x) => `${nameOf(catalog.statuses[x.id]?.name, L, x.id)}(${x.turnsLeft})`).join(' ') : tr('なし', 'none')}</span>
         <span>{tr('時刻', 'Time')}</span><span>{f?.time ?? 0}</span>
@@ -41,9 +49,13 @@ export function InventoryPanel({ view, catalog, onAction, focused, selected, onS
   view: PlayerView; catalog: Catalog; onAction?: (a: InvAction, slot: string) => void; focused?: boolean; selected?: string | null; onSelect?: (slot: string) => void;
 }) {
   const L = getLocale();
+  const treasure = view.inventory.reduce((a, it) => a + (it.value ?? 0), 0);
   return (
     <section class={`panel inv ${focused ? 'focused' : ''}`}>
-      <h3>{tr('所持品', 'Inventory')} <small>{view.inventory.length}/{view.self.capacity}</small></h3>
+      <h3>
+        {tr('所持品', 'Inventory')} <small>{view.inventory.length}/{view.self.capacity}</small>
+        {treasure > 0 && <small class="treasure" title={tr('持ち帰ると戦利品として確定する（落とすと減る）', 'Banked as haul when you extract (dropping it removes it)')}>{tr(`宝 計 ${treasure}`, `treasure ${treasure}`)}</small>}
+      </h3>
       {view.inventory.length === 0 && <div class="muted">{tr('なし', 'empty')}</div>}
       <ul>
         {view.inventory.map((it) => {
@@ -55,7 +67,7 @@ export function InventoryPanel({ view, catalog, onAction, focused, selected, onS
           return (
             <li key={it.id} class={selected === it.slot ? 'sel' : ''} onClick={() => onSelect?.(it.slot)} title={ci ? nameOf(ci.desc, L, '') : tr('未鑑定', 'unidentified')}>
               <span class="slot">{it.slot})</span>
-              <span class="name">{name}{it.qty > 1 ? ` x${it.qty}` : ''}{it.equipped ? <em> [{tr('装備', 'eq')}]</em> : null}{it.kind === null ? <em class="muted"> ?</em> : null}{cat === 'relic' ? <em class="relic"> ［{tr('遺物', 'relic')}］</em> : null}</span>
+              <span class="name">{name}{it.qty > 1 ? ` x${it.qty}` : ''}{it.equipped ? <em> [{tr('装備', 'eq')}]</em> : null}{it.kind === null ? <em class="muted"> ?</em> : null}{cat === 'relic' ? <em class="relic"> ［{tr('遺物', 'relic')}］</em> : null}{it.value !== undefined ? <em class="treasure"> ［{tr(`宝・価値 ${it.value}`, `treasure ${it.value}`)}］</em> : null}</span>
               {onAction && (
                 <span class="acts">
                   {usable && <button class="tiny" onClick={(e) => { e.stopPropagation(); onAction('use', it.slot); }}>{tr('使う', 'Use')}</button>}
@@ -122,7 +134,12 @@ export function PartyPanel({ world, catalog, follow, onFollow }: { world: World;
                   : p.state === 'at_camp'
                     ? <span class="pstate at_camp">{playerStateLabel(p.state)}</span>
                     : <span class="muted">{playerStateLabel(p.state)}{p.stats.deathCause ? ` (${kindName(catalog, L, p.stats.deathCause)})` : ''}</span>}
-                {(p.stats.expeditions ?? 0) > 0 && <span class="muted">{tr(`遠征達成 ${p.stats.expeditions}`, `${p.stats.expeditions} expeditions`)}</span>}
+                {((p.stats.expeditions ?? 0) > 0 || (p.stats.banked ?? 0) > 0) && (
+                  <span class="muted">
+                    {tr(`確定 ${p.stats.banked ?? 0}・遠征達成 ${p.stats.expeditions ?? 0}`, `banked ${p.stats.banked ?? 0}, ${p.stats.expeditions ?? 0} expeditions`)}
+                    {p.stats.lost ? tr(`・失 ${p.stats.lost}`, `, lost ${p.stats.lost}`) : ''}
+                  </span>
+                )}
               </div>
             </li>
           );
@@ -175,16 +192,23 @@ export function AiPanel({ thoughts, activities, commands, observationText }: {
 
 export function SummaryDialog({ summary, catalog, onClose }: { summary: RunSummary; catalog: Catalog | null; onClose: () => void }) {
   const L = getLocale();
+  const v2 = summary.scoreVersion === 2;
   return (
     <div class="modal" onClick={onClose}>
       <div class="dialog" onClick={(e) => e.stopPropagation()}>
         <h2>{tr('冒険の記録', 'Run summary')}</h2>
         <p class="muted">{summary.reason}{summary.seed ? ` / seed: ${summary.seed}` : ''}</p>
         <table>
-          <thead><tr><th>{tr('名前', 'Name')}</th><th>{tr('遠征達成', 'Expeditions')}</th><th>{tr('到達', 'Deepest')}</th><th>Lv</th><th>{tr('撃破', 'Kills')}</th><th>{tr('手数', 'Turns')}</th><th>{tr('状態', 'State')}</th><th>{tr('死因', 'Cause')}</th><th>{tr('スコア', 'Score')}</th></tr></thead>
+          <thead><tr>
+            <th>{tr('名前', 'Name')}</th>
+            <th title={v2 ? tr('持ち帰って確定した点の合計', 'Points banked by extracting') : tr('旧スコア（版1: 深度などから計算）', 'Old score (v1: depth-based)')}>{v2 ? tr('確定点', 'Banked') : tr('スコア（版1）', 'Score (v1)')}</th>
+            <th>{tr('遠征達成', 'Expeditions')}</th><th>{tr('到達', 'Deepest')}</th><th>Lv</th><th>{tr('撃破', 'Kills')}</th><th>{tr('手数', 'Turns')}</th><th>{tr('状態', 'State')}</th><th>{tr('死因', 'Cause')}</th>
+          </tr></thead>
           <tbody>
             {summary.players.map((p) => (
-              <tr key={p.id}><td>{p.name}</td><td><b>{p.expeditions ?? 0}</b></td><td>{p.deepest}</td><td>{p.level}</td><td>{p.kills}</td><td>{p.turns}</td><td>{playerStateLabel(p.state)}</td><td>{p.deathCause ? (catalog ? kindName(catalog, L, p.deathCause) : p.deathCause) : '-'}</td><td>{p.score}</td></tr>
+              <tr key={p.id}>
+                <td>{p.name}</td><td><b>{v2 ? (p.banked ?? p.score) : p.score}</b></td><td>{p.expeditions ?? 0}</td><td>{p.deepest}</td><td>{p.level}</td><td>{p.kills}</td><td>{p.turns}</td><td>{playerStateLabel(p.state)}</td><td>{p.deathCause ? (catalog ? kindName(catalog, L, p.deathCause) : p.deathCause) : '-'}</td>
+              </tr>
             ))}
           </tbody>
         </table>

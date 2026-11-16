@@ -23,6 +23,12 @@ const TargetZ = z.union([DirZ, PosZ, z.string().regex(/^e_[0-9a-z]{6}$/)]).descr
 const common = {
   player_token: z.string().optional().describe('ステートレス利用時のプレイヤートークン'),
 };
+/** 応答テキストの表示オプション（ゲームには影響しない） */
+const optionArgs = {
+  map: z.enum(['auto', 'always', 'never']).optional().describe('地図: auto（変化があった応答だけ。既定）/ always / never'),
+  inventory: z.enum(['on_change', 'always']).optional().describe('所持品の行: on_change（変わったときだけ。既定）/ always'),
+  status_line: z.enum(['short', 'long']).optional().describe('末尾の ▶ 行: short（既定）/ long'),
+};
 const actionCommon = {
   ...common,
   thought: z.string().max(280).optional().describe('判断理由の短いメモ（観戦・リプレイに表示。裁定には使わない）'),
@@ -99,7 +105,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
     description: 'ゲームのルール（式・操作・遠征・観測の読み方）。個別のモンスター数値は含まない。Rules of the game.',
     inputSchema: { topic: z.enum(RULE_TOPICS).optional(), locale: z.enum(['ja', 'en']).optional() },
   }, async ({ topic, locale }) => {
-    const text = rulesText((topic ?? 'all') as RulesTopic, locale ?? 'ja', manager.catalog.rules);
+    const text = rulesText((topic ?? 'all') as RulesTopic, locale ?? 'ja', manager.catalog);
     return out(text, { topic: topic ?? 'all', text });
   });
 
@@ -116,10 +122,17 @@ export function createMcpServer(ctx: McpContext): McpServer {
     return out(text, { runs });
   });
 
+  /** new_run / resume_run の表示オプション（brief_map は旧引数: false → map: never） */
+  const applyOptions = (port: PlayerPort, args: Record<string, unknown>) => {
+    const map = (args.map as 'auto' | 'always' | 'never' | undefined) ?? (args.brief_map === false ? 'never' : undefined);
+    port.setOptions({ map, inventory: args.inventory as 'on_change' | 'always' | undefined, status_line: args.status_line as 'short' | 'long' | undefined });
+  };
+
   const joinedOut = async (port: PlayerPort, token: string, runId: string, tool: string, args: Record<string, unknown>, reason: 'run_started' | 'resumed') => {
     ctx.boundToken = token;
+    applyOptions(port, args);
     const briefing = port.briefing(reason === 'resumed' ? 'resume' : 'start');
-    const o = port.observeWithTurn(reason, { detail: 'full', map: ctx.briefMap, consume: true });
+    const o = port.observeWithTurn(reason, { detail: 'full', consume: true });
     const head = `run_id: ${runId}\nplayer_token: ${token}\n(このトークンで resume_run できる / keep this token to resume)\n\n`;
     const text = head + (briefing.length ? briefing.join('\n') + '\n\n' : '') + o.text;
     record(port, tool, args, text);
@@ -136,13 +149,18 @@ export function createMcpServer(ctx: McpContext): McpServer {
       seed: z.string().max(64).optional(),
       locale: z.enum(['ja', 'en']).optional(),
       objective: z.enum(['auto', 'reach_depth', 'slay_guardian', 'retrieve_relic', 'endless']).optional().describe('最初の遠征の目的（既定 auto = 最初の候補。endless は目的なし）'),
-      brief_map: z.boolean().optional().describe('行動結果に局所 ASCII 地図を付けるか（既定 true）'),
+      ...optionArgs,
+      brief_map: z.boolean().optional().describe('旧引数。false は map: never と同じ'),
     },
   }, async (args) => {
-    if (args.brief_map !== undefined) ctx.briefMap = args.brief_map;
     const controller: Controller = { kind: 'agent', label: ctx.clientLabel };
+    const classId = normClass(args.class);
+    if (classId && !manager.catalog.classes[classId]) {
+      const list = Object.entries(manager.catalog.classes).map(([id, c]) => `${id.split(':')[1]}（${c.name.ja}）`).join(' / ');
+      return errOut(actionError('bad_request', `不明な職業 ${args.class} / unknown class`, `class は ${list}。詳しくは get_rules topic=classes`));
+    }
     const r = await manager.createRun({
-      name: args.character_name, classId: normClass(args.class), mode: args.mode, seed: args.seed, locale: args.locale, controller,
+      name: args.character_name, classId, mode: args.mode, seed: args.seed, locale: args.locale, controller,
       objective: args.objective as ObjectiveChoice | undefined,
     });
     if ('error' in r) return errOut(r.error);
@@ -162,13 +180,14 @@ export function createMcpServer(ctx: McpContext): McpServer {
   server.registerTool('resume_run', {
     title: 'ランを再開',
     description: 'プレイヤートークンで現在の接続にプレイヤーを再束縛する。再開ブリーフィング（遠征の目的と進捗・現在地・直近の節目・メモ）が付く。Rebind your player by token.',
-    inputSchema: { player_token: z.string() },
-  }, async ({ player_token }) => {
-    const port = manager.portForToken(player_token);
+    inputSchema: { player_token: z.string(), ...optionArgs },
+  }, async (args) => {
+    const port = manager.portForToken(args.player_token);
     if (!port) return errOut(actionError('no_session', 'そのトークンのランは見つからない / unknown token', 'new_run で新しく始める / start a new run'));
-    ctx.boundToken = player_token;
+    ctx.boundToken = args.player_token;
+    applyOptions(port, args);
     const briefing = port.briefing('resume');
-    const o = port.observeWithTurn('resumed', { detail: 'full', map: ctx.briefMap, consume: true });
+    const o = port.observeWithTurn('resumed', { detail: 'full', consume: true });
     const text = (briefing.length ? briefing.join('\n') + '\n\n' : '') + o.text;
     record(port, 'resume_run', {}, text);
     return out(text, { run_id: port.runId, player_id: port.playerId, briefing, observation: o.observation, turn: o.turn });
@@ -211,7 +230,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
   }, async (args) => {
     const port = portOf(args.player_token);
     if (!port) return noSession();
-    const o = port.observeWithTurn('observed', { detail: args.detail ?? 'brief', map: ctx.briefMap });
+    const o = port.observeWithTurn('observed', { detail: args.detail ?? 'brief' });
     record(port, 'observe', args, o.text);
     return out(o.text, { observation: o.observation, turn: o.turn });
   });
@@ -227,9 +246,20 @@ export function createMcpServer(ctx: McpContext): McpServer {
     const got = before === 'your_turn' ? true : before === 'waiting_others' ? await port.waitForTurn((args.timeout_s ?? 20) * 1000) : false;
     const now = port.view().status;
     const reason = got ? 'turn_arrived' : now === 'waiting_others' ? 'wait_timeout' : 'observed';
-    const o = port.observeWithTurn(reason, { detail: 'brief', map: ctx.briefMap });
+    const o = port.observeWithTurn(reason, { detail: 'brief' });
     record(port, 'wait_for_turn', args, o.text);
     return out(o.text, { observation: o.observation, turn: o.turn });
+  });
+
+  server.registerTool('set_options', {
+    title: '表示オプション',
+    description: '応答テキストの出し方（地図・所持品・末尾の ▶ 行）。ゲームには影響しない。手番を消費しない。Response verbosity options.',
+    inputSchema: { ...common, ...optionArgs },
+  }, async (args) => {
+    const port = portOf(args.player_token);
+    if (!port) return noSession();
+    const o = port.setOptions({ map: args.map, inventory: args.inventory, status_line: args.status_line });
+    return withTurn(port, `map=${o.map} inventory=${o.inventory} status_line=${o.status_line}`, { options: o });
   });
 
   server.registerTool('look', {
@@ -318,6 +348,9 @@ export function createMcpServer(ctx: McpContext): McpServer {
     title: '移動（目的地）', description: 'マクロ: 既知地図上の経路で座標・階段・記憶した対象へ移動。',
     inputSchema: { ...actionCommon, to: z.union([PosZ, z.enum(['stairs_down', 'stairs_up']), z.string().regex(/^e_[0-9a-z]{6}$/)]) },
   }, async (a) => act('travel_to', a, { type: 'travel', to: a.to }));
+  server.registerTool('collect', {
+    title: '回収', description: 'マクロ: 既知の「自分が投げた物」を近い順に回って拾う（自分が投げた物は上を歩くだけで拾える）。結果に回収数と残り。', inputSchema: { ...actionCommon },
+  }, async (a) => act('collect', a, { type: 'collect' }));
   server.registerTool('pickup', { title: '拾う', description: '足元のアイテムを拾う（省略時は全て）。', inputSchema: { ...actionCommon, item: z.string().regex(/^e_[0-9a-z]{6}$/).optional() } },
     async (a) => act('pickup', a, { type: 'pickup', item: a.item }));
   server.registerTool('drop', { title: '置く', description: '所持品を足元に置く。', inputSchema: { ...actionCommon, slot: SlotZ, qty: z.number().int().positive().optional() } },

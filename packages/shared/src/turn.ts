@@ -2,6 +2,7 @@
 // state / awaiting は事実の通知であり、行動の提案ではない。changes は PlayerView と観測だけから作る。
 import type { Observation } from './observation';
 import { endReasonText } from './expedition';
+import type { PerceivedEvent } from './filter';
 import type { Locale } from './types';
 import { t } from './util';
 import { dirLabel } from './observation';
@@ -17,7 +18,7 @@ export type TurnReason =
 export type Awaiting = 'action' | 'camp_choice' | 'nothing';
 
 export type ChangeCode =
-  | 'new_hostile' | 'hostile_gone' | 'hp_dropped' | 'hp_low' | 'status_gained' | 'status_lost' | 'level_up'
+  | 'new_hostile' | 'reappeared' | 'hostile_gone' | 'killed' | 'died_seen' | 'hp_dropped' | 'hp_low' | 'status_gained' | 'status_lost' | 'level_up'
   | 'item_found' | 'stairs_found' | 'floor_changed' | 'objective_progress' | 'objective_complete' | 'can_extract';
 
 export interface Change { code: ChangeCode; text: string; entity?: string }
@@ -37,12 +38,21 @@ export const MAX_CHANGES = 8;
 
 /** 差分計算用の要約（前回の応答時点の観測） */
 export interface TurnSnapshot {
+  /** この要約を作った時点の seq（以降に知覚した出来事が差分の対象） */
+  seq: number;
+  state: TurnState | null;
+  /** 既知のセル数（地図の変化の判定用） */
+  knownCells: number;
+  /** 所持品の要約（所持品の行の変化の判定用） */
+  inv: string;
   floorKey: string | null;
   depth: number | null;
   hp: number;
   maxHp: number;
   level: number;
   statuses: string[];
+  /** 状態異常の表示名（解けた後の文章に使う） */
+  statusNames?: Record<string, string>;
   hostiles: Record<string, string>;
   items: Record<string, string>;
   stairs: string[];
@@ -54,15 +64,22 @@ export interface TurnSnapshot {
   canExtract: boolean;
 }
 
-export function turnSnapshot(view: PlayerView, obs: Observation): TurnSnapshot {
+export function turnSnapshot(view: PlayerView, obs: Observation, state: TurnState | null = null): TurnSnapshot {
   const x = view.expedition;
+  let known = 0;
+  for (const c of view.memory.terrain) if (c) known++;
   return {
+    seq: view.seq,
+    state,
+    knownCells: known,
+    inv: view.inventory.map((i) => `${i.slot}:${i.kind ?? i.appearanceId}:${i.qty}:${i.equipped ?? ''}`).join(','),
     floorKey: view.floor?.key ?? null,
     depth: view.floor?.depth ?? null,
     hp: view.self.stats.hp,
     maxHp: view.self.stats.maxHp,
     level: view.self.level,
     statuses: view.self.statuses.map((s) => s.id).sort(),
+    statusNames: Object.fromEntries(obs.self.statuses.map((s) => [s.id, s.name])),
     hostiles: Object.fromEntries(obs.visible.monsters.map((m) => [m.id, m.name])),
     items: Object.fromEntries(obs.visible.items.map((i) => [i.id, i.name])),
     stairs: obs.navigation.known_stairs.map((s) => `${s.type}@${s.pos.x},${s.pos.y}`).sort(),
@@ -76,12 +93,15 @@ export function turnSnapshot(view: PlayerView, obs: Observation): TurnSnapshot {
 }
 
 const PRIORITY: ChangeCode[] = [
-  'floor_changed', 'objective_complete', 'objective_progress', 'can_extract', 'hp_low', 'hp_dropped', 'new_hostile',
-  'level_up', 'status_gained', 'status_lost', 'item_found', 'stairs_found', 'hostile_gone',
+  'floor_changed', 'objective_complete', 'objective_progress', 'can_extract', 'hp_low', 'killed', 'died_seen', 'hp_dropped', 'new_hostile',
+  'level_up', 'status_gained', 'status_lost', 'item_found', 'stairs_found', 'reappeared', 'hostile_gone',
 ];
 
-/** 前回の要約からの変化。prev が無ければ空 */
-export function diffChanges(prev: TurnSnapshot | null, cur: TurnSnapshot, view: PlayerView, obs: Observation): Change[] {
+/**
+ * 前回の要約からの変化。prev が無ければ空。
+ * events: 前回の要約以降に知覚した出来事（撃破・死亡の区別に使う）
+ */
+export function diffChanges(prev: TurnSnapshot | null, cur: TurnSnapshot, view: PlayerView, obs: Observation, events: readonly PerceivedEvent[] = []): Change[] {
   if (!prev) return [];
   const L = view.locale;
   const out: Change[] = [];
@@ -89,10 +109,18 @@ export function diffChanges(prev: TurnSnapshot | null, cur: TurnSnapshot, view: 
   if (!sameFloor && cur.depth !== null) out.push({ code: 'floor_changed', text: t(L, `地下${cur.depth}階に移った`, `Now on depth ${cur.depth}`) });
   if (cur.expNo !== null && cur.expNo === prev.expNo) {
     if (cur.expStatus === 'objective_complete' && prev.expStatus !== 'objective_complete') {
-      out.push({ code: 'objective_complete', text: t(L, '遠征の目的を達成した（いずれかの階段の上で extract すると帰還になる）', 'Objective complete (extract on any stairs to finish the expedition)') });
+      const ot = view.expedition?.objective.type;
+      const pressure = ot === 'slay_guardian' || ot === 'retrieve_relic';
+      out.push({
+        code: 'objective_complete',
+        text: pressure
+          ? t(L, '遠征の目的を達成した（いずれかの階段の上で extract すると帰還になる）。坑が騒がしくなった: この遠征の間、徘徊の湧き間隔が半分になる',
+            'Objective complete (extract on any stairs to finish). The pit grows restless: wanderers spawn twice as often for the rest of this expedition')
+          : t(L, '遠征の目的を達成した（いずれかの階段の上で extract すると帰還になる）', 'Objective complete (extract on any stairs to finish the expedition)'),
+      });
     }
     if (cur.reached && !prev.reached) out.push({ code: 'objective_progress', text: t(L, '目標の階に到達した', 'Reached the target depth') });
-    if (cur.relicHeld && !prev.relicHeld) out.push({ code: 'objective_progress', text: t(L, '遺物を手に入れた', 'You now carry the relic') });
+    if (cur.relicHeld && !prev.relicHeld) out.push({ code: 'objective_progress', text: t(L, '遺物を手に入れた（この階の眠っていた敵が目を覚ました）', 'You now carry the relic (the sleepers on this floor have woken)') });
     if (!cur.relicHeld && prev.relicHeld) out.push({ code: 'objective_progress', text: t(L, '遺物を手放した', 'You no longer carry the relic') });
     if (cur.progress !== prev.progress && view.expedition?.progress.guardianSlain && !JSON.parse(prev.progress || '{}').guardianSlain) {
       out.push({ code: 'objective_progress', text: t(L, '守護者が倒れた', 'The guardian has fallen') });
@@ -106,13 +134,33 @@ export function diffChanges(prev: TurnSnapshot | null, cur: TurnSnapshot, view: 
     if (a >= 25 && b < 25) out.push({ code: 'hp_low', text: t(L, 'HP が 25% を下回った', 'HP fell below 25%') });
     else if (a >= 50 && b < 50) out.push({ code: 'hp_low', text: t(L, 'HP が半分を下回った', 'HP fell below half') });
   }
+  // 目の前の死（撃破か、他の理由か）
+  const dead = new Map<string, boolean>();
+  for (const e of events) {
+    if (e.seq <= prev.seq || e.type !== 'died') continue;
+    const ev = e.event as Record<string, unknown>;
+    if (typeof ev.id !== 'string' || ev.id === view.self.id) continue;
+    dead.set(ev.id, ev.killer === view.self.id);
+  }
+  for (const [id, byYou] of dead) {
+    const name = prev.hostiles[id] ?? cur.hostiles[id];
+    if (!name) continue;
+    out.push(byYou
+      ? { code: 'killed', text: t(L, `倒した: ${name}`, `Killed: ${name}`), entity: id }
+      : { code: 'died_seen', text: t(L, `目の前で倒れた: ${name}`, `Died in front of you: ${name}`), entity: id });
+  }
   if (sameFloor) {
     for (const m of obs.visible.monsters) {
       if (m.id in prev.hostiles) continue;
+      const first = view.entities.find((e) => e.id === m.id)?.firstSeenSeq;
+      if (first !== undefined && first <= prev.seq) {
+        out.push({ code: 'reappeared', text: t(L, `再び見えた: ${m.name}(${m.id}) ${dirLabel(L, m.dir)}${m.dist}マス`, `Back in sight: ${m.name} (${m.id}) ${dirLabel(L, m.dir)} ${m.dist}`), entity: m.id });
+        continue;
+      }
       out.push({ code: 'new_hostile', text: t(L, `新たな敵: ${m.name}(${m.id}) ${dirLabel(L, m.dir)}${m.dist}マス`, `New hostile: ${m.name} (${m.id}) ${dirLabel(L, m.dir)} ${m.dist}`), entity: m.id });
     }
     for (const [id, name] of Object.entries(prev.hostiles)) {
-      if (id in cur.hostiles) continue;
+      if (id in cur.hostiles || dead.has(id)) continue;
       out.push({ code: 'hostile_gone', text: t(L, `見えなくなった敵: ${name}`, `Out of sight: ${name}`) });
     }
     const newItems = Object.entries(cur.items).filter(([id]) => !(id in prev.items));
@@ -121,7 +169,7 @@ export function diffChanges(prev: TurnSnapshot | null, cur: TurnSnapshot, view: 
   }
   if (cur.level > prev.level) out.push({ code: 'level_up', text: t(L, `レベル ${cur.level} になった`, `Reached level ${cur.level}`) });
   for (const s of cur.statuses) if (!prev.statuses.includes(s)) out.push({ code: 'status_gained', text: t(L, `状態異常: ${statusName(obs, s)}`, `Status: ${statusName(obs, s)}`) });
-  for (const s of prev.statuses) if (!cur.statuses.includes(s)) out.push({ code: 'status_lost', text: t(L, `状態異常が解けた: ${s.split(':')[1] ?? s}`, `Status ended: ${s.split(':')[1] ?? s}`) });
+  for (const s of prev.statuses) if (!cur.statuses.includes(s)) out.push({ code: 'status_lost', text: t(L, `状態異常が解けた: ${prev.statusNames?.[s] ?? s.split(':')[1] ?? s}`, `Status ended: ${prev.statusNames?.[s] ?? s.split(':')[1] ?? s}`) });
   out.sort((a, b) => PRIORITY.indexOf(a.code) - PRIORITY.indexOf(b.code));
   return out.slice(0, MAX_CHANGES);
 }
@@ -148,11 +196,13 @@ export function buildTurnBlock(view: PlayerView, p: { reason: TurnReason; interr
   return b;
 }
 
-/** テキスト応答の末尾に付ける 1 行 */
-export function turnLine(view: PlayerView, b: TurnBlock): string {
+/** テキスト応答の末尾に付ける 1 行。short: 状態が変わらない間の短い形（set_options の status_line） */
+export function turnLine(view: PlayerView, b: TurnBlock, short = false): string {
   const L: Locale = view.locale;
   const x = view.expedition;
   const inExp = x && x.status !== 'ended';
+  if (short && b.state === 'your_turn') return t(L, `▶ あなたの番（手番 ${b.turn_no}）`, `▶ Your turn (turn ${b.turn_no})`);
+  if (short && b.state === 'waiting_others') return t(L, '▶ 他のプレイヤーの手番（wait_for_turn で待てる）', '▶ Another player is acting (wait_for_turn)');
   switch (b.state) {
     case 'your_turn': {
       const coop = view.runMode === 'coop';

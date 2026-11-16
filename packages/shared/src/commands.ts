@@ -26,6 +26,8 @@ export const CommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('explore') }),
   z.object({ type: z.literal('travel'), to: TravelTargetSchema }),
   z.object({ type: z.literal('rest'), untilHp: z.number().int().positive().optional(), maxTurns: z.number().int().positive().optional() }),
+  /** 既知の「自分が投げた物」を近い順に回収する */
+  z.object({ type: z.literal('collect') }),
   // 遠征
   z.object({ type: z.literal('extract'), confirm: z.boolean().optional() }),
   z.object({ type: z.literal('start_expedition'), offer: z.union([z.number().int().min(1).max(9), z.literal('endless')]) }),
@@ -40,7 +42,7 @@ export type CommandType = Command['type'];
 export type Target = z.infer<typeof TargetSchema>;
 export type TravelTarget = z.infer<typeof TravelTargetSchema>;
 
-export const MACRO_COMMANDS: ReadonlySet<CommandType> = new Set<CommandType>(['explore', 'travel', 'rest']);
+export const MACRO_COMMANDS: ReadonlySet<CommandType> = new Set<CommandType>(['explore', 'travel', 'rest', 'collect']);
 export const FREE_COMMANDS: ReadonlySet<CommandType> = new Set<CommandType>(['say', 'note', 'retire']);
 /** キャンプでのみ有効（手番に関係しない） */
 export const CAMP_COMMANDS: ReadonlySet<CommandType> = new Set<CommandType>(['start_expedition']);

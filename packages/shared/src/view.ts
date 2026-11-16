@@ -2,7 +2,7 @@
 // projectPlayerView はルール無しの純粋なフィルタ。仕様: docs/PROTOCOL.md §4
 import type {
   CampState, Controller, Entity, EntityId, EntityRole, EquipSlot, Expedition, ExpeditionEndReason, ExpeditionResult, FloorKey,
-  Locale, MonsterMemory, Objective, PlayerId, PlayerState, Pos, RememberedEntity, Stats, StatusInst, World,
+  Locale, MonsterMemory, Objective, OfferSlot, PlayerId, PlayerState, Pos, RememberedEntity, Stats, StatusInst, World,
 } from './types';
 
 export type HpState = 'healthy' | 'wounded' | 'badly_wounded' | 'near_death';
@@ -21,6 +21,8 @@ export interface ItemView {
   qty: number;
   affixes: string[];
   equipped: EquipSlot | null;
+  /** 宝の価値（見えた時点で分かる） */
+  value?: number;
 }
 
 export interface EntityView {
@@ -44,6 +46,16 @@ export interface EntityView {
   damageSeen?: number;
   /** 手負いで逃げている（追跡中でも extract・休息を妨げない） */
   fleeing?: boolean;
+  /** 自分のセルから投擲の経路が通る（モンスター） */
+  shot?: boolean;
+  /** この個体を初めて見た seq（モンスター） */
+  firstSeenSeq?: number;
+  /** 自分が投げた物（アイテム） */
+  mine?: boolean;
+  /** 宝の価値（アイテム） */
+  value?: number;
+  /** 倒すと戦利品に入る賞金（守護者・名前付きの強敵） */
+  bounty?: number;
 }
 
 export interface RememberedView {
@@ -56,6 +68,9 @@ export interface RememberedView {
   ft: number;
   state?: string;
   role?: EntityRole;
+  /** 自分が投げた物 */
+  mine?: boolean;
+  value?: number;
 }
 
 export interface SelfView {
@@ -102,6 +117,13 @@ export interface ExpeditionView {
   result: ExpeditionResult | null;
   startSeq: number;
   endSeq: number | null;
+  slot: OfferSlot | null;
+  traits: string[];
+  multiplierPct: number;
+  /** 共有の戦利品（賞金・発見・撃破）。目的・深追い・宝は観測で計算する */
+  haul: { bounty: number; discovery: number; kills: number };
+  /** この遠征で到達した最深階 */
+  maxDepth: number;
 }
 
 export interface PlayerView {
@@ -130,6 +152,8 @@ export interface PlayerView {
   camp: CampState | null;
   /** 最深到達階（パーティ全体の生成済み最深） */
   deepestDepth: number;
+  /** 自分の成績（スコア版 2 の確定点・失った戦利品・達成した遠征の数） */
+  record: { banked: number; lost: number; expeditions: number };
 }
 
 export function hpState(hp: number, maxHp: number): HpState {
@@ -218,14 +242,17 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
     const it = world.entities[id];
     if (!it?.item) continue;
     const mk = maskKind(world, k.identified, it.kind);
-    inventory.push({
+    const iv: ItemView = {
       id, slot: it.item.slot ?? '?', kind: mk.kind, appearanceId: mk.appearanceId,
       qty: it.item.qty, affixes: [...it.item.affixes], equipped: equippedBy[id] ?? null,
-    });
+    };
+    if (it.item.value !== undefined) iv.value = it.item.value;
+    inventory.push(iv);
   }
   inventory.sort((a, b) => (a.slot < b.slot ? -1 : a.slot > b.slot ? 1 : 0));
 
   const visibleSet = new Set(k.visible);
+  const shots = new Set(k.shots ?? []);
   const entities: EntityView[] = [];
   if (floor && floorKey) {
     const ordered: Entity[] = [];
@@ -242,6 +269,8 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
         const mk = maskKind(world, k.identified, e.kind);
         const iv: EntityView = { id: e.id, cat, kind: mk.kind, appearanceId: mk.appearanceId, pos, qty: e.item!.qty, affixes: [...e.item!.affixes] };
         if (e.role) iv.role = e.role;
+        if (e.item!.thrownBy === playerId) iv.mine = true;
+        if (e.item!.value !== undefined) iv.value = e.item!.value;
         entities.push(iv);
       } else if (cat === 'monster' || cat === 'player') {
         const v: EntityView = {
@@ -257,8 +286,12 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
             if (e.scale.tier > 0) v.tier = e.scale.tier;
           }
           if (e.role) v.role = e.role;
+          if (e.bounty) v.bounty = e.bounty;
           const ds = k.damageSeen?.[e.id];
           if (ds) v.damageSeen = ds;
+          v.shot = shots.has(e.id);
+          const met = k.metAt?.[e.id];
+          if (met !== undefined) v.firstSeenSeq = met;
         } else {
           const pr = world.players[e.player!];
           v.playerId = e.player;
@@ -276,8 +309,10 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
     const mk = r.cat === 'item' ? maskKind(world, k.identified, r.kind) : { kind: r.kind, appearanceId: null };
     const rv: RememberedView = { id: r.id, cat: r.cat, kind: mk.kind, appearanceId: mk.appearanceId, pos: { ...r.pos }, qty: r.qty, ft: r.ft, state: r.state };
     // 役割は見た時点で分かる不変の性質
-    const role = world.entities[r.id]?.role;
-    if (role) rv.role = role;
+    const we = world.entities[r.id];
+    if (we?.role) rv.role = we.role;
+    if (r.cat === 'item' && we?.item?.thrownBy === playerId && !we.item.heldBy) rv.mine = true;
+    if (r.cat === 'item' && we?.item?.value !== undefined) rv.value = we.item.value;
     return rv;
   });
 
@@ -297,8 +332,10 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
       status: latest.status, endReason: latest.endReason,
       progress: { reached: latest.progress.reached, guardianSlain: latest.progress.guardianSlain, relicHeld: held !== null, relicHeldByYou: held === me.id },
       extracted: latest.extracted.some((x) => x.player === playerId),
-      result: latest.result ? { ...latest.result } : null,
+      result: latest.result ? structuredClone(latest.result) : null,
       startSeq: latest.startSeq, endSeq: latest.endSeq,
+      slot: latest.slot ?? null, traits: [...(latest.traits ?? [])], multiplierPct: latest.multiplierPct ?? 100,
+      haul: { ...(latest.haul ?? { bounty: 0, discovery: 0, kills: 0 }) }, maxDepth: latest.progress.maxDepth ?? 0,
     };
   }
 
@@ -345,6 +382,7 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
     expedition,
     camp: !currentExpedition(world) && world.camp ? structuredClone(world.camp) : null,
     deepestDepth: deepestGenerated(world),
+    record: { banked: rec.stats.banked ?? 0, lost: rec.stats.lost ?? 0, expeditions: rec.stats.expeditions ?? 0 },
   };
 }
 

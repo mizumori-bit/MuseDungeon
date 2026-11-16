@@ -1,7 +1,7 @@
 // Scene の組み立て。(a) PlayerView（プレイ・追従観戦）と (b) World 全体（俯瞰）。
 // プレイヤー視点では未知セルを描かない。未鑑定アイテムは外見 ID でしか描かない。
 import type { Catalog, EntityView, Pos, PlayerView, World } from '@muse/shared';
-import { hpLeftEstimate, itemDisplayName, kindName, monsterDisplayName, nameOf } from '@muse/shared';
+import { hpEstimateText, hpLeftEstimate, itemDisplayName, kindName, monsterDisplayName, nameOf } from '@muse/shared';
 import type { AssetRef } from '../theme/types';
 import { getLocale, tr } from '../util';
 import type { Scene, SceneEntity } from './types';
@@ -25,11 +25,18 @@ function markStacks(ents: SceneEntity[]): void {
   for (const e of ents) if (e.layer === 'item') e.stack = counts.get(`${e.x},${e.y}`) ?? 1;
 }
 
-/** ツールチップ用: 役割の表示（守護者・遺物） */
-export function roleLabel(role: 'guardian' | 'relic' | undefined): string {
-  if (role === 'guardian') return tr(' ［守護者］', ' [guardian]');
+/** ツールチップ用: 役割の表示（守護者・遺物）。bounty があれば賞金も（守護者・名前付きの強敵） */
+export function roleLabel(role: 'guardian' | 'relic' | undefined, bounty?: number): string {
+  if (role === 'guardian') return bounty ? tr(` ［守護者・賞金 ${bounty}］`, ` [guardian, bounty ${bounty}]`) : tr(' ［守護者］', ' [guardian]');
   if (role === 'relic') return tr(' ［遺物］', ' [relic]');
+  if (bounty) return tr(` ［賞金 ${bounty}］`, ` [bounty ${bounty}]`);
   return '';
+}
+
+/** ツールチップ用: 宝の価値と、自分が投げた物の印 */
+export function itemTags(p: { value?: number; mine?: boolean }): string {
+  return (p.value !== undefined ? tr(` ［宝・価値 ${p.value}］`, ` [treasure ${p.value}]`) : '')
+    + (p.mine ? tr(' ［自分が投げた］', ' [yours]') : '');
 }
 
 export interface SceneExtras {
@@ -38,12 +45,15 @@ export interface SceneExtras {
   bubbles?: { id: string; text: string }[];
 }
 
-/** ツールチップ用: 自分が見た与ダメージの累計と推定残り HP（PlayerView の知識だけから） */
-function monsterKnowledge(view: PlayerView, e: EntityView): string {
+/** ツールチップ用: 自分が見た与ダメージの累計・推定残り HP・射線（PlayerView の知識だけから。観測と同じ計算） */
+function monsterKnowledge(view: PlayerView, catalog: Catalog, e: EntityView): string {
   const parts: string[] = [];
   if (e.damageSeen) parts.push(tr(`与ダメ累計 ${e.damageSeen}`, `dmg seen ${e.damageSeen}`));
-  const est = e.role !== 'guardian' && e.hp ? hpLeftEstimate(e.kind ? view.monsterMemory[e.kind] : undefined, e.hp, e.damageSeen ?? 0) : undefined;
-  if (est) parts.push(tr(`推定残りHP ${est.min}〜${est.max}`, `est. HP left ${est.min}-${est.max}`));
+  const est = e.role !== 'guardian' && e.hp
+    ? hpLeftEstimate(e.kind ? view.monsterMemory[e.kind] : undefined, e.hp, e.damageSeen ?? 0, catalog.rules?.estimateMinSamples ?? 3)
+    : undefined;
+  if (est) parts.push(`${tr('推定残りHP', 'est. HP left')} ${hpEstimateText(getLocale(), est)}`);
+  if (e.shot === false) parts.push(tr('射線: 通らない', 'shot: blocked'));
   return parts.length ? ` (${parts.join(', ')})` : '';
 }
 
@@ -70,7 +80,11 @@ export function sceneFromView(view: PlayerView, catalog: Catalog, extras: SceneE
     if (visibleIds.has(r.id)) continue;
     if (vis[r.pos.y * f.width + r.pos.x] === 2) continue;
     if (r.cat === 'item') {
-      ents.push({ id: r.id, layer: 'item', ref: { ...itemRef(catalog, r.kind, r.appearanceId), x: r.pos.x, y: r.pos.y }, x: r.pos.x, y: r.pos.y, label: itemDisplayName(catalog, L, r.kind, r.appearanceId) + roleLabel(r.role), statuses: [], affixes: [], remembered: true, role: r.role });
+      ents.push({
+        id: r.id, layer: 'item', ref: { ...itemRef(catalog, r.kind, r.appearanceId), x: r.pos.x, y: r.pos.y }, x: r.pos.x, y: r.pos.y,
+        label: itemDisplayName(catalog, L, r.kind, r.appearanceId) + (r.qty > 1 ? ` x${r.qty}` : '') + roleLabel(r.role) + itemTags(r),
+        statuses: [], affixes: [], remembered: true, role: r.role, treasure: r.value !== undefined,
+      });
     } else {
       ents.push({ id: r.id, layer: 'feature', ref: { cls: 'feature', id: r.kind ?? 'unknown', state: r.state }, x: r.pos.x, y: r.pos.y, label: kindName(catalog, L, r.kind), statuses: [], affixes: [], remembered: true });
     }
@@ -78,12 +92,16 @@ export function sceneFromView(view: PlayerView, catalog: Catalog, extras: SceneE
   for (const e of view.entities) {
     const base = { id: e.id, x: e.pos.x, y: e.pos.y, statuses: e.statuses ?? [], affixes: e.affixes ?? [], role: e.role };
     if (e.cat === 'item') {
-      ents.push({ ...base, layer: 'item', ref: { ...itemRef(catalog, e.kind, e.appearanceId), x: e.pos.x, y: e.pos.y }, label: itemDisplayName(catalog, L, e.kind, e.appearanceId, e.affixes ?? []) + ((e.qty ?? 1) > 1 ? ` x${e.qty}` : '') + roleLabel(e.role) });
+      ents.push({
+        ...base, layer: 'item', ref: { ...itemRef(catalog, e.kind, e.appearanceId), x: e.pos.x, y: e.pos.y },
+        label: itemDisplayName(catalog, L, e.kind, e.appearanceId, e.affixes ?? []) + ((e.qty ?? 1) > 1 ? ` x${e.qty}` : '') + roleLabel(e.role) + itemTags(e),
+        treasure: e.value !== undefined,
+      });
     } else if (e.cat === 'feature' || e.cat === 'trap') {
       ents.push({ ...base, layer: 'feature', ref: { cls: 'feature', id: e.kind ?? 'unknown', state: e.state }, label: kindName(catalog, L, e.kind) });
     } else if (e.cat === 'monster') {
       ents.push({
-        ...base, layer: 'actor', ref: { cls: 'actor', id: e.kind ?? 'unknown' }, label: monsterDisplayName(catalog, L, e) + roleLabel(e.role) + monsterKnowledge(view, e),
+        ...base, layer: 'actor', ref: { cls: 'actor', id: e.kind ?? 'unknown' }, label: monsterDisplayName(catalog, L, e) + roleLabel(e.role, e.bounty) + monsterKnowledge(view, catalog, e),
         hpBucket: e.hp, hostile: true, asleep: e.awareness === 'asleep',
       });
     } else {
@@ -128,7 +146,7 @@ export function sceneFromWorld(world: World, catalog: Catalog, floorKey: string,
       const af = (e.scale?.affixes ?? []).map((a) => nameOf(catalog.affixes[a]?.name, L, a)).join(L === 'en' ? ' ' : '');
       const nm = kindName(catalog, L, e.kind);
       ents.push({
-        ...base, layer: 'actor', ref: { cls: 'actor', id: e.kind }, label: (af ? (L === 'en' ? `${af} ${nm}` : af + nm) : nm) + tier + roleLabel(e.role),
+        ...base, layer: 'actor', ref: { cls: 'actor', id: e.kind }, label: (af ? (L === 'en' ? `${af} ${nm}` : af + nm) : nm) + tier + roleLabel(e.role, e.bounty),
         hpFrac: e.stats ? e.stats.hp / Math.max(1, e.stats.maxHp) : 1, hostile: true,
         asleep: !!e.actor.dormant || e.actor.ai?.state === 'asleep' || (e.statuses ?? []).some((s) => s.id === 'core:sleep'),
       });
@@ -137,7 +155,13 @@ export function sceneFromWorld(world: World, catalog: Catalog, floorKey: string,
       const category = catalog.items[e.kind]?.category;
       // 俯瞰でも未鑑定になり得る種別は外見で描く（画像から正体を漏らさない）
       const ref: AssetRef = app ? { cls: 'appearance', id: app, category, x: e.pos.x, y: e.pos.y } : { cls: 'item', id: e.kind, category, x: e.pos.x, y: e.pos.y };
-      ents.push({ ...base, layer: 'item', ref, label: itemDisplayName(catalog, L, e.kind, null, e.item.affixes) + (e.item.qty > 1 ? ` x${e.item.qty}` : '') + roleLabel(e.role) });
+      const thrower = e.item.thrownBy ? world.players[e.item.thrownBy]?.name : undefined;
+      ents.push({
+        ...base, layer: 'item', ref,
+        label: itemDisplayName(catalog, L, e.kind, null, e.item.affixes) + (e.item.qty > 1 ? ` x${e.item.qty}` : '') + roleLabel(e.role) + itemTags({ value: e.item.value })
+          + (thrower ? tr(` ［${thrower} が投げた］`, ` [thrown by ${thrower}]`) : ''),
+        treasure: e.item.value !== undefined,
+      });
     } else if (e.trap) {
       ents.push({ ...base, layer: 'feature', ref: { cls: 'feature', id: e.kind }, label: kindName(catalog, L, e.kind), hidden: e.trap.revealedTo.length === 0 });
     } else if (e.feature) {

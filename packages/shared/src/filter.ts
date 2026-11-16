@@ -16,7 +16,7 @@ const PLAYER_VISIBLE: ReadonlySet<EventType> = new Set<EventType>([
   'item_identified', 'feature_state', 'trap_revealed', 'trap_triggered',
   'noise', 'thought', 'chat', 'entity_removed',
   // 遠征（objective_progress は守護者・遺物の ID を含むので俯瞰専用）
-  'expedition_offered', 'expedition_started', 'objective_completed', 'expedition_ended',
+  'expedition_offered', 'expedition_started', 'objective_completed', 'expedition_ended', 'haul_changed',
 ]);
 
 /** 自分に関するときだけ渡す種別 */
@@ -63,7 +63,10 @@ export function filterEventsForPlayer(events: readonly GameEvent[], playerId: Pl
     switch (ev.type) {
       case 'damaged':
         delete pe.seenTotals;
-        if (ev.target !== selfId) delete pe.hpAfter;
+        if (ev.target !== selfId) { delete pe.hpAfter; delete pe.fromDir; }
+        break;
+      case 'attack':
+        if (ev.target !== selfId) delete pe.fromDir;
         break;
       case 'healed':
         if (ev.target !== selfId) delete pe.hpAfter;

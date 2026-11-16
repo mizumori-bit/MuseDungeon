@@ -184,10 +184,13 @@ export class RunStore {
         out.push({
           runId: id, playerId: p.id, name: p.name, classId: p.classId, controller: p.controller, deepest: p.deepest,
           kills: p.kills, level: p.level, turns: p.turns, score: p.score, deathCause: p.deathCause, endedAt,
-          expeditions: p.expeditions ?? 0, ongoing,
+          expeditions: p.expeditions ?? 0, ongoing, scoreVersion: s.scoreVersion ?? 1,
         });
       }
     }
-    return out.sort((a, b) => b.expeditions - a.expeditions || b.deepest - a.deepest || b.score - a.score || a.turns - b.turns || b.endedAt - a.endedAt).slice(0, 100);
+    // 版 2 は確定点、同点なら達成した遠征の数・最深。版 1 は従来どおり。版ごとに別の表（版 2 が先）
+    return out.sort((a, b) => b.scoreVersion - a.scoreVersion
+      || (a.scoreVersion === 2 ? b.score - a.score || b.expeditions - a.expeditions || b.deepest - a.deepest : b.expeditions - a.expeditions || b.deepest - a.deepest || b.score - a.score)
+      || a.turns - b.turns || b.endedAt - a.endedAt).slice(0, 200);
   }
 }

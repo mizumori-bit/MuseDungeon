@@ -3,7 +3,8 @@
 import type { Entity, Floor, FloorKey, Pos } from '@muse/shared';
 import { DIRS, DIR_VEC, rleEncode } from '@muse/shared';
 import type { Ctx } from './ctx';
-import { placementFor, recordTargets } from './expedition';
+import { activeEffects, placementFor, recordTargets } from './expedition';
+import { currentExpedition } from '@muse/shared';
 import { generateFloor } from './gen/generate';
 import { spawnFromSpec } from './spawn';
 
@@ -14,7 +15,13 @@ export function ensureFloor(ctx: Ctx, key: FloorKey): Floor {
   const depth = parseInt(depthStr, 10);
   // 遠征の目標階なら守護者・遺物を置く（生成の専用段。他の乱数ストリームはずれない）
   const objective = placementFor(ctx, branch, depth);
-  const gen = generateFloor(ctx.content, ctx.world.secret.seed, branch, depth, ctx.world.meta.terrainTable, objective ?? undefined);
+  // 遠征の条件は目標階までの新しい階に効く
+  const x = currentExpedition(ctx.world);
+  const fx = activeEffects(ctx);
+  const inRange = !!x && (x.objective.targetDepth === null || depth <= x.objective.targetDepth);
+  const mods = inRange && (x!.traits?.length ?? 0) > 0
+    ? { monstersPct: fx.monstersPct, itemsPct: fx.itemsPct, treasurePct: fx.treasurePct, noFountain: fx.noFountain } : undefined;
+  const gen = generateFloor(ctx.content, ctx.world.secret.seed, branch, depth, ctx.world.meta.terrainTable, objective ?? undefined, mods);
   const { terrain, ...floorData } = gen.floor;
   const prevFloor = ctx.curFloor;
   const prevNow = ctx.now;

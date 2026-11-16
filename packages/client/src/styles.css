@@ -202,3 +202,59 @@ button.exit { border-color: #2e8a4e; background: #1f4a30; }
 .tag.vstatus.at_camp { background: #2e3f2a; }
 .tag.vstatus.dead, .tag.vstatus.ended { background: #5a1f1f; }
 .board td.primary-col { font-weight: 700; }
+
+/* ---- v3: 戦利品・候補の性格・宝 ---- */
+.tag.banked { background: #4a3a10; color: #ffe08a; font-size: 11px; padding: 1px 8px; }
+.kv .banked b { color: #ffe08a; }
+.slot-badge { font-size: 10.5px; font-weight: normal; padding: 0 7px; border-radius: 8px; border: 1px solid transparent; white-space: nowrap; }
+.slot-badge.safe { background: #1f3f2a; border-color: #3f7a4e; color: #b8f0c4; }
+.slot-badge.standard { background: #1f3550; border-color: #3a6a96; color: #cfe4ff; }
+.slot-badge.ambitious { background: #4f2418; border-color: #a0502e; color: #ffcfb8; }
+.danger { display: inline-flex; align-items: center; gap: 2px; white-space: nowrap; }
+.danger i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #2f3442; border: 1px solid #4a5062; }
+.danger i.on { background: #ffb74d; border-color: #ffb74d; }
+.danger.d4 i.on, .danger.d5 i.on { background: #ef5350; border-color: #ef5350; }
+.danger.d1 i.on, .danger.d2 i.on { background: #81c784; border-color: #81c784; }
+.traits { list-style: none; margin: 2px 0 0; padding: 0; font-size: 12px; }
+.traits li { padding: 1px 0; }
+.traits .tmult { color: #ffe08a; }
+.traits .tdesc { color: var(--muted); }
+.traits.compact { display: flex; flex-wrap: wrap; gap: 2px 10px; }
+.haul { margin: 4px 0 2px; padding: 4px 6px; border: 1px solid #5a4a1a; border-radius: 6px; background: rgba(255,193,7,0.06); font-size: 12px; }
+.haul-total { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.haul-total .lbl { color: var(--muted); }
+.haul-total b { font-size: 15px; color: #ffe08a; }
+.haul-total .mult { color: #ffe08a; }
+.haul-total .banked { margin-left: auto; color: var(--muted); }
+.haul-parts { color: #d8c890; }
+.haul-now { display: flex; flex-wrap: wrap; gap: 2px 12px; margin-top: 2px; }
+.haul-now .now.complete { color: #8fe0a0; }
+.haul-now .now.withdraw { color: #ffcc80; }
+.haul-now .next { color: #b4d8ff; }
+.result.payout { margin: 4px 0; font-size: 12.5px; }
+.result.payout .rhead { color: #ffe08a; }
+.result.payout .rpay { display: flex; gap: 10px; flex-wrap: wrap; }
+.result.payout .gain { color: #8fe0a0; font-weight: 700; }
+.result.payout.died .gain, .result.payout.retired .gain { color: var(--muted); }
+.result.payout .lost { color: #ef9a9a; }
+.campbox .record { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 13px; margin-bottom: 6px; }
+.campbox .record b { color: #ffe08a; }
+.campbox .record .lost b { color: #ef9a9a; }
+.offers.cards li.offer { flex-direction: column; align-items: stretch; gap: 2px; padding: 6px 0; }
+.offer .ohead { display: flex; gap: 6px; align-items: center; }
+.offer .oidx { color: var(--muted); font-family: Consolas, monospace; }
+.offer .ometa { display: flex; flex-wrap: wrap; gap: 2px 14px; font-size: 12px; color: #cfd6e6; padding-left: 18px; }
+.offer .omult { color: #ffe08a; }
+.offer .olevel.under { color: #ffab91; }
+.offer .traits { padding-left: 18px; }
+.inv h3 .treasure, .inv em.treasure { color: #ffc107; }
+.chg.killed { background: #1f4a30; }
+.chg.died_seen { background: #3a3a3a; }
+.chg.reappeared { background: #24283a; color: var(--muted); }
+.modehint .aim { color: #8fe0a0; font-size: 12.5px; }
+.modehint .aim.blocked { color: #ffab91; }
+.modehint .notice { color: #ffcc80; font-size: 12.5px; max-width: 560px; }
+.lobby h4 { margin: 8px 0 4px; font-size: 12.5px; color: #ffe08a; }
+.board-old { margin-top: 10px; font-size: 12px; }
+.board-old summary { cursor: pointer; color: var(--muted); }
+.board-old .board { opacity: 0.85; }

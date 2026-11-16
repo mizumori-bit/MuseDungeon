@@ -16,6 +16,12 @@ interface Tween { from: Pos; to: Pos; start: number; dur: number }
 interface Bump { dx: number; dy: number; start: number; dur: number }
 
 const FONT_STACK = '"Consolas","Menlo","DejaVu Sans Mono","Noto Sans Mono",monospace';
+
+/** 同じセルのアイテムのうち上に見せる順（遺物 → 宝 → その他） */
+function itemRank(e: SceneEntity | undefined): number {
+  if (!e) return -1;
+  return e.role === 'relic' ? 2 : e.treasure ? 1 : 0;
+}
 const STATUS_COLORS: Record<string, string> = { 'core:poison': '#7ee060', 'core:haste': '#f0e060', 'core:slow': '#60a0f0', 'core:sleep': '#c0c0ff' };
 
 export class Canvas2DRenderer implements Renderer {
@@ -298,8 +304,8 @@ export class Canvas2DRenderer implements Renderer {
     for (const e of s.entities) {
       if (e.layer !== 'item') continue;
       const k = e.y * s.width + e.x;
-      // 遺物は同じセルの他のアイテムより優先して見せる
-      if (topItem.get(k)?.role !== 'relic') topItem.set(k, e);
+      // 遺物 → 宝 → その他の順に、同じセルの他のアイテムより優先して見せる
+      if (itemRank(e) >= itemRank(topItem.get(k))) topItem.set(k, e);
     }
     for (const layer of ['feature', 'item'] as const) {
       for (const e of s.entities) {
@@ -310,6 +316,7 @@ export class Canvas2DRenderer implements Renderer {
         this.drawEntity(ctx, theme.resolve({ ...e.ref, x: e.x, y: e.y }, now), sx(e.x), sy(e.y), cs);
         ctx.globalAlpha = 1;
         if (e.role === 'relic') this.drawRelicBadge(ctx, sx(e.x), sy(e.y), cs);
+        else if (e.treasure) this.drawTreasureBadge(ctx, sx(e.x), sy(e.y), cs);
         if (layer === 'item' && (e.stack ?? 1) > 1) {
           ctx.fillStyle = '#ffffff';
           ctx.font = `bold ${Math.round(cs * 0.32)}px ${FONT_STACK}`;
@@ -585,6 +592,39 @@ export class Canvas2DRenderer implements Renderer {
     ctx.strokeStyle = 'rgba(0,0,0,0.9)';
     ctx.stroke();
     ctx.fillStyle = '#fff59d';
+    ctx.fill();
+    ctx.restore();
+  }
+
+  /** 宝: 左下の金貨と、左上の小さなきらめき（遺物の光より控えめ。右上は「複数あり」の印） */
+  private drawTreasureBadge(ctx: CanvasRenderingContext2D, px: number, py: number, cs: number): void {
+    const r = cs * 0.15, cx = px + r + 2, cy = py + cs - r - 2;
+    ctx.save();
+    ctx.lineWidth = Math.max(1.2, cs * 0.05);
+    ctx.strokeStyle = 'rgba(0,0,0,0.9)';
+    ctx.fillStyle = '#ffc107';
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(140,90,0,0.95)';
+    ctx.lineWidth = Math.max(1, cs * 0.03);
+    ctx.beginPath();
+    ctx.arc(cx, cy, r * 0.55, 0, Math.PI * 2);
+    ctx.stroke();
+    const sr = cs * 0.13, scx = px + sr + 2, scy = py + sr + 2, q = sr * 0.25;
+    ctx.globalAlpha = 0.9;
+    ctx.fillStyle = '#fff8e1';
+    ctx.beginPath();
+    ctx.moveTo(scx, scy - sr);
+    ctx.lineTo(scx + q, scy - q);
+    ctx.lineTo(scx + sr, scy);
+    ctx.lineTo(scx + q, scy + q);
+    ctx.lineTo(scx, scy + sr);
+    ctx.lineTo(scx - q, scy + q);
+    ctx.lineTo(scx - sr, scy);
+    ctx.lineTo(scx - q, scy - q);
+    ctx.closePath();
     ctx.fill();
     ctx.restore();
   }

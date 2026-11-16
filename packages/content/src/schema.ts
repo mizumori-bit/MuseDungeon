@@ -28,6 +28,8 @@ export const TerrainSchema = z.object({
 export const MonsterSchema = z.object({
   id: IdSchema,
   name: NamesSchema,
+  /** 地図の 1 文字（種族ごとに一意。起動時に重複を検証） */
+  glyph: z.string().regex(/^[A-Za-z]$/, '英字 1 文字'),
   tags: z.array(z.string()).default([]),
   depth: DepthSchema,
   rarity: z.number().int().min(1),
@@ -71,6 +73,10 @@ export const ItemSchema = z.object({
   throw: z.object({ dmg: DiceSchema, range: z.number().int().min(1), acc: z.number().int().default(0) }).optional(),
   /** 投げて当たった時に onUse を対象に適用する（薬など） */
   shatter: z.boolean().default(false),
+  /** 自分に使うと害がある（鑑定済みなら use_item ではなく throw_item を候補に出す） */
+  harmful: z.boolean().default(false),
+  /** 宝（category: treasure）の価値: dice × mult × (100 + 深度 × perDepthPct) / 100。見えた時点で分かる */
+  value: z.object({ dice: DiceSchema, mult: z.number().int().min(1), perDepthPct: z.number().int().min(0).default(10) }).optional(),
   desc: NamesSchema.optional(),
 });
 
@@ -214,6 +220,16 @@ export const BalanceSchema = z.object({
   macro: z.object({ stepLimit: Int.min(1) }),
   wander: z.object({ firstAt: Int.min(0), intervalMin: Int.min(1), intervalMax: Int.min(1), maxAwake: Int.min(0), minDistance: Int.min(0) }),
   score: z.object({ perDepth: Int, perKill: Int, perLevel: Int }),
+  /** 推定残り HP: 記録がこの数未満の間は上限を出さない */
+  estimate: z.object({ minSamples: Int.min(1) }).default({ minSamples: 3 }),
+  /** 戦利品（IMPROVEMENTS_V3 §2.2） */
+  haul: z.object({
+    overreachFirst: Int.min(0), overreachStep: Int.min(0), perKill: Int.min(0),
+    discovery: z.object({ species: Int.min(0), identify: Int.min(0), room: Int.min(0), inscription: Int.min(0) }),
+    /** 撤退のときに確定する割合（目的の基礎点は含まない） */
+    withdrawPct: Int.min(0).max(100),
+    guardianBounty: z.object({ base: Int.min(0), perDepth: Int.min(0) }),
+  }),
   expedition: z.object({
     firstTargetDepth: Int.min(2),
     aheadMin: Int.min(1), aheadMax: Int.min(1),
@@ -223,7 +239,32 @@ export const BalanceSchema = z.object({
     pointsPerExtraDepth: Int,
     /** retrieve_relic で遺物を守護者が守る確率 */
     relicGuardianPct: Int.min(0).max(100),
+    /** 目的達成後の圧力（slay_guardian / retrieve_relic）: 徘徊の湧き間隔の割合 */
+    afterObjective: z.object({ wanderIntervalPct: Int.min(1).max(100) }),
+    /** 推奨レベル = 1 + floor(深度 × mul / div) */
+    recommendedLevel: z.object({ mul: Int.min(1), div: Int.min(1) }),
+    /** 候補の 3 枠: 目標の深さ（最深 + aheadMin〜aheadMax）、条件の数、基礎点の割合 */
+    slots: z.record(z.object({ aheadMin: Int.min(1), aheadMax: Int.min(1), traitsMin: Int.min(0), traitsMax: Int.min(0), pointsPct: Int.min(1) })),
   }),
+});
+
+/** 遠征の条件（公開の修飾。目標階までの全階に効く。倍率は帰還時の戦利品に掛かる） */
+export const ExpeditionTraitSchema = z.object({
+  id: IdSchema,
+  name: NamesSchema,
+  desc: NamesSchema,
+  multiplierPct: z.number().int().min(1),
+  /** 危険度への加算 */
+  danger: z.number().int(),
+  effects: z.object({
+    monstersPct: z.number().int().min(0).optional(),
+    itemsPct: z.number().int().min(0).optional(),
+    treasurePct: z.number().int().min(0).optional(),
+    wanderIntervalPct: z.number().int().min(1).optional(),
+    sightDelta: z.number().int().optional(),
+    noWander: z.boolean().optional(),
+    noFountain: z.boolean().optional(),
+  }).default({}),
 });
 
 export const FeatureSchema = z.object({
@@ -259,6 +300,7 @@ export type ClassDef = z.infer<typeof ClassSchema>;
 export type FeatureDef = z.infer<typeof FeatureSchema>;
 export type BalanceDef = z.infer<typeof BalanceSchema>;
 export type PacingDef = z.infer<typeof PacingSchema>;
+export type ExpeditionTraitDef = z.infer<typeof ExpeditionTraitSchema>;
 
 /** ファイル名 → スキーマ。新しい定義ファイル種別はここに 1 行足す */
 export const FILE_SCHEMAS = {
@@ -276,6 +318,7 @@ export const FILE_SCHEMAS = {
   classes: ClassSchema,
   features: FeatureSchema,
   balance: BalanceSchema,
+  expeditionTraits: ExpeditionTraitSchema,
 } as const;
 
 export type FileKind = keyof typeof FILE_SCHEMAS;

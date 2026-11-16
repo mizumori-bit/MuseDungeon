@@ -2,7 +2,7 @@
 
 - 版: 1.0（設計完了・実装引き渡し用）
 - 日付: 2026-11-15
-- 関連文書: [PROTOCOL.md](PROTOCOL.md)（MCPツール／観測／イベント／通信の仕様）、[ASSET_SPEC.md](ASSET_SPEC.md)（画像アセットの仕様）、[IMPROVEMENTS_V2.md](IMPROVEMENTS_V2.md)（実プレイ評価を受けた改善設計。未反映の変更を含む）、[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md)（実装順序と受け入れ基準）
+- 関連文書: [PROTOCOL.md](PROTOCOL.md)（MCPツール／観測／イベント／通信の仕様）、[ASSET_SPEC.md](ASSET_SPEC.md)（画像アセットの仕様）、[IMPROVEMENTS_V2.md](IMPROVEMENTS_V2.md)（実プレイ評価を受けた改善設計。§13 に反映済み）、[IMPROVEMENTS_V3.md](IMPROVEMENTS_V3.md)（2 回目の評価を受けた改善設計。未実装）、[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md)（実装順序と受け入れ基準）
 
 ---
 
@@ -574,3 +574,38 @@ interface Renderer {
 - 計測（`npx tsx packages/tools/src/cli.ts pacing --runs 100`、貪欲 bot）: 階段発見までの手番の中央値は深度 1〜2 で 45（目安 60）、3〜6 で 87（目安 90）、7 以上で 182。判断間隔（マクロ 1 回の平均手数）5.2（目安 20 以下）。1 階あたり 225 手番。最初の遠征は中央値 340 手番・行動の呼び出し 105 回で、100 ラン中 92 ランが達成。
 - `balance.json`（core:balance）: 回復・休息の倍率・休憩の上限・マクロの上限・徘徊・スコア係数・遠征の目標深度の幅と基礎点・遺物を守護者が守る確率。`get_rules` の数値は公開カタログの `rules` から生成する。
 - 生成が変わったのでコンテンツのバージョンが変わる（旧リプレイはイベントから再生するので影響しない）。v1 で進行中だったランは、復旧時の再実行が一致しない（ログはそのまま再生できる）。
+
+## 14. 改善 v3（V3-1 観測の修正・V3-2 戦利品と確定）
+
+経緯は [IMPROVEMENTS_V3.md](IMPROVEMENTS_V3.md)、評価は [feedback/AI_PLAYTEST_2026-11-16.md](feedback/AI_PLAYTEST_2026-11-16.md)。ここには実装で確定した設計を書く。プロトコルの詳細は [PROTOCOL.md](PROTOCOL.md) §1.2・§2・§3・§4・§5・§8。V3-3 以降は未実装。
+
+### 14.1 観測と操作の修正（V3-1）
+- 投擲: engine の `shotClear`（投擲と同じ `line` で、途中の地形と行動者を見る）を知覚の時点で計算し、`knowledge_updated.shotsAfter` に after 値で残す。観測の `shot` はそれを読むだけ。ID 指定で経路が通らなければ `no_line_of_sight`（状態を変えない）。結果は `item_thrown.outcome` の 5 通りで、どれも落下地点とともに文章になる。
+- 投げた物には `item.thrownBy` を付け、投げた本人がそのマスに入ると拾う（`item_picked_up.auto`。手番を追加しない。所持品が一杯なら拾わない）。`collect` マクロは既知の自分の物を近い順に回る。
+- `changes`: `killed` / `died_seen` は知覚したイベント（`died`・`attack`）で区別する。`new_hostile` は「このランで初めて見た個体」で、判定に使う「初めて見た seq」は `knowledge_updated.metAtAfter`（engine が `seq + 1` を入れ、reducer は代入だけ。reducer で計算すると旧ログの畳み込みが変わるため）。それ以外の再出現は `reappeared`。
+- マクロの停止: 初見の個体・追跡中で現れた既知の個体・追跡への変化・被攻撃（外れも）・被弾。逃走中の個体では止まらない。`rest` は敵が視界に入ると止まる。
+- `outcome` の被害合計: 行動から次の手番までのイベントのうち自分が対象の `attack`・`damaged`・`healed` から数える（`PlayerPort.act`）。知覚ログ（文章のある出来事）は通常の命中の `attack` を持たないので使わない。HP の前後と、間の回復を添える。
+- マクロは攻撃しない（次のマスに敵がいれば `blocked`）。隣に起きている敵（逃走中を除く）がいれば動かない（`hostile_adjacent`）。
+- 姿の見えない攻撃者は `fromDir`（被害者にだけ渡す）で方向だけを文章にする。射撃の最長距離は、見ていた者の思い出（`rangeMax`）にだけ入る。
+- 推定残り HP は記録が `balance.estimate.minSamples`（3）体未満の間は上限を出さない。
+- 地図: 種族ごとに一意の `glyph`（content で検証）、上 2 行の x 目盛りと行頭の y 目盛り、フロア外のクリップ。同じセルの同種のアイテムは 1 行にまとめる。
+- 文章: 接辞名を含むアイテム名、射撃の動詞の統一、`look`・`recall` に体力の記録と推定、キャンプ専用のテキスト、`get_rules classes`、観測の `self.speed`。
+- 応答の量: `set_options`（地図 auto／所持品 on_change／▶ 行 short が既定）。サーバーがプレイヤーごとに前回の応答（既知セル数・所持品の要約・状態）を持ち、変化が無い欄を省く。`structuredContent` は省かない。
+
+### 14.2 戦利品と確定点（V3-2）
+- スコア版 2: ランのスコア = 確定点（`player.stats.banked`）の合計。払い戻しは帰還 = 戦利品 × 倍率、撤退 = (戦利品 − 目的) × `withdrawPct`%、死亡・引退 = 0（`stats.lost` に記録）。式は `shared/catalog.ts` の `haulTotal`・`payoutOf`・`overreachPoints`・`nextOverreach` で、engine と観測が同じ関数を使う（観測の `if_extract_now` = 実際の払い戻し、をテストで確かめる）。`RunSummary.scoreVersion: 2`。記録の一覧は版ごとに並べ、版 1 の記録は別の表として残す。
+- 戦利品のうち、賞金・発見・撃破は遠征に共有の `expedition.haul` として積む（`haul_changed`。各 step の終わりに、その step のイベント（`died`・`item_identified`）から `accrueHaul` が数える。種族の発見は、思い出の撃破数からその step で倒した数を引いて 0 のとき 1 回）。目的・深追い・宝は World から公開の式で毎回計算する（深追いは `progress.maxDepth`、宝は所持品の `item.value`）。
+- 宝: 分類 `treasure`、`value {dice, mult, perDepthPct}` は生成時に振って `item.value` に入れる（同じシードなら同じ）。初期 6 種。出どころは通常の床（loot の重み 6）・宝物庫（15）・守護者の確定ドロップ（`core:treasure_loot`）・条件 `crowded` の追加分。`extract` で換金し、所持品から消す（`objective_progress.extractedAfter[].treasure`）。
+- 守護者の賞金 = `guardianBounty.base + perDepth × 深度`（生成時に `bounty`）。
+- 目的達成後の圧力: `slay_guardian`・`retrieve_relic` の達成後は徘徊の湧き間隔 × `afterObjective.wanderIntervalPct`（50%）。遺物を拾うと、その階の眠っている・気づいていない敵が起きて遺物の場所へ向かう。どちらも公開ルールで、`changes` の文章で知らせる。
+- 候補の 3 枠: `balance.expedition.slots` の `aheadMin/Max`（生成済みの最深階からの幅）・`traitsMin/Max`・`pointsPct`。最初の遠征は `firstTargetDepth` から（野心は 1 階深い）。候補は `expedition|通番` のシードから作るので再現する。
+- 条件 `expeditionTraits`（`data/core/expeditionTraits.json`）: `monstersPct`・`itemsPct`・`treasurePct`・`wanderIntervalPct`・`sightDelta`・`noWander`・`noFountain` と倍率・危険度。目標階までに生成する階に効く（`GenMods`、徘徊は scheduler、視界は stats）。`elite`（名前付きの強敵）は V3-5 の名前付きの敵と一緒に入れる（未実装）。`treasurePct` は 150 で宝 1 個、以後 50 ごとに 1 個を追加で置く。
+- 危険度 = clamp(3 + 推奨レベル(目標深度) − レベル + 条件の危険度, 1, 5)、推奨レベル = 1 + floor(深度 × `recommendedLevel.mul` / `div`)。
+- 計測（`npm run choices -- --runs 40`、貪欲 bot。深追いの方針は「HP 60% 未満になったらその場で帰る」）:
+
+| 比べたもの | 方針ごとの確定点の中央値 | 最良/最悪 | 遠征あたりの死亡率 |
+|---|---|---|---|
+| 粘るか帰るか（標準枠） | 即帰還 6250／1 階深追い 5261／2 階深追い 6034 | 1.19 | 37%／46%／54% |
+| 遠征候補（即帰還） | 堅実 5968／標準 6250／野心 5922 | 1.06 | 28%／37%／53% |
+
+  目安（どれも他の 0.8〜1.25 倍、野心の死亡率が明確に高い）に入る（評価で見つかった不具合を直した後の値）。ただし AI プレイヤーの評価では、2 体とも「最初の深追いは着いた階段ですぐ帰れるのでほぼ無料、迷わない」と答えた。bot の比が目安に入ることは、選択が本当に割れていることの証明にはならない。調整した値: `overreachFirst` 600→1000、`overreachStep` 300→500、`slots.safe.pointsPct` 70→80、`slots.ambitious.pointsPct` 130→150。ランは死亡か 1500 行動まで続けるので、ランの死亡率はどの方針も 90% 前後になる（比べるのは遠征あたりの死亡率）。中央値は 40 ランでもぶれがある（±10% 程度）。

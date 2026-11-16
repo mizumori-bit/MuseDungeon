@@ -63,7 +63,8 @@ export interface Entity {
   base?: BaseStats;
   inv?: { items: EntityId[]; capacity: number };
   equip?: Partial<Record<EquipSlot, EntityId>>;
-  item?: { qty: number; affixes: string[]; heldBy?: EntityId; slot?: string };
+  /** thrownBy: 床に落ちている投げた物の持ち主（その人が上に入ると自動で拾う） */
+  item?: { qty: number; affixes: string[]; heldBy?: EntityId; slot?: string; thrownBy?: PlayerId; value?: number };
   statuses?: StatusInst[];
   trap?: { revealedTo: PlayerId[] };
   feature?: { state: string };
@@ -74,6 +75,8 @@ export interface Entity {
   xp?: number;
   /** 遠征の目的に関わる個体（守護者・遺物） */
   role?: EntityRole;
+  /** 倒すと遠征の戦利品に入る賞金（守護者・名前付きの強敵） */
+  bounty?: number;
 }
 
 export type EntityRole = 'guardian' | 'relic';
@@ -118,6 +121,8 @@ export interface MonsterMemory {
   abilities: string[];
   /** 目の前で倒れた個体の最大 HP（守護者は除く） */
   hpSeen?: { min: number; max: number; samples: number };
+  /** 観測した遠隔攻撃の最長距離 */
+  rangeMax?: number;
 }
 
 export interface RememberedEntity {
@@ -148,6 +153,10 @@ export interface Knowledge {
   met: EntityId[];
   /** 自分が見ている間にその個体が受けた実ダメージの合計（生存中の個体のみ） */
   damageSeen?: Record<EntityId, number>;
+  /** 自分のセルから投擲の経路が通る、視界内の敵 */
+  shots?: EntityId[];
+  /** 個体を初めて見た seq（met と同時に記録） */
+  metAt?: Record<EntityId, number>;
 }
 
 export interface PlayerStats {
@@ -159,6 +168,9 @@ export interface PlayerStats {
   /** 達成した遠征の数と、その基礎点の合計 */
   expeditions?: number;
   expeditionPoints?: number;
+  /** スコア版 2: 確定点の合計と、死亡・引退で失った戦利品の合計 */
+  banked?: number;
+  lost?: number;
 }
 
 export interface Controller { kind: 'agent' | 'human'; label: string }
@@ -192,6 +204,8 @@ export interface Objective {
   targetDepth: number | null;
 }
 
+export type OfferSlot = 'safe' | 'standard' | 'ambitious';
+
 export interface ExpeditionOffer {
   /** 1 始まりの番号（start_expedition の offer） */
   index: number;
@@ -200,6 +214,29 @@ export interface ExpeditionOffer {
   points: number;
   /** retrieve_relic: 遺物を守護者が守る */
   relicGuarded: boolean;
+  /** 枠（堅実・標準・野心）。古いランには無い */
+  slot?: OfferSlot;
+  /** 条件（expeditionTraits の ID） */
+  traits?: string[];
+  /** 帰還時の戦利品に掛かる倍率（%） */
+  multiplierPct?: number;
+}
+
+/** 遠征の戦利品のうち、参加者で共有する部分（目的・深追い・宝は別に計算する） */
+export interface ExpeditionHaul {
+  bounty: number;
+  discovery: number;
+  kills: number;
+}
+
+/** 戦利品の内訳 */
+export interface HaulParts {
+  objective: number;
+  overreach: number;
+  treasure: number;
+  bounty: number;
+  discovery: number;
+  kills: number;
 }
 
 export interface CampState {
@@ -214,6 +251,8 @@ export interface ObjectiveProgress {
   guardianSlain: boolean;
   /** 遺物を持っているプレイヤーのエンティティ */
   relicHeldBy: EntityId | null;
+  /** この遠征で参加者が到達した最深階（深追いの計算用） */
+  maxDepth?: number;
 }
 
 export interface ExpeditionResult {
@@ -224,6 +263,8 @@ export interface ExpeditionResult {
   deepest: number;
   kills: number;
   turns: number;
+  /** スコア版 2 の払い戻し（参加者の合計） */
+  payout?: { banked: number; lost: number; multiplierPct: number; parts: HaulParts; players: { player: PlayerId; banked: number; lost: number }[] };
 }
 
 export interface Expedition {
@@ -241,8 +282,13 @@ export interface Expedition {
   /** 目標階に配置した守護者・遺物（目標階の生成時に決まる。プレイヤーには渡さない） */
   targets: { guardian: EntityId | null; relic: EntityId | null };
   progress: ObjectiveProgress;
-  extracted: { player: PlayerId; completed: boolean }[];
+  /** treasure: extract のときに持ち帰った宝の価値の合計 */
+  extracted: { player: PlayerId; completed: boolean; treasure?: number }[];
   result: ExpeditionResult | null;
+  slot?: OfferSlot;
+  traits?: string[];
+  multiplierPct?: number;
+  haul?: ExpeditionHaul;
 }
 
 export type RngState = [number, number, number, number];
@@ -305,6 +351,8 @@ export interface RunSummaryPlayer {
   score: number;
   /** 達成した遠征の数 */
   expeditions?: number;
+  /** スコア版 2 の確定点 */
+  banked?: number;
 }
 
 export interface ExpeditionBrief {
@@ -325,6 +373,8 @@ export interface RunSummary {
   players: RunSummaryPlayer[];
   /** 遠征ごとの記録 */
   expeditions?: ExpeditionBrief[];
+  /** 2: score は確定点（IMPROVEMENTS_V3 §2.2）。無ければ版 1（深度×1000 ほか） */
+  scoreVersion?: 1 | 2;
 }
 
 export function floorKey(branch: string, depth: number): FloorKey {

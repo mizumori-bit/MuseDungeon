@@ -1,13 +1,13 @@
 [
   {
-    "id": "core:cave_rat", "name": { "ja": "大ネズミ", "en": "giant rat" }, "tags": ["animal", "cave", "vermin"],
+    "id": "core:cave_rat", "glyph": "r", "name": { "ja": "大ネズミ", "en": "giant rat" }, "tags": ["animal", "cave", "vermin"],
     "depth": { "min": 1, "peak": 2, "max": 6 }, "rarity": 1,
     "stats": { "hp": "1d6+1", "acc": 1, "eva": 2, "might": 0, "armor": 0, "sight": 6 },
     "speed": 110, "attack": { "dice": "1d3" },
     "ai": { "archetype": "melee_chaser" }, "xp": 1, "sleepPct": 40, "abilities": ["fast"]
   },
   {
-    "id": "core:goblin", "name": { "ja": "ゴブリン", "en": "goblin" }, "tags": ["humanoid", "cave", "ruins"],
+    "id": "core:goblin", "glyph": "g", "name": { "ja": "ゴブリン", "en": "goblin" }, "tags": ["humanoid", "cave", "ruins"],
     "depth": { "min": 1, "peak": 3, "max": 9 }, "rarity": 1,
     "stats": { "hp": "2d4+2", "acc": 2, "eva": 1, "might": 0, "armor": 0, "sight": 7 },
     "speed": 100, "attack": { "dice": "1d6" },
@@ -15,14 +15,14 @@
     "drops": [{ "table": "core:common_loot", "chancePct": 25 }], "abilities": ["flees"]
   },
   {
-    "id": "core:jackal", "name": { "ja": "ジャッカル", "en": "jackal" }, "tags": ["animal", "pack", "ruins"],
+    "id": "core:jackal", "glyph": "j", "name": { "ja": "ジャッカル", "en": "jackal" }, "tags": ["animal", "pack", "ruins"],
     "depth": { "min": 1, "peak": 3, "max": 8 }, "rarity": 2,
     "stats": { "hp": "1d6+2", "acc": 2, "eva": 3, "might": 0, "armor": 0, "sight": 8 },
     "speed": 120, "attack": { "dice": "1d4" },
     "ai": { "archetype": "pack", "alertRadius": 7 }, "xp": 2, "group": { "min": 2, "max": 4 }, "abilities": ["fast", "pack"]
   },
   {
-    "id": "core:spore_mold", "name": { "ja": "毒カビ", "en": "spore mold" }, "tags": ["plant", "cave", "stationary"],
+    "id": "core:spore_mold", "glyph": "m", "name": { "ja": "毒カビ", "en": "spore mold" }, "tags": ["plant", "cave", "stationary"],
     "depth": { "min": 2, "peak": 5, "max": 14 }, "rarity": 2,
     "stats": { "hp": "3d4+4", "acc": 3, "eva": 0, "might": 0, "armor": 1, "sight": 2 },
     "speed": 100,
@@ -30,7 +30,7 @@
     "ai": { "archetype": "stationary" }, "xp": 3, "sleepPct": 0, "abilities": ["poison", "stationary"]
   },
   {
-    "id": "core:goblin_slinger", "name": { "ja": "ゴブリンの投石兵", "en": "goblin slinger" }, "tags": ["humanoid", "ranged", "ruins"],
+    "id": "core:goblin_slinger", "glyph": "s", "name": { "ja": "ゴブリンの投石兵", "en": "goblin slinger" }, "tags": ["humanoid", "ranged", "ruins"],
     "depth": { "min": 2, "peak": 5, "max": 11 }, "rarity": 2,
     "stats": { "hp": "2d4+1", "acc": 2, "eva": 2, "might": 0, "armor": 0, "sight": 8 },
     "speed": 100, "attack": { "dice": "1d3" }, "ranged": { "dice": "1d5", "range": 6, "acc": 1 },
@@ -38,14 +38,14 @@
     "drops": [{ "table": "core:common_loot", "chancePct": 30 }], "abilities": ["ranged"]
   },
   {
-    "id": "core:imp", "name": { "ja": "小悪魔", "en": "imp" }, "tags": ["demon", "ruins", "cave"],
+    "id": "core:imp", "glyph": "i", "name": { "ja": "小悪魔", "en": "imp" }, "tags": ["demon", "ruins", "cave"],
     "depth": { "min": 3, "peak": 6, "max": 14 }, "rarity": 2,
     "stats": { "hp": "3d4+2", "acc": 4, "eva": 6, "might": 1, "armor": 0, "sight": 8 },
     "speed": 130, "attack": { "dice": "1d5" },
     "ai": { "archetype": "skittish", "fleeBelowHpPct": 50 }, "xp": 7, "abilities": ["fast", "flees"]
   },
   {
-    "id": "core:orc_brute", "name": { "ja": "オークの荒くれ", "en": "orc brute" }, "tags": ["humanoid", "halls"],
+    "id": "core:orc_brute", "glyph": "O", "name": { "ja": "オークの荒くれ", "en": "orc brute" }, "tags": ["humanoid", "halls"],
     "depth": { "min": 4, "peak": 8, "max": 18 }, "rarity": 2,
     "stats": { "hp": "4d6+6", "acc": 4, "eva": 1, "might": 2, "armor": 2, "sight": 7 },
     "speed": 100, "attack": { "dice": "1d10" },
@@ -53,7 +53,7 @@
     "drops": [{ "table": "core:common_loot", "chancePct": 40 }], "abilities": []
   },
   {
-    "id": "core:cave_troll", "name": { "ja": "洞窟トロル", "en": "cave troll" }, "tags": ["giant", "cave"],
+    "id": "core:cave_troll", "glyph": "T", "name": { "ja": "洞窟トロル", "en": "cave troll" }, "tags": ["giant", "cave"],
     "depth": { "min": 7, "peak": 12 }, "rarity": 3,
     "stats": { "hp": "6d8+10", "acc": 5, "eva": 0, "might": 3, "armor": 3, "sight": 6 },
     "speed": 80, "attack": { "dice": "2d6+2" },

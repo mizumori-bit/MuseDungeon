@@ -209,6 +209,11 @@ export function applyEvent(world: World, ev: GameEvent): void {
         else fk.remembered.push(clone(r));
       }
       for (const id of ev.metAdd) p.knowledge.met.push(id);
+      if (ev.metAtAfter) {
+        if (!p.knowledge.metAt) p.knowledge.metAt = {};
+        for (const [id, s] of Object.entries(ev.metAtAfter)) p.knowledge.metAt[id] = s;
+      }
+      if (ev.shotsAfter) p.knowledge.shots = [...ev.shotsAfter];
       break;
     }
     case 'monster_memory_updated':
@@ -234,6 +239,9 @@ export function applyEvent(world: World, ev: GameEvent): void {
     }
     case 'objective_completed':
       expedition(world, ev.no).status = 'objective_complete';
+      break;
+    case 'haul_changed':
+      expedition(world, ev.no).haul = clone(ev.haulAfter);
       break;
     case 'expedition_ended': {
       const x = expedition(world, ev.no);

@@ -2,7 +2,8 @@
 // プレイヤーがいるフロアごとに nextActAt 最小（同値は挿入順）のアクターを次の行動者にする。
 // モンスターは AI が即決、プレイヤーならコマンドを待つ。プレイヤーがいないフロアは凍結。
 import type { Entity, FloorKey } from '@muse/shared';
-import { cheb, regenInterval, regenStep } from '@muse/shared';
+import { cheb, floorDiv, regenInterval, regenStep } from '@muse/shared';
+import { wanderPct } from './expedition';
 import { monsterTurn } from './ai';
 import { heal } from './combat';
 import type { Ctx } from './ctx';
@@ -86,8 +87,11 @@ function beginPlayerTurn(ctx: Ctx, pe: Entity): boolean {
   const f = ctx.world.floors[key];
   const wb = ctx.content.balance.wander;
   if (!f.rules.noWander && cur.actor!.nextActAt >= f.nextWanderAt) {
-    spawnWanderer(ctx, key);
-    ctx.emit({ type: 'floor_wander', nextWanderAt: cur.actor!.nextActAt + wb.intervalMin + ctx.rng('runtime').int(Math.max(1, wb.intervalMax - wb.intervalMin)), seenBy: [], floor: key });
+    // 遠征の条件と、目的達成後の圧力で間隔が変わる
+    const wp = wanderPct(ctx);
+    if (!wp.none) spawnWanderer(ctx, key);
+    const base = wb.intervalMin + ctx.rng('runtime').int(Math.max(1, wb.intervalMax - wb.intervalMin));
+    ctx.emit({ type: 'floor_wander', nextWanderAt: cur.actor!.nextActAt + Math.max(1, floorDiv(base * wp.pct, 100)), seenBy: [], floor: key });
   }
   // 罠の発見
   const cls = ctx.content.classes[pr.classId];

@@ -6,7 +6,8 @@
       { "category": "scroll", "weight": 22 },
       { "category": "weapon", "weight": 10 },
       { "category": "armor", "weight": 8 },
-      { "category": "throwing", "weight": 12 }
+      { "category": "throwing", "weight": 12 },
+      { "category": "treasure", "weight": 6 }
     ],
     "depthBonus": 0, "affixChancePct": 10
   },
@@ -18,8 +19,16 @@
       { "category": "weapon", "weight": 18 },
       { "category": "armor", "weight": 15 },
       { "category": "throwing", "weight": 10 },
-      { "item": "core:potion_vigor", "weight": 6 }
+      { "item": "core:potion_vigor", "weight": 6 },
+      { "category": "treasure", "weight": 15 }
     ],
     "depthBonus": 3, "affixChancePct": 40
+  },
+  {
+    "id": "core:treasure_loot",
+    "entries": [
+      { "category": "treasure", "weight": 1 }
+    ],
+    "depthBonus": 1, "affixChancePct": 0
   }
 ]

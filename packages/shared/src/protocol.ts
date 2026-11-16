@@ -102,10 +102,12 @@ export interface LeaderboardEntry {
   score: number;
   deathCause: string | null;
   endedAt: number;
-  /** 達成した遠征の数（主な並び順） */
+  /** 達成した遠征の数 */
   expeditions: number;
   /** ラン終了前（キャンプ中）の記録か */
   ongoing: boolean;
+  /** 1: 旧スコア（深度×1000 ほか）、2: 確定点。版ごとに別の表として扱う */
+  scoreVersion: 1 | 2;
 }
 
 export type ObjectiveChoice = 'auto' | ObjectiveType;

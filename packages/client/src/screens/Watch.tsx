@@ -231,16 +231,16 @@ export function Watch({ runId }: { runId: string }) {
     if (followOnly) {
       const v = viewRef.current;
       if (v) {
-        expInfo = followExpInfo(v);
+        expInfo = followExpInfo(v, catalog);
         if (v.status === 'at_camp') campNote = tr(`${v.self.name} はキャンプにいる（盤面の外）`, `${v.self.name} is at camp (off the board)`);
       }
     } else if (w) {
       if (mode === 'follow' && follow && w.players[follow]) {
-        expInfo = followExpInfo(projectPlayerView(w, follow));
+        expInfo = followExpInfo(projectPlayerView(w, follow), catalog);
         if (w.players[follow].state === 'at_camp') campNote = tr(`${w.players[follow].name} はキャンプにいる（盤面の外）`, `${w.players[follow].name} is at camp (off the board)`);
       } else {
         const fk = featuredFloor(w);
-        expInfo = directorExpInfo(w, fk ? w.floors[fk]?.depth ?? null : null);
+        expInfo = directorExpInfo(w, fk ? w.floors[fk]?.depth ?? null : null, catalog);
       }
     }
   } catch {
