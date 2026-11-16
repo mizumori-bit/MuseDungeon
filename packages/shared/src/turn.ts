@@ -19,7 +19,9 @@ export type Awaiting = 'action' | 'camp_choice' | 'nothing';
 
 export type ChangeCode =
   | 'new_hostile' | 'reappeared' | 'hostile_gone' | 'killed' | 'died_seen' | 'hp_dropped' | 'hp_low' | 'status_gained' | 'status_lost' | 'level_up'
-  | 'item_found' | 'stairs_found' | 'floor_changed' | 'objective_progress' | 'objective_complete' | 'can_extract' | 'next_camp';
+  | 'item_found' | 'stairs_found' | 'floor_changed' | 'objective_progress' | 'objective_complete' | 'can_extract' | 'next_camp'
+  /** 守護者が倒れた（ほかの変化と別の行で先頭に出す。V3-2R2 §18.6） */
+  | 'guardian_slain';
 
 export interface Change { code: ChangeCode; text: string; entity?: string }
 
@@ -59,6 +61,8 @@ export interface TurnSnapshot {
   /** 見えていた敵の位置（消えたときに「最後に見た位置」を添える） */
   hostilePos?: Record<string, { x: number; y: number }>;
   items: Record<string, string>;
+  /** これまでの応答で報告したアイテム（同じ階。記憶の一覧に出入りしても「見つけた」を繰り返さない） */
+  reportedItems?: string[];
   stairs: string[];
   expNo: number | null;
   expStatus: string | null;
@@ -90,7 +94,7 @@ export function turnSnapshot(view: PlayerView, obs: Observation, state: TurnStat
     statusNames: Object.fromEntries(obs.self.statuses.map((s) => [s.id, s.name])),
     hostiles: Object.fromEntries(obs.visible.monsters.map((m) => [m.id, m.name])),
     hostilePos: Object.fromEntries(obs.visible.monsters.map((m) => [m.id, { x: m.pos.x, y: m.pos.y }])),
-    items: Object.fromEntries(obs.visible.items.map((i) => [i.id, i.name])),
+    items: Object.fromEntries(obs.visible.items.flatMap((i) => (i.ids ?? [i.id]).map((id) => [id, i.name]))),
     stairs: obs.navigation.known_stairs.map((s) => `${s.type}@${s.pos.x},${s.pos.y}`).sort(),
     expNo: x?.no ?? null,
     expStatus: x?.status ?? null,
@@ -104,7 +108,7 @@ export function turnSnapshot(view: PlayerView, obs: Observation, state: TurnStat
 }
 
 const PRIORITY: ChangeCode[] = [
-  'floor_changed', 'objective_complete', 'objective_progress', 'next_camp', 'can_extract', 'hp_low', 'killed', 'died_seen', 'hp_dropped', 'new_hostile',
+  'guardian_slain', 'floor_changed', 'objective_complete', 'objective_progress', 'next_camp', 'can_extract', 'hp_low', 'killed', 'died_seen', 'hp_dropped', 'new_hostile',
   'level_up', 'status_gained', 'status_lost', 'item_found', 'stairs_found', 'reappeared', 'hostile_gone',
 ];
 
@@ -139,7 +143,7 @@ export function diffChanges(prev: TurnSnapshot | null, cur: TurnSnapshot, view: 
     if (cur.relicHeld && !prev.relicHeld) out.push({ code: 'objective_progress', text: t(L, '遺物を手に入れた（この階の眠っていた敵が目を覚ました）', 'You now carry the relic (the sleepers on this floor have woken)') });
     if (!cur.relicHeld && prev.relicHeld) out.push({ code: 'objective_progress', text: t(L, '遺物を手放した', 'You no longer carry the relic') });
     if (cur.progress !== prev.progress && view.expedition?.progress.guardianSlain && !JSON.parse(prev.progress || '{}').guardianSlain) {
-      out.push({ code: 'objective_progress', text: t(L, '守護者が倒れた', 'The guardian has fallen') });
+      out.push({ code: 'guardian_slain', text: t(L, '★ 守護者が倒れた', '★ The guardian has fallen') });
     }
   }
   if (cur.canExtract && !prev.canExtract) out.push({ code: 'can_extract', text: t(L, 'この場で extract できる', 'You can extract here') });
@@ -165,9 +169,12 @@ export function diffChanges(prev: TurnSnapshot | null, cur: TurnSnapshot, view: 
       ? { code: 'killed', text: t(L, `倒した: ${name}`, `Killed: ${name}`), entity: id }
       : { code: 'died_seen', text: t(L, `目の前で倒れた: ${name}`, `Died in front of you: ${name}`), entity: id });
   }
+  // 報告済みの個体は階・遠征をまたいで引き継ぐ（一度見た個体が後の遠征で「新たな敵」にならない）
+  const reported = new Set([...(prev.reported ?? []), ...Object.keys(prev.hostiles)]);
+  cur.reported = [...new Set([...reported, ...Object.keys(cur.hostiles)])];
+  const seenItems = new Set([...(prev.reportedItems ?? []), ...Object.keys(prev.items)]);
+  cur.reportedItems = [...new Set([...seenItems, ...Object.keys(cur.items)])];
   if (sameFloor) {
-    const reported = new Set([...(prev.reported ?? []), ...Object.keys(prev.hostiles)]);
-    cur.reported = [...new Set([...reported, ...Object.keys(cur.hostiles)])];
     for (const m of obs.visible.monsters) {
       if (m.id in prev.hostiles) continue;
       // 前の応答で一度でも報告した個体だけを「再び見えた」にする（マクロの途中で一瞬見えただけの個体は「新たな敵」）
@@ -189,7 +196,7 @@ export function diffChanges(prev: TurnSnapshot | null, cur: TurnSnapshot, view: 
       const where = [lp ? t(L, `最後に見た位置 (${lp.x},${lp.y})`, `last seen (${lp.x},${lp.y})`) : '', out1 ? t(L, `${dirLabel(L, out1 as Dir)}へ`, `heading ${out1}`) : ''].filter(Boolean).join(L === 'en' ? ', ' : '・');
       out.push({ code: 'hostile_gone', text: t(L, `見えなくなった敵: ${name}${where ? `（${where}）` : ''}`, `Out of sight: ${name}${where ? ` (${where})` : ''}`), entity: id });
     }
-    const newItems = Object.entries(cur.items).filter(([id]) => !(id in prev.items));
+    const newItems = Object.entries(cur.items).filter(([id]) => !seenItems.has(id));
     if (newItems.length) out.push({ code: 'item_found', text: t(L, `アイテムを見つけた: ${newItems.map(([, n]) => n).join(', ')}`, `Found: ${newItems.map(([, n]) => n).join(', ')}`), entity: newItems[0][0] });
     if (cur.stairs.some((s) => !prev.stairs.includes(s))) out.push({ code: 'stairs_found', text: t(L, '階段を見つけた', 'Found stairs') });
   }
@@ -260,5 +267,8 @@ export function turnLine(view: PlayerView, b: TurnBlock, short = false): string 
 
 export function changesLine(L: Locale, changes: Change[]): string {
   if (!changes.length) return '';
-  return t(L, '変化: ', 'Changes: ') + changes.map((c) => c.text).join(' / ');
+  // 守護者の撃破は別の行で先頭に（ほかの変化に埋もれさせない）
+  const head = changes.filter((c) => c.code === 'guardian_slain').map((c) => c.text);
+  const rest = changes.filter((c) => c.code !== 'guardian_slain');
+  return [...head, rest.length ? t(L, '変化: ', 'Changes: ') + rest.map((c) => c.text).join(' / ') : ''].filter(Boolean).join('\n');
 }

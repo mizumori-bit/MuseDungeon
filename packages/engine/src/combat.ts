@@ -57,10 +57,36 @@ function fromDirFor(target: Entity, source: Entity | null, masks: Record<string,
   return { fromDir: dirTo(target.pos, source.pos) };
 }
 
+/**
+ * 命中の記録（V3-2R2 §18.2）: 自分の攻撃（近接・投擲）と、相手から自分への攻撃の回数と命中を、種族ごとの思い出に残す。
+ * 相手が見えているときだけ（見えていない相手の種族は記録しない）
+ */
+export function recordHit(ctx: Ctx, attacker: Entity, target: Entity, hit: boolean, kind: 'melee' | 'thrown' | 'ranged'): void {
+  // 守護者は種族の命中の記録に含めない（体力の記録と同じ。通常の個体より頑丈で、記録を歪めるため）
+  if (attacker.role === 'guardian' || target.role === 'guardian') return;
+  const sees = (pid: PlayerId, m: Entity) => {
+    const f = m.pos ? ctx.world.floors[m.pos.floor] : undefined;
+    return !!f && ctx.visibleSet(pid).has(m.pos!.y * f.width + m.pos!.x);
+  };
+  if (attacker.player && !target.player && target.actor && kind !== 'ranged' && sees(attacker.player, target)) {
+    updateMemory(ctx, attacker.player, target.kind, (m) => {
+      const cur = m.hitsByYou?.[kind] ?? [0, 0];
+      m.hitsByYou = { ...(m.hitsByYou ?? {}), [kind]: [cur[0] + (hit ? 1 : 0), cur[1] + 1] };
+    });
+  }
+  if (target.player && !attacker.player && attacker.actor && sees(target.player, attacker)) {
+    updateMemory(ctx, target.player, attacker.kind, (m) => {
+      const cur = m.hitsOnYou ?? [0, 0];
+      m.hitsOnYou = [cur[0] + (hit ? 1 : 0), cur[1] + 1];
+    });
+  }
+}
+
 /** 近接攻撃（バンプ攻撃） */
 export function melee(ctx: Ctx, attacker: Entity, target: Entity): void {
   const o = rollToHit(ctx, attacker, target, 0);
   emitAttack(ctx, attacker, target, o, false);
+  recordHit(ctx, attacker, target, o.hit, 'melee');
   makeNoise(ctx, attacker.pos!.floor, target.pos!, 5, attacker);
   if (o.hit) {
     const dmg = o.crit
@@ -75,6 +101,7 @@ export function melee(ctx: Ctx, attacker: Entity, target: Entity): void {
 export function rangedAttack(ctx: Ctx, attacker: Entity, target: Entity, dice: string, accBonus: number): void {
   const o = rollToHit(ctx, attacker, target, accBonus);
   emitAttack(ctx, attacker, target, o, true);
+  recordHit(ctx, attacker, target, o.hit, 'ranged');
   // 遠隔攻撃を見た者（撃った側が見えている者）の思い出に、能力と観測した距離を残す
   const key = attacker.pos!.floor;
   const f = ctx.world.floors[key];
@@ -185,7 +212,8 @@ export function kill(ctx: Ctx, victim: Entity, killer: Entity | null, via: Damag
   // 目の前で倒れた個体は最大 HP が分かる（見えていない者には伏せる）
   const maxHp = victim.stats?.maxHp ?? null;
   const masks = { ...(seen.masks ?? {}) };
-  for (const pid of seen.seenBy) if (masks[pid]?.includes('id')) masks[pid] = [...masks[pid], 'maxHp'];
+  // 見ていない者には最大 HP と種族・接辞も伏せる（視界外で毒が倒した相手は「何か」。V3-2R2 §18.7）
+  for (const pid of seen.seenBy) if (masks[pid]?.includes('id')) masks[pid] = [...masks[pid], 'maxHp', 'kind', 'affixes'];
   ctx.emit({
     type: 'died', id: victim.id, kind: victim.kind, killer: killer?.id ?? null, killerKind: killer?.kind ?? null, via, pos, maxHp,
     ...(victim.bounty ? { bounty: victim.bounty } : {}), ...(victim.scale?.affixes?.length ? { affixes: [...victim.scale.affixes] } : {}),
@@ -219,7 +247,8 @@ export function kill(ctx: Ctx, victim: Entity, killer: Entity | null, via: Damag
   if (killer?.player) {
     const pr = ctx.world.players[killer.player];
     ctx.emit({ type: 'player_stats', player: pr.id, stats: { ...pr.stats, kills: pr.stats.kills + 1 }, seenBy: [pr.id] });
-    updateMemory(ctx, pr.id, victim.kind, (m) => { m.kills += 1; });
+    // 見ていなかった相手（視界外で毒が倒した）は種族の撃破数に数えない（種族を知らないので）
+    if (!masks[pr.id]?.includes('id')) updateMemory(ctx, pr.id, victim.kind, (m) => { m.kills += 1; });
     grantXp(ctx, ctx.world.entities[killer.id], victim.xp ?? 0);
   }
 }

@@ -10,7 +10,7 @@ import { DOOR, FLOOR, GenGrid, WALL } from './grid';
 import { layoutGenerators } from './layouts';
 
 export type SpawnSpec =
-  | { type: 'monster'; kind: string; x: number; y: number; hp: number; affixes: string[]; tier: number; asleep: boolean; delay: number; role?: EntityRole; bounty?: number }
+  | { type: 'monster'; kind: string; x: number; y: number; hp: number; affixes: string[]; tier: number; asleep: boolean; delay: number; role?: EntityRole; bounty?: number; minHp?: number }
   | { type: 'item'; kind: string; x: number; y: number; qty: number; affixes: string[]; role?: EntityRole; value?: number }
   | { type: 'feature'; kind: string; x: number; y: number };
 
@@ -384,7 +384,9 @@ function populate(s: GenState): void {
       const asleep = mrng.chance(pick.def.sleepPct);
       s.spawns.push(monsterSpec(s, pick.def, pick.tier, x, y, asleep, mrng));
       if (pick.def.group) {
-        const size = mrng.range(pick.def.group.min, pick.def.group.max) - 1;
+        // 浅い階の群れは小さく: 群れの数の上限は min(種族の上限, 深度 + 1)（V3-2R2 §18.2）
+        const cap = Math.max(1, s.depth + 1);
+        const size = mrng.range(Math.min(pick.def.group.min, cap), Math.min(pick.def.group.max, cap)) - 1;
         for (let m = 0; m < size; m++) {
           const near = DIRS.map((d) => g.idx(x + DIR_VEC[d][0], y + DIR_VEC[d][1])).filter((i) => spawnableSet.has(i) && !occupied.has(i));
           if (!near.length) break;
@@ -478,13 +480,16 @@ function placeObjective(s: GenState, obj: ObjectiveSpec): boolean {
       const ni = near[rng.int(near.length)];
       gx = ni % g.w; gy = Math.trunc(ni / g.w);
     }
-    // 守護者は「その深度の通常モンスター」から選ぶ（深層の敵が混ざる抽選は使わない）
+    // 守護者は「その深度の候補のうち経験値が上位半分のもの」から選ぶ（vermin を除く。V3-2R2 §18.6）
     const effective = Math.min(s.depth, s.content.deepestDefined);
-    let pick: { def: MonsterDef; tier: number } | null = null;
-    for (let k = 0; k < 20 && !pick; k++) {
-      const p = pickMonster(s, rng);
-      if (p && !GUARDIAN_EXCLUDED_ARCHETYPES.has(p.def.ai.archetype) && p.def.depth.min <= effective) pick = p;
-    }
+    const tier = s.depth > s.content.deepestDefined ? floorDiv(s.depth - s.content.deepestDefined, 5) + 1 : 0;
+    const table = s.content.spawnTables[s.floorType.monsters.table];
+    const cands = s.content.lists.monsters
+      .filter((m) => (!table?.tagsAny.length || m.tags.some((t) => table.tagsAny.includes(t))) && !(table?.tagsNone ?? []).some((t) => m.tags.includes(t)))
+      .filter((m) => !GUARDIAN_EXCLUDED_ARCHETYPES.has(m.ai.archetype) && !m.tags.includes('vermin') && monsterWeight(m, effective, s.biome) > 0)
+      .sort((a, b) => b.xp - a.xp || (a.id < b.id ? -1 : 1));
+    const top = cands.slice(0, Math.max(1, Math.ceil(cands.length / 2)));
+    let pick: { def: MonsterDef; tier: number } | null = top.length ? { def: top[rng.int(top.length)], tier } : null;
     if (!pick) {
       const def = s.content.lists.monsters.find((m) => !GUARDIAN_EXCLUDED_ARCHETYPES.has(m.ai.archetype) && depthOk(m.depth, Math.min(s.depth, s.content.deepestDefined)))
         ?? s.content.lists.monsters.find((m) => !GUARDIAN_EXCLUDED_ARCHETYPES.has(m.ai.archetype));
@@ -498,6 +503,9 @@ function placeObjective(s: GenState, obj: ObjectiveSpec): boolean {
       spec.role = 'guardian';
       const gb = s.content.balance.haul.guardianBounty;
       spec.bounty = gb.base + gb.perDepth * s.depth;
+      // 体力の下限（「体力 12 の守護者」を出さない）
+      const gm = s.content.balance.guardian;
+      spec.minHp = gm.minHpBase + gm.minHpPerDepth * s.depth;
     }
     s.spawns.push(spec);
   }

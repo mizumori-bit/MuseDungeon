@@ -101,6 +101,8 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
       const v = who(ctx, ev.id, ev.kind, ev.affixes);
       if (ev.id === self) return ja ? 'あなたは死んだ……' : 'You die...';
       const hpNote = typeof ev.maxHp === 'number' ? (ja ? `（この${v}の体力は ${ev.maxHp} だった）` : ` (it had ${ev.maxHp} HP)`) : '';
+      // 視界の外で毒が倒した相手（種族は伏せてある。V3-2R2 §18.7）
+      if (ev.killer === self && ev.via === 'poison') return ev.kind ? (ja ? `${v}はあなたの毒で倒れた。${hpNote}` : `${cap(v)} falls to your poison.${hpNote}`) : (ja ? 'あなたの毒で何かが倒れた。' : 'Something fell to your poison.');
       if (ev.killer === self) return ja ? `${v}を倒した。${hpNote}` : `You kill ${v}.${hpNote}`;
       return ja ? `${v}は倒れた。${hpNote}` : `${cap(v)} dies.${hpNote}`;
     }
@@ -181,6 +183,8 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
         default: return `${head}${fall}`;
       }
     }
+    case 'item_issued':
+      return ev.actor === self ? (ja ? `キャンプで${kindName(ctx.catalog, L, ev.kind)}を 1 本持たされた。` : `Camp hands you a ${kindName(ctx.catalog, L, ev.kind)}.`) : null;
     case 'item_identified': {
       const real = kindName(ctx.catalog, L, ev.kind);
       const app = ev.appearanceId ? kindName(ctx.catalog, L, null, ev.appearanceId) : null;
@@ -232,6 +236,7 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
       if (ev.state === 'dead') return ja ? `${ctx.playerNames[ev.player] ?? '仲間'} は倒れた。` : `${ctx.playerNames[ev.player] ?? 'An ally'} has fallen.`;
       if (ev.state === 'left') return ja ? 'プレイヤーが離脱した。' : 'A player left.';
       if (ev.state === 'at_camp' && ev.reason === 'joined') return ja ? `${ctx.playerNames[ev.player] ?? 'プレイヤー'} はキャンプにいる。最初の遠征を選ぶ。` : `${ctx.playerNames[ev.player] ?? 'A player'} is at camp, choosing the first expedition.`;
+      if (ev.state === 'at_camp' && ev.reason === 'lifeline') return ja ? `${ctx.playerNames[ev.player] ?? 'プレイヤー'} は帰還の綱でキャンプに戻った（全回復）。` : `${ctx.playerNames[ev.player] ?? 'A player'} is pulled back to camp by the lifeline (fully healed).`;
       if (ev.state === 'at_camp') return ja ? `${ctx.playerNames[ev.player] ?? 'プレイヤー'} はキャンプに戻った（全回復）。` : `${ctx.playerNames[ev.player] ?? 'A player'} returns to camp (fully healed).`;
       return null;
     case 'expedition_started':

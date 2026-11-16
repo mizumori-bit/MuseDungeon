@@ -5,8 +5,8 @@ import type { AiState, Entity, Pos } from '@muse/shared';
 import { cheb, DIRS, DIR_VEC } from '@muse/shared';
 import { melee, rangedAttack } from './combat';
 import type { Ctx } from './ctx';
-import { hasLos, line } from './geom';
-import { isOpaqueFn, makeNoise, monsterSees, updateMemory, wakeMonster } from './perception';
+import { hasLos } from './geom';
+import { isOpaqueFn, makeNoise, monsterSees, shotLine, updateMemory, wakeMonster } from './perception';
 import { Registry } from './registry';
 
 export interface AiInput { target: Entity | null; ai: AiState; def: MonsterDef }
@@ -173,11 +173,11 @@ archetypes.register('ranged_kiter', (ctx, m, { target, ai, def }) => {
   return 100;
 });
 
+/** 射撃の経路: 視線が通り、投擲と同じ経路（双方向）が通ること。プレイヤーの shots と同じ判定 */
 function clearShot(ctx: Ctx, m: Entity, target: Entity): boolean {
   const key = m.pos!.floor;
   if (!hasLos(m.pos!, target.pos!, isOpaqueFn(ctx, key))) return false;
-  const path = line(m.pos!, target.pos!).slice(0, -1);
-  return path.every((p) => !ctx.actorAt(key, p.x, p.y));
+  return shotLine(ctx, key, m.pos!, target.pos!) !== null;
 }
 
 function sameAi(a: AiState, b: AiState): boolean {

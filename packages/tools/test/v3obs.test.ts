@@ -78,8 +78,10 @@ function findWallPair(sc: Scene): { p: { x: number; y: number }; m: { x: number;
       const mx = i % f.width, my = Math.trunc(i / f.width);
       const d = Math.max(Math.abs(mx - x), Math.abs(my - y));
       if (d < 2 || d > 6 || !passable(sc, mx, my) || occupied(sc, mx, my)) continue;
+      // 射線は双方向（どちらかの直線が通れば通る。V3-2R2）なので、両方向とも壁に当たる組を探す
       const path = line({ x, y }, { x: mx, y: my });
-      if (path.slice(0, -1).some((c) => !passable(sc, c.x, c.y))) return { p: { x, y }, m: { x: mx, y: my } };
+      const back = line({ x: mx, y: my }, { x, y });
+      if (path.slice(0, -1).some((c) => !passable(sc, c.x, c.y)) && back.slice(0, -1).some((c) => !passable(sc, c.x, c.y))) return { p: { x, y }, m: { x: mx, y: my } };
     }
   }
   throw new Error('no wall pair');
@@ -107,8 +109,14 @@ const say = (sc: Scene, evs: GameEvent[]) => {
 
 describe('V3-1 throwing (report 1, 2, 11)', () => {
   it('a monster behind a wall is shot-blocked, not a throw candidate, and an id throw is refused without spending a turn', () => {
-    const sc = newScene('v3-wall-1');
-    const { p, m } = findWallPair(sc);
+    // 射線は双方向なので「見えるのに両方向とも壁に当たる」組はまれ。見つかるシードを探す
+    let found: { sc: Scene; p: { x: number; y: number }; m: { x: number; y: number } } | null = null;
+    for (let i = 1; i <= 40 && !found; i++) {
+      const s = newScene(`v3-wall-${i}`);
+      try { found = { sc: s, ...findWallPair(s) }; } catch { /* 次のシード */ }
+    }
+    expect(found).not.toBeNull();
+    const { sc, p, m } = found!;
     moveMe(sc, p.x, p.y);
     inject(sc, { put: [goblin('e_tstw01', m.x, m.y)] });
     act(sc, { type: 'wait' });

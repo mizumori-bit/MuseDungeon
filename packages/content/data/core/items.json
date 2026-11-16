@@ -47,6 +47,9 @@
   { "id": "core:javelin", "name": { "ja": "投げ槍", "en": "javelin" }, "category": "throwing", "depth": { "min": 3 }, "rarity": 2, "stack": true,
     "throw": { "dmg": "1d8+1", "range": 6 } },
 
+  { "id": "core:lifeline", "name": { "ja": "帰還の綱", "en": "lifeline" }, "category": "lifeline", "depth": { "min": 1 }, "rarity": 1, "bound": true,
+    "onUse": [{ "effect": "recall" }],
+    "desc": { "ja": "遠征の開始時にキャンプが 1 本持たせる。使うと 2 手番のあいだ動けず、その後キャンプへ戻る（戦利品の半分が確定）。捨てる・投げることはできず、所持数に数えない", "en": "Camp gives you one at the start of each expedition. Using it leaves you unable to act for 2 turns, then returns you to camp (half the haul is banked). Cannot be dropped or thrown; does not count toward capacity" } },
   { "id": "core:relic", "name": { "ja": "古の遺物", "en": "ancient relic" }, "category": "relic", "depth": { "min": 1 }, "rarity": 1,
     "desc": { "ja": "遠征の目的の品。持ったまま階段の上で extract すると持ち帰れる。効果は無い", "en": "The object of your expedition. Extract on stairs while carrying it. It has no effect" } },
   { "id": "core:silver_goblet", "name": { "ja": "銀の杯", "en": "silver goblet" }, "category": "treasure", "depth": { "min": 1 }, "rarity": 1,

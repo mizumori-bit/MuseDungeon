@@ -1,6 +1,8 @@
-// V3-2R の計測（IMPROVEMENTS_V3 §14.6 の 1・2）。bot の方針比較は合格の根拠にしない。
-// 1. 1 回ごとの判断: 踏破 1 階あたりの死亡率、踏破の期待値 ÷ 即帰還の期待値、深度ごとのレベル − 推奨レベル
-// 2. 呼び出しの予算: 0 歩のマクロ、5 歩未満で止まった移動マクロの割合、撃破 1 体あたり・アイテム 1 個あたりの呼び出し、最初の遠征の呼び出し
+// V3-2R・V3-2R2 の計測（IMPROVEMENTS_V3 §14.6 の 1・2、§18.8）。bot の方針比較は合格の根拠にしない。
+// 1. 1 回ごとの判断: 踏破 1 階あたりの「綱か死」で終わる率、踏破の期待値 ÷ 即帰還の期待値（綱の 50% を含む）、
+//    深度ごとのレベル − 推奨レベル、枠ごとの達成率
+// 2. 呼び出しの予算: 0 歩のマクロ、5 歩未満で止まった移動マクロの割合、撃破 1 体あたり・アイテム 1 個あたりの呼び出し、
+//    最初の遠征の呼び出し、斥候の bot の呼び出しに投擲が占める割合
 import type { PlayerPort, SessionManager } from '@muse/server';
 import type { Command, OfferSlot } from '@muse/shared';
 import { buildObservation, recommendedLevel } from '@muse/shared';
@@ -28,7 +30,12 @@ export interface BudgetReport {
     /** 拾うための呼び出しの内訳 */
     pickupBreakdown: Record<string, number>;
   };
-  crossing: { floor: number; attempts: number; deaths: number; ratePct: number }[];
+  /** 踏破 n 階目の試みと、綱・死で終わった数（ratePct は綱か死の率） */
+  crossing: { floor: number; attempts: number; deaths: number; lifelines: number; ratePct: number }[];
+  /** 枠ごとの達成率（その枠だけを選ぶ bot。遠征の数・達成・死亡・綱・撤退） */
+  slots: { slot: OfferSlot; expeditions: number; completed: number; died: number; lifeline: number; withdrawn: number; ratePct: number }[];
+  /** 斥候の bot: 呼び出しのうち投擲（throw と fight with）の割合 */
+  scoutThrows: { calls: number; throws: number; pct: number };
   ev: { decisions: number; meanStake: number; meanOutcome: number; ratio: number };
   levels: { depth: number; n: number; median: number; recommended: number }[];
 }
@@ -48,7 +55,9 @@ interface Tracker {
   firstExpCalls: number | null; firstExpDone: boolean;
   levelAt: Map<number, number>;
   // 踏破
-  crossing: { floor: number; done: boolean; died: boolean }[];
+  crossing: { floor: number; done: boolean; died: boolean; lifeline: boolean }[];
+  /** 投擲の呼び出し（throw と fight with） */
+  throws: number;
   // 期待値
   decisions: { stake: number; outcome: number | null; banked0: number }[];
 }
@@ -72,6 +81,7 @@ function instrument(port: PlayerPort, tr: Tracker): PlayerPort {
             if (m) tgt = m.id;
           }
           if (tgt) tr.callsOnTarget.set(tgt, (tr.callsOnTarget.get(tgt) ?? 0) + 1);
+          if (cmd.type === 'throw' || (cmd.type === 'fight' && cmd.with)) tr.throws++;
           if (cmd.type === 'pickup' || (cmd.type === 'travel' && typeof cmd.to === 'string' && (v.entities.some((e) => e.id === cmd.to && e.cat === 'item') || v.memory.remembered.some((r) => r.id === cmd.to && r.cat === 'item')))) {
             tr.pickupCalls++;
             const k = cmd.type === 'pickup' ? `pickup${cmd.item ? '(id)' : ''}` : 'travel(item)';
@@ -112,12 +122,13 @@ function instrument(port: PlayerPort, tr: Tracker): PlayerPort {
           // 踏破の試み（目的達成後に目標より深い階へ着いた）と、その結果
           const bx = before.expedition && before.expedition.status !== 'ended' ? before.expedition : null;
           if (bx && bx.status === 'objective_complete' && bx.objective.targetDepth !== null && after.floor && before.floor && after.floor.depth > before.floor.depth && after.floor.depth > bx.objective.targetDepth) {
-            tr.crossing.push({ floor: after.floor.depth - bx.objective.targetDepth, done: false, died: false });
+            tr.crossing.push({ floor: after.floor.depth - bx.objective.targetDepth, done: false, died: false, lifeline: false });
           }
-          const open = tr.crossing.find((c) => !c.done && !c.died);
+          const open = tr.crossing.find((c) => !c.done && !c.died && !c.lifeline);
           if (open && ax && ax.objective.targetDepth !== null) {
             if (ax.crossedDepth >= ax.objective.targetDepth + open.floor) open.done = true;
             else if (after.status === 'dead') open.died = true;
+            else if ((after.status === 'at_camp' || ax.status === 'ended') && ax.endReason === 'lifeline') open.lifeline = true;
             else if (after.status === 'at_camp' || ax.status === 'ended') open.done = true; // 途中で帰った（試みとしては生還）
           }
           // 期待値の結果: 最初の踏破を終えた時点の今帰れば、死亡なら 0、途中で帰ったなら実際の確定点
@@ -138,10 +149,19 @@ function instrument(port: PlayerPort, tr: Tracker): PlayerPort {
   });
 }
 
+function newTracker(policy: number): Tracker {
+  return {
+    calls: 0, macroCalls: 0, zeroStep: 0, moveMacros: 0, shortMoves: 0, callsOnTarget: new Map(), pickupCalls: 0, shortBy: {}, pickupBy: {},
+    approach: 0, shortApproach: 0, policy,
+    firstExpCalls: null, firstExpDone: false, levelAt: new Map(), crossing: [], decisions: [], throws: 0,
+  };
+}
+
 export async function budgetReport(manager: SessionManager, opts: { runs: number; maxActs: number; seed: string; log?: (s: string) => void }): Promise<BudgetReport> {
   const trackers: Tracker[] = [];
   const killsPer: number[] = [];
   const healingLeft: number[] = [];
+  const closeAll = () => { for (const [id, s] of manager.sessions) { s.close(); manager.sessions.delete(id); } };
   // 即帰還（呼び出しの予算・最初の遠征）と、踏破に身を入れる方針（途中で引き返さない。踏破の死亡率と期待値）
   const policies: { overreach: number; offerSlot: OfferSlot; cautious: boolean }[] = [
     { overreach: 0, offerSlot: 'standard', cautious: true }, { overreach: 3, offerSlot: 'standard', cautious: false },
@@ -151,11 +171,7 @@ export async function budgetReport(manager: SessionManager, opts: { runs: number
       const seed = `${opts.seed}-${pol.overreach}-${i}`;
       const r = await manager.createRun({ name: 'budget', seed, controller: { kind: 'agent', label: 'budget' } });
       if ('error' in r) throw new Error(r.error.message);
-      const tr: Tracker = {
-        calls: 0, macroCalls: 0, zeroStep: 0, moveMacros: 0, shortMoves: 0, callsOnTarget: new Map(), pickupCalls: 0, shortBy: {}, pickupBy: {},
-        approach: 0, shortApproach: 0, policy: pol.overreach,
-        firstExpCalls: null, firstExpDone: false, levelAt: new Map(), crossing: [], decisions: [],
-      };
+      const tr = newTracker(pol.overreach);
       await playWithPort(instrument(r.port, tr), { kind: 'greedy', seed, maxActs: opts.maxActs, ...pol });
       // 撃破に使った呼び出し・拾った数・残った回復の薬
       const pid = r.port.playerId;
@@ -168,9 +184,44 @@ export async function budgetReport(manager: SessionManager, opts: { runs: number
       const me = r.session.world.entities[meId];
       healingLeft.push((me?.inv?.items ?? []).map((id) => r.session.world.entities[id]).filter((it) => it?.kind === 'core:potion_healing').reduce((a, it) => a + (it!.item?.qty ?? 0), 0));
       trackers.push(tr);
-      for (const [id, s] of manager.sessions) { s.close(); manager.sessions.delete(id); }
+      closeAll();
       opts.log?.(`policy overreach=${pol.overreach} run ${i}: calls ${tr.calls}, crossings ${tr.crossing.length}`);
     }
+  }
+  // 枠ごとの達成率: その枠だけを選び、踏破せずに帰る bot（推奨レベルどおりに育つ）
+  const slots: BudgetReport['slots'] = [];
+  for (const slot of ['safe', 'standard', 'ambitious'] as OfferSlot[]) {
+    let expeditions = 0, completed = 0, died = 0, lifeline = 0, withdrawn = 0;
+    for (let i = 0; i < opts.runs; i++) {
+      const seed = `${opts.seed}-slot-${slot}-${i}`;
+      const r = await manager.createRun({ name: 'budget', seed, controller: { kind: 'agent', label: 'budget' } });
+      if ('error' in r) throw new Error(r.error.message);
+      await playWithPort(r.port, { kind: 'greedy', seed, maxActs: Math.max(opts.maxActs, 900), overreach: 0, offerSlot: slot, cautious: true, maxExpeditions: 4 });
+      // その枠の遠征だけを数える（候補が足りず別の枠を選んだ遠征は除く）
+      for (const x of r.session.world.expeditions ?? []) {
+        if (!x.endReason || x.slot !== slot) continue;
+        expeditions++;
+        if (x.endReason === 'completed') completed++;
+        else if (x.endReason === 'died') died++;
+        else if (x.endReason === 'lifeline') lifeline++;
+        else if (x.endReason === 'withdrawn') withdrawn++;
+      }
+      closeAll();
+    }
+    slots.push({ slot, expeditions, completed, died, lifeline, withdrawn, ratePct: expeditions ? Math.round((completed * 1000) / expeditions) / 10 : 0 });
+    opts.log?.(`slot ${slot}: ${completed}/${expeditions}`);
+  }
+  // 斥候の bot の投擲の割合
+  let scoutCalls = 0, scoutThrows = 0;
+  for (let i = 0; i < opts.runs; i++) {
+    const seed = `${opts.seed}-scout-${i}`;
+    const r = await manager.createRun({ name: 'budget', classId: 'core:scout', seed, controller: { kind: 'agent', label: 'budget' } });
+    if ('error' in r) throw new Error(r.error.message);
+    const tr = newTracker(0);
+    await playWithPort(instrument(r.port, tr), { kind: 'greedy', seed, maxActs: opts.maxActs, overreach: 0, offerSlot: 'standard', cautious: true });
+    scoutCalls += tr.calls;
+    scoutThrows += tr.throws;
+    closeAll();
   }
   const all = (f: (t: Tracker) => number) => trackers.reduce((a, t) => a + f(t), 0);
   const picked = trackers.reduce((a, t) => a + ((t as Tracker & { picked?: number }).picked ?? 0), 0);
@@ -180,7 +231,8 @@ export async function budgetReport(manager: SessionManager, opts: { runs: number
   for (const k of [1, 2, 3]) {
     const cs = trackers.flatMap((t) => t.crossing.filter((c) => c.floor === k));
     const deaths = cs.filter((c) => c.died).length;
-    crossing.push({ floor: k, attempts: cs.length, deaths, ratePct: cs.length ? Math.round((deaths * 1000) / cs.length) / 10 : 0 });
+    const lifelines = cs.filter((c) => c.lifeline).length;
+    crossing.push({ floor: k, attempts: cs.length, deaths, lifelines, ratePct: cs.length ? Math.round(((deaths + lifelines) * 1000) / cs.length) / 10 : 0 });
   }
   const decs = trackers.flatMap((t) => t.decisions.filter((d) => d.outcome !== null));
   const meanStake = decs.length ? decs.reduce((a, d) => a + d.stake, 0) / decs.length : 0;
@@ -206,6 +258,8 @@ export async function budgetReport(manager: SessionManager, opts: { runs: number
       pickupBreakdown: trackers.reduce((acc, t) => { for (const [k, n] of Object.entries(t.pickupBy)) acc[k] = (acc[k] ?? 0) + n; return acc; }, {} as Record<string, number>),
     },
     crossing,
+    slots,
+    scoutThrows: { calls: scoutCalls, throws: scoutThrows, pct: scoutCalls ? Math.round((scoutThrows * 1000) / scoutCalls) / 10 : 0 },
     ev: { decisions: decs.length, meanStake: Math.round(meanStake), meanOutcome: Math.round(meanOutcome), ratio: meanStake ? Math.round((meanOutcome / meanStake) * 100) / 100 : 0 },
     levels,
   };
@@ -215,13 +269,19 @@ export function formatBudget(r: BudgetReport): string {
   const c = r.calls;
   const ok = (b: boolean) => (b ? 'OK' : '目安外');
   const lines = [
-    `ラン ${r.runs}（即帰還 / 3 階まで踏破（途中で引き返さない）の 2 方針。最初の遠征の呼び出しは即帰還の方針で数える）`,
+    `ラン ${r.runs}（即帰還 / 3 階まで踏破（途中で引き返さない）の 2 方針。最初の遠征の呼び出しは即帰還の方針で数える）。ほかに枠ごと・斥候の bot`,
     '',
     '## 1. 1 回ごとの判断',
-    '| 踏破する階 | 試み | 死亡 | 死亡率 |',
-    '|---|---|---|---|',
-    ...r.crossing.map((x) => `| ${x.floor} 階目 | ${x.attempts} | ${x.deaths} | ${x.ratePct}% |`),
-    `最初の 1 階の死亡率 ${r.crossing[0]?.ratePct ?? 0}%（目安 8% 以上、階を重ねるごとに上がる）: ${ok((r.crossing[0]?.ratePct ?? 0) >= 8)}`,
+    '| 踏破する階 | 試み | 死亡 | 綱 | 綱か死の率 |',
+    '|---|---|---|---|---|',
+    ...r.crossing.map((x) => `| ${x.floor} 階目 | ${x.attempts} | ${x.deaths} | ${x.lifelines} | ${x.ratePct}% |`),
+    `踏破 1 階目が綱か死で終わる率 ${r.crossing[0]?.ratePct ?? 0}%（目安 10〜25%）: ${ok((r.crossing[0]?.ratePct ?? 0) >= 10 && (r.crossing[0]?.ratePct ?? 0) <= 25)}`,
+    '| 枠 | 遠征 | 達成 | 死亡 | 綱 | 撤退 | 達成率 | 目安 |',
+    '|---|---|---|---|---|---|---|---|',
+    ...r.slots.map((s) => {
+      const [lo, hi] = s.slot === 'safe' ? [90, 100] : s.slot === 'standard' ? [60, 85] : [30, 60];
+      return `| ${s.slot} | ${s.expeditions} | ${s.completed} | ${s.died} | ${s.lifeline} | ${s.withdrawn} | ${s.ratePct}% | ${lo}〜${hi}%: ${ok(s.ratePct >= lo && s.ratePct <= hi)} |`;
+    }),
     `踏破の期待値 ÷ 即帰還の期待値 = ${r.ev.ratio}（判断 ${r.ev.decisions} 回、賭け金の平均 ${r.ev.meanStake}、結果の平均 ${r.ev.meanOutcome}。目安 0.9〜1.3）: ${ok(r.ev.ratio >= 0.9 && r.ev.ratio <= 1.3)}`,
     '| 深度 | 着いた数 | レベルの中央値 | 推奨 | 差 |',
     '|---|---|---|---|---|',
@@ -238,6 +298,7 @@ export function formatBudget(r: BudgetReport): string {
     `| アイテム 1 個を拾うのに使った呼び出し | ${c.callsPerPickup} | 0.5 以下: ${ok(c.callsPerPickup <= 0.5)} |`,
     `| 最初の遠征を帰還まで終える呼び出しの中央値 | ${c.firstExpeditionCallsMedian ?? '-'}（達成 ${c.firstExpeditionCompleted} ラン） | 60 以下: ${ok((c.firstExpeditionCallsMedian ?? 999) <= 60)} |`,
     `| 遠征の終わりに残った回復の薬（中央値） | ${c.healingLeftMedian} | 参考 |`,
+    `| 斥候の bot の呼び出しに投擲が占める割合 | ${r.scoutThrows.pct}%（${r.scoutThrows.throws}/${r.scoutThrows.calls}） | 30% 以下: ${ok(r.scoutThrows.pct <= 30)} |`,
     '',
     `5 歩未満の内訳: ${Object.entries(c.shortBreakdown).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k} ${n}`).join(', ')}`,
     `拾うための呼び出しの内訳: ${Object.entries(c.pickupBreakdown).map(([k, n]) => `${k} ${n}`).join(', ') || 'なし'}`,

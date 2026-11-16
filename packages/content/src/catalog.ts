@@ -31,7 +31,7 @@ export function buildCatalog(c: Content): Catalog {
     items[it.id] = {
       name: it.name, category: it.category, unidentified: it.unidentified, stack: it.stack,
       slot: it.equip?.slot, usable: it.onUse.length > 0, throwable: !!it.throw || it.shatter,
-      targeted: it.target !== 'none', desc: itemDesc(it), harmful: it.harmful, treasure: it.category === 'treasure',
+      targeted: it.target !== 'none', desc: itemDesc(it), harmful: it.harmful, treasure: it.category === 'treasure', bound: it.bound,
       throwRange: it.throw?.range ?? (it.shatter ? 4 : null),
       ...(it.equip?.slot === 'weapon' && it.equip.dmg ? { weapon: { dmg: it.equip.dmg, acc: it.equip.acc ?? 0 } } : {}),
       ...(it.equip?.slot === 'armor' ? { armorStats: { armor: it.equip.armor ?? 0, eva: it.equip.eva ?? 0 } } : {}),
@@ -69,7 +69,7 @@ export function buildCatalog(c: Content): Catalog {
       score: { ...c.balance.score },
       estimateMinSamples: c.balance.estimate.minSamples,
       haul: {
-        overreachFirst: c.balance.haul.overreachFirst, overreachStep: c.balance.haul.overreachStep, perKill: c.balance.haul.perKill,
+        overreachFirst: c.balance.haul.overreachFirst, overreachStep: c.balance.haul.overreachStep, overreachPct: { ...c.balance.haul.overreachPct }, perKill: c.balance.haul.perKill,
         withdrawPct: c.balance.haul.withdrawPct, discovery: { ...c.balance.haul.discovery },
         guardianBounty: { ...c.balance.haul.guardianBounty },
       },
@@ -81,10 +81,12 @@ export function buildCatalog(c: Content): Catalog {
       afterObjectiveWanderPct: c.balance.expedition.afterObjective.wanderIntervalPct,
       recommendedLevel: { byDepth: [...c.balance.expedition.recommendedLevelByDepth] },
       xp: { ...c.balance.xp },
+      lifeline: { ...c.balance.lifeline },
+      teleport: { ...c.balance.teleport },
       traits: Object.fromEntries(c.lists.expeditionTraits.map((t) => [t.id, { name: t.name, desc: t.desc, multiplierPct: t.multiplierPct, danger: t.danger }])),
       expedition: {
-        firstTargetDepth: { ...c.balance.expedition.firstTargetDepth }, aheadMin: c.balance.expedition.aheadMin, aheadMax: c.balance.expedition.aheadMax,
-        points: { ...c.balance.expedition.points }, pointsPerExtraDepth: c.balance.expedition.pointsPerExtraDepth,
+        firstTargetDepth: { ...c.balance.expedition.firstTargetDepth },
+        typePct: { ...c.balance.expedition.typePct }, depthPct: { ...c.balance.expedition.depthPct },
       },
       hpBands: [HP_BANDS[0], HP_BANDS[1], HP_BANDS[2]],
     },

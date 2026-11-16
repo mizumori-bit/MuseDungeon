@@ -220,8 +220,11 @@ export function applyEvent(world: World, ev: GameEvent): void {
         fk.mapped = fk.mapped.filter((i) => !del.has(i));
       }
       if (ev.senseAfter !== undefined) p.knowledge.sense = ev.senseAfter ? { ...ev.senseAfter } : null;
+      if (ev.hintAfter !== undefined) p.knowledge.floorHint = ev.hintAfter ? { ...ev.hintAfter } : null;
       break;
     }
+    case 'item_issued':
+      break;
     case 'monster_memory_updated':
       world.players[ev.player].knowledge.monsterMemory[ev.kind] = clone(ev.memoryAfter);
       break;

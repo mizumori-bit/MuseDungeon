@@ -231,7 +231,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
   }, async (a) => act('start_expedition', a, { type: 'start_expedition', offer: a.offer }));
   server.registerTool('extract', {
     title: '帰還・撤退',
-    description: '階段の上で遠征を終える。目的を達成していれば帰還（達成）、未達成なら confirm: true で撤退（報酬なし・生還）。追跡中の敵が見えている間は不可。',
+    description: '階段の上で遠征を終える。目的を達成していれば帰還（達成）、未達成なら confirm: true で撤退（目的を除いた半分・生還）。追跡中の敵が見えていてもできる（敵は階段を追ってこない）。階段から遠ければ帰還の綱（use_item）。',
     inputSchema: { ...actionCommon, confirm: z.boolean().optional().describe('未達成のまま撤退するときに true') },
   }, async (a) => act('extract', a, { type: 'extract', confirm: a.confirm }));
 
@@ -348,8 +348,10 @@ export function createMcpServer(ctx: McpContext): McpServer {
   // ---------------- 行動（手番を消費する） ----------------
   server.registerTool('move', { title: '移動', description: '1 マス移動。敵がいれば攻撃、閉じた扉は開ける。', inputSchema: { ...actionCommon, dir: DirZ } },
     async (a) => act('move', a, { type: 'move', dir: a.dir }));
-  server.registerTool('wait', { title: '待機', description: '1 手番待機。追跡中の敵が見えなければ休息として回復が速い。', inputSchema: { ...actionCommon } },
-    async (a) => act('wait', a, { type: 'wait' }));
+  server.registerTool('wait', {
+    title: '待機', description: '1 手番待機。追跡中の敵が見えなければ休息として回復が速い。turns（2〜10）なら、敵が見えた・隣に来た・被害を受けたら止まりつつ続けて待つ。',
+    inputSchema: { ...actionCommon, turns: z.number().int().min(1).max(10).optional().describe('続けて待つ手数（最大 10）') },
+  }, async (a) => act('wait', a, { type: 'wait', ...(a.turns ? { turns: a.turns } : {}) }));
   server.registerTool('rest', {
     title: '休憩',
     description: 'マクロ: 全快（または until_hp / max_turns）まで休む。休息中は回復が速い。追跡中の敵が見えると止まる。観測の self.rest_estimate に事前の見積もり、結果に実績（hp_gained・turns・time_elapsed）。',
@@ -373,9 +375,9 @@ export function createMcpServer(ctx: McpContext): McpServer {
     inputSchema: { ...actionCommon, what: z.enum(['thrown', 'items']).optional(), ...moveArgs },
   }, async (a) => act('collect', a, { type: 'collect', what: a.what, mode: a.mode, hpFloor: a.hp_floor }));
   server.registerTool('fight', {
-    title: '戦う', description: 'マクロ: 隣の相手に近接攻撃を繰り返す。相手が倒れた・離れた、HP が hp_floor（既定 50%）を下回った、追跡中の別の敵が現れた、状態異常を受けたら止まる。結果に与えた・受けた攻撃の回数と合計。',
-    inputSchema: { ...actionCommon, target: z.string().regex(/^e_[0-9a-z]{6}$/), hp_floor: z.number().int().min(0).optional() },
-  }, async (a) => act('fight', a, { type: 'fight', target: a.target, hpFloor: a.hp_floor }));
+    title: '戦う', description: 'マクロ: その相手と決着を付ける。with なしは近接（追跡中の相手が隣に来るまで待つ。最大 10 手番）、with にスロットを渡すとその品を投げて戦う（射程と射線が通るまで待つ）。相手が倒れた・離れた、（with）隣に来た・品が尽きた、HP が hp_floor（既定 50%）を下回った、追跡中の別の敵が現れた、状態異常を受けたら止まる。眠っている・気付いていない相手は待たない。結果に与えた・受けた攻撃の回数と合計。',
+    inputSchema: { ...actionCommon, target: z.string().regex(/^e_[0-9a-z]{6}$/), with: z.string().regex(/^[a-z]$/).optional().describe('投げて戦う品の所持品スロット（self.attack.throws）'), hp_floor: z.number().int().min(0).optional() },
+  }, async (a) => act('fight', a, { type: 'fight', target: a.target, ...(a.with ? { with: a.with } : {}), hpFloor: a.hp_floor }));
   server.registerTool('pickup', { title: '拾う', description: '足元のアイテムを拾う（省略時は全て）。', inputSchema: { ...actionCommon, item: z.string().regex(/^e_[0-9a-z]{6}$/).optional() } },
     async (a) => act('pickup', a, { type: 'pickup', item: a.item }));
   server.registerTool('drop', { title: '置く', description: '所持品を足元に置く。', inputSchema: { ...actionCommon, slot: SlotZ, qty: z.number().int().positive().optional() } },
@@ -385,7 +387,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
   server.registerTool('unequip', { title: '装備解除', description: '装備を外す（スロット文字か weapon/armor/accessory）。', inputSchema: { ...actionCommon, slot: z.union([SlotZ, z.enum(['weapon', 'armor', 'accessory'])]) } },
     async (a) => act('unequip', a, { type: 'unequip', slot: a.slot }));
   server.registerTool('use_item', {
-    title: '使う', description: '薬を飲む・巻物を読む。鑑定の巻物は target_slot で対象を選べる（省略時はスロット順で最初の未鑑定品）。',
+    title: '使う', description: '薬を飲む・巻物を読む・帰還の綱を使う（2 手番後にキャンプへ。戦利品の半分が確定。1 回の呼び出しで最後まで進む）。鑑定の巻物は target_slot で対象を選べる（省略時はスロット順で最初の未鑑定品）。',
     inputSchema: { ...actionCommon, slot: z.string().describe(SlotZ.description ?? ''), target: z.any().optional().describe(TargetZ.description ?? ''), target_slot: z.string().optional().describe('鑑定の巻物などの対象の所持品スロット') },
   }, async (a) => act('use_item', a, { type: 'use', slot: a.slot, target: a.target as never, targetSlot: a.target_slot }));
   server.registerTool('throw_item', {

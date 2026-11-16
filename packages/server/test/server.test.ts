@@ -163,8 +163,6 @@ describe('MCP contract', () => {
       if (o.expedition?.can_extract) break;
       const adj = o.visible.monsters.find((m) => m.dist === 1);
       if (adj?.dir) { await port.act({ type: 'move', dir: adj.dir }, { source: 'bot' }); continue; }
-      // 階段の上で追跡中の敵が見えている → 待って迎え撃つ（extract はできない）
-      if (o.expedition?.extract_blocked_by === 'hostile_hunting') { await port.act({ type: 'wait' }, { source: 'bot' }); continue; }
       const down = o.navigation.known_stairs.find((s) => s.type === 'down' && s.reachable);
       await port.act(down ? { type: 'travel', to: 'stairs_down' } : o.navigation.frontiers.length ? { type: 'explore' } : { type: 'wait' }, { source: 'bot' });
     }

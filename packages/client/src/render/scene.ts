@@ -1,8 +1,9 @@
 // Scene の組み立て。(a) PlayerView（プレイ・追従観戦）と (b) World 全体（俯瞰）。
 // プレイヤー視点では未知セルを描かない。未鑑定アイテムは外見 ID でしか描かない。
-import type { Catalog, EntityView, Pos, PlayerView, World } from '@muse/shared';
-import { hpEstimateText, hpLeftEstimate, itemDisplayName, kindName, monsterDisplayName, nameOf, threatOf } from '@muse/shared';
+import type { Catalog, EntityView, ObsMonster, Pos, PlayerView, World } from '@muse/shared';
+import { hitsText, hpEstimateText, hpLeftEstimate, itemDisplayName, kindName, monsterDisplayName, nameOf, threatOf } from '@muse/shared';
 import type { AssetRef } from '../theme/types';
+import { monsterSpeedLabel, monsterTraitLabel, threatText } from '../ui/labels';
 import { getLocale, tr } from '../util';
 import type { Scene, SceneEntity } from './types';
 
@@ -43,23 +44,43 @@ export interface SceneExtras {
   cursor?: Pos | null;
   path?: Pos[] | null;
   bubbles?: { id: string; text: string }[];
+  /** 観測の visible.monsters（あればツールチップを観測と同じ値で作る: 速さ・特徴・初見・命中の記録） */
+  monsters?: readonly ObsMonster[];
 }
 
 /**
- * ツールチップ用: 脅威・受けた最大の一撃・自分が見た与ダメージの累計・推定残り HP・射線
- * （PlayerView の知識だけから。観測の threat / worst_hit / hp_left_est と同じ計算）
+ * ツールチップ用: 脅威・受けた最大の一撃・速さと見れば分かる特徴・命中の記録・自分が見た与ダメージの累計・推定残り HP・射線。
+ * 観測の monster があればその値を使う。無ければ PlayerView の知識だけから（観測の threat / worst_hit / hp_left_est と同じ計算）
  */
-function monsterKnowledge(view: PlayerView, catalog: Catalog, e: EntityView): string {
+function monsterKnowledge(view: PlayerView, catalog: Catalog, e: EntityView, om?: ObsMonster): string {
+  const L = getLocale();
   const parts: string[] = [];
+  if (om) {
+    parts.push(threatText(om.threat, om.first_seen));
+    parts.push(om.worst_hit !== null ? tr(`最大の一撃 ${om.worst_hit}`, `worst hit ${om.worst_hit}`) : tr('一撃の大きさは不明', 'hit size unknown'));
+    const sp = monsterSpeedLabel(om.speed);
+    if (sp) parts.push(sp);
+    if (om.traits.length) parts.push(om.traits.map(monsterTraitLabel).join(tr('・', ', ')));
+    const hits = hitsText(L, om.hits);
+    if (hits) parts.push(hits);
+    if (om.damage_seen) parts.push(tr(`与ダメ累計 ${om.damage_seen}`, `dmg seen ${om.damage_seen}`));
+    if (om.hp_left_est) parts.push(`${tr('推定残りHP', 'est. HP left')} ${hpEstimateText(L, om.hp_left_est)}`);
+    if (om.shot === 'blocked') parts.push(tr('射線: 通らない', 'shot: blocked'));
+    return ` (${parts.join(', ')})`;
+  }
+  const mem = e.kind ? view.monsterMemory[e.kind] : undefined;
   const threat = threatOf(view, e);
-  parts.push(threat === null ? tr('脅威: 不明（被弾記録なし）', 'threat: unknown (never hit by it)') : tr(`脅威 ${threat}/5`, `threat ${threat}/5`));
-  const worst = e.kind ? view.monsterMemory[e.kind]?.maxDamageToYou ?? 0 : 0;
+  // 本当に初めて見た種族（観測の first_seen と同じ規則: 撃破が無く、遭遇した個体の数がいま見えている数以下）
+  const visibleOfKind = view.entities.filter((x) => x.cat === 'monster' && x.kind === e.kind).length;
+  const firstSeen = !mem || (mem.kills === 0 && mem.encounters <= visibleOfKind);
+  parts.push(threatText(threat, firstSeen));
+  const worst = mem?.maxDamageToYou ?? 0;
   parts.push(worst > 0 ? tr(`最大の一撃 ${worst}`, `worst hit ${worst}`) : tr('一撃の大きさは不明', 'hit size unknown'));
   if (e.damageSeen) parts.push(tr(`与ダメ累計 ${e.damageSeen}`, `dmg seen ${e.damageSeen}`));
   const est = e.role !== 'guardian' && e.hp
-    ? hpLeftEstimate(e.kind ? view.monsterMemory[e.kind] : undefined, e.hp, e.damageSeen ?? 0, catalog.rules?.estimateMinSamples ?? 5)
+    ? hpLeftEstimate(mem, e.hp, e.damageSeen ?? 0, catalog.rules?.estimateMinSamples ?? 5)
     : undefined;
-  if (est) parts.push(`${tr('推定残りHP', 'est. HP left')} ${hpEstimateText(getLocale(), est)}`);
+  if (est) parts.push(`${tr('推定残りHP', 'est. HP left')} ${hpEstimateText(L, est)}`);
   if (e.shot === false) parts.push(tr('射線: 通らない', 'shot: blocked'));
   return parts.length ? ` (${parts.join(', ')})` : '';
 }
@@ -110,7 +131,8 @@ export function sceneFromView(view: PlayerView, catalog: Catalog, extras: SceneE
       ents.push({ ...base, layer: 'feature', ref: { cls: 'feature', id: e.kind ?? 'unknown', state: e.state }, label: kindName(catalog, L, e.kind) });
     } else if (e.cat === 'monster') {
       ents.push({
-        ...base, layer: 'actor', ref: { cls: 'actor', id: e.kind ?? 'unknown' }, label: monsterDisplayName(catalog, L, e) + roleLabel(e.role, e.bounty) + monsterKnowledge(view, catalog, e),
+        ...base, layer: 'actor', ref: { cls: 'actor', id: e.kind ?? 'unknown' },
+        label: monsterDisplayName(catalog, L, e) + roleLabel(e.role, e.bounty) + monsterKnowledge(view, catalog, e, extras.monsters?.find((m) => m.id === e.id)),
         hpBucket: e.hp, hostile: true, asleep: e.awareness === 'asleep',
       });
     } else {
@@ -129,10 +151,12 @@ export function sceneFromView(view: PlayerView, catalog: Catalog, extras: SceneE
   // 目標の気配（遠征中、目標階にいる間だけ。観測の expedition.sense と同じ条件）
   const xv = view.expedition;
   const sense = view.sense && xv && xv.status !== 'ended' && view.status !== 'at_camp' ? { ...view.sense } : null;
+  // 下への風（今いる階の下り階段が未発見の間だけ。観測の self.floor.draft と同じ）
+  const draft = view.floorHint?.draft && view.status !== 'at_camp' ? view.floorHint.draft : null;
   return {
     mode: 'player', floorKey: f.key, width: f.width, height: f.height, biome: f.biome, terrain, vis, entities: ents,
     focus: me.pos, focusId: me.id, cursor: extras.cursor ?? null, path: extras.path ?? null, bubbles: extras.bubbles ?? [], catalog,
-    sense,
+    sense, draft,
   };
 }
 

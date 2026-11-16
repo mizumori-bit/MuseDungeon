@@ -1,9 +1,11 @@
 // 効果 DSL のハンドラ（レジストリ登録）。データ（アイテム・地物・罠・攻撃時効果）から ID で参照される。
 import type { EffectDef } from '@muse/content';
 import type { Entity, Pos } from '@muse/shared';
+import { cheb, isPursuing } from '@muse/shared';
 import { applyDamage, heal } from './combat';
 import type { Ctx } from './ctx';
-import { makeNoise, updateMemory } from './perception';
+import { hasLos, inCircle } from './geom';
+import { isOpaqueFn, makeNoise, updateMemory } from './perception';
 import { Registry, roll } from './registry';
 import { addStatus, removeStatus } from './statuses';
 
@@ -51,21 +53,50 @@ effects.register('max_hp', (ctx, p, ec) => {
   ctx.emit({ type: 'stats_changed', target: t.id, statsAfter: { ...ctx.world.entities[t.id].stats! }, baseAfter: { ...t.base, maxHp: t.base.maxHp + n }, speedAfter: null, reason: 'max_hp', seenBy: t.player ? [t.player] : [] });
 });
 
+/**
+ * 転移（V3-2R2 §18.1）: 着地点は「元の位置から teleport.minDistance 以上、かつ追跡中の敵から見えないマス」から選ぶ。
+ * 無ければ距離の条件だけ、それも無ければ通れるマス全体から。敵が転移する場合も同じ規則（敵から見て「追跡中の敵」はプレイヤー）
+ */
 effects.register('teleport', (ctx, _p, ec) => {
   const t = ctx.world.entities[ec.target.id];
   if (!t?.pos) return;
   const key = t.pos.floor;
   const f = ctx.world.floors[key];
-  const rng = ctx.rng('runtime');
-  for (let tries = 0; tries < 200; tries++) {
-    const x = rng.range(1, f.width - 2), y = rng.range(1, f.height - 2);
-    const tr = ctx.terrainAt(key, x, y);
-    if (!tr.passable || tr.stairs || ctx.actorAt(key, x, y) || ctx.featureAt(key, x, y)?.trap) continue;
-    const from = { x: t.pos.x, y: t.pos.y };
-    const seen = ctx.perceive(key, [{ field: 'from', pos: from }, { field: 'to', pos: { x, y } }], t.player ? [t.player] : []);
-    ctx.emit({ type: 'entity_moved', id: t.id, kind: t.kind, from, to: { x, y }, mode: 'teleport', ...seen });
-    return;
+  const from = { x: t.pos.x, y: t.pos.y };
+  const minD = ctx.content.balance.teleport.minDistance;
+  const opaque = isOpaqueFn(ctx, key);
+  // 追ってくる相手の目: プレイヤーなら追跡中のモンスター、モンスターならプレイヤーの視界
+  const hunters = t.player
+    ? ctx.entitiesOn(key).filter((m) => m.actor && !m.player && m.pos && (m.stats?.hp ?? 0) > 0 && isPursuing(m))
+    : [];
+  const playerVis = t.player ? [] : ctx.playersOn(key).map((pr) => ctx.visibleSet(pr.id));
+  const watched = (x: number, y: number): boolean => {
+    if (t.player) return hunters.some((m) => inCircle(m.pos!, { x, y }, m.stats!.sight) && hasLos(m.pos!, { x, y }, opaque));
+    return playerVis.some((v) => v.has(y * f.width + x));
+  };
+  const any: Pos[] = [];
+  const far: Pos[] = [];
+  const hidden: Pos[] = [];
+  for (let y = 1; y < f.height - 1; y++) {
+    for (let x = 1; x < f.width - 1; x++) {
+      const tr = ctx.terrainAt(key, x, y);
+      if (!tr.passable || tr.stairs || ctx.actorAt(key, x, y) || ctx.featureAt(key, x, y)?.trap) continue;
+      any.push({ x, y });
+      if (cheb(from, { x, y }) < minD) continue;
+      far.push({ x, y });
+      if (!watched(x, y)) hidden.push({ x, y });
+    }
   }
+  const pool = hidden.length ? hidden : far.length ? far : any;
+  if (!pool.length) return;
+  const to = pool[ctx.rng('runtime').int(pool.length)];
+  const seen = ctx.perceive(key, [{ field: 'from', pos: from }, { field: 'to', pos: to }], t.player ? [t.player] : []);
+  ctx.emit({ type: 'entity_moved', id: t.id, kind: t.kind, from, to: { ...to }, mode: 'teleport', ...seen });
+});
+
+// 帰還の綱（V3-2R2 §18.1）: lifeline.turns 手番のあいだ行動できず、その後キャンプへ戻る
+effects.register('recall', (ctx, _p, ec) => {
+  addStatus(ctx, ec.target, 'core:recall', ctx.content.balance.lifeline.turns, 1);
 });
 
 effects.register('identify', (ctx, p, ec) => {

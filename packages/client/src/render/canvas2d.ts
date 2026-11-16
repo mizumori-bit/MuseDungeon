@@ -1,6 +1,6 @@
 // Canvas 2D 実装。レイヤー L0〜L7（docs/ASSET_SPEC.md §4）の順に描く。
 // 向き・補間・演出は見た目専用の状態で、イベントから導出する（World State には含めない）。
-import type { Pos } from '@muse/shared';
+import type { Dir, Pos } from '@muse/shared';
 import type { AssetRef, Drawable, Facing, GlyphDrawable, Theme } from '../theme/types';
 import { bucketFrac } from './scene';
 import type { Renderer, Scene, SceneEntity, ViewEvent } from './types';
@@ -23,7 +23,7 @@ function itemRank(e: SceneEntity | undefined): number {
   return e.role === 'relic' ? 2 : e.treasure ? 1 : 0;
 }
 const SENSE_VEC: Record<string, [number, number]> = { n: [0, -1], ne: [1, -1], e: [1, 0], se: [1, 1], s: [0, 1], sw: [-1, 1], w: [-1, 0], nw: [-1, -1] };
-const STATUS_COLORS: Record<string, string> ={ 'core:poison': '#7ee060', 'core:haste': '#f0e060', 'core:slow': '#60a0f0', 'core:sleep': '#c0c0ff' };
+const STATUS_COLORS: Record<string, string> ={ 'core:poison': '#7ee060', 'core:haste': '#f0e060', 'core:slow': '#60a0f0', 'core:sleep': '#c0c0ff', 'core:recall': '#d7b47a' };
 
 export class Canvas2DRenderer implements Renderer {
   private canvas: HTMLCanvasElement | null = null;
@@ -406,9 +406,11 @@ export class Canvas2DRenderer implements Renderer {
     }
     // L7 オーバーレイ
     for (const { e, p } of actors) this.drawOverlay(ctx, e, sx(p.x), sy(p.y), cs, now);
-    if (s.sense && s.focusId) {
+    if ((s.sense || s.draft) && s.focusId) {
       const me = actors.find((a) => a.e.id === s.focusId);
-      if (me) this.drawSenseArrow(ctx, s.sense, sx(me.p.x), sy(me.p.y), cs);
+      if (me && s.sense) this.drawSenseArrow(ctx, s.sense, sx(me.p.x), sy(me.p.y), cs);
+      // 気配と同じ方角なら、重ならないよう外側に出す
+      if (me && s.draft) this.drawDraftArrow(ctx, s.draft, sx(me.p.x), sy(me.p.y), cs, s.sense?.dir === s.draft ? 1.55 : 0.95);
     }
     if (s.path) {
       ctx.fillStyle = 'rgba(120,200,255,0.55)';
@@ -570,6 +572,40 @@ export class Canvas2DRenderer implements Renderer {
       ctx.strokeStyle = color;
       ctx.stroke();
     }
+    ctx.restore();
+  }
+
+  /**
+   * 下への風（V3-2R2 §18.4）: 自分のセルの外側に、下り階段の方角を指す水色の二重の山形を描く（気配の三角とは形と色で区別する）。
+   * 遠近は分からないので大きさは一定。dist はセル中心からの距離（セル幅の倍数）
+   */
+  private drawDraftArrow(ctx: CanvasRenderingContext2D, dir: Dir, px: number, py: number, cs: number, dist: number): void {
+    const v = SENSE_VEC[dir];
+    if (!v) return;
+    const len = Math.hypot(v[0], v[1]);
+    const ux = v[0] / len, uy = v[1] / len;
+    const nx = -uy, ny = ux;
+    const size = cs * 0.2;
+    const cx = px + cs / 2 + ux * cs * dist, cy = py + cs / 2 + uy * cs * dist;
+    const chevron = (off: number) => {
+      const tx = cx + ux * (size + off), ty = cy + uy * (size + off);
+      const bx = cx + ux * off - ux * size * 0.4, by = cy + uy * off - uy * size * 0.4;
+      ctx.moveTo(bx + nx * size, by + ny * size);
+      ctx.lineTo(tx, ty);
+      ctx.lineTo(bx - nx * size, by - ny * size);
+    };
+    ctx.save();
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    chevron(-size * 0.45);
+    chevron(size * 0.45);
+    ctx.lineWidth = Math.max(2.5, cs * 0.12);
+    ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+    ctx.stroke();
+    ctx.lineWidth = Math.max(1.2, cs * 0.055);
+    ctx.strokeStyle = '#7fdcff';
+    ctx.stroke();
     ctx.restore();
   }
 

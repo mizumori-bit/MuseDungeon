@@ -3,6 +3,7 @@ import type { StatusDef } from '@muse/content';
 import type { Entity, StatusInst } from '@muse/shared';
 import { applyDamage } from './combat';
 import type { Ctx } from './ctx';
+import { lifelineReturn } from './expedition';
 import { Registry } from './registry';
 
 export interface StatusHandler {
@@ -10,6 +11,8 @@ export interface StatusHandler {
   tick?(ctx: Ctx, e: Entity, inst: StatusInst, def: StatusDef): void;
   /** 行動不能にするか */
   incapacitates?: boolean;
+  /** 効果が切れたときの処理（帰還の綱: キャンプへ戻る） */
+  expire?(ctx: Ctx, e: Entity, inst: StatusInst): void;
 }
 
 export const statusHandlers = new Registry<StatusHandler>('statusHandler');
@@ -23,6 +26,8 @@ statusHandlers.register('dot', {
 });
 statusHandlers.register('speed_pct', {});
 statusHandlers.register('incapacitate', { incapacitates: true });
+// 帰還の綱（V3-2R2 §18.1）: その間は行動できず、切れたらキャンプへ戻る。被害は受ける
+statusHandlers.register('recall', { incapacitates: true, expire: (ctx, e) => lifelineReturn(ctx, e) });
 
 function statusSeen(ctx: Ctx, e: Entity) {
   return e.pos ? ctx.perceive(e.pos.floor, [{ field: 'target', pos: e.pos, entity: e.id }], e.player ? [e.player] : []) : { seenBy: e.player ? [e.player] : [] };
@@ -77,6 +82,9 @@ export function tickStatuses(ctx: Ctx, e: Entity): boolean {
   for (const ex of expired) {
     state = state.filter((s) => s.id !== ex.id);
     ctx.emit({ type: 'status_expired', target: e.id, targetKind: e.kind, statusId: ex.id, statusesAfter: state.map((s) => ({ ...s })), ...statusSeen(ctx, e) });
+    const def = ctx.content.statuses[ex.id];
+    const h = def ? statusHandlers.get(def.handler) : undefined;
+    if (h?.expire && ctx.world.entities[e.id]?.pos) h.expire(ctx, ctx.world.entities[e.id], ex);
   }
   return incap;
 }

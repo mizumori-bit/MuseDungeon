@@ -1,10 +1,20 @@
 // 情報パネル（Preact）。表示名は公開カタログ、状態は PlayerView / World から。
-import type { AgentActivity, Alert, Catalog, CommandRecord, ObsMonster, PlayerView, RunSummary, World } from '@muse/shared';
-import { dirLabel, endReasonText, hpEstimateText, hpState, itemDisplayName, itemStats, itemStatsText, kindName, nameOf, objectiveText, xpForLevel } from '@muse/shared';
+import type { AgentActivity, Alert, Catalog, CommandRecord, ObsMonster, Observation, PlayerView, RunSummary, World } from '@muse/shared';
+import { dirLabel, endReasonText, hitsText, hpEstimateText, hpState, itemDisplayName, itemStats, itemStatsText, kindName, nameOf, objectiveText, xpForLevel } from '@muse/shared';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { PLAYER_COLORS } from '../render/scene';
 import { getLocale, tr } from '../util';
-import { playerStateLabel } from './labels';
+import { DIR_ARROW, exploredLabel, monsterSpeedLabel, monsterTraitLabel, playerStateLabel, threatText } from './labels';
+
+/** 手放せない品（帰還の綱）か。捨てる・投げることができず、所持数に数えない（V3-2R2 §18.1） */
+export function isBoundItem(catalog: Catalog | null | undefined, kind: string | null): boolean {
+  return !!kind && !!catalog?.items[kind]?.bound;
+}
+
+/** 所持数（手放せない品を数えない。観測の self.inventory_count と同じ数え方） */
+export function carriedCount(view: PlayerView, catalog: Catalog | null | undefined): number {
+  return view.inventory.filter((it) => !isBoundItem(catalog, it.kind)).length;
+}
 
 function HpBar({ hp, max }: { hp: number; max: number }) {
   const frac = max > 0 ? Math.max(0, Math.min(1, hp / max)) : 0;
@@ -14,13 +24,18 @@ function HpBar({ hp, max }: { hp: number; max: number }) {
   );
 }
 
-/** speed: 実効の速さ（観測の self.speed。状態異常込み）。無ければ基本の速さ */
-export function StatusPanel({ view, catalog, speed }: { view: PlayerView; catalog: Catalog; speed?: number }) {
+/**
+ * speed: 実効の速さ（観測の self.speed。状態異常込み）。無ければ基本の速さ。
+ * floor: 観測の self.floor（下への風・探索の進み具合。V3-2R2 §18.4）
+ */
+export function StatusPanel({ view, catalog, speed, floor }: { view: PlayerView; catalog: Catalog; speed?: number; floor?: Observation['self']['floor'] }) {
   const L = getLocale();
   const s = view.self;
   const f = view.floor;
   const sp = speed ?? s.speed;
   const rec = view.record;
+  const explored = floor?.explored;
+  const draft = floor?.draft;
   return (
     <section class="panel">
       <h3>{s.name} <small>{kindName(catalog, L, s.classId)} Lv{s.level}</small></h3>
@@ -32,6 +47,19 @@ export function StatusPanel({ view, catalog, speed }: { view: PlayerView; catalo
         </span>
         <span>XP</span><span>{s.xp} / {xpForLevel(s.level)}</span>
         <span>{tr('階層', 'Depth')}</span><span>{f ? `${tr('地下', 'B')}${f.depth}${tr('階', 'F')} ${nameOf(catalog.biomes[f.biome]?.name, L, f.biome)}` : '-'}</span>
+        {(explored || draft) && (
+          <>
+            <span>{tr('この階', 'This floor')}</span>
+            <span class="floorhint">
+              {explored && <span title={tr('この階の通れるマスのうち、見た割合（4 段階）', 'Share of this floor\'s walkable cells you have seen (4 bands)')}>{tr(`探索 ${exploredLabel(explored)}`, `explored ${exploredLabel(explored)}`)}</span>}
+              {draft && (
+                <span class="draft" title={tr('この階の下り階段の方角（まだ見ていないときだけ。遠近は分からない）。地図では自分の横に水色の矢印', 'Direction of this floor\'s down stairs (only until you see them; distance unknown). Shown as a cyan arrow next to you on the map')}>
+                  <b class="darrow">{DIR_ARROW[draft]}</b>{tr(`下への風: ${dirLabel(L, draft)}`, `draft: ${dirLabel(L, draft)}`)}
+                </span>
+              )}
+            </span>
+          </>
+        )}
         <span>{tr('命中/ダメージ', 'Acc/Dmg')}</span><span>+{s.stats.acc} / {s.stats.dmg}{s.stats.might ? (s.stats.might > 0 ? `+${s.stats.might}` : s.stats.might) : ''}</span>
         <span>{tr('回避/装甲', 'Eva/Armor')}</span><span>{s.stats.eva} / {s.stats.armor}</span>
         <span>{tr('速さ', 'Speed')}</span><span>{sp}{sp !== 100 ? <small class="muted"> {tr('（標準 100）', '(normal 100)')}</small> : null}</span>
@@ -53,7 +81,7 @@ export function InventoryPanel({ view, catalog, onAction, focused, selected, onS
   return (
     <section class={`panel inv ${focused ? 'focused' : ''}`}>
       <h3>
-        {tr('所持品', 'Inventory')} <small>{view.inventory.length}/{view.self.capacity}</small>
+        {tr('所持品', 'Inventory')} <small title={tr('帰還の綱は所持数に数えない', 'The lifeline does not count toward capacity')}>{carriedCount(view, catalog)}/{view.self.capacity}</small>
         {treasure > 0 && <small class="treasure" title={tr('持ち帰ると戦利品として確定する（落とすと減る）', 'Banked as haul when you extract (dropping it removes it)')}>{tr(`宝 計 ${treasure}`, `treasure ${treasure}`)}</small>}
       </h3>
       {view.inventory.length === 0 && <div class="muted">{tr('なし', 'empty')}</div>}
@@ -62,24 +90,32 @@ export function InventoryPanel({ view, catalog, onAction, focused, selected, onS
           const ci = it.kind ? catalog.items[it.kind] : undefined;
           const cat = ci?.category ?? (it.appearanceId ? catalog.appearances[it.appearanceId]?.category : undefined);
           const usable = cat === 'potion' || cat === 'scroll' || ci?.usable;
-          const throwable = ci?.throwable || cat === 'throwing' || cat === 'potion';
+          // 手放せない品（帰還の綱）: 置く・投げるは出さない
+          const bound = !!ci?.bound;
+          const throwable = !bound && (ci?.throwable || cat === 'throwing' || cat === 'potion');
           const name = itemDisplayName(catalog, L, it.kind, it.appearanceId, it.affixes);
           // 鑑定済みの自分の持ち物は性能をそのまま見せる（V3-2R §14.3）
           const stats = itemStatsText(L, itemStats(catalog, it.kind, it.affixes));
           return (
-            <li key={it.id} class={selected === it.slot ? 'sel' : ''} onClick={() => onSelect?.(it.slot)} title={ci ? nameOf(ci.desc, L, '') : tr('未鑑定', 'unidentified')}>
+            <li key={it.id} class={`${selected === it.slot ? 'sel' : ''} ${bound ? 'bound' : ''}`} onClick={() => onSelect?.(it.slot)} title={ci ? nameOf(ci.desc, L, '') : tr('未鑑定', 'unidentified')}>
               <span class="slot">{it.slot})</span>
               <span class="name">
                 {name}{it.qty > 1 ? ` x${it.qty}` : ''}{it.equipped ? <em> [{tr('装備', 'eq')}]</em> : null}{it.kind === null ? <em class="muted"> ?</em> : null}{cat === 'relic' ? <em class="relic"> ［{tr('遺物', 'relic')}］</em> : null}{it.value !== undefined ? <em class="treasure"> ［{tr(`宝・価値 ${it.value}`, `treasure ${it.value}`)}］</em> : null}
+                {bound && <em class="bound"> ［{tr('手放せない・所持数に数えない', 'bound, not counted')}］</em>}
                 {stats && <span class="istats">{stats}</span>}
               </span>
               {onAction && (
                 <span class="acts">
-                  {usable && <button class="tiny" onClick={(e) => { e.stopPropagation(); onAction('use', it.slot); }}>{tr('使う', 'Use')}</button>}
+                  {usable && (
+                    <button class={`tiny ${bound ? 'lifeline' : ''}`} onClick={(e) => { e.stopPropagation(); onAction('use', it.slot); }}
+                      title={bound ? tr('帰還の綱を使う（L）: 数手番動けずにキャンプへ戻る。確認が出る', 'Use the lifeline (L): helpless for a few turns, then back to camp. Asks to confirm') : undefined}>
+                      {bound ? tr('綱を使う', 'Use') : tr('使う', 'Use')}
+                    </button>
+                  )}
                   {ci?.slot && !it.equipped && <button class="tiny" onClick={(e) => { e.stopPropagation(); onAction('equip', it.slot); }}>{tr('装備', 'Equip')}</button>}
                   {it.equipped && <button class="tiny" onClick={(e) => { e.stopPropagation(); onAction('unequip', it.slot); }}>{tr('外す', 'Remove')}</button>}
                   {throwable && !it.equipped && <button class="tiny" onClick={(e) => { e.stopPropagation(); onAction('throw', it.slot); }}>{tr('投げる', 'Throw')}</button>}
-                  <button class="tiny" onClick={(e) => { e.stopPropagation(); onAction('drop', it.slot); }}>{tr('置く', 'Drop')}</button>
+                  {!bound && <button class="tiny" onClick={(e) => { e.stopPropagation(); onAction('drop', it.slot); }}>{tr('置く', 'Drop')}</button>}
                 </span>
               )}
             </li>
@@ -110,21 +146,32 @@ export function MessageLog({ lines, title }: { lines: LogLine[]; title?: string 
 
 /** 先頭に出して強調する警告（一撃で倒されうる・HP が危険域） */
 const URGENT_ALERTS: readonly string[] = ['lethal_range', 'critical_hp'];
+/** 並べる順（先頭から）。群れの被害見込みと逃げ道の見込みは危険の直後に置く（V3-2R2 §18.1・§18.2） */
+const ALERT_ORDER: readonly string[] = [...URGENT_ALERTS, 'incoming', 'escape'];
 
-export function AlertsBar({ alerts }: { alerts: Alert[] }) {
+/** onEscape: 逃げ道の見込み（escape）に「退く」ボタンを添える。data.stairs は向かう階段（up / down） */
+export function AlertsBar({ alerts, onEscape }: { alerts: Alert[]; onEscape?: (stairs: 'up' | 'down') => void }) {
   if (!alerts.length) return null;
-  const rank = (a: Alert) => { const i = URGENT_ALERTS.indexOf(a.code); return i < 0 ? URGENT_ALERTS.length : i; };
+  const rank = (a: Alert) => { const i = ALERT_ORDER.indexOf(a.code); return i < 0 ? ALERT_ORDER.length : i; };
   const sorted = [...alerts].sort((a, b) => rank(a) - rank(b));
   return (
     <div class="alerts">
-      {sorted.map((a) => <span key={a.code} class={`alert ${a.code} ${URGENT_ALERTS.includes(a.code) ? 'urgent' : ''}`}>{a.code === 'lethal_range' ? `⚠ ${a.text}` : a.text}</span>)}
+      {sorted.map((a) => {
+        const stairs = a.code === 'escape' && (a.data?.stairs === 'up' || a.data?.stairs === 'down') ? a.data.stairs : null;
+        return (
+          <span key={a.code} class={`alert ${a.code} ${URGENT_ALERTS.includes(a.code) ? 'urgent' : ''}`}>
+            {a.code === 'lethal_range' ? `⚠ ${a.text}` : a.text}
+            {stairs && onEscape && (
+              <button class="tiny flee aact" onClick={() => onEscape(stairs)}
+                title={tr('その階段まで退く（flee: 隣に敵がいても動く。途中で攻撃は受ける）。着いたら extract（E）か階段（>）', 'Flee to those stairs (moves even with an enemy adjacent; you will be attacked). Then extract (E) or take the stairs (>)')}>
+                {stairs === 'up' ? tr('上り階段へ退く', 'Flee up') : tr('下り階段へ退く', 'Flee down')}
+              </button>
+            )}
+          </span>
+        );
+      })}
     </div>
   );
-}
-
-/** 脅威の表示。記録が無い種族は「不明（被弾記録なし）」（V3-2R §14.3） */
-export function threatText(threat: ObsMonster['threat']): string {
-  return threat === null ? tr('脅威: 不明（被弾記録なし）', 'threat: unknown (never hit by it)') : tr(`脅威 ${threat}/5`, `threat ${threat}/5`);
 }
 
 /** その種族から受けた最大の一撃 */
@@ -135,11 +182,19 @@ export function worstHitText(w: number | null): string {
 const AWARE_LABEL: Record<string, [string, string]> = { asleep: ['睡眠中', 'asleep'], unaware: ['未察知', 'unaware'], hunting: ['追跡中', 'hunting'] };
 const HP_LABEL: Record<string, [string, string]> = { healthy: ['健康', 'healthy'], wounded: ['軽傷', 'wounded'], badly_wounded: ['重傷', 'badly wounded'], near_death: ['瀕死', 'near death'] };
 
+/** 追跡中で逃げておらず、動く相手（fight で「迎え撃つ」: 隣に来るまで待てる。V3-2R2 §18.5） */
+export function isApproaching(m: ObsMonster): boolean {
+  return m.awareness === 'hunting' && !m.fleeing && !m.traits.includes('stationary');
+}
+
 /**
- * 見えている敵（観測の visible.monsters）。脅威・最大の一撃・推定残り HP・投擲の可否を並べる。
- * 隣にいる相手には「戦う」（fight マクロ）を出す
+ * 見えている敵（観測の visible.monsters）。脅威・最大の一撃・速さと見れば分かる特徴・命中の記録・推定残り HP・投擲の可否を並べる。
+ * onFight(id): 隣の相手には「戦う」、追跡中で届かない相手には「迎え撃つ」（隣に来るまで待つ）。
+ * onFight(id, slot): 「投擲で決着」（その品を投げ続ける。射程と射線が通るまで待つ）。throwSlotFor が投げる品のスロットを返す相手だけに出す
  */
-export function MonstersPanel({ monsters, hp, onFight }: { monsters: ObsMonster[]; hp: number; onFight?: (id: string) => void }) {
+export function MonstersPanel({ monsters, hp, onFight, throwSlotFor }: {
+  monsters: ObsMonster[]; hp: number; onFight?: (id: string, withSlot?: string) => void; throwSlotFor?: (m: ObsMonster) => string | null;
+}) {
   if (!monsters.length) return null;
   const L = getLocale();
   return (
@@ -155,22 +210,44 @@ export function MonstersPanel({ monsters, hp, onFight }: { monsters: ObsMonster[
           const shot = m.shot === 'blocked' ? tr('射線: 通らない', 'shot: blocked')
             : m.shots.length ? [clear.length ? tr(`投擲可: ${clear.join(',')}`, `throw: ${clear.join(',')}`) : '', far.length ? tr(`射程外: ${far.join(',')}`, `out of range: ${far.join(',')}`) : ''].filter(Boolean).join(' / ')
               : '';
+          const speed = monsterSpeedLabel(m.speed);
+          const hits = hitsText(L, m.hits);
+          const meet = m.dist > 1 && isApproaching(m);
+          const withSlot = throwSlotFor?.(m) ?? null;
           return (
             <li key={m.id} class={`${lethal ? 'lethal' : ''} ${m.role ?? ''}`}>
               <div class="mhead">
                 <b>{m.name}</b>
+                {m.first_seen && <span class="mfirst" title={tr('このランで初めて見た種族', 'A species you meet for the first time this run')}>{tr('初見', 'new')}</span>}
                 <small>{dirLabel(L, m.dir)} {m.dist}</small>
                 {aw && <span class={`maw ${m.awareness}`}>{tr(aw[0], aw[1])}{m.fleeing ? tr('・逃走中', ', fleeing') : ''}</span>}
                 {hs && <span class={`mhp ${m.hp_state}`}>{tr(hs[0], hs[1])}</span>}
-                {onFight && m.dist === 1 && (
-                  <button class="tiny right" onClick={() => onFight(m.id)} title={tr('倒れる・離れる・HP が半分を下回るまで殴り続ける（F）', 'Keep attacking until it falls, moves away, or your HP drops below half (F)')}>
-                    {tr('戦う', 'Fight')}
-                  </button>
+                {onFight && (m.dist === 1 || meet || withSlot) && (
+                  <span class="right macts">
+                    {m.dist === 1 && (
+                      <button class="tiny" onClick={() => onFight(m.id)} title={tr('倒れる・離れる・HP が半分を下回るまで殴り続ける（F）', 'Keep attacking until it falls, moves away, or your HP drops below half (F)')}>
+                        {tr('戦う', 'Fight')}
+                      </button>
+                    )}
+                    {meet && (
+                      <button class="tiny" onClick={() => onFight(m.id)} title={tr('隣に来るまで待ち（最大 10 手番）、来たら殴り続ける（F）。HP が半分を下回る・別の追跡中の敵で止まる', 'Wait until it comes adjacent (up to 10 turns), then keep attacking (F). Stops below half HP or on another hunting enemy')}>
+                        {tr('迎え撃つ', 'Meet')}
+                      </button>
+                    )}
+                    {withSlot && (
+                      <button class="tiny" onClick={() => onFight(m.id, withSlot)} title={tr(`${withSlot} を倒れるまで投げ続ける（射程と射線が通るまで待つ）。隣に来た・品が尽きた・射線が 3 手番通らない・HP が半分を下回ると止まる`, `Keep throwing ${withSlot} until it falls (waits for range and a clear line). Stops when it comes adjacent, you run out, the line stays blocked for 3 turns, or HP drops below half`)}>
+                        {tr(`投擲で決着（${withSlot}）`, `Throw it down (${withSlot})`)}
+                      </button>
+                    )}
+                  </span>
                 )}
               </div>
               <div class="msub">
-                <span class={`mthreat ${m.threat === null ? 'unknown' : `t${m.threat}`}`}>{threatText(m.threat)}</span>
+                <span class={`mthreat ${m.threat === null ? 'unknown' : `t${m.threat}`}`}>{threatText(m.threat, m.first_seen)}</span>
                 <span class={lethal ? 'mworst lethal' : 'mworst'}>{worstHitText(m.worst_hit)}{lethal ? tr('（今の HP 以上）', ' (>= your HP)') : ''}</span>
+                {speed && <span class={`mspeed ${m.speed}`} title={tr('自分の今の速さとの比較（見れば分かる）', 'Compared with your current speed (visible at a glance)')}>{speed}</span>}
+                {m.traits.length > 0 && <span class="mtraits">{m.traits.map(monsterTraitLabel).join(tr('・', ', '))}</span>}
+                {hits && <span class="mhits" title={tr('記録した命中の回数（確率ではない）', 'Recorded hits / tries (not a probability)')}>{hits}</span>}
                 {m.hp_left_est && <span>{hpEstimateText(L, m.hp_left_est)}</span>}
                 {m.damage_seen ? <span>{tr(`与ダメ累計 ${m.damage_seen}`, `dmg dealt ${m.damage_seen}`)}</span> : null}
                 {shot && <span class={m.shot === 'blocked' ? 'mshot blocked' : 'mshot'}>{shot}</span>}

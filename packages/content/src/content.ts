@@ -124,11 +124,13 @@ function crossValidate(c: Content): void {
   const need = (ok: boolean, msg: string) => { if (!ok) errs.push(msg); };
   need(!!c.balance, 'balance.json に core:balance が必要');
   if (c.balance) {
-    for (const k of ['reach_depth', 'slay_guardian', 'retrieve_relic']) need(k in c.balance.expedition.points, `balance.expedition.points に ${k} が必要`);
-    need(c.balance.expedition.aheadMax >= c.balance.expedition.aheadMin, 'balance.expedition: aheadMax >= aheadMin');
+    for (const k of ['reach_depth', 'slay_guardian', 'retrieve_relic', 'retrieve_relic_guarded']) need(k in c.balance.expedition.typePct, `balance.expedition.typePct に ${k} が必要`);
+    for (const s of Object.values(c.balance.expedition.slots)) need(s.aheadMax >= s.aheadMin, 'balance.expedition.slots: aheadMax >= aheadMin');
     need(c.balance.wander.intervalMax >= c.balance.wander.intervalMin, 'balance.wander: intervalMax >= intervalMin');
   }
   need(!!c.items['core:relic'], '遠征の遺物 core:relic が必要');
+  need(!!c.items['core:lifeline']?.bound, '帰還の綱 core:lifeline（bound）が必要');
+  need(!!c.statuses['core:recall'], '帰還中の状態 core:recall が必要');
   for (const it of c.lists.items) if (it.category === 'treasure') need(!!it.value, `${it.id}: 宝には value が必要`);
   need(!!c.lootTables['core:treasure_loot'], '守護者の確定ドロップ core:treasure_loot が必要');
   if (c.balance) for (const k of ['safe', 'standard', 'ambitious']) need(k in c.balance.expedition.slots, `balance.expedition.slots に ${k} が必要`);

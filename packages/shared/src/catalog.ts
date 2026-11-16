@@ -30,6 +30,8 @@ export interface CatalogItem {
   throwRange: number | null;
   /** 宝（持ち帰ると点になる。価値は個体ごと） */
   treasure: boolean;
+  /** 手放せない品（帰還の綱）。捨てる・投げることができず、所持数に数えない */
+  bound?: boolean;
   /** 自分の持ち物の性能（鑑定済みなら定義の値をそのまま見せる。V3-2R §14.3） */
   weapon?: { dmg: string; acc: number };
   armorStats?: { armor: number; eva: number };
@@ -69,56 +71,85 @@ export interface CatalogRules {
   macroStepLimit: number;
   wander: { intervalMin: number; intervalMax: number };
   score: { perDepth: number; perKill: number; perLevel: number };
-  expedition: { firstTargetDepth: Record<'safe' | 'standard' | 'ambitious', number>; aheadMin: number; aheadMax: number; points: Record<string, number>; pointsPerExtraDepth: number };
+  /** 候補の点 = 枠の基礎点 × typePct % × (depthPct.base + depthPct.perDepth × 目標深度) %（V3-2R2 §18.3） */
+  expedition: { firstTargetDepth: Record<'safe' | 'standard' | 'ambitious', number>; typePct: Record<string, number>; depthPct: { base: number; perDepth: number } };
   /** 敵の HP 4 段階の境界（%）: healthy >= [0], wounded >= [1], badly_wounded >= [2], それ未満 near_death */
   hpBands: [number, number, number];
   /** 推定残り HP: 記録がこの数未満の間は上限を出さない */
   estimateMinSamples: number;
   /** 戦利品（v3） */
   haul: {
-    overreachFirst: number; overreachStep: number; perKill: number; withdrawPct: number;
+    overreachFirst: number; overreachStep: number; overreachPct: { first: number; step: number }; perKill: number; withdrawPct: number;
     discovery: { species: number; identify: number; room: number; inscription: number };
     guardianBounty: { base: number; perDepth: number };
   };
-  /** キャンプの 3 枠（目標深度の幅・条件の数・基礎点の割合） */
-  slots: Record<'safe' | 'standard' | 'ambitious', { aheadMin: number; aheadMax: number; traitsMin: number; traitsMax: number; pointsPct: number }>;
+  /** キャンプの 3 枠（目標深度の幅・条件の数・枠の基礎点） */
+  slots: Record<'safe' | 'standard' | 'ambitious', { aheadMin: number; aheadMax: number; traitsMin: number; traitsMax: number; base: number }>;
   /** 目的達成後の徘徊の湧き間隔（%）と推奨レベルの式 */
   afterObjectiveWanderPct: number;
   /** 推奨レベルの表（深度 1 から。bot の実測） */
   recommendedLevel: { byDepth: number[] };
   /** 敵を倒す以外の経験値 */
   xp: { perNewDepth: number; perObjective: number };
+  /** 帰還の綱: 使ってから戻るまでの手番と、確定する戦利品の割合（V3-2R2 §18.1） */
+  lifeline: { turns: number; pct: number };
+  /** 転移の巻物の着地点の最短距離 */
+  teleport: { minDistance: number };
   /** 遠征の条件（公開） */
   traits: Record<string, { name: Names; desc: Names; multiplierPct: number; danger: number }>;
 }
 
 /**
- * 深追い（踏破）の点: 目標より深い階を横切り、その階の下り階段に立つたびに入る（V3-2R §14.1）。
- * crossedDepth = 下り階段に立った最も深い階。k 階目ごとに first + step × (k - 1)
+ * n 階目（1 から）の踏破の点（V3-2R2 §18.4）: 目的の点 × (pct.first + pct.step × (n − 1))%。
+ * 下限は overreachFirst + overreachStep × (n − 1)。目的の点は条件の倍率をかける前の値
  */
-export function overreachPoints(rules: Pick<CatalogRules, 'haul'>, targetDepth: number | null, crossedDepth: number): number {
+export function overreachStepPoints(rules: Pick<CatalogRules, 'haul'>, objectivePoints: number, n: number): number {
+  const h = rules.haul;
+  const floor = h.overreachFirst + h.overreachStep * (n - 1);
+  const pct = (h.overreachPct?.first ?? 0) + (h.overreachPct?.step ?? 0) * (n - 1);
+  return Math.max(floor, Math.trunc((objectivePoints * pct) / 100));
+}
+
+/**
+ * 深追い（踏破）の点: 目標より深い階を横切り、その階の下り階段に立つたびに入る（V3-2R §14.1）。
+ * crossedDepth = 下り階段に立った最も深い階。k 階目ごとに overreachStepPoints(k)
+ */
+export function overreachPoints(rules: Pick<CatalogRules, 'haul'>, targetDepth: number | null, crossedDepth: number, objectivePoints: number): number {
   if (targetDepth === null) return 0;
   const k = Math.max(0, crossedDepth - targetDepth);
   let total = 0;
-  for (let i = 0; i < k; i++) total += rules.haul.overreachFirst + rules.haul.overreachStep * i;
+  for (let i = 1; i <= k; i++) total += overreachStepPoints(rules, objectivePoints, i);
   return total;
 }
 
 /** 次に踏破の点が入る階（その階の下り階段に立てば入る）とその点 */
-export function nextOverreach(rules: Pick<CatalogRules, 'haul'>, targetDepth: number | null, crossedDepth: number): { depth: number; points: number } | null {
+export function nextOverreach(rules: Pick<CatalogRules, 'haul'>, targetDepth: number | null, crossedDepth: number, objectivePoints: number): { depth: number; points: number } | null {
   if (targetDepth === null) return null;
   const k = Math.max(0, crossedDepth - targetDepth);
-  return { depth: Math.max(targetDepth, crossedDepth) + 1, points: rules.haul.overreachFirst + rules.haul.overreachStep * k };
+  return { depth: Math.max(targetDepth, crossedDepth) + 1, points: overreachStepPoints(rules, objectivePoints, k + 1) };
 }
 
 export function haulTotal(p: HaulParts): number {
   return p.objective + p.overreach + p.treasure + p.bounty + p.discovery + p.kills;
 }
 
-/** 払い戻し: 帰還は全部 × 倍率、撤退は目的を除いて × withdrawPct（倍率は掛けない） */
-export function payoutOf(rules: Pick<CatalogRules, 'haul'>, p: HaulParts, completed: boolean, multiplierPct: number): number {
+/**
+ * 払い戻し: 帰還は全部 × 倍率、撤退は目的を除いて × withdrawPct（倍率は掛けない）。
+ * 帰還の綱（V3-2R2 §18.1）は戦利品全体 × lifeline.pct（倍率は掛けない。目的は達成済みのときだけ含む）
+ */
+export function payoutOf(rules: Pick<CatalogRules, 'haul'> & Partial<Pick<CatalogRules, 'lifeline'>>, p: HaulParts, completed: boolean, multiplierPct: number, lifeline = false): number {
+  if (lifeline) return Math.trunc(((haulTotal(p) - (completed ? 0 : p.objective)) * (rules.lifeline?.pct ?? 50)) / 100);
   if (completed) return Math.trunc((haulTotal(p) * multiplierPct) / 100);
   return Math.trunc(((haulTotal(p) - p.objective) * rules.haul.withdrawPct) / 100);
+}
+
+/** 候補の点（V3-2R2 §18.3）: 枠の基礎点 × 種類の係数 × 深さの係数。どの組み合わせでも 堅実 < 標準 < 野心 */
+export function offerPoints(rules: Pick<CatalogRules, 'expedition' | 'slots'>, slot: 'safe' | 'standard' | 'ambitious', type: string, guarded: boolean, targetDepth: number): number {
+  const x = rules.expedition;
+  const key = type === 'retrieve_relic' && guarded ? 'retrieve_relic_guarded' : type;
+  const typePct = x.typePct[key] ?? 100;
+  const depthPct = x.depthPct.base + x.depthPct.perDepth * targetDepth;
+  return Math.trunc((Math.trunc((rules.slots[slot].base * typePct) / 100) * depthPct) / 100);
 }
 
 /** 推奨レベル（公開の表。表より深い階は直近 4 階の傾きで外挿する。整数のみ） */

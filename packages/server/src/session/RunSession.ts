@@ -386,7 +386,7 @@ export class RunSession {
         error: actionError('stale_turn', t(pr.locale, `前提の seq ${opts.expectSeq} は古い（現在 ${this.world.seq}）。`, `expect_seq ${opts.expectSeq} is stale (now ${this.world.seq}).`), t(pr.locale, 'observe で最新の状態を取得してから行動する。', 'Call observe and act on the latest state.')),
       };
     }
-    if (MACRO_COMMANDS.has(cmd.type)) return this.runMacro(pid, cmd, opts);
+    if (MACRO_COMMANDS.has(cmd.type) || (cmd.type === 'wait' && (cmd.turns ?? 1) > 1)) return this.runMacro(pid, cmd, opts);
     return this.enqueue(() => this.stepNow(pid, cmd, opts.source, opts.thought));
   }
 

@@ -6,7 +6,7 @@
   { "id": "core:venomous", "name": { "ja": "毒牙の", "en": "venomous" }, "target": "monster", "depth": { "min": 2 }, "rarity": 2,
     "mods": { "xpPct": 40 }, "onHit": [{ "effect": "status", "status": "core:poison", "turns": "1d4+2", "power": 1, "chancePct": 35 }], "abilities": ["poison"] },
   { "id": "core:guardian", "name": { "ja": "守護者", "en": "guardian" }, "target": "guardian", "depth": { "min": 1 }, "rarity": 1,
-    "mods": { "hpPct": 150, "acc": 1, "might": 1, "armor": 1, "xpPct": 300 } },
+    "mods": { "hpPct": 100, "acc": 1, "might": 1, "armor": 1, "xpPct": 300 } },
   { "id": "core:keen", "name": { "ja": "鋭い", "en": "keen" }, "target": "item", "depth": { "min": 2 }, "rarity": 1, "categories": ["weapon"],
     "mods": { "acc": 2 } },
   { "id": "core:heavy", "name": { "ja": "重厚な", "en": "heavy" }, "target": "item", "depth": { "min": 3 }, "rarity": 2, "categories": ["weapon"],

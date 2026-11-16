@@ -3,7 +3,7 @@
 import type {
   AiState, BaseStats, CampState, Dir, Entity, EntityId, EquipSlot, Expedition, ExpeditionHaul, ExpeditionEndReason, ExpeditionResult, Floor,
   FloorKey, FloorPos, MonsterMemory, Objective, ObjectiveProgress, PlayerId, PlayerRecord, PlayerStats, Pos,
-  RememberedEntity, RngState, RunMeta, RunSummary, Sense, Stats, StatusInst, WorldSecret,
+  RememberedEntity, RngState, RunMeta, RunSummary, Sense, Stats, StatusInst, WorldSecret, FloorHint,
 } from './types';
 
 /** 2: 遠征・実ダメージ・回復の蓄積値（IMPROVEMENTS_V2）。1 のログもそのまま畳み込める */
@@ -100,6 +100,8 @@ export type GameEvent =
       reachedAffixes?: string[] | null;
     }>
   | E<'item_identified', { player: PlayerId; kind: string; appearanceId: string | null }>
+  /** キャンプが持たせた品（帰還の綱。V3-2R2 §18.1）。状態変化は put/del */
+  | E<'item_issued', { actor: EntityId; item: EntityId; kind: string; qty: number; reason: string }>
   // 地物・罠
   | E<'feature_state', { id: EntityId; kind: string; state: string }>
   | E<'trap_revealed', { trap: EntityId; kind: string; player: PlayerId; pos: Pos }>
@@ -123,6 +125,8 @@ export type GameEvent =
       mappedDel?: number[];
       /** 目標の気配（after 値。変化したときだけ。null は気配なし） */
       senseAfter?: Sense | null;
+      /** 今いる階の手がかり（after 値。変化したときだけ。V3-2R2） */
+      hintAfter?: FloorHint | null;
     }>
   | E<'monster_memory_updated', { player: PlayerId; kind: string; memoryAfter: MonsterMemory }>
   | E<'notes_updated', { player: PlayerId; notesAfter: string[] }>

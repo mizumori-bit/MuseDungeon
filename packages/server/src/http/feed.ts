@@ -58,7 +58,7 @@ export function handleFeed(req: IncomingMessage, res: ServerResponse, manager: S
       if (endedScope !== key) {
         endedScope = key;
         const turn = port.turnBlock('observed');
-        const head = v.expedition ? resultText(v.locale, v.expedition) : '';
+        const head = v.expedition ? resultText(v.locale, v.expedition, port.catalog.rules) : '';
         send({ type: 'ended', ...base(), scope: 'expedition', turn, text: [head, port.turnLine(turn)].filter(Boolean).join('\n'), summary: null });
       }
       return;

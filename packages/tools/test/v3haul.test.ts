@@ -142,9 +142,10 @@ describe('V3-2 offers, treasure, haul', () => {
 
   it('kills and first discoveries accrue into the shared haul as the expedition goes', async () => {
     const manager = new SessionManager(content, loadConfig({ runsDir: null, waitOthersMs: 100 }));
-    const r = await manager.createRun({ name: 'K', seed: 'v3-haul-1', controller: { kind: 'agent', label: 't' }, objective: 'endless' });
+    // 同じ種族を 2 体以上倒すシード（bot が綱で早く帰るシードでは 2 体目の発見を確かめられない）
+    const r = await manager.createRun({ name: 'K', seed: 'v3-haul-2', controller: { kind: 'agent', label: 't' }, objective: 'endless' });
     if ('error' in r) throw new Error(r.error.message);
-    const rng = Rng.fromSeed('v3-haul-1');
+    const rng = Rng.fromSeed('v3-haul-2');
     const memo = newMemo();
     const pid = r.port.playerId;
     const k0 = r.session.world.players[pid].stats.kills;

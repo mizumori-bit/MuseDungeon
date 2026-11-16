@@ -55,6 +55,8 @@ export interface Scene {
   catalog: Catalog;
   /** 目標（守護者・遺物）の気配。focusId の横に方角の矢印を出す（プレイヤー視点のみ） */
   sense?: { what: 'guardian' | 'relic'; dir: Dir; range: 'far' | 'near' } | null;
+  /** 下への風: 今いる階の下り階段が未発見のときの方角（V3-2R2 §18.4）。focusId の横に気配とは別の形の矢印を出す（プレイヤー視点のみ） */
+  draft?: Dir | null;
 }
 
 /** 演出用のイベント（クライアントがゲームイベントから導出する。見た目専用） */

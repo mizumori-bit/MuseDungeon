@@ -38,8 +38,9 @@ const ACTOR: Record<string, GlyphDrawable> = {
 };
 
 // relic: 遠征の遺物（core:relic）。目印の光と星はレンダラーが役割（role）から重ねる
-const ITEM_CH: Record<string, string> = { potion: '!', scroll: '?', weapon: ')', armor: '[', throwing: '/', accessory: '"', relic: '¤' };
-const ITEM_FG: Record<string, string> = { potion: '#e070e0', scroll: '#e8dcb0', weapon: '#c8d0dc', armor: '#c09050', throwing: '#d8d8d8', accessory: '#f0d060', relic: '#ffd54f' };
+// lifeline: 帰還の綱（core:lifeline。手放せないので床には落ちないが、所持品や投擲の演出で引かれたときの代替）
+const ITEM_CH: Record<string, string> = { potion: '!', scroll: '?', weapon: ')', armor: '[', throwing: '/', accessory: '"', relic: '¤', lifeline: '§' };
+const ITEM_FG: Record<string, string> = { potion: '#e070e0', scroll: '#e8dcb0', weapon: '#c8d0dc', armor: '#c09050', throwing: '#d8d8d8', accessory: '#f0d060', relic: '#ffd54f', lifeline: '#d7b47a' };
 
 const APPEARANCE_FG: Record<string, string> = {
   'core:potion_look_01': '#ff5050',
@@ -65,6 +66,8 @@ const STATUS: Record<string, GlyphDrawable> = {
   'core:haste': { kind: 'glyph', ch: '»', fg: '#f0e060' },
   'core:slow': { kind: 'glyph', ch: '«', fg: '#60a0f0' },
   'core:sleep': { kind: 'glyph', ch: 'z', fg: '#c0c0ff' },
+  // 帰還中（帰還の綱を使ってからキャンプへ戻るまで。動けない）
+  'core:recall': { kind: 'glyph', ch: '§', fg: '#d7b47a' },
 };
 
 const UNKNOWN: GlyphDrawable = { kind: 'glyph', ch: '?', fg: '#ff40ff', bold: true };

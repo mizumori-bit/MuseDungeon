@@ -75,6 +75,8 @@ export const ItemSchema = z.object({
   shatter: z.boolean().default(false),
   /** 自分に使うと害がある（鑑定済みなら use_item ではなく throw_item を候補に出す） */
   harmful: z.boolean().default(false),
+  /** 手放せない品（帰還の綱）: 捨てる・投げることができず、所持数に数えない。坑の中には出ない */
+  bound: z.boolean().default(false),
   /** 宝（category: treasure）の価値: dice × mult × (100 + 深度 × perDepthPct) / 100。見えた時点で分かる */
   value: z.object({ dice: DiceSchema, mult: z.number().int().min(1), perDepthPct: z.number().int().min(0).default(10) }).optional(),
   desc: NamesSchema.optional(),
@@ -226,28 +228,37 @@ export const BalanceSchema = z.object({
   xp: z.object({ perNewDepth: Int.min(0), perObjective: Int.min(0) }).default({ perNewDepth: 0, perObjective: 0 }),
   /** 戦利品（IMPROVEMENTS_V3 §2.2） */
   haul: z.object({
-    overreachFirst: Int.min(0), overreachStep: Int.min(0), perKill: Int.min(0),
+    /** 踏破の点の下限（n 階目 = first + step × (n − 1)） */
+    overreachFirst: Int.min(0), overreachStep: Int.min(0),
+    /** 踏破の点（V3-2R2 §18.4）: n 階目 = 目的の点 × (first + step × (n − 1))%。下限は overreachFirst / overreachStep */
+    overreachPct: z.object({ first: Int.min(0), step: Int.min(0) }).default({ first: 0, step: 0 }),
+    perKill: Int.min(0),
     discovery: z.object({ species: Int.min(0), identify: Int.min(0), room: Int.min(0), inscription: Int.min(0) }),
     /** 撤退のときに確定する割合（目的の基礎点は含まない） */
     withdrawPct: Int.min(0).max(100),
     guardianBounty: z.object({ base: Int.min(0), perDepth: Int.min(0) }),
   }),
+  /** 帰還の綱（V3-2R2 §18.1）: 使ってから戻るまでの手番と、確定する戦利品の割合 */
+  lifeline: z.object({ turns: Int.min(1), pct: Int.min(0).max(100) }).default({ turns: 2, pct: 50 }),
+  /** 転移の着地点: 元の位置からこの距離以上（チェビシェフ）を優先する */
+  teleport: z.object({ minDistance: Int.min(0) }).default({ minDistance: 0 }),
+  /** 守護者の体力の下限 = minHpBase + minHpPerDepth × 深度（V3-2R2 §18.6） */
+  guardian: z.object({ minHpBase: Int.min(0), minHpPerDepth: Int.min(0) }).default({ minHpBase: 0, minHpPerDepth: 0 }),
   expedition: z.object({
     /** 最初の遠征の目標深度（枠ごと） */
     firstTargetDepth: z.object({ safe: Int.min(2), standard: Int.min(2), ambitious: Int.min(2) }),
-    aheadMin: Int.min(1), aheadMax: Int.min(1),
-    /** 達成時の基礎点（目的の種類ごと） */
-    points: z.record(Int),
-    /** 目標が「最深到達＋aheadMin」より深い 1 階ごとの加点 */
-    pointsPerExtraDepth: Int,
+    /** 候補の点（V3-2R2 §18.3）= 枠の基礎点 × 種類の係数 % × 深さの係数 %。retrieve_relic_guarded は守護者付きの遺物 */
+    typePct: z.record(Int.min(1)),
+    /** 深さの係数 = base + perDepth × 目標深度（%） */
+    depthPct: z.object({ base: Int.min(1), perDepth: Int.min(0) }),
     /** retrieve_relic で遺物を守護者が守る確率 */
     relicGuardianPct: Int.min(0).max(100),
     /** 目的達成後の圧力（slay_guardian / retrieve_relic）: 徘徊の湧き間隔の割合 */
     afterObjective: z.object({ wanderIntervalPct: Int.min(1).max(100) }),
     /** 推奨レベル（深度 1 から順。bot の実測の中央値。表より深い階は直近 4 階の傾きで外挿する） */
     recommendedLevelByDepth: z.array(Int.min(1)).min(5),
-    /** 候補の 3 枠: 目標の深さ（最深 + aheadMin〜aheadMax）、条件の数、基礎点の割合 */
-    slots: z.record(z.object({ aheadMin: Int.min(1), aheadMax: Int.min(1), traitsMin: Int.min(0), traitsMax: Int.min(0), pointsPct: Int.min(1) })),
+    /** 候補の 3 枠: 目標の深さ（最深 + aheadMin〜aheadMax）、条件の数、枠の基礎点 */
+    slots: z.record(z.object({ aheadMin: Int.min(1), aheadMax: Int.min(1), traitsMin: Int.min(0), traitsMax: Int.min(0), base: Int.min(1) })),
   }),
 });
 

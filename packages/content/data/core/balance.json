@@ -9,24 +9,25 @@
     "estimate": { "minSamples": 5 },
     "xp": { "perNewDepth": 4, "perObjective": 8 },
     "haul": {
-      "overreachFirst": 600, "overreachStep": 300, "perKill": 10,
+      "overreachFirst": 600, "overreachStep": 300, "overreachPct": { "first": 25, "step": 10 }, "perKill": 10,
       "discovery": { "species": 50, "identify": 30, "room": 100, "inscription": 50 },
       "withdrawPct": 50,
       "guardianBounty": { "base": 300, "perDepth": 60 }
     },
+    "lifeline": { "turns": 2, "pct": 50 },
+    "teleport": { "minDistance": 12 },
+    "guardian": { "minHpBase": 10, "minHpPerDepth": 3 },
     "expedition": {
       "firstTargetDepth": { "safe": 2, "standard": 3, "ambitious": 3 },
-      "aheadMin": 2,
-      "aheadMax": 4,
-      "points": { "reach_depth": 2000, "slay_guardian": 3000, "retrieve_relic": 3500 },
-      "pointsPerExtraDepth": 500,
+      "typePct": { "reach_depth": 100, "slay_guardian": 120, "retrieve_relic": 120, "retrieve_relic_guarded": 135 },
+      "depthPct": { "base": 100, "perDepth": 5 },
       "relicGuardianPct": 50,
       "afterObjective": { "wanderIntervalPct": 50 },
-      "recommendedLevelByDepth": [1, 2, 2, 4, 4, 5, 6, 7],
+      "recommendedLevelByDepth": [1, 2, 2, 3, 4, 5, 6, 7],
       "slots": {
-        "safe": { "aheadMin": 1, "aheadMax": 1, "traitsMin": 0, "traitsMax": 0, "pointsPct": 80 },
-        "standard": { "aheadMin": 2, "aheadMax": 2, "traitsMin": 0, "traitsMax": 1, "pointsPct": 100 },
-        "ambitious": { "aheadMin": 3, "aheadMax": 4, "traitsMin": 1, "traitsMax": 2, "pointsPct": 150 }
+        "safe": { "aheadMin": 1, "aheadMax": 1, "traitsMin": 0, "traitsMax": 0, "base": 1600 },
+        "standard": { "aheadMin": 2, "aheadMax": 2, "traitsMin": 0, "traitsMax": 1, "base": 2400 },
+        "ambitious": { "aheadMin": 3, "aheadMax": 3, "traitsMin": 1, "traitsMax": 2, "base": 3600 }
       }
     }
   }

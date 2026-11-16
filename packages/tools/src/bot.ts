@@ -1,7 +1,7 @@
 // ベースライン bot（ランダム／貪欲）。AI と同じ PlayerPort・同じ Command・同じ観測だけを使う。
 // 貪欲 bot は遠征を遊ぶ: 目的を追い、達成したら階段の上で extract、キャンプでは次の遠征を選ぶ。
 import type { Command, Dir, ExpeditionEndReason, OfferSlot, PlayerView } from '@muse/shared';
-import { cheb, dirTo, DIRS, Rng } from '@muse/shared';
+import { cheb, dirTo, DIRS, offerGap, Rng } from '@muse/shared';
 import type { PlayerPort, SessionManager } from '@muse/server';
 
 const WEAPON_RANK = ['core:dagger', 'core:short_sword', 'core:mace', 'core:war_axe'];
@@ -51,10 +51,15 @@ export interface BotMemo {
   offerSlot?: OfferSlot;
   /** 方針: 踏破の途中で HP が 60% を切ったらその場で帰る（既定 true） */
   cautious: boolean;
+  /** 方針: 推奨レベルに届いている枠だけを選ぶ（届かなければ堅実で育つ。§18.8 の「推奨レベルどおりの bot」） */
+  levelAware: boolean;
 }
 
-export function newMemo(policy: { overreach?: number; offerSlot?: OfferSlot; cautious?: boolean } = {}): BotMemo {
-  return { restFails: 0, avoid: new Set<string>(), blocked: 0, descend: false, gaveUp: null, overreach: policy.overreach ?? 0, offerSlot: policy.offerSlot, cautious: policy.cautious ?? true };
+export function newMemo(policy: { overreach?: number; offerSlot?: OfferSlot; cautious?: boolean; levelAware?: boolean } = {}): BotMemo {
+  return {
+    restFails: 0, avoid: new Set<string>(), blocked: 0, descend: false, gaveUp: null, overreach: policy.overreach ?? 0, offerSlot: policy.offerSlot,
+    cautious: policy.cautious ?? true, levelAware: policy.levelAware ?? false,
+  };
 }
 
 /** 既知の階段のうち一番近い到達可能なものへの travel（無ければ null） */
@@ -90,7 +95,11 @@ function crossedEnough(x: NonNullable<PlayerView['expedition']>, memo: BotMemo):
 export function greedyDecide(port: PlayerPort, rng: Rng, memo: BotMemo): Command {
   const v = port.view();
   if (v.status === 'at_camp') {
-    const o = (memo.offerSlot ? v.camp?.offers.find((x) => x.slot === memo.offerSlot) : undefined) ?? v.camp?.offers[0];
+    let o = (memo.offerSlot ? v.camp?.offers.find((x) => x.slot === memo.offerSlot) : undefined) ?? v.camp?.offers[0];
+    // 推奨レベルに届いていなければ堅実で育つ（公開の表と自分のレベルだけで判断）
+    if (memo.levelAware && o && o.objective.targetDepth !== null && offerGap(port.catalog.rules, o.objective.targetDepth, o.traits ?? [], v.self.level).levelGap! > 0) {
+      o = v.camp?.offers.find((x) => x.slot === 'safe') ?? o;
+    }
     return { type: 'start_expedition', offer: o?.index ?? 'endless' };
   }
   const me = v.self;
@@ -102,7 +111,10 @@ export function greedyDecide(port: PlayerPort, rng: Rng, memo: BotMemo): Command
   const unknownPotion = inv.find((i) => i.kind === null && i.appearanceId?.includes('potion'));
   const unknownScroll = inv.find((i) => i.kind === null && i.appearanceId?.includes('scroll'));
   const throwable = inv.find((i) => i.kind === 'core:throwing_knife' || i.kind === 'core:javelin');
+  const lifeline = inv.find((i) => i.kind === 'core:lifeline');
+  const carried = inv.filter((i) => i.kind !== 'core:lifeline').length;
   const hp = hpPct(v);
+  const onStairs = !!pos && !!port.catalog.terrain[v.terrainTable[v.memory.terrain[pos.y * (v.floor?.width ?? 0) + pos.x]]]?.stairs;
   const x = v.expedition && v.expedition.status !== 'ended' ? v.expedition : null;
   const complete = !!x && x.status === 'objective_complete' && (x.objective.type !== 'retrieve_relic' || x.progress.relicHeldByYou);
   // 踏破の方針: 目標より overreach 階深い下り階段に立つまでは帰らない。ただし余力（HP 60% 以上）が無くなったらその場で帰る
@@ -111,13 +123,25 @@ export function greedyDecide(port: PlayerPort, rng: Rng, memo: BotMemo): Command
 
   if (hp < 35 && healing && (adj || hostiles.length)) return { type: 'use', slot: healing.slot };
   if (hp < 25 && unknownPotion && adj) return { type: 'use', slot: unknownPotion.slot };
+  // 退く（V3-2R2 §18.1）: 余力が無く、群れ（追跡中 2 体以上）か一撃で倒されうる相手がいる。
+  // 階段の上なら extract（達成済みなら帰還、未達成なら撤退）、遠ければ帰還の綱。達成済みで階段の上なら相手によらず帰る
+  const huntingNow = hostiles.filter((h) => h.awareness === 'hunting' && !h.fleeing);
+  if (hp < 30 && huntingNow.length) {
+    if (onStairs && complete) return { type: 'extract' };
+    const danger = huntingNow.length >= 2 || port.observe({ map: false }).observation.alerts.some((a) => a.code === 'lethal_range');
+    if (danger && onStairs) return { type: 'extract', confirm: true };
+    if (danger && lifeline) return { type: 'use', slot: lifeline.slot };
+  }
   // 隣の敵: 余力があれば fight（1 回の呼び出しで殴り続ける）、無ければ 1 発ずつ
   if (adj && (adj.awareness !== 'asleep' || hp > 50)) {
     const floor = Math.trunc((v.self.stats.maxHp * 35) / 100);
     return v.self.stats.hp > floor ? { type: 'fight', target: adj.id, hpFloor: floor } : { type: 'move', dir: dirTo(pos, adj.pos)! };
   }
   const hunting = hostiles.filter((h) => h.awareness === 'hunting');
-  if (hunting.length && throwable && cheb(hunting[0].pos, pos) <= 6 && cheb(hunting[0].pos, pos) > 1) return { type: 'throw', slot: throwable.slot, target: hunting[0].id };
+  // 投擲は fight { with } で決着まで（射程に入るまで待つ。V3-2R2 §18.5）。2 マス先の相手はすぐ隣に来るので近接に任せる
+  if (hunting.length && throwable && cheb(hunting[0].pos, pos) <= 6 && cheb(hunting[0].pos, pos) > 2 && !memo.avoid.has(hunting[0].id)) {
+    return { type: 'fight', target: hunting[0].id, with: throwable.slot, hpFloor: Math.trunc((v.self.stats.maxHp * 35) / 100) };
+  }
   if (hunting.length && hp < 60 && cheb(hunting[0].pos, pos) <= 8 && !memo.avoid.has(hunting[0].id)) return { type: 'travel', to: hunting[0].id };
   // 遠征の目的
   if (done || memo.gaveUp !== null) {
@@ -144,7 +168,7 @@ export function greedyDecide(port: PlayerPort, rng: Rng, memo: BotMemo): Command
     }
     if (x.objective.type === 'retrieve_relic' && !x.progress.relicHeld) {
       const here = v.entities.find((e) => e.role === 'relic' && e.pos.x === pos.x && e.pos.y === pos.y);
-      if (here && inv.length >= me.capacity) {
+      if (here && carried >= me.capacity) {
         // 一杯なら要らない物を置く（装備していない武器・防具 → 未鑑定の巻物 → 先頭）
         const junk = inv.find((i) => !i.equipped && (WEAPON_RANK.includes(i.kind ?? '') || ARMOR_RANK.includes(i.kind ?? '')))
           ?? inv.find((i) => !i.equipped && i.kind === null && i.appearanceId?.includes('scroll')) ?? inv.find((i) => !i.equipped && i.kind !== 'core:potion_healing');
@@ -210,6 +234,8 @@ export interface BotOptions {
   offerSlot?: OfferSlot;
   /** 方針: 踏破の途中で HP が 60% を切ったら帰る（既定 true） */
   cautious?: boolean;
+  /** 方針: 推奨レベルに届いている枠だけを選ぶ */
+  levelAware?: boolean;
 }
 
 /** 1 ランを最後まで（死亡・終了・上限）bot で遊ぶ */
@@ -224,7 +250,7 @@ export async function runBot(manager: SessionManager, opts: BotOptions): Promise
 
 export async function playWithPort(port: PlayerPort, opts: BotOptions): Promise<Omit<BotResult, 'runId' | 'seed' | 'ms'>> {
   const rng = Rng.fromSeed(`bot|${opts.seed}`);
-  const memo = newMemo({ overreach: opts.overreach, offerSlot: opts.offerSlot, cautious: opts.cautious });
+  const memo = newMemo({ overreach: opts.overreach, offerSlot: opts.offerSlot, cautious: opts.cautious, levelAware: opts.levelAware });
   const maxActs = opts.maxActs ?? 2500;
   const brief: number[] = [];
   const full: number[] = [];
@@ -306,6 +332,7 @@ export async function playWithPort(port: PlayerPort, opts: BotOptions): Promise<
     } else if (opts.kind === 'greedy') {
       // 行き詰まったら探索に戻す（1 歩も進めないマクロは手番を使わずに拒否される）
       if (cmd.type === 'travel' && typeof cmd.to === 'string' && cmd.to.startsWith('e_')) memo.avoid.add(cmd.to);
+      if (cmd.type === 'fight') memo.avoid.add(cmd.target);
       if (cmd.type === 'explore' && out.error.code === 'nothing_to_do') explored = true;
       if (cmd.type === 'rest') memo.restFails = 3;
       if (cmd.type === 'travel' && cmd.to === 'stairs_down') { explored = false; memo.descend = false; }

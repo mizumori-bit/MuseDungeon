@@ -12,6 +12,7 @@ export type { CreateRunParams, StepResult } from './run';
 export { generateFloor, selectBiome, selectFloorType } from './gen/generate';
 export type { GeneratedFloor, SpawnSpec } from './gen/generate';
 export { computeFov, hasLos, line } from './geom';
+export { shotLine } from './perception';
 export { actions, archetypes, effects, validators, layoutGenerators, statusHandlers };
 
 /** コンテンツが参照するハンドラ ID が全てレジストリに登録されているか検証する */

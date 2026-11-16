@@ -1,17 +1,17 @@
 // 遠征まわりの表示部品: 目的と進捗、戦利品（未確定の点）、ブリーフィング、手番の状態行と変化、休憩の見積もり、キャンプ、観戦用の要約、AI の応答待ち。
 // 文章と数値は shared の expedition.ts / turn.ts / catalog.ts / observation.ts で作る。ここでは並べて見せるだけで、ゲームの判定はしない。
 import type {
-  Catalog, CatalogRules, Change, Expedition, ExpeditionOffer, ExpeditionView, HaulParts, ObsExpedition, Observation, OfferSlot, PlayerView,
+  Catalog, CatalogRules, Change, Dir, Expedition, ExpeditionOffer, ExpeditionView, HaulParts, ObsExpedition, Observation, OfferSlot, PlayerView,
   RestEstimate, World,
 } from '@muse/shared';
 import {
-  briefingLines, buildObservation, currentExpedition, deepestGenerated, endReasonText, haulTotal, latestExpedition, multText, nameOf, nextCampOf,
+  briefingLines, buildObservation, currentExpedition, deepestGenerated, dirLabel, endReasonText, haulTotal, latestExpedition, multText, nameOf, nextCampOf,
   nextOverreach, objectiveText, offerGap, offerText, overreachPoints, partsText, progressText, resultText, slotName,
 } from '@muse/shared';
 import type { RefObject } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
 import { getLocale, tr } from '../util';
-import { expStatusLabel, extractBlockLabel } from './labels';
+import { DIR_ARROW, expStatusLabel, extractBlockLabel } from './labels';
 
 /** 守護者を倒す・遺物を持ち帰る等の目的を、自分が extract したら達成になる状態か（表示用。最終判定はサーバー） */
 export function completesOnExtract(x: ExpeditionView): boolean {
@@ -88,13 +88,21 @@ export interface HaulInfo {
   /** 今 extract すると撤退になる（目的の基礎点を除いて withdrawPct %、倍率なし） */
   withdraw?: boolean;
   withdrawPct?: number;
+  /** 今ここで帰還の綱を使ったら確定する点（綱を持っているときだけ。プレイヤー視点のみ。V3-2R2 §18.1） */
+  ifLifelineNow?: number;
+  /** 綱で確定する割合（%）と、戻るまでの手番 */
+  lifelinePct?: number;
+  lifelineTurns?: number;
   /**
    * 次の踏破: その階の下り階段に立てば点が入る（V3-2R §14.1）。
-   * here: 今その階にいる（pathLen が null なら下り階段は未発見）。俯瞰では here を付けない
+   * here: 今その階にいる（pathLen が null なら下り階段は未発見）。俯瞰では here を付けない。
+   * dir: 下り階段が未発見のときの「下への風」の方角（V3-2R2 §18.4）
    */
-  next: { depth: number; points: number; pathLen?: number | null; here?: boolean } | null;
+  next: { depth: number; points: number; pathLen?: number | null; here?: boolean; dir?: Dir } | null;
   /** 今帰った場合の次の候補の下限と推奨レベル（潜るほど深くなる） */
   nextCamp?: { minTargetDepth: number; recommendedLevel: number } | null;
+  /** 次の踏破をしてから帰った場合の次の候補の下限と推奨レベル */
+  nextCampAfter?: { minTargetDepth: number; recommendedLevel: number } | null;
   /** 自分のレベル（次の候補の推奨レベルと比べる。プレイヤー視点のみ） */
   level?: number;
   /** 確定済みの点（プレイヤー視点のみ） */
@@ -106,24 +114,44 @@ export function haulFromObs(ox: ObsExpedition | undefined, banked: number, rules
   if (!ox || !h) return null;
   const nx = h.next_overreach;
   const nc = h.next_camp;
+  const nc2 = h.next_camp_after_crossing;
   return {
     total: h.total, parts: h.parts, multiplierPct: h.multiplier_pct, ifExtractNow: h.if_extract_now,
     withdraw: ox.extract_outcome === 'withdraw', withdrawPct: rules?.haul.withdrawPct,
-    next: nx ? { depth: nx.depth, points: nx.points, pathLen: nx.path_len, here: ox.progress.depth === nx.depth } : null,
+    ...(h.if_lifeline_now !== undefined ? { ifLifelineNow: h.if_lifeline_now, lifelinePct: rules?.lifeline?.pct, lifelineTurns: rules?.lifeline?.turns } : {}),
+    next: nx ? { depth: nx.depth, points: nx.points, pathLen: nx.path_len, here: ox.progress.depth === nx.depth, ...(nx.dir ? { dir: nx.dir } : {}) } : null,
     nextCamp: nc ? { minTargetDepth: nc.min_target_depth, recommendedLevel: nc.recommended_level } : null,
+    // 今帰った場合と下限が変わらなければ出さない
+    nextCampAfter: nc2 && (!nc || nc2.min_target_depth !== nc.min_target_depth) ? { minTargetDepth: nc2.min_target_depth, recommendedLevel: nc2.recommended_level } : null,
     level, banked,
   };
 }
 
-/** 「地下4階の下り階段に着けば +600（経路 23）」「（未発見）」 */
+/** 「地下4階の下り階段に着けば +600（経路 23）」「（未発見・下への風は南東 ↘）」 */
 export function nextOverreachText(n: NonNullable<HaulInfo['next']>): string {
-  const where = n.here ? (n.pathLen !== null && n.pathLen !== undefined ? tr(`（経路 ${n.pathLen}）`, ` (path ${n.pathLen})`) : tr('（未発見）', ' (not found yet)')) : '';
+  const L = getLocale();
+  const where = !n.here ? ''
+    : n.pathLen !== null && n.pathLen !== undefined ? tr(`（経路 ${n.pathLen}）`, ` (path ${n.pathLen})`)
+      : n.dir ? tr(`（未発見・下への風は${dirLabel(L, n.dir)} ${DIR_ARROW[n.dir]}）`, ` (not found yet; the draft blows ${dirLabel(L, n.dir)} ${DIR_ARROW[n.dir]})`)
+        : tr('（未発見）', ' (not found yet)');
   return tr(`地下${n.depth}階の下り階段に着けば +${n.points}${where}`, `Reach the down stairs of depth ${n.depth}: +${n.points}${where}`);
 }
 
 /** 「帰ると次の候補は地下5階以上・推奨 Lv4」 */
 export function nextCampText(c: NonNullable<HaulInfo['nextCamp']>): string {
   return tr(`帰ると次の候補は地下${c.minTargetDepth}階以上・推奨 Lv${c.recommendedLevel}`, `If you extract now, next offers start at depth ${c.minTargetDepth} (recommended Lv${c.recommendedLevel})`);
+}
+
+/** 「踏破してから帰ると地下6階以上・推奨 Lv5」 */
+export function nextCampAfterText(c: NonNullable<HaulInfo['nextCampAfter']>): string {
+  return tr(`踏破してから帰ると地下${c.minTargetDepth}階以上・推奨 Lv${c.recommendedLevel}`, `After the crossing: from depth ${c.minTargetDepth} (recommended Lv${c.recommendedLevel})`);
+}
+
+/** 「帰還の綱なら +120（戦利品の 50%・2 手番動けない）」 */
+export function lifelineNowText(h: Pick<HaulInfo, 'ifLifelineNow' | 'lifelinePct' | 'lifelineTurns'>): string {
+  const pct = h.lifelinePct ?? 50;
+  const turns = h.lifelineTurns ?? 2;
+  return tr(`帰還の綱なら +${h.ifLifelineNow}（戦利品の ${pct}%・${turns} 手番動けない）`, `Lifeline now: +${h.ifLifelineNow} (${pct}% of the haul, ${turns} turns helpless)`);
 }
 
 export function HaulBlock({ h }: { h: HaulInfo }) {
@@ -139,13 +167,18 @@ export function HaulBlock({ h }: { h: HaulInfo }) {
         {h.banked !== undefined && <span class="banked">{tr(`確定済み ${h.banked}`, `banked ${h.banked}`)}</span>}
       </div>
       <div class="haul-parts">{parts || tr('まだ無い', 'nothing yet')}</div>
-      {(h.ifExtractNow !== undefined || h.next) && (
+      {(h.ifExtractNow !== undefined || h.ifLifelineNow !== undefined || h.next) && (
         <div class="haul-now">
           {h.ifExtractNow !== undefined && (
-            <span class={`now ${h.withdraw ? 'withdraw' : 'complete'}`}>
+            <span class={`now ${h.withdraw ? 'withdraw' : 'complete'}`} title={tr('階段の上で extract したとき（追跡中の敵が見えていてもよい）', 'When you extract on stairs (even with hunters in view)')}>
               {h.withdraw
                 ? tr(`今撤退すれば +${h.ifExtractNow}（目的を除いた ${pct}%・倍率なし）`, `Withdraw now: +${h.ifExtractNow} (${pct}% without the objective, no multiplier)`)
                 : tr(`今帰れば +${h.ifExtractNow}`, `Extract now: +${h.ifExtractNow}`)}
+            </span>
+          )}
+          {h.ifLifelineNow !== undefined && (
+            <span class="life" title={tr('帰還の綱（L）: 階段から遠くても使える。数手番動けず（その間も攻撃は受ける）、その後キャンプへ戻る。倍率は掛からない', 'Lifeline (L): usable anywhere. You are helpless for a few turns (still attacked), then return to camp. No multiplier')}>
+              {lifelineNowText(h)}
             </span>
           )}
           {h.next && (
@@ -159,6 +192,7 @@ export function HaulBlock({ h }: { h: HaulInfo }) {
         <div class={`haul-camp ${h.level !== undefined && h.nextCamp.recommendedLevel > h.level ? 'over' : ''}`}
           title={tr('次の遠征の候補の目標深度は、生成済みの最深階が基準になる（潜るほど次が深くなる）', 'Next offers are based on the deepest floor generated so far (the deeper you go, the deeper they get)')}>
           {nextCampText(h.nextCamp)}{h.level !== undefined ? tr(`（あなた Lv${h.level}）`, ` (you Lv${h.level})`) : ''}
+          {h.nextCampAfter && <span class="after">{tr(' ／ ', ' / ')}{nextCampAfterText(h.nextCampAfter)}</span>}
         </div>
       )}
     </div>
@@ -183,6 +217,39 @@ export function extractConfirmText(ox: ObsExpedition | undefined, complete: bool
     `The objective is not complete. Extracting now withdraws and ends this expedition.${pay}${next}\nWithdraw?`);
 }
 
+/**
+ * 帰還の綱の確認文（V3-2R2 §18.1）: 動けない手番の数・確定する点（if_lifeline_now）・今の追跡中の敵の被害見込み・参考の階段の extract。
+ * 文と数値は観測から並べるだけ（判定はサーバー）
+ */
+export function lifelineConfirmText(obs: Observation | null, rules: CatalogRules | undefined, itemName: string): string {
+  const ox = obs?.expedition;
+  const h = ox?.haul;
+  const turns = rules?.lifeline?.turns ?? 2;
+  const pct = rules?.lifeline?.pct ?? 50;
+  const lines = [
+    tr(`${itemName}を使いますか？`, `Use the ${itemName}?`),
+    tr(`${turns} 手番のあいだ動けず（その間も攻撃は受ける）、その後キャンプへ戻ってこの遠征を終える。`, `You cannot act for ${turns} turns (you are still attacked), then return to camp and this expedition ends.`),
+  ];
+  if (h?.if_lifeline_now !== undefined) {
+    lines.push(tr(`確定する点: +${h.if_lifeline_now}（戦利品 ${h.total} の ${pct}%・倍率なし${ox?.extract_outcome === 'complete' ? '' : '・目的は未達成なので目的の点は入らない'}）`,
+      `Banked: +${h.if_lifeline_now} (${pct}% of the haul ${h.total}, no multiplier${ox?.extract_outcome === 'complete' ? '' : '; the objective is not complete, so its points are not included'})`));
+  }
+  const incoming = obs?.alerts.find((a) => a.code === 'incoming');
+  const hunters = obs?.visible.monsters.filter((m) => m.awareness === 'hunting' && !m.fleeing) ?? [];
+  if (incoming) lines.push(tr(`今の群れ: ${incoming.text}`, `Pursuers: ${incoming.text}`));
+  else if (hunters.length) {
+    const m = hunters[0];
+    lines.push(tr(`追跡中: ${m.name}（${m.worst_hit !== null ? `最大の一撃 ${m.worst_hit}` : '一撃の大きさは不明'}）・あなたの HP ${obs?.self.hp ?? '?'}`,
+      `Hunting you: ${m.name} (${m.worst_hit !== null ? `worst hit ${m.worst_hit}` : 'hit size unknown'}), your HP ${obs?.self.hp ?? '?'}`));
+  }
+  const st = obs?.navigation.known_stairs.filter((s) => s.path_len !== null).sort((a, b) => a.path_len! - b.path_len!)[0];
+  if (h && st) {
+    lines.push(tr(`（参考: 階段の上で extract すれば +${h.if_extract_now}${ox?.extract_outcome === 'complete' ? '' : '（撤退）'}。最寄りの階段まで ${st.path_len} 歩）`,
+      `(For reference: extracting on stairs banks +${h.if_extract_now}${ox?.extract_outcome === 'complete' ? '' : ' (withdrawal)'}; nearest stairs ${st.path_len} steps away)`));
+  }
+  return lines.join('\n');
+}
+
 // ---- 結果（払い戻し） ----
 
 /** 終了した遠征の結果。payout があれば確定点と内訳、無ければ従来の文章 */
@@ -198,7 +265,8 @@ export function ResultBlock({ x, playerId, rules }: { x: ExpeditionView; playerI
   const parts = partsText(L, pay.parts);
   const how = r.reason === 'completed' ? `${tr('倍率', 'multiplier')} ${multText(pay.multiplierPct)}`
     : r.reason === 'withdrawn' ? tr(`撤退: 目的を除いて ${rules?.haul.withdrawPct ?? 50}%`, `withdrawal: ${rules?.haul.withdrawPct ?? 50}% without the objective`)
-      : tr('死亡・引退では確定しない', 'nothing is banked on death or retirement');
+      : r.reason === 'lifeline' ? tr(`帰還の綱: 戦利品の ${rules?.lifeline?.pct ?? 50}%（倍率なし）`, `lifeline: ${rules?.lifeline?.pct ?? 50}% of the haul (no multiplier)`)
+        : tr('死亡・引退では確定しない', 'nothing is banked on death or retirement');
   return (
     <div class={`result payout ${r.reason}`}>
       <div class="rhead">
@@ -216,7 +284,10 @@ export function ResultBlock({ x, playerId, rules }: { x: ExpeditionView; playerI
 
 // ---- プレイ画面 ----
 
-export function ExpeditionPanel({ view, obs, catalog, onBriefing }: { view: PlayerView; obs: Observation | null; catalog?: Catalog | null; onBriefing?: () => void }) {
+/** onLifeline: 帰還の綱を持っていれば extract の行に「帰還の綱を使う」を添える（確認は呼び出し側） */
+export function ExpeditionPanel({ view, obs, catalog, onBriefing, onLifeline }: {
+  view: PlayerView; obs: Observation | null; catalog?: Catalog | null; onBriefing?: () => void; onLifeline?: () => void;
+}) {
   const x = view.expedition;
   if (!x) return null;
   const L = getLocale();
@@ -250,6 +321,13 @@ export function ExpeditionPanel({ view, obs, catalog, onBriefing }: { view: Play
               : tr(`extract 可（E）: 今 extract すると撤退（目的を除く ${rules?.haul.withdrawPct ?? 50}%${now !== undefined ? `・+${now} 確定` : ''}）`,
                 `extract possible (E): withdraw (${rules?.haul.withdrawPct ?? 50}% without the objective${now !== undefined ? `, banks +${now}` : ''})`))
             : `${tr('extract 不可', 'cannot extract')}（${extractBlockLabel(ox.extract_blocked_by)}）`}
+          {/* 階段の上なら extract の方が得か同じで手番もかからないので、綱は階段から離れているときだけ出す */}
+          {onLifeline && !ox.can_extract && ox.haul?.if_lifeline_now !== undefined && (
+            <button class="tiny lifeline right" onClick={onLifeline}
+              title={tr('階段から遠くても使える退却。確定する点と手番の数を確認してから使う', 'A retreat usable anywhere. Shows the banked points and turns before using it')}>
+              {tr(`帰還の綱を使う（L）+${ox.haul.if_lifeline_now}`, `Use lifeline (L) +${ox.haul.if_lifeline_now}`)}
+            </button>
+          )}
         </div>
       )}
       {x.status === 'ended' && x.result && <ResultBlock x={x} playerId={view.playerId} rules={rules} />}
@@ -257,13 +335,11 @@ export function ExpeditionPanel({ view, obs, catalog, onBriefing }: { view: Play
   );
 }
 
-const SENSE_ARROW: Record<string, string> = { n: '↑', ne: '↗', e: '→', se: '↘', s: '↓', sw: '↙', w: '←', nw: '↖' };
-
 /** 目標の気配（目標階にいる間。方角と 10 マス以内かどうか。地図では自分の横に矢印を出す） */
 export function SenseLine({ sense }: { sense: NonNullable<ObsExpedition['sense']> }) {
   return (
     <div class={`sense ${sense.what} ${sense.range}`} title={tr('正確な位置は、見るまで分からない', 'The exact position is unknown until you see it')}>
-      <span class="sarrow">{SENSE_ARROW[sense.dir] ?? '?'}</span> {sense.text}
+      <span class="sarrow">{DIR_ARROW[sense.dir] ?? '?'}</span> {sense.text}
     </div>
   );
 }
@@ -278,16 +354,19 @@ export function BriefingCard({ x, catalog, onClose }: { x: ExpeditionView; catal
   );
 }
 
-/** ▶ の状態行と、前回の自分の手番以降の変化 */
+/** ▶ の状態行と、前回の自分の手番以降の変化。守護者が倒れたことは、ほかの変化と別の行で先頭に出す（V3-2R2 §18.6） */
 export function TurnBar({ line, changes }: { line: string; changes: Change[] }) {
   if (!line && !changes.length) return null;
+  const head = changes.filter((c) => c.code === 'guardian_slain');
+  const rest = changes.filter((c) => c.code !== 'guardian_slain');
   return (
     <div class="turnbar">
       {line && <div class="turnline">{line}</div>}
-      {changes.length > 0 && (
+      {head.map((c, i) => <div key={`head-${i}`} class="chg-head guardian_slain">{c.text}</div>)}
+      {rest.length > 0 && (
         <div class="changes">
           <span class="lbl">{tr('前の手番からの変化', 'Since your last turn')}:</span>
-          {changes.map((c, i) => <span key={`${c.code}-${i}`} class={`chg ${c.code}`}>{c.text}</span>)}
+          {rest.map((c, i) => <span key={`${c.code}-${i}`} class={`chg ${c.code}`}>{c.text}</span>)}
         </div>
       )}
     </div>
@@ -428,13 +507,14 @@ function directorHaul(world: World, x: Expedition, rules: CatalogRules | undefin
   }
   const shared = x.haul ?? { bounty: 0, discovery: 0, kills: 0 };
   const crossed = x.progress.crossedDepth ?? 0;
+  // 踏破の点は目的の点（条件の倍率をかける前の x.points）に比例する（V3-2R2 §18.4）
   const parts: HaulParts = {
     objective: x.status === 'objective_complete' ? x.points : 0,
-    overreach: overreachPoints(rules, x.objective.targetDepth, crossed),
+    overreach: overreachPoints(rules, x.objective.targetDepth, crossed, x.points),
     treasure, bounty: shared.bounty, discovery: shared.discovery, kills: shared.kills,
   };
   const nc = rules.slots?.safe ? nextCampOf(rules, deepestGenerated(world)) : null;
-  return { total: haulTotal(parts), parts, multiplierPct: x.multiplierPct ?? 100, next: nextOverreach(rules, x.objective.targetDepth, crossed), nextCamp: nc };
+  return { total: haulTotal(parts), parts, multiplierPct: x.multiplierPct ?? 100, next: nextOverreach(rules, x.objective.targetDepth, crossed, x.points), nextCamp: nc };
 }
 
 /** 俯瞰: World の最新の遠征。depth は表示中のフロアの深さ */

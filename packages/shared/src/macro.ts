@@ -19,13 +19,22 @@ export type MacroStop =
   | 'unreachable' | 'unknown_destination' | 'step_limit' | 'full_hp' | 'status_changed'
   | 'not_your_turn' | 'dead' | 'run_ended' | 'floor_changed' | 'blocked' | 'error'
   | 'target_hp' | 'max_turns' | 'left_board' | 'attacked' | 'collected' | 'hostile_adjacent'
-  | 'hp_floor' | 'hp_threshold' | 'target_down' | 'target_gone' | 'target_moved' | 'hostile_alerted';
+  | 'hp_floor' | 'hp_threshold' | 'target_down' | 'target_gone' | 'target_moved' | 'hostile_alerted'
+  // fight の拡張（V3-2R2 §18.5）
+  | 'target_adjacent' | 'out_of_ammo' | 'no_line_of_sight' | 'target_not_approaching' | 'target_not_hunting' | 'not_throwable';
 
 /** 自然に終わった（中断ではない）停止理由 */
 export const MACRO_COMPLETED_STOPS: ReadonlySet<MacroStop> = new Set<MacroStop>(['arrived', 'explored', 'full_hp', 'target_hp', 'max_turns', 'collected', 'target_down']);
 
+/** fight が相手を待つ最大の手番（近づいてくるまで・射程に入るまで） */
+export const FIGHT_WAIT_MAX = 10;
+/** 当てて逃げる相手を待つ手番（隣から離れても 2 マス以内で追跡中なら） */
+const FIGHT_APART_MAX = 2;
+/** 射線が続けて通らなければ止まる手番 */
+const FIGHT_BLOCKED_MAX = 3;
+
 export interface MacroState {
-  kind: 'explore' | 'travel' | 'rest' | 'collect' | 'fight';
+  kind: 'explore' | 'travel' | 'rest' | 'collect' | 'fight' | 'wait';
   target?: TravelTarget;
   /** 移動マクロの慎重さ（careful 既定 / steady / flee） */
   mode: MacroMode;
@@ -37,6 +46,14 @@ export interface MacroState {
   collectWhat: 'thrown' | 'items';
   /** fight: 相手 */
   fightTarget?: string;
+  /** fight: 投げる品のスロットと、開始時のその品の種類（尽きたら止まる） */
+  fightWith?: string;
+  fightKind?: string | null;
+  /** fight: 一度でも隣で殴り合ったか・待った手番・隣から離れていた手番・射線が通らなかった手番 */
+  engaged?: boolean;
+  waits?: number;
+  apart?: number;
+  blocked?: number;
   floorKey: string;
   lastHp: number;
   knownHostiles: string[];
@@ -64,6 +81,12 @@ export interface MacroState {
   aware: Record<string, string>;
   /** 直前の手での自分の状態異常（新しく掛かったものだけで止まる） */
   myStatuses: string[];
+  /** このマクロの間に一度でも見た個体（rest: 報告済みの逃走中の個体が出入りしても止まらない） */
+  everSeen: string[];
+  /** 既知の下り階段の数（steady・careful は初めて見たら止まる） */
+  knownDown: number;
+  /** wait: 直前の手で隣にいた敵 */
+  adjacent: string[];
 }
 
 /** 既知の「自分が投げた物」の位置（セル index） */
@@ -95,7 +118,7 @@ function pickable(catalog: Catalog, it: { kind: string | null; role?: string }):
 export function pickableItems(view: PlayerView, catalog: Catalog, skip: readonly string[] = []): { id: string; cell: number }[] {
   const f = view.floor;
   if (!f) return [];
-  if (view.inventory.length >= view.self.capacity) return [];
+  if (view.inventory.filter((i) => !(i.kind && catalog.items[i.kind]?.bound)).length >= view.self.capacity) return [];
   const out = new Map<string, number>();
   for (const e of view.entities) if (e.cat === 'item' && pickable(catalog, e) && !skip.includes(e.id)) out.set(e.id, e.pos.y * f.width + e.pos.x);
   for (const r of view.memory.remembered) if (r.cat === 'item' && !out.has(r.id) && pickable(catalog, r) && !skip.includes(r.id)) out.set(r.id, r.pos.y * f.width + r.pos.x);
@@ -119,6 +142,19 @@ function stairsCount(view: PlayerView, catalog: Catalog): number {
   return n;
 }
 
+function downStairsCount(view: PlayerView, catalog: Catalog): number {
+  let n = 0;
+  for (const t of view.memory.terrain) if (t && catalog.terrain[view.terrainTable[t]]?.stairs === 'down') n++;
+  return n;
+}
+
+/** 投げられる品の射程（分からなければ null） */
+function throwRangeOf(view: PlayerView, catalog: Catalog, slot: string): number | null {
+  const it = view.inventory.find((i) => i.slot === slot);
+  if (!it?.kind || it.equipped) return null;
+  return catalog.items[it.kind]?.throwRange ?? null;
+}
+
 /** 動かない種族（公開のタグ） */
 export function isStationary(catalog: Catalog, e: Pick<EntityView, 'kind'>): boolean {
   return !!e.kind && !!catalog.monsters[e.kind]?.tags.includes('stationary');
@@ -129,6 +165,8 @@ const HP_FLOOR_PCT: Record<string, number> = { careful: 0, steady: 50, flee: 25,
 export function macroStart(view: PlayerView, cmd: Command, catalog: Catalog): MacroState {
   const rules = catalog.rules;
   const kind = cmd.type as MacroState['kind'];
+  const withSlot = cmd.type === 'fight' ? cmd.with : undefined;
+  const withItem = withSlot ? view.inventory.find((i) => i.slot === withSlot) : undefined;
   const mode: MacroMode = (cmd.type === 'explore' || cmd.type === 'travel' || cmd.type === 'collect') ? (cmd.mode ?? 'careful') : 'careful';
   const floorPct = kind === 'fight' ? HP_FLOOR_PCT.fight : HP_FLOOR_PCT[mode];
   const explicitFloor = 'hpFloor' in cmd ? cmd.hpFloor : undefined;
@@ -141,7 +179,8 @@ export function macroStart(view: PlayerView, cmd: Command, catalog: Catalog): Ma
     hpFloor: explicitFloor ?? Math.trunc((view.self.stats.maxHp * floorPct) / 100),
     pickup: cmd.type === 'explore' ? (cmd.pickup ?? true) : cmd.type === 'travel' ? (cmd.pickup ?? itemTarget) : cmd.type === 'collect' ? (cmd.what ?? 'thrown') === 'items' : false,
     collectWhat: cmd.type === 'collect' ? (cmd.what ?? 'thrown') : 'thrown',
-    ...(cmd.type === 'fight' ? { fightTarget: cmd.target } : {}),
+    ...(cmd.type === 'fight' ? { fightTarget: cmd.target, engaged: false, waits: 0, apart: 0, blocked: 0 } : {}),
+    ...(withSlot ? { fightWith: withSlot, fightKind: withItem ? (withItem.kind ?? withItem.appearanceId) : null } : {}),
     floorKey: view.floor?.key ?? '',
     lastHp: view.self.stats.hp,
     knownHostiles: hostileIds(view),
@@ -156,7 +195,11 @@ export function macroStart(view: PlayerView, cmd: Command, catalog: Catalog): Ma
     startSeq: view.seq,
     aware: Object.fromEntries(view.entities.filter((e) => e.cat === 'monster').map((e) => [e.id, e.awareness ?? 'unaware'])),
     myStatuses: view.self.statuses.map((s) => s.id),
+    everSeen: hostileIds(view),
+    knownDown: downStairsCount(view, catalog),
+    adjacent: view.self.pos ? view.entities.filter((e) => e.cat === 'monster' && cheb(e.pos, view.self.pos!) <= 1).map((e) => e.id) : [],
   };
+  if (cmd.type === 'wait') st.maxTurns = cmd.turns ?? 1;
   if (cmd.type === 'rest') {
     if (cmd.untilHp !== undefined) st.untilHp = cmd.untilHp;
     if (cmd.maxTurns !== undefined) st.maxTurns = cmd.maxTurns;
@@ -245,6 +288,9 @@ export function macroNext(state: MacroState, view: PlayerView, catalog: Catalog,
   for (const h of hostiles) {
     const isNew = !before.has(h.id);
     if (kind === 'rest') {
+      // 報告済みの個体が逃げながら視界を出入りしても止まらない（V3-2R2 §18.5）
+      if (isNew && !(h.fleeing && state.everSeen.includes(h.id))) return { stop: 'hostile_in_view' };
+    } else if (kind === 'wait') {
       if (isNew) return { stop: 'hostile_in_view' };
     } else if (kind === 'fight') {
       if (isNew && h.id !== state.fightTarget && pursuing(h) && reaches(h)) return { stop: 'hostile_in_view' };
@@ -258,21 +304,73 @@ export function macroNext(state: MacroState, view: PlayerView, catalog: Catalog,
     }
   }
   state.knownHostiles = hostiles.map((h) => h.id);
+  for (const h of hostiles) if (!state.everSeen.includes(h.id)) state.everSeen.push(h.id);
   state.aware = Object.fromEntries(hostiles.map((h) => [h.id, h.awareness ?? 'unaware']));
   state.myStatuses = me.statuses.map((s) => s.id);
   for (const h of hostiles) if (h.kind && !state.knownKinds.includes(h.kind)) state.knownKinds.push(h.kind);
 
-  // 戦う: 隣の相手を殴り続ける
+  // 待つ（wait { turns }）: 敵が見えた・隣に来た・被害で止まる
+  if (kind === 'wait') {
+    const adjNow = hostiles.filter((h) => cheb(h.pos, pos) <= 1 && h.awareness !== 'asleep').map((h) => h.id);
+    if (state.steps > 0 && adjNow.some((id) => !state.adjacent.includes(id))) return { stop: 'hostile_adjacent' };
+    state.adjacent = adjNow;
+    state.lastHp = hp;
+    if (state.steps >= (state.maxTurns ?? 1)) return { stop: 'max_turns' };
+    state.steps += 1;
+    return { command: { type: 'wait' } };
+  }
+
+  // 戦う（V3-2R2 §18.5）: 隣の相手を殴り続ける／そのスロットの品を投げ続ける。追跡中で届かない相手は待つ
   if (kind === 'fight') {
     const tg = hostiles.find((h) => h.id === state.fightTarget);
-    if (!tg) return { stop: state.steps > 0 ? 'target_gone' : 'target_gone' };
-    if (cheb(tg.pos, pos) > 1) return { stop: 'target_moved' };
+    if (!tg) return { stop: 'target_gone' };
     if (state.steps >= state.limit) return { stop: 'step_limit' };
-    const dir = dirBetween(pos, tg.pos);
-    if (!dir) return { stop: 'error' };
-    state.steps += 1;
+    const d = cheb(tg.pos, pos);
+    const hunting = tg.awareness === 'hunting';
     state.lastHp = hp;
-    return { command: { type: 'move', dir } };
+    const wait = (): MacroDecision => { state.steps += 1; return { command: { type: 'wait' } }; };
+    if (state.fightWith) {
+      const slot = state.fightWith;
+      const it = view.inventory.find((i) => i.slot === slot);
+      if (!it || (state.fightKind !== undefined && (it.kind ?? it.appearanceId) !== state.fightKind)) return { stop: 'out_of_ammo' };
+      const range = throwRangeOf(view, catalog, slot);
+      if (range === null) return { stop: 'not_throwable' };
+      if (d <= 1) return { stop: 'target_adjacent' };
+      if (tg.shot && d <= range) {
+        state.blocked = 0;
+        state.steps += 1;
+        return { command: { type: 'throw', slot, target: tg.id } };
+      }
+      // 射程外か射線なし: 追跡中で近づいてくるなら待つ
+      if (tg.fleeing && d > range) return { stop: 'target_moved' };
+      if (!hunting) return { stop: 'target_not_hunting' };
+      if (!tg.shot) {
+        state.blocked = (state.blocked ?? 0) + 1;
+        if (state.blocked >= FIGHT_BLOCKED_MAX) return { stop: 'no_line_of_sight' };
+      }
+      if ((state.waits ?? 0) >= FIGHT_WAIT_MAX || isStationary(catalog, tg)) return { stop: 'target_not_approaching' };
+      state.waits = (state.waits ?? 0) + 1;
+      return wait();
+    }
+    if (d <= 1) {
+      state.engaged = true;
+      state.apart = 0;
+      const dir = dirBetween(pos, tg.pos);
+      if (!dir) return { stop: 'error' };
+      state.steps += 1;
+      return { command: { type: 'move', dir } };
+    }
+    if (state.engaged) {
+      // 当てて逃げる相手: 追跡中で 2 マス以内なら 2 手番まで待つ（追わない）
+      if (hunting && !tg.fleeing && d <= 2 && (state.apart ?? 0) < FIGHT_APART_MAX) { state.apart = (state.apart ?? 0) + 1; return wait(); }
+      return { stop: 'target_moved' };
+    }
+    // 迎え撃つ: 追跡中の相手が隣に来るまで待つ（最大 FIGHT_WAIT_MAX 手番）
+    if (!hunting) return { stop: 'target_not_hunting' };
+    if (tg.fleeing) return { stop: 'target_moved' };
+    if ((state.waits ?? 0) >= FIGHT_WAIT_MAX || isStationary(catalog, tg)) return { stop: 'target_not_approaching' };
+    state.waits = (state.waits ?? 0) + 1;
+    return wait();
   }
 
   // 隣の敵: careful は起きている敵（逃走中を除く）、steady は追跡中の敵がいれば動かない。flee は動く
@@ -283,6 +381,10 @@ export function macroNext(state: MacroState, view: PlayerView, catalog: Catalog,
   // 休憩: 自分に届く追跡中の敵（動かない敵は隣接していなければ妨げない）
   if (kind === 'rest' && hostiles.some((h) => pursuing(h) && reaches(h))) return { stop: 'hostile_in_view' };
   if (kind === 'explore' && mode === 'careful' && stairsCount(view, catalog) > state.knownStairs) return { stop: 'stairs_seen' };
+  // その階の下り階段を初めて見た（踏破の判断の起点。steady も止まる。flee は止まらない。V3-2R2 §18.5）
+  const downNow = downStairsCount(view, catalog);
+  if (kind !== 'rest' && mode !== 'flee' && state.knownDown === 0 && downNow > 0) return { stop: 'stairs_seen' };
+  state.knownDown = downNow;
   state.knownStairs = stairsCount(view, catalog);
   state.knownItems = itemIds(view);
   state.lastHp = hp;
@@ -303,6 +405,10 @@ export function macroNext(state: MacroState, view: PlayerView, catalog: Catalog,
   // 足元のアイテムを拾う（通り道と目的地。1 手番）
   if (state.pickup) {
     const items = pickableItems(view, catalog, state.skipItems).filter((x) => x.cell === here && view.entities.some((e) => e.id === x.id));
+    // travel_to の目的地に指定したアイテムは、有害品・遺物でも拾う（明示した行き先）
+    const dest = kind === 'travel' && typeof state.target === 'string' && !state.skipItems.includes(state.target)
+      ? view.entities.find((e) => e.id === state.target && e.cat === 'item' && e.pos.y * grid.width + e.pos.x === here) : undefined;
+    if (dest && !items.some((x) => x.id === dest.id)) items.unshift({ id: dest.id, cell: here });
     if (items.length) {
       state.skipItems.push(items[0].id);
       state.steps += 1;
@@ -374,14 +480,26 @@ export function macroStopError(L: Locale, stop: MacroStop, cmd: Command): Action
     case 'hp_floor':
       return actionError('hp_floor', t(L, 'HP がすでに hp_floor を下回っている。', 'HP is already below hp_floor.'), t(L, 'hp_floor を下げるか、回復してから。', 'Lower hp_floor or heal first.'));
     case 'blocked':
-      return actionError('blocked', t(L, '次のマスに敵がいて進めない（マクロは攻撃しない）。', 'An enemy stands in the next cell (macros never attack).'), t(L, 'fight で倒すか、別の経路を選ぶ。', 'Use fight, or choose another route.'));
+      return actionError('blocked', t(L, '既知の経路が敵にふさがれていて進めない（マクロは攻撃しない）。', 'Your known route is blocked by a monster (macros never attack).'), t(L, 'fight で倒すか、別の経路を選ぶ。', 'Use fight, or choose another route.'));
     case 'unreachable':
       return actionError('unreachable', t(L, '既知の経路では到達できない。', 'Unreachable via the known map.'), t(L, 'explore で経路を探す。', 'Explore to find a route.'));
     case 'unknown_destination':
       return actionError('unknown_destination', t(L, '行き先が既知の地図に無い。', 'The destination is not on your known map.'), t(L, 'explore で見つけてから。', 'Find it with explore first.'));
     case 'target_gone':
     case 'target_moved':
-      return actionError('no_target', t(L, 'その相手は隣にいない（見えていない）。', 'That target is not adjacent (or not visible).'), t(L, '隣接した敵の id を指定する。', 'Give the id of an adjacent enemy.'));
+      return actionError('no_target', t(L, 'その相手は見えていない（または逃げている）。', 'That target is not visible (or is fleeing).'), t(L, 'visible.monsters の id を指定する。', 'Give an id from visible.monsters.'));
+    case 'target_not_hunting':
+      return actionError('no_target', t(L, 'その相手はまだあなたを追っていない（眠っている・気付いていない）。fight は追跡中の相手を待つ。', 'That target is not hunting you yet (asleep or unaware). fight waits only for hunting targets.'),
+        t(L, '近づくなら travel_to、先手を取るなら throw_item。隣に来れば fight で殴れる。', 'Approach with travel_to or open with throw_item. Once adjacent, fight works.'));
+    case 'target_not_approaching':
+      return actionError('no_target', t(L, 'その相手は動かないので、待っても近づいてこない。', 'That target does not move, so waiting will not bring it closer.'), t(L, 'travel_to で隣へ行くか、投擲で戦う（fight { target, with }）。', 'Walk next to it with travel_to, or fight it with throws (fight { target, with }).'));
+    case 'target_adjacent':
+      return actionError('blocked', t(L, '相手は隣にいる（投擲の fight は隣に来た相手には止まる）。', 'The target is adjacent (throwing fight stops once it is next to you).'), t(L, '近接で戦うなら fight { target }（with なし）、それでも投げるなら throw_item。', 'Melee with fight { target } (no with), or throw once with throw_item.'));
+    case 'out_of_ammo':
+    case 'not_throwable':
+      return actionError('cannot_use', t(L, 'そのスロットに投げられる物が無い。', 'There is nothing throwable in that slot.'), t(L, 'self.attack.throws のスロットを with に指定する。', 'Pass a slot from self.attack.throws as with.'));
+    case 'no_line_of_sight':
+      return actionError('no_line_of_sight', t(L, '相手まで投擲の経路が通っていない。', 'No clear throwing line to the target.'), t(L, '位置を変えるか、近接で戦う。', 'Move, or fight in melee.'));
     case 'explored':
       return actionError('nothing_to_do', t(L, 'この階で辿り着ける未見の区画も、拾うアイテムも無い。', 'Nothing reachable left to explore or pick up on this floor.'), t(L, 'travel_to stairs_down か extract。', 'travel_to stairs_down, or extract.'));
     case 'collected':

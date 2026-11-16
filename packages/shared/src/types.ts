@@ -124,6 +124,10 @@ export interface MonsterMemory {
   hpSeen?: { min: number; max: number; samples: number };
   /** 観測した遠隔攻撃の最長距離 */
   rangeMax?: number;
+  /** 自分の攻撃の [命中, 回数]（近接・投擲を分ける。V3-2R2 §18.2） */
+  hitsByYou?: { melee?: [number, number]; thrown?: [number, number] };
+  /** この種族から自分への攻撃の [命中, 回数] */
+  hitsOnYou?: [number, number];
 }
 
 export interface RememberedEntity {
@@ -148,6 +152,12 @@ export interface FloorKnowledge {
 /** 遺物・守護者の気配（目標階にいる間。方角と、10 マス以内かどうか。正確な位置は見るまで出さない） */
 export interface Sense { what: 'guardian' | 'relic'; dir: Dir; range: 'far' | 'near' }
 
+/**
+ * 今いる階の手がかり（V3-2R2 §18.4。engine が計算する）。
+ * draft: 下り階段をまだ見ていないときの、その方角（遠近は出さない）。explored: 通れるマスのうち見た割合の 4 段階（1 = 約 1/4 … 4 = ほぼ全て）
+ */
+export interface FloorHint { floor: FloorKey; draft: Dir | null; explored: 1 | 2 | 3 | 4 }
+
 export interface Knowledge {
   floors: Record<FloorKey, FloorKnowledge>;
   /** 現在視界内のセル index（現在フロア、昇順） */
@@ -165,6 +175,8 @@ export interface Knowledge {
   metAt?: Record<EntityId, number>;
   /** 目標の気配（目標階にいる間だけ） */
   sense?: Sense | null;
+  /** 今いる階の手がかり（下への風・探索の進み具合） */
+  floorHint?: FloorHint | null;
 }
 
 export interface PlayerStats {
@@ -203,7 +215,8 @@ export type PlayerState = 'alive' | 'dead' | 'left' | 'at_camp';
 
 // ---- 遠征（IMPROVEMENTS_V2 §2） ----
 export type ObjectiveType = 'reach_depth' | 'slay_guardian' | 'retrieve_relic' | 'endless';
-export type ExpeditionEndReason = 'completed' | 'withdrawn' | 'died' | 'retired';
+/** lifeline: 帰還の綱で戻った（V3-2R2 §18.1） */
+export type ExpeditionEndReason = 'completed' | 'withdrawn' | 'lifeline' | 'died' | 'retired';
 export const OBJECTIVE_TYPES: readonly ObjectiveType[] = ['reach_depth', 'slay_guardian', 'retrieve_relic', 'endless'];
 
 export interface Objective {
@@ -293,7 +306,8 @@ export interface Expedition {
   targets: { guardian: EntityId | null; relic: EntityId | null };
   progress: ObjectiveProgress;
   /** treasure: extract のときに持ち帰った宝の価値の合計 */
-  extracted: { player: PlayerId; completed: boolean; treasure?: number }[];
+  /** lifeline: 帰還の綱で戻った（確定は戦利品の lifeline.pct %） */
+  extracted: { player: PlayerId; completed: boolean; treasure?: number; lifeline?: boolean }[];
   result: ExpeditionResult | null;
   slot?: OfferSlot;
   traits?: string[];

@@ -1,14 +1,14 @@
 // プレイヤーの基本行動。各ハンドラは「検証（イベント無し）→ 実行」の二段。
 // 不正なコマンドはイベントを出さず時間も消費しない（ActionError を返す）。
 import type { ActionError, Command, Entity, EquipSlot, PlayerRecord, Pos } from '@muse/shared';
-import { actionError, diceMax, DIR_VEC, EQUIP_SLOTS, stepPos, t } from '@muse/shared';
-import { endRun, grantXp, melee, rollToHit, applyDamage, checkRunEnd } from './combat';
+import { actionError, currentExpedition, diceMax, DIR_VEC, EQUIP_SLOTS, stepPos, t } from '@muse/shared';
+import { endRun, grantXp, melee, recordHit, rollToHit, applyDamage, checkRunEnd } from './combat';
 import type { Ctx } from './ctx';
 import { applyEffects } from './effects';
-import { doExtract, extractError, maybeEndExpedition } from './expedition';
+import { doExtract, extractError, invCount, maybeEndExpedition } from './expedition';
 import { ensureFloor, findFreeCell } from './floors';
 import { line } from './geom';
-import { makeNoise, shotClear, updateKnowledge, wakeMonster } from './perception';
+import { makeNoise, shotClear, shotLine, updateKnowledge, wakeMonster } from './perception';
 import { hasStatus, removeStatus } from './statuses';
 import { Registry, roll } from './registry';
 import { regenTick } from './scheduler';
@@ -126,7 +126,7 @@ actions.register('pickup', (ctx, e, pr, cmd: Extract<Command, { type: 'pickup' }
       const x = ctx.world.entities[id];
       return x?.kind === it.kind && JSON.stringify(x.item?.affixes) === JSON.stringify(it.item?.affixes);
     });
-    return stack || (e.inv!.items.length < e.inv!.capacity && freeSlot(ctx, e) !== null);
+    return stack || (invCount(ctx, e) < e.inv!.capacity && freeSlot(ctx, e) !== null);
   });
   if (!canTakeAny) return fail(pr, 'inventory_full', '所持品がいっぱいだ。', 'Your inventory is full.', 'drop で何かを置いてから拾う。', 'drop something first.');
   return {
@@ -160,7 +160,7 @@ export function pickUpItems(ctx: Ctx, e: Entity, items: Entity[], auto: boolean)
       continue;
     }
     const slot = freeSlot(ctx, me);
-    if (!slot || me.inv!.items.length >= me.inv!.capacity) break;
+    if (!slot || invCount(ctx, me) >= me.inv!.capacity) break;
     const held = structuredClone(it);
     delete held.pos;
     held.item!.heldBy = e.id;
@@ -196,6 +196,7 @@ function unequipEvents(ctx: Ctx, e: Entity, slotName: EquipSlot): void {
 actions.register('drop', (ctx, e, pr, cmd: Extract<Command, { type: 'drop' }>) => {
   const it = invItem(ctx, e, cmd.slot);
   if (!it) return fail(pr, 'no_such_item', `スロット ${cmd.slot} にアイテムは無い。`, `No item in slot ${cmd.slot}.`, 'inventory で所持品のスロットを確認する。', 'Check slots with inventory.');
+  if (ctx.content.items[it.kind]?.bound) return fail(pr, 'cannot_use', 'それは手放せない。', 'You cannot let go of that.', '帰還の綱は所持数に数えない。使うなら use_item。', 'The lifeline does not count toward capacity. Use it with use_item.');
   return {
     run: () => {
       const eq = equippedSlotOf(ctx.world.entities[e.id], it.id);
@@ -264,6 +265,10 @@ actions.register('use', (ctx, e, pr, cmd: Extract<Command, { type: 'use' }>) => 
   const def = ctx.content.items[it.kind];
   if (!def || !def.onUse.length) {
     return fail(pr, 'cannot_use', 'それは使えない。', 'You cannot use that.', def?.equip ? '装備品は equip で装備する。' : def?.throw ? '投擲武器は throw_item で投げる。' : '別のアイテムを選ぶ。', def?.equip ? 'Equip it with equip.' : def?.throw ? 'Throw it with throw_item.' : 'Choose another item.');
+  }
+  // 帰還の綱は遠征の参加者だけが使える
+  if (def.onUse.some((x) => x.effect === 'recall') && !currentExpedition(ctx.world)?.participants.includes(pr.id)) {
+    return fail(pr, 'cannot_use', '進行中の遠征が無いので、帰還の綱は使えない。', 'There is no expedition to return from.', '', '');
   }
   // 鑑定の対象（target_slot）。手番を使う前に確かめる
   let identifySlot: string | undefined;
@@ -345,6 +350,7 @@ actions.register('throw', (ctx, e, pr, cmd: Extract<Command, { type: 'throw' }>)
   if (!it) return fail(pr, 'no_such_item', `スロット ${cmd.slot} にアイテムは無い。`, `No item in slot ${cmd.slot}.`, 'inventory で確認する。', 'Check with inventory.');
   if (equippedSlotOf(e, it.id)) return fail(pr, 'cannot_use', '装備中のものは投げられない。', 'You cannot throw an equipped item.', '先に unequip する。', 'unequip it first.');
   const def = ctx.content.items[it.kind];
+  if (def?.bound) return fail(pr, 'cannot_use', 'それは投げられない。', 'You cannot throw that.', '帰還の綱は use_item で使う。', 'Use the lifeline with use_item.');
   const range = def?.throw?.range ?? 4;
   const tp = resolveTarget(ctx, e, pr, cmd.target, range);
   if ('code' in tp) return { error: tp };
@@ -354,7 +360,8 @@ actions.register('throw', (ctx, e, pr, cmd: Extract<Command, { type: 'throw' }>)
       const me = ctx.world.entities[e.id];
       const key = me.pos!.floor;
       const from = { x: me.pos!.x, y: me.pos!.y };
-      const full = line(from, tp);
+      // 経路は shots と同じ（双方向のうち通る方。どちらも通らなければ前向きの直線で、途中で遮られる）
+      const full = shotLine(ctx, key, from, tp) ?? line(from, tp);
       const path = full.slice(0, range);
       let landed: Pos = from;
       let hitEnt: Entity | null = null;
@@ -371,6 +378,7 @@ actions.register('throw', (ctx, e, pr, cmd: Extract<Command, { type: 'throw' }>)
       if (hitEnt) {
         const o = rollToHit(ctx, me, hitEnt, def?.throw?.acc ?? 0);
         if (o.hit) { hit = hitEnt; crit = o.crit; }
+        recordHit(ctx, me, hitEnt, o.hit, 'thrown');
       }
       // 結果の分類（文章で必ず伝える）
       const intended = typeof cmd.target === 'string' && cmd.target.startsWith('e_') ? cmd.target : (ctx.actorAt(key, tp.x, tp.y)?.id ?? null);

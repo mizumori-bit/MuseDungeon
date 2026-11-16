@@ -2,7 +2,7 @@
 // projectPlayerView はルール無しの純粋なフィルタ。仕様: docs/PROTOCOL.md §4
 import type {
   CampState, Controller, Entity, EntityId, EntityRole, EquipSlot, Expedition, ExpeditionEndReason, ExpeditionResult, FloorKey,
-  Locale, MonsterMemory, Objective, OfferSlot, PlayerId, PlayerState, Pos, RememberedEntity, Stats, StatusInst, World, Sense,
+  Locale, MonsterMemory, Objective, OfferSlot, PlayerId, PlayerState, Pos, RememberedEntity, Stats, StatusInst, World, Sense, FloorHint,
 } from './types';
 
 export type HpState = 'healthy' | 'wounded' | 'badly_wounded' | 'near_death';
@@ -56,6 +56,8 @@ export interface EntityView {
   value?: number;
   /** 倒すと戦利品に入る賞金（守護者・名前付きの強敵） */
   bounty?: number;
+  /** 速さ（モンスター。状態異常を除く素の値。見れば分かる性質。観測では自分との比較の 3 段階にする。V3-2R2 §18.2） */
+  speed?: number;
 }
 
 export interface RememberedView {
@@ -144,6 +146,8 @@ export interface PlayerView {
   memory: { terrain: number[]; remembered: RememberedView[]; unsighted?: number[] };
   /** 目標の気配（遠征の目標階にいる間） */
   sense: Sense | null;
+  /** 今いる階の手がかり（下への風・探索の進み具合）。今いる階のものだけ */
+  floorHint: FloorHint | null;
   identified: string[];
   monsterMemory: Record<string, MonsterMemory>;
   notes: string[];
@@ -295,6 +299,7 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
           const ds = k.damageSeen?.[e.id];
           if (ds) v.damageSeen = ds;
           v.shot = shots.has(e.id);
+          if (e.actor) v.speed = e.actor.speed;
           const met = k.metAt?.[e.id];
           if (met !== undefined) v.firstSeenSeq = met;
         } else {
@@ -378,6 +383,7 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
     entities,
     memory: { terrain: fk ? [...fk.seen] : [], remembered, ...(fk?.mapped?.length ? { unsighted: [...fk.mapped] } : {}) },
     sense: k.sense ? { ...k.sense } : null,
+    floorHint: k.floorHint && k.floorHint.floor === floorKey ? { ...k.floorHint } : null,
     identified: [...k.identified],
     monsterMemory: structuredClone(k.monsterMemory),
     notes: [...k.notes],

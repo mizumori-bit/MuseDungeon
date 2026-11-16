@@ -14,7 +14,7 @@ const PLAYER_VISIBLE: ReadonlySet<EventType> = new Set<EventType>([
   'status_applied', 'status_expired',
   'xp_gained', 'level_up',
   'item_picked_up', 'item_dropped', 'item_equipped', 'item_unequipped', 'item_used', 'item_thrown',
-  'item_identified', 'feature_state', 'trap_revealed', 'trap_triggered',
+  'item_identified', 'item_issued', 'feature_state', 'trap_revealed', 'trap_triggered',
   'noise', 'thought', 'chat', 'entity_removed',
   // 遠征（objective_progress は守護者・遺物の ID を含むので俯瞰専用）
   'expedition_offered', 'expedition_started', 'objective_completed', 'expedition_ended', 'haul_changed',
@@ -70,6 +70,8 @@ export function filterEventsForPlayer(events: readonly GameEvent[], playerId: Pl
     }
     switch (ev.type) {
       case 'damaged':
+        // 視界外の相手への毒（自分が毒を与えた）: 名前・体力・位置を出さない（V3-2R2 §18.7）。倒れたときだけ died で知らせる
+        if (ev.via === 'poison' && ev.target !== selfId && masked.includes('target')) continue;
         delete pe.seenTotals;
         if (ev.target !== selfId) { delete pe.hpAfter; delete pe.fromDir; }
         break;

@@ -1,5 +1,5 @@
 // 表示用ラベル（UI 言語）。状態・遠征・extract の可否などの事実を短く言い換えるだけで、判定はしない。
-import type { ExpeditionBrief, ExpeditionView, ObjectiveChoice, PlayerState, ViewStatus } from '@muse/shared';
+import type { Dir, ExpeditionBrief, ExpeditionView, MonsterTrait, ObjectiveChoice, ObsExpedition, ObsMonster, PlayerState, ViewStatus } from '@muse/shared';
 import { endReasonText } from '@muse/shared';
 import { getLocale, tr } from '../util';
 
@@ -29,17 +29,49 @@ export function expStatusLabel(x: Pick<ExpeditionView | ExpeditionBrief, 'status
   return { key: 'progress', text: tr('進行中', 'in progress') };
 }
 
-const EXTRACT_BLOCK: Record<string, [string, string]> = {
+// 階段の上なら追跡中の敵が見えていても extract できる（V3-2R2 §18.1）ので、追跡中の敵は理由に無い
+const EXTRACT_BLOCK: Record<NonNullable<ObsExpedition['extract_blocked_by']>, [string, string]> = {
   not_on_stairs: ['階段の上ではない', 'not on stairs'],
-  hostile_hunting: ['追跡中の敵が見えている', 'a hunting enemy is in view'],
   not_your_turn: ['手番ではない', 'not your turn'],
   ended: ['遠征は終了済み', 'the expedition is over'],
 };
 
-export function extractBlockLabel(code: string | undefined): string {
+export function extractBlockLabel(code: ObsExpedition['extract_blocked_by']): string {
   const v = code ? EXTRACT_BLOCK[code] : undefined;
   return v ? tr(v[0], v[1]) : (code ?? '');
 }
+
+/** 敵の速さ（自分の今の速さとの比較。見れば分かる。V3-2R2 §18.2）。普通は空 */
+export function monsterSpeedLabel(speed: ObsMonster['speed']): string {
+  if (speed === 'fast') return tr('あなたより速い', 'faster than you');
+  if (speed === 'slow') return tr('あなたより遅い', 'slower than you');
+  return '';
+}
+
+const TRAIT_LABEL: Record<MonsterTrait, [string, string]> = { pack: ['群れる', 'pack'], ranged: ['飛び道具', 'ranged'], stationary: ['動かない', 'stationary'] };
+
+/** 見れば分かる特徴（群れる・飛び道具・動かない） */
+export function monsterTraitLabel(trait: MonsterTrait): string {
+  const v = TRAIT_LABEL[trait];
+  return v ? tr(v[0], v[1]) : trait;
+}
+
+/** 脅威の表示。記録が無い種族は、本当に初めて見たなら「不明（初見）」、そうでなければ「不明（被弾の記録なし）」（V3-2R2 §18.2） */
+export function threatText(threat: ObsMonster['threat'], firstSeen?: boolean): string {
+  if (threat !== null) return tr(`脅威 ${threat}/5`, `threat ${threat}/5`);
+  return firstSeen ? tr('脅威: 不明（初見）', 'threat: unknown (first sighting)') : tr('脅威: 不明（被弾の記録なし）', 'threat: unknown (never hit by it)');
+}
+
+const EXPLORED_LABEL: Record<number, [string, string]> = { 1: ['約 1/4', 'about 1/4'], 2: ['約半分', 'about half'], 3: ['約 3/4', 'about 3/4'], 4: ['ほぼ全て', 'nearly all'] };
+
+/** この階の探索の進み具合（4 段階。V3-2R2 §18.4） */
+export function exploredLabel(band: 1 | 2 | 3 | 4): string {
+  const v = EXPLORED_LABEL[band];
+  return v ? tr(v[0], v[1]) : String(band);
+}
+
+/** 方角の矢印（気配・下への風） */
+export const DIR_ARROW: Record<Dir, string> = { n: '↑', ne: '↗', e: '→', se: '↘', s: '↓', sw: '↙', w: '←', nw: '↖' };
 
 export const OBJECTIVE_CHOICES: { id: ObjectiveChoice; ja: string; en: string }[] = [
   { id: 'auto', ja: 'おまかせ（最初の候補）', en: 'Auto (first offer)' },

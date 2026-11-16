@@ -1,6 +1,8 @@
 // プレイ画面（人間）。AI と同じ Command を同じ PlayerPort（WS 経由）へ送る。
 // 受け取るのはサーバーの PlayerView フレーム＋知覚イベントだけ（生のイベント列は受け取らない）。
-import type { ActionError, ActionErrorCode, Change, Command, Dir, EntityView, ObsMonster, Observation, PerceivedEvent, PlayerView, Pos, RunSummary, ServerMsg, TurnSnapshot } from '@muse/shared';
+import type {
+  ActionError, ActionErrorCode, Catalog, Change, Command, Dir, EntityView, ObsMonster, Observation, PerceivedEvent, PlayerView, Pos, RunSummary, ServerMsg, TurnSnapshot,
+} from '@muse/shared';
 import {
   buildNavGrid, buildObservation, buildTurnBlock, diffChanges, findPath, itemDisplayName, itemStats, monsterDisplayName, pickableItems, turnLine, turnSnapshot,
 } from '@muse/shared';
@@ -9,9 +11,11 @@ import { connectWs, type WsHandle, type WsStatus } from '../net/ws';
 import type { Canvas2DRenderer } from '../render/canvas2d';
 import { toViewEvents } from '../render/events';
 import { sceneFromView } from '../render/scene';
-import { AlertsBar, InventoryPanel, MessageLog, MonstersPanel, StatusPanel, SummaryDialog, type InvAction, type LogLine } from '../ui/panels';
+import {
+  AlertsBar, carriedCount, InventoryPanel, isApproaching, isBoundItem, MessageLog, MonstersPanel, StatusPanel, SummaryDialog, type InvAction, type LogLine,
+} from '../ui/panels';
 import { ErrorBanner, Header, MapView, ThemePicker, useCatalog, useLocaleRefresh, useTheme } from '../ui/common';
-import { BriefingCard, CampPanel, completesOnExtract, ExpeditionPanel, extractConfirmText, RestEstimateLine, rulesOf, TurnBar } from '../ui/expedition';
+import { BriefingCard, CampPanel, completesOnExtract, ExpeditionPanel, extractConfirmText, lifelineConfirmText, RestEstimateLine, rulesOf, TurnBar } from '../ui/expedition';
 import { extractBlockLabel, viewStatusLabel } from '../ui/labels';
 import { perceivedLines } from '../ui/narration';
 import { getLocale, getPref, getToken, setPref, tr } from '../util';
@@ -38,8 +42,12 @@ const QUIET_ERRORS: ReadonlySet<ActionErrorCode> = new Set<ActionErrorCode>(['no
 
 interface SnapAt { snap: TurnSnapshot; seq: number }
 
-interface NoticeAction { label: string; title?: string; command: Command }
+/** command を送るか、run を呼ぶ（確認を挟む操作: 帰還の綱など） */
+interface NoticeAction { label: string; title?: string; command?: Command; run?: () => void }
 interface Notice { text: string; actions?: NoticeAction[] }
+
+/** 「数手待つ」の手数（wait turns。何か変化があればサーバーが止める。V3-2R2 §18.5） */
+const WAIT_TURNS = 5;
 
 type ShotState = ObsMonster['shots'][number]['state'];
 
@@ -55,6 +63,12 @@ function knownThrown(obs: Observation | null): number {
 /** 鑑定の巻物か（公開カタログに効果の印が無いので、種別 ID で見分ける） */
 function isIdentifyScroll(kind: string | null): boolean {
   return !!kind && kind.includes('identify');
+}
+
+/** 帰還の綱のスロット（手放せない・使える品。遠征の開始時にキャンプが 1 本持たせる。V3-2R2 §18.1） */
+function lifelineSlot(v: PlayerView | null, c: Catalog | null): string | null {
+  if (!v || !c) return null;
+  return v.inventory.find((it) => isBoundItem(c, it.kind) && !!it.kind && c.items[it.kind]?.usable)?.slot ?? null;
 }
 
 /** 隣にいる、起きていて逃げていない敵（careful のマクロが動けない相手） */
@@ -131,7 +145,8 @@ export function Play({ runId }: { runId: string }) {
   const eventsRef = useRef<PerceivedEvent[]>([]);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
-  const [aim, setAim] = useState<{ text: string; blocked: boolean } | null>(null);
+  /** target: 狙いのマスにいる敵（「投擲で決着」の対象） */
+  const [aim, setAim] = useState<{ text: string; blocked: boolean; target?: string } | null>(null);
   catalogRef.current = catalog;
 
   /** 地図の上に数秒だけ出す注意（射線が通らない・マクロが拒否された等）。actions があればボタンを添える */
@@ -162,7 +177,9 @@ export function Play({ runId }: { runId: string }) {
   const redraw = (evs?: PerceivedEvent[]) => {
     const v = viewRef.current, c = catalogRef.current, r = rRef.current;
     if (!v || !c || !r) return;
-    const scene = sceneFromView(v, c, { cursor: cursorRef.current, path: modeRef.current === 'normal' ? pathRef.current : null });
+    // ツールチップは、この view の観測が作り済みならその値で（速さ・特徴・初見・命中の記録）。ここでは作らない
+    const monsters = obsRef.current && obsViewRef.current === v ? obsRef.current.visible.monsters : undefined;
+    const scene = sceneFromView(v, c, { cursor: cursorRef.current, path: modeRef.current === 'normal' ? pathRef.current : null, monsters });
     if (!scene) return;
     r.draw(scene);
     if (evs?.length) void r.animate(toViewEvents(evs.map((e) => e.event), c));
@@ -191,7 +208,8 @@ export function Play({ runId }: { runId: string }) {
           addLog([{ seq: viewRef.current?.seq ?? 0, text: `⚠ ${errorLine(m.error)}`, kind: 'error' }]);
           // 手番を使わずに拒否されたもの（射線が通らない・射程外の相手を ID で狙った、マクロが 1 歩も進めない等）は地図の上にもはっきり出す。
           // 隣に起きている敵がいて移動マクロが拒否されたら、退く（flee）を選べるようにする
-          if (m.error.code === 'hostile_adjacent') flash(errorLine(m.error), fleeActions(obsNow()));
+          // 階段から遠ければ、帰還の綱も選べるようにする（確認を挟む）
+          if (m.error.code === 'hostile_adjacent') flash(errorLine(m.error), [...fleeActions(obsNow()), ...lifelineActions()]);
           else if (!QUIET_ERRORS.has(m.error.code)) flash(errorLine(m.error));
           // 表示上は達成に見えても、サーバーが撤退扱いと判断した場合（最終判定はサーバー）
           if (m.error.code === 'confirm_required' && window.confirm(extractConfirmText(obsNow()?.expedition, false, rulesOf(catalogRef.current)))) {
@@ -281,7 +299,8 @@ export function Play({ runId }: { runId: string }) {
     const v = viewRef.current, c = catalogRef.current;
     if (!v || !c) return;
     if (!pickableItems(v, c).length) {
-      const full = v.inventory.length >= v.self.capacity;
+      // 手放せない品（帰還の綱）は所持数に数えない
+      const full = carriedCount(v, c) >= v.self.capacity;
       flash(full ? tr('所持品がいっぱいで拾えない。', 'Your inventory is full.') : tr('拾いに行けるアイテムを知らない。', 'You know of no items to pick up.'));
       return;
     }
@@ -289,21 +308,76 @@ export function Play({ runId }: { runId: string }) {
   };
 
   /**
-   * fight: 隣の相手に近接攻撃を繰り返す（倒れた・離れた・HP が半分を下回った・別の追跡中の敵・状態異常で止まる）。
-   * id を省くと、地図で指している隣の敵 → 追跡中の敵 → 弱っている敵の順に選ぶ
+   * fight: その相手と決着を付ける（V3-2R2 §18.5）。隣なら近接攻撃を繰り返し、追跡中で届かない相手は隣に来るまで待つ（迎え撃つ。最大 10 手番）。
+   * withSlot: その品を倒れるまで投げ続ける（射程と射線が通るまで待つ）。止まる条件はサーバーが判定する。
+   * id を省くと、隣の敵（地図で指している → 追跡中 → 弱っている順）、いなければ追ってくる敵（指している → 近い順）を選ぶ
    */
-  const doFight = (id?: string) => {
+  const doFight = (id?: string, withSlot?: string) => {
     const v = viewRef.current;
     const o = obsNow();
     if (!v || !o) return;
+    const w = withSlot ? { with: withSlot } : {};
+    if (id) {
+      if (!o.visible.monsters.some((m) => m.id === id)) { flash(tr('その敵は見えていない。', 'That enemy is not in view.')); return; }
+      send({ type: 'fight', target: id, ...w });
+      return;
+    }
     const adj = o.visible.monsters.filter((m) => m.dist === 1);
     const hov = rRef.current?.hover;
-    const tgt = id ? adj.find((m) => m.id === id)
-      : (hov ? adj.find((m) => m.pos.x === hov.x && m.pos.y === hov.y) : undefined)
-        ?? [...adj].sort((a, b) => Number(b.awareness === 'hunting') - Number(a.awareness === 'hunting') || (HP_ORDER[a.hp_state] ?? 9) - (HP_ORDER[b.hp_state] ?? 9) || (a.id < b.id ? -1 : 1))[0];
-    if (!tgt) { flash(tr('隣に敵がいない（「戦う」は隣接した相手にだけ使える）。', 'No adjacent enemy (fight needs an adjacent target).')); return; }
-    send({ type: 'fight', target: tgt.id });
+    const at = (ms: ObsMonster[]) => (hov ? ms.find((m) => m.pos.x === hov.x && m.pos.y === hov.y) : undefined);
+    const comers = o.visible.monsters.filter((m) => m.dist > 1 && isApproaching(m));
+    const tgt = at(adj)
+      ?? [...adj].sort((a, b) => Number(b.awareness === 'hunting') - Number(a.awareness === 'hunting') || (HP_ORDER[a.hp_state] ?? 9) - (HP_ORDER[b.hp_state] ?? 9) || (a.id < b.id ? -1 : 1))[0]
+      ?? at(comers) ?? comers[0];
+    if (!tgt) {
+      flash(tr('隣に敵がおらず、追ってくる敵もいない（眠っている・気付いていない相手には近づくか、投げる）。', 'No adjacent enemy and none hunting you (approach or throw at sleeping or unaware ones).'));
+      return;
+    }
+    send({ type: 'fight', target: tgt.id, ...w });
   };
+
+  /**
+   * 「投擲で決着」に使う品（その相手について）: 選択中の投擲物 → 狙える品 → （追ってくる相手なら）射程外・射線待ちの品。
+   * 追ってこない相手は、今狙えるときだけ（射程に入るのを待てないので）
+   */
+  const throwSlotFor = (m: ObsMonster): string | null => {
+    if (!m.shots.length) return null;
+    const sel = selSlot ? m.shots.find((s) => s.slot === selSlot) : undefined;
+    const pick = sel ?? m.shots.find((s) => s.state === 'clear') ?? m.shots[0];
+    if (pick.state !== 'clear' && !isApproaching(m)) return null;
+    return pick.slot;
+  };
+
+  /** 帰還の綱を使う: 動けない手番の数と確定する点を確認してから use（V3-2R2 §18.1） */
+  const doLifeline = () => {
+    const v = viewRef.current, c = catalogRef.current;
+    if (!v || !c) return;
+    const slot = lifelineSlot(v, c);
+    const x = v.expedition;
+    if (!x || x.status === 'ended' || v.status === 'at_camp') { flash(tr('進行中の遠征が無い。', 'No expedition in progress.')); return; }
+    if (!slot) { flash(tr('帰還の綱を持っていない（遠征の開始時にキャンプが 1 本持たせる）。', 'You have no lifeline (camp gives one at the start of each expedition).')); return; }
+    const it = v.inventory.find((i) => i.slot === slot);
+    const name = it ? itemDisplayName(c, getLocale(), it.kind, it.appearanceId, it.affixes) : tr('帰還の綱', 'lifeline');
+    if (!window.confirm(lifelineConfirmText(obsNow(), rulesOf(c), name))) return;
+    send({ type: 'use', slot });
+  };
+
+  /** 注意（地図の上）に添える「帰還の綱」のボタン（綱を持っていて遠征中のときだけ） */
+  const lifelineActions = (): NoticeAction[] => {
+    const v = viewRef.current;
+    const ox = obsNow()?.expedition;
+    const pts = ox?.haul?.if_lifeline_now;
+    // 階段の上なら extract の方が得か同じ（手番もかからない）
+    if (!lifelineSlot(v, catalogRef.current) || pts === undefined || ox?.can_extract) return [];
+    return [{
+      label: tr(`帰還の綱（L）+${pts}`, `Lifeline (L) +${pts}`),
+      title: tr('数手番動けず（その間も攻撃は受ける）、その後キャンプへ戻る。確認が出る', 'Helpless for a few turns (still attacked), then back to camp. Asks to confirm'),
+      run: doLifeline,
+    }];
+  };
+
+  /** 数手待つ: 何か変化（敵が見えた・隣に来た・被害）があればサーバーが止める */
+  const doWaitTurns = () => send({ type: 'wait', turns: WAIT_TURNS });
 
   const doExplore = (force?: MoveMode) => send({ type: 'explore', ...modeArg(force) });
   const doTravelDown = () => send({ type: 'travel', to: 'stairs_down', ...modeArg() });
@@ -325,7 +399,8 @@ export function Play({ runId }: { runId: string }) {
   const throwables = (v: PlayerView): string[] => v.inventory.filter((it) => {
     const ci = it.kind ? catalogRef.current?.items[it.kind] : undefined;
     const cat = ci?.category ?? (it.appearanceId ? catalogRef.current?.appearances[it.appearanceId]?.category : undefined);
-    return !it.equipped && (ci?.throwable || cat === 'throwing' || cat === 'potion');
+    // 手放せない品（帰還の綱）は投げられない
+    return !it.equipped && !ci?.bound && (ci?.throwable || cat === 'throwing' || cat === 'potion');
   }).map((it) => it.slot);
 
   const distOf = (v: PlayerView, p: Pos) => (v.self.pos ? Math.max(Math.abs(p.x - v.self.pos.x), Math.abs(p.y - v.self.pos.y)) : 0);
@@ -366,10 +441,10 @@ export function Play({ runId }: { runId: string }) {
       const name = monsterDisplayName(c, getLocale(), ent);
       const st = shotState(v, ent);
       setAim(st === 'blocked'
-        ? { blocked: true, text: tr(`狙い: ${name} — 射線が通らない（${dist}）。Shift+Enter でそのマスへ投げる（途中で落ちる）`, `Aim: ${name} — no clear line (${dist}). Shift+Enter throws at the cell (drops short)`) }
+        ? { blocked: true, target: ent.id, text: tr(`狙い: ${name} — 射線が通らない（${dist}）。Shift+Enter でそのマスへ投げる（途中で落ちる）。追ってくる相手なら F で射線が通るまで待って投げる`, `Aim: ${name} — no clear line (${dist}). Shift+Enter throws at the cell (drops short). If it is hunting you, F waits for a clear line`) }
         : st === 'out_of_range'
-          ? { blocked: true, text: tr(`狙い: ${name} — 射程外（${dist}）。近づくか、Shift+Enter でそのマスへ投げる（手前に落ちる）`, `Aim: ${name} — out of range (${dist}). Get closer, or Shift+Enter throws at the cell (drops short)`) }
-          : { blocked: false, text: tr(`狙い: ${name} — 投げられる（射線が通る・射程内、${dist}）`, `Aim: ${name} — clear and in range (${dist})`) });
+          ? { blocked: true, target: ent.id, text: tr(`狙い: ${name} — 射程外（${dist}）。近づくか、Shift+Enter でそのマスへ投げる（手前に落ちる）。追ってくる相手なら F で射程に入るまで待って投げる`, `Aim: ${name} — out of range (${dist}). Get closer, or Shift+Enter throws at the cell (drops short). If it is hunting you, F waits until it is in range`) }
+          : { blocked: false, target: ent.id, text: tr(`狙い: ${name} — 投げられる（射線が通る・射程内、${dist}）`, `Aim: ${name} — clear and in range (${dist})`) });
     } else {
       const far = range !== null && d > range;
       setAim({ blocked: far, text: tr(`狙い: (${p.x},${p.y})（${dist}${far ? '・射程外: 手前に落ちる' : ''}）`, `Aim: (${p.x},${p.y}) (${dist}${far ? ', out of range: drops short' : ''})`) });
@@ -419,6 +494,21 @@ export function Play({ runId }: { runId: string }) {
     send({ type: 'throw', slot, target: ent && st === 'clear' ? ent.id : { x: p.x, y: p.y } });
   };
 
+  /**
+   * 投擲で決着（fight with）: 狙っている敵に、選んだ品を倒れるまで投げ続ける。射程外・射線が通らなくても、
+   * 追ってくる相手なら射程と射線が通るまで待つ（待てるかどうか・止まる条件はサーバーが判定する）
+   */
+  const fireFight = () => {
+    const v = viewRef.current;
+    const slot = throwSlotRef.current;
+    const p = cursorRef.current;
+    if (!v || !slot || !p) return;
+    const ent = monsterAt(v, p);
+    if (!ent) { flash(tr('「投擲で決着」は敵を狙ったときだけ使える（Tab で敵に合わせる）。', 'Throw-it-down needs an enemy under the aim (Tab cycles enemies).')); return; }
+    setMode('normal');
+    send({ type: 'fight', target: ent.id, with: slot });
+  };
+
   /** 鑑定の対象の候補: 未鑑定の持ち物（同じ外見は 1 つにまとめる。巻物自身を除く） */
   const identifyOptions = (v: PlayerView, scrollSlot: string) => {
     const c = catalogRef.current;
@@ -434,10 +524,11 @@ export function Play({ runId }: { runId: string }) {
     return out;
   };
 
-  /** use: 鑑定済みの鑑定の巻物なら対象を選ばせる（候補が 1 つならそれを、未鑑定の巻物ならそのまま使う） */
+  /** use: 帰還の綱なら確認してから。鑑定済みの鑑定の巻物なら対象を選ばせる（候補が 1 つならそれを、未鑑定の巻物ならそのまま使う） */
   const doUse = (slot: string) => {
     const v = viewRef.current;
     const it = v?.inventory.find((x) => x.slot === slot);
+    if (it && slot === lifelineSlot(v, catalogRef.current)) { doLifeline(); return; }
     if (v && it && isIdentifyScroll(it.kind)) {
       const opts = identifyOptions(v, slot);
       if (opts.length > 1) { setMode('pick'); setPick({ slot, options: opts }); return; }
@@ -500,6 +591,8 @@ export function Play({ runId }: { runId: string }) {
             setCursor({ ...ms[next].pos });
           }
         } else if (e.key === 'Enter' || e.key === 't' || e.key === 'f') fireThrow(undefined, e.shiftKey);
+        // F（Shift+f）: 投擲で決着（倒れるまで投げ続ける。追ってくる相手は射程に入るまで待つ）
+        else if (e.key === 'F') fireFight();
         else handled = false;
       } else if (md === 'dir') {
         if (dir) { setMode('normal'); send({ type: 'interact', dir }); }
@@ -514,6 +607,10 @@ export function Play({ runId }: { runId: string }) {
         else handled = false;
       } else if (dir) send({ type: 'move', dir });
       else if (e.key === '.' || e.key === '5' || e.key === 'Clear') send({ type: 'wait' });
+      // W: 数手待つ（変化があれば止まる）
+      else if (e.key === 'W') doWaitTurns();
+      // L: 帰還の綱（確認が出る）
+      else if (e.key === 'L') doLifeline();
       else if (e.key === 'x') doExplore();
       // Shift+X: 強行（steady）で探索。弱い射撃や毒を受けても止まらない
       else if (e.key === 'X') doExplore('steady');
@@ -570,7 +667,11 @@ export function Play({ runId }: { runId: string }) {
   const pickables = view && catalog && view.status !== 'at_camp' ? pickableItems(view, catalog).length : 0;
   const adjAwake = adjacentAwake(obs);
   const adjacent = obs ? obs.visible.monsters.filter((m) => m.dist === 1) : [];
+  // 追ってくる（隣に来るまで待って迎え撃てる）敵
+  const comers = obs ? obs.visible.monsters.filter((m) => m.dist > 1 && isApproaching(m)) : [];
   const flee = adjAwake.length ? fleeActions(obs) : [];
+  const lifeSlot = lifelineSlot(view, catalog);
+  const lifePts = obs?.expedition?.haul?.if_lifeline_now;
 
   // 前回の自分の手番以降の変化（turnSnapshot / diffChanges。撃破の判定に基準以降の出来事を渡す）
   useEffect(() => {
@@ -604,8 +705,8 @@ export function Play({ runId }: { runId: string }) {
   const exp = view?.expedition ?? null;
   const expActive = !!exp && exp.status !== 'ended' && !atCamp;
   const modeHint = mode === 'target'
-    ? tr('投擲: 方向キー/Tab で狙い（Tab は射線が通り射程内の相手だけ）、Enter で投げる・Shift+Enter でそのマスへ（Esc 取消）',
-      'Throw: aim with keys/Tab (Tab cycles targets in range with a clear line), Enter to throw, Shift+Enter at the cell (Esc cancels)')
+    ? tr('投擲: 方向キー/Tab で狙い（Tab は射線が通り射程内の相手だけ）、Enter で投げる・Shift+Enter でそのマスへ・F で投擲で決着（倒れるまで投げ続ける）（Esc 取消）',
+      'Throw: aim with keys/Tab (Tab cycles targets in range with a clear line), Enter to throw, Shift+Enter at the cell, F to keep throwing until it falls (Esc cancels)')
     : mode === 'dir' ? tr('操作する方向を選ぶ（. で足元、Esc 取消）', 'Pick a direction (. for here, Esc cancels)')
       : mode === 'inv' ? tr('スロットの文字で既定の操作（i/Esc で戻る）', 'Press a slot letter (i/Esc to exit)')
         : mode === 'pick' ? tr('鑑定する品のスロットの文字を押す（Esc 取消）', 'Press the slot letter of the item to identify (Esc cancels)') : null;
@@ -635,7 +736,7 @@ export function Play({ runId }: { runId: string }) {
       <ErrorBanner error={error ?? catErr ?? th.error} onClose={() => setError(null)} />
       <div class="layout">
         <div class="main">
-          {obs && <AlertsBar alerts={obs.alerts} />}
+          {obs && <AlertsBar alerts={obs.alerts} onEscape={(stairs) => send({ type: 'travel', to: stairs === 'up' ? 'stairs_up' : 'stairs_down', mode: 'flee' })} />}
           <TurnBar line={turnText} changes={changes} />
           <MapView
             theme={th.theme}
@@ -648,13 +749,22 @@ export function Play({ runId }: { runId: string }) {
                   <div class="modehint">
                     {modeHint && <div>{modeHint}</div>}
                     {mode === 'target' && aim && <div class={`aim ${aim.blocked ? 'blocked' : ''}`}>{aim.text}</div>}
+                    {mode === 'target' && aim?.target && (
+                      <div class="nacts">
+                        <button class="tiny fight" onClick={fireFight}
+                          title={tr('選んだ品を倒れるまで投げ続ける。追ってくる相手は射程と射線が通るまで待つ。隣に来た・品が尽きた・射線が 3 手番通らない・HP が半分を下回ると止まる', 'Keep throwing the item until it falls; waits for range and a clear line if it is hunting you. Stops when it comes adjacent, you run out, the line stays blocked for 3 turns, or HP drops below half')}>
+                          {tr('投擲で決着', 'Throw it down')} (F)
+                        </button>
+                      </div>
+                    )}
                     {notice && (
                       <div class="notice">
                         ⚠ {notice.text}
                         {notice.actions && (
                           <div class="nacts">
                             {notice.actions.map((a, i) => (
-                              <button key={i} class="tiny flee" title={a.title} onClick={() => { setNotice(null); send(a.command); }}>{a.label}</button>
+                              <button key={i} class={`tiny ${a.run ? 'lifeline' : 'flee'}`} title={a.title}
+                                onClick={() => { setNotice(null); if (a.run) a.run(); else if (a.command) send(a.command); }}>{a.label}</button>
                             ))}
                             <button class="tiny" onClick={() => setNotice(null)}>{tr('閉じる', 'Close')}</button>
                           </div>
@@ -690,14 +800,26 @@ export function Play({ runId }: { runId: string }) {
               <button class={`tiny ${moveMode === 'steady' ? 'on' : ''}`} onClick={() => setMoveMode('steady')}>{tr('強行', 'Steady')}</button>
             </span>
             <button class="small" onClick={() => doExplore()} title={tr('x（Shift+X: 強行で探索）', 'x (Shift+X: explore steadily)')}>{tr('探索', 'Explore')} (x)</button>
-            {adjacent.length > 0 && (
+            {adjacent.length > 0 ? (
               <button class="small fight" onClick={() => doFight()} title={tr('隣の敵を、倒れる・離れる・HP が半分を下回るまで殴り続ける（F）', 'Keep attacking the adjacent enemy until it falls, moves away, or your HP drops below half (F)')}>
                 {tr('戦う', 'Fight')} (F)
               </button>
+            ) : comers.length > 0 && (
+              <button class="small fight" onClick={() => doFight()}
+                title={tr(`追ってくる敵（${comers[0].name}）が隣に来るまで待ち（最大 10 手番）、来たら殴り続ける（F）。HP が半分を下回る・別の追跡中の敵で止まる`, `Wait until the enemy hunting you (${comers[0].name}) comes adjacent (up to 10 turns), then keep attacking (F). Stops below half HP or on another hunting enemy`)}>
+                {tr('迎え撃つ', 'Meet')} (F)
+              </button>
             )}
             {flee.map((a, i) => (
-              <button key={`flee-${i}`} class="small flee" title={a.title} onClick={() => send(a.command)}>{a.label}</button>
+              <button key={`flee-${i}`} class="small flee" title={a.title} onClick={() => { if (a.command) send(a.command); }}>{a.label}</button>
             ))}
+            {expActive && lifeSlot && lifePts !== undefined && !obs?.expedition?.can_extract && (
+              <button class="small lifeline" onClick={doLifeline}
+                title={tr(`帰還の綱（L）: 階段から遠くても使える退却。${rulesOf(catalog)?.lifeline?.turns ?? 2} 手番動けず（その間も攻撃は受ける）、その後キャンプへ戻る。確認が出る`,
+                  `Lifeline (L): a retreat usable anywhere. Helpless for ${rulesOf(catalog)?.lifeline?.turns ?? 2} turns (still attacked), then back to camp. Asks to confirm`)}>
+                {tr(`帰還の綱 +${lifePts}`, `Lifeline +${lifePts}`)} (L)
+              </button>
+            )}
             <button class="small" onClick={() => doRest()} title="R">{tr('休憩', 'Rest')} (R)</button>
             <span class="resthp">
               <input type="number" min={1} max={view?.self.stats.maxHp ?? 999} value={restHp} placeholder="HP"
@@ -706,6 +828,10 @@ export function Play({ runId }: { runId: string }) {
               <button class="small" onClick={() => doRest(parseInt(restHp, 10) || undefined)} title={tr('指定した HP まで休む', 'Rest until this HP')}>{tr('まで休む', 'Rest until')}</button>
             </span>
             <button class="small" onClick={() => send({ type: 'wait' })} title=".">{tr('待機', 'Wait')} (.)</button>
+            <button class="small" onClick={doWaitTurns}
+              title={tr(`最大 ${WAIT_TURNS} 手番続けて待つ（W）。敵が新たに見えた・隣に来た・被害・状態異常で止まる`, `Wait up to ${WAIT_TURNS} turns (W). Stops when an enemy appears or comes adjacent, on damage, or on a status change`)}>
+              {tr('数手待つ', 'Wait a few')} (W)
+            </button>
             <button class="small" onClick={() => send({ type: 'pickup' })} title="g">{tr('拾う', 'Pick up')} (g)</button>
             {thrownKnown > 0 && (
               <button class="small" onClick={doCollect} title={tr('既知の「自分が投げた物」を近い順に回って拾う（C）', 'Walk to and pick up your thrown items, nearest first (C)')}>
@@ -720,7 +846,7 @@ export function Play({ runId }: { runId: string }) {
             <button class="small" onClick={doTravelDown} title="T">{tr('下り階段へ', 'To stairs')} (T)</button>
             <button class="small" onClick={() => send({ type: 'stairs' })} title=">">{tr('階段を使う', 'Use stairs')} (&gt;)</button>
             {exp && expActive && (
-              <button class={`small ${obs?.expedition?.can_extract ? 'exit' : ''}`} onClick={doExtract} title={tr('階段の上で遠征を終える', 'End the expedition on stairs')}>
+              <button class={`small ${obs?.expedition?.can_extract ? 'exit' : ''}`} onClick={doExtract} title={tr('階段の上で遠征を終える（追跡中の敵が見えていてもよい）', 'End the expedition on stairs (even with hunters in view)')}>
                 {completesOnExtract(exp) ? tr('帰還', 'Extract') : tr('撤退', 'Withdraw')} (E)
               </button>
             )}
@@ -737,9 +863,12 @@ export function Play({ runId }: { runId: string }) {
           )}
         </div>
         <aside class="side">
-          {view && <ExpeditionPanel view={view} obs={obs} catalog={catalog} onBriefing={exp && expActive ? () => setBriefingNo(exp.no) : undefined} />}
-          {view && catalog && <StatusPanel view={view} catalog={catalog} speed={obs?.self.speed} />}
-          {obs && !atCamp && <MonstersPanel monsters={obs.visible.monsters} hp={obs.self.hp} onFight={doFight} />}
+          {view && (
+            <ExpeditionPanel view={view} obs={obs} catalog={catalog} onBriefing={exp && expActive ? () => setBriefingNo(exp.no) : undefined}
+              onLifeline={expActive && lifeSlot ? doLifeline : undefined} />
+          )}
+          {view && catalog && <StatusPanel view={view} catalog={catalog} speed={obs?.self.speed} floor={atCamp ? null : obs?.self.floor} />}
+          {obs && !atCamp && <MonstersPanel monsters={obs.visible.monsters} hp={obs.self.hp} onFight={doFight} throwSlotFor={throwSlotFor} />}
           {view && catalog && <InventoryPanel view={view} catalog={catalog} onAction={invAction} focused={mode === 'inv'} selected={selSlot} onSelect={setSelSlot} />}
           <MessageLog lines={log} />
           <form class="chat" onSubmit={(e) => { e.preventDefault(); if (chat.trim()) { send({ type: 'say', text: chat.trim().slice(0, 280) }); setChat(''); } }}>
@@ -749,8 +878,8 @@ export function Play({ runId }: { runId: string }) {
             <div class="muted small">{tr('選択中', 'Selected')}: {(() => { const it = view.inventory.find((x) => x.slot === selSlot); return it ? itemDisplayName(catalog, L, it.kind, it.appearanceId, it.affixes) : '-'; })()}</div>
           )}
           <div class="help muted">
-            {tr('移動: 矢印/テンキー/hjklyubn　待機: .　探索: x（強行: X）　戦う: F（隣の敵）　休憩: R　拾う: g　拾い集める: G　回収: C　階段: >　帰還/撤退: E（階段の上）　投擲: t　操作: o　所持品: i　クリック: その場所へ移動（Shift+クリック: 退く）',
-              'Move: arrows/numpad/hjklyubn  Wait: .  Explore: x (steady: X)  Fight: F (adjacent)  Rest: R  Pick up: g  Collect items: G  Collect thrown: C  Stairs: >  Extract: E (on stairs)  Throw: t  Interact: o  Inventory: i  Click: travel (Shift+click: flee)')}
+            {tr('移動: 矢印/テンキー/hjklyubn　待機: .　数手待つ: W　探索: x（強行: X）　戦う: F（隣の敵。いなければ追ってくる敵を迎え撃つ）　休憩: R　拾う: g　拾い集める: G　回収: C　階段: >　帰還/撤退: E（階段の上）　帰還の綱: L　投擲: t（狙い中に F で投擲で決着）　操作: o　所持品: i　クリック: その場所へ移動（Shift+クリック: 退く）',
+              'Move: arrows/numpad/hjklyubn  Wait: .  Wait a few: W  Explore: x (steady: X)  Fight: F (adjacent; otherwise meet a hunter)  Rest: R  Pick up: g  Collect items: G  Collect thrown: C  Stairs: >  Extract: E (on stairs)  Lifeline: L  Throw: t (F while aiming: throw until it falls)  Interact: o  Inventory: i  Click: travel (Shift+click: flee)')}
           </div>
         </aside>
       </div>

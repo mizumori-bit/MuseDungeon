@@ -17,7 +17,8 @@ const HpFloorSchema = z.number().int().min(0);
 
 export const CommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('move'), dir: DirSchema }),
-  z.object({ type: z.literal('wait') }),
+  /** turns: 2〜10 なら何か変化があるまで続けて待つ（サーバーで展開。V3-2R2 §18.5） */
+  z.object({ type: z.literal('wait'), turns: z.number().int().min(1).max(10).optional() }),
   z.object({ type: z.literal('pickup'), item: EntityRefSchema.optional() }),
   z.object({ type: z.literal('drop'), slot: SlotSchema, qty: z.number().int().positive().optional() }),
   z.object({ type: z.literal('equip'), slot: SlotSchema }),
@@ -33,8 +34,11 @@ export const CommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('rest'), untilHp: z.number().int().positive().optional(), maxTurns: z.number().int().positive().optional() }),
   /** 既知の「自分が投げた物」（what: 'thrown'、既定）か、見えている・記憶したアイテム（'items'）を近い順に拾う */
   z.object({ type: z.literal('collect'), what: z.enum(['thrown', 'items']).optional(), mode: MacroModeSchema.optional(), hpFloor: HpFloorSchema.optional() }),
-  /** 隣の相手に近接攻撃を繰り返す（倒れた・離れた・HP が hpFloor を下回った・別の追跡中の敵・状態異常で止まる） */
-  z.object({ type: z.literal('fight'), target: EntityRefSchema, hpFloor: HpFloorSchema.optional() }),
+  /**
+   * その相手と決着を付ける（V3-2R2 §18.5）。with なし: 近接（追跡中の相手は隣に来るまで待つ）。with: そのスロットの品を投げて戦う（射程と射線が通るまで待つ）。
+   * 倒れた・離れた・HP が hpFloor を下回った・別の追跡中の敵・状態異常で止まる
+   */
+  z.object({ type: z.literal('fight'), target: EntityRefSchema, with: SlotSchema.optional(), hpFloor: HpFloorSchema.optional() }),
   // 遠征
   z.object({ type: z.literal('extract'), confirm: z.boolean().optional() }),
   z.object({ type: z.literal('start_expedition'), offer: z.union([z.number().int().min(1).max(9), z.literal('endless')]) }),

@@ -4,13 +4,15 @@ import type {
   ActionError, Entity, Expedition, ExpeditionEndReason, ExpeditionHaul, ExpeditionOffer, ExpeditionResult, HaulParts, Objective,
   ObjectiveProgress, ObjectiveType, OfferSlot, PlayerId, PlayerRecord,
 } from '@muse/shared';
-import { actionError, cheb, currentExpedition, deepestGenerated, haulTotal, isPursuing, offerPoints, overreachPoints, payoutOf, Rng, t } from '@muse/shared';
+import { cheb, currentExpedition, deepestGenerated, haulTotal, isPursuing, offerPoints, overreachPoints, payoutOf, Rng, actionError, t } from '@muse/shared';
 import { buildSummary, grantXp } from './combat';
 import type { Ctx } from './ctx';
 import { findFreeCell } from './floors';
 import { recomputeStats } from './stats';
 
 const OFFER_TYPES: ObjectiveType[] = ['reach_depth', 'slay_guardian', 'retrieve_relic'];
+/** 帰還の綱（V3-2R2 §18.1） */
+export const LIFELINE = 'core:lifeline';
 const SLOTS: OfferSlot[] = ['safe', 'standard', 'ambitious'];
 
 /** 条件の効果をまとめる（倍率は掛け合わせ、加算は足し合わせ） */
@@ -55,7 +57,7 @@ export function sharedParts(ctx: Ctx, x: Expedition): HaulParts {
   const h: ExpeditionHaul = x.haul ?? { bounty: 0, discovery: 0, kills: 0 };
   return {
     objective: x.status === 'objective_complete' ? x.points : 0,
-    overreach: overreachPoints(ctx.content.balance, x.objective.targetDepth, x.progress.crossedDepth ?? 0),
+    overreach: overreachPoints(ctx.content.balance, x.objective.targetDepth, x.progress.crossedDepth ?? 0, x.points),
     treasure: 0, bounty: h.bounty, discovery: h.discovery, kills: h.kills,
   };
 }
@@ -84,13 +86,14 @@ export function makeOffers(ctx: Ctx, no: number): ExpeditionOffer[] {
   return SLOTS.map((slot, i) => {
     const s = b.slots[slot];
     const type = types[i % types.length];
-    // 目標の深さは枠ごとに重ならない（堅実 +1・標準 +2・野心 +3〜4）。最初の遠征は浅い固定値から
+    // 目標の深さは枠ごとに重ならない（堅実 +1・標準 +2・野心 +3）。最初の遠征は浅い固定値から
     const target = no === 1 ? Math.max(b.firstTargetDepth[slot], deepest + 1) : deepest + rng.range(s.aheadMin, s.aheadMax);
     const n = rng.range(s.traitsMin, s.traitsMax);
     const traits = rng.shuffle([...traitIds]).slice(0, n).sort();
     const multiplierPct = traits.reduce((m, id) => Math.trunc((m * ctx.content.expeditionTraits[id].multiplierPct) / 100), 100);
     const relicGuarded = type === 'retrieve_relic' && rng.chance(b.relicGuardianPct);
-    const points = Math.trunc((offerPoints(ctx.content.balance, type, target, deepest) * s.pointsPct) / 100);
+    // 点 = 枠の基礎点 × 種類の係数 × 深さの係数（V3-2R2 §18.3）
+    const points = offerPoints({ expedition: b, slots: b.slots as Record<OfferSlot, typeof s> }, slot, type, relicGuarded, target);
     return { index: i + 1, objective: { type, targetDepth: target }, points, relicGuarded, slot, traits, multiplierPct };
   });
 }
@@ -207,9 +210,12 @@ export function accrueHaul(ctx: Ctx): void {
   const killsNow = new Map<string, { pid: PlayerId; kind: string; n: number }>();
   for (const ev of ctx.events) {
     if (ev.type === 'died' && ev.killer && byEntity.has(ev.killer) && !byEntity.has(ev.id) && !w.players[ev.id]) {
-      gains.kills += h.perKill;
-      if (ev.bounty) { gains.bounty += ev.bounty; reasons.push(`bounty:${ev.kind}`); }
       const pid = byEntity.get(ev.killer)!;
+      // 見ていなかった相手（視界外で毒が倒した）: 撃破と賞金だけ。種族は書かない
+      const unseen = !!ev.masks?.[pid]?.includes('id');
+      gains.kills += h.perKill;
+      if (ev.bounty) { gains.bounty += ev.bounty; reasons.push(unseen ? 'bounty' : `bounty:${ev.kind}`); }
+      if (unseen) continue;
       const k = `${pid}|${ev.kind}`;
       const cur = killsNow.get(k);
       if (cur) cur.n++; else killsNow.set(k, { pid, kind: ev.kind, n: 1 });
@@ -267,8 +273,8 @@ export function extractError(ctx: Ctx, e: Entity, pr: PlayerRecord, confirm: boo
   const x = currentExpedition(ctx.world);
   if (!x) return { error: actionError('cannot_extract', t(L, '進行中の遠征が無い。', 'There is no expedition in progress.'), t(L, 'キャンプなら start_expedition で次の遠征を始める。', 'At camp, start one with start_expedition.')) };
   const tr = ctx.terrainAt(e.pos!.floor, e.pos!.x, e.pos!.y);
-  if (!tr.stairs) return { error: actionError('cannot_extract', t(L, '階段の上でないと extract できない。', 'You must stand on stairs to extract.'), t(L, 'travel_to stairs_up / stairs_down で階段へ移動する。', 'Move onto stairs with travel_to stairs_up / stairs_down.')) };
-  if (huntingInView(ctx, pr)) return { error: actionError('cannot_extract', t(L, '追跡中の敵が見えている間は extract できない。', 'You cannot extract while a hunting enemy is in view.'), t(L, '敵を倒すか、視界から外れてから extract する。', 'Defeat it or break line of sight first.')) };
+  if (!tr.stairs) return { error: actionError('cannot_extract', t(L, '階段の上でないと extract できない。', 'You must stand on stairs to extract.'), t(L, 'travel_to stairs_up / stairs_down で階段へ移動する。階段から遠ければ帰還の綱（use_item）も使える。', 'Move onto stairs with travel_to stairs_up / stairs_down. Far from stairs, the lifeline (use_item) also works.')) };
+  // 階段の上なら追跡中の敵が見えていても extract できる（敵は階段を追ってこない。V3-2R2 §18.1）
   const completed = wouldComplete(ctx, x, e);
   if (!completed && confirm !== true) {
     return { error: actionError('confirm_required', t(L, '目的は未達成。今 extract すると撤退（報酬なし）になる。', 'The objective is not complete; extracting now is a withdrawal (no reward).'), t(L, '撤退するなら confirm: true を付けて extract する。', 'To withdraw, call extract with confirm: true.')) };
@@ -276,8 +282,8 @@ export function extractError(ctx: Ctx, e: Entity, pr: PlayerRecord, confirm: boo
   return { completed, expedition: x };
 }
 
-/** extract の実行: 盤面から外してキャンプへ（全回復・状態異常解除） */
-export function doExtract(ctx: Ctx, e: Entity, pr: PlayerRecord, completed: boolean, x: Expedition): void {
+/** extract の実行: 盤面から外してキャンプへ（全回復・状態異常解除）。lifeline: 帰還の綱で戻った */
+export function doExtract(ctx: Ctx, e: Entity, pr: PlayerRecord, completed: boolean, x: Expedition, lifeline = false): void {
   const me = ctx.world.entities[e.id];
   const key = me.pos!.floor;
   ctx.curFloor = key;
@@ -290,7 +296,7 @@ export function doExtract(ctx: Ctx, e: Entity, pr: PlayerRecord, completed: bool
     || (completed && ctx.world.entities[id]?.kind === 'core:relic'));
   ctx.emit({
     type: 'objective_progress', no: x.no, progressAfter: { ...x.progress }, statusAfter: x.status,
-    extractedAfter: [...x.extracted, { player: pr.id, completed, treasure }], seenBy: [], floor: key,
+    extractedAfter: [...x.extracted, { player: pr.id, completed, treasure, ...(lifeline ? { lifeline: true } : {}) }], seenBy: [], floor: key,
   });
   const cur = ctx.world.entities[e.id];
   const extractPos = { floor: key, x: cur.pos!.x, y: cur.pos!.y };
@@ -300,8 +306,52 @@ export function doExtract(ctx: Ctx, e: Entity, pr: PlayerRecord, completed: bool
   body.actor = { ...body.actor!, dormant: true, regen: 0 };
   body.stats = { ...body.stats!, hp: body.stats!.maxHp };
   body.statuses = [];
-  ctx.emit({ type: 'player_state', player: pr.id, state: 'at_camp', reason: completed ? 'extracted' : 'withdrew', extractPos, put: [body], ...(treasureIds.length ? { del: treasureIds } : {}), seenBy: 'all', floor: key });
+  ctx.emit({ type: 'player_state', player: pr.id, state: 'at_camp', reason: lifeline ? 'lifeline' : completed ? 'extracted' : 'withdrew', extractPos, put: [body], ...(treasureIds.length ? { del: treasureIds } : {}), seenBy: 'all', floor: key });
   maybeEndExpedition(ctx);
+}
+
+/** 帰還の綱の効果が終わった: その場からキャンプへ（目的を達成済みなら達成扱い。確定は lifeline.pct %） */
+export function lifelineReturn(ctx: Ctx, e: Entity): void {
+  const me = ctx.world.entities[e.id];
+  const pr = me?.player ? ctx.world.players[me.player] : undefined;
+  const x = currentExpedition(ctx.world);
+  if (!me?.pos || !pr || pr.state !== 'alive' || !x) return;
+  doExtract(ctx, me, pr, wouldComplete(ctx, x, me), x, true);
+}
+
+/** 所持数に数える品の数（手放せない品＝帰還の綱は数えない） */
+export function invCount(ctx: Ctx, e: Entity): number {
+  return (e.inv?.items ?? []).filter((id) => !ctx.content.items[ctx.world.entities[id]?.kind ?? '']?.bound).length;
+}
+
+/** 遠征の開始時: 参加者の帰還の綱を 1 本にそろえる（余っていても 1 本、無ければ補充） */
+function issueLifeline(ctx: Ctx, pid: PlayerId): void {
+  const pr = ctx.world.players[pid];
+  const me = pr ? ctx.world.entities[pr.entityId] : undefined;
+  if (!me?.pos || !me.inv || !ctx.content.items[LIFELINE]) return;
+  const held = me.inv.items.map((id) => ctx.world.entities[id]).filter((it): it is Entity => it?.kind === LIFELINE);
+  if (held.length === 1 && held[0].item!.qty === 1) return;
+  const actor = structuredClone(me);
+  const put: Entity[] = [];
+  const del: string[] = [];
+  let itemId: string;
+  if (held.length) {
+    const keep = structuredClone(held[0]);
+    keep.item!.qty = 1;
+    put.push(keep);
+    itemId = keep.id;
+    for (const extra of held.slice(1)) { del.push(extra.id); actor.inv!.items = actor.inv!.items.filter((id) => id !== extra.id); }
+  } else {
+    const used = new Set(me.inv.items.map((id) => ctx.world.entities[id]?.item?.slot));
+    let slot: string | null = null;
+    for (let c = 97; c <= 122 && !slot; c++) if (!used.has(String.fromCharCode(c))) slot = String.fromCharCode(c);
+    if (!slot) return;
+    itemId = ctx.newEntityId();
+    put.push({ id: itemId, kind: LIFELINE, sid: ctx.nextSid(), item: { qty: 1, affixes: [], heldBy: me.id, slot } });
+    actor.inv!.items.push(itemId);
+  }
+  put.push(actor);
+  ctx.emit({ type: 'item_issued', actor: me.id, item: itemId, kind: LIFELINE, qty: 1, reason: 'expedition_started', put, ...(del.length ? { del } : {}), seenBy: [pid], floor: me.pos.floor });
 }
 
 /** 盤面に誰も残っていなければ遠征を終える（extract・死亡・引退の後に呼ぶ） */
@@ -311,7 +361,7 @@ export function maybeEndExpedition(ctx: Ctx): void {
   if (!x) return;
   if (w.playerOrder.some((pid) => w.players[pid].state === 'alive')) return;
   let reason: ExpeditionEndReason;
-  if (x.extracted.length) reason = x.extracted.some((r) => r.completed) ? 'completed' : 'withdrawn';
+  if (x.extracted.length) reason = x.extracted.some((r) => r.completed && !r.lifeline) ? 'completed' : x.extracted.some((r) => r.lifeline) ? 'lifeline' : 'withdrawn';
   else reason = x.participants.some((pid) => w.players[pid]?.state === 'dead') ? 'died' : 'retired';
   const points = reason === 'completed' ? x.points : 0;
   let deepest = 0, kills = 0, turns = 0;
@@ -334,9 +384,9 @@ export function maybeEndExpedition(ctx: Ctx): void {
     if (!pr) continue;
     const parts = { ...shared, treasure: r.treasure ?? 0 };
     partsTotal = { ...partsTotal, treasure: partsTotal.treasure + parts.treasure };
-    const banked = payoutOf(ctx.content.balance, parts, r.completed, mult);
+    const banked = payoutOf(ctx.content.balance, parts, r.completed, mult, !!r.lifeline);
     players.push({ player: pr.id, banked, lost: 0 });
-    const done = r.completed && reason === 'completed';
+    const done = r.completed && !r.lifeline && reason === 'completed';
     ctx.emit({
       type: 'player_stats', player: pr.id,
       stats: {
@@ -408,6 +458,8 @@ export function startExpedition(ctx: Ctx, pr: PlayerRecord, offer: number | 'end
   };
   ctx.emit({ type: 'expedition_started', expedition: exp, seenBy: 'all', floor: null });
   for (const pid of participants) if (w.players[pid].state === 'at_camp') returnFromCamp(ctx, pid);
+  // キャンプが帰還の綱を 1 本持たせる
+  for (const pid of participants) issueLifeline(ctx, pid);
   // 条件（視界など）を能力値に反映
   for (const pid of participants) {
     const e = w.entities[w.players[pid].entityId];

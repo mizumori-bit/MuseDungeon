@@ -29,6 +29,7 @@ export function endReasonText(L: Locale, r: ExpeditionEndReason | null): string 
   switch (r) {
     case 'completed': return t(L, '達成して帰還', 'completed and extracted');
     case 'withdrawn': return t(L, '撤退', 'withdrawn');
+    case 'lifeline': return t(L, '帰還の綱で帰還', 'returned by lifeline');
     case 'died': return t(L, '死亡', 'died');
     case 'retired': return t(L, '引退', 'retired');
     default: return t(L, '進行中', 'in progress');
@@ -40,8 +41,9 @@ export function briefingLines(L: Locale, x: ExpeditionView, rules?: Pick<Catalog
   const lines = [
     t(L, `【遠征 ${x.no}】目的: ${objectiveText(L, x.objective)}`, `[Expedition ${x.no}] Objective: ${objectiveText(L, x.objective)}`),
     t(L, `達成条件: ${conditionText(L, x.objective)}`, `Completion: ${conditionText(L, x.objective)}`),
-    t(L, '撤退: 階段の上で extract(confirm) すると、未達成のまま生還して遠征を終えられる', 'Withdraw: extract(confirm) on stairs ends the expedition alive, without the reward'),
-    t(L, '終了理由: 達成して帰還 / 撤退 / 死亡 / 引退(retire)', 'It ends by: completion + extract / withdrawal / death / retire'),
+    t(L, '撤退: 階段の上で extract(confirm) すると、未達成のまま生還して遠征を終えられる（追跡中の敵が見えていてもよい）', 'Withdraw: extract(confirm) on stairs ends the expedition alive, without the reward (even with hunters in view)'),
+    t(L, '帰還の綱: 階段から遠くても use_item で使えば、数手番後にキャンプへ戻る（戦利品の半分が確定）', 'Lifeline: use_item it anywhere to return to camp after a few turns (half the haul is banked)'),
+    t(L, '終了理由: 達成して帰還 / 帰還の綱で帰還 / 撤退 / 死亡 / 引退(retire)', 'It ends by: completion + extract / lifeline / withdrawal / death / retire'),
   ];
   if (x.objective.type !== 'endless') {
     lines.push(t(L,
@@ -122,7 +124,7 @@ export function partsText(L: Locale, p: { objective: number; overreach: number; 
   return (L === 'en' ? en : ja).filter(([v]) => v > 0).map(([v, n]) => (L === 'en' ? `${n} ${v}` : `${n}${v}`)).join(L === 'en' ? ', ' : '・');
 }
 
-export function resultText(L: Locale, x: ExpeditionView): string {
+export function resultText(L: Locale, x: ExpeditionView, rules?: Partial<Pick<CatalogRules, 'haul' | 'lifeline'>>): string {
   const r = x.result;
   if (!r) return '';
   const pay = r.payout;
@@ -130,18 +132,16 @@ export function resultText(L: Locale, x: ExpeditionView): string {
     const mine = pay.players.length === 1 ? pay.players[0] : null;
     const banked = mine ? mine.banked : pay.banked;
     const lost = mine ? mine.lost : pay.lost;
+    // 倍率が掛かるのは帰還（達成）だけ。撤退と綱はそれぞれの割合（倍率なし）
+    const how = r.reason === 'completed' ? t(L, `倍率 ${multText(pay.multiplierPct)}`, `multiplier ${multText(pay.multiplierPct)}`)
+      : r.reason === 'lifeline' ? t(L, `帰還の綱で ${rules?.lifeline?.pct ?? 50}%（倍率なし）`, `lifeline ${rules?.lifeline?.pct ?? 50}% (no multiplier)`)
+        : r.reason === 'withdrawn' ? t(L, `撤退で目的を除いて ${rules?.haul?.withdrawPct ?? 50}%（倍率なし）`, `withdrawal ${rules?.haul?.withdrawPct ?? 50}% without the objective (no multiplier)`)
+          : t(L, '確定なし', 'nothing banked');
     return t(L,
-      `遠征 ${x.no} は終了した（${endReasonText(L, r.reason)}）。確定 +${banked}${lost ? `（失った戦利品 ${lost}）` : ''}。内訳: ${partsText(L, pay.parts) || 'なし'}、倍率 ${multText(pay.multiplierPct)}。この遠征: 最深 地下${r.deepest}階、撃破 ${r.kills}、手番 ${r.turns}`,
-      `Expedition ${x.no} ended (${endReasonText(L, r.reason)}). Banked +${banked}${lost ? ` (lost ${lost})` : ''}. Parts: ${partsText(L, pay.parts) || 'none'}, multiplier ${multText(pay.multiplierPct)}. Deepest ${r.deepest}, kills ${r.kills}, turns ${r.turns}`);
+      `遠征 ${x.no} は終了した（${endReasonText(L, r.reason)}）。確定 +${banked}${lost ? `（失った戦利品 ${lost}）` : ''}。内訳: ${partsText(L, pay.parts) || 'なし'}、${how}。この遠征: 最深 地下${r.deepest}階、撃破 ${r.kills}、手番 ${r.turns}`,
+      `Expedition ${x.no} ended (${endReasonText(L, r.reason)}). Banked +${banked}${lost ? ` (lost ${lost})` : ''}. Parts: ${partsText(L, pay.parts) || 'none'}, ${how}. Deepest ${r.deepest}, kills ${r.kills}, turns ${r.turns}`);
   }
   return t(L,
     `遠征 ${x.no} は終了した（${endReasonText(L, r.reason)}）。獲得 +${r.points} 点。この遠征: 最深 地下${r.deepest}階、撃破 ${r.kills}、手番 ${r.turns}`,
     `Expedition ${x.no} ended (${endReasonText(L, r.reason)}). +${r.points} points. This expedition: deepest ${r.deepest}, kills ${r.kills}, turns ${r.turns}`);
-}
-
-/** 遠征の候補の基礎点（engine の候補生成とルールブックで共用） */
-export function offerPoints(rules: Pick<CatalogRules, 'expedition'>, type: Objective['type'], targetDepth: number, deepest: number): number {
-  const base = rules.expedition.points[type] ?? 0;
-  const extra = Math.max(0, targetDepth - deepest - rules.expedition.aheadMin);
-  return base + extra * rules.expedition.pointsPerExtraDepth;
 }

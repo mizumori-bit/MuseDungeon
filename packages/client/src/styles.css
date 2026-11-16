@@ -91,7 +91,7 @@ canvas.map { width: 100%; height: 100%; display: block; cursor: crosshair; }
 .alert { font-size: 12px; padding: 2px 8px; border-radius: 10px; background: #2a2e3a; }
 .alert.critical_hp, .alert.dead { background: #6b1c1c; }
 .alert.low_hp, .alert.poisoned { background: #5a4415; }
-.alert.enemy_adjacent, .alert.multiple_enemies { background: #5a2236; }
+.alert.enemy_adjacent { background: #5a2236; }
 .alert.on_stairs, .alert.item_here, .alert.new_floor { background: #1f4a5a; }
 .alert.at_camp { background: #2e3f2a; }
 .alert.can_extract { background: #1f5a3a; }
@@ -136,6 +136,7 @@ th, td { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--line
 .expband.withdrawn { background: rgba(158,158,158,0.3); }
 .expband.died { background: rgba(229,57,53,0.3); }
 .expband.retired { background: rgba(171,71,188,0.3); }
+.expband.lifeline { background: rgba(215,180,122,0.32); }
 .expband.cur { outline: 1px solid var(--accent); }
 
 .modal { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 10; }
@@ -155,6 +156,7 @@ th, td { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--line
 .exp .badge.ended { background: #3a3a3a; }
 .exp .badge.ended.completed { background: #1f5a3a; }
 .exp .badge.ended.died { background: #6b1c1c; }
+.exp .badge.ended.lifeline { background: #4a3a1f; }
 .exp .right { margin-left: auto; }
 .exp .objective { font-size: 13px; }
 .exp .progress { font-size: 12px; color: #b4d8ff; }
@@ -296,3 +298,32 @@ button.fight { border-color: #a0402e; background: #3a1c14; }
 .board-old { margin-top: 10px; font-size: 12px; }
 .board-old summary { cursor: pointer; color: var(--muted); }
 .board-old .board { opacity: 0.85; }
+
+/* ---- V3-2R2: 退却（帰還の綱・逃げ道）・危険の表示・下への風・投擲で決着 ---- */
+/* 群れ全体の被害見込み（incoming）と逃げ道の見込み（escape） */
+.alert.incoming { background: #6a1f3a; border: 1px solid #c0506e; }
+.alert.escape { background: #1f3f4a; border: 1px solid #3f8fa0; display: inline-flex; align-items: center; gap: 6px; }
+.alert .aact { margin-left: 2px; }
+/* 帰還の綱 */
+button.lifeline { border-color: #a08048; background: #3a2e18; }
+.inv li.bound .name { color: #e8d4a8; }
+.inv em.bound { color: #d7b47a; }
+.haul-now .life { color: #e8c890; }
+.haul-camp .after { color: #9fb4d0; }
+.exp .extract { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.result.payout.lifeline .gain { color: #e8c890; }
+/* 守護者が倒れた（ほかの変化と別の行で先頭に） */
+.chg-head.guardian_slain { margin-top: 3px; padding: 2px 8px; border-radius: 6px; background: #5a4a15; color: #ffe08a; font-weight: 700; display: inline-block; }
+/* 敵の一覧: 初見・速さ・見れば分かる特徴・命中の記録 */
+.mons .mfirst { font-size: 10.5px; padding: 0 6px; border-radius: 8px; background: #4a2a5a; color: #e1bee7; }
+.mons .macts { display: inline-flex; gap: 2px; flex-wrap: wrap; }
+.mons .mspeed.fast { color: #ff8a65; font-weight: 700; }
+.mons .mspeed.slow { color: #90caf9; }
+.mons .mtraits { color: #ffcc80; }
+.mons .mhits { color: #b0bec5; }
+/* この階の手がかり（探索の進み具合・下への風） */
+.floorhint { display: inline-flex; flex-wrap: wrap; gap: 0 10px; }
+.floorhint .draft { color: #7fdcff; }
+.floorhint .darrow { display: inline-block; min-width: 1.1em; text-align: center; }
+/* 狙い中のボタン（投擲で決着） */
+.modehint .nacts { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }

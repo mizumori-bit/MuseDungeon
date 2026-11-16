@@ -54,6 +54,14 @@ export function buildNavGrid(view: PlayerView, catalog: Catalog): NavGrid | null
   }
   // 発見済みの罠はできれば避ける
   for (const e of view.entities) if (e.cat === 'trap') hazard[e.pos.y * width + e.pos.x] = 1;
+  // 見えている動かない敵の隣も罠と同じ扱い（ほかに道が無ければ通る。V3-2R2 §18.5）
+  for (const e of view.entities) {
+    if (e.cat !== 'monster' || !e.kind || !catalog.monsters[e.kind]?.tags.includes('stationary')) continue;
+    for (const d of DIRS) {
+      const nx = e.pos.x + DIR_VEC[d][0], ny = e.pos.y + DIR_VEC[d][1];
+      if (nx >= 0 && ny >= 0 && nx < width && ny < height) hazard[ny * width + nx] = 1;
+    }
+  }
   for (const r of view.memory.remembered) if (r.cat === 'trap') hazard[r.pos.y * width + r.pos.x] = 1;
   const unsighted = new Uint8Array(n);
   for (const i of view.memory.unsighted ?? []) unsighted[i] = 1;

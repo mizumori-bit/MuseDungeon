@@ -1,18 +1,33 @@
 // 知覚: プレイヤーの視界と知識（knowledge_updated）、モンスターの視認、騒音、起床、モンスターの思い出。
-import type { Entity, FloorKey, MonsterMemory, PlayerId, PlayerRecord, Pos, RememberedEntity, Sense } from '@muse/shared';
+import type { Entity, FloorHint, FloorKey, MonsterMemory, PlayerId, PlayerRecord, Pos, RememberedEntity, Sense } from '@muse/shared';
 import { cheb, compassDir, currentExpedition, indicesToRanges } from '@muse/shared';
 import type { Ctx } from './ctx';
 import { computeFov, hasLos, inCircle, line } from './geom';
 
-/** 投擲の経路が通るか: from から to までの直線上（終点を除く）が通行可能で、他のアクターがいない */
+/**
+ * 投げ物・射撃の経路（始点を含まず終点を含む）。from→to の直線か、to→from の直線を逆にたどったもののうち、
+ * 途中（終点を除く）が通行可能で他のアクターがいない方。どちらも通らなければ null。
+ * 投擲と敵の射撃で同じものを使う（向きで射線が変わらない。V3-2R2 の評価の指摘）
+ */
+export function shotLine(ctx: Ctx, key: FloorKey, from: Pos, to: Pos): Pos[] | null {
+  const ok = (path: Pos[]) => {
+    for (let i = 0; i < path.length; i++) {
+      const p = path[i];
+      if (!ctx.terrainAt(key, p.x, p.y).passable) return false;
+      if (i < path.length - 1 && ctx.actorAt(key, p.x, p.y)) return false;
+    }
+    return true;
+  };
+  const fwd = line(from, to);
+  if (ok(fwd)) return fwd;
+  // to→from の直線（from を含み to を含まない）を逆にして、from を除き to を足す
+  const back = line(to, from).reverse().slice(1).concat([{ x: to.x, y: to.y }]);
+  return ok(back) ? back : null;
+}
+
+/** 投擲の経路が通るか（shotLine の有無） */
 export function shotClear(ctx: Ctx, key: FloorKey, from: Pos, to: Pos): boolean {
-  const path = line(from, to);
-  for (let i = 0; i < path.length; i++) {
-    const p = path[i];
-    if (!ctx.terrainAt(key, p.x, p.y).passable) return false;
-    if (i < path.length - 1 && ctx.actorAt(key, p.x, p.y)) return false;
-  }
-  return true;
+  return shotLine(ctx, key, from, to) !== null;
 }
 
 export function isOpaqueFn(ctx: Ctx, key: FloorKey): (x: number, y: number) => boolean {
@@ -131,12 +146,15 @@ export function updateKnowledge(ctx: Ctx, key: FloorKey): void {
     const sense = senseFor(ctx, pr, key);
     const prevSense = k.sense ?? null;
     const senseChanged = JSON.stringify(sense) !== JSON.stringify(prevSense);
-    if (visChanged || newlySeen.length || rememberedSet.length || rememberedDel.length || met.length || shotsChanged || mappedDel.length || senseChanged) {
+    // 今いる階の手がかり（下への風・探索の進み具合。V3-2R2 §18.4）
+    const hint = floorHintFor(ctx, pr, key, newlySeen, mappedDel);
+    const hintChanged = JSON.stringify(hint) !== JSON.stringify(k.floorHint ?? null);
+    if (visChanged || newlySeen.length || rememberedSet.length || rememberedDel.length || met.length || shotsChanged || mappedDel.length || senseChanged || hintChanged) {
       ctx.emit({
         type: 'knowledge_updated', player: pr.id, floorKey: key,
         visible: visChanged ? indicesToRanges(fov) : null,
         newlySeen, rememberedSet, rememberedDel, metAdd: met, ...(shotsChanged ? { shotsAfter: shots } : {}),
-        ...(mappedDel.length ? { mappedDel } : {}), ...(senseChanged ? { senseAfter: sense } : {}),
+        ...(mappedDel.length ? { mappedDel } : {}), ...(senseChanged ? { senseAfter: sense } : {}), ...(hintChanged ? { hintAfter: hint } : {}),
         // このイベントの seq（emit が world.seq + 1 を振る）を初見の時点として記録する
         ...(met.length ? { metAtAfter: Object.fromEntries(met.map((id) => [id, ctx.world.seq + 1])) } : {}),
         seenBy: [pr.id], floor: key,
@@ -170,6 +188,45 @@ function senseFor(ctx: Ctx, pr: PlayerRecord, key: FloorKey): Sense | null {
   const dir = compassDir(me.pos, tgt.pos);
   if (!dir) return null;
   return { what, dir, range: cheb(me.pos, tgt.pos) <= 10 ? 'near' : 'far' };
+}
+
+/** 探索の進み具合の 4 段階の境界（見た割合 %）: 40 未満 = 約 1/4、65 未満 = 約半分、90 未満 = 約 3/4、それ以上 = ほぼ全て */
+const EXPLORED_BANDS = [40, 65, 90];
+
+/**
+ * 今いる階の手がかり（公開ルール）: 下り階段をまだ見ていなければその 8 方向（遠近は出さない）と、
+ * 通れるマスのうち自分の目で見た割合の 4 段階。未探索の地形そのものは渡さない
+ */
+function floorHintFor(ctx: Ctx, pr: PlayerRecord, key: FloorKey, newlySeen: number[], mappedDel: number[]): FloorHint | null {
+  const me = ctx.world.entities[pr.entityId];
+  const f = ctx.world.floors[key];
+  if (!me?.pos || me.pos.floor !== key || !f) return null;
+  const fk = pr.knowledge.floors[key];
+  const fresh = new Set<number>();
+  for (let j = 0; j < newlySeen.length; j += 2) fresh.add(newlySeen[j]);
+  const known = (i: number) => (fk?.seen[i] ?? 0) !== 0 || fresh.has(i);
+  let draft: FloorHint['draft'] = null;
+  if (f.stairs.down.length && !f.stairs.down.some((s) => known(s.y * f.width + s.x))) {
+    const near = [...f.stairs.down].sort((a, b) => cheb(me.pos!, a) - cheb(me.pos!, b) || a.y - b.y || a.x - b.x)[0];
+    draft = compassDir(me.pos, near);
+  }
+  const prev = pr.knowledge.floorHint;
+  let explored: FloorHint['explored'];
+  if (prev && prev.floor === key && !newlySeen.length && !mappedDel.length) explored = prev.explored;
+  else {
+    const mapped = new Set(fk?.mapped ?? []);
+    for (const i of mappedDel) mapped.delete(i);
+    let total = 0, seen = 0;
+    for (let i = 0; i < f.terrain.length; i++) {
+      const x = i % f.width, y = Math.trunc(i / f.width);
+      if (!ctx.terrainAt(key, x, y).passable && !ctx.terrainAt(key, x, y).door) continue;
+      total++;
+      if (known(i) && !mapped.has(i)) seen++;
+    }
+    const pct = total > 0 ? Math.trunc((seen * 100) / total) : 100;
+    explored = pct < EXPLORED_BANDS[0] ? 1 : pct < EXPLORED_BANDS[1] ? 2 : pct < EXPLORED_BANDS[2] ? 3 : 4;
+  }
+  return { floor: key, draft, explored };
 }
 
 /** モンスターがプレイヤーを視認できるか（プレイヤーの視界と対称、半径外は射線） */

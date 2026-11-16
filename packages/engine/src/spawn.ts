@@ -19,7 +19,7 @@ export function makeMonster(ctx: Ctx, floor: FloorKey, spec: Extract<SpawnSpec, 
   const def = ctx.content.monsters[spec.kind];
   const mods = sumAffixMods(ctx.content, spec.affixes);
   const tier = spec.tier;
-  const maxHp = Math.max(1, floorDiv(spec.hp * (100 + 50 * tier + mods.hpPct), 100));
+  const maxHp = Math.max(1, spec.minHp ?? 0, floorDiv(spec.hp * (100 + 50 * tier + mods.hpPct), 100));
   const base = {
     maxHp,
     acc: def.stats.acc + 2 * tier + mods.acc,

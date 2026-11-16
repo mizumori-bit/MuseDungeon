@@ -52,6 +52,7 @@ turn: {
 - `reason`: `observed` は `observe` と照会ツール、`wait_timeout` は `wait_for_turn` が時間切れになったとき（実装で追加した値）。
 - `changes` のコード（v3。この優先順で最大 8 件）: `floor_changed`, `objective_complete`, `objective_progress`, `can_extract`, `hp_low`, `killed`（自分が倒した）, `died_seen`（目の前で倒れた）, `hp_dropped`, `new_hostile`（このランで初めて見た個体）, `level_up`, `status_gained`, `status_lost`, `item_found`, `stairs_found`, `reappeared`（前に見た個体が再び見えた）, `hostile_gone`（倒れた以外の理由で見えなくなった）。PlayerView・観測と、その間に知覚したイベント（撃破・死亡の区別に使う）から作る（`turnSnapshot` → `diffChanges(prev, cur, view, obs, events)`）。基準は「前回この プレイヤーに turn を返した時点」で、行動ツール・`observe`・`wait_for_turn`・`new_run`・`resume_run` が基準を更新する。照会ツール（`look` 等）の `turn.changes` は常に空。人間向け UI も同じ関数で自分の手番ごとの変化を出す。
 - `objective_complete` は、`slay_guardian` と `retrieve_relic` では「坑が騒がしくなった（この遠征の間、徘徊の湧き間隔が半分）」を添える。遺物を手にした `objective_progress` は「この階の眠っていた敵が目を覚ました」を添える。
+- V3-2R2: 守護者が倒れたら `guardian_slain`（「★ 守護者が倒れた」。優先順の先頭で、テキストではほかの変化と別の行にして先に出す）。
 - V3-2R: 踏破（目標より深い階の下り階段に立った）は `objective_progress`（「地下4階を踏破した」）。今帰った場合の次の候補の下限が変わると `next_camp`（優先順は `objective_progress` の次）。`hostile_gone` は最後に見た位置と、視界の外へ出た一歩の向きを添える（「見えなくなった敵: ゴブリン（最後に見た位置 (5,6)・北東へ）」。向きは知覚した移動から。行き先は出さない）。
 - 末尾の ▶ 行は既定で短縮形（`set_options status_line: short`）。新しいラン・再開・遠征の開始と、`state` が変わった応答では長い形になる。
 
@@ -75,12 +76,12 @@ turn: {
 | ツール | 引数 | 結果 |
 |---|---|---|
 | `expedition` | – | 遠征の目的・達成条件・進捗（ブリーフィング）。キャンプでは次の遠征の候補。手番を消費しない |
-| `extract` | `confirm?: boolean`, 共通引数 | 行動。階段（上り・下り）の上で、追跡中（逃走中を除く）の敵が見えていないときだけ可。目的を達成していれば**帰還**（遠征は `completed`、戦利品 × 倍率を確定）。未達成なら `confirm: true` で**撤退**（`withdrawn`、(戦利品 − 目的) × `withdrawPct`% を確定）。`confirm` が無ければ `confirm_required`。確定する点は観測の `expedition.haul.if_extract_now` と一致する。所持している宝は換金され、達成して持ち帰った遺物は納められ、どちらも所持品から消える |
+| `extract` | `confirm?: boolean`, 共通引数 | 行動。階段（上り・下り）の上なら可（V3-2R2: 追跡中の敵が見えていてもよい。敵は階段を追ってこない）。目的を達成していれば**帰還**（遠征は `completed`、戦利品 × 倍率を確定）。未達成なら `confirm: true` で**撤退**（`withdrawn`、(戦利品 − 目的) × `withdrawPct`% を確定）。`confirm` が無ければ `confirm_required`。確定する点は観測の `expedition.haul.if_extract_now` と一致する。所持している宝は換金され、達成して持ち帰った遺物は納められ、どちらも所持品から消える |
 | `start_expedition` | `offer: 1..n | 'endless'` | キャンプで次の遠征を始める。前回 `extract` した階段から再開する。結果に `briefing`（目的・枠・条件・倍率・戦利品の説明） |
 
-スコア（版 2、v3）: ランのスコア = 確定点（`banked`）の合計。遠征の払い戻しは、帰還 = 戦利品 × 条件の倍率、撤退 = (戦利品 − 目的の基礎点) × `withdrawPct`%（初期値 50）、死亡・引退 = 0（失った戦利品 `lost` として記録）。戦利品の内訳 `HaulParts` は `objective`（達成で基礎点）・`overreach`（踏破: 目標より深い階の**下り階段に立ったとき**。着いただけでは入らない。1 階目 `overreachFirst`、以後 `overreachStep` ずつ増える。V3-2R）・`treasure`（所持している宝の価値）・`bounty`（守護者の賞金）・`discovery`（このランで初めて倒した種族・鑑定したアイテム種）・`kills`（1 体 `perKill`）。宝を除く部分は遠征の参加者で共有し、extract した各自に払い戻す。係数は `balance.json` の `haul`。
+スコア（版 2、v3）: ランのスコア = 確定点（`banked`）の合計。遠征の払い戻しは、帰還 = 戦利品 × 条件の倍率、撤退 = (戦利品 − 目的の基礎点) × `withdrawPct`%（初期値 50）、帰還の綱 = 戦利品（目的は達成済みのときだけ含む）× `lifeline.pct`%（初期値 50。倍率なし。V3-2R2）、死亡・引退 = 0（失った戦利品 `lost` として記録）。結果の段階は 4 つ（階段で帰還・綱で帰還・階段で撤退・死）。戦利品の内訳 `HaulParts` は `objective`（達成で基礎点）・`overreach`（踏破: 目標より深い階の**下り階段に立ったとき**。着いただけでは入らない。n 階目 = 目的の基礎点 × (`overreachPct.first` + `overreachPct.step` × (n − 1))%、下限 `overreachFirst` + `overreachStep` × (n − 1)。V3-2R2）・`treasure`（所持している宝の価値）・`bounty`（守護者の賞金）・`discovery`（このランで初めて倒した種族・鑑定したアイテム種）・`kills`（1 体 `perKill`）。宝を除く部分は遠征の参加者で共有し、extract した各自に払い戻す。係数は `balance.json` の `haul`。
 
-キャンプの候補は 3 枠（`slot`: `safe` 堅実 / `standard` 標準 / `ambitious` 野心）で、目標深度（生成済みの最深階 + 堅実 1・標準 2・野心 3〜4。重ならない）・条件（`expeditionTraits`）の数・基礎点の割合が枠ごとに違う（`balance.expedition.slots`）。目的の種類は 3 枠で別。最初の遠征は 堅実 地下2階・標準と野心 地下3階（`firstTargetDepth`）。条件は目標階までの全階に効く公開の修飾で、倍率は帰還時の戦利品に掛かる（複数なら掛け合わせ）。V3-2R で危険度の 5 段階を廃止し、`recommended_level`・`level_gap`（推奨 − 自分のレベル）・`trait_danger`（条件の危険度の合計）を出す。推奨レベルは公開の表（`balance.expedition.recommendedLevelByDepth`。bot の実測の中央値。表より深い階は直近 4 階の傾きで伸ばす）。
+キャンプの候補は 3 枠（`slot`: `safe` 堅実 / `standard` 標準 / `ambitious` 野心）で、目標深度（生成済みの最深階 + 堅実 1・標準 2・野心 3。重ならない）・条件（`expeditionTraits`）の数・枠の基礎点が枠ごとに違う（`balance.expedition.slots`）。候補の点 = 枠の基礎点（`slots.*.base`: 1600 / 2400 / 3600）× 種類の係数（`typePct`: 到達 100・守護者 120・遺物 120・守護者付きの遺物 135 %）× 深さの係数（`depthPct`: 100 + 5 × 目標深度 %）で、どの組み合わせでも 堅実 < 標準 < 野心（V3-2R2。`offerPoints`）。目的の種類は 3 枠で別。最初の遠征は 堅実 地下2階・標準と野心 地下3階（`firstTargetDepth`）。条件は目標階までの全階に効く公開の修飾で、倍率は帰還時の戦利品に掛かる（複数なら掛け合わせ）。V3-2R で危険度の 5 段階を廃止し、`recommended_level`・`level_gap`（推奨 − 自分のレベル）・`trait_danger`（条件の危険度の合計）を出す。推奨レベルは公開の表（`balance.expedition.recommendedLevelByDepth`。bot の実測の中央値。表より深い階は直近 4 階の傾きで伸ばす）。
 
 以降のツールは MCP 接続に束縛されたプレイヤーに対して作用する。ステートレスなクライアント向けに、全ツールが任意引数 `player_token` も受け付ける。
 
@@ -108,17 +109,17 @@ turn: {
 | ツール | 引数 | 備考 |
 |---|---|---|
 | `move` | `dir` | 敵対者がいれば近接攻撃、閉じた扉は開ける |
-| `wait` | – | 追跡中の敵が見えなければ休息（回復が `restMultiplier` 倍） |
+| `wait` | `turns?: 1..10` | 追跡中の敵が見えなければ休息（回復が `restMultiplier` 倍）。`turns` が 2 以上ならマクロ（V3-2R2）: 敵が新たに見えた（`hostile_in_view`）・起きている敵が隣に来た（`hostile_adjacent`）・攻撃や毒以外の被害・状態異常で止まり、指定の手数で `max_turns` |
 | `rest` | `until_hp?`, `max_turns?` | マクロ。全快（かつ毒が抜ける）か、指定の HP・手数か、中断まで（上限 `rest.maxTurns`） |
 | `explore` | `mode?`, `hp_floor?`, `pickup?`（既定 true） | マクロ。未見の区画（地図の巻物で地形だけ知った区画を含む）へ自動移動。pickup なら通り道と見えている・記憶したアイテムも拾う（遺物と鑑定済みの有害品は拾わない） |
 | `travel_to` | `to: {x,y} | 'stairs_down' | 'stairs_up' | entity_id`, `mode?`, `hp_floor?`, `pickup?` | マクロ。既知地図上のみ。目的地がアイテムなら着いて拾う |
 | `collect` | `what?: 'thrown'|'items'`, `mode?`, `hp_floor?` | マクロ（v3）。`thrown`（既定）は既知の自分が投げた物、`items` は見えている・記憶したアイテムを近い順に回って拾う。結果に `collected: { picked, remaining }` |
-| `fight` | `target: entity_id`, `hp_floor?` | マクロ（V3-2R）。隣の相手に近接攻撃を繰り返す。相手が倒れた（`target_down`）・離れた（`target_moved`）・HP が `hp_floor`（既定 50%）未満・追跡中の別の敵・状態異常で止まる。結果の `outcome` に与えた攻撃の回数・命中・合計 |
+| `fight` | `target: entity_id`, `with?: slot`, `hp_floor?` | マクロ（V3-2R、V3-2R2 で拡張）。その相手と決着を付ける。`with` なし: 隣なら近接攻撃を繰り返す。相手が追跡中で届かない間は隣に来るまで待つ（最大 10 手番、`target_not_approaching`）。当てて逃げる相手は追跡中で 2 マス以内なら 2 手番まで待つ（追わない）。`with`: そのスロットの品を投げて戦う（射程と射線が通るまで待つ）。止まるのは: 相手が倒れた（`target_down`）・離れた／逃げて射程を出た（`target_moved`）・見えなくなった（`target_gone`）・（`with`）隣に来た（`target_adjacent`）・品が尽きた（`out_of_ammo`）・射線が 3 手番続けて通らない（`no_line_of_sight`）・HP が `hp_floor`（既定 50%）未満・追跡中の別の敵・状態異常。眠っている・気付いていない相手は待たない（`target_not_hunting` で拒否）。結果の `outcome` に与えた攻撃（投げた）回数・命中・合計・待った手番 |
 | `pickup` | `item?: entity_id` | 省略時は足元の全て（入る分だけ） |
 | `drop` | `slot`, `qty?` | |
 | `equip` / `unequip` | `slot` | |
-| `use_item` | `slot`, `target?: dir | {x,y} | entity_id`, `target_slot?` | `target_slot`: 鑑定の巻物で鑑定する品（省略時はスロット順で最初の未鑑定品。読んだ巻物自身の種類は除く）。引数の形が合わないときもゲームのエラー形式（`bad_request`・hint・valid_actions）で返す |
-| `throw_item` | `slot`, `target: {x,y} | entity_id` | ID 指定で投擲の経路が通らない相手は `no_line_of_sight`、射程外は `out_of_range`（どちらも手番も品物も失わない。観測の `shots`）。座標指定は遮られた位置か射程の端に落ちる。結果は必ず 命中 / 外れ / 遮られた / 届かない / 誰もいない と落下地点で書く。自分が投げた物はそのマスに入るだけで拾う（追加の手番なし） |
+| `use_item` | `slot`, `target?: dir | {x,y} | entity_id`, `target_slot?` | 帰還の綱（`core:lifeline`。V3-2R2）は使うと `lifeline.turns`（2）手番のあいだ行動できず（状態 `core:recall`、その間も攻撃は受ける）、切れるとキャンプへ戻る。1 回の呼び出しで最後まで進む。遠征の開始時にキャンプが 1 本にそろえる。捨てる・投げることはできず（`cannot_use`）、所持数に数えない。`target_slot`: 鑑定の巻物で鑑定する品（省略時はスロット順で最初の未鑑定品。読んだ巻物自身の種類は除く）。引数の形が合わないときもゲームのエラー形式（`bad_request`・hint・valid_actions）で返す |
+| `throw_item` | `slot`, `target: {x,y} | entity_id` | 投擲の経路は双方向（自分→相手の直線か、相手→自分の直線を逆にたどったもののうち通る方。敵の射撃も同じ経路。V3-2R2）。ID 指定で経路が通らない相手は `no_line_of_sight`、射程外は `out_of_range`（どちらも手番も品物も失わない。観測の `shots`）。座標指定は遮られた位置か射程の端に落ちる。結果は必ず 命中 / 外れ / 遮られた / 届かない / 誰もいない と落下地点で書く。自分が投げた物はそのマスに入るだけで拾う（追加の手番なし） |
 | `interact` | `dir?` | 扉の開閉、地物の操作。省略時は足元 |
 | `use_stairs` | – | 足元の階段 |
 | `say` | `text` | COOP 用チャット。手番を消費しない |
@@ -130,7 +131,8 @@ ActionResult {
   ok: true
   outcome: string                 // 1〜2 文の結果要約
   steps?: number                  // マクロで実際に進んだ手数
-  interrupted_by?: string         // マクロの停止理由 'hostile_in_view' | 'hostile_alerted'（見えている敵が追跡に変わった）| 'hostile_adjacent' | 'attacked' | 'damaged' | 'blocked' | 'stairs_seen' | 'hp_floor' | 'hp_threshold' | 'arrived' | 'explored' | 'collected' | 'target_down' | 'target_moved' | 'target_gone' | 'full_hp' | 'target_hp' | 'max_turns' | ...
+  interrupted_by?: string         // マクロの停止理由 'hostile_in_view' | 'hostile_alerted'（見えている敵が追跡に変わった）| 'hostile_adjacent' | 'attacked' | 'damaged' | 'blocked' | 'stairs_seen' | 'hp_floor' | 'hp_threshold' | 'arrived' | 'explored' | 'collected' | 'target_down' | 'target_moved' | 'target_gone' | 'full_hp' | 'target_hp' | 'max_turns'
+                                  // V3-2R2 の fight: 'target_adjacent' | 'out_of_ammo' | 'not_throwable' | 'no_line_of_sight' | 'target_not_approaching' | 'target_not_hunting' | ...
   distance?: number               // explore / travel_to: 歩いた手数
   time_elapsed?: number | null    // explore / travel_to: 経過したフロア時間（階を移ったら null）
   rest?: { hp_gained, turns, time_elapsed, stopped_by }   // rest の実績
@@ -145,9 +147,11 @@ ActionResult {
 - `outcome` には、その行動から次の自分の手番までに受けた攻撃の回数・命中数・合計ダメージ・HP の前後を必ず書く（v3。「3 回攻撃を受け、2 回命中・合計 9 ダメージ（HP 23→15、回復 +1）、外れ 1 回」）。数えるのはその間の自分が対象の `attack`・`damaged`・`healed` で、合計 − 回復 = HP の差。毒・罠などのダメージが混ざるときは「（攻撃 X・毒など Y、HP a→b）」と分ける。
 - 移動マクロ（`explore`・`travel_to`・`collect`）の `mode`（V3-2R）:
   - `careful`（既定）: 初見の**種族**・追跡中（逃走中を除く）で自分に届く敵の出現・見えている敵が追跡に変わった・攻撃を受けた（外れも含む、`attacked`）・毒以外のダメージ・状態異常・HP が 50%／25% をまたいだ（`hp_threshold`）・階段の発見（explore）で止まる。既知の種族の眠っている・気づいていない個体、隣にいない動かない敵、毒の継続ダメージ、アイテムの発見では止まらない（`changes` には出る）。隣に起きている敵（逃走中を除く）がいれば動かない
-  - `steady`: 追跡中の敵が隣接した・初見の種族・HP が `hp_floor`（既定 最大 HP の 50%）未満で止まる
+  - `steady`: 追跡中の敵が隣接した・初見の種族・HP が `hp_floor`（既定 最大 HP の 50%）未満・その階の下り階段を初めて見た（`stairs_seen`。V3-2R2）で止まる
   - `flee`: 到着・進路をふさがれた・HP が `hp_floor`（既定 25%）未満で止まる。隣に敵がいても動く（退却）
-  - どの mode も 1 歩ずつ通常の `move` として記録し、敵は通常どおり攻撃する。マクロは攻撃しない（次のマスに敵がいれば `blocked`）。`rest` は敵が視界に入ると状態によらず止まる（動かない敵は隣にいなければ休息を妨げない）
+  - どの mode も 1 歩ずつ通常の `move` として記録し、敵は通常どおり攻撃する。マクロは攻撃しない（次のマスに敵がいれば `blocked`）。`rest` は敵が視界に入ると状態によらず止まる（動かない敵は隣にいなければ休息を妨げない。V3-2R2: すでに見た個体が逃げながら視界を出入りしても止まらない）
+  - careful と steady は、その階の下り階段を初めて見たときにも止まる（`stairs_seen`。flee は止まらない。V3-2R2）。経路探索は、見えている動かない敵の隣のマスを罠と同じく避ける（ほかに道が無ければ通る）
+  - `valid_actions` の `fight` と `mode:steady` の行には、既定の `hp_floor` の実数を書く（「HP 24 未満で止まる」）
 - **0 歩で終わる呼び出しは作らない**: 実行前に 1 歩も進めないと分かれば、手番を使わずに理由付きのエラー（`hostile_adjacent`・`hostile_in_view`・`hp_floor`・`blocked`・`unreachable`・`unknown_destination`・`nothing_to_do`）で返す。`valid_actions` にはその場で進める mode だけを出す（隣に敵がいれば `travel_to stairs_up mode:flee` と `fight <id>`）。
 - 行動ツールは「次に自分の手番が来る」か「遠征・ランが終わる」まで待ってから返る。
 - COOP で他プレイヤー待ちが 20 秒を超えたら `turn.state = 'waiting_others'` で一旦返す。その場合は `wait_for_turn` で手番が来るまで待てる。
@@ -163,25 +167,30 @@ Observation {
   seq: number
   status: 'your_turn' | 'waiting_others' | 'dead' | 'ended' | 'at_camp'
   summary: string                      // 1 行の現況
-  alerts: Alert[]                      // 重要度順。例 { code:'enemy_adjacent', text, entity? }
+  alerts: Alert[]                      // 重要度順。例 { code:'enemy_adjacent', text, entity?, data? }（data: incoming / escape の数値。V3-2R2）
   self: {
     name, class, level, xp, xp_next
     hp, max_hp, statuses: {id, turns_left}[]
-    pos: {x,y}, floor: { depth, biome_name, time }
+    pos: {x,y}, floor: { depth, biome_name, time, draft?: Dir, explored?: 1|2|3|4, hint_text? }
+                                    // draft: 下への風（今いる階の下り階段を見ていない間の 8 方向。遠近は出さない）、explored: 通れるマスのうち見た割合の 4 段階（約 1/4・半分・3/4・ほぼ全て）。V3-2R2
     equipment: { weapon?, armor?, accessory? }     // 表示名
     attack: { acc, dmg, throws?: { slot, name, dmg: string|null, acc, range }[] }, defense: { eva, armor }   // throws: 投げられる持ち物（acc は自分の命中込み。V3-2R）
-    inventory_count, inventory_capacity
+    inventory_count, inventory_capacity   // inventory_count は手放せない品（帰還の綱）を数えない
     inventory?: { slot, name, qty, category, identified, equipped, value?, stats? }[]   // full のみ。value は宝の価値、stats は鑑定済みの性能（weapon {dmg,acc} / armor {armor,eva} / throw {dmg,acc,range}。接辞込み）
     inventory_brief?: string        // brief のみ（例 "a)小剣*[1d6・命中+1] c)投げナイフx8[投擲1d4+1・射程7・命中+1]"。* は装備中）
     turns: number                   // 自分が行動した手番数
     speed: number                   // 実効の速さ（標準 100。状態異常込み。v3）
     score: { banked, expeditions_completed }   // 確定済みの点と達成した遠征の数（v3）
-    rest_estimate?: { hp_to_full, turns, time, wander_expected: string /* 例 "0〜1" */, blocked_by?: 'poisoned' }  // HP が減っていて、休めるときのみ（追跡中の敵が見えている間は出さない。V3-2R）
+    rest_estimate?: { hp_to_full, turns, time, wander_expected: string /* 例 "0〜1" */, blocked_by?: 'poisoned', lowest_hp?: number /* 毒のとき、抜けるまでの最低 HP（V3-2R2） */ }  // HP が減っていて、休めるときのみ（追跡中の敵が見えている間は出さない。V3-2R）
   }
   visible: {
     monsters: { id, name, pos, dir, dist, hp_state: 'healthy'|'wounded'|'badly_wounded'|'near_death',
                 awareness: 'asleep'|'unaware'|'hunting', threat: 1|2|3|4|5|null, statuses,   // null: 攻撃を受けた記録が無い種族（不明・初見。V3-2R）
                 worst_hit: number|null,                       // その種族から受けた最大の一撃（会心を見ていれば会心の値）
+                speed: 'slow'|'normal'|'fast',                // 自分の今の速さとの比較（見れば分かる。V3-2R2）
+                traits: ('pack'|'ranged'|'stationary')[],      // 見れば分かる特徴（種族の公開タグ。V3-2R2）
+                first_seen?: true,                            // 本当に初めて見た種族（threat null の文が「不明（初見）」になる）
+                hits?: { your_melee?: [hits, tries], your_thrown?: [hits, tries], theirs?: [hits, tries] },   // 命中の記録（種族ごと。確率は出さない）
                 role?: 'guardian', fleeing?: true,            // 守護者 / 手負いで逃走中
                 damage_seen?: number,                         // 見ている間にこの個体が受けた実ダメージの合計
                 hp_left_est?: { min, max: number | null, samples, record: { min, max } },   // 体力の記録がある種族のみ。記録が estimateMinSamples（5）体未満は max: null。record は記録した個体の体力の範囲（標本）
@@ -190,6 +199,7 @@ Observation {
                 bounty?: number }[]                           // 倒すと戦利品に入る賞金（v3）
     items:    { id, ids?, name, pos, dir, dist, qty, role?: 'relic', remembered?, mine?: true, value? }[]
               // 同じセルの同種は 1 行（ids に全て）。mine = 自分が投げた物、value = 宝の価値（v3）
+              // 自分が投げた物は見えている・記憶したものを全部で 1 行にまとめる（qty = 本数、pos = 最寄り、ids = 全て。V3-2R2）
     items_omitted?: number          // 記憶の中の遠いアイテムのうち省いた件数
     players:  { id, name, pos, dir, dist, hp_state }[]
     features: { type, pos, dir, dist, state? }[]   // 階段・扉・泉・発見済みの罠 など
@@ -206,7 +216,7 @@ Observation {
     objective: { type: 'reach_depth'|'slay_guardian'|'retrieve_relic'|'endless', target_depth: number|null, text }
     progress: { depth, target_depth, reached?, guardian_slain?, relic_held? }
     can_extract: boolean               // 今この場で extract できるか
-    extract_blocked_by?: 'not_on_stairs' | 'hostile_hunting' | 'not_your_turn' | 'ended'
+    extract_blocked_by?: 'not_on_stairs' | 'not_your_turn' | 'ended'   // V3-2R2: 追跡中の敵が見えていても止めない
     extract_outcome: 'complete' | 'withdraw'   // 今 extract したら達成か撤退か
     text: string                       // 1 行の要約
     result?: { reason, points, deepest, kills, turns, text }   // 終了した遠征
@@ -214,8 +224,10 @@ Observation {
     haul?: {                           // 未確定の戦利品（v3）
       total, multiplier_pct, parts: { objective, overreach, treasure, bounty, discovery, kills }
       if_extract_now: number           // 今 extract したら確定する点（帰還なら × 倍率、撤退なら (total − objective) × withdrawPct%）
-      next_overreach: { depth, points, at: 'stairs_down', path_len: number|null } | null   // 次に踏破の点が入る階（その階の下り階段に立てば入る）。今いる階なら既知の下り階段までの経路長
+      if_lifeline_now?: number         // 帰還の綱を今使った場合の確定点（綱を持っているときだけ。V3-2R2）
+      next_overreach: { depth, points, at: 'stairs_down', path_len: number|null, dir?: Dir } | null   // 次に踏破の点が入る階（その階の下り階段に立てば入る）。今いる階なら既知の下り階段までの経路長、未発見なら下への風の方角 dir
       next_camp: { min_target_depth, recommended_level } | null   // 今帰った場合の次の候補の下限と推奨レベル（潜るほど深くなる）
+      next_camp_after_crossing?: { min_target_depth, recommended_level } | null   // 次の踏破をしてから帰った場合（V3-2R2）
       text: string                     // 戦利品の 1 行（テキストでは遠征の行に続けて 1 行にする）
     }
     sense?: { what: 'guardian'|'relic', dir, range: 'far'|'near', text }   // 目標階にいる間の気配（10 マス以内が near。正確な位置は出さない。V3-2R）
@@ -229,12 +241,16 @@ Observation {
 ```
 
 - `threat` は「自分の現在 HP」と「思い出にある観測済み最大ダメージ／未知なら深度からの控えめな推定」から出す。PlayerView 外の値は使わない。
-- `alerts` の主なコード: `low_hp`, `critical_hp`, `enemy_adjacent`, `multiple_enemies`, `poisoned`, `on_stairs`, `item_here`, `inventory_full`, `new_floor`, `can_extract`, `at_camp`。人間向け UI にも同じものを表示する。`alerts` は現在の状態、`turn.changes` は前回からの差分。
+- `alerts` の主なコード: `low_hp`, `critical_hp`, `enemy_adjacent`, `incoming`, `lethal_range`, `escape`, `poisoned`, `on_stairs`, `item_here`, `inventory_full`, `new_floor`, `can_extract`, `at_camp`。
+  - `incoming`（V3-2R2。`multiple_enemies` を置き換え）: 自分に届く追跡中の敵（逃走中を除く。動かない敵は隣にいるときだけ）が 2 体以上。`data: { hunting, worst_sum, unrecorded, hp }`。worst_sum は種族ごとの `worst_hit` を個体ごとに足したもの（思い出の記録だけ）。
+  - `lethal_range`: 追跡中の敵の `worst_hit`、または記録のある追跡中の敵の `worst_hit` の合計が今の HP 以上。
+  - `escape`（V3-2R2）: 追跡中の敵が見えていて、既知の階段に辿り着けるとき（階段の上では出さない）。`data: { stairs: 'up'|'down', path_len, faster }`（faster = 自分より速い追跡中の敵の数）。人間向け UI にも同じものを表示する。`alerts` は現在の状態、`turn.changes` は前回からの差分。
 - `hp_left_est` は思い出の `hpSeen`（目の前で倒した個体の最大 HP の範囲。守護者は除く）、`hp_state`、`damage_seen` だけから計算する（`hpLeftEstimate`）。記録の範囲と矛盾する（接辞・深層強化で頑丈な）個体には付かない。
 - `rest_estimate` は engine と同じ式（`regenInterval`・`regenStep`）と自分の回復の蓄積値（`self.regen`）で数える。中断が無ければ `rest` の実績と一致する。
 - `fleeing`: 逃走の閾値（種族データの `fleeBelowHpPct`）を下回った追跡中の敵。逃走中の敵は `extract` と休息を妨げない。
 - 目安: brief は約 400 トークン以内、full は約 1,500 トークン以内。`map` は brief では既定で付け、`new_run` のオプション `brief_map: false` で外せる。
 - 地図（v3）: モンスターは種族ごとに固定の 1 文字（content の `glyph`。一意）。テキストでは上の 2 行が x 座標の 10 の位・1 の位、行頭が y 座標の目盛り。`get_map` も同じ。
+- 帰還の綱を持っていれば `valid_actions` に「use_item <slot>（帰還の綱: 2 手番動けずにキャンプへ戻る・+N 確定・追跡中の記録の最大被害 …）」。投擲の候補があれば「fight <id> with:<slot>（投擲で決着まで）」、追跡中で届かない相手がいれば「fight <id>（迎え撃つ）」を足す（V3-2R2）。
 - 投擲の候補（`valid_actions`）は、射程内で経路が通る相手だけを、自分を攻撃している相手から順に最大 3 件出す。有害と分かっている薬（`harmful`）は使う代わりに投げる候補になる。自分が投げた物を知っていれば `collect` が出る。
 - 推定残り HP の文章: 記録が足りない間は「3 以上（記録 1 体）」のように下限だけを書く。
 - キャンプの観測テキストは、遠征の観測の欄（見えるもの・地図など）を出さず、確定点・前回の払い戻し・候補（枠・倍率・危険度・推奨レベル）だけを書く。
@@ -285,10 +301,11 @@ PlayerView {
   deepestDepth: number
   record: { banked, lost, expeditions }   // スコア版 2 の確定点・失った戦利品・達成した遠征の数（v3）
   sense: { what, dir, range } | null      // 目標の気配（V3-2R）。memory.unsighted?: number[]（地形は知っているが見ていないセル）
+  floorHint: { floor, draft: Dir | null, explored: 1|2|3|4 } | null   // 今いる階の手がかり（engine が計算して knowledge に書く。V3-2R2）
 }
 ```
 
-`EntityView` は v2 で `role?: 'guardian'|'relic'`、`damageSeen?`（モンスター）、`fleeing?` を持つ。v3 で `shot`（投擲の経路）、`firstSeenSeq`（このランで初めて見た seq）、`mine`（自分が投げた物）、`value`（宝）、`bounty`（賞金）を足した。`ExpeditionView` は v3 で `slot`・`traits`・`multiplierPct`・`haul`（共有の賞金・発見・撃破）・`maxDepth` を持つ。目的・深追い・宝の点は観測側で公開の式から計算する。
+`EntityView` は v2 で `role?: 'guardian'|'relic'`、`damageSeen?`（モンスター）、`fleeing?` を持つ。V3-2R2 でモンスターに `speed`（素の速さ。見れば分かる性質。観測では自分との比較の 3 段階にする）を足した。v3 で `shot`（投擲の経路）、`firstSeenSeq`（このランで初めて見た seq）、`mine`（自分が投げた物）、`value`（宝）、`bounty`（賞金）を足した。`ExpeditionView` は v3 で `slot`・`traits`・`multiplierPct`・`haul`（共有の賞金・発見・撃破）・`maxDepth` を持つ。目的・深追い・宝の点は観測側で公開の式から計算する。
 
 `ItemView.kind` は未鑑定なら `null` で、代わりに `appearanceId`（外見の ID。content で定義）と `appearance`（その表示名。例 "赤い薬"）を持つ。視界内の床にある未鑑定アイテム（`EntityView`）も同様。人間向けの描画は `appearanceId` で画像を引く（[ASSET_SPEC.md](ASSET_SPEC.md) §7.4）。
 
@@ -346,7 +363,7 @@ EventBase {
 | | `objective_progress` | no, progressAfter, statusAfter, targetsAfter?, extractedAfter?（守護者・遺物の ID を含むので**俯瞰専用**） |
 | | `objective_completed` | no, objective |
 | | `haul_changed` | no, haulAfter（賞金・発見・撃破の after 値）, gains, reasons（v3。参加者に渡す。文章にするのは賞金と発見だけ） |
-| | `expedition_ended` | no, reason（completed/withdrawn/died/retired）, result, summary（ラン継続中はシード無し） |
+| | `expedition_ended` | no, reason（completed/withdrawn/lifeline/died/retired）, result, summary（ラン継続中はシード無し） |
 | メタ | `thought` | player, text（状態は変えない） |
 | | `chat` | player, text |
 | 追加 | `player_state` / `player_stats` | プレイヤーの生死・離脱 / 撃破数・到達深度・死因 |
@@ -383,6 +400,16 @@ V3-2R で足した項目（同じく後方互換。会心と経験値のルー�
 - `StatusInst.source`（状態異常を与えた者。毒で倒したときの撃破者になる）、`status_applied.targetAffixes`
 - `player_state.reason: 'joined'`（キャンプから始まる参加）。参加コマンドの `atCamp`
 - プレイヤー向けの射影で、見えていた個体が視界の外へ動いた `entity_moved` に `dirOut`（向きだけ。行き先は伏せたまま）
+
+V3-2R2 で足した項目（同じく後方互換。転移・守護者の選び方・群れの数で乱数の使い方が、候補と踏破で点の式が変わったので `engineVersion` は 0.4.0）:
+
+- `item_issued { actor, item, kind, qty, reason }`（キャンプが持たせた品＝帰還の綱。状態変化は put/del。本人にだけ渡す）
+- `knowledge_updated.hintAfter`（今いる階の手がかり `{ floor, draft, explored }` の after 値。変化したときだけ）
+- `monster_memory_updated.memoryAfter.hitsByYou { melee?, thrown? }` / `hitsOnYou`（[命中, 回数]。相手が見えているときだけ数える）
+- `objective_progress.extractedAfter[].lifeline`、`expedition_ended.reason: 'lifeline'`、`player_state.reason: 'lifeline'`
+- 状態異常 `core:recall`（帰還中。行動不能、切れるとキャンプへ）
+- `died` を見ていない者には `id`・`pos`・`maxHp` に加えて `kind`・`affixes` も伏せる（視界外で毒が倒した相手は「何か」）。射影で、自分が対象でない `via: 'poison'` の `damaged` は対象が伏せられていれば落とす（視界外の相手の体力・名前を出さない）
+- エンティティの `SpawnSpec.minHp`（守護者の体力の下限。生成の内部）
 
 プレイヤーに渡す際は `filterEventsForPlayer(events, playerId, view)` を通す: `seenBy` に含まれないものを落とし、見えていないエンティティ参照を `null` にし、`knowledge_updated` 等の他人向け・内部用イベントを除く。`PerceivedEvent` はそれに `text`（`narrate` の出力）を付けたもの。
 

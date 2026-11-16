@@ -88,7 +88,13 @@ const STOP_TEXT: Record<string, [string, string]> = {
   hp_threshold: ['HP が 50%・25% の線をまたいだ', 'HP crossed the 50% / 25% line'],
   target_down: ['相手が倒れた', 'the target fell'],
   target_gone: ['相手が見えなくなった', 'the target is out of sight'],
-  target_moved: ['相手が隣から離れた', 'the target moved away'],
+  target_moved: ['相手が離れた（逃げた・射程を出た）', 'the target moved away (fled or left range)'],
+  target_adjacent: ['相手が隣に来た（近接で続けるなら fight { target }）', 'the target is adjacent (continue in melee with fight { target })'],
+  out_of_ammo: ['投げる物が尽きた', 'nothing left to throw'],
+  not_throwable: ['そのスロットの品は投げられない', 'that slot holds nothing throwable'],
+  no_line_of_sight: ['射線が 3 手番続けて通らなかった', 'no clear line for 3 turns'],
+  target_not_approaching: ['相手が近づいてこない（待つ上限）', 'the target is not coming (wait limit)'],
+  target_not_hunting: ['相手はあなたを追っていない', 'the target is not hunting you'],
   damaged: ['ダメージを受けた', 'you took damage'],
   item_seen: ['新しいアイテムを見つけた', 'you spotted a new item'],
   stairs_seen: ['階段を見つけた', 'you found stairs'],
@@ -99,7 +105,7 @@ const STOP_TEXT: Record<string, [string, string]> = {
   step_limit: ['1 回の手数の上限に達した', 'reached the step limit'],
   full_hp: ['HP が全快した', 'HP is full'],
   target_hp: ['指定した HP に達した', 'reached the requested HP'],
-  max_turns: ['指定した手数を休んだ', 'rested for the requested turns'],
+  max_turns: ['指定した手数に達した', 'reached the requested turns'],
   status_changed: ['状態異常が変化した', 'a status effect changed'],
   not_your_turn: ['手番ではない', 'not your turn'],
   waiting_others: ['他プレイヤーの手番待ち', 'waiting for other players'],
@@ -119,8 +125,8 @@ const LONG_REASONS: ReadonlySet<TurnReason> = new Set<TurnReason>(['run_started'
  * 自分が受けた攻撃と被害の合計。行動から次の自分の手番までのイベント（自分が対象のものだけ）から数える。
  * 知覚ログ（文章のある出来事）は通常の命中の attack を持たないので使わない。
  */
-function harmSummary(events: readonly GameEvent[], selfId: string): { hits: number; misses: number; total: number; other: number; healed: number } {
-  let hits = 0, misses = 0, total = 0, other = 0, healed = 0;
+function harmSummary(events: readonly GameEvent[], selfId: string): { hits: number; misses: number; total: number; other: number; healed: number; levelHp: number } {
+  let hits = 0, misses = 0, total = 0, other = 0, healed = 0, levelHp = 0;
   for (const ev of events) {
     if (ev.type === 'attack' && ev.target === selfId) { if (ev.hit) hits++; else misses++; }
     if (ev.type === 'damaged' && ev.target === selfId) {
@@ -129,14 +135,16 @@ function harmSummary(events: readonly GameEvent[], selfId: string): { hits: numb
       if (ev.via !== 'melee' && ev.via !== 'ranged' && ev.via !== 'thrown') other += d;
     }
     if (ev.type === 'healed' && ev.target === selfId) healed += ev.amount;
+    // レベルアップで増えた最大 HP（同じだけ HP も増える。回復とは別に書く）
+    if (ev.type === 'level_up' && ev.target === selfId) levelHp += ev.gains?.maxHp ?? 0;
   }
-  return { hits, misses, total, other, healed };
+  return { hits, misses, total, other, healed, levelHp };
 }
 
-/** HP の前後（回復が混ざったら添える） */
-function hpDelta(L: Locale, before: number, after: number, total: number): string {
-  const regen = after - (before - total);
-  const extra = regen > 0 ? t(L, `、回復 +${regen}`, `, healed +${regen}`) : '';
+/** HP の前後（回復・レベルアップが混ざったら添える） */
+function hpDelta(L: Locale, before: number, after: number, total: number, levelHp = 0): string {
+  const regen = after - (before - total) - levelHp;
+  const extra = (regen > 0 ? t(L, `、回復 +${regen}`, `, healed +${regen}`) : '') + (levelHp > 0 ? t(L, `、レベルアップ +${levelHp}`, `, level up +${levelHp}`) : '');
   return t(L, `HP ${before}→${after}${extra}`, `HP ${before}→${after}${extra}`);
 }
 
@@ -271,15 +279,26 @@ export class SessionPlayerPort implements PlayerPort {
       let swings = 0, hits = 0, dealt = 0;
       for (const e of r.events) {
         if (e.type === 'attack' && e.attacker === view.self.id && e.target === cmd.target) { swings++; if (e.hit) hits++; }
+        // 投擲で戦った（with）: 投げた数と当たった数
+        if (e.type === 'item_thrown' && e.actor === view.self.id) { swings++; if (e.hit === cmd.target) hits++; }
         if (e.type === 'damaged' && e.source === view.self.id && e.target === cmd.target) dealt += e.dealt ?? e.amount;
       }
-      outcome += ' ' + t(L, `${swings} 回攻撃し ${hits} 回命中・合計 ${dealt} ダメージを与えた。`, `Swung ${swings} times, ${hits} hit for ${dealt} total.`);
+      const waits = Math.max(0, (r.steps ?? 0) - swings);
+      const verb = cmd.with ? t(L, '投げ', 'threw') : t(L, '攻撃し', 'swung');
+      outcome += ' ' + t(L, `${swings} 回${verb} ${hits} 回命中・合計 ${dealt} ダメージを与えた${waits ? `（待った手番 ${waits}）` : ''}。`,
+        `${cmd.with ? 'Threw' : 'Swung'} ${swings} times, ${hits} hit for ${dealt} total${waits ? ` (waited ${waits} turns)` : ''}.`);
+    }
+    // 帰還の綱で戻った: 確定点
+    const lifelined = r.events.some((e) => e.type === 'player_state' && e.player === this.playerId && e.reason === 'lifeline');
+    if (lifelined) {
+      const pay = view.expedition?.result?.payout?.players.find((x) => x.player === this.playerId);
+      outcome = t(L, `帰還の綱でキャンプへ戻った${pay ? `。確定 +${pay.banked}` : ''}。`, `The lifeline pulled you back to camp${pay ? `. Banked +${pay.banked}` : ''}.`) + ' ' + outcome;
     }
     const harm = harmSummary(r.events, view.self.id);
     // 攻撃によるダメージと、毒・罠などのダメージを分けて書く
     const split = harm.other && harm.other < harm.total ? t(L, `攻撃 ${harm.total - harm.other}・毒など ${harm.other}、`, `attacks ${harm.total - harm.other}, poison etc. ${harm.other}; `)
       : harm.other && (harm.hits || harm.misses) ? t(L, `攻撃 0・毒など ${harm.other}、`, `attacks 0, poison etc. ${harm.other}; `) : '';
-    const hpText = split + hpDelta(L, before.self.stats.hp, view.self.stats.hp, harm.total);
+    const hpText = split + hpDelta(L, before.self.stats.hp, view.self.stats.hp, harm.total, harm.levelHp);
     if (harm.hits || harm.misses) {
       outcome += ' ' + t(L,
         `${harm.hits + harm.misses} 回攻撃を受け、${harm.hits} 回命中・合計 ${harm.total} ダメージ（${hpText}）${harm.misses ? `、外れ ${harm.misses} 回` : ''}。`,
@@ -334,7 +353,7 @@ export class SessionPlayerPort implements PlayerPort {
       lines.push(...briefingLines(L, x, this.catalog.rules));
       lines.push(t(L, `進捗: ${progressText(L, x, view.floor?.depth ?? null)}`, `Progress: ${progressText(L, x, view.floor?.depth ?? null)}`));
     } else if (view.status === 'at_camp') {
-      if (x?.result) lines.push(resultText(L, x));
+      if (x?.result) lines.push(resultText(L, x, this.catalog.rules));
       lines.push(...campLines(L, view, this.catalog.rules));
     } else if (!x) {
       lines.push(t(L, '遠征は設定されていない（目的なし）。', 'No expedition is set (no objective).'));
