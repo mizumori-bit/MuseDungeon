@@ -9,7 +9,7 @@ import type { ExpeditionView, PlayerView } from './view';
 export function objectiveText(L: Locale, o: Objective): string {
   const d = o.targetDepth;
   switch (o.type) {
-    case 'reach_depth': return t(L, `地下${d}階に到達し、階段から帰還する`, `Reach depth ${d}, then extract from any stairs`);
+    case 'reach_depth': return t(L, `地下${d}階を踏破し（その階の下り階段に着き）、階段から帰還する`, `Cross depth ${d} (reach its down stairs), then extract from any stairs`);
     case 'slay_guardian': return t(L, `地下${d}階の守護者を倒し、階段から帰還する`, `Slay the guardian on depth ${d}, then extract from any stairs`);
     case 'retrieve_relic': return t(L, `地下${d}階の遺物を見つけ、持ったまま階段から帰還する`, `Find the relic on depth ${d} and extract from any stairs while carrying it`);
     default: return t(L, '目的なし。できるだけ深く潜る', 'No objective: descend as deep as you can');
@@ -18,7 +18,7 @@ export function objectiveText(L: Locale, o: Objective): string {
 
 export function conditionText(L: Locale, o: Objective): string {
   switch (o.type) {
-    case 'reach_depth': return t(L, `地下${o.targetDepth}階に着く → いずれかの階段の上で extract`, `Arrive on depth ${o.targetDepth} → extract while standing on any stairs`);
+    case 'reach_depth': return t(L, `地下${o.targetDepth}階の下り階段に着く（着いただけでは達成しない）→ いずれかの階段の上で extract`, `Stand on the down stairs of depth ${o.targetDepth} (arriving is not enough) → extract while standing on any stairs`);
     case 'slay_guardian': return t(L, '守護者を倒す → いずれかの階段の上で extract', 'Slay the guardian → extract while standing on any stairs');
     case 'retrieve_relic': return t(L, '遺物を拾う → 持ったままいずれかの階段の上で extract', 'Pick up the relic → extract on any stairs while carrying it');
     default: return t(L, '達成条件なし（階段の上で extract(confirm) すると撤退として終わる）', 'No completion condition (extract(confirm) on stairs ends it as a withdrawal)');
@@ -37,12 +37,14 @@ export function endReasonText(L: Locale, r: ExpeditionEndReason | null): string 
 }
 
 /** 開始時・再開時のブリーフィング（§2.6） */
-export function briefingLines(L: Locale, x: ExpeditionView, rules?: Pick<CatalogRules, 'traits'>): string[] {
+export function briefingLines(L: Locale, x: ExpeditionView, rules?: Pick<CatalogRules, 'traits'> & Partial<Pick<CatalogRules, 'lifeline'>>): string[] {
+  const lt = rules?.lifeline?.turns ?? 0;
   const lines = [
     t(L, `【遠征 ${x.no}】目的: ${objectiveText(L, x.objective)}`, `[Expedition ${x.no}] Objective: ${objectiveText(L, x.objective)}`),
     t(L, `達成条件: ${conditionText(L, x.objective)}`, `Completion: ${conditionText(L, x.objective)}`),
     t(L, '撤退: 階段の上で extract(confirm) すると、未達成のまま生還して遠征を終えられる（追跡中の敵が見えていてもよい）', 'Withdraw: extract(confirm) on stairs ends the expedition alive, without the reward (even with hunters in view)'),
-    t(L, '帰還の綱: 階段から遠くても use_item で使えば、数手番後にキャンプへ戻る（戦利品の半分が確定）', 'Lifeline: use_item it anywhere to return to camp after a few turns (half the haul is banked)'),
+    t(L, `帰還の綱: 階段から遠くても use_item で使えば${lt > 0 ? ` ${lt} 手番後に` : 'その場で'}キャンプへ戻る（戦利品の半分が確定。達成した遠征には数えない）`,
+      `Lifeline: use_item it anywhere to return to camp${lt > 0 ? ` after ${lt} turns` : ' at once'} (half the haul is banked; not a completed expedition)`),
     t(L, '終了理由: 達成して帰還 / 帰還の綱で帰還 / 撤退 / 死亡 / 引退(retire)', 'It ends by: completion + extract / lifeline / withdrawal / death / retire'),
   ];
   if (x.objective.type !== 'endless') {
@@ -55,12 +57,20 @@ export function briefingLines(L: Locale, x: ExpeditionView, rules?: Pick<Catalog
   return lines;
 }
 
+/** 2 回目以降の遠征の開始時の説明（1 行。V3-2R3 §20.6） */
+export function briefingShort(L: Locale, x: ExpeditionView, rules?: Pick<CatalogRules, 'traits'>): string {
+  const tr = x.traits.length ? t(L, `・条件: ${traitsText(L, rules, x.traits) || x.traits.join(', ')}`, `, traits: ${traitsText(L, rules, x.traits) || x.traits.join(', ')}`) : '';
+  const guard = x.objective.type === 'retrieve_relic' && x.relicGuarded ? t(L, '（守護者付き）', ' (guarded)') : '';
+  return t(L, `【遠征 ${x.no}】${objectiveText(L, x.objective)}${guard}・目的 +${x.points}・帰還で ${multText(x.multiplierPct)}${tr}`,
+    `[Expedition ${x.no}] ${objectiveText(L, x.objective)}${guard}, objective +${x.points}, ${multText(x.multiplierPct)} on extract${tr}`);
+}
+
 export function progressText(L: Locale, x: ExpeditionView, depth: number | null): string {
   const o = x.objective;
   const parts: string[] = [];
   if (o.targetDepth !== null) parts.push(t(L, `地下${depth ?? '-'}/${o.targetDepth}階`, `depth ${depth ?? '-'}/${o.targetDepth}`));
   else if (depth !== null) parts.push(t(L, `地下${depth}階`, `depth ${depth}`));
-  if (o.type === 'reach_depth') parts.push(x.progress.reached ? t(L, '目標階に到達済み', 'target reached') : t(L, '目標階に未到達', 'target not reached'));
+  if (o.type === 'reach_depth') parts.push(x.progress.reached ? t(L, '目標階を踏破済み', 'target crossed') : t(L, '目標階の下り階段に未到達', 'target not crossed yet'));
   if (o.type === 'slay_guardian') parts.push(x.progress.guardianSlain ? t(L, '守護者: 討伐済み', 'guardian: slain') : t(L, '守護者: 未討伐', 'guardian: alive'));
   if (o.type === 'retrieve_relic') {
     parts.push(x.progress.relicHeldByYou ? t(L, '遺物: 所持', 'relic: carried') : x.progress.relicHeld ? t(L, '遺物: 仲間が所持', 'relic: carried by an ally') : t(L, '遺物: 未入手', 'relic: not held'));
@@ -87,6 +97,17 @@ export function traitsText(L: Locale, rules: Pick<CatalogRules, 'traits'> | unde
   }).join(' / ');
 }
 
+const GUARD_TRAIT_JA: Record<string, string> = { fast: '速い', slow: '遅い', ranged: '射撃する', large: '大柄', armored: '重装' };
+
+/** 守護者の見込みの文（「守護者: 格 2・射撃する・速い」。種族名は出さない。V3-2R3 §20.1） */
+export function guardianForecastText(L: Locale, g: { rank: number; traits: string[] } | undefined): string {
+  if (!g) return '';
+  // 速さは必ず書く（速い・遅いが無ければ「普通の速さ」）
+  const speed = g.traits.includes('fast') || g.traits.includes('slow') ? [] : [t(L, '普通の速さ', 'normal speed')];
+  const tr = [...g.traits.map((x) => (L === 'en' ? x : GUARD_TRAIT_JA[x] ?? x)), ...speed];
+  return t(L, `守護者: 格 ${g.rank}・${tr.join('・')}`, `guardian: rank ${g.rank}, ${tr.join(', ')}`);
+}
+
 /** 候補の文章。rules と level があれば推奨レベルとの差と条件の危険度も付ける（公開の表と式だけで計算） */
 export function offerText(L: Locale, o: ExpeditionOffer, ctx?: { rules: Pick<CatalogRules, 'traits' | 'recommendedLevel'>; level: number }): string {
   const guard = o.objective.type === 'retrieve_relic' && o.relicGuarded ? t(L, '（守護者付き）', ' (guarded)') : '';
@@ -101,8 +122,9 @@ export function offerText(L: Locale, o: ExpeditionOffer, ctx?: { rules: Pick<Cat
     const td = g.traitDanger ? t(L, `／条件 ${g.traitDanger > 0 ? '+' : ''}${g.traitDanger}`, ` / traits ${g.traitDanger > 0 ? '+' : ''}${g.traitDanger}`) : '';
     danger = t(L, ` / 推奨 Lv${g.recommendedLevel}・あなた Lv${ctx.level}（差 ${gap}）${td}`, ` / recommended Lv${g.recommendedLevel}, you Lv${ctx.level} (gap ${gap})${td}`);
   }
-  return t(L, `${head} — 基礎 +${o.points} / 倍率 ${multText(mult)}${traits ? `（${traits}）` : ''}${danger}`,
-    `${head} — base +${o.points} / multiplier ${multText(mult)}${traits ? ` (${traits})` : ''}${danger}`);
+  const gf = o.guardian ? ` / ${guardianForecastText(L, o.guardian)}` : '';
+  return t(L, `${head} — 基礎 +${o.points} / 倍率 ${multText(mult)}${traits ? `（${traits}）` : ''}${danger}${gf}`,
+    `${head} — base +${o.points} / multiplier ${multText(mult)}${traits ? ` (${traits})` : ''}${danger}${gf}`);
 }
 
 export function campLines(L: Locale, view: PlayerView, rules?: Pick<CatalogRules, 'traits' | 'recommendedLevel'>): string[] {

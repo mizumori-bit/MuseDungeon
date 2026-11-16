@@ -4,8 +4,8 @@ import type {
   ActionError, Catalog, Command, GameEvent, Locale, Observation, PerceivedEvent, PlayerId, PlayerView, Pos, RunSummary, TurnBlock, TurnReason,
 } from '@muse/shared';
 import {
-  briefingLines, buildObservation, buildTurnBlock, campLines, changesLine, describeInventory, describeTarget, diffChanges,
-  formatObservationText, kindName, MACRO_COMPLETED_STOPS, mapTextLines, memoryCombatText, mineCount, nameOf, pickableItems, progressText, renderAsciiMap, resultText, t,
+  briefingLines, briefingShort, buildObservation, buildTurnBlock, campLines, changesLine, describeInventory, describeTarget, diffChanges,
+  formatObservationText, kindName, MACRO_COMPLETED_STOPS, mapTextLines, memoryCombatText, memoryKey, mineCount, nameOf, pickableItems, progressText, renderAsciiMap, resultText, t,
   turnLine, turnSnapshot, turnStateOf,
 } from '@muse/shared';
 import type { PlayerOptions } from './RunSession';
@@ -83,7 +83,9 @@ export interface PlayerPort {
 const STOP_TEXT: Record<string, [string, string]> = {
   hostile_in_view: ['敵が視界に入った', 'a hostile came into view'],
   hostile_adjacent: ['隣に起きている敵がいる（退くなら mode: flee、戦うなら fight）', "an awake enemy is adjacent (retreat with mode: 'flee', or fight)"],
-  hp_floor: ['HP が hp_floor を下回った', 'HP fell below hp_floor'],
+  hp_floor: ['HP が hp_floor 以下になった', 'HP fell to hp_floor or below'],
+  hp_risk: ['次の手番に最悪の被害を受けると hp_floor を割る（被弾の前に止まった）', 'one more turn of the worst damage would drop you below hp_floor (stopped before being hit)'],
+  first_hit: ['被弾の記録の無い相手から初めて被弾した（数字を見てから続けるかを決める）', 'first hit from a creature with no record (check the numbers before continuing)'],
   hostile_alerted: ['見えている敵が追跡に変わった', 'a visible enemy started hunting you'],
   hp_threshold: ['HP が 50%・25% の線をまたいだ', 'HP crossed the 50% / 25% line'],
   target_down: ['相手が倒れた', 'the target fell'],
@@ -350,8 +352,12 @@ export class SessionPlayerPort implements PlayerPort {
     const lines: string[] = [];
     const x = view.expedition;
     if (x && x.status !== 'ended' && view.status !== 'at_camp') {
-      lines.push(...briefingLines(L, x, this.catalog.rules));
-      lines.push(t(L, `進捗: ${progressText(L, x, view.floor?.depth ?? null)}`, `Progress: ${progressText(L, x, view.floor?.depth ?? null)}`));
+      // 2 回目以降の遠征の開始は 1 行（ルールは最初の遠征で説明済み。V3-2R3 §20.6）
+      if (kind === 'start' && x.no > 1) lines.push(briefingShort(L, x, this.catalog.rules));
+      else {
+        lines.push(...briefingLines(L, x, this.catalog.rules));
+        lines.push(t(L, `進捗: ${progressText(L, x, view.floor?.depth ?? null)}`, `Progress: ${progressText(L, x, view.floor?.depth ?? null)}`));
+      }
     } else if (view.status === 'at_camp') {
       if (x?.result) lines.push(resultText(L, x, this.catalog.rules));
       lines.push(...campLines(L, view, this.catalog.rules));
@@ -429,13 +435,16 @@ export class SessionPlayerPort implements PlayerPort {
     });
     if (!kind) return { text: t(L, `「${q}」という種族は知らない。`, `You know of no creature called "${q}".`), data: null };
     const mem = view.monsterMemory[kind];
+    // 守護者の記録は種族と分けて残る（V3-2R3 §20.4）
+    const gmem = view.monsterMemory[memoryKey(kind, 'guardian')];
     const name = kindName(this.catalog, L, kind);
-    if (!mem) return { text: t(L, `${name}にはまだ遭遇していない。`, `You have not met a ${name} yet.`), data: { kind, memory: null } };
-    const note = mem.hpSeen
-      ? t(L, '（体力の記録は目の前で倒した個体の最大 HP。接辞・深層強化・守護者はこれより頑丈なことがある）', ' (HP record = max HP of those you saw die; affixes, tiers and guardians can be sturdier)')
+    if (!mem && !gmem) return { text: t(L, `${name}にはまだ遭遇していない。`, `You have not met a ${name} yet.`), data: { kind, memory: null } };
+    const note = mem?.hpSeen
+      ? t(L, '（体力の記録は目の前で倒した個体の最大 HP。接辞・深層強化はこれより頑丈なことがある。守護者は別の記録）', ' (HP record = max HP of those you saw die; affixes and tiers can be sturdier; guardians are recorded separately)')
       : t(L, '（体力は目の前で倒すと分かる）', ' (HP is learned when you see one die)');
-    const text = `${name}: ${memoryCombatText(L, mem)}${note}`;
-    return { text, data: { kind, memory: mem } };
+    const parts = [mem ? `${name}: ${memoryCombatText(L, mem)}${note}` : t(L, `${name}: 通常の個体の記録なし`, `${name}: no record of ordinary ones`)];
+    if (gmem) parts.push(t(L, `守護者の記録: ${memoryCombatText(L, gmem)}`, `Guardian record: ${memoryCombatText(L, gmem)}`));
+    return { text: parts.join('\n'), data: { kind, memory: mem ?? null, ...(gmem ? { guardian: gmem } : {}) } };
   }
 
   messages(sinceSeq = 0, limit = 30): InfoResult {

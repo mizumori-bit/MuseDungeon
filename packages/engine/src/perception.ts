@@ -1,6 +1,6 @@
 // 知覚: プレイヤーの視界と知識（knowledge_updated）、モンスターの視認、騒音、起床、モンスターの思い出。
 import type { Entity, FloorHint, FloorKey, MonsterMemory, PlayerId, PlayerRecord, Pos, RememberedEntity, Sense } from '@muse/shared';
-import { cheb, compassDir, currentExpedition, indicesToRanges } from '@muse/shared';
+import { cheb, compassDir, currentExpedition, indicesToRanges, memoryKey } from '@muse/shared';
 import type { Ctx } from './ctx';
 import { computeFov, hasLos, inCircle, line } from './geom';
 
@@ -64,14 +64,17 @@ function sameArr(a: readonly number[], b: readonly number[]): boolean {
   return true;
 }
 
-export function emptyMemory(kind: string): MonsterMemory {
-  return { kind, encounters: 0, kills: 0, maxDamageToYou: 0, maxDamageByYou: 0, abilities: [] };
+/** 空の思い出。キーが guardian|種族 なら守護者の記録（V3-2R3 §20.4） */
+export function emptyMemory(key: string): MonsterMemory {
+  const g = key.startsWith('guardian|');
+  return { kind: g ? key.slice('guardian|'.length) : key, encounters: 0, kills: 0, maxDamageToYou: 0, maxDamageByYou: 0, abilities: [], ...(g ? { guardian: true } : {}) };
 }
 
-/** モンスターの思い出を更新（変化があればイベント） */
-export function updateMemory(ctx: Ctx, pid: PlayerId, kind: string, fn: (m: MonsterMemory) => void): void {
+/** モンスターの思い出を更新（変化があればイベント）。個体を渡すと、守護者は種族と別のキー（guardian|種族）に記録する */
+export function updateMemory(ctx: Ctx, pid: PlayerId, who: string | Entity, fn: (m: MonsterMemory) => void): void {
   const pr = ctx.world.players[pid];
   if (!pr) return;
+  const kind = typeof who === 'string' ? who : memoryKey(who.kind, who.role);
   const cur = pr.knowledge.monsterMemory[kind] ?? emptyMemory(kind);
   const next: MonsterMemory = { ...cur, abilities: [...cur.abilities] };
   fn(next);
@@ -162,7 +165,7 @@ export function updateKnowledge(ctx: Ctx, key: FloorKey): void {
     }
     for (const id of met) {
       const m = ctx.world.entities[id];
-      updateMemory(ctx, pr.id, m.kind, (mm) => {
+      updateMemory(ctx, pr.id, m, (mm) => {
         mm.encounters += 1;
         mm.abilities.push(...visibleAbilities(ctx, m));
       });

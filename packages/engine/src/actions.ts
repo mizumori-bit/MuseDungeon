@@ -299,6 +299,8 @@ actions.register('use', (ctx, e, pr, cmd: Extract<Command, { type: 'use' }>) => 
       }
       ctx.emit({ type: 'item_used', actor: e.id, item: it.id, kind: it.kind, appearanceId: appearanceOf(ctx, it.kind), category: def.category, qtyAfter, put, del, ...selfSeen(ctx, me), floor: key });
       applyEffects(ctx, def.onUse, { user: ctx.world.entities[e.id], target: ctx.world.entities[e.id], pos: { x: me.pos!.x, y: me.pos!.y }, source: me, via: 'item', ...(identifySlot ? { itemSlot: identifySlot } : {}), usedKind: it.kind });
+      // 帰還の綱で盤面を離れた（即時）: 手番は doExtract が進めた
+      if (!ctx.world.entities[e.id]?.pos) return { cost: 0, scheduled: true };
       const pNow = ctx.world.players[pr.id];
       if (appearanceOf(ctx, it.kind) && !pNow.knowledge.identified.includes(it.kind)) {
         ctx.emit({ type: 'item_identified', player: pr.id, kind: it.kind, appearanceId: appearanceOf(ctx, it.kind), seenBy: [pr.id], floor: key });

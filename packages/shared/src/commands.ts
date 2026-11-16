@@ -29,7 +29,8 @@ export const CommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('interact'), dir: DirSchema.optional() }),
   z.object({ type: z.literal('stairs') }),
   // マクロ（サーバーで基本行動へ展開）
-  z.object({ type: z.literal('explore'), mode: MacroModeSchema.optional(), hpFloor: HpFloorSchema.optional(), pickup: z.boolean().optional() }),
+  /** toward: 'draft' は下への風の方角の未探索を優先する（V3-2R3 §20.5） */
+  z.object({ type: z.literal('explore'), mode: MacroModeSchema.optional(), hpFloor: HpFloorSchema.optional(), pickup: z.boolean().optional(), toward: z.enum(['draft']).optional() }),
   z.object({ type: z.literal('travel'), to: TravelTargetSchema, mode: MacroModeSchema.optional(), hpFloor: HpFloorSchema.optional(), pickup: z.boolean().optional() }),
   z.object({ type: z.literal('rest'), untilHp: z.number().int().positive().optional(), maxTurns: z.number().int().positive().optional() }),
   /** 既知の「自分が投げた物」（what: 'thrown'、既定）か、見えている・記憶したアイテム（'items'）を近い順に拾う */

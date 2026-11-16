@@ -1,10 +1,12 @@
 // 情報パネル（Preact）。表示名は公開カタログ、状態は PlayerView / World から。
 import type { AgentActivity, Alert, Catalog, CommandRecord, ObsMonster, Observation, PlayerView, RunSummary, World } from '@muse/shared';
-import { dirLabel, endReasonText, hitsText, hpEstimateText, hpState, itemDisplayName, itemStats, itemStatsText, kindName, nameOf, objectiveText, xpForLevel } from '@muse/shared';
+import {
+  dealtText, dirLabel, endReasonText, hitsText, hpEstimateText, hpState, itemDisplayName, itemStats, itemStatsText, kindName, nameOf, objectiveText, sameOrWorseEquip, xpForLevel,
+} from '@muse/shared';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { PLAYER_COLORS } from '../render/scene';
 import { getLocale, tr } from '../util';
-import { DIR_ARROW, exploredLabel, monsterSpeedLabel, monsterTraitLabel, playerStateLabel, threatText } from './labels';
+import { DIR_ARROW, exploredLabel, lifelineEffectText, monsterLooksText, monsterSpeedLabel, playerStateLabel, threatText, worstTurnText } from './labels';
 
 /** 手放せない品（帰還の綱）か。捨てる・投げることができず、所持数に数えない（V3-2R2 §18.1） */
 export function isBoundItem(catalog: Catalog | null | undefined, kind: string | null): boolean {
@@ -73,11 +75,15 @@ export function StatusPanel({ view, catalog, speed, floor }: { view: PlayerView;
 
 export type InvAction = 'use' | 'equip' | 'unequip' | 'drop' | 'throw';
 
-export function InventoryPanel({ view, catalog, onAction, focused, selected, onSelect }: {
-  view: PlayerView; catalog: Catalog; onAction?: (a: InvAction, slot: string) => void; focused?: boolean; selected?: string | null; onSelect?: (slot: string) => void;
+/**
+ * exposed: 隣に起きている追跡中の敵がいる（薬・巻物を使う間にその敵が行動する。V3-2R3 §20.4）。使うボタンに印を付ける
+ */
+export function InventoryPanel({ view, catalog, onAction, focused, selected, onSelect, exposed }: {
+  view: PlayerView; catalog: Catalog; onAction?: (a: InvAction, slot: string) => void; focused?: boolean; selected?: string | null; onSelect?: (slot: string) => void; exposed?: boolean;
 }) {
   const L = getLocale();
   const treasure = view.inventory.reduce((a, it) => a + (it.value ?? 0), 0);
+  const lifeline = lifelineEffectText(catalog.rules?.lifeline?.turns);
   return (
     <section class={`panel inv ${focused ? 'focused' : ''}`}>
       <h3>
@@ -96,23 +102,29 @@ export function InventoryPanel({ view, catalog, onAction, focused, selected, onS
           const name = itemDisplayName(catalog, L, it.kind, it.appearanceId, it.affixes);
           // 鑑定済みの自分の持ち物は性能をそのまま見せる（V3-2R §14.3）
           const stats = itemStatsText(L, itemStats(catalog, it.kind, it.affixes));
+          // 装備中の品と種類が同じで性能が同じか下の装備は「装備」を出さない（観測の valid_actions と同じ。V3-2R3 §20.6）
+          const worse = !!ci?.slot && !it.equipped && sameOrWorseEquip(view, catalog, it);
+          // 使う間に隣の敵が行動する（帰還の綱は除く: 即時なら使った手番で盤面を離れる）
+          const risky = !!exposed && !bound;
           return (
             <li key={it.id} class={`${selected === it.slot ? 'sel' : ''} ${bound ? 'bound' : ''}`} onClick={() => onSelect?.(it.slot)} title={ci ? nameOf(ci.desc, L, '') : tr('未鑑定', 'unidentified')}>
               <span class="slot">{it.slot})</span>
               <span class="name">
                 {name}{it.qty > 1 ? ` x${it.qty}` : ''}{it.equipped ? <em> [{tr('装備', 'eq')}]</em> : null}{it.kind === null ? <em class="muted"> ?</em> : null}{cat === 'relic' ? <em class="relic"> ［{tr('遺物', 'relic')}］</em> : null}{it.value !== undefined ? <em class="treasure"> ［{tr(`宝・価値 ${it.value}`, `treasure ${it.value}`)}］</em> : null}
                 {bound && <em class="bound"> ［{tr('手放せない・所持数に数えない', 'bound, not counted')}］</em>}
+                {worse && <em class="worse" title={tr('装備中の品と同じ種類で、性能が同じか下（装備しても良くならない）', 'Same kind as your equipped item, with the same or worse stats (equipping it gains nothing)')}> ［{tr('装備中と同じか劣る', 'same or worse')}］</em>}
                 {stats && <span class="istats">{stats}</span>}
               </span>
               {onAction && (
                 <span class="acts">
                   {usable && (
-                    <button class={`tiny ${bound ? 'lifeline' : ''}`} onClick={(e) => { e.stopPropagation(); onAction('use', it.slot); }}
-                      title={bound ? tr('帰還の綱を使う（L）: 数手番動けずにキャンプへ戻る。確認が出る', 'Use the lifeline (L): helpless for a few turns, then back to camp. Asks to confirm') : undefined}>
-                      {bound ? tr('綱を使う', 'Use') : tr('使う', 'Use')}
+                    <button class={`tiny ${bound ? 'lifeline' : ''} ${risky ? 'exposed' : ''}`} onClick={(e) => { e.stopPropagation(); onAction('use', it.slot); }}
+                      title={bound ? tr(`帰還の綱を使う（L）: ${lifeline}。確認が出る`, `Use the lifeline (L): ${lifeline}. Asks to confirm`)
+                        : risky ? tr('使う間に隣の敵が行動する', 'Adjacent enemies act while you use it') : undefined}>
+                      {bound ? tr('綱を使う', 'Use') : tr('使う', 'Use')}{risky ? ' ⚠' : ''}
                     </button>
                   )}
-                  {ci?.slot && !it.equipped && <button class="tiny" onClick={(e) => { e.stopPropagation(); onAction('equip', it.slot); }}>{tr('装備', 'Equip')}</button>}
+                  {ci?.slot && !it.equipped && !worse && <button class="tiny" onClick={(e) => { e.stopPropagation(); onAction('equip', it.slot); }}>{tr('装備', 'Equip')}</button>}
                   {it.equipped && <button class="tiny" onClick={(e) => { e.stopPropagation(); onAction('unequip', it.slot); }}>{tr('外す', 'Remove')}</button>}
                   {throwable && !it.equipped && <button class="tiny" onClick={(e) => { e.stopPropagation(); onAction('throw', it.slot); }}>{tr('投げる', 'Throw')}</button>}
                   {!bound && <button class="tiny" onClick={(e) => { e.stopPropagation(); onAction('drop', it.slot); }}>{tr('置く', 'Drop')}</button>}
@@ -144,10 +156,13 @@ export function MessageLog({ lines, title }: { lines: LogLine[]; title?: string 
   );
 }
 
-/** 先頭に出して強調する警告（一撃で倒されうる・HP が危険域） */
+/** 先頭に出して強調する警告（1 手で倒されうる・HP が危険域） */
 const URGENT_ALERTS: readonly string[] = ['lethal_range', 'critical_hp'];
-/** 並べる順（先頭から）。群れの被害見込みと逃げ道の見込みは危険の直後に置く（V3-2R2 §18.1・§18.2） */
-const ALERT_ORDER: readonly string[] = [...URGENT_ALERTS, 'incoming', 'escape'];
+/**
+ * 並べる順（先頭から）。2 手で倒されうる（V3-2R3 §20.4）は危険の直後、
+ * 群れの被害見込みと逃げ道の見込みはその後に置く（V3-2R2 §18.1・§18.2）
+ */
+const ALERT_ORDER: readonly string[] = [...URGENT_ALERTS, 'lethal_2turns', 'incoming', 'escape'];
 
 /** onEscape: 逃げ道の見込み（escape）に「退く」ボタンを添える。data.stairs は向かう階段（up / down） */
 export function AlertsBar({ alerts, onEscape }: { alerts: Alert[]; onEscape?: (stairs: 'up' | 'down') => void }) {
@@ -158,13 +173,18 @@ export function AlertsBar({ alerts, onEscape }: { alerts: Alert[]; onEscape?: (s
     <div class="alerts">
       {sorted.map((a) => {
         const stairs = a.code === 'escape' && (a.data?.stairs === 'up' || a.data?.stairs === 'down') ? a.data.stairs : null;
+        // 追われたままなら最悪の被害（V3-2R3b §23.1）。HP 以上なら綱（L）を先に考える
+        const worst = stairs && typeof a.data?.worst_if_chased === 'number' ? a.data.worst_if_chased : null;
+        const deadly = worst !== null && typeof a.data?.hp === 'number' && worst >= a.data.hp;
         return (
           <span key={a.code} class={`alert ${a.code} ${URGENT_ALERTS.includes(a.code) ? 'urgent' : ''}`}>
-            {a.code === 'lethal_range' ? `⚠ ${a.text}` : a.text}
+            {a.code === 'lethal_range' || a.code === 'lethal_2turns' ? `⚠ ${a.text}` : a.text}
             {stairs && onEscape && (
-              <button class="tiny flee aact" onClick={() => onEscape(stairs)}
-                title={tr('その階段まで退く（flee: 隣に敵がいても動く。途中で攻撃は受ける）。着いたら extract（E）か階段（>）', 'Flee to those stairs (moves even with an enemy adjacent; you will be attacked). Then extract (E) or take the stairs (>)')}>
+              <button class={`tiny flee aact ${deadly ? 'danger' : ''}`} onClick={() => onEscape(stairs)}
+                title={tr('その階段まで退く（flee: 隣に敵がいても動く。途中で攻撃は受ける）。着いたら extract（E）か階段（>）', 'Flee to those stairs (moves even with an enemy adjacent; you will be attacked). Then extract (E) or take the stairs (>)')
+                  + (deadly ? tr('。追われたままなら HP 以上の被害になりうる: 帰還の綱（L）も考える', '. Being chased all the way could cost your HP: consider the lifeline (L)') : '')}>
                 {stairs === 'up' ? tr('上り階段へ退く', 'Flee up') : tr('下り階段へ退く', 'Flee down')}
+                {stairs && (worst !== null ? tr(`（追われたままなら最悪 ${worst}）`, ` (worst ${worst} if chased)`) : typeof a.data?.path_len === 'number' ? tr('（最悪の被害は不明）', ' (worst unknown)') : '')}
               </button>
             )}
           </span>
@@ -188,7 +208,16 @@ export function isApproaching(m: ObsMonster): boolean {
 }
 
 /**
- * 見えている敵（観測の visible.monsters）。脅威・最大の一撃・速さと見れば分かる特徴・命中の記録・推定残り HP・投擲の可否を並べる。
+ * 自分に届く追跡中の敵か（逃げておらず、動かない敵は隣にいるときだけ）。観測の incoming / lethal_range と同じ数え方
+ */
+function reachesYou(m: ObsMonster): boolean {
+  return m.awareness === 'hunting' && !m.fleeing && !(m.traits.includes('stationary') && m.dist > 1);
+}
+
+/**
+ * 見えている敵（観測の visible.monsters）。脅威・最大の一撃と 1 手番あたりの最悪の被害・体格と速さと見れば分かる特徴・
+ * 命中と通りの記録・推定残り HP・投擲の可否を並べる。
+ * 届く追跡中の敵で、1 手番の最悪の被害（worst_turn）が今の HP 以上なら「1 手で」、2 倍で HP 以上なら「2 手で」倒されうる印を付ける。
  * onFight(id): 隣の相手には「戦う」、追跡中で届かない相手には「迎え撃つ」（隣に来るまで待つ）。
  * onFight(id, slot): 「投擲で決着」（その品を投げ続ける。射程と射線が通るまで待つ）。throwSlotFor が投げる品のスロットを返す相手だけに出す
  */
@@ -204,18 +233,23 @@ export function MonstersPanel({ monsters, hp, onFight, throwSlotFor }: {
         {monsters.map((m) => {
           const aw = AWARE_LABEL[m.awareness];
           const hs = HP_LABEL[m.hp_state];
-          const lethal = m.awareness === 'hunting' && !m.fleeing && m.worst_hit !== null && m.worst_hit >= hp;
+          const wt = reachesYou(m) ? m.worst_turn : null;
+          const lethal = wt !== null && wt >= hp;
+          const lethal2 = wt !== null && !lethal && wt * 2 >= hp;
           const clear = m.shots.filter((s) => s.state === 'clear').map((s) => s.slot);
           const far = m.shots.filter((s) => s.state === 'out_of_range').map((s) => s.slot);
           const shot = m.shot === 'blocked' ? tr('射線: 通らない', 'shot: blocked')
             : m.shots.length ? [clear.length ? tr(`投擲可: ${clear.join(',')}`, `throw: ${clear.join(',')}`) : '', far.length ? tr(`射程外: ${far.join(',')}`, `out of range: ${far.join(',')}`) : ''].filter(Boolean).join(' / ')
               : '';
           const speed = monsterSpeedLabel(m.speed);
+          const looks = monsterLooksText(m);
           const hits = hitsText(L, m.hits);
+          const dealt = dealtText(L, m.dealt);
+          const perTurn = worstTurnText(m);
           const meet = m.dist > 1 && isApproaching(m);
           const withSlot = throwSlotFor?.(m) ?? null;
           return (
-            <li key={m.id} class={`${lethal ? 'lethal' : ''} ${m.role ?? ''}`}>
+            <li key={m.id} class={`${lethal ? 'lethal' : lethal2 ? 'lethal2' : ''} ${m.role ?? ''}`}>
               <div class="mhead">
                 <b>{m.name}</b>
                 {m.first_seen && <span class="mfirst" title={tr('このランで初めて見た種族', 'A species you meet for the first time this run')}>{tr('初見', 'new')}</span>}
@@ -244,10 +278,16 @@ export function MonstersPanel({ monsters, hp, onFight, throwSlotFor }: {
               </div>
               <div class="msub">
                 <span class={`mthreat ${m.threat === null ? 'unknown' : `t${m.threat}`}`}>{threatText(m.threat, m.first_seen)}</span>
-                <span class={lethal ? 'mworst lethal' : 'mworst'}>{worstHitText(m.worst_hit)}{lethal ? tr('（今の HP 以上）', ' (>= your HP)') : ''}</span>
+                <span class={`mworst ${lethal ? 'lethal' : lethal2 ? 'lethal2' : ''}`}
+                  title={tr('最大の一撃: その相手（守護者は守護者の記録）から受けた最大の被害。1 手に最悪: それ × あなたの 1 手番に相手が行動する回数（速い相手は 2 回）',
+                    'Worst hit: the most damage it (or, for a guardian, the guardian record) has dealt you in one blow. Worst per turn: that times how often it acts during one of your turns (twice if it is faster)')}>
+                  {worstHitText(m.worst_hit)}{perTurn ? tr(`（${perTurn}）`, ` (${perTurn})`) : ''}
+                  {lethal ? tr('・1 手で HP 以上', ', >= your HP in one turn') : lethal2 ? tr('・2 手で HP 以上', ', >= your HP in two turns') : ''}
+                </span>
                 {speed && <span class={`mspeed ${m.speed}`} title={tr('自分の今の速さとの比較（見れば分かる）', 'Compared with your current speed (visible at a glance)')}>{speed}</span>}
-                {m.traits.length > 0 && <span class="mtraits">{m.traits.map(monsterTraitLabel).join(tr('・', ', '))}</span>}
+                {looks && <span class="mtraits" title={tr('見れば分かる性質（体格・群れる・飛び道具・動かない・重装）', 'Visible at a glance (size, pack, ranged, stationary, armored)')}>{looks}</span>}
                 {hits && <span class="mhits" title={tr('記録した命中の回数（確率ではない）', 'Recorded hits / tries (not a probability)')}>{hits}</span>}
+                {dealt && <span class="mdealt" title={tr('通り: 自分の攻撃が当たったときの実ダメージの平均と回数（装甲の値は伏せたまま。近接と投擲を比べられる）', 'Your hits: average damage when they land, and how many (armor stays hidden; compare melee and throws)')}>{dealt}</span>}
                 {m.hp_left_est && <span>{hpEstimateText(L, m.hp_left_est)}</span>}
                 {m.damage_seen ? <span>{tr(`与ダメ累計 ${m.damage_seen}`, `dmg dealt ${m.damage_seen}`)}</span> : null}
                 {shot && <span class={m.shot === 'blocked' ? 'mshot blocked' : 'mshot'}>{shot}</span>}

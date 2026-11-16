@@ -1,7 +1,7 @@
 // ベースライン bot（ランダム／貪欲）。AI と同じ PlayerPort・同じ Command・同じ観測だけを使う。
 // 貪欲 bot は遠征を遊ぶ: 目的を追い、達成したら階段の上で extract、キャンプでは次の遠征を選ぶ。
 import type { Command, Dir, ExpeditionEndReason, OfferSlot, PlayerView } from '@muse/shared';
-import { cheb, dirTo, DIRS, offerGap, Rng } from '@muse/shared';
+import { buildNavGrid, cheb, compassDir, dirTo, DIRS, distanceField, offerGap, Rng } from '@muse/shared';
 import type { PlayerPort, SessionManager } from '@muse/server';
 
 const WEAPON_RANK = ['core:dagger', 'core:short_sword', 'core:mace', 'core:war_axe'];
@@ -45,6 +45,8 @@ function hpPct(v: PlayerView): number {
 
 export interface BotMemo {
   restFails: number; avoid: Set<string>; blocked: number; descend: boolean; gaveUp: number | null;
+  /** 探索を終えた目標階で、気配の方角の既知のマスへ向かい直した回数（遠征ごと） */
+  senseTries: number; senseNo: number;
   /** 方針: 目的を達成した後、目標より何階深く潜ってから帰るか */
   overreach: number;
   /** 方針: キャンプで選ぶ枠（無ければ 1 番目） */
@@ -53,12 +55,14 @@ export interface BotMemo {
   cautious: boolean;
   /** 方針: 推奨レベルに届いている枠だけを選ぶ（届かなければ堅実で育つ。§18.8 の「推奨レベルどおりの bot」） */
   levelAware: boolean;
+  /** 方針: 直行（V3-2R3 §20.2）。道をふさぐ・隣に来た敵とだけ戦い、下り階段を見つけたらすぐ向かう */
+  direct: boolean;
 }
 
-export function newMemo(policy: { overreach?: number; offerSlot?: OfferSlot; cautious?: boolean; levelAware?: boolean } = {}): BotMemo {
+export function newMemo(policy: { overreach?: number; offerSlot?: OfferSlot; cautious?: boolean; levelAware?: boolean; direct?: boolean } = {}): BotMemo {
   return {
-    restFails: 0, avoid: new Set<string>(), blocked: 0, descend: false, gaveUp: null, overreach: policy.overreach ?? 0, offerSlot: policy.offerSlot,
-    cautious: policy.cautious ?? true, levelAware: policy.levelAware ?? false,
+    restFails: 0, avoid: new Set<string>(), blocked: 0, descend: false, gaveUp: null, senseTries: 0, senseNo: 0, overreach: policy.overreach ?? 0, offerSlot: policy.offerSlot,
+    cautious: policy.cautious ?? true, levelAware: policy.levelAware ?? false, direct: policy.direct ?? false,
   };
 }
 
@@ -85,6 +89,28 @@ function neighborDir(a: Dir | null, b: Dir): boolean {
   if (!a) return false;
   const d = Math.abs(DIR_ORDER.indexOf(a) - DIR_ORDER.indexOf(b));
   return d === 1 || d === 7;
+}
+
+/** 気配の方角にある、既知で歩いて届く遠いマス（5 マス以上先。無ければ null） */
+function senseCell(port: PlayerPort, dir: Dir): { x: number; y: number } | null {
+  const v = port.view();
+  const f = v.floor;
+  const me = v.self.pos;
+  if (!f || !me) return null;
+  const grid = buildNavGrid(v, port.catalog);
+  if (!grid) return null;
+  const dist = distanceField(grid, me, false);
+  let best: { x: number; y: number } | null = null;
+  let bestD = 0;
+  for (let i = 0; i < dist.length; i++) {
+    if (dist[i] < 5) continue;
+    const p = { x: i % f.width, y: Math.trunc(i / f.width) };
+    const d = compassDir(me, p);
+    if (d !== dir && !neighborDir(d, dir)) continue;
+    const c = cheb(me, p);
+    if (c > bestD) { bestD = c; best = p; }
+  }
+  return best;
 }
 
 /** 方針の階数だけ踏破したか */
@@ -128,7 +154,9 @@ export function greedyDecide(port: PlayerPort, rng: Rng, memo: BotMemo): Command
   const huntingNow = hostiles.filter((h) => h.awareness === 'hunting' && !h.fleeing);
   if (hp < 30 && huntingNow.length) {
     if (onStairs && complete) return { type: 'extract' };
-    const danger = huntingNow.length >= 2 || port.observe({ map: false }).observation.alerts.some((a) => a.code === 'lethal_range');
+    // 1 手で倒されうる（lethal_range）ときだけ退く（群れでも押し切れるなら戦う）
+    // 階段の上なら extract、そうでなければ綱（§22.2 の「綱の前に階段へ退く」は V3-2R3b §23.1 で取り消し）
+    const danger = port.observe({ map: false }).observation.alerts.some((a) => a.code === 'lethal_range');
     if (danger && onStairs) return { type: 'extract', confirm: true };
     if (danger && lifeline) return { type: 'use', slot: lifeline.slot };
   }
@@ -138,11 +166,14 @@ export function greedyDecide(port: PlayerPort, rng: Rng, memo: BotMemo): Command
     return v.self.stats.hp > floor ? { type: 'fight', target: adj.id, hpFloor: floor } : { type: 'move', dir: dirTo(pos, adj.pos)! };
   }
   const hunting = hostiles.filter((h) => h.awareness === 'hunting');
-  // 投擲は fight { with } で決着まで（射程に入るまで待つ。V3-2R2 §18.5）。2 マス先の相手はすぐ隣に来るので近接に任せる
-  if (hunting.length && throwable && cheb(hunting[0].pos, pos) <= 6 && cheb(hunting[0].pos, pos) > 2 && !memo.avoid.has(hunting[0].id)) {
+  // 投擲は fight { with } で決着まで（射程に入るまで待つ。V3-2R2 §18.5）。2 マス先の相手はすぐ隣に来るので近接に任せる。直行は投げない
+  if (!memo.direct && hunting.length && throwable && cheb(hunting[0].pos, pos) <= 6 && cheb(hunting[0].pos, pos) > 2 && !memo.avoid.has(hunting[0].id)) {
     return { type: 'fight', target: hunting[0].id, with: throwable.slot, hpFloor: Math.trunc((v.self.stats.maxHp * 35) / 100) };
   }
-  if (hunting.length && hp < 60 && cheb(hunting[0].pos, pos) <= 8 && !memo.avoid.has(hunting[0].id)) return { type: 'travel', to: hunting[0].id };
+  // 射撃して距離を取る敵: 投げる物が無ければ HP によらず近づく（寄られると下がり、下がる間は撃たない。V3-2R3a §22.2）
+  const shooter = hunting.find((h) => !h.fleeing && !!h.kind && !!port.catalog.monsters[h.kind]?.tags.includes('ranged') && cheb(h.pos, pos) <= 8 && !memo.avoid.has(h.id));
+  if (shooter && (!throwable || memo.direct)) return { type: 'travel', to: shooter.id, mode: 'steady', hpFloor: 0 };
+  if (!memo.direct && hunting.length && hp < 60 && cheb(hunting[0].pos, pos) <= 8 && !memo.avoid.has(hunting[0].id)) return { type: 'travel', to: hunting[0].id };
   // 遠征の目的
   if (done || memo.gaveUp !== null) {
     const ex = port.observe({ map: false }).observation.expedition;
@@ -161,6 +192,18 @@ export function greedyDecide(port: PlayerPort, rng: Rng, memo: BotMemo): Command
       if (far.length) return { type: 'travel', to: far[0].pos, ...steadyIf(hp) };
     }
   }
+  // 踏破型（V3-2R3 §20.1）: 目標階の下り階段に立てば達成。知っていれば向かい、知らなければ下への風の方角を探す
+  if (x && onTarget && !done && x.objective.type === 'reach_depth' && !x.progress.reached) {
+    const down = port.observe({ map: false }).observation.navigation.known_stairs.find((s) => s.type === 'down' && s.reachable);
+    if (down) return { type: 'travel', to: 'stairs_down', ...steadyIf(hp) };
+    if (v.floorHint?.draft) return { type: 'explore', toward: 'draft', ...steadyIf(hp) };
+  }
+  // 直行: 目標より上の階では、下り階段を知っていればすぐ降りる（知らなければ下への風の方角を探す）
+  if (memo.direct && x && !done && x.objective.targetDepth !== null && (v.floor?.depth ?? 0) < x.objective.targetDepth && !hunting.length) {
+    const down = port.observe({ map: false }).observation.navigation.known_stairs.find((s) => s.type === 'down' && s.reachable);
+    if (down) { memo.descend = true; return { type: 'travel', to: 'stairs_down', ...steadyIf(hp) }; }
+    if (v.floorHint?.draft) return { type: 'explore', toward: 'draft', ...steadyIf(hp) };
+  }
   if (x && onTarget && !done) {
     if (x.objective.type === 'slay_guardian' && !x.progress.guardianSlain) {
       const g = hostiles.find((h) => h.role === 'guardian');
@@ -176,7 +219,8 @@ export function greedyDecide(port: PlayerPort, rng: Rng, memo: BotMemo): Command
       }
       if (here) return { type: 'pickup', item: here.id };
       const seen = v.entities.find((e) => e.role === 'relic') ?? v.memory.remembered.find((r) => r.role === 'relic');
-      if (seen && !memo.avoid.has(seen.id) && !hunting.length) return { type: 'travel', to: seen.id };
+      const pursuers = hunting.filter((h) => !h.fleeing && !(h.kind && port.catalog.monsters[h.kind]?.tags.includes('stationary') && cheb(h.pos, pos) > 1));
+      if (seen && !memo.avoid.has(seen.id) && !pursuers.length) return { type: 'travel', to: seen.id };
     }
   }
   // 装備の更新（公開情報: 名前の序列のみ）
@@ -236,6 +280,8 @@ export interface BotOptions {
   cautious?: boolean;
   /** 方針: 推奨レベルに届いている枠だけを選ぶ */
   levelAware?: boolean;
+  /** 方針: 直行（道をふさぐ敵とだけ戦い、下り階段へ直行する） */
+  direct?: boolean;
 }
 
 /** 1 ランを最後まで（死亡・終了・上限）bot で遊ぶ */
@@ -250,7 +296,7 @@ export async function runBot(manager: SessionManager, opts: BotOptions): Promise
 
 export async function playWithPort(port: PlayerPort, opts: BotOptions): Promise<Omit<BotResult, 'runId' | 'seed' | 'ms'>> {
   const rng = Rng.fromSeed(`bot|${opts.seed}`);
-  const memo = newMemo({ overreach: opts.overreach, offerSlot: opts.offerSlot, cautious: opts.cautious, levelAware: opts.levelAware });
+  const memo = newMemo({ overreach: opts.overreach, offerSlot: opts.offerSlot, cautious: opts.cautious, levelAware: opts.levelAware, direct: opts.direct });
   const maxActs = opts.maxActs ?? 2500;
   const brief: number[] = [];
   const full: number[] = [];
@@ -296,7 +342,13 @@ export async function playWithPort(port: PlayerPort, opts: BotOptions): Promise<
       const x = v.expedition && v.expedition.status !== 'ended' ? v.expedition : null;
       const stuckOnTarget = !!x && x.objective.targetDepth !== null && (v.floor?.depth ?? 0) >= x.objective.targetDepth
         && x.status !== 'objective_complete' && (x.objective.type === 'slay_guardian' || x.objective.type === 'retrieve_relic');
-      if (stuckOnTarget) {
+      if (memo.senseNo !== (x?.no ?? 0)) { memo.senseNo = x?.no ?? 0; memo.senseTries = 0; }
+      const toward = stuckOnTarget && v.sense && memo.senseTries < 6 ? senseCell(port, v.sense.dir) : null;
+      if (toward) {
+        // 探索し尽くしても気配が残っている（守護者は歩き回る）: 気配の方角の既知のマスへ向かい直す
+        memo.senseTries++;
+        cmd = { type: 'travel', to: toward, ...steadyIf(hpPct(v)) };
+      } else if (stuckOnTarget) {
         // 目標階を探索し尽くしても見つからない → 撤退する
         memo.gaveUp = x!.no;
         cmd = toNearestStairs(port) ?? { type: 'wait' };
@@ -336,7 +388,14 @@ export async function playWithPort(port: PlayerPort, opts: BotOptions): Promise<
       if (cmd.type === 'explore' && out.error.code === 'nothing_to_do') explored = true;
       if (cmd.type === 'rest') memo.restFails = 3;
       if (cmd.type === 'travel' && cmd.to === 'stairs_down') { explored = false; memo.descend = false; }
-      if (port.view().status === 'your_turn') await port.act({ type: 'wait' }, { source: 'bot' });
+      // fight が被弾の前の停止（hp_risk）で断られた: 隣の相手なら 1 発だけ殴る（待つと一方的に殴られる）
+      const nv = port.view();
+      const tg = cmd.type === 'fight' && out.error.code === 'hp_floor' ? nv.entities.find((e) => e.id === cmd.target) : undefined;
+      if (tg && nv.self.pos && cheb(tg.pos, nv.self.pos) <= 1 && nv.status === 'your_turn') {
+        await port.act({ type: 'move', dir: dirTo(nv.self.pos, tg.pos)! }, { source: 'bot' });
+        continue;
+      }
+      if (nv.status === 'your_turn') await port.act({ type: 'wait' }, { source: 'bot' });
     }
   }
   const v = port.view();

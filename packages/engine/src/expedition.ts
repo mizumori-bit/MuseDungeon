@@ -1,13 +1,17 @@
 // 遠征（IMPROVEMENTS_V2 §2）: 候補の生成、開始、目的の進捗、extract、終了判定。
 // 状態は全てイベント（expedition_* / objective_* / player_state）で変わる。
 import type {
-  ActionError, Entity, Expedition, ExpeditionEndReason, ExpeditionHaul, ExpeditionOffer, ExpeditionResult, HaulParts, Objective,
+  ActionError, Entity, Expedition, ExpeditionEndReason, FloorPos, Pos, ExpeditionHaul, ExpeditionOffer, ExpeditionResult, HaulParts, Objective,
   ObjectiveProgress, ObjectiveType, OfferSlot, PlayerId, PlayerRecord,
 } from '@muse/shared';
-import { cheb, currentExpedition, deepestGenerated, haulTotal, isPursuing, offerPoints, overreachPoints, payoutOf, Rng, actionError, t } from '@muse/shared';
+import { campDepthOf, cheb, currentExpedition, deepestGenerated, haulTotal, isPursuing, killPoints, offerPoints, overreachPoints, payoutOf, Rng, actionError, t } from '@muse/shared';
 import { buildSummary, grantXp } from './combat';
 import type { Ctx } from './ctx';
 import { findFreeCell } from './floors';
+import { hasLos, inCircle } from './geom';
+import { isOpaqueFn } from './perception';
+import { guardianSpec, pickGuardianKind } from './gen/generate';
+import { spawnFromSpec } from './spawn';
 import { recomputeStats } from './stats';
 
 const OFFER_TYPES: ObjectiveType[] = ['reach_depth', 'slay_guardian', 'retrieve_relic'];
@@ -72,12 +76,34 @@ export function treasureHeld(ctx: Ctx, e: Entity): number {
   return v;
 }
 
-/** 目標階の生成時に置くもの */
-export interface ObjectivePlacement { guardian: boolean; relic: boolean }
+/** 目標階に置くもの。rank: 守護者の格、guardianKind: 候補で決めた種族 */
+export interface ObjectivePlacement { guardian: boolean; relic: boolean; rank?: 1 | 2 | 3; guardianKind?: string }
 
-/** 次の遠征の候補（シードと通番から決定的に作る。乱数状態は進めない） */
+/** 枠ごとの守護者の格（V3-2R3 §20.1）: 堅実 1・標準 2・野心 3。枠の無い遠征は 2 */
+export function guardianRankOf(slot: OfferSlot | undefined | null): 1 | 2 | 3 {
+  return slot === 'safe' ? 1 : slot === 'ambitious' ? 3 : 2;
+}
+
+/** 守護者の見込みに出す、見れば分かる特徴（速さ・射撃・大柄・重装）。種族名は出さない */
+export function guardianTraits(ctx: Ctx, kind: string): string[] {
+  const def = ctx.content.monsters[kind];
+  if (!def) return [];
+  const out: string[] = [];
+  if (def.speed > 100) out.push('fast');
+  else if (def.speed < 100) out.push('slow');
+  if (def.ranged || def.tags.includes('ranged')) out.push('ranged');
+  if (def.size === 'large') out.push('large');
+  if (def.stats.armor >= 3) out.push('armored');
+  return out;
+}
+
+/**
+ * 次の遠征の候補（シードと通番から決定的に作る。乱数状態は進めない）。
+ * 目標の深さは「目標として達成した最深の階」（campDepth）から数える（V3-2R3 §20.2）。踏破で先まで降りても深くならない
+ */
 export function makeOffers(ctx: Ctx, no: number): ExpeditionOffer[] {
   const b = ctx.content.balance.expedition;
+  const campDepth = campDepthOf(ctx.world);
   const deepest = deepestGenerated(ctx.world);
   const rng = Rng.fromSeed(`${ctx.world.secret.seed}|expedition|${no}`);
   const traitIds = ctx.content.lists.expeditionTraits.map((x) => x.id);
@@ -85,16 +111,26 @@ export function makeOffers(ctx: Ctx, no: number): ExpeditionOffer[] {
   const types = no === 1 ? [...OFFER_TYPES] : rng.shuffle([...OFFER_TYPES]);
   return SLOTS.map((slot, i) => {
     const s = b.slots[slot];
-    const type = types[i % types.length];
-    // 目標の深さは枠ごとに重ならない（堅実 +1・標準 +2・野心 +3）。最初の遠征は浅い固定値から
-    const target = no === 1 ? Math.max(b.firstTargetDepth[slot], deepest + 1) : deepest + rng.range(s.aheadMin, s.aheadMax);
+    let type = types[i % types.length];
+    // 目標の深さは枠ごとに重ならない（堅実 +1・標準 +2・野心 +3）。最初の候補の深さより浅くしない
+    const target = Math.max(b.firstTargetDepth[slot], campDepth + rng.range(s.aheadMin, s.aheadMax));
+    // その階の下り階段にすでに立った（下の階が生成済み）なら、踏破型は出さず別の種類に替える
+    if (type === 'reach_depth' && target < deepest) type = rng.chance(50) ? 'slay_guardian' : 'retrieve_relic';
     const n = rng.range(s.traitsMin, s.traitsMax);
     const traits = rng.shuffle([...traitIds]).slice(0, n).sort();
     const multiplierPct = traits.reduce((m, id) => Math.trunc((m * ctx.content.expeditionTraits[id].multiplierPct) / 100), 100);
-    const relicGuarded = type === 'retrieve_relic' && rng.chance(b.relicGuardianPct);
+    // 堅実の遺物は無防備（守護者付きは標準・野心だけ）
+    const relicGuarded = type === 'retrieve_relic' && rng.chance(b.relicGuardianPct) && slot !== 'safe';
     // 点 = 枠の基礎点 × 種類の係数 × 深さの係数（V3-2R2 §18.3）
     const points = offerPoints({ expedition: b, slots: b.slots as Record<OfferSlot, typeof s> }, slot, type, relicGuarded, target);
-    return { index: i + 1, objective: { type, targetDepth: target }, points, relicGuarded, slot, traits, multiplierPct };
+    const offer: ExpeditionOffer = { index: i + 1, objective: { type, targetDepth: target }, points, relicGuarded, slot, traits, multiplierPct };
+    // 守護者の見込み（格は枠で決まる。種族はここで決め、プレイヤーには特徴だけを出す）
+    if (type === 'slay_guardian' || relicGuarded) {
+      const rank = guardianRankOf(slot);
+      const kind = pickGuardianKind(ctx.content, ctx.world.secret.seed, 'main', target, rank, rng);
+      if (kind) { offer.guardianKind = kind; offer.guardian = { rank, traits: guardianTraits(ctx, kind) }; }
+    }
+    return offer;
   });
 }
 
@@ -107,9 +143,83 @@ export function offerExpeditions(ctx: Ctx): void {
 export function placementFor(ctx: Ctx, branch: string, depth: number): ObjectivePlacement | null {
   const x = currentExpedition(ctx.world);
   if (!x || branch !== 'main' || x.objective.targetDepth !== depth) return null;
-  if (x.objective.type === 'slay_guardian') return { guardian: true, relic: false };
-  if (x.objective.type === 'retrieve_relic') return { guardian: x.relicGuarded, relic: true };
+  const g = { rank: x.guardianRank ?? guardianRankOf(x.slot), ...(x.guardianKind ? { guardianKind: x.guardianKind } : {}) };
+  if (x.objective.type === 'slay_guardian') return { guardian: true, relic: false, ...g };
+  if (x.objective.type === 'retrieve_relic') return { guardian: x.relicGuarded, relic: true, ...g };
   return null;
+}
+
+/**
+ * 目標階が生成済みのとき（V3-2R3 §20.2）: 遠征の開始時に守護者・遺物を置く。生成時と同じ規則
+ * （入口から歩いて遠い側の半分。入口から 8 マス以上・階段・扉・アクターのいるマスを除く）。乱数は expedition|通番|place
+ */
+function placeOnExistingFloor(ctx: Ctx, x: Expedition): void {
+  const depth = x.objective.targetDepth;
+  if (depth === null) return;
+  const key = `main:${depth}`;
+  const f = ctx.world.floors[key];
+  const pl = placementFor(ctx, 'main', depth);
+  if (!f || !pl || (!pl.guardian && !pl.relic)) return;
+  const rng = Rng.fromSeed(`${ctx.world.secret.seed}|expedition|${x.no}|place`);
+  const n = f.width * f.height;
+  const dist = new Int32Array(n).fill(-1);
+  const start = f.entry.y * f.width + f.entry.x;
+  const q = [start];
+  dist[start] = 0;
+  for (let h = 0; h < q.length; h++) {
+    const c = q[h];
+    const cx = c % f.width, cy = Math.trunc(c / f.width);
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const nx = cx + dx, ny = cy + dy;
+      if ((!dx && !dy) || nx < 0 || ny < 0 || nx >= f.width || ny >= f.height) continue;
+      const ni = ny * f.width + nx;
+      if (dist[ni] >= 0) continue;
+      const tr = ctx.terrainAt(key, nx, ny);
+      if (!tr.passable && !tr.door) continue;
+      dist[ni] = dist[c] + 1;
+      q.push(ni);
+    }
+  }
+  const ok = (i: number, minDist: number) => {
+    const px = i % f.width, py = Math.trunc(i / f.width);
+    const tr = ctx.terrainAt(key, px, py);
+    return tr.passable && !tr.stairs && !tr.door && dist[i] >= minDist && !ctx.actorAt(key, px, py) && ctx.itemsAt(key, px, py).length === 0
+      && !ctx.featureAt(key, px, py) && cheb({ x: px, y: py }, f.entry) > 7;
+  };
+  let cands: number[] = [];
+  for (const minDist of [12, 8, 1]) {
+    cands = [];
+    for (let i = 0; i < n; i++) if (ok(i, minDist)) cands.push(i);
+    if (cands.length) break;
+  }
+  if (!cands.length) return;
+  cands.sort((a, b) => dist[a] - dist[b] || a - b);
+  const far = cands.slice(Math.trunc(cands.length / 2));
+  const at = far[rng.int(far.length)];
+  const ax = at % f.width, ay = Math.trunc(at / f.width);
+  const spawned: Entity[] = [];
+  if (pl.relic) spawned.push(spawnFromSpec(ctx, key, { type: 'item', kind: 'core:relic', x: ax, y: ay, qty: 1, affixes: [], role: 'relic' }, 'objective'));
+  if (pl.guardian) {
+    let gx = ax, gy = ay;
+    if (pl.relic) {
+      const near: number[] = [];
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const i = (ay + dy) * f.width + (ax + dx);
+        if ((dx || dy) && ax + dx >= 0 && ay + dy >= 0 && ax + dx < f.width && ay + dy < f.height && ok(i, 1)) near.push(i);
+      }
+      if (near.length) { const ni = near[rng.int(near.length)]; gx = ni % f.width; gy = Math.trunc(ni / f.width); }
+    }
+    const rank = pl.rank ?? 2;
+    const kind = pl.guardianKind ?? pickGuardianKind(ctx.content, ctx.world.secret.seed, 'main', depth, rank, rng);
+    if (kind) {
+      const spec = guardianSpec(ctx.content, depth, kind, rank, gx, gy, rng);
+      if (spec.type === 'monster') spec.delay = 0;
+      const g = spawnFromSpec(ctx, key, spec, 'objective');
+      // 生成済みの階の時刻に合わせる（その階の時間で動き出す）
+      spawned.push(g);
+    }
+  }
+  recordTargets(ctx, spawned);
 }
 
 /** ensureFloor から: 生成された守護者・遺物を遠征に記録する（俯瞰専用イベント） */
@@ -130,13 +240,14 @@ function present(pr: PlayerRecord | undefined): boolean {
 /** 目的の進捗を World から計算する（イベントは出さない） */
 export function computeProgress(ctx: Ctx, x: Expedition): ObjectiveProgress {
   const w = ctx.world;
+  // 到達（踏破型）の達成: 目標階（かそれより深い階）の下り階段に参加者が立った（V3-2R3 §20.1。着いただけでは達成しない）
   let reached = x.progress.reached;
   if (!reached && x.objective.targetDepth !== null) {
     for (const pid of w.playerOrder) {
       const pr = w.players[pid];
       if (pr.state !== 'alive') continue;
       const e = w.entities[pr.entityId];
-      if (e?.pos && (w.floors[e.pos.floor]?.depth ?? 0) >= x.objective.targetDepth) reached = true;
+      if (e?.pos && (w.floors[e.pos.floor]?.depth ?? 0) >= x.objective.targetDepth && ctx.terrainAt(e.pos.floor, e.pos.x, e.pos.y).stairs === 'down') reached = true;
     }
   }
   let maxDepth = x.progress.maxDepth ?? 0;
@@ -213,7 +324,11 @@ export function accrueHaul(ctx: Ctx): void {
       const pid = byEntity.get(ev.killer)!;
       // 見ていなかった相手（視界外で毒が倒した）: 撃破と賞金だけ。種族は書かない
       const unseen = !!ev.masks?.[pid]?.includes('id');
-      gains.kills += h.perKill;
+      // 撃破の点 = 種族の経験値 × killPerXp × 深さの係数、接辞付きは × killAffixPct %（V3-2R3 §20.5）
+      const depth = ev.floor ? w.floors[ev.floor]?.depth ?? 1 : 1;
+      gains.kills += killPoints({ expedition: ctx.content.balance.expedition, haul: h }, ctx.content.monsters[ev.kind]?.xp ?? 0, depth, (ev.affixes?.length ?? 0) > 0);
+      // 守護者は種族の記録と分けるので、「初めて倒した種族」の発見に数えない
+      if (ev.id === x.targets.guardian) { if (ev.bounty) { gains.bounty += ev.bounty; reasons.push(unseen ? 'bounty' : `bounty:${ev.kind}`); } continue; }
       if (ev.bounty) { gains.bounty += ev.bounty; reasons.push(unseen ? 'bounty' : `bounty:${ev.kind}`); }
       if (unseen) continue;
       const k = `${pid}|${ev.kind}`;
@@ -299,7 +414,9 @@ export function doExtract(ctx: Ctx, e: Entity, pr: PlayerRecord, completed: bool
     extractedAfter: [...x.extracted, { player: pr.id, completed, treasure, ...(lifeline ? { lifeline: true } : {}) }], seenBy: [], floor: key,
   });
   const cur = ctx.world.entities[e.id];
-  const extractPos = { floor: key, x: cur.pos!.x, y: cur.pos!.y };
+  // 綱で戻った次の遠征は、この遠征を始めた地点から（綱を使った地点ではない。V3-2R3a §22.1）
+  const startPos = lifeline ? x.start[pr.id]?.pos : undefined;
+  const extractPos = startPos && ctx.world.floors[startPos.floor] ? { ...startPos } : { floor: key, x: cur.pos!.x, y: cur.pos!.y };
   const body = structuredClone(cur);
   delete body.pos;
   if (treasureIds.length) body.inv = { ...body.inv!, items: body.inv!.items.filter((id) => !treasureIds.includes(id)) };
@@ -426,6 +543,7 @@ export function startExpedition(ctx: Ctx, pr: PlayerRecord, offer: number | 'end
   let slot: OfferSlot | undefined;
   let traits: string[] = [];
   let multiplierPct = 100;
+  let guardianKind: string | undefined;
   if (offer === 'endless') objective = { type: 'endless', targetDepth: null };
   else {
     const o = camp.offers.find((c) => c.index === offer);
@@ -436,12 +554,16 @@ export function startExpedition(ctx: Ctx, pr: PlayerRecord, offer: number | 'end
     slot = o.slot;
     traits = [...(o.traits ?? [])];
     multiplierPct = o.multiplierPct ?? 100;
+    guardianKind = o.guardianKind;
   }
   const participants: PlayerId[] = w.playerOrder.filter((pid) => present(w.players[pid]));
   const start: Expedition['start'] = {};
   for (const pid of participants) {
     const p = w.players[pid];
-    start[pid] = { kills: p.stats.kills, turns: w.entities[p.entityId]?.actor?.turns ?? 0, deepest: p.stats.deepest };
+    const pe = w.entities[p.entityId];
+    // この遠征を始める地点（キャンプからなら再開する階段、盤面にいればその場）
+    const pos = p.state === 'at_camp' ? resumePointOf(ctx, pid) : pe?.pos ? { floor: pe.pos.floor, x: pe.pos.x, y: pe.pos.y } : undefined;
+    start[pid] = { kills: p.stats.kills, turns: pe?.actor?.turns ?? 0, deepest: p.stats.deepest, ...(pos ? { pos } : {}) };
   }
   let startDepth = 0;
   for (const pid of participants) {
@@ -455,17 +577,109 @@ export function startExpedition(ctx: Ctx, pr: PlayerRecord, offer: number | 'end
     participants, start, targets: { guardian: null, relic: null }, progress: { reached: false, guardianSlain: false, relicHeldBy: null, maxDepth: startDepth },
     extracted: [], result: null,
     ...(slot ? { slot } : {}), traits, multiplierPct, haul: { bounty: 0, discovery: 0, kills: 0 },
+    ...(guardianKind ? { guardianKind } : {}), guardianRank: guardianRankOf(slot),
   };
   ctx.emit({ type: 'expedition_started', expedition: exp, seenBy: 'all', floor: null });
+  // キャンプにいる間に、再開する階は落ち着く（V3-2R3a §22.1）: 追跡をやめて全快し、再開するマスが見える敵は離れた場所へ
+  const settleRng = Rng.fromSeed(`${w.secret.seed}|expedition|${exp.no}|settle`);
+  const settled = new Set<string>();
+  for (const pid of participants) {
+    if (w.players[pid].state !== 'at_camp') continue;
+    const at = resumePointOf(ctx, pid);
+    const k = `${at.floor}|${at.x}|${at.y}`;
+    if (settled.has(k)) continue;
+    settled.add(k);
+    settleFloor(ctx, at, settleRng);
+  }
   for (const pid of participants) if (w.players[pid].state === 'at_camp') returnFromCamp(ctx, pid);
   // キャンプが帰還の綱を 1 本持たせる
   for (const pid of participants) issueLifeline(ctx, pid);
+  // 目標階が生成済みなら、守護者・遺物をこの時点で置く
+  const started = currentExpedition(w);
+  if (started) placeOnExistingFloor(ctx, started);
   // 条件（視界など）を能力値に反映
   for (const pid of participants) {
     const e = w.entities[w.players[pid].entityId];
     if (e?.pos) recomputeStats(ctx, e, 'expedition');
   }
   return null;
+}
+
+/** キャンプから再開する地点（前回 extract した地点。無ければ地下 1 階の入口） */
+function resumePointOf(ctx: Ctx, pid: PlayerId): FloorPos {
+  const w = ctx.world;
+  const pr = w.players[pid];
+  const f1 = w.floors['main:1'];
+  return pr.extractPos && w.floors[pr.extractPos.floor] ? { ...pr.extractPos } : { floor: 'main:1', x: f1.entry.x, y: f1.entry.y };
+}
+
+/**
+ * 再開する階を落ち着かせる（V3-2R3a §22.1）: その階の敵は追跡をやめ（眠っている者はそのまま）、体力は全快する。
+ * 再開するマスが見える位置にいる敵は、転移の着地と同じ規則で動かす（12 マス以上離れ、そこから見えないマス。無ければ最も遠いマス）
+ */
+function settleFloor(ctx: Ctx, at: FloorPos, rng: Rng): void {
+  const key = at.floor;
+  const f = ctx.world.floors[key];
+  if (!f) return;
+  const opaque = isOpaqueFn(ctx, key);
+  const minD = ctx.content.balance.teleport.minDistance;
+  const prevFloor = ctx.curFloor;
+  ctx.curFloor = key;
+  const mons = ctx.entitiesOn(key).filter((m) => m.actor?.ai && !m.player && m.pos && (m.stats?.hp ?? 0) > 0).sort((a, b) => a.sid - b.sid);
+  for (const m0 of mons) {
+    let m = ctx.world.entities[m0.id];
+    const ai = m.actor!.ai!;
+    if (ai.state !== 'asleep' && ai.state !== 'unaware') {
+      ctx.emit({ type: 'ai_state_changed', id: m.id, ai: { ...ai, state: 'unaware', targetPos: null, lostTurns: 0 }, dormant: !!m.actor!.dormant, nextActAt: m.actor!.nextActAt, seenBy: [], floor: key });
+    }
+    m = ctx.world.entities[m.id];
+    if (m.stats && m.stats.hp < m.stats.maxHp) {
+      ctx.emit({ type: 'healed', target: m.id, targetKind: m.kind, amount: m.stats.maxHp - m.stats.hp, hpAfter: m.stats.maxHp, via: 'camp', seenBy: [], floor: key });
+    }
+    m = ctx.world.entities[m.id];
+    // 守護者は離れた場所ではなく持ち場へ戻す（V3-2R3b §23.2）。持ち場がふさがっていれば範囲の中の近い空きマス
+    if (m.home) {
+      const home = m.home;
+      if (m.pos!.x === home.x && m.pos!.y === home.y) continue;
+      const leash = ctx.content.balance.guardian.leash;
+      let to: Pos | undefined;
+      for (let r = 0; r <= leash && !to; r++) {
+        for (let y = home.y - r; y <= home.y + r && !to; y++) {
+          for (let x = home.x - r; x <= home.x + r && !to; x++) {
+            if (Math.max(Math.abs(x - home.x), Math.abs(y - home.y)) !== r || x < 0 || y < 0 || x >= f.width || y >= f.height) continue;
+            const tr = ctx.terrainAt(key, x, y);
+            if (!tr.passable || tr.stairs || ctx.featureAt(key, x, y)?.trap) continue;
+            const occ = ctx.actorAt(key, x, y);
+            if (occ && occ.id !== m.id) continue;
+            to = { x, y };
+          }
+        }
+      }
+      if (to && !(to.x === m.pos!.x && to.y === m.pos!.y)) {
+        ctx.emit({ type: 'entity_moved', id: m.id, kind: m.kind, from: { x: m.pos!.x, y: m.pos!.y }, to: { ...to }, mode: 'teleport', seenBy: [], floor: key });
+      }
+      continue;
+    }
+    const sees = inCircle(m.pos!, at, m.stats?.sight ?? 7) && hasLos(m.pos!, at, opaque);
+    if (!sees) continue;
+    const sight = Math.max(m.stats?.sight ?? 7, 8);
+    const free: Pos[] = [];
+    const hidden: Pos[] = [];
+    for (let y = 1; y < f.height - 1; y++) {
+      for (let x = 1; x < f.width - 1; x++) {
+        const tr = ctx.terrainAt(key, x, y);
+        if (!tr.passable || tr.stairs || ctx.actorAt(key, x, y) || ctx.featureAt(key, x, y)?.trap) continue;
+        free.push({ x, y });
+        if (cheb(at, { x, y }) >= minD && !(inCircle({ x, y }, at, sight) && hasLos({ x, y }, at, opaque))) hidden.push({ x, y });
+      }
+    }
+    let to: Pos | undefined;
+    if (hidden.length) to = hidden[rng.int(hidden.length)];
+    else if (free.length) to = [...free].sort((a, b) => cheb(at, b) - cheb(at, a) || a.y - b.y || a.x - b.x)[0];
+    if (!to) continue;
+    ctx.emit({ type: 'entity_moved', id: m.id, kind: m.kind, from: { x: m.pos!.x, y: m.pos!.y }, to: { ...to }, mode: 'teleport', seenBy: [], floor: key });
+  }
+  ctx.curFloor = prevFloor;
 }
 
 /** キャンプのプレイヤーを前回 extract した地点へ戻す */

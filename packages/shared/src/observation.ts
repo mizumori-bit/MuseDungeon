@@ -3,7 +3,8 @@
 import type { Catalog } from './catalog';
 import { haulTotal, nameOf, nextCampOf, nextOverreach, offerGap, overreachPoints, payoutOf, regenInterval, regenStep } from './catalog';
 import { multText, objectiveText, offerText, partsText, progressText, resultText } from './expedition';
-import { isStationary, pickableItems } from './macro';
+import { isStationary, pickableItems, sameOrWorseEquip } from './macro';
+import { attacksPerTurn, memoryOf, monsterSpeedOf, selfSpeed } from './danger';
 import type { PerceivedEvent } from './filter';
 import { kindName } from './narrate';
 import type { NavGrid } from './nav';
@@ -18,7 +19,7 @@ import { hpState, xpForLevel } from './view';
 export interface Alert { code: string; text: string; entity?: string; data?: Record<string, unknown> }
 
 /** 見れば分かる特徴（V3-2R2 §18.2）: 群れる・飛び道具・動かない。種族の公開タグから */
-export type MonsterTrait = 'pack' | 'ranged' | 'stationary';
+export type MonsterTrait = 'pack' | 'ranged' | 'stationary' | 'armored';
 const OBVIOUS_TRAITS: readonly MonsterTrait[] = ['pack', 'ranged', 'stationary'];
 
 export interface ObsMonster {
@@ -31,8 +32,14 @@ export interface ObsMonster {
   worst_hit: number | null;
   /** 速さ: 自分の今の速さとの比較（見れば分かる。V3-2R2 §18.2） */
   speed: 'slow' | 'normal' | 'fast';
-  /** 見れば分かる特徴（群れる・飛び道具・動かない） */
+  /** 見れば分かる特徴（群れる・飛び道具・動かない・重装＝素の装甲 3 以上） */
   traits: MonsterTrait[];
+  /** 体格（小柄・大柄。並は出さない。V3-2R3 §20.4） */
+  size?: 'small' | 'large';
+  /** 1 手番あたりの最悪の被害 = worst_hit × 自分の 1 手番に相手が行動する回数（記録が無ければ null） */
+  worst_turn: number | null;
+  /** 通りの記録: 自分の攻撃が当たったときの実ダメージの [合計, 回数]（近接・投擲） */
+  dealt?: { melee?: [number, number]; thrown?: [number, number] };
   /** 本当に初めて見た種族（このランで遭遇した個体がいま見えているものだけ） */
   first_seen?: boolean;
   /** 命中の記録 [命中, 回数]（記録が無ければ出さない）。確率そのものは出さない（相手の回避は伏せた情報） */
@@ -101,10 +108,8 @@ export interface ObsExpedition {
      * dir は下り階段が未発見のときの「下への風」の方角（V3-2R2 §18.4）
      */
     next_overreach: { depth: number; points: number; at: 'stairs_down'; path_len: number | null; dir?: Dir } | null;
-    /** 今帰った場合の次の候補の下限と推奨レベル（潜るほど深くなる） */
+    /** 今帰った場合の次の候補の下限と推奨レベル（目標として達成した最深の階から。踏破では深くならない。V3-2R3 §20.2） */
     next_camp: { min_target_depth: number; recommended_level: number } | null;
-    /** 次の踏破をしてから帰った場合の次の候補の下限と推奨レベル */
-    next_camp_after_crossing?: { min_target_depth: number; recommended_level: number } | null;
     /** 1 行の要約 */
     text: string;
   };
@@ -117,6 +122,8 @@ export interface ObsCamp {
     slot?: OfferSlot; traits?: string[]; multiplier_pct: number;
     /** 推奨レベルと、自分のレベルとの差（正なら推奨より低い）。条件の危険度の合計は別に出す（V3-2R §14.4） */
     recommended_level: number | null; level_gap: number | null; trait_danger: number;
+    /** 守護者の見込み（格と見れば分かる特徴。種族名は会うまで出さない。V3-2R3 §20.1） */
+    guardian?: { rank: 1 | 2 | 3; traits: string[] };
   }[];
 }
 export interface ObsPlayer { id: string; name: string; pos: Pos; dir: Dir | null; dist: number; hp_state: HpState }
@@ -313,8 +320,8 @@ export function itemStatsText(L: Locale, s: ItemStats | undefined): string {
 
 /** 能力タグの表示名 */
 export function abilityName(locale: Locale, a: string): string {
-  const ja: Record<string, string> = { flees: '手負いで逃げる', ranged: '遠隔攻撃', fast: '速い', slow: '遅い', poison: '毒', stationary: '動かない', pack: '群れる' };
-  const en: Record<string, string> = { flees: 'flees when hurt', ranged: 'ranged attack', fast: 'fast', slow: 'slow', poison: 'poison', stationary: 'stationary', pack: 'pack' };
+  const ja: Record<string, string> = { flees: '手負いで逃げる', ranged: '遠隔攻撃', fast: '速い', slow: '遅い', poison: '毒', stationary: '動かない', pack: '群れる', armored: '重装' };
+  const en: Record<string, string> = { flees: 'flees when hurt', ranged: 'ranged attack', fast: 'fast', slow: 'slow', poison: 'poison', stationary: 'stationary', pack: 'pack', armored: 'armored' };
   return (locale === 'en' ? en[a] : ja[a]) ?? a;
 }
 
@@ -330,15 +337,14 @@ export function memoryCombatText(locale: Locale, mem: MonsterMemory): string {
     `met ${mem.encounters}, killed ${mem.kills}, speed: ${speed}, ranged: ${ranged}, max dmg to you ${mem.maxDamageToYou}, max dmg by you ${mem.maxDamageByYou}, HP record: ${hp}${ab.length ? ', other: ' + ab.join(', ') : ''}`);
 }
 
-/** 敵の実効の速さ（状態異常の倍率込み）。分からなければ null */
-function monsterSpeed(catalog: Catalog, e: EntityView): number | null {
-  if (e.speed === undefined) return null;
-  let sp = e.speed;
-  for (const st of e.statuses ?? []) {
-    const pct = catalog.statuses[st]?.speedPct;
-    if (pct !== undefined) sp = floorDiv(sp * pct, 100);
-  }
-  return Math.max(10, sp);
+/** 通りの記録の文（「近接の通り 平均 2.5／13 回」） */
+export function dealtText(L: Locale, d: ObsMonster['dealt']): string {
+  if (!d) return '';
+  const avg = (x: [number, number]) => { const a10 = Math.trunc((x[0] * 10) / Math.max(1, x[1])); return `${Math.trunc(a10 / 10)}.${a10 % 10}`; };
+  const parts: string[] = [];
+  if (d.melee) parts.push(t(L, `近接の通り 平均${avg(d.melee)}／${d.melee[1]}回`, `melee avg ${avg(d.melee)} over ${d.melee[1]}`));
+  if (d.thrown) parts.push(t(L, `投擲の通り 平均${avg(d.thrown)}／${d.thrown[1]}回`, `thrown avg ${avg(d.thrown)} over ${d.thrown[1]}`));
+  return parts.join(L === 'en' ? ', ' : '・');
 }
 
 /** 命中の記録の文（「あなたの命中 近接 1/6・相手の命中 3/5」） */
@@ -355,12 +361,7 @@ const EXPLORED_JA: Record<number, string> = { 1: '約 1/4', 2: '約半分', 3: '
 const EXPLORED_EN: Record<number, string> = { 1: 'about a quarter', 2: 'about half', 3: 'about three quarters', 4: 'nearly all' };
 
 function effectiveSpeed(view: PlayerView, catalog: Catalog): number {
-  let sp = view.self.speed;
-  for (const st of view.self.statuses) {
-    const pct = catalog.statuses[st.id]?.speedPct;
-    if (pct !== undefined) sp = floorDiv(sp * pct, 100);
-  }
-  return Math.max(10, sp);
+  return selfSpeed(view, catalog);
 }
 
 /** 全快まで休んだ場合の見積もり（engine の回復処理と同じ式・同じ蓄積値で数える） */
@@ -402,7 +403,7 @@ export function restEstimate(view: PlayerView, catalog: Catalog, huntingVisible:
 }
 
 export function threatOf(view: PlayerView, e: EntityView): 1 | 2 | 3 | 4 | 5 | null {
-  const mem = e.kind ? view.monsterMemory[e.kind] : undefined;
+  const mem = memoryOf(view, e);
   // 攻撃を受けた記録が無い種族は「不明（初見）」。深度からの推定で低く見せない（V3-2R §14.3）
   if (!mem || mem.maxDamageToYou <= 0) return null;
   let est = mem.maxDamageToYou;
@@ -551,21 +552,31 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
   for (const e of view.entities) if (e.cat === 'monster' && e.kind) visibleOfKind.set(e.kind, (visibleOfKind.get(e.kind) ?? 0) + 1);
   for (const e of view.entities) {
     if (e.cat === 'monster') {
-      const mem = e.kind ? view.monsterMemory[e.kind] : undefined;
-      const sp = monsterSpeed(catalog, e);
-      const tags = e.kind ? catalog.monsters[e.kind]?.tags ?? [] : [];
+      // 守護者は守護者の記録（種族の記録と分ける。V3-2R3 §20.4）
+      const mem = memoryOf(view, e);
+      const sp = monsterSpeedOf(catalog, e);
+      const cm = e.kind ? catalog.monsters[e.kind] : undefined;
+      const tags = cm?.tags ?? [];
       const m: ObsMonster = {
         id: e.id, name: monsterDisplayName(catalog, L, e), pos: e.pos, ...rel(e.pos),
         hp_state: e.hp ?? 'healthy', awareness: e.awareness ?? 'unaware', threat: threatOf(view, e),
         statuses: (e.statuses ?? []).map((s) => nameOf(catalog.statuses[s]?.name, L, s)),
         worst_hit: mem && mem.maxDamageToYou > 0 ? mem.maxDamageToYou : null,
+        worst_turn: mem && mem.maxDamageToYou > 0 ? mem.maxDamageToYou * attacksPerTurn(view, catalog, e) : null,
         speed: sp === null || sp === mySpeed ? 'normal' : sp > mySpeed ? 'fast' : 'slow',
-        traits: OBVIOUS_TRAITS.filter((tr) => tags.includes(tr)),
+        traits: [...OBVIOUS_TRAITS.filter((tr) => tags.includes(tr)), ...(cm?.armored ? ['armored' as const] : [])],
         shot: e.shot ? 'clear' : 'blocked',
         shots: throwables.map((tw) => ({ slot: tw.slot, state: !e.shot ? 'blocked' as const : pos && cheb(pos, e.pos) > tw.range ? 'out_of_range' as const : 'clear' as const })),
       };
+      if (cm?.size === 'small' || cm?.size === 'large') m.size = cm.size;
       // 本当に初めて見た種族: 撃破が無く、遭遇した個体の数がいま見えている数以下
       if (!mem || (mem.kills === 0 && mem.encounters <= (visibleOfKind.get(e.kind ?? '') ?? 0))) m.first_seen = true;
+      if (mem?.dmgByYou?.melee || mem?.dmgByYou?.thrown) {
+        m.dealt = {
+          ...(mem.dmgByYou?.melee ? { melee: [...mem.dmgByYou.melee] as [number, number] } : {}),
+          ...(mem.dmgByYou?.thrown ? { thrown: [...mem.dmgByYou.thrown] as [number, number] } : {}),
+        };
+      }
       if (mem?.hitsByYou?.melee || mem?.hitsByYou?.thrown || mem?.hitsOnYou) {
         m.hits = {
           ...(mem.hitsByYou?.melee ? { your_melee: [...mem.hitsByYou.melee] as [number, number] } : {}),
@@ -577,10 +588,9 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       if (e.bounty) m.bounty = e.bounty;
       if (e.fleeing) m.fleeing = true;
       if (e.damageSeen) m.damage_seen = e.damageSeen;
-      if (e.role !== 'guardian') {
-        const est = hpLeftEstimate(e.kind ? view.monsterMemory[e.kind] : undefined, m.hp_state, e.damageSeen ?? 0, catalog.rules?.estimateMinSamples ?? 5);
-        if (est) m.hp_left_est = est;
-      }
+      // 推定残り HP（守護者は守護者の体力の記録から）
+      const est = hpLeftEstimate(mem, m.hp_state, e.damageSeen ?? 0, catalog.rules?.estimateMinSamples ?? 5);
+      if (est) m.hp_left_est = est;
       monsters.push(m);
     } else if (e.cat === 'item') {
       const name = itemDisplayName(catalog, L, e.kind, e.appearanceId, e.affixes);
@@ -715,24 +725,27 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
   }
   // 自分に届く追跡中の敵（逃走中を除く。動かない敵は隣にいるときだけ）
   const huntingReach = hostiles.filter((m) => m.awareness === 'hunting' && !m.fleeing && !(m.traits.includes('stationary') && m.dist > 1));
-  const recorded = huntingReach.filter((m) => m.worst_hit !== null);
-  const worstSum = recorded.reduce((a, m) => a + m.worst_hit!, 0);
+  // 1 手番あたりの最悪の被害（worst_hit × 行動の回数。V3-2R3 §20.4）で群れの見込みと致死を計算する
+  const recorded = huntingReach.filter((m) => m.worst_turn !== null);
+  const worstSum = recorded.reduce((a, m) => a + m.worst_turn!, 0);
   const unrecorded = huntingReach.length - recorded.length;
   if (huntingReach.length >= 2 && view.status !== 'dead') {
     // 群れ全体の被害見込み（思い出の記録だけから。V3-2R2 §18.2）
     alerts.push({
       code: 'incoming',
-      text: t(L, `追跡中 ${huntingReach.length} 体。記録の最大被害の合計 ${worstSum}／手${unrecorded ? `、ほかに記録のない ${unrecorded} 体` : ''}。あなたの HP ${me.stats.hp}`,
-        `${huntingReach.length} hunting you. Recorded worst hits sum to ${worstSum}/turn${unrecorded ? `, plus ${unrecorded} with no record` : ''}. Your HP ${me.stats.hp}`),
+      text: t(L, `追跡中 ${huntingReach.length} 体。1 手の最悪の被害の合計 ${worstSum}${unrecorded ? `、ほかに記録のない ${unrecorded} 体` : ''}。あなたの HP ${me.stats.hp}`,
+        `${huntingReach.length} hunting you. Worst damage per turn sums to ${worstSum}${unrecorded ? `, plus ${unrecorded} with no record` : ''}. Your HP ${me.stats.hp}`),
       data: { hunting: huntingReach.length, worst_sum: worstSum, unrecorded, hp: me.stats.hp },
     });
   } else if (hostiles.length && !adjacent.length) alerts.push({ code: 'enemy_in_view', text: t(L, `敵が視界内: ${hostiles[0].name}`, `Enemy in view: ${hostiles[0].name}`), entity: hostiles[0].id });
-  // 一撃で倒されうる: 追跡中（逃走中を除く）の敵の「受けた最大の一撃」、または群れの合計が今の HP 以上
-  const lethal = huntingReach.filter((m) => m.worst_hit !== null && m.worst_hit >= me.stats.hp);
+  // 1 手で倒されうる: 1 体の worst_turn、または合計が今の HP 以上。2 手で倒されうる: 合計の 2 倍が HP 以上
+  const lethal = huntingReach.filter((m) => m.worst_turn !== null && m.worst_turn >= me.stats.hp);
   if (lethal.length && view.status !== 'dead') {
-    alerts.push({ code: 'lethal_range', text: t(L, `一撃で倒されうる: ${lethal.map((m) => `${m.name}(最大 ${m.worst_hit})`).join(', ')}`, `One hit could kill you: ${lethal.map((m) => `${m.name} (max ${m.worst_hit})`).join(', ')}`), entity: lethal[0].id });
+    alerts.push({ code: 'lethal_range', text: t(L, `1 手で倒されうる: ${lethal.map((m) => `${m.name}(最悪 ${m.worst_turn})`).join(', ')}`, `One turn could kill you: ${lethal.map((m) => `${m.name} (worst ${m.worst_turn})`).join(', ')}`), entity: lethal[0].id });
   } else if (recorded.length >= 2 && worstSum >= me.stats.hp && view.status !== 'dead') {
-    alerts.push({ code: 'lethal_range', text: t(L, `1 手で倒されうる: 追跡中の敵の記録の最大被害の合計 ${worstSum} ≥ HP ${me.stats.hp}`, `One round could kill you: recorded worst hits of hunting enemies sum to ${worstSum} >= HP ${me.stats.hp}`), entity: recorded[0].id });
+    alerts.push({ code: 'lethal_range', text: t(L, `1 手で倒されうる: 追跡中の敵の 1 手の最悪の被害の合計 ${worstSum} ≥ HP ${me.stats.hp}`, `One turn could kill you: worst damage per turn of hunting enemies sums to ${worstSum} >= HP ${me.stats.hp}`), entity: recorded[0].id });
+  } else if (recorded.length && worstSum * 2 >= me.stats.hp && view.status !== 'dead') {
+    alerts.push({ code: 'lethal_2turns', text: t(L, `2 手で倒されうる: 1 手の最悪の被害 ${worstSum} × 2 ≥ HP ${me.stats.hp}`, `Two turns could kill you: worst damage per turn ${worstSum} x 2 >= HP ${me.stats.hp}`), entity: recorded[0].id });
   }
   if (me.statuses.some((s) => s.id === 'core:poison')) alerts.push({ code: 'poisoned', text: t(L, '毒に冒されている', 'You are poisoned') });
   if (onStairs) alerts.push({ code: 'on_stairs', text: onStairs === 'down' ? t(L, '下り階段の上にいる', 'You are on stairs down') : t(L, '上り階段の上にいる', 'You are on stairs up') });
@@ -749,7 +762,8 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
         code: 'escape',
         text: t(L, `${st.type === 'up' ? '上り' : '下り'}階段まで ${st.path_len} 歩。${faster ? `追ってくる敵のうち ${faster} 体はあなたより速い` : '追ってくる敵にあなたより速いものはいない'}（階段の上なら extract できる・階を移れば敵は追ってこない）`,
           `${st.path_len} steps to the stairs ${st.type}. ${faster ? `${faster} of your pursuers are faster than you` : 'none of your pursuers is faster than you'} (on stairs you can extract; enemies do not follow you between floors)`),
-        data: { stairs: st.type, path_len: st.path_len, faster },
+        // worst_if_chased: 追われたままなら最悪の被害（歩数 × worst_turn の合計。記録の無い敵がいれば null。V3-2R3b §23.1）
+        data: { stairs: st.type, path_len: st.path_len, faster, worst_if_chased: unrecorded ? null : st.path_len! * worstSum, hp: me.stats.hp },
       });
     }
   }
@@ -842,16 +856,14 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
         const where = here ? (down ? t(L, `（経路 ${down.path_len}）`, ` (path ${down.path_len})`) : draft ? t(L, `（未発見・下への風は${DIR_JA[draft]}）`, ` (not found yet; the draft blows ${draft})`) : t(L, '（未発見）', ' (not found yet)')) : '';
         nextText = t(L, ` / 地下${nx.depth}階の下り階段に着けば +${nx.points}${where}`, ` / reach the down stairs of depth ${nx.depth} for +${nx.points}${where}`);
       }
-      const nc = catalog.rules.recommendedLevel ? nextCampOf(catalog.rules, view.deepestDepth) : null;
-      const nc2 = nc && nx ? nextCampOf(catalog.rules, Math.max(view.deepestDepth, nx.depth)) : null;
-      const after = nc2 && nc && nc2.minTargetDepth !== nc.minTargetDepth
-        ? t(L, `、地下${nx!.depth}階へ降りると地下${nc2.minTargetDepth}階以上（推奨 Lv${nc2.recommendedLevel}）`, `; once you go down to depth ${nx!.depth}, from depth ${nc2.minTargetDepth} (Lv${nc2.recommendedLevel})`) : '';
-      const campText = nc ? t(L, ` / 帰ると次の候補は地下${nc.minTargetDepth}階以上（推奨 Lv${nc.recommendedLevel}）${after}`, ` / next offers from depth ${nc.minTargetDepth} (recommended Lv${nc.recommendedLevel})${after}`) : '';
+      // 次の候補の下限は「目標として達成した最深の階」から（踏破しても深くならない。V3-2R3 §20.2）
+      const reachedCamp = expedition.extract_outcome === 'complete' && xv.objective.targetDepth !== null ? Math.max(view.campDepth, xv.objective.targetDepth) : view.campDepth;
+      const nc = catalog.rules.recommendedLevel ? nextCampOf(catalog.rules, reachedCamp) : null;
+      const campText = nc ? t(L, ` / 帰ると次の候補は地下${nc.minTargetDepth}階以上（推奨 Lv${nc.recommendedLevel}）`, ` / next offers from depth ${nc.minTargetDepth} (recommended Lv${nc.recommendedLevel})`) : '';
       const lifeText = ifLifeline !== undefined ? t(L, `・綱なら +${ifLifeline}`, `, lifeline +${ifLifeline}`) : '';
       expedition.haul = {
         total, multiplier_pct: xv.multiplierPct, parts, if_extract_now: ifNow, ...(ifLifeline !== undefined ? { if_lifeline_now: ifLifeline } : {}), next_overreach: next,
         next_camp: nc ? { min_target_depth: nc.minTargetDepth, recommended_level: nc.recommendedLevel } : null,
-        ...(nc2 ? { next_camp_after_crossing: { min_target_depth: nc2.minTargetDepth, recommended_level: nc2.recommendedLevel } } : {}),
         text: t(L,
           `戦利品 ${total}（${partsText(L, parts) || 'なし'}）${expedition.extract_outcome === 'complete' ? multText(xv.multiplierPct) : `撤退なら ${catalog.rules.haul.withdrawPct}%（目的を除く）`} → 今帰れば +${ifNow}${lifeText}${nextText}${campText} / 確定済み ${view.record.banked}`,
           `haul ${total} (${partsText(L, parts) || 'none'}) ${expedition.extract_outcome === 'complete' ? multText(xv.multiplierPct) : `withdraw ${catalog.rules.haul.withdrawPct}% without objective`} → extract now +${ifNow}${lifeText}${nextText}${campText} / banked ${view.record.banked}`),
@@ -867,6 +879,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
         index: o.index, type: o.objective.type, target_depth: o.objective.targetDepth, points: o.points,
         text: offerText(L, o, rules ? { rules, level: me.level } : undefined),
         ...(o.slot ? { slot: o.slot } : {}), ...(o.traits?.length ? { traits: [...o.traits] } : {}),
+        ...(o.guardian ? { guardian: { rank: o.guardian.rank, traits: [...o.guardian.traits] } } : {}),
         multiplier_pct: o.multiplierPct ?? 100,
         ...((): { recommended_level: number | null; level_gap: number | null; trait_danger: number } => {
           if (!rules?.recommendedLevel) return { recommended_level: null, level_gap: null, trait_danger: 0 };
@@ -891,6 +904,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
     passable_dirs, onStairs, itemsHere: itemsHere.length > 0, hostiles, frontiers: frontiers.length, known_stairs, grid,
     canExtract: expedition?.can_extract ?? false, objectiveComplete: expedition?.extract_outcome === 'complete', restTurns: rest && !rest.blocked_by ? rest.turns : null,
     attackers, mineCount, pickables, huntingReach, worstSum, unrecorded,
+    draft: view.floorHint?.draft ?? null,
     ifLifeline: expedition?.haul?.if_lifeline_now,
   });
 
@@ -969,6 +983,8 @@ interface VAInput {
   huntingReach: ObsMonster[]; worstSum: number; unrecorded: number;
   /** 帰還の綱を今使った場合の確定点 */
   ifLifeline?: number;
+  /** 下への風（今いる階の下り階段が未発見のとき） */
+  draft: Dir | null;
 }
 
 function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): string[] {
@@ -1004,30 +1020,55 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
   if (view.self.stats.hp < view.self.stats.maxHp) {
     out.push(hunting ? `rest (${t(L, '不可: 追跡中の敵が見えている', 'unavailable: a hunting enemy is in view')})` : x.restTurns !== null ? `rest (${t(L, `全快まで約${x.restTurns}手`, `~${x.restTurns} turns to full`)})` : 'rest');
   }
-  if (x.canExtract) out.push(x.objectiveComplete ? `extract (${t(L, '帰還: 遠征達成', 'complete the expedition')})` : `extract confirm:true (${t(L, '撤退: 未達成のまま終える', 'withdraw without the reward')})`);
+  // 帰還する階段: 次の遠征はこの階段から始まる（V3-2R3 §20.6）
+  const fromHere = t(L, '・次の遠征はこの階段から始まる。階の敵は追跡をやめて全快する', '; the next expedition starts from these stairs, where monsters stop hunting and heal fully');
+  if (x.canExtract) out.push(x.objectiveComplete ? `extract (${t(L, '帰還: 遠征達成', 'complete the expedition')}${fromHere})` : `extract confirm:true (${t(L, '撤退: 未達成のまま終える', 'withdraw without the reward')}${fromHere})`);
   // 移動マクロはその場で進める mode だけを出す（V3-2R §14.2）。隣に起きている敵がいれば careful では動かないので flee を出す
   const adjAwake = x.hostiles.filter((m) => m.dist <= 1 && m.awareness !== 'asleep' && !m.fleeing);
   // 既定の hp_floor の実数（steady・fight は最大 HP の 50%。V3-2R2 §18.5）
   const floor50 = Math.trunc((view.self.stats.maxHp * 50) / 100);
   const stopText = t(L, `HP ${floor50} 未満で止まる`, `stops below HP ${floor50}`);
-  const flee = adjAwake.length ? ' mode:flee' : x.huntingReach.length ? ` mode:steady (${stopText})` : '';
+  // 階段への移動の見込み（V3-2R3b §23.1）: 追跡中の敵が届くなら、歩数と「追われたままなら」の最悪の被害（歩数 × worst_turn の合計）。
+  // 記録の無い敵がいれば「不明」
+  const hpNow = view.self.stats.hp;
+  const nearestStairs = (type?: 'down' | 'up') => x.known_stairs.filter((s) => (!type || s.type === type) && s.path_len !== null).sort((a, b) => a.path_len! - b.path_len!)[0];
+  const stairsRisk = (type: 'down' | 'up'): string => {
+    const st = x.huntingReach.length ? nearestStairs(type) : undefined;
+    if (!st) return '';
+    const n = st.path_len!;
+    return x.unrecorded
+      ? t(L, `階段まで ${n} 歩。追われたままなら最悪の被害は不明（記録のない敵がいる。HP ${hpNow}）`, `${n} steps to the stairs. If they keep chasing you, worst damage unknown (an enemy has no record; HP ${hpNow})`)
+      : t(L, `階段まで ${n} 歩。追われたままなら最悪 ${n * x.worstSum} の被害（HP ${hpNow}）`, `${n} steps to the stairs. If they keep chasing you, worst ${n * x.worstSum} damage (HP ${hpNow})`);
+  };
+  const stairsLine = (type: 'down' | 'up'): string => {
+    const risk = stairsRisk(type);
+    const sep = t(L, '・', '; ');
+    if (adjAwake.length) return `travel_to stairs_${type} mode:flee${risk ? ` (${risk})` : ''}`;
+    if (x.huntingReach.length) return `travel_to stairs_${type} mode:steady (${stopText}${risk ? sep + risk : ''})`;
+    return `travel_to stairs_${type}`;
+  };
   for (const m of x.hostiles.filter((h) => h.dist <= 1)) out.push(`fight ${m.id} (${m.name}・${stopText})`);
-  // 迎え撃つ: 追跡中で届かない相手は、隣に来るまで待って戦う（最大 10 手番）
+  // 迎え撃つ: 追跡中で届かない相手は、隣に来るまで待って戦う（最大 10 手番）。射撃する相手は待ち受けない（V3-2R3a §22.2）
   if (!adjAwake.length) {
-    const comer = x.huntingReach.filter((m) => m.dist > 1 && !m.traits.includes('stationary'))[0];
+    const comer = x.huntingReach.filter((m) => m.dist > 1 && !m.traits.includes('stationary') && !m.traits.includes('ranged'))[0];
     if (comer) out.push(`fight ${comer.id} (${t(L, `${comer.name} を迎え撃つ: 隣に来るまで待つ・${stopText}`, `meet ${comer.name}: waits until it is adjacent, ${stopText}`)})`);
+    const shooter = x.huntingReach.filter((m) => m.dist > 1 && m.traits.includes('ranged'))[0];
+    if (shooter) out.push(`travel_to ${shooter.id} (${t(L, `${shooter.name}: 近づく（寄られると下がり、下がる間は撃たない）／視線を切る`, `${shooter.name}: close in (it backs off when approached and does not shoot while backing off) / break line of sight`)})`);
   }
   if (!adjAwake.length) {
     if (x.frontiers > 0 || x.pickables > 0) out.push(x.pickables > 0 ? `explore (${t(L, `拾えるアイテム ${x.pickables} 個も拾う`, `also picks up ${x.pickables} items`)})` : 'explore');
     else out.push(`explore (${t(L, '不可: 探索済み・拾う物なし', 'unavailable: explored, nothing to pick up')})`);
+    // 下への風の方角の未探索を優先する（V3-2R3 §20.5）
+    if (x.frontiers > 0 && x.draft) out.push(`explore toward:draft (${t(L, `下への風の${DIR_JA[x.draft]}を優先`, `prefer the draft (${x.draft})`)})`);
   }
-  if (x.known_stairs.some((s) => s.type === 'down' && !(x.onStairs === 'down'))) out.push(`travel_to stairs_down${flee}`);
-  if (x.known_stairs.some((s) => s.type === 'up' && !(x.onStairs === 'up'))) out.push(`travel_to stairs_up${flee}`);
+  if (x.known_stairs.some((s) => s.type === 'down' && !(x.onStairs === 'down'))) out.push(stairsLine('down'));
+  if (x.known_stairs.some((s) => s.type === 'up' && !(x.onStairs === 'up'))) out.push(stairsLine('up'));
   if (x.onStairs) out.push(`use_stairs (${x.onStairs === 'down' ? t(L, '降りる', 'descend') : t(L, '上る', 'ascend')})`);
   if (x.itemsHere) out.push('pickup');
   if (x.mineCount > 0 && !adjAwake.length) out.push(`collect (${t(L, `自分が投げた物 ${x.mineCount} 個を回収`, `pick up ${x.mineCount} thrown items`)})`);
   if (x.pickables > 0 && !adjAwake.length) out.push(`collect what:items (${t(L, `見えている・記憶したアイテム ${x.pickables} 個を拾って回る`, `pick up ${x.pickables} known items`)})`);
   const throwGroups: { key: string; slots: string[]; targets: ObsMonster[] }[] = [];
+  const lifelineLines: string[] = [];
   for (const it of view.inventory) {
     const name = itemDisplayName(catalog, L, it.kind, it.appearanceId, it.affixes);
     const cat = itemCategory(catalog, it.kind, it.appearanceId);
@@ -1039,14 +1080,21 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
         out.push(`use_item ${it.slot} (${name}${x.ifLifeline !== undefined ? t(L, `・+${x.ifLifeline} 確定`, `, banks +${x.ifLifeline}`) : ''})`);
         continue;
       }
-      const turns = catalog.rules?.lifeline?.turns ?? 2;
+      const turns = catalog.rules?.lifeline?.turns ?? 0;
       const risk = x.huntingReach.length
-        ? t(L, `・追跡中 ${x.huntingReach.length} 体の記録の最大被害 ${x.worstSum}／手${x.unrecorded ? `＋記録なし ${x.unrecorded} 体` : ''}`, `, ${x.huntingReach.length} hunting: recorded worst ${x.worstSum}/turn${x.unrecorded ? ` + ${x.unrecorded} unrecorded` : ''}`) : '';
-      out.push(`use_item ${it.slot} (${t(L, `${name}: ${turns} 手番動けずにキャンプへ戻る${x.ifLifeline !== undefined ? `・+${x.ifLifeline} 確定` : ''}${risk}`, `${name}: ${turns} turns helpless, then back to camp${x.ifLifeline !== undefined ? `, banks +${x.ifLifeline}` : ''}${risk}`)})`);
+        ? t(L, `・追跡中 ${x.huntingReach.length} 体の 1 手の最悪の被害 ${x.worstSum}${x.unrecorded ? `＋記録なし ${x.unrecorded} 体` : ''}`, `, ${x.huntingReach.length} hunting: worst ${x.worstSum}/turn${x.unrecorded ? ` + ${x.unrecorded} unrecorded` : ''}`) : '';
+      const how = (turns > 0 ? t(L, `${turns} 手番動けずにキャンプへ戻る`, `${turns} turns helpless, then back to camp`) : t(L, 'その場でキャンプへ戻る（達成は捨てる）', 'back to camp at once (no completion)'))
+        + t(L, '・次の遠征はこの遠征を始めた階段から', '; the next expedition starts from where this one began');
+      const line = `use_item ${it.slot} (${t(L, `${name}: ${how}${x.ifLifeline !== undefined ? `・+${x.ifLifeline} 確定` : ''}${risk}`, `${name}: ${how}${x.ifLifeline !== undefined ? `, banks +${x.ifLifeline}` : ''}${risk}`)})`;
+      out.push(line);
+      lifelineLines.push(line);
       continue;
     }
-    if ((cat === 'potion' || cat === 'scroll' || ci?.usable) && !harmful) out.push(`use_item ${it.slot} (${name})`);
-    if (ci?.slot && !it.equipped) out.push(`equip ${it.slot} (${name})`);
+    // 隣に起きている追跡中の敵がいれば、使う間にその敵が行動する（V3-2R3 §20.4）
+    const exposed = adjAwake.some((m) => m.awareness === 'hunting') ? t(L, '・使う間に隣の敵が行動する', '; adjacent enemies act while you use it') : '';
+    if ((cat === 'potion' || cat === 'scroll' || ci?.usable) && !harmful) out.push(`use_item ${it.slot} (${name}${exposed})`);
+    // 同じか劣る装備は勧めない（V3-2R3 §20.6）
+    if (ci?.slot && !it.equipped && !sameOrWorseEquip(view, catalog, it)) out.push(`equip ${it.slot} (${name})`);
     // 投擲: 射程内で経路の通る相手だけ（自分を攻撃している相手を先に、近い順に最大 3）。対象が同じ品目はまとめる
     if ((cat === 'throwing' || harmful) && ci?.throwRange != null && !it.equipped) {
       const targets = x.hostiles
@@ -1082,6 +1130,17 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
       if (e.cat !== 'feature' || e.pos.x !== nx || e.pos.y !== ny) continue;
       const fd = e.kind ? catalog.features[e.kind] : undefined;
       if (fd?.interactable && e.state !== 'used') out.push(`interact${d ? ' ' + d : ''} (${kindName(catalog, L, e.kind)})`);
+    }
+  }
+  // 一番近い階段でも、追われたままなら最悪の被害が今の HP 以上: 綱の候補を階段より前に並べる（V3-2R3b §23.1）。
+  // 記録の無い敵がいるときは、記録のある分だけの見込み（下限）で判断する
+  const near = x.huntingReach.length ? nearestStairs() : undefined;
+  if (near && lifelineLines.length && near.path_len! * x.worstSum >= hpNow) {
+    const first = out.findIndex((s) => s.startsWith('travel_to stairs_'));
+    if (first >= 0) {
+      const rest = out.filter((s) => !lifelineLines.includes(s));
+      const at = rest.findIndex((s) => s.startsWith('travel_to stairs_'));
+      return [...rest.slice(0, at), ...lifelineLines, ...rest.slice(at)];
     }
   }
   return out;
@@ -1154,11 +1213,13 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
       const outOf = m.shots.filter((x) => x.state === 'out_of_range').map((x) => x.slot);
       const shot = m.shot === 'blocked' ? t(L, '  射線:通らない', ' shot:blocked') : outOf.length && outOf.length === m.shots.length ? t(L, '  射程外', ' out of range') : outOf.length ? t(L, `  射程外:${outOf.join(',')}`, ` out of range:${outOf.join(',')}`) : '';
       const threat = m.threat === null ? (m.first_seen ? t(L, '不明（初見）', 'unknown (first sighting)') : t(L, '不明（被弾の記録なし）', 'unknown (never hit by it)')) : String(m.threat);
-      const worst = m.worst_hit !== null ? t(L, `  最大の一撃:${m.worst_hit}`, ` worst_hit:${m.worst_hit}`) : '';
+      const perTurn = m.worst_turn !== null && m.worst_turn !== m.worst_hit ? t(L, `（1 手に最悪 ${m.worst_turn}）`, ` (worst ${m.worst_turn}/turn)`) : '';
+      const worst = m.worst_hit !== null ? t(L, `  最大の一撃:${m.worst_hit}${perTurn}`, ` worst_hit:${m.worst_hit}${perTurn}`) : '';
       // 見れば分かる特徴（速さは自分との比較）と命中の記録
-      const looks = [m.speed === 'fast' ? t(L, '速い', 'fast') : m.speed === 'slow' ? t(L, '遅い', 'slow') : '', ...m.traits.map((tr) => abilityName(L, tr))].filter(Boolean);
+      const looks = [m.size === 'large' ? t(L, '大柄', 'large') : m.size === 'small' ? t(L, '小柄', 'small') : '', m.speed === 'fast' ? t(L, '速い', 'fast') : m.speed === 'slow' ? t(L, '遅い', 'slow') : '', ...m.traits.map((tr) => abilityName(L, tr))].filter(Boolean);
       const looksText = looks.length ? (L === 'en' ? ` [${looks.join(', ')}]` : `  [${looks.join('・')}]`) : '';
-      const hits = m.hits ? (L === 'en' ? ` ${hitsText(L, m.hits)}` : `  ${hitsText(L, m.hits)}`) : '';
+      const hitLine = [hitsText(L, m.hits), dealtText(L, m.dealt)].filter(Boolean).join(L === 'en' ? ', ' : '・');
+      const hits = hitLine ? (L === 'en' ? ` ${hitLine}` : `  ${hitLine}`) : '';
       lines.push(L === 'en'
         ? `- ${m.name}${role} ${m.id} (${m.pos.x},${m.pos.y}) ${relLabel(L, from, m.pos)} hp:${m.hp_state} ${m.awareness}${m.fleeing ? '(fleeing)' : ''}${looksText} threat:${threat}${worst}${hits}${dmg}${est}${shot}${m.statuses.length ? ' ' + m.statuses.join(',') : ''}`
         : `- ${m.name}${role} ${m.id} (${m.pos.x},${m.pos.y}) ${relLabel(L, from, m.pos)}  負傷:${HP_JA[m.hp_state]}  状態:${AW_JA[m.awareness] ?? m.awareness}${m.fleeing ? '(逃走中)' : ''}${looksText}  脅威:${threat}${worst}${hits}${dmg}${est}${shot}${m.statuses.length ? '  ' + m.statuses.join(',') : ''}`);
@@ -1251,7 +1312,7 @@ export function describeTarget(view: PlayerView, catalog: Catalog, target: Pos |
   const list: unknown[] = [];
   for (const e of here) {
     if (e.cat === 'monster') {
-      const mem = e.kind ? view.monsterMemory[e.kind] : undefined;
+      const mem = memoryOf(view, e);
       const name = monsterDisplayName(catalog, L, e);
       const memText = mem ? memoryCombatText(L, mem) : t(L, '初めて見る相手だ', 'never seen before');
       const hpText = '';
@@ -1259,7 +1320,7 @@ export function describeTarget(view: PlayerView, catalog: Catalog, target: Pos |
         ? t(L, '・守護者（通常の個体より大幅に頑丈）', ', guardian (far sturdier than a normal one)')
         : (e.affixes?.length || e.tier) ? t(L, '・接辞や深層強化があるので記録より頑丈なことがある', ', affixes/tier may make it sturdier than your records') : '';
       const ds = e.damageSeen ? t(L, `・この個体への与ダメ累計 ${e.damageSeen}`, `, damage you saw it take ${e.damageSeen}`) : '';
-      const est = e.role !== 'guardian' ? hpLeftEstimate(mem, e.hp ?? 'healthy', e.damageSeen ?? 0, catalog.rules?.estimateMinSamples ?? 3) : undefined;
+      const est = hpLeftEstimate(mem, e.hp ?? 'healthy', e.damageSeen ?? 0, catalog.rules?.estimateMinSamples ?? 3);
       const estText = est ? t(L, `・推定残りHP ${hpEstimateText(L, est)}`, `, estimated HP left ${hpEstimateText(L, est)}`) : '';
       const shotText = e.shot === false ? t(L, '・射線: 通らない', ', shot: blocked') : '';
       parts.push(`${name} [${L === 'en' ? e.hp : HP_JA[e.hp ?? 'healthy']}, ${L === 'en' ? e.awareness : AW_JA[e.awareness ?? 'unaware']}] ${memText}${hpText}${ds}${estText}${shotText}${sturdy}`);

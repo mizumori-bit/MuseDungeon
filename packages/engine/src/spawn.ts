@@ -19,7 +19,7 @@ export function makeMonster(ctx: Ctx, floor: FloorKey, spec: Extract<SpawnSpec, 
   const def = ctx.content.monsters[spec.kind];
   const mods = sumAffixMods(ctx.content, spec.affixes);
   const tier = spec.tier;
-  const maxHp = Math.max(1, spec.minHp ?? 0, floorDiv(spec.hp * (100 + 50 * tier + mods.hpPct), 100));
+  const maxHp = Math.max(1, spec.minHp ?? 0, floorDiv(spec.hp * (100 + 50 * tier + mods.hpPct + (spec.hpBonusPct ?? 0)), 100));
   const base = {
     maxHp,
     acc: def.stats.acc + 2 * tier + mods.acc,
@@ -50,6 +50,8 @@ export function makeMonster(ctx: Ctx, floor: FloorKey, spec: Extract<SpawnSpec, 
   if (tier > 0 || spec.affixes.length) e.scale = { tier, affixes: [...spec.affixes] };
   if (spec.role) e.role = spec.role;
   if (spec.bounty) e.bounty = spec.bounty;
+  // 守護者は置かれたマスを持ち場にする（守護者付きの遺物では遺物の隣。V3-2R3b §23.2）
+  if (spec.role === 'guardian') e.home = { x: spec.x, y: spec.y };
   return e;
 }
 

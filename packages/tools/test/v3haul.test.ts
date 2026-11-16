@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { buildCatalog, loadContent } from '@muse/content';
 import { createRun, generateFloor, joinPlayer, step } from '@muse/engine';
 import type { Command, Entity, GameEvent, World } from '@muse/shared';
-import { applyEvent, buildObservation, haulTotal, payoutOf, projectPlayerView, Rng } from '@muse/shared';
+import { applyEvent, buildObservation, haulTotal, killPoints, payoutOf, projectPlayerView, Rng } from '@muse/shared';
 import { loadConfig, SessionManager } from '@muse/server';
 import { greedyDecide, newMemo, playWithPort } from '../src/index';
 
@@ -155,8 +155,12 @@ describe('V3-2 offers, treasure, haul', () => {
     }
     const w = r.session.world;
     const x = w.expeditions![w.expeditions!.length - 1];
-    const kills = w.players[pid].stats.kills - k0;
-    expect(x.haul!.kills).toBe(kills * content.balance.haul.perKill);
+    // 撃破の点 = 種族の経験値 × killPerXp × 深さの係数、接辞付きは × killAffixPct %（V3-2R3 §20.5）
+    const meId = w.players[pid].entityId;
+    const killEvents = r.session.history.filter((e) => e.type === 'died' && e.killer === meId && e.seq >= x.startSeq) as Extract<GameEvent, { type: 'died' }>[];
+    expect(killEvents.length).toBe(w.players[pid].stats.kills - k0);
+    const expected = killEvents.reduce((a, e) => a + killPoints(catalog.rules, content.monsters[e.kind].xp, w.floors[e.floor!].depth, (e.affixes?.length ?? 0) > 0), 0);
+    expect(x.haul!.kills).toBe(expected);
     // 発見: このランで初めて倒した種族ごとに 1 回、初めて鑑定したアイテム種ごとに 1 回（同じ種族の 2 体目では付かない）
     const species = Object.values(w.players[pid].knowledge.monsterMemory).filter((m) => m.kills > 0).length;
     // 参加時に職業の知識で判明する分（遠征の開始前）は数えない

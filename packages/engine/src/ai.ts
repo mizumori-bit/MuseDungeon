@@ -109,7 +109,7 @@ export function flee(ctx: Ctx, m: Entity, from: Pos): boolean {
   }
   if (!best) return false;
   for (const pr of ctx.playersOn(key)) {
-    if (ctx.visibleSet(pr.id).has(m.pos!.y * f.width + m.pos!.x)) updateMemory(ctx, pr.id, m.kind, (mm) => { mm.abilities.push('flees'); });
+    if (ctx.visibleSet(pr.id).has(m.pos!.y * f.width + m.pos!.x)) updateMemory(ctx, pr.id, m, (mm) => { mm.abilities.push('flees'); });
   }
   return stepTo(ctx, m, best);
 }
@@ -125,10 +125,28 @@ function hpPct(m: Entity): number {
   return m.stats ? Math.trunc((m.stats.hp * 100) / Math.max(1, m.stats.maxHp)) : 100;
 }
 
+/**
+ * 持ち場を守る（V3-2R3b §23.2）: 持ち場から leash マスより離れていれば持ち場へ向かい、
+ * 範囲の中では範囲の中だけを歩き回る
+ */
+function keepPost(ctx: Ctx, m: Entity, home: Pos): void {
+  const leash = ctx.content.balance.guardian.leash;
+  if (cheb(m.pos!, home) > leash) {
+    if (approach(ctx, m, home)) return;
+  }
+  const rng = ctx.rng('runtime');
+  if (rng.chance(55)) return;
+  const opts = freeNeighbors(ctx, m).filter((p) => ctx.terrainAt(m.pos!.floor, p.x, p.y).passable && cheb(p, home) <= leash);
+  if (opts.length) stepTo(ctx, m, opts[rng.int(opts.length)]);
+}
+
 function noTarget(ctx: Ctx, m: Entity, ai: AiState): number {
+  // 見失った直後の捜索（最後に見た位置へ向かう）は追跡の続きとして今までどおり。捜索を終えたら持ち場へ戻る
   if (ai.state === 'searching' && ai.targetPos) {
-    if (!approach(ctx, m, ai.targetPos)) wander(ctx, m);
-  } else if (ai.state === 'unaware') wander(ctx, m);
+    if (!approach(ctx, m, ai.targetPos)) { if (m.home) keepPost(ctx, m, m.home); else wander(ctx, m); }
+  } else if (ai.state === 'unaware') {
+    if (m.home) keepPost(ctx, m, m.home); else wander(ctx, m);
+  }
   return 100;
 }
 

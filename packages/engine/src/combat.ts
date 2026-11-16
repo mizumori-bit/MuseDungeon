@@ -62,20 +62,19 @@ function fromDirFor(target: Entity, source: Entity | null, masks: Record<string,
  * 相手が見えているときだけ（見えていない相手の種族は記録しない）
  */
 export function recordHit(ctx: Ctx, attacker: Entity, target: Entity, hit: boolean, kind: 'melee' | 'thrown' | 'ranged'): void {
-  // 守護者は種族の命中の記録に含めない（体力の記録と同じ。通常の個体より頑丈で、記録を歪めるため）
-  if (attacker.role === 'guardian' || target.role === 'guardian') return;
+  // 守護者は種族と別の記録（guardian|種族）に残る（V3-2R3 §20.4）
   const sees = (pid: PlayerId, m: Entity) => {
     const f = m.pos ? ctx.world.floors[m.pos.floor] : undefined;
     return !!f && ctx.visibleSet(pid).has(m.pos!.y * f.width + m.pos!.x);
   };
   if (attacker.player && !target.player && target.actor && kind !== 'ranged' && sees(attacker.player, target)) {
-    updateMemory(ctx, attacker.player, target.kind, (m) => {
+    updateMemory(ctx, attacker.player, target, (m) => {
       const cur = m.hitsByYou?.[kind] ?? [0, 0];
       m.hitsByYou = { ...(m.hitsByYou ?? {}), [kind]: [cur[0] + (hit ? 1 : 0), cur[1] + 1] };
     });
   }
   if (target.player && !attacker.player && attacker.actor && sees(target.player, attacker)) {
-    updateMemory(ctx, target.player, attacker.kind, (m) => {
+    updateMemory(ctx, target.player, attacker, (m) => {
       const cur = m.hitsOnYou ?? [0, 0];
       m.hitsOnYou = [cur[0] + (hit ? 1 : 0), cur[1] + 1];
     });
@@ -108,7 +107,7 @@ export function rangedAttack(ctx: Ctx, attacker: Entity, target: Entity, dice: s
   const dist = cheb(attacker.pos!, target.pos!);
   for (const pr of ctx.playersOn(key)) {
     if (!ctx.visibleSet(pr.id).has(attacker.pos!.y * f.width + attacker.pos!.x)) continue;
-    updateMemory(ctx, pr.id, attacker.kind, (m) => { m.abilities.push('ranged'); m.rangeMax = Math.max(m.rangeMax ?? 0, dist); });
+    updateMemory(ctx, pr.id, attacker, (m) => { m.abilities.push('ranged'); m.rangeMax = Math.max(m.rangeMax ?? 0, dist); });
   }
   if (o.hit) {
     const dmg = o.crit ? Math.max(1, diceMax(dice)) : Math.max(1, roll(ctx.rng('runtime'), dice) - (target.stats?.armor ?? 0));
@@ -160,10 +159,18 @@ export function applyDamage(ctx: Ctx, target: Entity, amount: number, source: En
   });
   // 思い出（受けたダメージは脅威の見積もり用に出目どおり、与えたダメージは実ダメージ）
   if (source && t.player && !source.player) {
-    updateMemory(ctx, t.player, source.kind, (m) => { m.maxDamageToYou = Math.max(m.maxDamageToYou, amount); });
+    updateMemory(ctx, t.player, source, (m) => { m.maxDamageToYou = Math.max(m.maxDamageToYou, amount); });
   }
   if (source?.player && !t.player && t.actor) {
-    updateMemory(ctx, source.player, t.kind, (m) => { m.maxDamageByYou = Math.max(m.maxDamageByYou, dealt); });
+    // 通りの記録（V3-2R3 §20.4）: 当たったときの実ダメージの合計と回数（近接・投擲）
+    const kindOf = via === 'melee' ? 'melee' as const : via === 'thrown' ? 'thrown' as const : null;
+    updateMemory(ctx, source.player, t, (m) => {
+      m.maxDamageByYou = Math.max(m.maxDamageByYou, dealt);
+      if (kindOf && amount > 0) {
+        const cur = m.dmgByYou?.[kindOf] ?? [0, 0];
+        m.dmgByYou = { ...(m.dmgByYou ?? {}), [kindOf]: [cur[0] + dealt, cur[1] + 1] };
+      }
+    });
   }
   if (hpAfter <= 0) {
     kill(ctx, ctx.world.entities[t.id], source, via);
@@ -219,10 +226,11 @@ export function kill(ctx: Ctx, victim: Entity, killer: Entity | null, via: Damag
     ...(victim.bounty ? { bounty: victim.bounty } : {}), ...(victim.scale?.affixes?.length ? { affixes: [...victim.scale.affixes] } : {}),
     seenBy: seen.seenBy, ...(Object.keys(masks).length ? { masks } : {}),
   });
-  if (maxHp !== null && victim.role !== 'guardian') {
+  if (maxHp !== null) {
     for (const pid of seen.seenBy) {
       if (masks[pid]?.includes('id')) continue;
-      updateMemory(ctx, pid, victim.kind, (m) => {
+      // 守護者は守護者の記録に残る（種族の体力の記録とは分ける）
+      updateMemory(ctx, pid, victim, (m) => {
         m.hpSeen = m.hpSeen
           ? { min: Math.min(m.hpSeen.min, maxHp), max: Math.max(m.hpSeen.max, maxHp), samples: m.hpSeen.samples + 1 }
           : { min: maxHp, max: maxHp, samples: 1 };
@@ -234,8 +242,8 @@ export function kill(ctx: Ctx, victim: Entity, killer: Entity | null, via: Damag
   const rng = ctx.rng('runtime');
   const depth = ctx.world.floors[key].depth;
   const drops = [...(def?.drops ?? [])];
-  // 守護者は宝を必ず落とす
-  if (victim.role === 'guardian') drops.push({ table: 'core:treasure_loot', chancePct: 100 });
+  // 守護者・大柄な種族・接辞付きの個体は宝を必ず落とす（V3-2R3 §20.5）
+  if (victim.role === 'guardian' || def?.size === 'large' || (victim.scale?.affixes?.length ?? 0) > 0) drops.push({ table: 'core:treasure_loot', chancePct: 100 });
   for (const d of drops) {
     if (!rng.chance(d.chancePct)) continue;
     const l = pickLoot(ctx.content, d.table, depth, rng);
@@ -248,8 +256,10 @@ export function kill(ctx: Ctx, victim: Entity, killer: Entity | null, via: Damag
     const pr = ctx.world.players[killer.player];
     ctx.emit({ type: 'player_stats', player: pr.id, stats: { ...pr.stats, kills: pr.stats.kills + 1 }, seenBy: [pr.id] });
     // 見ていなかった相手（視界外で毒が倒した）は種族の撃破数に数えない（種族を知らないので）
-    if (!masks[pr.id]?.includes('id')) updateMemory(ctx, pr.id, victim.kind, (m) => { m.kills += 1; });
-    grantXp(ctx, ctx.world.entities[killer.id], victim.xp ?? 0);
+    if (!masks[pr.id]?.includes('id')) updateMemory(ctx, pr.id, victim, (m) => { m.kills += 1; });
+    // 撃破の経験値に深さの係数（深度 1 階ごとに xp.killDepthPct %。直行しても深さに追いつく。V3-2R3 §20.2）
+    const kd = ctx.content.balance.xp.killDepthPct ?? 0;
+    grantXp(ctx, ctx.world.entities[killer.id], Math.trunc(((victim.xp ?? 0) * (100 + kd * Math.max(0, depth - 1))) / 100));
   }
 }
 

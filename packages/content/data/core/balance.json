@@ -7,19 +7,27 @@
     "wander": { "firstAt": 5000, "intervalMin": 4000, "intervalMax": 6000, "maxAwake": 30, "minDistance": 12 },
     "score": { "perDepth": 1000, "perKill": 10, "perLevel": 25 },
     "estimate": { "minSamples": 5 },
-    "xp": { "perNewDepth": 4, "perObjective": 8 },
+    "xp": { "perNewDepth": 4, "perObjective": 8, "killDepthPct": 15 },
     "haul": {
-      "overreachFirst": 600, "overreachStep": 300, "overreachPct": { "first": 25, "step": 10 }, "perKill": 10,
+      "overreachFirst": 600, "overreachStep": 300, "overreachPct": { "first": 25, "step": 10 },
+      "killPerXp": 4, "killAffixPct": 150,
       "discovery": { "species": 50, "identify": 30, "room": 100, "inscription": 50 },
       "withdrawPct": 50,
       "guardianBounty": { "base": 300, "perDepth": 60 }
     },
-    "lifeline": { "turns": 2, "pct": 50 },
+    "lifeline": { "turns": 0, "pct": 50 },
     "teleport": { "minDistance": 12 },
-    "guardian": { "minHpBase": 10, "minHpPerDepth": 3 },
+    "guardian": {
+      "ranks": [
+        { "hpPct": 50, "minHpBase": 6, "minHpPerDepth": 2 },
+        { "hpPct": 100, "minHpBase": 10, "minHpPerDepth": 3 },
+        { "hpPct": 150, "minHpBase": 10, "minHpPerDepth": 3 }
+      ],
+      "leash": 3
+    },
     "expedition": {
       "firstTargetDepth": { "safe": 2, "standard": 3, "ambitious": 3 },
-      "typePct": { "reach_depth": 100, "slay_guardian": 120, "retrieve_relic": 120, "retrieve_relic_guarded": 135 },
+      "typePct": { "reach_depth": 100, "slay_guardian": 110, "retrieve_relic": 110, "retrieve_relic_guarded": 125 },
       "depthPct": { "base": 100, "perDepth": 5 },
       "relicGuardianPct": 50,
       "afterObjective": { "wanderIntervalPct": 50 },

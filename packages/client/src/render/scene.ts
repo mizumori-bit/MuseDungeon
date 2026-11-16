@@ -1,9 +1,11 @@
 // Scene の組み立て。(a) PlayerView（プレイ・追従観戦）と (b) World 全体（俯瞰）。
 // プレイヤー視点では未知セルを描かない。未鑑定アイテムは外見 ID でしか描かない。
-import type { Catalog, EntityView, ObsMonster, Pos, PlayerView, World } from '@muse/shared';
-import { hitsText, hpEstimateText, hpLeftEstimate, itemDisplayName, kindName, monsterDisplayName, nameOf, threatOf } from '@muse/shared';
+import type { Catalog, EntityView, MonsterTrait, ObsMonster, Pos, PlayerView, World } from '@muse/shared';
+import {
+  dealtText, hitsText, hpEstimateText, hpLeftEstimate, itemDisplayName, kindName, memoryOf, monsterDisplayName, monsterSpeedOf, nameOf, selfSpeed, threatOf, worstTurnOf,
+} from '@muse/shared';
 import type { AssetRef } from '../theme/types';
-import { monsterSpeedLabel, monsterTraitLabel, threatText } from '../ui/labels';
+import { monsterLooksText, monsterSpeedLabel, threatText, worstTurnText } from '../ui/labels';
 import { getLocale, tr } from '../util';
 import type { Scene, SceneEntity } from './types';
 
@@ -48,38 +50,65 @@ export interface SceneExtras {
   monsters?: readonly ObsMonster[];
 }
 
+/** 見れば分かる特徴のうち、種族の公開タグから分かるもの（観測の traits と同じ。重装はカタログの armored から） */
+const TAG_TRAITS: readonly MonsterTrait[] = ['pack', 'ranged', 'stationary'];
+
+/** 「最大の一撃 5（1 手に最悪 10）」。記録が無ければ「一撃の大きさは不明」 */
+function worstText(m: Pick<ObsMonster, 'worst_hit' | 'worst_turn'>): string {
+  if (m.worst_hit === null) return tr('一撃の大きさは不明', 'hit size unknown');
+  const per = worstTurnText(m);
+  return tr(`最大の一撃 ${m.worst_hit}${per ? `（${per}）` : ''}`, `worst hit ${m.worst_hit}${per ? ` (${per})` : ''}`);
+}
+
 /**
- * ツールチップ用: 脅威・受けた最大の一撃・速さと見れば分かる特徴・命中の記録・自分が見た与ダメージの累計・推定残り HP・射線。
- * 観測の monster があればその値を使う。無ければ PlayerView の知識だけから（観測の threat / worst_hit / hp_left_est と同じ計算）
+ * ツールチップ用: 脅威・受けた最大の一撃と 1 手番あたりの最悪の被害・体格と速さと見れば分かる特徴・命中と通りの記録・
+ * 自分が見た与ダメージの累計・推定残り HP・射線。
+ * 観測の monster があればその値を使う。無ければ PlayerView の知識だけから（観測と同じ shared の式。守護者は守護者の記録 memoryOf）
  */
 function monsterKnowledge(view: PlayerView, catalog: Catalog, e: EntityView, om?: ObsMonster): string {
   const L = getLocale();
   const parts: string[] = [];
   if (om) {
     parts.push(threatText(om.threat, om.first_seen));
-    parts.push(om.worst_hit !== null ? tr(`最大の一撃 ${om.worst_hit}`, `worst hit ${om.worst_hit}`) : tr('一撃の大きさは不明', 'hit size unknown'));
+    parts.push(worstText(om));
     const sp = monsterSpeedLabel(om.speed);
     if (sp) parts.push(sp);
-    if (om.traits.length) parts.push(om.traits.map(monsterTraitLabel).join(tr('・', ', ')));
+    const looks = monsterLooksText(om);
+    if (looks) parts.push(looks);
     const hits = hitsText(L, om.hits);
     if (hits) parts.push(hits);
+    const dealt = dealtText(L, om.dealt);
+    if (dealt) parts.push(dealt);
     if (om.damage_seen) parts.push(tr(`与ダメ累計 ${om.damage_seen}`, `dmg seen ${om.damage_seen}`));
     if (om.hp_left_est) parts.push(`${tr('推定残りHP', 'est. HP left')} ${hpEstimateText(L, om.hp_left_est)}`);
     if (om.shot === 'blocked') parts.push(tr('射線: 通らない', 'shot: blocked'));
     return ` (${parts.join(', ')})`;
   }
-  const mem = e.kind ? view.monsterMemory[e.kind] : undefined;
+  // 守護者は種族と別の記録（V3-2R3 §20.4）
+  const mem = memoryOf(view, e);
   const threat = threatOf(view, e);
   // 本当に初めて見た種族（観測の first_seen と同じ規則: 撃破が無く、遭遇した個体の数がいま見えている数以下）
   const visibleOfKind = view.entities.filter((x) => x.cat === 'monster' && x.kind === e.kind).length;
   const firstSeen = !mem || (mem.kills === 0 && mem.encounters <= visibleOfKind);
   parts.push(threatText(threat, firstSeen));
   const worst = mem?.maxDamageToYou ?? 0;
-  parts.push(worst > 0 ? tr(`最大の一撃 ${worst}`, `worst hit ${worst}`) : tr('一撃の大きさは不明', 'hit size unknown'));
+  parts.push(worstText({ worst_hit: worst > 0 ? worst : null, worst_turn: worstTurnOf(view, catalog, e) }));
+  // 速さ（自分の今の速さとの比較）と、見れば分かる体格・特徴（観測の speed / size / traits と同じ）
+  const sp = monsterSpeedOf(catalog, e);
+  const mine = selfSpeed(view, catalog);
+  const spLabel = monsterSpeedLabel(sp === null || sp === mine ? 'normal' : sp > mine ? 'fast' : 'slow');
+  if (spLabel) parts.push(spLabel);
+  const cm = e.kind ? catalog.monsters[e.kind] : undefined;
+  const looks = monsterLooksText({
+    size: cm?.size === 'small' || cm?.size === 'large' ? cm.size : undefined,
+    traits: [...TAG_TRAITS.filter((t) => cm?.tags.includes(t)), ...(cm?.armored ? ['armored' as const] : [])],
+  });
+  if (looks) parts.push(looks);
+  const dealt = dealtText(L, mem?.dmgByYou);
+  if (dealt) parts.push(dealt);
   if (e.damageSeen) parts.push(tr(`与ダメ累計 ${e.damageSeen}`, `dmg seen ${e.damageSeen}`));
-  const est = e.role !== 'guardian' && e.hp
-    ? hpLeftEstimate(mem, e.hp, e.damageSeen ?? 0, catalog.rules?.estimateMinSamples ?? 5)
-    : undefined;
+  // 推定残り HP（守護者は守護者の体力の記録から。観測の hp_left_est と同じ）
+  const est = e.hp ? hpLeftEstimate(mem, e.hp, e.damageSeen ?? 0, catalog.rules?.estimateMinSamples ?? 5) : undefined;
   if (est) parts.push(`${tr('推定残りHP', 'est. HP left')} ${hpEstimateText(L, est)}`);
   if (e.shot === false) parts.push(tr('射線: 通らない', 'shot: blocked'));
   return parts.length ? ` (${parts.join(', ')})` : '';

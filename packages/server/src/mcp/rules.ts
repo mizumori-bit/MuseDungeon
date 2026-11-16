@@ -51,11 +51,13 @@ function ja(r: CatalogRules): Record<Topic, string> {
 - 階の種類によっては敵がいない（聖域: 深い所に一定の間隔で現れる、敵も徘徊も出ない休息の階）。
 - new_run で objective を省くとキャンプから始まり、最初の遠征も候補 3 つから選ぶ。objective を渡すと最初の遠征を直接始める（reach_depth = 堅実の枠 / slay_guardian = 標準の枠 / retrieve_relic = 野心の枠 / endless / auto = 1 番目の候補）。2 回目以降はキャンプの候補 3 つから選ぶ。`,
     expedition: `# 遠征
-- 目的の種類: reach_depth（目標の階に着く）、slay_guardian（目標の階の守護者を倒す）、retrieve_relic（目標の階の遺物を拾い、持ったまま帰る）、endless（目的なし）。
+- 目的の種類: reach_depth（目標の階を踏破する＝その階の下り階段に立つ。着いただけでは達成しない）、slay_guardian（目標の階の守護者を倒す）、retrieve_relic（目標の階の遺物を拾い、持ったまま帰る）、endless（目的なし）。
+- 守護者の格は枠で決まる: 堅実 格 1（その深度の候補の経験値の下位半分・射撃して距離を取る型を除く・体力 +${r.guardianRanks?.[0]?.hpPct ?? 50}%。堅実の遺物は無防備）、標準 格 2（上位半分・+${r.guardianRanks?.[1]?.hpPct ?? 100}%）、野心 格 3（上位半分・+${r.guardianRanks?.[2]?.hpPct ?? 150}%）。候補に守護者の見込み（格と、速い・遅い・射撃する・大柄・重装）が出る。種族名は会うまで出ない。
 - 守護者・遺物の居場所は教えられない。観測では role: guardian / relic の印が付く。
+- 守護者は置かれた場所を持ち場にし、気づいていない間は持ち場の近くから離れない（守護者付きの遺物では遺物のそば）。追跡は他の敵と同じで、見失って捜索を終えると持ち場へ戻る。
 - 帰還（extract）: 目的を達成したうえで、いずれかの階段（上り・下り）の上にいること。追跡中の敵が見えていてもよい（敵は階段を追ってこない。階を移れば追ってこない）。遠征は「達成」で終わる。
 - 撤退（extract confirm: true）: 目的が未達成でも同じ条件で extract できる。生還し、遠征は「撤退」で終わる。
-- 帰還の綱: 遠征の開始時にキャンプが 1 本持たせる（余っていても 1 本、無ければ補充。坑の中では手に入らない。捨てる・投げることはできず、所持数に数えない）。use_item で使うと ${r.lifeline.turns} 手番のあいだ行動できず（その間の攻撃は受ける）、その後キャンプへ戻る。1 回の呼び出しで最後まで進む（止まるのは死んだときだけ）。確定するのは戦利品全体の ${r.lifeline.pct}%（目的を達成済みならその点も含む。持っている遺物は納めた扱い。未達成なら撤退と同じ額）。遠征は「綱で帰還」で終わる。
+- 帰還の綱: 遠征の開始時にキャンプが 1 本持たせる（余っていても 1 本、無ければ補充。坑の中では手に入らない。捨てる・投げることはできず、所持数に数えない）。use_item で使うと${r.lifeline.turns > 0 ? ` ${r.lifeline.turns} 手番のあいだ行動できず（その間の攻撃は受ける）、その後` : 'その手番で'}キャンプへ戻る。確定するのは戦利品全体の ${r.lifeline.pct}%（目的を達成済みならその点も含む。持っている遺物は納めた扱い。未達成なら撤退と同じ額）。遠征は「綱で帰還」で終わる。
 - 結果の段階は 4 つ: 階段で帰還（戦利品 × 倍率）／綱で帰還（${r.lifeline.pct}%）／階段で撤退（目的を除いて ${h.withdrawPct}%）／死亡（0、ランの終わり）。
 ## 戦利品と確定点（スコア版 2）
 - ランのスコア = 確定点の合計。遠征中に得た点はすべて未確定の「戦利品」で、extract で確定する:
@@ -69,8 +71,9 @@ function ja(r: CatalogRules): Record<Topic, string> {
   - 宝: 分類 treasure の所持品の価値の合計（落とせば減る。帰還・撤退で換金され所持品から消える）。持ち帰った遺物は帰還で納められ、所持品から消える
   - 賞金: 守護者を倒すと（${h.guardianBounty.base} + 深度×${h.guardianBounty.perDepth}）。観測の bounty に出る。守護者は宝を必ず落とす
   - 発見: このランで初めて、ある種族を倒す +${h.discovery.species}／あるアイテム種を鑑定する +${h.discovery.identify}
-  - 撃破: 1 体 +${h.perKill}
-- 観測の expedition.haul に、内訳（parts）・合計・倍率・今 extract した場合の確定点（if_extract_now）・今綱を使った場合の確定点（if_lifeline_now）・次に踏破の点が入る階（next_overreach。その階の下り階段までの経路長が分かれば path_len、未発見なら下への風の方角 dir）・今帰った場合と、次の踏破の階へ降りてから帰った場合の次の候補の下限と推奨レベル（next_camp / next_camp_after_crossing。次の候補は新しい階に着いた時点で深くなる）が毎回出る。self.score に確定済みの点。
+  - 撃破: 種族の経験値 × ${h.killPerXp} × 深さの係数（${x.depthPct.base} + ${x.depthPct.perDepth}×深度 %）。接辞付きは × ${h.killAffixPct}%（大ネズミは 6 点前後、強い種族ほど大きい）
+  - 大柄な種族と接辞付きの個体は宝を必ず落とす（守護者も）
+- 観測の expedition.haul に、内訳（parts）・合計・倍率・今 extract した場合の確定点（if_extract_now）・今綱を使った場合の確定点（if_lifeline_now）・次に踏破の点が入る階（next_overreach。その階の下り階段までの経路長が分かれば path_len、未発見なら下への風の方角 dir）・今帰った場合の次の候補の下限と推奨レベル（next_camp。目標として達成した最深の階から数えるので、踏破しても深くならない）が毎回出る。self.score に確定済みの点。
 - 下への風: 今いる階の下り階段をまだ見ていない間、その方角（8 方向。遠近は出さない）が self.floor.draft に出る。self.floor.explored はその階の通れるマスのうち見た割合の 4 段階（1 約 1/4・2 約半分・3 約 3/4・4 ほぼ全て）。
 - COOP では戦利品（宝を除く）はパーティで共有し、extract した各自に払い戻される。宝は持っている本人の分。
 ## 目的を達成した後の圧力
@@ -78,7 +81,7 @@ function ja(r: CatalogRules): Record<Topic, string> {
 - 遺物を拾うと、その階の眠っている・気づいていない敵が目を覚まし、遺物の場所へ向かう。
 - 気配: 目標階にいる間、守護者（未討伐）か遺物（未入手）の方角（8 方向）と、10 マス以内かどうかが expedition.sense に出る。正確な位置は見るまで分からない。
 ## 遠征の候補（キャンプ）
-- 候補は 3 枠。目標の深度は「生成済みの最深階 + 幅」（最初の遠征は 堅実 地下${x.firstTargetDepth.safe}階・標準 地下${x.firstTargetDepth.standard}階・野心 地下${x.firstTargetDepth.ambitious}階）。目的の種類は 3 枠で別:
+- 候補は 3 枠。目標の深度は「目標として達成した最深の階 + 幅」（踏破で先まで降りても深くならない。踏破は次の目標階の下見になる。最初の遠征は 堅実 地下${x.firstTargetDepth.safe}階・標準 地下${x.firstTargetDepth.standard}階・野心 地下${x.firstTargetDepth.ambitious}階）。目的の種類は 3 枠で別（目標の階の下り階段にすでに立ったことがあれば、その枠に踏破型は出ない）。目標の階が生成済みなら、守護者・遺物は遠征の開始時に置かれる:
   - 堅実: +${sl.safe.aheadMin}〜${sl.safe.aheadMax} 階、条件 ${sl.safe.traitsMin}〜${sl.safe.traitsMax} 個、枠の基礎点 ${sl.safe.base}
   - 標準: +${sl.standard.aheadMin}〜${sl.standard.aheadMax} 階、条件 ${sl.standard.traitsMin}〜${sl.standard.traitsMax} 個、枠の基礎点 ${sl.standard.base}
   - 野心: +${sl.ambitious.aheadMin}〜${sl.ambitious.aheadMax} 階、条件 ${sl.ambitious.traitsMin}〜${sl.ambitious.traitsMax} 個、枠の基礎点 ${sl.ambitious.base}
@@ -89,7 +92,7 @@ ${traitsLines(r, true)}
 - new_run で objective を省くとキャンプから始まり、最初の遠征も 3 候補から選ぶ。
 ## その他
 - 経験値は敵を倒すほか、新しい深度に初めて着く（${r.xp.perNewDepth} × 深度）と遠征の目的を達成する（${r.xp.perObjective} × 目標深度）ことでも得る。
-- 遠征が達成か撤退で終わるとキャンプに戻る。キャンプでは時間が進まず、HP は全快し状態異常は消える。次の遠征の候補 3 つから start_expedition { offer } で選ぶ（前回 extract した階段から再開）。何も選ばずにやめてもよい（resume_run で後から続けられる）。
+- 遠征が達成か撤退で終わるとキャンプに戻る。キャンプでは時間が進まず、HP は全快し状態異常は消える。次の遠征の候補 3 つから start_expedition { offer } で選ぶ（前回 extract した階段から再開。帰還の綱で戻った場合は、その遠征を始めた階段から。目標の階が上なら上り階段を使う）。キャンプにいる間に再開する階は落ち着く: その階の敵は追跡をやめて体力が全快し、再開するマスが見える敵は離れた場所へ移る（削っては帰るを繰り返しても得にならない）。何も選ばずにやめてもよい（resume_run で後から続けられる）。
 - 接続が切れても遠征は終わらない（中断）。resume_run で続きから再開できる。
 - 観測の expedition に目的・進捗・can_extract（今この場で extract できるか）が毎回付く。`,
     actions: `# 行動
@@ -99,7 +102,7 @@ ${traitsLines(r, true)}
 - 方向は n ne e se s sw w nw。座標は左上原点、x は東、y は南へ増える。
 - move: 敵がいれば近接攻撃（バンプ攻撃）、閉じた扉なら開ける（その手番は移動しない）、味方なら位置交換。
 - 原則: 1 回の呼び出しは 1 つの判断に対応する。マクロが 1 歩も進めないと分かるときは、手番を使わずに理由付きのエラー（hostile_adjacent / hostile_in_view / hp_floor / blocked / nothing_to_do など）で拒否される。
-- explore: 未見の区画へ自動移動するマクロ（最大 ${r.macroStepLimit} 手）。pickup（既定 true）なら通り道と見えている・記憶したアイテムも拾う（遺物と鑑定済みの有害品は拾わない。所持品が一杯なら拾わない）。地図の巻物で地形だけ知った区画も「未見」として行き先になる。
+- explore: 未見の区画へ自動移動するマクロ（最大 ${r.macroStepLimit} 手）。pickup（既定 true）なら通り道と見えている・記憶したアイテムも拾う（遺物・鑑定済みの有害品・装備中の品と同じ種類で性能が同じか下の装備は拾わない。所持品が一杯なら拾わない）。toward: 'draft' なら下への風の方角の未探索を優先する。steady・flee では、1 マス幅の通路をふさぐ逃走中の敵を攻撃して進む。地図の巻物で地形だけ知った区画も「未見」として行き先になる。
 - travel_to: {x,y} / "stairs_down" / "stairs_up" / エンティティ ID へ既知地図上で移動するマクロ。目的地がアイテムなら着いて拾う。既知の階段には path_len（既知地図上の経路長）が付く。
 - 移動マクロ（explore / travel_to / collect）の mode（慎重さ）:
   - careful（既定）: 初見の種族が見えた／追跡中（逃走中でない）で自分に届く敵が現れた／見えている敵が追跡に変わった／攻撃を受けた（外れも含む）／毒以外のダメージを受けた／状態異常を受けた／HP が 50%・25% の線をまたいだ／階段を見つけた（explore）で止まる。既知の種族の眠っている・気づいていない個体、動かない敵で隣にいないもの、毒の継続ダメージ、アイテムの発見では止まらない（changes には出る）。隣に起きている敵（逃走中を除く）がいると動かない。
@@ -107,7 +110,7 @@ ${traitsLines(r, true)}
   - flee: 到着／進路をふさがれた／HP が hp_floor（既定 25%）を下回ったで止まる。隣に敵がいても動く（退却。途中で受けた攻撃はすべて結果に出る）。
   - careful と steady は、その階の下り階段を初めて見たときにも止まる（踏破の判断の起点）。経路は、見えている動かない敵の隣を罠と同じく避ける（ほかに道が無ければ通る）。
   - どの mode も 1 歩ずつ通常の move として行い、敵は通常どおり攻撃してくる。マクロは攻撃しない（次のマスに敵がいれば blocked で止まる）。valid_actions にはその場で進める mode だけが出る。
-- fight{target,with?,hp_floor?}: その相手と決着を付けるマクロ。with なし: 隣の相手に近接攻撃を繰り返す。相手が追跡中で届かない間は隣に来るまで待つ（最大 10 手番）。当てて逃げる相手は、追跡中で 2 マス以内なら 2 手番まで待つ（追わない）。with にスロットを渡すと、その品を投げて戦う（射程と射線が通るまで待つ）。止まるのは: 相手が倒れた／離れた・逃げて射程を出た／（with のとき）相手が隣に来た・品が尽きた・射線が 3 手番続けて通らない／HP が hp_floor（既定 50%）を下回った／追跡中の別の敵が現れた／状態異常を受けた。眠っている・気付いていない相手を待つことはしない（近づくなら travel_to、先手なら throw_item）。結果に与えた・受けた攻撃の回数と合計。
+- fight{target,with?,hp_floor?}: その相手と決着を付けるマクロ。with なし: 隣の相手に近接攻撃を繰り返す。相手が追跡中で届かない間は隣に来るまで待つ（最大 10 手番）。当てて逃げる相手は、追跡中で 2 マス以内なら 2 手番まで待つ（追わない）。with にスロットを渡すと、その品を投げて戦う（射程と射線が通るまで待つ）。止まるのは: 相手が倒れた／離れた・逃げて射程を出た／（with のとき）相手が隣に来た・品が尽きた・射線が 3 手番続けて通らない／HP が hp_floor（既定 50%）以下／**次の手番に、届く追跡中の敵（隣・飛び道具）から 1 手の最悪の被害を受けると hp_floor を割る（被弾の前に止まる。hp_risk）**／被弾の記録の無い種族から初めて被弾した（first_hit。一度だけ）／追跡中の別の敵が現れた／状態異常を受けた。眠っている・気付いていない相手を待つことはしない（近づくなら travel_to、先手なら throw_item）。結果に与えた・受けた攻撃の回数と合計。
 - wait{turns?}: 1 手番待つ。turns（2〜10）を渡すと、敵が見えた・隣に来た・攻撃や毒以外の被害を受けたら止まりつつ、その手数だけ待つ。
 - rest: 全快（かつ毒が抜ける）まで、または until_hp / max_turns まで休むマクロ（最大 ${r.restMaxTurns} 手）。敵が視界に入ると（状態によらず）止まる（すでに見た個体が逃げながら視界を出入りする場合は止まらない）。追跡中の敵が見えている間は休めない（動かない敵は隣にいなければ妨げない）。
 - throw_item: 対象（ID）までの投擲の経路が通っていないときは no_line_of_sight、射程外なら out_of_range で拒否される（手番も品物も失わない。visible.monsters の shots に品目ごとの clear / blocked / out_of_range）。座標を狙えば遮られた位置か射程の端に落ちる。結果は必ず「命中／外れ／壁や他の者に遮られた／届かなかった」と落下地点で示される。
@@ -132,10 +135,14 @@ ${traitsLines(r, true)}
 - 敵の HP は個体ごとにダイスで決まり幅がある。接辞・深層強化（tier）で増え、守護者は通常の個体より大幅に頑丈。
 - 目の前で倒した個体は最大 HP が分かり、種族ごとの「体力の記録」（recall）に残る（守護者は体力の記録と命中の記録に含めない。受けた最大の一撃には含める）。記録がある種族には、見ている間に与えた実ダメージの合計（damage_seen）と 4 段階表示から推定残り HP（hp_left_est）が付く。記録は標本であって種族の範囲ではないので「記録どおりなら残り 6〜8（記録 3 体: 体力 8〜8）」と書く。記録が ${r.estimateMinSamples} 体未満の間は下限だけ。
 - 姿の見えない相手から攻撃されたときは、来た方向だけが分かる（「南東から飛んできた何かの射撃」）。
-- threat(1-5) は「自分の現在 HP と、その種族から受けた最大の一撃」から見積もった危険度。その種族から攻撃を受けた記録が無ければ null（脅威: 不明（被弾の記録なし）。本当に初めて見た種族は「不明（初見）」）。worst_hit にその最大の一撃が出る。追跡中の敵の worst_hit、または追跡中の敵の worst_hit の合計が今の HP 以上なら alerts に lethal_range。
-- 見れば分かる特徴は初見から出る: speed（自分の今の速さとの比較で slow / normal / fast）、traits（pack 群れる・ranged 飛び道具・stationary 動かない）。体力・威力・回避・弱点は伏せたまま。
+- threat(1-5) は「自分の現在 HP と、その種族から受けた最大の一撃」から見積もった危険度。その種族から攻撃を受けた記録が無ければ null（脅威: 不明（被弾の記録なし）。本当に初めて見た種族は「不明（初見）」）。worst_hit にその最大の一撃、worst_turn に 1 手番あたりの最悪の被害（worst_hit × 自分の 1 手番に相手が行動する回数。自分より速い相手は 2 回）。追跡中の敵の worst_turn、またはその合計が今の HP 以上なら alerts に lethal_range、合計の 2 倍が HP 以上なら lethal_2turns。
+- 守護者の記録は種族の記録と分けて残る（体力・命中・最大の一撃。recall では「守護者の記録」）。
+- 通りの記録: 自分の攻撃が当たったときの平均ダメージが種族ごと・近接と投擲に分けて残る（「近接の通り 平均 2.5／13 回」）。装甲そのものは出ない。
+- 撃破の経験値は深いほど多い（深度 1 階ごとに +${r.xp.killDepthPct ?? 0}%）。
+- 見れば分かる特徴は初見から出る: speed（自分の今の速さとの比較で slow / normal / fast）、size（small 小柄・large 大柄）、traits（pack 群れる・ranged 飛び道具・stationary 動かない・armored 重装＝素の装甲 3 以上）。体力・威力・回避・弱点は伏せたまま。
+- 飛び道具（ranged）の敵は距離を取る: 寄られると下がり、下がる手番は撃たない。待ち受けると撃たれ続けるので、近づくか視線を切る。
 - 命中の記録: 種族ごとに、自分の攻撃（近接・投擲を分ける）と相手から自分への攻撃の回数と命中が残り、visible.monsters の hits に出る（「あなたの命中 近接1/6・相手の命中 3/5」）。確率そのものは出ない。
-- 群れの被害見込み: 追跡中の敵が 2 体以上見えると alerts に incoming（追跡中の数・記録の最大被害の合計・記録の無い数・あなたの HP）。逃げ道: 追跡中の敵が見えていて既知の階段に辿り着けるとき、alerts に escape（最寄りの階段・経路長・あなたより速い追跡中の敵の数）。
+- 群れの被害見込み: 追跡中の敵が 2 体以上見えると alerts に incoming（追跡中の数・記録の最大被害の合計・記録の無い数・あなたの HP）。逃げ道: 追跡中の敵が見えていて既知の階段に辿り着けるとき、alerts に escape（最寄りの階段・経路長・あなたより速い追跡中の敵の数）。そのとき valid_actions の travel_to stairs_* に「階段まで 7 歩。追われたままなら最悪 21 の被害（HP 9）」が付く（歩数 × 追跡中の敵の 1 手の最悪の被害の合計。記録の無い敵がいれば不明）。一番近い階段でもそれが HP 以上で綱を持っていれば、綱の候補が階段より前に並ぶ。
 - 浅い階の群れは小さい: 群れの数は最大で 深度 + 1（地下1階は 2、地下2階は 3）。
 - 転移の巻物: 着地点は元の位置から ${r.teleport.minDistance} マス以上離れ、追跡中の敵から見えないマスを優先する（無ければ距離だけ、それも無ければどこでも）。
 - 経験値: 敵を倒す、新しい深度に初めて着く、遠征の目的を達成する。レベルアップの文に上がった能力値が並ぶ。
@@ -148,18 +155,18 @@ ${traitsLines(r, true)}
 - 未鑑定の薬には有害なもの（毒薬）もある。投げると対象に効果が及ぶ薬もある。
 - 投擲武器（投げナイフ・投げ槍）は throw_item で対象（エンティティ ID か座標か方向）へ投げる。投げた物は着地点に落ちるので拾い直せる。
 - 遺物（retrieve_relic の目的の品）は効果を持たない。持ったまま階段の上で extract すると持ち帰れる。
-- 帰還の綱: 遠征ごとにキャンプが 1 本持たせる。use_item で使うと ${r.lifeline.turns} 手番後にキャンプへ戻る（戦利品の ${r.lifeline.pct}% が確定）。捨てる・投げることはできず、所持数に数えない。
+- 帰還の綱: 遠征ごとにキャンプが 1 本持たせる。use_item で使うと${r.lifeline.turns > 0 ? ` ${r.lifeline.turns} 手番後に` : 'その場で'}キャンプへ戻る（戦利品の ${r.lifeline.pct}% が確定。達成した遠征の数には入らない）。捨てる・投げることはできず、所持数に数えない。
 - 地物: 泉（回復、1 回）、祭壇（所持品を鑑定、1 回）。罠は見つけるまで見えない（隣接すると発見判定）。発見済みの罠は経路探索で避ける。`,
     observation: `# 観測と turn ブロック
 - 全応答の turn: state（your_turn / waiting_others / at_camp / expedition_ended / run_ended）、turn_no、reason、awaiting（action / camp_choice / nothing）、changes（前回の応答からの重要な変化）。テキストでは末尾の ▶ 行が同じ内容。
 - changes のコード: new_hostile（このランで初めて見た）, reappeared（前に見た個体が再び見えた）, killed（あなたが倒した）, died_seen（目の前で倒れた）, hostile_gone（倒れた以外の理由で見えなくなった）, hp_dropped, hp_low, status_gained, status_lost, level_up, item_found, stairs_found, floor_changed, objective_progress, objective_complete, can_extract。alerts は「現在の状態」、changes は「前回からの差分」。
 - 行動結果の outcome には、その行動から次の自分の手番までに受けた攻撃の回数・命中・合計ダメージ（HP の前後。間に回復があれば「回復 +N」）が必ず入る。
-- summary: 1 行の現況。alerts: 重要度順の警告（enemy_adjacent, low_hp, critical_hp, incoming, lethal_range, escape, poisoned, on_stairs, item_here, inventory_full, new_floor, can_extract, at_camp など。incoming と escape には data に数値）。
+- summary: 1 行の現況。alerts: 重要度順の警告（enemy_adjacent, low_hp, critical_hp, incoming, lethal_range, lethal_2turns, escape, poisoned, on_stairs, item_here, inventory_full, new_floor, can_extract, at_camp など。incoming と escape には data に数値）。
 - expedition: 遠征の目的・進捗・can_extract・extract_blocked_by・extract_outcome（今 extract したら complete=達成 / withdraw=撤退）。キャンプでは camp に次の遠征の候補。
 - 手負いで逃げている敵には fleeing が付く。逃走中の敵は追跡中でも extract と休息を妨げない。
 - self: HP・レベル・状態異常・位置・装備・所持品（brief は一覧の短縮形、full は詳細）・turns・speed（実効の速さ）・score（確定済みの点と達成した遠征の数）・rest_estimate（HP が減っているとき）。
-- visible.monsters: id, 名前, 座標, 方向, 距離, hp_state, awareness(asleep/unaware/hunting), speed, traits, threat, first_seen, worst_hit, hits, role, damage_seen, hp_left_est, shot（clear: 投擲の経路が通る / blocked）, bounty（倒すと戦利品に入る賞金）。items（同じマスの同種は 1 行。自分が投げた物は全部で 1 行（本数と最寄りの位置）で mine、宝は value）/ players / features も同様。
-- expedition.haul: 未確定の戦利品（total, multiplier_pct, parts, if_extract_now, if_lifeline_now, next_overreach, next_camp, next_camp_after_crossing）。self.floor: draft（下への風）・explored（探索の進み具合）。expedition.sense: 目標階にいる間の気配（守護者・遺物の方角と、10 マス以内かどうか）。camp.offers: slot（safe/standard/ambitious）, traits, multiplier_pct, recommended_level, level_gap, trait_danger。
+- visible.monsters: id, 名前, 座標, 方向, 距離, hp_state, awareness(asleep/unaware/hunting), speed, size, traits, threat, first_seen, worst_hit, worst_turn, hits, dealt, role, damage_seen, hp_left_est, shot（clear: 投擲の経路が通る / blocked）, bounty（倒すと戦利品に入る賞金）。items（同じマスの同種は 1 行。自分が投げた物は全部で 1 行（本数と最寄りの位置）で mine、宝は value）/ players / features も同様。
+- expedition.haul: 未確定の戦利品（total, multiplier_pct, parts, if_extract_now, if_lifeline_now, next_overreach, next_camp）。self.floor: draft（下への風）・explored（探索の進み具合）。expedition.sense: 目標階にいる間の気配（守護者・遺物の方角と、10 マス以内かどうか）。camp.offers: slot（safe/standard/ambitious）, traits, multiplier_pct, recommended_level, level_gap, trait_danger, guardian（守護者の見込み: rank と特徴）。
 - 見えるものの「記憶しているアイテム」は近い順に 3 件まで（戦闘中は出さない）。残りは件数だけ（get_map で全体）。navigation.unsighted は地形は判明しているが、まだ見ていないセルの数。
 - 休めないとき（追跡中の敵が見えている）は rest_estimate を出さない。
 - navigation: here(足元), passable_dirs, frontiers(未探索との境界、近い順), known_stairs(既知の階段と到達可否・path_len)。
@@ -191,11 +198,13 @@ function en(r: CatalogRules): Record<Topic, string> {
 - Some floor types have no monsters (sanctuary: a resting floor that appears at intervals in the depths, with no monsters or wanderers).
 - new_run without objective starts at camp, where you choose the first expedition from 3 offers. Passing objective starts it directly (reach_depth = safe slot / slay_guardian = standard slot / retrieve_relic = ambitious slot / endless / auto = the first offer). Later expeditions are chosen from 3 offers at camp.`,
     expedition: `# Expeditions
-- Objective types: reach_depth (arrive on the target depth), slay_guardian (slay the guardian there), retrieve_relic (pick up the relic there and carry it out), endless (no objective).
+- Objective types: reach_depth (cross the target depth = stand on its down stairs; arriving is not enough), slay_guardian (slay the guardian there), retrieve_relic (pick up the relic there and carry it out), endless (no objective).
+- The guardian's rank comes from the slot: safe rank 1 (lower XP half of the depth's candidates, no kiting shooters, HP +${r.guardianRanks?.[0]?.hpPct ?? 50}%; safe relics are unguarded), standard rank 2 (upper half, +${r.guardianRanks?.[1]?.hpPct ?? 100}%), ambitious rank 3 (upper half, +${r.guardianRanks?.[2]?.hpPct ?? 150}%). Offers show a guardian forecast (rank and fast / slow / ranged / large / armored); the species stays hidden until you meet it.
 - Guardian and relic locations are not revealed; observations mark them with role: guardian / relic.
+- A guardian keeps the place it was put as its post and, while unaware, stays near it (by the relic for a guarded relic). It hunts like any other monster, and once it loses you and ends its search it goes back to its post.
 - Extract (complete): objective done and standing on any stairs (up or down). Hunting enemies in view do not prevent it (monsters never follow you between floors). The expedition ends as completed.
 - Withdraw (extract confirm: true): same conditions without the objective; you survive and the expedition ends as withdrawn.
-- Lifeline: camp gives each participant exactly one at the start of every expedition (extras are trimmed; none can be found in the pit; it cannot be dropped or thrown and does not count toward capacity). use_item it to be helpless for ${r.lifeline.turns} turns (you still take hits), then return to camp; one call runs to the end (only death stops it). It banks ${r.lifeline.pct}% of the whole haul (the objective included only if already complete; a carried relic counts as delivered; otherwise the same as a withdrawal). The expedition ends as lifeline.
+- Lifeline: camp gives each participant exactly one at the start of every expedition (extras are trimmed; none can be found in the pit; it cannot be dropped or thrown and does not count toward capacity). use_item it to return to camp${r.lifeline.turns > 0 ? ` after ${r.lifeline.turns} helpless turns (you still take hits)` : ' at once'}. It banks ${r.lifeline.pct}% of the whole haul (the objective included only if already complete; a carried relic counts as delivered; otherwise the same as a withdrawal). The expedition ends as lifeline.
 - Four outcomes: stairs + complete (haul x multiplier) / lifeline (${r.lifeline.pct}%) / stairs withdrawal (${h.withdrawPct}% without the objective) / death (0, the run ends).
 ## Haul and banked points (score version 2)
 - Run score = total banked points. Everything earned during an expedition is an unbanked haul, settled on extract:
@@ -209,8 +218,9 @@ function en(r: CatalogRules): Record<Topic, string> {
   - treasure: value of treasure items you carry (drop one and it is gone; cashed in and removed on extract)
   - bounty: slaying a guardian (${h.guardianBounty.base} + depth*${h.guardianBounty.perDepth}); shown as bounty. Guardians always drop a treasure
   - discovery: first time this run you kill a species +${h.discovery.species} / identify an item kind +${h.discovery.identify}
-  - kills: +${h.perKill} each
-- expedition.haul shows parts, total, multiplier, if_extract_now (banked if you extract right now), if_lifeline_now (banked if you use the lifeline now), next_overreach (the depth whose down stairs pay next, with path_len when known, or dir = the draft when not found yet) and next_camp / next_camp_after_crossing (where the next offers would start if you extract now / after going down to the next crossing floor; offers deepen as soon as you arrive on a new floor) every time. self.score shows your banked points.
+  - kills: species XP x ${h.killPerXp} x depth factor (${x.depthPct.base} + ${x.depthPct.perDepth}*depth %), x ${h.killAffixPct}% with affixes (a cave rat is about 6; stronger species pay more)
+  - large species and affixed individuals always drop a treasure (guardians too)
+- expedition.haul shows parts, total, multiplier, if_extract_now (banked if you extract right now), if_lifeline_now (banked if you use the lifeline now), next_overreach (the depth whose down stairs pay next, with path_len when known, or dir = the draft when not found yet) and next_camp (where the next offers would start if you extract now; counted from the deepest target you have achieved, so crossings do not push it deeper) every time. self.score shows your banked points.
 - Draft: until you have seen the current floor's down stairs, self.floor.draft gives their 8-way direction (no distance). self.floor.explored is how much of the floor's walkable cells you have seen, in 4 steps (1 about a quarter, 2 about half, 3 about three quarters, 4 nearly all).
 - In COOP the haul (except treasure) is shared by the party and paid to each player who extracts. Treasure belongs to whoever carries it.
 ## Pressure after the objective
@@ -218,7 +228,7 @@ function en(r: CatalogRules): Record<Topic, string> {
 - Picking up the relic wakes sleeping/unaware monsters on that floor and sends them toward it.
 - Sense: on the target floor, expedition.sense gives the direction (8-way) to the unslain guardian or untaken relic and whether it is within 10 cells. The exact position is not given until you see it.
 ## Offers at camp
-- Three slots. Target depth = deepest generated depth + range (first expedition: safe depth ${x.firstTargetDepth.safe}, standard ${x.firstTargetDepth.standard}, ambitious ${x.firstTargetDepth.ambitious}). Each slot has a different objective type:
+- Three slots. Target depth = deepest achieved target + range (crossings do not push it deeper; they scout the next target. First expedition: safe depth ${x.firstTargetDepth.safe}, standard ${x.firstTargetDepth.standard}, ambitious ${x.firstTargetDepth.ambitious}). Each slot has a different objective type (no crossing objective for a floor whose down stairs you have already stood on). If the target floor already exists, the guardian/relic is placed when the expedition starts:
   - safe: +${sl.safe.aheadMin}-${sl.safe.aheadMax}, ${sl.safe.traitsMin}-${sl.safe.traitsMax} traits, slot base ${sl.safe.base}
   - standard: +${sl.standard.aheadMin}-${sl.standard.aheadMax}, ${sl.standard.traitsMin}-${sl.standard.traitsMax} traits, slot base ${sl.standard.base}
   - ambitious: +${sl.ambitious.aheadMin}-${sl.ambitious.aheadMax}, ${sl.ambitious.traitsMin}-${sl.ambitious.traitsMax} traits, slot base ${sl.ambitious.base}
@@ -228,7 +238,7 @@ ${traitsLines(r, false)}
 - Offers show the recommended level, your gap to it (level_gap = recommended - yours) and the sum of trait dangers (trait_danger). Recommended levels come from a public table (depth 1-${r.recommendedLevel.byDepth.length}: ${r.recommendedLevel.byDepth.join(', ')}; deeper depths extend the last 4-depth slope). No hidden information is used.
 - new_run without objective starts at camp, so you choose the first expedition from 3 offers too.
 ## Other
-- After completing or withdrawing you are at camp: time does not pass, HP is restored and statuses cleared. Choose the next of 3 offers with start_expedition { offer } (you restart from the stairs you extracted on). You may stop instead and resume_run later.
+- After completing or withdrawing you are at camp: time does not pass, HP is restored and statuses cleared. Choose the next of 3 offers with start_expedition { offer } (you restart from the stairs you extracted on; after a lifeline, from where that expedition began). While you are at camp the restart floor settles: its monsters stop hunting and heal fully, and any that can see the restart cell move far away (chipping and leaving does not pay). You may stop instead and resume_run later.
 - A disconnect does not end an expedition; resume_run continues it.
 - Every observation includes expedition (objective, progress, can_extract).`,
     actions: `# Actions
@@ -246,7 +256,7 @@ Free: observe / wait_for_turn / expedition / look / get_map / inventory / recall
   - flee: stops on arrival, a blocked path or HP below hp_floor (default 25%). Moves even with enemies adjacent (a retreat; every attack taken shows in the result).
   - Every mode walks with ordinary moves and enemies attack as usual. Macros never attack (an enemy in the next cell stops them: blocked). valid_actions only lists modes that can move right now.
   - careful and steady also stop when you first see the floor's down stairs (where the crossing decision starts). Paths avoid cells next to visible stationary monsters like traps (unless there is no other way).
-- fight{target,with?,hp_floor?}: settle it with that target. Without with: keep attacking it in melee; while it is hunting you but not adjacent, wait until it is (max 10 turns); a hit-and-run target hunting within 2 cells is waited for up to 2 turns (never chased). With a slot in with: fight by throwing that item, waiting until it is in range with a clear line. Stops when it falls, moves away / flees out of range, (with) it becomes adjacent, the item runs out, or the line is blocked 3 turns in a row, your HP falls below hp_floor (default 50%), another hunting enemy appears, or you get a status. It never waits for sleeping/unaware targets (approach with travel_to or open with throw_item). The result reports swings, hits and damage both ways.
+- fight{target,with?,hp_floor?}: settle it with that target. Without with: keep attacking it in melee; while it is hunting you but not adjacent, wait until it is (max 10 turns); a hit-and-run target hunting within 2 cells is waited for up to 2 turns (never chased). With a slot in with: fight by throwing that item, waiting until it is in range with a clear line. Stops when it falls, moves away / flees out of range, (with) it becomes adjacent, the item runs out, or the line is blocked 3 turns in a row, your HP is at or below hp_floor (default 50%), **one more turn of the worst damage from hunters in reach (adjacent or ranged) would drop you below hp_floor (stops before being hit: hp_risk)**, you take a first hit from a creature with no record (first_hit, once), another hunting enemy appears, or you get a status. It never waits for sleeping/unaware targets (approach with travel_to or open with throw_item). The result reports swings, hits and damage both ways.
 - wait{turns?}: wait one turn. With turns (2-10) it keeps waiting, stopping when a monster appears, one becomes adjacent, or you are attacked / take non-poison damage.
 - rest: waits until HP is full and poison is gone, or until until_hp / max_turns (max ${r.restMaxTurns} turns). It stops when any monster comes into view (but not when an already-seen fleeing monster wanders in and out). Stationary monsters do not block resting unless adjacent.
 - throw_item at an entity id is refused with no_line_of_sight when the path is blocked and out_of_range when it is too far (no turn, no item lost; shots in visible.monsters gives clear / blocked / out_of_range per item). Targeting a position lands where it is blocked or at the end of the range. The result always says hit / missed / blocked / fell short and where it landed.
@@ -270,10 +280,14 @@ Free: observe / wait_for_turn / expedition / look / get_map / inventory / recall
 - Monster HP is rolled per individual; affixes and tiers raise it, and guardians are far sturdier.
 - When you see a monster die you learn its max HP; recall keeps an HP record per species (guardians are left out of HP and hit records, but count toward the worst hit). For recorded species, observations include damage_seen and hp_left_est, phrased as "if typical" because the record is a sample, not the species range (lower bound only until ${r.estimateMinSamples} are recorded).
 - When an unseen attacker hits you, you learn the direction it came from.
-- threat (1-5) is estimated from your HP and the biggest hit you have taken from that species; null if it has never hit you ("unknown, first sighting" only for a species you have truly never met). worst_hit shows that biggest hit, and alerts carry lethal_range when a hunting enemy's worst_hit, or the sum over hunting enemies, is at least your HP.
-- What you can see is shown from the first sighting: speed (slow / normal / fast compared with your current speed) and traits (pack, ranged, stationary). HP, power, evasion and weaknesses stay hidden.
+- threat (1-5) is estimated from your HP and the biggest hit you have taken from that species; null if it has never hit you ("unknown, first sighting" only for a species you have truly never met). worst_hit shows that biggest hit and worst_turn the worst damage per turn (worst_hit x how many times it acts in one of your turns; 2 if it is faster). alerts carry lethal_range when a hunting enemy's worst_turn, or their sum, is at least your HP, and lethal_2turns when twice the sum is.
+- Guardians have their own record, separate from the species (HP, hits, worst hit; recall shows it as the guardian record).
+- Damage records: the average damage of your hits per species, melee and thrown separately ("melee avg 2.5 over 13"). Armor itself stays hidden.
+- Kill XP grows with depth (+${r.xp.killDepthPct ?? 0}% per depth).
+- What you can see is shown from the first sighting: speed (slow / normal / fast compared with your current speed), size (small / large) and traits (pack, ranged, stationary, armored = base armor 3+). HP, power, evasion and weaknesses stay hidden.
+- Ranged enemies keep their distance: when approached they back off, and they do not shoot while backing off. Waiting for them means being shot; close in or break line of sight.
 - Hit records: per species, your attacks (melee and thrown separately) and its attacks on you, as hits/tries in visible.monsters hits ("your hits melee 1/6, its hits 3/5"). No probabilities are given.
-- Pack danger: with 2+ hunting enemies in view, alerts carry incoming (how many, the sum of their recorded worst hits, how many have no record, your HP). Escape: with hunting enemies in view and known reachable stairs, alerts carry escape (nearest stairs, path length, how many hunters are faster than you).
+- Pack danger: with 2+ hunting enemies in view, alerts carry incoming (how many, the sum of their recorded worst hits, how many have no record, your HP). Escape: with hunting enemies in view and known reachable stairs, alerts carry escape (nearest stairs, path length, how many hunters are faster than you), and the travel_to stairs_* candidates say "7 steps to the stairs. If they keep chasing you, worst 21 damage (HP 9)" (steps x the sum of the hunters' worst damage per turn; unknown if one has no record). If even the nearest stairs could cost your HP and you hold the lifeline, the lifeline candidate is listed before the stairs.
 - Packs are small on shallow floors: at most depth + 1 (2 on depth 1, 3 on depth 2).
 - Teleport scroll: prefers a landing cell at least ${r.teleport.minDistance} cells away that no hunting enemy can see (then distance only, then anywhere).
 - XP comes from kills, first arrival at a new depth and completing an expedition objective. Level-up messages list the stat gains.
@@ -286,18 +300,18 @@ Free: observe / wait_for_turn / expedition / look / get_map / inventory / recall
 - Some unidentified potions are harmful. Some potions affect the target when thrown.
 - Throwing weapons: throw_item at an entity id, position or direction. They land and can be picked up again.
 - The relic (retrieve_relic) has no effect; extract on stairs while carrying it.
-- Lifeline: camp gives one per expedition. use_item it to return to camp after ${r.lifeline.turns} turns (${r.lifeline.pct}% of the haul is banked). It cannot be dropped or thrown and does not count toward capacity.
+- Lifeline: camp gives one per expedition. use_item it to return to camp${r.lifeline.turns > 0 ? ` after ${r.lifeline.turns} turns` : ' at once'} (${r.lifeline.pct}% of the haul is banked; it does not count as a completed expedition). It cannot be dropped or thrown and does not count toward capacity.
 - Features: fountain (heal, once), altar (identify inventory, once). Traps are hidden until found (search happens when adjacent). Known traps are avoided by pathing.`,
     observation: `# Observation and the turn block
 - Every response has turn: state (your_turn / waiting_others / at_camp / expedition_ended / run_ended), turn_no, reason, awaiting (action / camp_choice / nothing), changes (important changes since your last response). The final ▶ line of the text says the same.
 - change codes: new_hostile (first time this run), reappeared, killed (by you), died_seen, hostile_gone (left view without dying), hp_dropped, hp_low, status_gained, status_lost, level_up, item_found, stairs_found, floor_changed, objective_progress, objective_complete, can_extract. alerts = current state, changes = what changed.
 - Every action outcome states how many attacks you took until your next turn, how many hit and the total damage (HP before/after, plus "healed +N" if you recovered in between).
-- summary, alerts (enemy_adjacent, low_hp, critical_hp, incoming, lethal_range, escape, poisoned, on_stairs, item_here, inventory_full, new_floor, can_extract, at_camp, ...; incoming and escape carry numbers in data).
+- summary, alerts (enemy_adjacent, low_hp, critical_hp, incoming, lethal_range, lethal_2turns, escape, poisoned, on_stairs, item_here, inventory_full, new_floor, can_extract, at_camp, ...; incoming and escape carry numbers in data).
 - expedition: objective, progress, can_extract, extract_blocked_by, extract_outcome (complete / withdraw if you extract now). At camp, camp lists the next offers.
 - Wounded monsters running away carry fleeing; a fleeing monster does not block extract or resting.
 - self: hp, level, statuses, position, equipment, inventory (brief: compact line; full: details), turns, speed, score (banked points and completed expeditions), rest_estimate (when hurt).
-- visible.monsters: id, name, pos, dir, dist, hp_state, awareness (asleep/unaware/hunting), speed, traits, threat, first_seen, worst_hit, hits, role, damage_seen, hp_left_est, shot (clear / blocked), bounty. Items (same kind on one cell merged; all your thrown items on one line with the count and the nearest position, marked mine; treasure has value) / players / features too.
-- expedition.haul: the unbanked haul (total, multiplier_pct, parts, if_extract_now, if_lifeline_now, next_overreach, next_camp, next_camp_after_crossing). self.floor: draft and explored. expedition.sense: on the target floor, the direction to the guardian/relic and whether it is within 10. camp.offers: slot, traits, multiplier_pct, recommended_level, level_gap, trait_danger.
+- visible.monsters: id, name, pos, dir, dist, hp_state, awareness (asleep/unaware/hunting), speed, size, traits, threat, first_seen, worst_hit, worst_turn, hits, dealt, role, damage_seen, hp_left_est, shot (clear / blocked), bounty. Items (same kind on one cell merged; all your thrown items on one line with the count and the nearest position, marked mine; treasure has value) / players / features too.
+- expedition.haul: the unbanked haul (total, multiplier_pct, parts, if_extract_now, if_lifeline_now, next_overreach, next_camp). self.floor: draft and explored. expedition.sense: on the target floor, the direction to the guardian/relic and whether it is within 10. camp.offers: slot, traits, multiplier_pct, recommended_level, level_gap, trait_danger, guardian (forecast: rank and traits).
 - Remembered items in view: nearest 3 only (none while a hunting enemy is in view); the rest as a count (see get_map). navigation.unsighted counts cells whose terrain is known but not yet seen.
 - rest_estimate is omitted while you cannot rest (a hunting enemy is in view).
 - navigation: here, passable_dirs, frontiers (nearest first), known_stairs (with reachability and path_len).

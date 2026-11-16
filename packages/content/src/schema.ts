@@ -47,6 +47,8 @@ export const MonsterSchema = z.object({
   sleepPct: z.number().int().min(0).max(100).default(50),
   /** モンスターの思い出に記録され得る観測可能な能力 */
   abilities: z.array(z.string()).default([]),
+  /** 体格（見れば分かる公開の性質。V3-2R3 §20.4）。大柄は宝を必ず落とす */
+  size: z.enum(['small', 'medium', 'large']).default('medium'),
 });
 
 export const EquipSchema = z.object({
@@ -225,25 +227,30 @@ export const BalanceSchema = z.object({
   /** 推定残り HP: 記録がこの数未満の間は上限を出さない */
   estimate: z.object({ minSamples: Int.min(1) }).default({ minSamples: 5 }),
   /** 敵を倒す以外の経験値（V3-2R §14.5）: 新しい深度に初めて着く（× 深度）、遠征の目的を達成する（× 目標深度） */
-  xp: z.object({ perNewDepth: Int.min(0), perObjective: Int.min(0) }).default({ perNewDepth: 0, perObjective: 0 }),
+  xp: z.object({ perNewDepth: Int.min(0), perObjective: Int.min(0), killDepthPct: Int.min(0).default(0) }).default({ perNewDepth: 0, perObjective: 0, killDepthPct: 0 }),
   /** 戦利品（IMPROVEMENTS_V3 §2.2） */
   haul: z.object({
     /** 踏破の点の下限（n 階目 = first + step × (n − 1)） */
     overreachFirst: Int.min(0), overreachStep: Int.min(0),
     /** 踏破の点（V3-2R2 §18.4）: n 階目 = 目的の点 × (first + step × (n − 1))%。下限は overreachFirst / overreachStep */
     overreachPct: z.object({ first: Int.min(0), step: Int.min(0) }).default({ first: 0, step: 0 }),
-    perKill: Int.min(0),
+    /** 撃破の点（V3-2R3 §20.5）= 種族の経験値 × killPerXp × 深さの係数（depthPct）。接辞付きは × killAffixPct % */
+    killPerXp: Int.min(0), killAffixPct: Int.min(100).default(150),
     discovery: z.object({ species: Int.min(0), identify: Int.min(0), room: Int.min(0), inscription: Int.min(0) }),
     /** 撤退のときに確定する割合（目的の基礎点は含まない） */
     withdrawPct: Int.min(0).max(100),
     guardianBounty: z.object({ base: Int.min(0), perDepth: Int.min(0) }),
   }),
   /** 帰還の綱（V3-2R2 §18.1）: 使ってから戻るまでの手番と、確定する戦利品の割合 */
-  lifeline: z.object({ turns: Int.min(1), pct: Int.min(0).max(100) }).default({ turns: 2, pct: 50 }),
+  lifeline: z.object({ turns: Int.min(0), pct: Int.min(0).max(100) }).default({ turns: 0, pct: 50 }),
   /** 転移の着地点: 元の位置からこの距離以上（チェビシェフ）を優先する */
   teleport: z.object({ minDistance: Int.min(0) }).default({ minDistance: 0 }),
-  /** 守護者の体力の下限 = minHpBase + minHpPerDepth × 深度（V3-2R2 §18.6） */
-  guardian: z.object({ minHpBase: Int.min(0), minHpPerDepth: Int.min(0) }).default({ minHpBase: 0, minHpPerDepth: 0 }),
+  /** 守護者の格（V3-2R3 §20.1。堅実 1・標準 2・野心 3）ごとの体力の上乗せ（%）と下限（minHpBase + minHpPerDepth × 深度） */
+  guardian: z.object({
+    ranks: z.array(z.object({ hpPct: Int.min(0), minHpBase: Int.min(0), minHpPerDepth: Int.min(0) })).min(1),
+    /** 持ち場の範囲（V3-2R3b §23.2）: 気づいていない守護者は持ち場からこのマス数（チェビシェフ）以内だけを動く */
+    leash: Int.min(0).default(3),
+  }),
   expedition: z.object({
     /** 最初の遠征の目標深度（枠ごと） */
     firstTargetDepth: z.object({ safe: Int.min(2), standard: Int.min(2), ambitious: Int.min(2) }),

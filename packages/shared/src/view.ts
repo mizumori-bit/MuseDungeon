@@ -161,6 +161,8 @@ export interface PlayerView {
   camp: CampState | null;
   /** 最深到達階（パーティ全体の生成済み最深） */
   deepestDepth: number;
+  /** 目標として達成した最深の階（次の候補の基準。V3-2R3 §20.2） */
+  campDepth: number;
   /** 自分の成績（スコア版 2 の確定点・失った戦利品・達成した遠征の数） */
   record: { banked: number; lost: number; expeditions: number };
 }
@@ -185,6 +187,25 @@ export function currentExpedition(world: World): Expedition | null {
 export function latestExpedition(world: World): Expedition | null {
   const list = world.expeditions;
   return list?.length ? list[list.length - 1] : null;
+}
+
+/**
+ * 目標として達成した最深の階（V3-2R3 §20.2）: 目的を達成して戻った（帰還の綱を含む）遠征の目標深度の最大。無ければ 0。
+ * 次の候補の深さはここから数える（踏破で先まで降りても深くならない）
+ */
+export function campDepthOf(world: World): number {
+  let d = 0;
+  for (const x of world.expeditions ?? []) {
+    if (x.objective.targetDepth !== null && x.extracted.some((r) => r.completed)) d = Math.max(d, x.objective.targetDepth);
+  }
+  return d;
+}
+
+/** 候補から、プレイヤーに渡さない守護者の種族を外す */
+export function stripCamp(camp: CampState): CampState {
+  const c = structuredClone(camp);
+  for (const o of c.offers) delete o.guardianKind;
+  return c;
 }
 
 /** 生成済みの最深階（main 枝） */
@@ -392,8 +413,9 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
     runStatus: world.status,
     runMode: world.meta.mode,
     expedition,
-    camp: !currentExpedition(world) && world.camp ? structuredClone(world.camp) : null,
+    camp: !currentExpedition(world) && world.camp ? stripCamp(world.camp) : null,
     deepestDepth: deepestGenerated(world),
+    campDepth: campDepthOf(world),
     record: { banked: rec.stats.banked ?? 0, lost: rec.stats.lost ?? 0, expeditions: rec.stats.expeditions ?? 0 },
   };
 }

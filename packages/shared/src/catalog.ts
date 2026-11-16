@@ -50,7 +50,8 @@ export interface Catalog {
   contentVersion: string;
   terrain: Record<string, CatalogTerrain>;
   /** glyph: 地図の 1 文字（種族ごとに一意） */
-  monsters: Record<string, { name: Names; tags: string[]; glyph: string }>;
+  /** size・armored: 見れば分かる性質（V3-2R3 §20.4） */
+  monsters: Record<string, { name: Names; tags: string[]; glyph: string; size?: 'small' | 'medium' | 'large'; armored?: boolean }>;
   classes: Record<string, CatalogClass>;
   items: Record<string, CatalogItem>;
   appearances: Record<string, { name: Names; category: string }>;
@@ -79,7 +80,7 @@ export interface CatalogRules {
   estimateMinSamples: number;
   /** 戦利品（v3） */
   haul: {
-    overreachFirst: number; overreachStep: number; overreachPct: { first: number; step: number }; perKill: number; withdrawPct: number;
+    overreachFirst: number; overreachStep: number; overreachPct: { first: number; step: number }; killPerXp: number; killAffixPct: number; withdrawPct: number;
     discovery: { species: number; identify: number; room: number; inscription: number };
     guardianBounty: { base: number; perDepth: number };
   };
@@ -89,12 +90,14 @@ export interface CatalogRules {
   afterObjectiveWanderPct: number;
   /** 推奨レベルの表（深度 1 から。bot の実測） */
   recommendedLevel: { byDepth: number[] };
-  /** 敵を倒す以外の経験値 */
-  xp: { perNewDepth: number; perObjective: number };
+  /** 敵を倒す以外の経験値と、撃破の経験値の深さの係数（深度 1 階ごとの %） */
+  xp: { perNewDepth: number; perObjective: number; killDepthPct?: number };
   /** 帰還の綱: 使ってから戻るまでの手番と、確定する戦利品の割合（V3-2R2 §18.1） */
   lifeline: { turns: number; pct: number };
   /** 転移の巻物の着地点の最短距離 */
   teleport: { minDistance: number };
+  /** 守護者の格ごとの体力の上乗せ（%。V3-2R3 §20.1） */
+  guardianRanks?: { hpPct: number }[];
   /** 遠征の条件（公開） */
   traits: Record<string, { name: Names; desc: Names; multiplierPct: number; danger: number }>;
 }
@@ -171,10 +174,29 @@ export function offerGap(rules: Pick<CatalogRules, 'recommendedLevel' | 'traits'
   return { recommendedLevel: rec, levelGap: rec - level, traitDanger };
 }
 
-/** 今帰った場合の次の候補の下限（生成済みの最深階 + 堅実の幅）と推奨レベル */
-export function nextCampOf(rules: Pick<CatalogRules, 'recommendedLevel' | 'slots'>, deepestGenerated: number): { minTargetDepth: number; recommendedLevel: number } {
-  const min = deepestGenerated + rules.slots.safe.aheadMin;
+/**
+ * 次の候補の下限（V3-2R3 §20.2）: 目標として達成した最深の階（campDepth）+ 堅実の幅。最初の候補の深さより浅くはならない。
+ * 踏破で先まで降りても深くならない
+ */
+export function nextCampOf(rules: Pick<CatalogRules, 'recommendedLevel' | 'slots' | 'expedition'>, campDepth: number): { minTargetDepth: number; recommendedLevel: number } {
+  const min = Math.max(rules.expedition.firstTargetDepth?.safe ?? 1, campDepth + rules.slots.safe.aheadMin);
   return { minTargetDepth: min, recommendedLevel: recommendedLevel(rules, min) };
+}
+
+/** 深さの係数（%）: depthPct.base + depthPct.perDepth × 深度（候補の点と撃破の点で共用） */
+export function depthFactorPct(rules: Pick<CatalogRules, 'expedition'>, depth: number): number {
+  return rules.expedition.depthPct.base + rules.expedition.depthPct.perDepth * depth;
+}
+
+/** 撃破の点（V3-2R3 §20.5）: 種族の経験値 × killPerXp × 深さの係数、接辞付きは × killAffixPct % */
+export function killPoints(rules: Pick<CatalogRules, 'expedition' | 'haul'>, speciesXp: number, depth: number, affixed: boolean): number {
+  const base = Math.trunc((speciesXp * rules.haul.killPerXp * depthFactorPct(rules, depth)) / 100);
+  return affixed ? Math.trunc((base * rules.haul.killAffixPct) / 100) : base;
+}
+
+/** 思い出のキー: 守護者は種族と分けて記録する（V3-2R3 §20.4） */
+export function memoryKey(kind: string, role?: string | null): string {
+  return role === 'guardian' ? `guardian|${kind}` : kind;
 }
 
 /** 自然回復の間隔（手番）。engine と観測の見積もりで同じ式を使う */

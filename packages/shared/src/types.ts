@@ -78,6 +78,8 @@ export interface Entity {
   role?: EntityRole;
   /** 倒すと遠征の戦利品に入る賞金（守護者・名前付きの強敵） */
   bounty?: number;
+  /** 持ち場（守護者が置かれたマス。V3-2R3b §23.2）。気づいていない間はここから guardian.leash マス以内だけを動く。プレイヤーには渡さない */
+  home?: { x: number; y: number };
 }
 
 export type EntityRole = 'guardian' | 'relic';
@@ -124,6 +126,10 @@ export interface MonsterMemory {
   hpSeen?: { min: number; max: number; samples: number };
   /** 観測した遠隔攻撃の最長距離 */
   rangeMax?: number;
+  /** 守護者の記録（種族の記録と分ける。キーは guardian|種族） */
+  guardian?: boolean;
+  /** 自分の攻撃が当たったときの実ダメージの [合計, 回数]（近接・投擲。V3-2R3 §20.4「通り」） */
+  dmgByYou?: { melee?: [number, number]; thrown?: [number, number] };
   /** 自分の攻撃の [命中, 回数]（近接・投擲を分ける。V3-2R2 §18.2） */
   hitsByYou?: { melee?: [number, number]; thrown?: [number, number] };
   /** この種族から自分への攻撃の [命中, 回数] */
@@ -241,6 +247,10 @@ export interface ExpeditionOffer {
   traits?: string[];
   /** 帰還時の戦利品に掛かる倍率（%） */
   multiplierPct?: number;
+  /** 守護者の見込み（守護者を倒す・守護者付きの遺物。V3-2R3 §20.1）。種族名は会うまで出さない */
+  guardian?: { rank: 1 | 2 | 3; traits: string[] };
+  /** 守護者の種族（候補を作った時点で決める。プレイヤーには渡さない） */
+  guardianKind?: string;
 }
 
 /** 遠征の戦利品のうち、参加者で共有する部分（目的・深追い・宝は別に計算する） */
@@ -301,7 +311,8 @@ export interface Expedition {
   endReason: ExpeditionEndReason | null;
   participants: PlayerId[];
   /** 開始時点の参加者の成績（結果の差分計算用） */
-  start: Record<PlayerId, { kills: number; turns: number; deepest: number }>;
+  /** pos: その参加者がこの遠征を始めた地点（綱で戻った次の遠征はここから。V3-2R3a §22.1） */
+  start: Record<PlayerId, { kills: number; turns: number; deepest: number; pos?: FloorPos }>;
   /** 目標階に配置した守護者・遺物（目標階の生成時に決まる。プレイヤーには渡さない） */
   targets: { guardian: EntityId | null; relic: EntityId | null };
   progress: ObjectiveProgress;
@@ -313,6 +324,9 @@ export interface Expedition {
   traits?: string[];
   multiplierPct?: number;
   haul?: ExpeditionHaul;
+  /** 守護者の種族と格（候補から引き継ぐ。プレイヤーには渡さない。V3-2R3 §20.1） */
+  guardianKind?: string;
+  guardianRank?: 1 | 2 | 3;
 }
 
 export type RngState = [number, number, number, number];

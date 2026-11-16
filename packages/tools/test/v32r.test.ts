@@ -5,7 +5,7 @@ import { buildCatalog, loadContent } from '@muse/content';
 import { line } from '@muse/engine';
 import type { Command, Entity, GameEvent, PerceivedEvent, PlayerView, World } from '@muse/shared';
 import {
-  applyEvent, buildObservation, diceMax, diffChanges, narrate, Rng, turnSnapshot,
+  applyEvent, buildObservation, diceMax, diffChanges, killPoints, narrate, Rng, turnSnapshot,
 } from '@muse/shared';
 import { loadConfig, SessionManager } from '@muse/server';
 import { greedyDecide, newMemo, playWithPort } from '../src/index';
@@ -66,6 +66,8 @@ describe('V3-2R crossing (§14.1)', () => {
     const descend = async () => {
       const f = t.world.floors[t.me().pos!.floor];
       t.place(f.stairs.down[0].x, f.stairs.down[0].y);
+      // 下り階段の上で手番を終える（目標階の踏破は「下り階段に立った」で達成。V3-2R3 §20.1）
+      await t.act({ type: 'wait' });
       const r = await t.act({ type: 'stairs' });
       expect(r.ok).toBe(true);
       t.clearMonsters();
@@ -78,7 +80,9 @@ describe('V3-2R crossing (§14.1)', () => {
     let obs = t.r.port.observe({ map: false }).observation;
     expect(obs.expedition!.haul!.parts.overreach).toBe(0);
     expect(obs.expedition!.haul!.next_overreach).toMatchObject({ depth: 3, points: content.balance.haul.overreachFirst, at: 'stairs_down' });
-    expect(obs.expedition!.haul!.next_camp!.min_target_depth).toBe(3 + content.balance.expedition.slots.safe.aheadMin);
+    // 次の候補は「目標として達成した最深の階（2）」から（踏破しても深くならない。V3-2R3 §20.2）
+    expect(t.world.expeditions![0].status).toBe('objective_complete');
+    expect(obs.expedition!.haul!.next_camp!.min_target_depth).toBe(Math.max(content.balance.expedition.firstTargetDepth.safe, 2 + content.balance.expedition.slots.safe.aheadMin));
     // 下り階段に立つと踏破の点が入る
     const f3 = t.world.floors[t.me().pos!.floor];
     t.place(f3.stairs.down[0].x, f3.stairs.down[0].y);
@@ -342,7 +346,9 @@ describe('V3-2R numbers you need (§14.3, §14.7)', () => {
     for (let i = 0; i < 3 && t.world.entities.e_psn001; i++) await t.act({ type: 'wait' });
     const died = t.r.session.history.find((e) => e.type === 'died' && e.id === 'e_psn001') as Extract<GameEvent, { type: 'died' }> | undefined;
     expect(died?.killer).toBe(t.meId);
-    expect(t.world.expeditions![0].haul!.kills).toBe(k0 + content.balance.haul.perKill);
+    // 撃破の点 = 種族の経験値 × killPerXp × 深さの係数（V3-2R3 §20.5）
+    const depth = t.world.floors[died!.floor!].depth;
+    expect(t.world.expeditions![0].haul!.kills).toBe(k0 + killPoints(catalog.rules, content.monsters[died!.kind].xp, depth, (died!.affixes?.length ?? 0) > 0));
     // 毒を受けたまま休む: 毒の継続ダメージでは止まらない
     const me = structuredClone(t.me());
     me.stats = { ...me.stats!, hp: Math.max(5, me.stats!.maxHp - 6) };

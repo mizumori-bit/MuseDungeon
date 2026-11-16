@@ -4,7 +4,8 @@ import type {
   ActionError, ActionErrorCode, Catalog, Change, Command, Dir, EntityView, ObsMonster, Observation, PerceivedEvent, PlayerView, Pos, RunSummary, ServerMsg, TurnSnapshot,
 } from '@muse/shared';
 import {
-  buildNavGrid, buildObservation, buildTurnBlock, diffChanges, findPath, itemDisplayName, itemStats, monsterDisplayName, pickableItems, turnLine, turnSnapshot,
+  buildNavGrid, buildObservation, buildTurnBlock, diffChanges, dirLabel, findPath, itemDisplayName, itemStats, monsterDisplayName, pickableItems, sameOrWorseEquip, turnLine,
+  turnSnapshot,
 } from '@muse/shared';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { connectWs, type WsHandle, type WsStatus } from '../net/ws';
@@ -16,7 +17,7 @@ import {
 } from '../ui/panels';
 import { ErrorBanner, Header, MapView, ThemePicker, useCatalog, useLocaleRefresh, useTheme } from '../ui/common';
 import { BriefingCard, CampPanel, completesOnExtract, ExpeditionPanel, extractConfirmText, lifelineConfirmText, RestEstimateLine, rulesOf, TurnBar } from '../ui/expedition';
-import { extractBlockLabel, viewStatusLabel } from '../ui/labels';
+import { DIR_ARROW, extractBlockLabel, lifelineEffectText, viewStatusLabel } from '../ui/labels';
 import { perceivedLines } from '../ui/narration';
 import { getLocale, getPref, getToken, setPref, tr } from '../util';
 
@@ -348,7 +349,7 @@ export function Play({ runId }: { runId: string }) {
     return pick.slot;
   };
 
-  /** 帰還の綱を使う: 動けない手番の数と確定する点を確認してから use（V3-2R2 §18.1） */
+  /** 帰還の綱を使う: 戻り方（即時か、動けない手番の数）と確定する点を確認してから use（V3-2R2 §18.1・V3-2R3 §20.3） */
   const doLifeline = () => {
     const v = viewRef.current, c = catalogRef.current;
     if (!v || !c) return;
@@ -369,9 +370,10 @@ export function Play({ runId }: { runId: string }) {
     const pts = ox?.haul?.if_lifeline_now;
     // 階段の上なら extract の方が得か同じ（手番もかからない）
     if (!lifelineSlot(v, catalogRef.current) || pts === undefined || ox?.can_extract) return [];
+    const how = lifelineEffectText(catalogRef.current?.rules?.lifeline?.turns);
     return [{
       label: tr(`帰還の綱（L）+${pts}`, `Lifeline (L) +${pts}`),
-      title: tr('数手番動けず（その間も攻撃は受ける）、その後キャンプへ戻る。確認が出る', 'Helpless for a few turns (still attacked), then back to camp. Asks to confirm'),
+      title: tr(`${how}。確認が出る`, `${how}. Asks to confirm`),
       run: doLifeline,
     }];
   };
@@ -380,6 +382,18 @@ export function Play({ runId }: { runId: string }) {
   const doWaitTurns = () => send({ type: 'wait', turns: WAIT_TURNS });
 
   const doExplore = (force?: MoveMode) => send({ type: 'explore', ...modeArg(force) });
+  /**
+   * 風の方へ探索（explore toward: 'draft'。V3-2R3 §20.5）: 下への風の方角にある未探索を優先する。
+   * 風は今いる階の下り階段が未発見の間だけ吹く（観測の self.floor.draft）。無ければ送らずに理由を出す
+   */
+  const doExploreDraft = () => {
+    const o = obsNow();
+    if (!o?.self.floor?.draft) {
+      flash(tr('この階では下への風を感じない（下り階段を見つけた後は吹かない）。探索は x。', 'No draft on this floor (it stops once you have found the down stairs). Use x to explore.'));
+      return;
+    }
+    send({ type: 'explore', toward: 'draft', ...modeArg() });
+  };
   const doTravelDown = () => send({ type: 'travel', to: 'stairs_down', ...modeArg() });
 
   /** rest: untilHp を指定すると、その HP まで（現在より大きく最大未満のときのみ） */
@@ -560,6 +574,8 @@ export function Play({ runId }: { runId: string }) {
     const ci = it.kind ? catalogRef.current?.items[it.kind] : undefined;
     const cat = ci?.category ?? (it.appearanceId ? catalogRef.current?.appearances[it.appearanceId]?.category : undefined);
     if (it.equipped) invAction('unequip', slot);
+    // 装備中の品と同じ種類で性能が同じか下なら、装備しても良くならない（V3-2R3 §20.6）
+    else if (ci?.slot && catalogRef.current && sameOrWorseEquip(v, catalogRef.current, it)) flash(tr('装備中の品と同じ種類で、性能が同じか下。装備しても良くならない。', 'Same kind as your equipped item with the same or worse stats; equipping it gains nothing.'));
     else if (ci?.slot) invAction('equip', slot);
     else if (cat === 'potion' || cat === 'scroll' || ci?.usable) invAction('use', slot);
     else if (ci?.throwable || cat === 'throwing') invAction('throw', slot);
@@ -614,6 +630,8 @@ export function Play({ runId }: { runId: string }) {
       else if (e.key === 'x') doExplore();
       // Shift+X: 強行（steady）で探索。弱い射撃や毒を受けても止まらない
       else if (e.key === 'X') doExplore('steady');
+      // D（Shift+d）: 風の方へ探索（下への風の方角の未探索を優先）
+      else if (e.key === 'D') doExploreDraft();
       else if (e.key === 'F') doFight();
       else if (e.key === 'R') doRest();
       else if (e.key === 'E') doExtract();
@@ -672,6 +690,11 @@ export function Play({ runId }: { runId: string }) {
   const flee = adjAwake.length ? fleeActions(obs) : [];
   const lifeSlot = lifelineSlot(view, catalog);
   const lifePts = obs?.expedition?.haul?.if_lifeline_now;
+  const lifeHow = lifelineEffectText(rulesOf(catalog)?.lifeline?.turns);
+  // 下への風（今いる階の下り階段が未発見の間だけ）。「風の方へ探索」を出す
+  const draft = obs?.self.floor?.draft;
+  // 隣に起きている追跡中の敵がいる: 薬・巻物を使う間にその敵が行動する（V3-2R3 §20.4）
+  const exposed = adjAwake.some((m) => m.awareness === 'hunting');
 
   // 前回の自分の手番以降の変化（turnSnapshot / diffChanges。撃破の判定に基準以降の出来事を渡す）
   useEffect(() => {
@@ -799,7 +822,14 @@ export function Play({ runId }: { runId: string }) {
               <button class={`tiny ${moveMode === 'careful' ? 'on' : ''}`} onClick={() => setMoveMode('careful')}>{tr('慎重', 'Careful')}</button>
               <button class={`tiny ${moveMode === 'steady' ? 'on' : ''}`} onClick={() => setMoveMode('steady')}>{tr('強行', 'Steady')}</button>
             </span>
-            <button class="small" onClick={() => doExplore()} title={tr('x（Shift+X: 強行で探索）', 'x (Shift+X: explore steadily)')}>{tr('探索', 'Explore')} (x)</button>
+            <button class="small" onClick={() => doExplore()} title={tr('x（Shift+X: 強行で探索・Shift+D: 風の方へ探索）', 'x (Shift+X: explore steadily, Shift+D: explore toward the draft)')}>{tr('探索', 'Explore')} (x)</button>
+            {draft && !atCamp && adjAwake.length === 0 && (
+              <button class="small draft" onClick={doExploreDraft}
+                title={tr(`下への風（${dirLabel(L, draft)}）の方角にある未探索を優先して探索する（D）。止まり方は「移動」の慎重・強行に従う`,
+                  `Explore, preferring unexplored cells toward the draft (${dirLabel(L, draft)}) (D). Stops as set by Move: careful / steady`)}>
+                {tr('風の方へ探索', 'Toward the draft')} {DIR_ARROW[draft]} (D)
+              </button>
+            )}
             {adjacent.length > 0 ? (
               <button class="small fight" onClick={() => doFight()} title={tr('隣の敵を、倒れる・離れる・HP が半分を下回るまで殴り続ける（F）', 'Keep attacking the adjacent enemy until it falls, moves away, or your HP drops below half (F)')}>
                 {tr('戦う', 'Fight')} (F)
@@ -815,8 +845,7 @@ export function Play({ runId }: { runId: string }) {
             ))}
             {expActive && lifeSlot && lifePts !== undefined && !obs?.expedition?.can_extract && (
               <button class="small lifeline" onClick={doLifeline}
-                title={tr(`帰還の綱（L）: 階段から遠くても使える退却。${rulesOf(catalog)?.lifeline?.turns ?? 2} 手番動けず（その間も攻撃は受ける）、その後キャンプへ戻る。確認が出る`,
-                  `Lifeline (L): a retreat usable anywhere. Helpless for ${rulesOf(catalog)?.lifeline?.turns ?? 2} turns (still attacked), then back to camp. Asks to confirm`)}>
+                title={tr(`帰還の綱（L）: 階段から遠くても使える退却。${lifeHow}。確認が出る`, `Lifeline (L): a retreat usable anywhere; ${lifeHow}. Asks to confirm`)}>
                 {tr(`帰還の綱 +${lifePts}`, `Lifeline +${lifePts}`)} (L)
               </button>
             )}
@@ -846,7 +875,8 @@ export function Play({ runId }: { runId: string }) {
             <button class="small" onClick={doTravelDown} title="T">{tr('下り階段へ', 'To stairs')} (T)</button>
             <button class="small" onClick={() => send({ type: 'stairs' })} title=">">{tr('階段を使う', 'Use stairs')} (&gt;)</button>
             {exp && expActive && (
-              <button class={`small ${obs?.expedition?.can_extract ? 'exit' : ''}`} onClick={doExtract} title={tr('階段の上で遠征を終える（追跡中の敵が見えていてもよい）', 'End the expedition on stairs (even with hunters in view)')}>
+              <button class={`small ${obs?.expedition?.can_extract ? 'exit' : ''}`} onClick={doExtract}
+                title={tr('階段の上で遠征を終える（追跡中の敵が見えていてもよい）。次の遠征はその階段から始まり、その階の敵は追跡をやめて全快する', 'End the expedition on stairs (even with hunters in view). The next expedition starts from those stairs; monsters there stop hunting and heal fully')}>
                 {completesOnExtract(exp) ? tr('帰還', 'Extract') : tr('撤退', 'Withdraw')} (E)
               </button>
             )}
@@ -869,7 +899,7 @@ export function Play({ runId }: { runId: string }) {
           )}
           {view && catalog && <StatusPanel view={view} catalog={catalog} speed={obs?.self.speed} floor={atCamp ? null : obs?.self.floor} />}
           {obs && !atCamp && <MonstersPanel monsters={obs.visible.monsters} hp={obs.self.hp} onFight={doFight} throwSlotFor={throwSlotFor} />}
-          {view && catalog && <InventoryPanel view={view} catalog={catalog} onAction={invAction} focused={mode === 'inv'} selected={selSlot} onSelect={setSelSlot} />}
+          {view && catalog && <InventoryPanel view={view} catalog={catalog} onAction={invAction} focused={mode === 'inv'} selected={selSlot} onSelect={setSelSlot} exposed={exposed} />}
           <MessageLog lines={log} />
           <form class="chat" onSubmit={(e) => { e.preventDefault(); if (chat.trim()) { send({ type: 'say', text: chat.trim().slice(0, 280) }); setChat(''); } }}>
             <input value={chat} placeholder={tr('チャット（COOP）', 'Chat (COOP)')} onInput={(e) => setChat((e.target as HTMLInputElement).value)} />
@@ -878,8 +908,8 @@ export function Play({ runId }: { runId: string }) {
             <div class="muted small">{tr('選択中', 'Selected')}: {(() => { const it = view.inventory.find((x) => x.slot === selSlot); return it ? itemDisplayName(catalog, L, it.kind, it.appearanceId, it.affixes) : '-'; })()}</div>
           )}
           <div class="help muted">
-            {tr('移動: 矢印/テンキー/hjklyubn　待機: .　数手待つ: W　探索: x（強行: X）　戦う: F（隣の敵。いなければ追ってくる敵を迎え撃つ）　休憩: R　拾う: g　拾い集める: G　回収: C　階段: >　帰還/撤退: E（階段の上）　帰還の綱: L　投擲: t（狙い中に F で投擲で決着）　操作: o　所持品: i　クリック: その場所へ移動（Shift+クリック: 退く）',
-              'Move: arrows/numpad/hjklyubn  Wait: .  Wait a few: W  Explore: x (steady: X)  Fight: F (adjacent; otherwise meet a hunter)  Rest: R  Pick up: g  Collect items: G  Collect thrown: C  Stairs: >  Extract: E (on stairs)  Lifeline: L  Throw: t (F while aiming: throw until it falls)  Interact: o  Inventory: i  Click: travel (Shift+click: flee)')}
+            {tr('移動: 矢印/テンキー/hjklyubn　待機: .　数手待つ: W　探索: x（強行: X・風の方へ: D）　戦う: F（隣の敵。いなければ追ってくる敵を迎え撃つ）　休憩: R　拾う: g　拾い集める: G　回収: C　階段: >　帰還/撤退: E（階段の上）　帰還の綱: L　投擲: t（狙い中に F で投擲で決着）　操作: o　所持品: i　クリック: その場所へ移動（Shift+クリック: 退く）',
+              'Move: arrows/numpad/hjklyubn  Wait: .  Wait a few: W  Explore: x (steady: X, toward the draft: D)  Fight: F (adjacent; otherwise meet a hunter)  Rest: R  Pick up: g  Collect items: G  Collect thrown: C  Stairs: >  Extract: E (on stairs)  Lifeline: L  Throw: t (F while aiming: throw until it falls)  Interact: o  Inventory: i  Click: travel (Shift+click: flee)')}
           </div>
         </aside>
       </div>

@@ -364,8 +364,11 @@ export function createMcpServer(ctx: McpContext): McpServer {
   server.registerTool('explore', {
     title: '自動探索',
     description: 'マクロ: 未見の区画へ進む（最大 200 手）。pickup（既定 true）なら通り道と見えているアイテムも拾う。止まる条件は mode で選ぶ。1 歩も進めないなら手番を使わずに理由付きで拒否する。',
-    inputSchema: { ...actionCommon, ...moveArgs, pickup: z.boolean().optional().describe('通り道と見えている・記憶したアイテムを拾う（既定 true。遺物と鑑定済みの有害品は拾わない）') },
-  }, async (a) => act('explore', a, { type: 'explore', mode: a.mode, hpFloor: a.hp_floor, pickup: a.pickup }));
+    inputSchema: {
+      ...actionCommon, ...moveArgs, pickup: z.boolean().optional().describe('通り道と見えている・記憶したアイテムを拾う（既定 true。遺物・鑑定済みの有害品・同じか劣る装備は拾わない）'),
+      toward: z.enum(['draft']).optional().describe("'draft': 下への風の方角の未探索を優先する（下り階段を探すとき）"),
+    },
+  }, async (a) => act('explore', a, { type: 'explore', mode: a.mode, hpFloor: a.hp_floor, pickup: a.pickup, ...(a.toward ? { toward: a.toward } : {}) }));
   server.registerTool('travel_to', {
     title: '移動（目的地）', description: "マクロ: 既知地図上の経路で座標・階段・記憶した対象へ移動。目的地がアイテムなら着いて拾う。隣に敵がいても退くなら mode: 'flee'。",
     inputSchema: { ...actionCommon, to: z.union([PosZ, z.enum(['stairs_down', 'stairs_up']), z.string().regex(/^e_[0-9a-z]{6}$/)]), ...moveArgs, pickup: z.boolean().optional().describe('通り道のアイテムも拾う（既定: 目的地がアイテムのとき true）') },

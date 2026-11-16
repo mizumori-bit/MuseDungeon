@@ -7,6 +7,7 @@ import type { Ctx } from './ctx';
 import { hasLos, inCircle } from './geom';
 import { isOpaqueFn, makeNoise, updateMemory } from './perception';
 import { Registry, roll } from './registry';
+import { lifelineReturn } from './expedition';
 import { addStatus, removeStatus } from './statuses';
 
 export interface EffectCtx {
@@ -38,7 +39,7 @@ effects.register('status', (ctx, p, ec) => {
   const st = String(p.status);
   addStatus(ctx, ec.target, st, dice(ctx, p.turns, '5'), num(p.power, 1), ec.source?.id ?? null);
   if (st === 'core:poison' && ec.source && !ec.source.player && ec.target.player) {
-    updateMemory(ctx, ec.target.player, ec.source.kind, (m) => { m.abilities.push('poison'); });
+    updateMemory(ctx, ec.target.player, ec.source, (m) => { m.abilities.push('poison'); });
   }
 });
 
@@ -94,9 +95,11 @@ effects.register('teleport', (ctx, _p, ec) => {
   ctx.emit({ type: 'entity_moved', id: t.id, kind: t.kind, from, to: { ...to }, mode: 'teleport', ...seen });
 });
 
-// 帰還の綱（V3-2R2 §18.1）: lifeline.turns 手番のあいだ行動できず、その後キャンプへ戻る
+// 帰還の綱: lifeline.turns が 0 なら使った手番でキャンプへ戻る（V3-2R3 §20.3）。1 以上ならその手番のあいだ行動できず、その後戻る
 effects.register('recall', (ctx, _p, ec) => {
-  addStatus(ctx, ec.target, 'core:recall', ctx.content.balance.lifeline.turns, 1);
+  const turns = ctx.content.balance.lifeline.turns;
+  if (turns <= 0) { lifelineReturn(ctx, ec.target); return; }
+  addStatus(ctx, ec.target, 'core:recall', turns, 1);
 });
 
 effects.register('identify', (ctx, p, ec) => {

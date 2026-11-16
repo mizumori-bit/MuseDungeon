@@ -41,7 +41,8 @@ export function buildCatalog(c: Content): Catalog {
   return {
     contentVersion: c.version,
     terrain: Object.fromEntries(c.terrain.map((t) => [t.id, { name: t.name, passable: t.passable, opaque: t.opaque, layer: t.layer, door: t.door, stairs: t.stairs, tags: t.tags }])),
-    monsters: Object.fromEntries(c.lists.monsters.map((m) => [m.id, { name: m.name, tags: m.tags, glyph: m.glyph }])),
+    // size・armored は見れば分かる性質（V3-2R3 §20.4）。armored は素の装甲が 3 以上（値そのものは出さない）
+    monsters: Object.fromEntries(c.lists.monsters.map((m) => [m.id, { name: m.name, tags: m.tags, glyph: m.glyph, size: m.size, armored: m.stats.armor >= 3 }])),
     classes: Object.fromEntries(c.lists.classes.map((k) => [k.id, {
       name: k.name, desc: k.desc,
       // 自キャラの初期値と成長は公開情報（キー名 hp は使わない: 能力値を出さないカタログの検査に合わせる）
@@ -69,7 +70,8 @@ export function buildCatalog(c: Content): Catalog {
       score: { ...c.balance.score },
       estimateMinSamples: c.balance.estimate.minSamples,
       haul: {
-        overreachFirst: c.balance.haul.overreachFirst, overreachStep: c.balance.haul.overreachStep, overreachPct: { ...c.balance.haul.overreachPct }, perKill: c.balance.haul.perKill,
+        overreachFirst: c.balance.haul.overreachFirst, overreachStep: c.balance.haul.overreachStep, overreachPct: { ...c.balance.haul.overreachPct },
+        killPerXp: c.balance.haul.killPerXp, killAffixPct: c.balance.haul.killAffixPct,
         withdrawPct: c.balance.haul.withdrawPct, discovery: { ...c.balance.haul.discovery },
         guardianBounty: { ...c.balance.haul.guardianBounty },
       },
@@ -83,6 +85,7 @@ export function buildCatalog(c: Content): Catalog {
       xp: { ...c.balance.xp },
       lifeline: { ...c.balance.lifeline },
       teleport: { ...c.balance.teleport },
+      guardianRanks: c.balance.guardian.ranks.map((r) => ({ hpPct: r.hpPct })),
       traits: Object.fromEntries(c.lists.expeditionTraits.map((t) => [t.id, { name: t.name, desc: t.desc, multiplierPct: t.multiplierPct, danger: t.danger }])),
       expedition: {
         firstTargetDepth: { ...c.balance.expedition.firstTargetDepth },

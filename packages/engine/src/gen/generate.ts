@@ -10,12 +10,13 @@ import { DOOR, FLOOR, GenGrid, WALL } from './grid';
 import { layoutGenerators } from './layouts';
 
 export type SpawnSpec =
-  | { type: 'monster'; kind: string; x: number; y: number; hp: number; affixes: string[]; tier: number; asleep: boolean; delay: number; role?: EntityRole; bounty?: number; minHp?: number }
+  | { type: 'monster'; kind: string; x: number; y: number; hp: number; affixes: string[]; tier: number; asleep: boolean; delay: number; role?: EntityRole; bounty?: number; minHp?: number; hpBonusPct?: number }
   | { type: 'item'; kind: string; x: number; y: number; qty: number; affixes: string[]; role?: EntityRole; value?: number }
   | { type: 'feature'; kind: string; x: number; y: number };
 
 /** 遠征の目標階に置くもの */
-export interface ObjectiveSpec { guardian: boolean; relic: boolean }
+/** rank: 守護者の格（堅実 1・標準 2・野心 3）。guardianKind: 候補で決めた種族（無ければ生成時に格で選ぶ） */
+export interface ObjectiveSpec { guardian: boolean; relic: boolean; rank?: 1 | 2 | 3; guardianKind?: string }
 
 /** 遠征の条件による生成の修飾（目標階までの新しい階に効く） */
 export interface GenMods { monstersPct: number; itemsPct: number; treasurePct: number; noFountain: boolean }
@@ -443,6 +444,50 @@ function populate(s: GenState): void {
 const GUARDIAN_EXCLUDED_ARCHETYPES = new Set(['stationary', 'skittish']);
 
 /**
+ * 守護者の候補（V3-2R3 §20.1）: その階の生成表のタグに合い、その深度の重みが正の種族から、vermin と動かない・逃げ回る型を除く。
+ * 格 1 は経験値の下位半分（射撃して距離を取る型も除く）、格 2・3 は上位半分（切り上げ）
+ */
+export function guardianCandidates(content: Content, floorType: FloorTypeDef, biome: BiomeDef, depth: number, rank: 1 | 2 | 3): MonsterDef[] {
+  const effective = Math.min(depth, content.deepestDefined);
+  const table = content.spawnTables[floorType.monsters.table];
+  let cands = content.lists.monsters
+    .filter((m) => (!table?.tagsAny.length || m.tags.some((t) => table.tagsAny.includes(t))) && !(table?.tagsNone ?? []).some((t) => m.tags.includes(t)))
+    .filter((m) => !GUARDIAN_EXCLUDED_ARCHETYPES.has(m.ai.archetype) && !m.tags.includes('vermin') && monsterWeight(m, effective, biome) > 0);
+  if (rank === 1) cands = cands.filter((m) => m.ai.archetype !== 'ranged_kiter');
+  cands.sort((a, b) => b.xp - a.xp || (a.id < b.id ? -1 : 1));
+  const half = Math.max(1, Math.ceil(cands.length / 2));
+  return rank === 1 ? cands.slice(cands.length - half) : cands.slice(0, half);
+}
+
+/** 守護者の種族を選ぶ（候補を作るときと生成時で同じ規則）。階の種類と地形は深度とシードから決まる */
+export function pickGuardianKind(content: Content, seed: string, branch: string, depth: number, rank: 1 | 2 | 3, rng: Rng): string | null {
+  const c = guardianCandidates(content, selectFloorType(content, seed, branch, depth), selectBiome(content, seed, branch, depth), depth, rank);
+  if (c.length) return c[rng.int(c.length)].id;
+  const def = content.lists.monsters.find((m) => !GUARDIAN_EXCLUDED_ARCHETYPES.has(m.ai.archetype) && depthOk(m.depth, Math.min(depth, content.deepestDefined)))
+    ?? content.lists.monsters.find((m) => !GUARDIAN_EXCLUDED_ARCHETYPES.has(m.ai.archetype));
+  return def?.id ?? null;
+}
+
+/** 守護者の生成仕様（生成時と、生成済みの階に遠征の開始時に置くときで共用）。格で体力の上乗せと下限が決まる */
+export function guardianSpec(content: Content, depth: number, kind: string, rank: 1 | 2 | 3, x: number, y: number, rng: Rng): SpawnSpec {
+  const def = content.monsters[kind];
+  const tier = depth > content.deepestDefined ? floorDiv(depth - content.deepestDefined, 5) + 1 : 0;
+  const spec = monsterSpec({ content, depth }, def, tier, x, y, false, rng);
+  if (spec.type === 'monster') {
+    const guardAffix = content.lists.affixes.find((a) => a.target === 'guardian');
+    spec.affixes = [...(guardAffix ? [guardAffix.id] : []), ...spec.affixes];
+    spec.role = 'guardian';
+    const gb = content.balance.haul.guardianBounty;
+    spec.bounty = gb.base + gb.perDepth * depth;
+    const ranks = content.balance.guardian.ranks;
+    const r = ranks[Math.min(ranks.length, rank) - 1];
+    spec.hpBonusPct = r.hpPct;
+    spec.minHp = r.minHpBase + r.minHpPerDepth * depth;
+  }
+  return spec;
+}
+
+/**
  * 遠征の目標階の専用段: 守護者・遺物を入口から離れた到達可能なセルに置く。
  * 乱数は 'objective' ストリームだけを使う（他の段の結果は変わらない）。
  */
@@ -480,34 +525,16 @@ function placeObjective(s: GenState, obj: ObjectiveSpec): boolean {
       const ni = near[rng.int(near.length)];
       gx = ni % g.w; gy = Math.trunc(ni / g.w);
     }
-    // 守護者は「その深度の候補のうち経験値が上位半分のもの」から選ぶ（vermin を除く。V3-2R2 §18.6）
-    const effective = Math.min(s.depth, s.content.deepestDefined);
-    const tier = s.depth > s.content.deepestDefined ? floorDiv(s.depth - s.content.deepestDefined, 5) + 1 : 0;
-    const table = s.content.spawnTables[s.floorType.monsters.table];
-    const cands = s.content.lists.monsters
-      .filter((m) => (!table?.tagsAny.length || m.tags.some((t) => table.tagsAny.includes(t))) && !(table?.tagsNone ?? []).some((t) => m.tags.includes(t)))
-      .filter((m) => !GUARDIAN_EXCLUDED_ARCHETYPES.has(m.ai.archetype) && !m.tags.includes('vermin') && monsterWeight(m, effective, s.biome) > 0)
-      .sort((a, b) => b.xp - a.xp || (a.id < b.id ? -1 : 1));
-    const top = cands.slice(0, Math.max(1, Math.ceil(cands.length / 2)));
-    let pick: { def: MonsterDef; tier: number } | null = top.length ? { def: top[rng.int(top.length)], tier } : null;
-    if (!pick) {
-      const def = s.content.lists.monsters.find((m) => !GUARDIAN_EXCLUDED_ARCHETYPES.has(m.ai.archetype) && depthOk(m.depth, Math.min(s.depth, s.content.deepestDefined)))
-        ?? s.content.lists.monsters.find((m) => !GUARDIAN_EXCLUDED_ARCHETYPES.has(m.ai.archetype));
-      if (!def) return false;
-      pick = { def, tier: s.depth > s.content.deepestDefined ? floorDiv(s.depth - s.content.deepestDefined, 5) + 1 : 0 };
-    }
-    const guardAffix = s.content.lists.affixes.find((a) => a.target === 'guardian');
-    const spec = monsterSpec(s, pick.def, pick.tier, gx, gy, false, rng);
-    if (spec.type === 'monster') {
-      spec.affixes = [...(guardAffix ? [guardAffix.id] : []), ...spec.affixes];
-      spec.role = 'guardian';
-      const gb = s.content.balance.haul.guardianBounty;
-      spec.bounty = gb.base + gb.perDepth * s.depth;
-      // 体力の下限（「体力 12 の守護者」を出さない）
-      const gm = s.content.balance.guardian;
-      spec.minHp = gm.minHpBase + gm.minHpPerDepth * s.depth;
-    }
-    s.spawns.push(spec);
+    // 守護者の種族と格（V3-2R3 §20.1）: 候補で決めた種族があればそれ、無ければ格の規則で選ぶ
+    const rank = obj.rank ?? 2;
+    const kind = obj.guardianKind && s.content.monsters[obj.guardianKind]
+      ? obj.guardianKind
+      : (() => {
+        const c = guardianCandidates(s.content, s.floorType, s.biome, s.depth, rank);
+        return c.length ? c[rng.int(c.length)].id : pickGuardianKind(s.content, s.seed, s.branch, s.depth, rank, rng);
+      })();
+    if (!kind) return false;
+    s.spawns.push(guardianSpec(s.content, s.depth, kind, rank, gx, gy, rng));
   }
   return true;
 }

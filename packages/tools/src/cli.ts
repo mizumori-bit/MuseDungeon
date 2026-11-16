@@ -165,7 +165,7 @@ async function main() {
     }
     case 'budget': {
       const manager = new SessionManager(content, loadConfig({ runsDir: null }));
-      const rep = await budgetReport(manager, { runs: Number(flag('runs', '30')), maxActs: Number(flag('max-acts', '600')), seed: flag('seed', 'budget')!, log: has('verbose') ? (s) => console.log(s) : undefined });
+      const rep = await budgetReport(manager, { runs: Number(flag('runs', '30')), maxActs: Number(flag('max-acts', '600')), seed: flag('seed', 'budget')!, ...(flag('slot-runs', '') ? { slotRuns: Number(flag('slot-runs', '')) } : {}), log: has('verbose') ? (s) => console.log(s) : undefined });
       console.log(has('json') ? JSON.stringify(rep, null, 2) : formatBudget(rep));
       break;
     }

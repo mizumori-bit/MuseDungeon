@@ -165,11 +165,15 @@ describe('V3-2R2 retreat (§18.1)', () => {
   it('the lifeline takes its turns (you can be hit), then banks half the haul and ends the expedition as lifeline; the next expedition gets one again', async () => {
     const t = await newRun('v32r2-life-2');
     t.clearMonsters();
-    // 目標の地下2階へ（到達で達成）
+    // 目標の地下2階へ。その階の下り階段に立って踏破（達成）
     const f1 = t.world.floors[t.me().pos!.floor];
     t.place(f1.stairs.down[0].x, f1.stairs.down[0].y);
     expect((await t.act({ type: 'stairs' })).ok).toBe(true);
     t.clearMonsters();
+    const f2 = t.world.floors[t.me().pos!.floor];
+    await t.act({ type: 'wait' });
+    expect(t.world.expeditions![0].status).toBe('in_progress');
+    t.place(f2.stairs.down[0].x, f2.stairs.down[0].y);
     await t.act({ type: 'wait' });
     expect(t.world.expeditions![0].status).toBe('objective_complete');
     // 階段から離れて、隣に追跡中の敵
@@ -290,14 +294,16 @@ describe('V3-2R2 reading danger (§18.2)', () => {
     expect(hunting[0].first_seen).toBeUndefined();
   });
 
-  it('guardians come from the top half of the depth’s candidates by XP, never vermin, with a minimum HP', () => {
+  it('guardians are never vermin and get the minimum HP of their rank (rank 2 by default)', () => {
+    const r2 = content.balance.guardian.ranks[1];
     for (let i = 0; i < 30; i++) {
       for (const depth of [2, 3, 4, 6]) {
         const g = generateFloor(content, `v32r2-guard-${i}`, 'main', depth, content.terrain.map((tt) => tt.id), { guardian: true, relic: false });
         const spec = g.spawns.find((s) => s.type === 'monster' && s.role === 'guardian');
         if (!spec || spec.type !== 'monster') continue;
         expect(content.monsters[spec.kind].tags).not.toContain('vermin');
-        expect(spec.minHp).toBe(content.balance.guardian.minHpBase + content.balance.guardian.minHpPerDepth * depth);
+        expect(spec.minHp).toBe(r2.minHpBase + r2.minHpPerDepth * depth);
+        expect(spec.hpBonusPct).toBe(r2.hpPct);
       }
     }
   });

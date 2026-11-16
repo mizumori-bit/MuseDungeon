@@ -131,6 +131,7 @@ function crossValidate(c: Content): void {
   need(!!c.items['core:relic'], '遠征の遺物 core:relic が必要');
   need(!!c.items['core:lifeline']?.bound, '帰還の綱 core:lifeline（bound）が必要');
   need(!!c.statuses['core:recall'], '帰還中の状態 core:recall が必要');
+  if (c.balance) need(c.balance.guardian.ranks.length >= 3, 'balance.guardian.ranks は格 1〜3 の 3 つが必要');
   for (const it of c.lists.items) if (it.category === 'treasure') need(!!it.value, `${it.id}: 宝には value が必要`);
   need(!!c.lootTables['core:treasure_loot'], '守護者の確定ドロップ core:treasure_loot が必要');
   if (c.balance) for (const k of ['safe', 'standard', 'ambitious']) need(k in c.balance.expedition.slots, `balance.expedition.slots に ${k} が必要`);

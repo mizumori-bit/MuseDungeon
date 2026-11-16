@@ -81,6 +81,12 @@ export function filterEventsForPlayer(events: readonly GameEvent[], playerId: Pl
       case 'healed':
         if (ev.target !== selfId) delete pe.hpAfter;
         break;
+      case 'expedition_offered': {
+        // 候補の守護者の種族は会うまで渡さない（特徴だけ）
+        const camp = pe.camp as { offers?: { guardianKind?: string }[] } | undefined;
+        for (const o of camp?.offers ?? []) delete o.guardianKind;
+        break;
+      }
       case 'expedition_started': {
         // 開始時点の他プレイヤーの成績と目標の ID は渡さない
         const x = (pe.expedition ?? {}) as Record<string, unknown>;
