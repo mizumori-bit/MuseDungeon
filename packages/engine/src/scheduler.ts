@@ -2,7 +2,7 @@
 // プレイヤーがいるフロアごとに nextActAt 最小（同値は挿入順）のアクターを次の行動者にする。
 // モンスターは AI が即決、プレイヤーならコマンドを待つ。プレイヤーがいないフロアは凍結。
 import type { Entity, FloorKey } from '@muse/shared';
-import { cheb, floorDiv } from '@muse/shared';
+import { cheb, regenInterval, regenStep } from '@muse/shared';
 import { monsterTurn } from './ai';
 import { heal } from './combat';
 import type { Ctx } from './ctx';
@@ -13,11 +13,26 @@ import { spawnFromSpec } from './spawn';
 import { actionDelay } from './stats';
 import { tickStatuses } from './statuses';
 
-export function endTurn(ctx: Ctx, e: Entity, cost: number): void {
+/**
+ * プレイヤーの自然回復を 1 手番進める（回復があれば healed を出す）。新しい蓄積値を返す。
+ * restful: 追跡中の敵が見えない状態での wait（休息）。回復の速さが restMultiplier 倍になる。
+ */
+export function regenTick(ctx: Ctx, e: Entity, restful: boolean): number | undefined {
+  const cur = ctx.world.entities[e.id];
+  if (!cur?.player || !cur.stats || !cur.actor) return undefined;
+  const rules = ctx.content.balance.regen;
+  const r = regenStep(cur.actor.regen ?? 0, cur.stats.hp, cur.stats.maxHp, restful ? rules.restMultiplier : 1, regenInterval(ctx.content.balance, cur.level?.level ?? 1));
+  if (r.heal > 0) heal(ctx, cur, r.heal, restful ? 'rest' : 'regen');
+  return r.acc;
+}
+
+export function endTurn(ctx: Ctx, e: Entity, cost: number, restful = false): void {
+  const regenAfter = regenTick(ctx, e, restful);
   const cur = ctx.world.entities[e.id];
   if (!cur?.actor) return;
   ctx.emit({
     type: 'actor_scheduled', id: cur.id, nextActAt: cur.actor.nextActAt + actionDelay(ctx, cur, cost), turns: cur.actor.turns + 1,
+    ...(regenAfter !== undefined ? { regenAfter } : {}),
     seenBy: cur.player ? [cur.player] : [], floor: cur.pos?.floor ?? ctx.curFloor,
   });
 }
@@ -32,18 +47,15 @@ function nextActor(ctx: Ctx, key: FloorKey): Entity | null {
   return best;
 }
 
-function regenInterval(e: Entity): number {
-  return Math.max(3, 9 - floorDiv(e.level?.level ?? 1, 2));
-}
-
 function spawnWanderer(ctx: Ctx, key: FloorKey): void {
   const f = ctx.world.floors[key];
   const rng = ctx.rng('runtime');
   const biome = ctx.content.biomes[f.biome];
   const floorType = ctx.content.floorTypes[f.floorType];
+  const wb = ctx.content.balance.wander;
   if (!biome || !floorType || floorType.monsters.per1000 === 0) return;
   const awake = ctx.entitiesOn(key).filter((e) => e.actor && !e.player && !e.actor.dormant).length;
-  if (awake >= 30) return;
+  if (awake >= wb.maxAwake) return;
   const pick = pickMonster({ content: ctx.content, depth: f.depth, biome, floorType }, rng);
   if (!pick) return;
   const players = ctx.playersOn(key).map((p) => ctx.world.entities[p.entityId]);
@@ -51,7 +63,7 @@ function spawnWanderer(ctx: Ctx, key: FloorKey): void {
     const x = rng.range(1, f.width - 2), y = rng.range(1, f.height - 2);
     const tr = ctx.terrainAt(key, x, y);
     if (!tr.passable || tr.stairs || ctx.actorAt(key, x, y) || ctx.featureAt(key, x, y)) continue;
-    if (players.some((p) => cheb(p.pos!, { x, y }) < 12)) continue;
+    if (players.some((p) => cheb(p.pos!, { x, y }) < wb.minDistance)) continue;
     if (ctx.seersOf(key, { x, y }).length) continue;
     const m = spawnFromSpec(ctx, key, {
       type: 'monster', kind: pick.def.id, x, y, hp: Math.max(1, roll(rng, pick.def.stats.hp)), affixes: [], tier: pick.tier, asleep: false, delay: 0,
@@ -69,13 +81,13 @@ function beginPlayerTurn(ctx: Ctx, pe: Entity): boolean {
   const incap = tickStatuses(ctx, pe);
   let cur = ctx.world.entities[pe.id];
   if (!cur?.pos || pr.state !== 'alive' || ctx.world.status === 'ended') return false;
-  // 自然回復
-  if (cur.actor!.turns > 0 && cur.actor!.turns % regenInterval(cur) === 0 && cur.stats!.hp < cur.stats!.maxHp) heal(ctx, cur, 1, 'regen');
+  // 自然回復は手番の終わり（endTurn）で蓄積値として進める
   // 徘徊モンスター（休憩し放題への圧力）
   const f = ctx.world.floors[key];
+  const wb = ctx.content.balance.wander;
   if (!f.rules.noWander && cur.actor!.nextActAt >= f.nextWanderAt) {
     spawnWanderer(ctx, key);
-    ctx.emit({ type: 'floor_wander', nextWanderAt: cur.actor!.nextActAt + 4000 + ctx.rng('runtime').int(2000), seenBy: [], floor: key });
+    ctx.emit({ type: 'floor_wander', nextWanderAt: cur.actor!.nextActAt + wb.intervalMin + ctx.rng('runtime').int(Math.max(1, wb.intervalMax - wb.intervalMin)), seenBy: [], floor: key });
   }
   // 罠の発見
   const cls = ctx.content.classes[pr.classId];

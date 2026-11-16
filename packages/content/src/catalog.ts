@@ -1,5 +1,6 @@
 // 公開カタログの生成。能力値・出現条件は含めない（プレイヤーが知り得る性質と表示名だけ）。
 import type { Catalog, CatalogItem, Names } from '@muse/shared';
+import { HP_BANDS } from '@muse/shared';
 import type { Content } from './content';
 import type { ItemDef } from './schema';
 
@@ -43,9 +44,21 @@ export function buildCatalog(c: Content): Catalog {
     features: Object.fromEntries(c.lists.features.map((f) => [f.id, {
       name: f.name, category: f.category, states: f.states, interactable: f.onInteract.length > 0, passable: f.passable,
     }])),
-    statuses: Object.fromEntries(Object.values(c.statuses).map((s) => [s.id, { name: s.name }])),
+    statuses: Object.fromEntries(Object.values(c.statuses).map((s) => [s.id, s.handler === 'speed_pct' ? { name: s.name, speedPct: s.params.pct ?? 100 } : { name: s.name }])),
     affixes: Object.fromEntries(c.lists.affixes.map((a) => [a.id, { name: a.name, target: a.target }])),
     biomes: Object.fromEntries(c.lists.biomes.map((b) => [b.id, { name: b.name }])),
     floorTypes: Object.fromEntries(c.lists.floorTypes.map((f) => [f.id, { name: f.name }])),
+    rules: {
+      regen: { ...c.balance.regen },
+      restMaxTurns: c.balance.rest.maxTurns,
+      macroStepLimit: c.balance.macro.stepLimit,
+      wander: { intervalMin: c.balance.wander.intervalMin, intervalMax: c.balance.wander.intervalMax },
+      score: { ...c.balance.score },
+      expedition: {
+        firstTargetDepth: c.balance.expedition.firstTargetDepth, aheadMin: c.balance.expedition.aheadMin, aheadMax: c.balance.expedition.aheadMax,
+        points: { ...c.balance.expedition.points }, pointsPerExtraDepth: c.balance.expedition.pointsPerExtraDepth,
+      },
+      hpBands: [HP_BANDS[0], HP_BANDS[1], HP_BANDS[2]],
+    },
   };
 }

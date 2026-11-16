@@ -295,14 +295,21 @@ export class Canvas2DRenderer implements Renderer {
     const inView = (e: { x: number; y: number }) => e.x >= x0 - 1 && e.x <= x1 + 1 && e.y >= y0 - 1 && e.y <= y1 + 1;
     // L3 地物 → アイテム（同一セルは最上位の 1 つ＋「複数あり」の印）
     const topItem = new Map<number, SceneEntity>();
-    for (const e of s.entities) if (e.layer === 'item') topItem.set(e.y * s.width + e.x, e);
+    for (const e of s.entities) {
+      if (e.layer !== 'item') continue;
+      const k = e.y * s.width + e.x;
+      // 遺物は同じセルの他のアイテムより優先して見せる
+      if (topItem.get(k)?.role !== 'relic') topItem.set(k, e);
+    }
     for (const layer of ['feature', 'item'] as const) {
       for (const e of s.entities) {
         if (e.layer !== layer || !inView(e)) continue;
         if (layer === 'item' && topItem.get(e.y * s.width + e.x) !== e) continue;
+        if (e.role === 'relic') this.drawRelicGlow(ctx, sx(e.x), sy(e.y), cs);
         ctx.globalAlpha = e.hidden ? 0.45 : 1;
         this.drawEntity(ctx, theme.resolve({ ...e.ref, x: e.x, y: e.y }, now), sx(e.x), sy(e.y), cs);
         ctx.globalAlpha = 1;
+        if (e.role === 'relic') this.drawRelicBadge(ctx, sx(e.x), sy(e.y), cs);
         if (layer === 'item' && (e.stack ?? 1) > 1) {
           ctx.fillStyle = '#ffffff';
           ctx.font = `bold ${Math.round(cs * 0.32)}px ${FONT_STACK}`;
@@ -316,6 +323,7 @@ export class Canvas2DRenderer implements Renderer {
     const actors = s.entities.filter((e) => e.layer === 'actor' && inView(e)).map((e) => ({ e, p: this.entPos(e, now) }))
       .sort((a, b) => a.p.y - b.p.y || a.p.x - b.p.x);
     for (const { e, p } of actors) {
+      if (e.role === 'guardian') this.drawGuardianBase(ctx, sx(p.x), sy(p.y), cs);
       if (e.isPlayer && e.color) {
         ctx.strokeStyle = e.color;
         ctx.lineWidth = Math.max(1, cs * 0.07);
@@ -481,6 +489,7 @@ export class Canvas2DRenderer implements Renderer {
     e.affixes.slice(0, 2).forEach((af, i) => {
       this.drawIcon(ctx, theme.resolve({ cls: 'affix', id: af }, now), px + icon * i, py, icon);
     });
+    if (e.role === 'guardian') this.drawCrown(ctx, px + cs / 2, py - cs * 0.02, cs * 0.42);
     if (e.isPlayer && e.name) {
       ctx.font = `bold ${Math.max(9, Math.round(cs * 0.36))}px sans-serif`;
       ctx.textAlign = 'center';
@@ -491,6 +500,93 @@ export class Canvas2DRenderer implements Renderer {
       ctx.fillStyle = e.color ?? '#fff';
       ctx.fillText(e.name, px + cs / 2, py - 1);
     }
+  }
+
+  // ---- 遠征の目的に関わる個体の印（テーマ非依存のベクター描画。画像・glyph のどちらの上にも重ねる） ----
+
+  /** 守護者: 足元の赤い輪と、セルの四隅の括弧 */
+  private drawGuardianBase(ctx: CanvasRenderingContext2D, px: number, py: number, cs: number): void {
+    ctx.save();
+    ctx.fillStyle = 'rgba(255,70,40,0.22)';
+    ctx.strokeStyle = 'rgba(255,90,50,0.95)';
+    ctx.lineWidth = Math.max(1.5, cs * 0.07);
+    ctx.beginPath();
+    ctx.ellipse(px + cs / 2, py + cs * 0.84, cs * 0.44, cs * 0.16, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    const k = cs * 0.24, m = Math.max(1, cs * 0.04);
+    ctx.lineWidth = Math.max(1.5, cs * 0.06);
+    ctx.beginPath();
+    for (const [cx, cy, dx, dy] of [[px + m, py + m, 1, 1], [px + cs - m, py + m, -1, 1], [px + m, py + cs - m, 1, -1], [px + cs - m, py + cs - m, -1, -1]]) {
+      ctx.moveTo(cx + dx * k, cy);
+      ctx.lineTo(cx, cy);
+      ctx.lineTo(cx, cy + dy * k);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  /** 守護者: 頭上の冠 */
+  private drawCrown(ctx: CanvasRenderingContext2D, cx: number, bottom: number, w: number): void {
+    const h = w * 0.62;
+    const l = cx - w / 2, r = cx + w / 2, top = bottom - h;
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(l, bottom);
+    ctx.lineTo(l, top + h * 0.15);
+    ctx.lineTo(cx - w / 4, top + h * 0.55);
+    ctx.lineTo(cx, top);
+    ctx.lineTo(cx + w / 4, top + h * 0.55);
+    ctx.lineTo(r, top + h * 0.15);
+    ctx.lineTo(r, bottom);
+    ctx.closePath();
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = Math.max(1.5, w * 0.14);
+    ctx.strokeStyle = 'rgba(0,0,0,0.9)';
+    ctx.stroke();
+    ctx.fillStyle = '#ffb300';
+    ctx.fill();
+    ctx.restore();
+  }
+
+  /** 遺物: 背後の金色の光 */
+  private drawRelicGlow(ctx: CanvasRenderingContext2D, px: number, py: number, cs: number): void {
+    const cx = px + cs / 2, cy = py + cs / 2;
+    ctx.save();
+    const g = ctx.createRadialGradient(cx, cy, cs * 0.05, cx, cy, cs * 0.62);
+    g.addColorStop(0, 'rgba(255,215,80,0.75)');
+    g.addColorStop(1, 'rgba(255,215,80,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(px - cs * 0.15, py - cs * 0.15, cs * 1.3, cs * 1.3);
+    ctx.strokeStyle = 'rgba(255,220,100,0.95)';
+    ctx.lineWidth = Math.max(1.5, cs * 0.06);
+    ctx.beginPath();
+    ctx.arc(cx, cy, cs * 0.46, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  /** 遺物: 左上の四芒星 */
+  private drawRelicBadge(ctx: CanvasRenderingContext2D, px: number, py: number, cs: number): void {
+    const r = cs * 0.2, cx = px + r + 1, cy = py + r + 1, q = r * 0.32;
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - r);
+    ctx.lineTo(cx + q, cy - q);
+    ctx.lineTo(cx + r, cy);
+    ctx.lineTo(cx + q, cy + q);
+    ctx.lineTo(cx, cy + r);
+    ctx.lineTo(cx - q, cy + q);
+    ctx.lineTo(cx - r, cy);
+    ctx.lineTo(cx - q, cy - q);
+    ctx.closePath();
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = Math.max(1.5, cs * 0.05);
+    ctx.strokeStyle = 'rgba(0,0,0,0.9)';
+    ctx.stroke();
+    ctx.fillStyle = '#fff59d';
+    ctx.fill();
+    ctx.restore();
   }
 
   private drawIcon(ctx: CanvasRenderingContext2D, d: Drawable, px: number, py: number, size: number): void {

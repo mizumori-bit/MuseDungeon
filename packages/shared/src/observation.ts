@@ -1,24 +1,66 @@
 // Observation: PlayerView に AI が使いやすい派生情報を足して整形したもの。
 // 派生情報は PlayerView（とカタログ）だけから計算する。仕様: docs/PROTOCOL.md §3
 import type { Catalog } from './catalog';
-import { nameOf } from './catalog';
+import { nameOf, regenInterval, regenStep } from './catalog';
+import { objectiveText, offerText, progressText, resultText } from './expedition';
 import type { PerceivedEvent } from './filter';
 import { kindName } from './narrate';
 import type { NavGrid } from './nav';
 import { buildNavGrid, distanceField, findFrontiers } from './nav';
-import type { Dir, Locale, Pos } from './types';
+import type { Dir, EntityRole, Expedition, Locale, MonsterMemory, ObjectiveType, Pos } from './types';
 import { DIRS, DIR_VEC } from './types';
-import { cheb, ceilDiv, dirTo, t } from './util';
+import { cheb, ceilDiv, dirTo, floorDiv, t } from './util';
 import type { EntityView, HpState, ItemView, PlayerView, ViewStatus } from './view';
-import { xpForLevel } from './view';
+import { hpState, xpForLevel } from './view';
 
 export interface Alert { code: string; text: string; entity?: string }
 
 export interface ObsMonster {
   id: string; name: string; pos: Pos; dir: Dir | null; dist: number;
   hp_state: HpState; awareness: string; threat: 1 | 2 | 3 | 4 | 5; statuses: string[];
+  /** 遠征の守護者 */
+  role?: EntityRole;
+  /** 手負いで逃げている（追跡中でも extract・休息を妨げない） */
+  fleeing?: boolean;
+  /** 自分が見ている間にこの個体が受けた実ダメージの合計 */
+  damage_seen?: number;
+  /** 推定残り HP（思い出に体力の記録がある種族のみ。4 段階表示と damage_seen から計算） */
+  hp_left_est?: { min: number; max: number };
 }
-export interface ObsItem { id: string; name: string; pos: Pos; dir: Dir | null; dist: number; qty: number; remembered?: boolean }
+export interface ObsItem { id: string; name: string; pos: Pos; dir: Dir | null; dist: number; qty: number; remembered?: boolean; role?: EntityRole }
+
+export interface RestEstimate {
+  hp_to_full: number;
+  /** 全快までの手番数（追跡中の敵が見えず毒も無いまま休み続けた場合） */
+  turns: number;
+  /** 経過するフロア時間 */
+  time: number;
+  /** その間に湧く徘徊モンスターの目安（公開ルールの湧き間隔から） */
+  wander_expected: string;
+  blocked_by?: 'hostile_hunting' | 'poisoned';
+}
+
+export interface ObsExpedition {
+  no: number;
+  objective: { type: ObjectiveType; target_depth: number | null; text: string };
+  progress: { depth: number | null; target_depth: number | null; reached?: boolean; guardian_slain?: boolean; relic_held?: boolean };
+  status: Expedition['status'];
+  points: number;
+  /** 今この場で extract できるか */
+  can_extract: boolean;
+  /** 今 extract したら: complete（達成して帰還）/ withdraw（撤退、confirm が必要） */
+  extract_outcome: 'complete' | 'withdraw';
+  extract_blocked_by?: 'not_on_stairs' | 'hostile_hunting' | 'not_your_turn' | 'ended';
+  /** 1 行の要約 */
+  text: string;
+  /** 終了した遠征の結果 */
+  result?: { reason: string; points: number; deepest: number; kills: number; turns: number; text: string };
+}
+
+export interface ObsCamp {
+  next_no: number;
+  offers: { index: number; type: ObjectiveType; target_depth: number | null; points: number; text: string }[];
+}
 export interface ObsPlayer { id: string; name: string; pos: Pos; dir: Dir | null; dist: number; hp_state: HpState }
 export interface ObsFeature { type: string; name: string; pos: Pos; dir: Dir | null; dist: number; state?: string }
 export interface ObsInvItem { slot: string; name: string; qty: number; category: string; identified: boolean; equipped: boolean }
@@ -37,17 +79,26 @@ export interface Observation {
     inventory_count: number; inventory_capacity: number;
     inventory_brief?: string;
     inventory?: ObsInvItem[];
+    /** 自分が行動した手番数 */
+    turns: number;
+    /** HP が減っているときのみ: 全快まで休んだ場合の見積もり */
+    rest_estimate?: RestEstimate;
   };
   visible: { monsters: ObsMonster[]; items: ObsItem[]; players: ObsPlayer[]; features: ObsFeature[] };
   navigation: {
     here: string;
     passable_dirs: Dir[];
     frontiers: { pos: Pos; dir: Dir | null; dist: number }[];
-    known_stairs: { type: 'down' | 'up'; pos: Pos; dist: number; reachable: boolean }[];
+    /** path_len: 既知地図上の経路長（不明なら null） */
+    known_stairs: { type: 'down' | 'up'; pos: Pos; dist: number; reachable: boolean; path_len: number | null }[];
   };
   recent_events: string[];
   map?: { origin: Pos; rows: string[]; legend: Record<string, string> };
   valid_actions: string[];
+  /** 遠征の目的と進捗（事実の表示。次の一手の指示ではない） */
+  expedition?: ObsExpedition;
+  /** キャンプの候補（遠征と遠征の間のみ） */
+  camp?: ObsCamp;
 }
 
 export interface ObservationOptions {
@@ -108,6 +159,66 @@ function itemCategory(catalog: Catalog, kind: string | null, appearanceId: strin
   return 'misc';
 }
 
+/**
+ * 推定残り HP。思い出の体力の記録（倒した個体の最大 HP の範囲）と 4 段階表示と damage_seen だけから計算する。
+ * 記録の範囲と矛盾する（接辞・深層強化で頑丈な）個体では undefined。
+ */
+export function hpLeftEstimate(mem: MonsterMemory | undefined, band: HpState, damageSeen: number): { min: number; max: number } | undefined {
+  const hs = mem?.hpSeen;
+  if (!hs) return undefined;
+  const lo = Math.max(hs.min, damageSeen + 1);
+  let mn = Number.MAX_SAFE_INTEGER;
+  let mx = -1;
+  for (let m = lo; m <= hs.max; m++) {
+    for (let h = 1; h <= m - damageSeen; h++) {
+      if (hpState(h, m) !== band) continue;
+      if (h < mn) mn = h;
+      if (h > mx) mx = h;
+    }
+  }
+  return mx < 0 ? undefined : { min: mn, max: mx };
+}
+
+function effectiveSpeed(view: PlayerView, catalog: Catalog): number {
+  let sp = view.self.speed;
+  for (const st of view.self.statuses) {
+    const pct = catalog.statuses[st.id]?.speedPct;
+    if (pct !== undefined) sp = floorDiv(sp * pct, 100);
+  }
+  return Math.max(10, sp);
+}
+
+/** 全快まで休んだ場合の見積もり（engine の回復処理と同じ式・同じ蓄積値で数える） */
+export function restEstimate(view: PlayerView, catalog: Catalog, huntingVisible: boolean): RestEstimate | undefined {
+  const me = view.self;
+  if (me.stats.hp >= me.stats.maxHp) return undefined;
+  const rules = catalog.rules;
+  const interval = regenInterval(rules, me.level);
+  const mult = rules.regen.restMultiplier;
+  let acc = me.regen;
+  let hp = me.stats.hp;
+  let turns = 0;
+  const cap = Math.max(rules.restMaxTurns, 1) * 10;
+  while (hp < me.stats.maxHp && turns < cap) {
+    const r = regenStep(acc, hp, me.stats.maxHp, mult, interval);
+    acc = r.acc;
+    hp += r.heal;
+    turns++;
+  }
+  const delay = Math.max(1, floorDiv(100 * 100, effectiveSpeed(view, catalog)));
+  const time = turns * delay;
+  let wander = '0';
+  if (!view.floor?.noWander) {
+    const lo = floorDiv(time, rules.wander.intervalMax);
+    const hi = ceilDiv(time, rules.wander.intervalMin);
+    wander = lo === hi ? `${lo}` : `${lo}〜${hi}`;
+  }
+  const est: RestEstimate = { hp_to_full: me.stats.maxHp - me.stats.hp, turns, time, wander_expected: wander };
+  if (huntingVisible) est.blocked_by = 'hostile_hunting';
+  else if (me.statuses.some((s) => s.id === 'core:poison')) est.blocked_by = 'poisoned';
+  return est;
+}
+
 export function threatOf(view: PlayerView, e: EntityView): 1 | 2 | 3 | 4 | 5 {
   const mem = e.kind ? view.monsterMemory[e.kind] : undefined;
   const depth = view.floor?.depth ?? 1;
@@ -120,7 +231,7 @@ export function threatOf(view: PlayerView, e: EntityView): 1 | 2 | 3 | 4 | 5 {
   return th as 1 | 2 | 3 | 4 | 5;
 }
 
-const ITEM_GLYPH: Record<string, string> = { potion: '!', scroll: '?', weapon: ')', armor: '[', throwing: '/', accessory: '"' };
+const ITEM_GLYPH: Record<string, string> = { potion: '!', scroll: '?', weapon: ')', armor: '[', throwing: '/', accessory: '"', relic: '$' };
 
 function terrainGlyph(catalog: Catalog, id: string | undefined): string {
   if (!id) return ' ';
@@ -228,13 +339,23 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
   const rel = (p: Pos) => ({ dir: pos ? dirTo(pos, p) : null, dist: pos ? cheb(pos, p) : 0 });
   for (const e of view.entities) {
     if (e.cat === 'monster') {
-      monsters.push({
+      const m: ObsMonster = {
         id: e.id, name: monsterDisplayName(catalog, L, e), pos: e.pos, ...rel(e.pos),
         hp_state: e.hp ?? 'healthy', awareness: e.awareness ?? 'unaware', threat: threatOf(view, e),
         statuses: (e.statuses ?? []).map((s) => nameOf(catalog.statuses[s]?.name, L, s)),
-      });
+      };
+      if (e.role) m.role = e.role;
+      if (e.fleeing) m.fleeing = true;
+      if (e.damageSeen) m.damage_seen = e.damageSeen;
+      if (e.role !== 'guardian') {
+        const est = hpLeftEstimate(e.kind ? view.monsterMemory[e.kind] : undefined, m.hp_state, e.damageSeen ?? 0);
+        if (est) m.hp_left_est = est;
+      }
+      monsters.push(m);
     } else if (e.cat === 'item') {
-      items.push({ id: e.id, name: itemDisplayName(catalog, L, e.kind, e.appearanceId, e.affixes), pos: e.pos, ...rel(e.pos), qty: e.qty ?? 1 });
+      const it: ObsItem = { id: e.id, name: itemDisplayName(catalog, L, e.kind, e.appearanceId, e.affixes), pos: e.pos, ...rel(e.pos), qty: e.qty ?? 1 };
+      if (e.role) it.role = e.role;
+      items.push(it);
     } else if (e.cat === 'player') {
       players.push({ id: e.id, name: e.name ?? '?', pos: e.pos, ...rel(e.pos), hp_state: e.hp ?? 'healthy' });
     } else {
@@ -247,7 +368,11 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
   const visibleIds = new Set(view.entities.map((e) => e.id));
   for (const r of view.memory.remembered) {
     if (visibleIds.has(r.id)) continue;
-    if (r.cat === 'item' && items.length < 12) items.push({ id: r.id, name: itemDisplayName(catalog, L, r.kind, r.appearanceId), pos: r.pos, ...rel(r.pos), qty: r.qty, remembered: true });
+    if (r.cat === 'item' && (items.length < 12 || r.role)) {
+      const it: ObsItem = { id: r.id, name: itemDisplayName(catalog, L, r.kind, r.appearanceId), pos: r.pos, ...rel(r.pos), qty: r.qty, remembered: true };
+      if (r.role) it.role = r.role;
+      items.push(it);
+    }
     if (r.cat !== 'item') features.push({ type: r.kind ?? 'feature', name: kindName(catalog, L, r.kind), pos: r.pos, ...rel(r.pos), state: r.state });
   }
 
@@ -278,7 +403,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       if (!st) continue;
       const p = { x: i % f.width, y: Math.trunc(i / f.width) };
       const dd = pathDist(p);
-      known_stairs.push({ type: st, pos: p, dist: dd >= 0 ? dd : cheb(pos, p), reachable: dd >= 0 });
+      known_stairs.push({ type: st, pos: p, dist: dd >= 0 ? dd : cheb(pos, p), reachable: dd >= 0, path_len: dd >= 0 ? dd : null });
     }
     known_stairs.sort((a, b) => a.dist - b.dist);
     const fr = findFrontiers(grid)
@@ -335,10 +460,50 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
   const invBrief = invItems.map((i) => `${i.slot})${i.name}${i.qty > 1 ? `x${i.qty}` : ''}${i.equipped ? '*' : ''}`).join(' ');
 
   const biomeName = f ? nameOf(catalog.biomes[f.biome]?.name, L, f.biome) : '';
-  const valid_actions = buildValidActions(view, catalog, { passable_dirs, onStairs, itemsHere: itemsHere.length > 0, hostiles, frontiers: frontiers.length, known_stairs, grid });
+  // 追跡中（逃走中を除く）の敵が見えているか: extract と休息の判定（engine と同じ）
+  const huntingVisible = hostiles.some((m) => m.awareness === 'hunting' && !m.fleeing);
+  const rest = restEstimate(view, catalog, huntingVisible);
+
+  // 遠征
+  let expedition: ObsExpedition | undefined;
+  const xv = view.expedition;
+  if (xv) {
+    const active = xv.status !== 'ended' && view.status !== 'at_camp';
+    const blocked: ObsExpedition['extract_blocked_by'] = !active ? 'ended' : view.status !== 'your_turn' ? 'not_your_turn' : !onStairs ? 'not_on_stairs' : huntingVisible ? 'hostile_hunting' : undefined;
+    const prog: ObsExpedition['progress'] = { depth: f?.depth ?? null, target_depth: xv.objective.targetDepth };
+    if (xv.objective.type === 'reach_depth') prog.reached = xv.progress.reached;
+    if (xv.objective.type === 'slay_guardian') prog.guardian_slain = xv.progress.guardianSlain;
+    if (xv.objective.type === 'retrieve_relic') prog.relic_held = xv.progress.relicHeldByYou;
+    const extractText = blocked === undefined ? t(L, 'extract: 可', 'extract: possible')
+      : blocked === 'ended' ? '' : t(L, `extract: 不可(${EXTRACT_BLOCK_JA[blocked]})`, `extract: not now (${blocked})`);
+    const statusText = xv.status === 'objective_complete' ? t(L, '目的達成済み', 'objective complete') : xv.status === 'ended' ? t(L, '終了', 'ended') : t(L, '進行中', 'in progress');
+    expedition = {
+      no: xv.no,
+      objective: { type: xv.objective.type, target_depth: xv.objective.targetDepth, text: objectiveText(L, xv.objective) },
+      progress: prog, status: xv.status, points: xv.points,
+      can_extract: blocked === undefined,
+      // engine の wouldComplete と同じ規則（遺物は自分が持っていること）
+      extract_outcome: xv.status === 'objective_complete' && (xv.objective.type !== 'retrieve_relic' || xv.progress.relicHeldByYou) ? 'complete' : 'withdraw',
+      text: [t(L, `【遠征${xv.no}】${objectiveText(L, xv.objective)}`, `[Expedition ${xv.no}] ${objectiveText(L, xv.objective)}`), statusText, progressText(L, xv, f?.depth ?? null), extractText].filter(Boolean).join(' | '),
+    };
+    if (blocked !== undefined) expedition.extract_blocked_by = blocked;
+    if (xv.result) expedition.result = { ...xv.result, text: resultText(L, xv) };
+  }
+  let camp: ObsCamp | undefined;
+  if (view.camp) {
+    camp = { next_no: view.camp.nextNo, offers: view.camp.offers.map((o) => ({ index: o.index, type: o.objective.type, target_depth: o.objective.targetDepth, points: o.points, text: offerText(L, o) })) };
+  }
+  if (view.status === 'at_camp') alerts.unshift({ code: 'at_camp', text: t(L, 'キャンプにいる（盤面にいない）', 'You are at camp (off the board)') });
+  if (expedition?.can_extract && expedition.extract_outcome === 'complete') alerts.push({ code: 'can_extract', text: t(L, 'この場で extract すると帰還（達成）になる', 'extract here completes the expedition') });
+
+  const valid_actions = buildValidActions(view, catalog, {
+    passable_dirs, onStairs, itemsHere: itemsHere.length > 0, hostiles, frontiers: frontiers.length, known_stairs, grid,
+    canExtract: expedition?.can_extract ?? false, objectiveComplete: expedition?.extract_outcome === 'complete', restTurns: rest && !rest.blocked_by ? rest.turns : null,
+  });
 
   const statusLabel: Record<ViewStatus, [string, string]> = {
     your_turn: ['あなたの番', 'your turn'], waiting_others: ['他プレイヤー待ち', 'waiting for others'], dead: ['死亡', 'dead'], ended: ['ラン終了', 'run ended'],
+    at_camp: ['キャンプ', 'at camp'],
   };
   const summaryParts = [
     f ? t(L, `地下${f.depth}階 ${biomeName}`, `Depth ${f.depth} ${biomeName}`) : '',
@@ -362,12 +527,16 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       defense: { eva: me.stats.eva, armor: me.stats.armor },
       equipment: { weapon: equipName(me.equip.weapon), armor: equipName(me.equip.armor), accessory: equipName(me.equip.accessory) },
       inventory_count: view.inventory.length, inventory_capacity: me.capacity,
+      turns: me.turns,
     },
     visible: { monsters, items, players, features },
     navigation: { here, passable_dirs, frontiers, known_stairs },
     recent_events: (opts.recent ?? []).map((e) => e.text).filter((s) => s.length > 0).slice(-10),
     valid_actions,
   };
+  if (rest) obs.self.rest_estimate = rest;
+  if (expedition) obs.expedition = expedition;
+  if (camp) obs.camp = camp;
   if (opts.detail === 'full') obs.self.inventory = invItems;
   else obs.self.inventory_brief = invBrief;
   if (opts.map && f && pos) {
@@ -378,15 +547,25 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
   return obs;
 }
 
+const EXTRACT_BLOCK_JA: Record<string, string> = { not_on_stairs: '階段の上ではない', hostile_hunting: '追跡中の敵が見えている', not_your_turn: '手番ではない', ended: '終了済み' };
+
 interface VAInput {
   passable_dirs: Dir[]; onStairs: 'up' | 'down' | null; itemsHere: boolean; hostiles: ObsMonster[];
   frontiers: number; known_stairs: Observation['navigation']['known_stairs']; grid: NavGrid | null;
+  canExtract: boolean; objectiveComplete: boolean; restTurns: number | null;
 }
 
 function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): string[] {
   const L = view.locale;
   const out: string[] = [];
-  if (view.status !== 'your_turn' || !view.self.pos || !view.floor) return view.status === 'dead' ? [] : ['observe'];
+  if (view.status === 'at_camp') {
+    if (!view.camp) return ['wait_for_turn'];
+    return [
+      ...view.camp.offers.map((o) => `start_expedition ${o.index} (${objectiveText(L, o.objective)})`),
+      'start_expedition endless', 'retire',
+    ];
+  }
+  if (view.status !== 'your_turn' || !view.self.pos || !view.floor) return view.status === 'dead' || view.status === 'ended' ? [] : ['wait_for_turn'];
   const pos = view.self.pos;
   const f = view.floor;
   const byPos = new Map<number, EntityView>();
@@ -405,8 +584,11 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
     if (x.passable_dirs.includes(d)) out.push(`move ${d}`);
   }
   out.push('wait');
-  const hunting = x.hostiles.some((m) => m.awareness === 'hunting' || m.dist <= 2);
-  if (view.self.stats.hp < view.self.stats.maxHp) out.push(hunting ? `rest (${t(L, '不可: 敵が近い', 'unavailable: enemy nearby')})` : 'rest');
+  const hunting = x.hostiles.some((m) => (m.awareness === 'hunting' && !m.fleeing) || m.dist <= 2);
+  if (view.self.stats.hp < view.self.stats.maxHp) {
+    out.push(hunting ? `rest (${t(L, '不可: 敵が近い', 'unavailable: enemy nearby')})` : x.restTurns !== null ? `rest (${t(L, `全快まで約${x.restTurns}手`, `~${x.restTurns} turns to full`)})` : 'rest');
+  }
+  if (x.canExtract) out.push(x.objectiveComplete ? `extract (${t(L, '帰還: 遠征達成', 'complete the expedition')})` : `extract confirm:true (${t(L, '撤退: 未達成のまま終える', 'withdraw without the reward')})`);
   out.push(x.frontiers > 0 ? 'explore' : `explore (${t(L, '探索済み', 'fully explored')})`);
   if (x.known_stairs.some((s) => s.type === 'down')) out.push('travel_to stairs_down');
   if (x.known_stairs.some((s) => s.type === 'up')) out.push('travel_to stairs_up');
@@ -443,26 +625,45 @@ export function formatObservationText(obs: Observation, locale: Locale): string 
   const s = obs.self;
   const statusText: Record<ViewStatus, [string, string]> = {
     your_turn: ['あなたの番', 'your turn'], waiting_others: ['他プレイヤー待ち', 'waiting for others'], dead: ['死亡', 'dead'], ended: ['ラン終了', 'run ended'],
+    at_camp: ['キャンプ', 'at camp'],
   };
-  const floorText = s.floor ? t(L, `地下${s.floor.depth}階 ${s.floor.biome_name}`, `Depth ${s.floor.depth} ${s.floor.biome_name}`) : '-';
+  const floorText = s.floor ? t(L, `地下${s.floor.depth}階 ${s.floor.biome_name}`, `Depth ${s.floor.depth} ${s.floor.biome_name}`) : obs.status === 'at_camp' ? t(L, 'キャンプ', 'Camp') : '-';
   const posText = s.pos ? t(L, `位置(${s.pos.x},${s.pos.y})`, `pos(${s.pos.x},${s.pos.y})`) : '';
-  lines.push(`[seq ${obs.seq} | ${floorText} | HP ${s.hp}/${s.max_hp} | Lv${s.level} | ${posText} | ${statusText[obs.status][L === 'en' ? 1 : 0]}]`);
+  lines.push(`[seq ${obs.seq} | ${floorText} | HP ${s.hp}/${s.max_hp} | Lv${s.level} | ${posText ? posText + ' | ' : ''}${statusText[obs.status][L === 'en' ? 1 : 0]}]`);
+  if (obs.expedition) lines.push(obs.expedition.text);
   if (obs.alerts.length) lines.push('!! ' + obs.alerts.map((a) => a.text).join(' / '));
   const st = s.statuses.length ? s.statuses.map((x) => `${x.name}(${x.turns_left})`).join(' ') : t(L, 'なし', 'none');
   lines.push(t(L,
     `能力: 命中+${s.attack.acc} ダメージ${s.attack.dmg} 回避${s.defense.eva} 装甲${s.defense.armor} XP ${s.xp}/${s.xp_next} 状態:${st}`,
     `Stats: acc+${s.attack.acc} dmg ${s.attack.dmg} eva ${s.defense.eva} armor ${s.defense.armor} XP ${s.xp}/${s.xp_next} status:${st}`));
+  const re = s.rest_estimate;
+  if (re) {
+    const block = re.blocked_by === 'hostile_hunting' ? t(L, '（今は追跡中の敵が見えるので休めない）', ' (blocked: a hunting enemy is in view)')
+      : re.blocked_by === 'poisoned' ? t(L, '（毒が抜けるまで休憩は続く）', ' (rest continues until the poison wears off)') : '';
+    lines.push(t(L,
+      `休憩の見積もり: 全快まで ${re.turns} 手（HP +${re.hp_to_full}、時間 ${re.time}、その間の徘徊の目安 ${re.wander_expected} 体）${block}`,
+      `Rest estimate: ${re.turns} turns to full (HP +${re.hp_to_full}, time ${re.time}, wanderers expected ${re.wander_expected})${block}`));
+  }
+  if (obs.expedition?.result) lines.push(obs.expedition.result.text);
+  if (obs.camp && obs.status === 'at_camp') {
+    lines.push(t(L, `次の遠征の候補（遠征 ${obs.camp.next_no}）。start_expedition { offer } で始める:`, `Offers for expedition ${obs.camp.next_no} (start with start_expedition { offer }):`));
+    for (const o of obs.camp.offers) lines.push('  ' + o.text);
+    lines.push('  ' + t(L, 'endless) 目的なしでひたすら潜る（offer: "endless"）', 'endless) no objective, just descend (offer: "endless")'));
+  }
   const vis = obs.visible;
   if (vis.monsters.length || vis.items.length || vis.players.length || vis.features.length) {
     lines.push(t(L, '見えるもの:', 'In view:'));
     const from = s.pos ?? { x: 0, y: 0 };
     for (const m of vis.monsters) {
+      const role = m.role === 'guardian' ? t(L, ' [守護者]', ' [guardian]') : '';
+      const dmg = m.damage_seen ? t(L, `  与ダメ累計:${m.damage_seen}`, ` dmg_seen:${m.damage_seen}`) : '';
+      const est = m.hp_left_est ? t(L, `  推定残りHP:${m.hp_left_est.min}〜${m.hp_left_est.max}`, ` hp_left_est:${m.hp_left_est.min}-${m.hp_left_est.max}`) : '';
       lines.push(L === 'en'
-        ? `- ${m.name} ${m.id} (${m.pos.x},${m.pos.y}) ${relLabel(L, from, m.pos)} hp:${m.hp_state} ${m.awareness} threat:${m.threat}${m.statuses.length ? ' ' + m.statuses.join(',') : ''}`
-        : `- ${m.name} ${m.id} (${m.pos.x},${m.pos.y}) ${relLabel(L, from, m.pos)}  負傷:${HP_JA[m.hp_state]}  状態:${AW_JA[m.awareness] ?? m.awareness}  脅威:${m.threat}${m.statuses.length ? '  ' + m.statuses.join(',') : ''}`);
+        ? `- ${m.name}${role} ${m.id} (${m.pos.x},${m.pos.y}) ${relLabel(L, from, m.pos)} hp:${m.hp_state} ${m.awareness}${m.fleeing ? '(fleeing)' : ''} threat:${m.threat}${dmg}${est}${m.statuses.length ? ' ' + m.statuses.join(',') : ''}`
+        : `- ${m.name}${role} ${m.id} (${m.pos.x},${m.pos.y}) ${relLabel(L, from, m.pos)}  負傷:${HP_JA[m.hp_state]}  状態:${AW_JA[m.awareness] ?? m.awareness}${m.fleeing ? '(逃走中)' : ''}  脅威:${m.threat}${dmg}${est}${m.statuses.length ? '  ' + m.statuses.join(',') : ''}`);
     }
     for (const p of vis.players) lines.push(`- ${t(L, '味方', 'ally')} ${p.name} (${p.pos.x},${p.pos.y}) ${relLabel(L, from, p.pos)} ${L === 'en' ? p.hp_state : HP_JA[p.hp_state]}`);
-    for (const it of vis.items) lines.push(`- ${it.name}${it.qty > 1 ? ` x${it.qty}` : ''} ${it.id} (${it.pos.x},${it.pos.y}) ${relLabel(L, from, it.pos)}${it.remembered ? t(L, ' (記憶)', ' (remembered)') : ''}`);
+    for (const it of vis.items) lines.push(`- ${it.name}${it.role === 'relic' ? t(L, ' [遺物]', ' [relic]') : ''}${it.qty > 1 ? ` x${it.qty}` : ''} ${it.id} (${it.pos.x},${it.pos.y}) ${relLabel(L, from, it.pos)}${it.remembered ? t(L, ' (記憶)', ' (remembered)') : ''}`);
     for (const ft of vis.features) lines.push(`- ${ft.name} (${ft.pos.x},${ft.pos.y}) ${relLabel(L, from, ft.pos)}${ft.state && ft.state !== 'idle' ? ` [${ft.state}]` : ''}`);
   }
   const nav = obs.navigation;
@@ -545,8 +746,17 @@ export function describeTarget(view: PlayerView, catalog: Catalog, target: Pos |
         ? t(L, `遭遇${mem.encounters}回・撃破${mem.kills}回・受けた最大ダメージ${mem.maxDamageToYou}・与えた最大ダメージ${mem.maxDamageByYou}${mem.abilities.length ? '・能力:' + mem.abilities.join(',') : ''}`,
           `met ${mem.encounters}, killed ${mem.kills}, max dmg to you ${mem.maxDamageToYou}, max dmg by you ${mem.maxDamageByYou}${mem.abilities.length ? ', abilities: ' + mem.abilities.join(',') : ''}`)
         : t(L, '初めて見る相手だ', 'never seen before');
-      parts.push(`${name} [${L === 'en' ? e.hp : HP_JA[e.hp ?? 'healthy']}, ${L === 'en' ? e.awareness : AW_JA[e.awareness ?? 'unaware']}] ${memText}`);
-      list.push({ id: e.id, name, hp_state: e.hp, awareness: e.awareness, memory: mem ?? null, threat: threatOf(view, e) });
+      const hpText = mem?.hpSeen
+        ? t(L, `・倒した個体の体力 ${mem.hpSeen.min}〜${mem.hpSeen.max}（${mem.hpSeen.samples}体）`, `, HP of those you killed ${mem.hpSeen.min}-${mem.hpSeen.max} (${mem.hpSeen.samples})`)
+        : '';
+      const sturdy = e.role === 'guardian'
+        ? t(L, '・守護者（通常の個体より大幅に頑丈）', ', guardian (far sturdier than a normal one)')
+        : (e.affixes?.length || e.tier) ? t(L, '・接辞や深層強化があるので記録より頑丈なことがある', ', affixes/tier may make it sturdier than your records') : '';
+      const ds = e.damageSeen ? t(L, `・この個体への与ダメ累計 ${e.damageSeen}`, `, damage you saw it take ${e.damageSeen}`) : '';
+      const est = e.role !== 'guardian' ? hpLeftEstimate(mem, e.hp ?? 'healthy', e.damageSeen ?? 0) : undefined;
+      const estText = est ? t(L, `・推定残りHP ${est.min}〜${est.max}`, `, estimated HP left ${est.min}-${est.max}`) : '';
+      parts.push(`${name} [${L === 'en' ? e.hp : HP_JA[e.hp ?? 'healthy']}, ${L === 'en' ? e.awareness : AW_JA[e.awareness ?? 'unaware']}] ${memText}${hpText}${ds}${estText}${sturdy}`);
+      list.push({ id: e.id, name, hp_state: e.hp, awareness: e.awareness, memory: mem ?? null, threat: threatOf(view, e), role: e.role, damage_seen: e.damageSeen ?? 0, hp_left_est: est ?? null });
     } else if (e.cat === 'item') {
       const name = itemDisplayName(catalog, L, e.kind, e.appearanceId, e.affixes);
       const desc = e.kind ? nameOf(catalog.items[e.kind]?.desc, L, '') : t(L, '正体不明', 'unidentified');

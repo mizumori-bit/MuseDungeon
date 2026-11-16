@@ -1,9 +1,9 @@
 // Scene の組み立て。(a) PlayerView（プレイ・追従観戦）と (b) World 全体（俯瞰）。
 // プレイヤー視点では未知セルを描かない。未鑑定アイテムは外見 ID でしか描かない。
-import type { Catalog, Pos, PlayerView, World } from '@muse/shared';
-import { itemDisplayName, kindName, monsterDisplayName, nameOf } from '@muse/shared';
+import type { Catalog, EntityView, Pos, PlayerView, World } from '@muse/shared';
+import { hpLeftEstimate, itemDisplayName, kindName, monsterDisplayName, nameOf } from '@muse/shared';
 import type { AssetRef } from '../theme/types';
-import { getLocale } from '../util';
+import { getLocale, tr } from '../util';
 import type { Scene, SceneEntity } from './types';
 
 export const PLAYER_COLORS = ['#4fc3f7', '#ffb74d', '#ba68c8', '#81c784', '#f06292', '#fff176'];
@@ -25,10 +25,26 @@ function markStacks(ents: SceneEntity[]): void {
   for (const e of ents) if (e.layer === 'item') e.stack = counts.get(`${e.x},${e.y}`) ?? 1;
 }
 
+/** ツールチップ用: 役割の表示（守護者・遺物） */
+export function roleLabel(role: 'guardian' | 'relic' | undefined): string {
+  if (role === 'guardian') return tr(' ［守護者］', ' [guardian]');
+  if (role === 'relic') return tr(' ［遺物］', ' [relic]');
+  return '';
+}
+
 export interface SceneExtras {
   cursor?: Pos | null;
   path?: Pos[] | null;
   bubbles?: { id: string; text: string }[];
+}
+
+/** ツールチップ用: 自分が見た与ダメージの累計と推定残り HP（PlayerView の知識だけから） */
+function monsterKnowledge(view: PlayerView, e: EntityView): string {
+  const parts: string[] = [];
+  if (e.damageSeen) parts.push(tr(`与ダメ累計 ${e.damageSeen}`, `dmg seen ${e.damageSeen}`));
+  const est = e.role !== 'guardian' && e.hp ? hpLeftEstimate(e.kind ? view.monsterMemory[e.kind] : undefined, e.hp, e.damageSeen ?? 0) : undefined;
+  if (est) parts.push(tr(`推定残りHP ${est.min}〜${est.max}`, `est. HP left ${est.min}-${est.max}`));
+  return parts.length ? ` (${parts.join(', ')})` : '';
 }
 
 export function sceneFromView(view: PlayerView, catalog: Catalog, extras: SceneExtras = {}): Scene | null {
@@ -54,20 +70,20 @@ export function sceneFromView(view: PlayerView, catalog: Catalog, extras: SceneE
     if (visibleIds.has(r.id)) continue;
     if (vis[r.pos.y * f.width + r.pos.x] === 2) continue;
     if (r.cat === 'item') {
-      ents.push({ id: r.id, layer: 'item', ref: { ...itemRef(catalog, r.kind, r.appearanceId), x: r.pos.x, y: r.pos.y }, x: r.pos.x, y: r.pos.y, label: itemDisplayName(catalog, L, r.kind, r.appearanceId), statuses: [], affixes: [], remembered: true });
+      ents.push({ id: r.id, layer: 'item', ref: { ...itemRef(catalog, r.kind, r.appearanceId), x: r.pos.x, y: r.pos.y }, x: r.pos.x, y: r.pos.y, label: itemDisplayName(catalog, L, r.kind, r.appearanceId) + roleLabel(r.role), statuses: [], affixes: [], remembered: true, role: r.role });
     } else {
       ents.push({ id: r.id, layer: 'feature', ref: { cls: 'feature', id: r.kind ?? 'unknown', state: r.state }, x: r.pos.x, y: r.pos.y, label: kindName(catalog, L, r.kind), statuses: [], affixes: [], remembered: true });
     }
   }
   for (const e of view.entities) {
-    const base = { id: e.id, x: e.pos.x, y: e.pos.y, statuses: e.statuses ?? [], affixes: e.affixes ?? [] };
+    const base = { id: e.id, x: e.pos.x, y: e.pos.y, statuses: e.statuses ?? [], affixes: e.affixes ?? [], role: e.role };
     if (e.cat === 'item') {
-      ents.push({ ...base, layer: 'item', ref: { ...itemRef(catalog, e.kind, e.appearanceId), x: e.pos.x, y: e.pos.y }, label: itemDisplayName(catalog, L, e.kind, e.appearanceId, e.affixes ?? []) + ((e.qty ?? 1) > 1 ? ` x${e.qty}` : '') });
+      ents.push({ ...base, layer: 'item', ref: { ...itemRef(catalog, e.kind, e.appearanceId), x: e.pos.x, y: e.pos.y }, label: itemDisplayName(catalog, L, e.kind, e.appearanceId, e.affixes ?? []) + ((e.qty ?? 1) > 1 ? ` x${e.qty}` : '') + roleLabel(e.role) });
     } else if (e.cat === 'feature' || e.cat === 'trap') {
       ents.push({ ...base, layer: 'feature', ref: { cls: 'feature', id: e.kind ?? 'unknown', state: e.state }, label: kindName(catalog, L, e.kind) });
     } else if (e.cat === 'monster') {
       ents.push({
-        ...base, layer: 'actor', ref: { cls: 'actor', id: e.kind ?? 'unknown' }, label: monsterDisplayName(catalog, L, e),
+        ...base, layer: 'actor', ref: { cls: 'actor', id: e.kind ?? 'unknown' }, label: monsterDisplayName(catalog, L, e) + roleLabel(e.role) + monsterKnowledge(view, e),
         hpBucket: e.hp, hostile: true, asleep: e.awareness === 'asleep',
       });
     } else {
@@ -100,7 +116,7 @@ export function sceneFromWorld(world: World, catalog: Catalog, floorKey: string,
   const order = world.playerOrder;
   for (const e of Object.values(world.entities).sort((a, b) => a.sid - b.sid)) {
     if (!e.pos || e.pos.floor !== floorKey) continue;
-    const base = { id: e.id, x: e.pos.x, y: e.pos.y, statuses: (e.statuses ?? []).map((s) => s.id), affixes: e.scale?.affixes ?? [] };
+    const base = { id: e.id, x: e.pos.x, y: e.pos.y, statuses: (e.statuses ?? []).map((s) => s.id), affixes: e.scale?.affixes ?? [], role: e.role };
     if (e.player) {
       const pr = world.players[e.player];
       if (pr?.state !== 'alive') continue;
@@ -112,7 +128,7 @@ export function sceneFromWorld(world: World, catalog: Catalog, floorKey: string,
       const af = (e.scale?.affixes ?? []).map((a) => nameOf(catalog.affixes[a]?.name, L, a)).join(L === 'en' ? ' ' : '');
       const nm = kindName(catalog, L, e.kind);
       ents.push({
-        ...base, layer: 'actor', ref: { cls: 'actor', id: e.kind }, label: (af ? (L === 'en' ? `${af} ${nm}` : af + nm) : nm) + tier,
+        ...base, layer: 'actor', ref: { cls: 'actor', id: e.kind }, label: (af ? (L === 'en' ? `${af} ${nm}` : af + nm) : nm) + tier + roleLabel(e.role),
         hpFrac: e.stats ? e.stats.hp / Math.max(1, e.stats.maxHp) : 1, hostile: true,
         asleep: !!e.actor.dormant || e.actor.ai?.state === 'asleep' || (e.statuses ?? []).some((s) => s.id === 'core:sleep'),
       });
@@ -121,7 +137,7 @@ export function sceneFromWorld(world: World, catalog: Catalog, floorKey: string,
       const category = catalog.items[e.kind]?.category;
       // 俯瞰でも未鑑定になり得る種別は外見で描く（画像から正体を漏らさない）
       const ref: AssetRef = app ? { cls: 'appearance', id: app, category, x: e.pos.x, y: e.pos.y } : { cls: 'item', id: e.kind, category, x: e.pos.x, y: e.pos.y };
-      ents.push({ ...base, layer: 'item', ref, label: itemDisplayName(catalog, L, e.kind, null, e.item.affixes) + (e.item.qty > 1 ? ` x${e.item.qty}` : '') });
+      ents.push({ ...base, layer: 'item', ref, label: itemDisplayName(catalog, L, e.kind, null, e.item.affixes) + (e.item.qty > 1 ? ` x${e.item.qty}` : '') + roleLabel(e.role) });
     } else if (e.trap) {
       ents.push({ ...base, layer: 'feature', ref: { cls: 'feature', id: e.kind }, label: kindName(catalog, L, e.kind), hidden: e.trap.revealedTo.length === 0 });
     } else if (e.feature) {

@@ -1,14 +1,16 @@
 // リプレイ: キーフレーム＋イベント列を shared の applyEvent で畳むだけ（ゲームロジック不要）。
 // 再生/停止、0.25x〜16x、1 イベント／1 手番送り、シーク、マーカージャンプ、視点切替、thought 表示。
 // 進行中のランも末尾を再取得して巻き戻し観戦できる。
-import type { CommandRecord, GameEvent, Marker, RunIndex, RunMetaFile, World } from '@muse/shared';
-import { applyEvent, buildObservation, emptyWorld, formatObservationText, projectPlayerView } from '@muse/shared';
+import type { CommandRecord, ExpeditionBrief, GameEvent, Marker, RunIndex, RunMetaFile, World } from '@muse/shared';
+import { applyEvent, buildObservation, emptyWorld, endReasonText, formatObservationText, objectiveText, projectPlayerView } from '@muse/shared';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { api, errorText } from '../api';
 import type { Canvas2DRenderer } from '../render/canvas2d';
 import { toViewEvents } from '../render/events';
 import { directorFloor, sceneFromView, sceneFromWorld } from '../render/scene';
 import { ErrorBanner, Header, MapView, ThemePicker, useCatalog, useLocaleRefresh, useTheme } from '../ui/common';
+import { directorExpInfo, ExpeditionStatusPanel, followExpInfo, type ExpInfo } from '../ui/expedition';
+import { expStatusLabel } from '../ui/labels';
 import { narrateWorld, thoughtsFrom } from '../ui/narration';
 import { AiPanel, MessageLog, PartyPanel } from '../ui/panels';
 import { clamp, getLocale, tr } from '../util';
@@ -19,7 +21,17 @@ const SPEEDS = [0.25, 0.5, 1, 2, 4, 8, 16];
 const MARKER_LABEL: Record<string, [string, string]> = {
   join: ['参加', 'join'], floor: ['階移動', 'floor'], level_up: ['Lv up', 'level up'], kill: ['撃破', 'kill'],
   near_death: ['瀕死', 'near death'], death: ['死亡', 'death'], thought: ['思考', 'thought'], end: ['終了', 'end'],
+  expedition_start: ['遠征開始', 'expedition start'], objective: ['目的達成', 'objective'], expedition_end: ['遠征終了', 'expedition end'],
 };
+
+/** seq を含む遠征（開始〜終了。終了前なら開始以降すべて） */
+function expeditionAt(list: readonly ExpeditionBrief[], seq: number): ExpeditionBrief | null {
+  for (let i = list.length - 1; i >= 0; i--) {
+    const x = list[i];
+    if (seq >= x.startSeq && (x.endSeq === null || seq <= x.endSeq)) return x;
+  }
+  return null;
+}
 
 interface Bubble { id: string; text: string; until: number }
 
@@ -286,6 +298,28 @@ export function Replay({ runId }: { runId: string }) {
   };
 
   const pct = (s: number) => (lastSeq > firstSeq ? ((s - firstSeq) / (lastSeq - firstSeq)) * 100 : 0);
+  const exps = index?.expeditions ?? [];
+  const curExp = expeditionAt(exps, seq);
+  const expOption = (x: ExpeditionBrief) => `${tr(`遠征 ${x.no}`, `Expedition ${x.no}`)}: ${objectiveText(L, x.objective)} — ${x.status === 'ended' ? endReasonText(L, x.endReason) : expStatusLabel(x).text}`;
+  const jumpExpedition = (no: number) => {
+    const x = exps.find((e) => e.no === no);
+    if (!x) return;
+    setPlaying(false);
+    void seek(Math.max(firstSeq, x.startSeq));
+  };
+
+  let expInfo: ExpInfo | null = null;
+  if (w) {
+    try {
+      if (mode === 'follow' && follow && w.players[follow]) expInfo = followExpInfo(projectPlayerView(w, follow));
+      else {
+        const fk = directorFloor(w, follow).floorKey;
+        expInfo = directorExpInfo(w, fk ? w.floors[fk]?.depth ?? null : null);
+      }
+    } catch {
+      expInfo = null;
+    }
+  }
 
   return (
     <div class="page replay">
@@ -316,9 +350,31 @@ export function Replay({ runId }: { runId: string }) {
           </label>
         )}
         <span class="muted">seq {seq} / {lastSeq}{loaded < lastSeq ? ` (${tr('読込', 'loading')} ${loaded})` : ''}</span>
+        {exps.length > 0 && (
+          <label class="inline">{tr('遠征', 'Expedition')}
+            <select value={curExp ? String(curExp.no) : ''} onChange={(e) => { const v = (e.target as HTMLSelectElement).value; if (v) jumpExpedition(parseInt(v, 10)); }}>
+              <option value="">{tr('（遠征の外）', '(between expeditions)')}</option>
+              {exps.map((x) => <option key={x.no} value={String(x.no)}>{expOption(x)}</option>)}
+            </select>
+          </label>
+        )}
+        {curExp && (
+          <span class="muted">
+            #{curExp.startSeq}〜{curExp.endSeq !== null ? `#${curExp.endSeq}` : tr('進行中', 'ongoing')}
+            {' '}{curExp.status === 'ended' ? `（${endReasonText(L, curExp.endReason)}${curExp.endReason === 'completed' ? ` +${curExp.points}` : ''}）` : ''}
+          </span>
+        )}
       </div>
       <div class="timeline">
         <div class="track">
+          {exps.map((x) => {
+            const a = pct(Math.max(firstSeq, x.startSeq));
+            const b = pct(x.endSeq ?? lastSeq);
+            return (
+              <span key={`exp-${x.no}`} class={`expband ${x.endReason ?? 'ongoing'} ${curExp?.no === x.no ? 'cur' : ''}`}
+                style={{ left: `${a}%`, width: `${Math.max(0.3, b - a)}%` }} title={`${expOption(x)}（#${x.startSeq}〜${x.endSeq ?? ''}）`} onClick={() => jumpExpedition(x.no)} />
+            );
+          })}
           {markers.slice(0, 600).map((m, i) => (
             <span key={`${m.seq}-${i}`} class={`marker ${m.type}`} style={{ left: `${pct(m.seq)}%` }} title={`#${m.seq} ${m.label}`} onClick={() => void seek(m.seq)} />
           ))}
@@ -341,6 +397,7 @@ export function Replay({ runId }: { runId: string }) {
           <MapView theme={th.theme} onReady={(r) => { rRef.current = r; render(); setTick((n) => n + 1); }} />
         </div>
         <aside class="side">
+          <ExpeditionStatusPanel info={expInfo} />
           {w && catalog && <PartyPanel world={w} catalog={catalog} follow={follow} onFollow={(pid) => setFollow(pid)} />}
           <AiPanel thoughts={thoughts} commands={cmdView} observationText={obsText} />
           <MessageLog lines={recentLines} />

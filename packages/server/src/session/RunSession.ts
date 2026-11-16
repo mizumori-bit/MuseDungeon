@@ -6,7 +6,7 @@ import type { Content } from '@muse/content';
 import { createRun, ENGINE_VERSION, isPlayersTurn, joinPlayer, step } from '@muse/engine';
 import type {
   ActionError, AgentActivity, Command, CommandRecord, CommandSource, GameEvent, JoinCommand, MacroStop,
-  PerceivedEvent, PlayerId, PlayerView, RunMetaFile, RunSummary, World,
+  PerceivedEvent, PlayerId, PlayerView, RunMetaFile, RunSummary, TurnSnapshot, World,
 } from '@muse/shared';
 import {
   actionError, applyEvent, canonicalHash, emptyWorld, filterEventsForPlayer, FREE_COMMANDS, MACRO_COMMANDS,
@@ -38,8 +38,18 @@ export interface SubmitOpts {
   expectSeq?: number;
 }
 
+/** マクロの実績（結果の報告用。PlayerView から計算） */
+export interface MacroReport {
+  kind: string;
+  /** 歩いた手数（explore / travel）。rest は 0 */
+  distance: number;
+  /** 経過したフロア時間（階を移った場合は null） */
+  timeElapsed: number | null;
+  hpGained: number;
+}
+
 export type SubmitResult =
-  | { ok: true; events: GameEvent[]; startSeq: number; steps?: number; interruptedBy?: MacroStop | 'waiting_others' }
+  | { ok: true; events: GameEvent[]; startSeq: number; steps?: number; interruptedBy?: MacroStop | 'waiting_others'; macro?: MacroReport }
   | { ok: false; error: ActionError };
 
 const MESSAGE_LOG_CAP = 3000;
@@ -67,6 +77,12 @@ export class RunSession {
   private readonly messageLogs = new Map<PlayerId, PerceivedEvent[]>();
   private readonly lastResultSeq = new Map<PlayerId, number>();
   private readonly timeoutTimers = new Map<PlayerId, { timer: NodeJS.Timeout; key: string }>();
+  /** turn.changes の基準（前回の応答時点の要約） */
+  private readonly turnSnaps = new Map<PlayerId, TurnSnapshot>();
+  /** マクロ展開中のプレイヤー（ターンフィードはこの間 turn を送らない） */
+  private readonly macroActive = new Set<PlayerId>();
+  /** 最後に入力（コマンド投入）があった時刻 */
+  private readonly lastInput = new Map<PlayerId, number>();
   private readonly log: LogWriter | null;
   private lastKeyframeSeq = 0;
   private metaFile: RunMetaFile;
@@ -174,10 +190,11 @@ export class RunSession {
     this.history.push(...events);
     this.updatedAt = rec.wall;
     for (const pid of this.world.playerOrder) this.appendMessages(pid, events);
-    const floorChange = events.some((e) => e.type === 'entity_changed_floor' || e.type === 'player_joined');
+    const floorChange = events.some((e) => e.type === 'entity_changed_floor' || e.type === 'player_joined'
+      || e.type === 'expedition_started' || e.type === 'expedition_ended');
     const ended = events.some((e) => e.type === 'run_ended');
     if (events.length && (floorChange || ended || this.world.seq - this.lastKeyframeSeq >= this.deps.config.keyframeEvery)) this.writeKeyframe();
-    if (events.some((e) => e.type === 'player_joined' || e.type === 'run_ended' || e.type === 'player_state')) {
+    if (events.some((e) => e.type === 'player_joined' || e.type === 'run_ended' || e.type === 'player_state' || e.type === 'expedition_ended')) {
       this.metaFile = this.buildMeta();
       this.log?.writeMeta(this.metaFile);
     }
@@ -186,6 +203,10 @@ export class RunSession {
       this.log?.writeSummary(ev.summary, summaryMarkdown(ev.summary, this.history, this.deps.catalog));
       for (const t0 of this.timeoutTimers.values()) clearTimeout(t0.timer);
       this.timeoutTimers.clear();
+    } else {
+      // 遠征の終了ごとに途中経過の記録を書く（キャンプで止めても成績が残る）
+      const xe = [...events].reverse().find((e) => e.type === 'expedition_ended') as Extract<GameEvent, { type: 'expedition_ended' }> | undefined;
+      if (xe) this.log?.writeSummary(xe.summary, summaryMarkdown(xe.summary, this.history, this.deps.catalog));
     }
     if (events.length) for (const l of this.listeners) l.onEvents?.(events);
     for (const w of [...this.waiters]) w();
@@ -283,6 +304,27 @@ export class RunSession {
     return () => this.listeners.delete(l);
   }
 
+  turnSnapshot(pid: PlayerId): TurnSnapshot | null {
+    return this.turnSnaps.get(pid) ?? null;
+  }
+
+  setTurnSnapshot(pid: PlayerId, s: TurnSnapshot): void {
+    this.turnSnaps.set(pid, s);
+  }
+
+  isMacroRunning(pid: PlayerId): boolean {
+    return this.macroActive.has(pid);
+  }
+
+  lastInputAt(pid: PlayerId): number {
+    return this.lastInput.get(pid) ?? this.createdAt;
+  }
+
+  /** 現在の手番の識別子（同じ手番かどうかの判定用） */
+  turnKeyOf(pid: PlayerId): string {
+    return this.turnKey(pid);
+  }
+
   recordAgentActivity(a: AgentActivity): void {
     this.agentActivity.push(a);
     if (this.agentActivity.length > 50) this.agentActivity.shift();
@@ -314,6 +356,7 @@ export class RunSession {
   async submit(pid: PlayerId, cmd: Command, opts: SubmitOpts): Promise<SubmitResult> {
     const pr = this.world.players[pid];
     if (!pr) return { ok: false, error: actionError('no_session', 'no such player', 'resume_run') };
+    this.lastInput.set(pid, Date.now());
     if (opts.expectSeq !== undefined && opts.expectSeq !== this.world.seq && !FREE_COMMANDS.has(cmd.type)) {
       return {
         ok: false,
@@ -342,6 +385,7 @@ export class RunSession {
     const startView = this.view(pid);
     if (startView.status === 'dead') return { ok: false, error: actionError('dead', t(startView.locale, 'あなたは死んでいる。', 'You are dead.'), '') };
     if (startView.status === 'ended') return { ok: false, error: actionError('run_ended', t(startView.locale, 'ランは終了している。', 'The run has ended.'), '') };
+    if (startView.status === 'at_camp') return { ok: false, error: actionError('at_camp', t(startView.locale, 'あなたはキャンプにいる（盤面にいない）。', 'You are at camp (off the board).'), t(startView.locale, 'start_expedition { offer } で次の遠征を始める。ここで終えてもよい。', 'Start the next expedition with start_expedition { offer }, or stop here.')) };
     if (startView.status !== 'your_turn') {
       return { ok: false, error: actionError('not_your_turn', t(startView.locale, 'まだあなたの番ではない。', 'It is not your turn yet.'), t(startView.locale, 'observe で手番を待つ。', 'Call observe to wait.')) };
     }
@@ -356,7 +400,9 @@ export class RunSession {
     let lastEvents: GameEvent[] = [];
     let stop: MacroStop | 'waiting_others' = 'step_limit';
     let firstError: ActionError | null = null;
+    this.macroActive.add(pid);
     for (const l of this.listeners) l.onMacro?.({ playerId: pid, kind: cmd.type, state: 'running', steps: 0 });
+    try {
     for (;;) {
       if (!this.isTurn(pid)) {
         const got = await this.waitForTurn(pid, this.deps.config.waitOthersMs);
@@ -377,9 +423,20 @@ export class RunSession {
       lastEvents = r.events;
       if (state.steps % 5 === 0) for (const l of this.listeners) l.onMacro?.({ playerId: pid, kind: cmd.type, state: 'running', steps: state.steps });
     }
+    } finally {
+      this.macroActive.delete(pid);
+    }
     for (const l of this.listeners) l.onMacro?.({ playerId: pid, kind: cmd.type, state: 'stopped', steps: state.steps, reason: stop });
-    if (firstError && state.steps === 0) return { ok: false, error: firstError };
-    return { ok: true, events: all, startSeq, steps: state.steps, interruptedBy: stop };
+    if (firstError && state.steps <= 1 && !all.length) return { ok: false, error: firstError };
+    const end = this.view(pid);
+    const sameFloor = end.floor?.key === state.floorKey;
+    const macro: MacroReport = {
+      kind: cmd.type,
+      distance: cmd.type === 'rest' ? 0 : all.filter((e) => e.type === 'entity_moved' && e.id === end.self.id).length,
+      timeElapsed: sameFloor && end.floor ? end.floor.time - state.startTime : null,
+      hpGained: end.self.stats.hp - state.startHp,
+    };
+    return { ok: true, events: all, startSeq, steps: state.steps, interruptedBy: stop, macro };
   }
 
   /** COOP: 同一フロアで他プレイヤーを待たせているときのタイムアウト（wait を source:'timeout' で投入） */

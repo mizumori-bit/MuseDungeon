@@ -1,7 +1,7 @@
 // ディスク上のラン記録の読み出し（ReplayPort の土台）。観戦者向けの変換もここで行う。
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import type { CommandRecord, GameEvent, LeaderboardEntry, Marker, RunIndex, RunMetaFile, RunSummary, World } from '@muse/shared';
+import type { CommandRecord, ExpeditionBrief, GameEvent, LeaderboardEntry, Marker, RunIndex, RunMetaFile, RunSummary, World } from '@muse/shared';
 import { INTERNAL_EVENT_TYPES, stripSecret } from '@muse/shared';
 import type { KeyframeFile } from './LogWriter';
 
@@ -35,6 +35,8 @@ export function readJsonl<T>(path: string): T[] {
 
 export class MarkerBuilder {
   readonly markers: Marker[] = [];
+  /** 遠征単位のリプレイ選択用 */
+  readonly expeditions: ExpeditionBrief[] = [];
   private playerEntity = new Map<string, string>();
   private names = new Map<string, string>();
   private maxHp = new Map<string, number>();
@@ -95,6 +97,21 @@ export class MarkerBuilder {
       case 'run_ended':
         this.markers.push({ seq: ev.seq, type: 'end', label: ev.reason });
         break;
+      case 'expedition_started':
+        this.markers.push({ seq: ev.seq, type: 'expedition_start', label: `#${ev.expedition.no} ${ev.expedition.objective.type}${ev.expedition.objective.targetDepth ? ` @${ev.expedition.objective.targetDepth}` : ''}` });
+        this.expeditions.push({
+          no: ev.expedition.no, objective: { ...ev.expedition.objective }, status: 'in_progress', endReason: null,
+          points: ev.expedition.points, startSeq: ev.seq, endSeq: null,
+        });
+        break;
+      case 'objective_completed':
+        this.markers.push({ seq: ev.seq, type: 'objective', label: `#${ev.no} ${ev.objective.type}` });
+        for (const x of this.expeditions) if (x.no === ev.no) x.status = 'objective_complete';
+        break;
+      case 'expedition_ended':
+        this.markers.push({ seq: ev.seq, type: 'expedition_end', label: `#${ev.no} ${ev.reason}` });
+        for (const x of this.expeditions) if (x.no === ev.no) { x.status = 'ended'; x.endReason = ev.reason; x.endSeq = ev.seq; }
+        break;
       default:
         break;
     }
@@ -151,22 +168,26 @@ export class RunStore {
     const evs = events ?? this.events(runId);
     const mb = new MarkerBuilder();
     for (const ev of evs) mb.add(ev);
-    return { runId, lastSeq: evs.length ? evs[evs.length - 1].seq : 0, markers: mb.markers, keyframes: this.keyframeSeqs(runId) };
+    return { runId, lastSeq: evs.length ? evs[evs.length - 1].seq : 0, markers: mb.markers, keyframes: this.keyframeSeqs(runId), expeditions: mb.expeditions };
   }
 
+  /** 記録（ラン終了時、または遠征の終了ごとの途中経過）。達成した遠征の数を主な並び順にする */
   leaderboard(): LeaderboardEntry[] {
     const out: LeaderboardEntry[] = [];
     for (const id of this.listRunIds()) {
       const s = this.summary(id);
       if (!s) continue;
-      const endedAt = this.meta(id)?.endedAt ?? this.mtime(id);
+      const meta = this.meta(id);
+      const endedAt = meta?.endedAt ?? this.mtime(id);
+      const ongoing = meta?.status === 'active';
       for (const p of s.players) {
         out.push({
           runId: id, playerId: p.id, name: p.name, classId: p.classId, controller: p.controller, deepest: p.deepest,
           kills: p.kills, level: p.level, turns: p.turns, score: p.score, deathCause: p.deathCause, endedAt,
+          expeditions: p.expeditions ?? 0, ongoing,
         });
       }
     }
-    return out.sort((a, b) => b.deepest - a.deepest || b.kills - a.kills || a.turns - b.turns || b.endedAt - a.endedAt).slice(0, 100);
+    return out.sort((a, b) => b.expeditions - a.expeditions || b.deepest - a.deepest || b.score - a.score || a.turns - b.turns || b.endedAt - a.endedAt).slice(0, 100);
   }
 }

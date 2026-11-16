@@ -48,6 +48,8 @@ export interface ActorComp {
   /** 休眠中（スケジューラが手番を与えない。睡眠中モンスター用） */
   dormant?: boolean;
   ai?: AiState;
+  /** 自然回復の蓄積値（プレイヤー）。通常の手番で +1、休息の手番で +restMultiplier、回復間隔に達すると 1 HP */
+  regen?: number;
 }
 
 export interface Entity {
@@ -70,7 +72,11 @@ export interface Entity {
   scale?: { tier: number; affixes: string[] };
   /** モンスター撃破時の経験値 */
   xp?: number;
+  /** 遠征の目的に関わる個体（守護者・遺物） */
+  role?: EntityRole;
 }
+
+export type EntityRole = 'guardian' | 'relic';
 
 export interface Region {
   id: number;
@@ -110,6 +116,8 @@ export interface MonsterMemory {
   maxDamageByYou: number;
   /** 観測した能力（例 'poison', 'ranged', 'fast', 'slow', 'flees'） */
   abilities: string[];
+  /** 目の前で倒れた個体の最大 HP（守護者は除く） */
+  hpSeen?: { min: number; max: number; samples: number };
 }
 
 export interface RememberedEntity {
@@ -138,6 +146,8 @@ export interface Knowledge {
   notes: string[];
   /** 遭遇済みの個体 ID（思い出の遭遇数カウント用） */
   met: EntityId[];
+  /** 自分が見ている間にその個体が受けた実ダメージの合計（生存中の個体のみ） */
+  damageSeen?: Record<EntityId, number>;
 }
 
 export interface PlayerStats {
@@ -146,6 +156,9 @@ export interface PlayerStats {
   turns: number;
   deathCause: string | null;
   endedSeq: number | null;
+  /** 達成した遠征の数と、その基礎点の合計 */
+  expeditions?: number;
+  expeditionPoints?: number;
 }
 
 export interface Controller { kind: 'agent' | 'human'; label: string }
@@ -157,10 +170,79 @@ export interface PlayerRecord {
   locale: Locale;
   controller: Controller;
   entityId: EntityId;
-  state: 'alive' | 'dead' | 'left';
+  /** at_camp: 遠征から帰還・撤退してキャンプにいる（盤面にいない） */
+  state: PlayerState;
   joinedSeq: number;
   stats: PlayerStats;
   knowledge: Knowledge;
+  /** 最後に extract した地点（次の遠征の再開地点） */
+  extractPos?: FloorPos | null;
+}
+
+export type PlayerState = 'alive' | 'dead' | 'left' | 'at_camp';
+
+// ---- 遠征（IMPROVEMENTS_V2 §2） ----
+export type ObjectiveType = 'reach_depth' | 'slay_guardian' | 'retrieve_relic' | 'endless';
+export type ExpeditionEndReason = 'completed' | 'withdrawn' | 'died' | 'retired';
+export const OBJECTIVE_TYPES: readonly ObjectiveType[] = ['reach_depth', 'slay_guardian', 'retrieve_relic', 'endless'];
+
+export interface Objective {
+  type: ObjectiveType;
+  /** endless は null */
+  targetDepth: number | null;
+}
+
+export interface ExpeditionOffer {
+  /** 1 始まりの番号（start_expedition の offer） */
+  index: number;
+  objective: Objective;
+  /** 達成時の基礎点 */
+  points: number;
+  /** retrieve_relic: 遺物を守護者が守る */
+  relicGuarded: boolean;
+}
+
+export interface CampState {
+  /** 次の遠征の通番 */
+  nextNo: number;
+  offers: ExpeditionOffer[];
+}
+
+export interface ObjectiveProgress {
+  /** 目標深度に誰かが到達した */
+  reached: boolean;
+  guardianSlain: boolean;
+  /** 遺物を持っているプレイヤーのエンティティ */
+  relicHeldBy: EntityId | null;
+}
+
+export interface ExpeditionResult {
+  reason: ExpeditionEndReason;
+  /** 獲得した遠征の基礎点（達成時のみ） */
+  points: number;
+  /** この遠征中の最深到達（最大）・撃破と手番（参加者の合計） */
+  deepest: number;
+  kills: number;
+  turns: number;
+}
+
+export interface Expedition {
+  no: number;
+  objective: Objective;
+  points: number;
+  relicGuarded: boolean;
+  status: 'in_progress' | 'objective_complete' | 'ended';
+  startSeq: number;
+  endSeq: number | null;
+  endReason: ExpeditionEndReason | null;
+  participants: PlayerId[];
+  /** 開始時点の参加者の成績（結果の差分計算用） */
+  start: Record<PlayerId, { kills: number; turns: number; deepest: number }>;
+  /** 目標階に配置した守護者・遺物（目標階の生成時に決まる。プレイヤーには渡さない） */
+  targets: { guardian: EntityId | null; relic: EntityId | null };
+  progress: ObjectiveProgress;
+  extracted: { player: PlayerId; completed: boolean }[];
+  result: ExpeditionResult | null;
 }
 
 export type RngState = [number, number, number, number];
@@ -202,6 +284,10 @@ export interface World {
   players: Record<PlayerId, PlayerRecord>;
   /** 参加順 */
   playerOrder: PlayerId[];
+  /** 遠征の記録（古いログには無い） */
+  expeditions?: Expedition[];
+  /** キャンプの候補（遠征と遠征の間） */
+  camp?: CampState | null;
 }
 
 export interface RunSummaryPlayer {
@@ -217,6 +303,18 @@ export interface RunSummaryPlayer {
   deathCause: string | null;
   equipment: Partial<Record<EquipSlot, string>>;
   score: number;
+  /** 達成した遠征の数 */
+  expeditions?: number;
+}
+
+export interface ExpeditionBrief {
+  no: number;
+  objective: Objective;
+  status: Expedition['status'];
+  endReason: ExpeditionEndReason | null;
+  points: number;
+  startSeq: number;
+  endSeq: number | null;
 }
 
 export interface RunSummary {
@@ -225,6 +323,8 @@ export interface RunSummary {
   seed: string;
   endedSeq: number;
   players: RunSummaryPlayer[];
+  /** 遠征ごとの記録 */
+  expeditions?: ExpeditionBrief[];
 }
 
 export function floorKey(branch: string, depth: number): FloorKey {

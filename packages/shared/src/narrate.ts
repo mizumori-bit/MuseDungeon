@@ -1,6 +1,7 @@
 // イベント → 文章（ja / en）。入力はプレイヤー向けに縮約済みのイベントのみ。
 import type { Catalog } from './catalog';
 import { nameOf } from './catalog';
+import { endReasonText, objectiveText } from './expedition';
 import type { ProjectedEvent } from './filter';
 import type { Locale } from './types';
 import { dirTo } from './util';
@@ -63,13 +64,18 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
     case 'damaged': {
       const tg = who(ctx, ev.target, ev.targetKind);
       const src = ev.source ? who(ctx, ev.source, ev.sourceKind) : null;
-      if (ev.via === 'poison') return ja ? `${tg}は毒で ${ev.amount} ダメージを受けた。` : `${cap(tg)} take${ev.target === self ? '' : 's'} ${ev.amount} poison damage.`;
-      if (ev.via === 'trap') return ja ? `${tg}は罠で ${ev.amount} ダメージを受けた。` : `${cap(tg)} take${ev.target === self ? '' : 's'} ${ev.amount} damage from a trap.`;
-      if (ev.source === self) return ja ? `あなたは${tg}に ${ev.amount} ダメージを与えた。` : `You hit ${tg} for ${ev.amount}.`;
-      if (ev.target === self) return ja ? `${src ?? '何か'}の攻撃。あなたは ${ev.amount} ダメージを受けた。` : `${cap(src ?? 'something')} hits you for ${ev.amount}.`;
-      return ja ? `${src ?? '何か'}が${tg}に ${ev.amount} ダメージを与えた。` : `${cap(src ?? 'something')} hits ${tg} for ${ev.amount}.`;
+      // 実際に減った HP（とどめの超過分を含めない）
+      const amt = ev.dealt ?? ev.amount;
+      if (amt <= 0 && ev.amount <= 0) return null;
+      if (ev.via === 'poison') return ja ? `${tg}は毒で ${amt} ダメージを受けた。` : `${cap(tg)} take${ev.target === self ? '' : 's'} ${amt} poison damage.`;
+      if (ev.via === 'trap') return ja ? `${tg}は罠で ${amt} ダメージを受けた。` : `${cap(tg)} take${ev.target === self ? '' : 's'} ${amt} damage from a trap.`;
+      if (ev.source === self) return ja ? `あなたは${tg}に ${amt} ダメージを与えた。` : `You hit ${tg} for ${amt}.`;
+      if (ev.target === self) return ja ? `${src ?? '何か'}の攻撃。あなたは ${amt} ダメージを受けた。` : `${cap(src ?? 'something')} hits you for ${amt}.`;
+      return ja ? `${src ?? '何か'}が${tg}に ${amt} ダメージを与えた。` : `${cap(src ?? 'something')} hits ${tg} for ${amt}.`;
     }
     case 'healed': {
+      // 自然回復・休息は 1 ずつ頻繁に起きるので文章にしない（rest の結果に合計が出る）
+      if (ev.via === 'regen' || ev.via === 'rest') return null;
       const tg = who(ctx, ev.target, ev.targetKind);
       return ja ? `${tg}は ${ev.amount} 回復した。` : `${cap(tg)} recover${ev.target === self ? '' : 's'} ${ev.amount} HP.`;
     }
@@ -78,8 +84,9 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
     case 'died': {
       const v = who(ctx, ev.id, ev.kind);
       if (ev.id === self) return ja ? 'あなたは死んだ……' : 'You die...';
-      if (ev.killer === self) return ja ? `${v}を倒した。` : `You kill ${v}.`;
-      return ja ? `${v}は倒れた。` : `${cap(v)} dies.`;
+      const hpNote = typeof ev.maxHp === 'number' ? (ja ? `（この${v}の体力は ${ev.maxHp} だった）` : ` (it had ${ev.maxHp} HP)`) : '';
+      if (ev.killer === self) return ja ? `${v}を倒した。${hpNote}` : `You kill ${v}.${hpNote}`;
+      return ja ? `${v}は倒れた。${hpNote}` : `${cap(v)} dies.${hpNote}`;
     }
     case 'status_applied': {
       const tg = who(ctx, ev.target, ev.targetKind);
@@ -176,6 +183,15 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
     case 'player_state':
       if (ev.state === 'dead') return ja ? `${ctx.playerNames[ev.player] ?? '仲間'} は倒れた。` : `${ctx.playerNames[ev.player] ?? 'An ally'} has fallen.`;
       if (ev.state === 'left') return ja ? 'プレイヤーが離脱した。' : 'A player left.';
+      if (ev.state === 'at_camp') return ja ? `${ctx.playerNames[ev.player] ?? 'プレイヤー'} はキャンプに戻った（全回復）。` : `${ctx.playerNames[ev.player] ?? 'A player'} returns to camp (fully healed).`;
+      return null;
+    case 'expedition_started':
+      return ja ? `遠征 ${ev.expedition?.no} が始まった: ${objectiveText(L, ev.expedition?.objective)}` : `Expedition ${ev.expedition?.no} begins: ${objectiveText(L, ev.expedition?.objective)}`;
+    case 'objective_completed':
+      return ja ? `遠征の目的を達成した: ${objectiveText(L, ev.objective)}` : `Objective complete: ${objectiveText(L, ev.objective)}`;
+    case 'expedition_ended':
+      return ja ? `遠征 ${ev.no} が終了した（${endReasonText(L, ev.reason)}）。` : `Expedition ${ev.no} has ended (${endReasonText(L, ev.reason)}).`;
+    case 'expedition_offered':
       return null;
     case 'run_ended':
       return ja ? `ランが終了した（${ev.reason}）。` : `The run has ended (${ev.reason}).`;

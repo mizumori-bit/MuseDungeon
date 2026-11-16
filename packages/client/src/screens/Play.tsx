@@ -1,7 +1,7 @@
 // プレイ画面（人間）。AI と同じ Command を同じ PlayerPort（WS 経由）へ送る。
 // 受け取るのはサーバーの PlayerView フレーム＋知覚イベントだけ（生のイベント列は受け取らない）。
-import type { Command, Dir, PerceivedEvent, PlayerView, Pos, RunSummary, ServerMsg } from '@muse/shared';
-import { buildNavGrid, buildObservation, findPath, itemDisplayName } from '@muse/shared';
+import type { Change, Command, Dir, PerceivedEvent, PlayerView, Pos, RunSummary, ServerMsg, TurnSnapshot } from '@muse/shared';
+import { buildNavGrid, buildObservation, buildTurnBlock, diffChanges, findPath, itemDisplayName, turnLine, turnSnapshot } from '@muse/shared';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { connectWs, type WsHandle, type WsStatus } from '../net/ws';
 import type { Canvas2DRenderer } from '../render/canvas2d';
@@ -9,8 +9,10 @@ import { toViewEvents } from '../render/events';
 import { sceneFromView } from '../render/scene';
 import { AlertsBar, InventoryPanel, MessageLog, StatusPanel, SummaryDialog, type InvAction, type LogLine } from '../ui/panels';
 import { ErrorBanner, Header, MapView, ThemePicker, useCatalog, useLocaleRefresh, useTheme } from '../ui/common';
+import { BriefingCard, CampPanel, completesOnExtract, ExpeditionPanel, RestEstimateLine, TurnBar } from '../ui/expedition';
+import { extractBlockLabel, viewStatusLabel } from '../ui/labels';
 import { perceivedLines } from '../ui/narration';
-import { getLocale, getToken, tr } from '../util';
+import { getLocale, getPref, getToken, setPref, tr } from '../util';
 
 const MOVE_KEYS: Record<string, Dir> = {
   ArrowUp: 'n', ArrowDown: 's', ArrowLeft: 'w', ArrowRight: 'e',
@@ -21,6 +23,11 @@ const MOVE_KEYS: Record<string, Dir> = {
 const DIR_D: Record<Dir, [number, number]> = { n: [0, -1], ne: [1, -1], e: [1, 0], se: [1, 1], s: [0, 1], sw: [-1, 1], w: [-1, 0], nw: [-1, -1] };
 
 type Mode = 'normal' | 'target' | 'dir' | 'inv';
+
+/** 手番を消費しないコマンド（いつでも送れる） */
+const FREE: ReadonlySet<Command['type']> = new Set<Command['type']>(['say', 'note', 'retire']);
+
+interface SnapAt { snap: TurnSnapshot; seq: number }
 
 export function Play({ runId }: { runId: string }) {
   useLocaleRefresh();
@@ -36,6 +43,9 @@ export function Play({ runId }: { runId: string }) {
   const [mode, setModeState] = useState<Mode>('normal');
   const [selSlot, setSelSlot] = useState<string | null>(null);
   const [chat, setChat] = useState('');
+  const [changes, setChanges] = useState<Change[]>([]);
+  const [briefingNo, setBriefingNo] = useState<number | null>(null);
+  const [restHp, setRestHp] = useState('');
 
   const viewRef = useRef<PlayerView | null>(null);
   const catalogRef = useRef(catalog);
@@ -47,6 +57,10 @@ export function Play({ runId }: { runId: string }) {
   const cursorRef = useRef<Pos | null>(null);
   const pathRef = useRef<Pos[] | null>(null);
   const throwSlotRef = useRef<string | null>(null);
+  /** 変化の基準: 最後に自分が行動を決めた時点の要約（その行動で世界が進んだら確定する） */
+  const baseSnapRef = useRef<SnapAt | null>(null);
+  const pendingBaseRef = useRef<SnapAt | null>(null);
+  const curSnapRef = useRef<SnapAt | null>(null);
   catalogRef.current = catalog;
 
   const setMode = (m: Mode) => { modeRef.current = m; setModeState(m); if (m !== 'target') cursorRef.current = null; redraw(); };
@@ -80,6 +94,10 @@ export function Play({ runId }: { runId: string }) {
         case 'error':
           pendingRef.current = false;
           addLog([{ seq: viewRef.current?.seq ?? 0, text: `⚠ ${m.error.message}${m.error.hint ? ` — ${m.error.hint}` : ''}`, kind: 'error' }]);
+          // 表示上は達成に見えても、サーバーが撤退扱いと判断した場合（最終判定はサーバー）
+          if (m.error.code === 'confirm_required' && window.confirm(tr('目的は未達成です。撤退（報酬なし）して遠征を終えますか？', 'The objective is not complete. Withdraw without the reward?'))) {
+            send({ type: 'extract', confirm: true });
+          }
           if (m.error.code === 'no_session' || m.error.code === 'bad_request') setError(m.error.message);
           break;
         case 'ended':
@@ -103,15 +121,57 @@ export function Play({ runId }: { runId: string }) {
 
   const send = (command: Command) => {
     const v = viewRef.current;
-    const free = command.type === 'say' || command.type === 'note' || command.type === 'retire';
+    const free = FREE.has(command.type);
+    const camp = command.type === 'start_expedition';
     if (!v || !wsRef.current) return;
-    if (!free && (v.status !== 'your_turn' || pendingRef.current || macroRef.current)) return;
+    if (camp ? v.status !== 'at_camp' || pendingRef.current : !free && (v.status !== 'your_turn' || pendingRef.current || macroRef.current)) return;
     if (!free) {
       pendingRef.current = true;
       setTimeout(() => { pendingRef.current = false; }, 4000);
+      // 次に世界が進んだら、この時点を「前の手番」として変化を数える
+      if (curSnapRef.current) pendingBaseRef.current = curSnapRef.current;
     }
     pathRef.current = null;
-    wsRef.current.send({ t: 'command', command, expectSeq: free ? undefined : v.seq });
+    wsRef.current.send({ t: 'command', command, expectSeq: free || camp ? undefined : v.seq });
+  };
+
+  const obsNow = () => {
+    const v = viewRef.current, c = catalogRef.current;
+    return v && c ? buildObservation(v, c, { detail: 'brief', map: false }) : null;
+  };
+
+  /** extract: 達成済みなら帰還、未達成なら確認してから撤退（confirm: true） */
+  const doExtract = () => {
+    const v = viewRef.current;
+    if (!v) return;
+    const x = v.expedition;
+    const ox = obsNow()?.expedition;
+    if (!x || !ox || x.status === 'ended' || v.status === 'at_camp') {
+      addLog([{ seq: v.seq, text: tr('進行中の遠征が無い。', 'No expedition in progress.'), kind: 'error' }]);
+      return;
+    }
+    if (!ox.can_extract) {
+      addLog([{ seq: v.seq, text: `${tr('今は extract できない', 'Cannot extract now')}（${extractBlockLabel(ox.extract_blocked_by)}）`, kind: 'error' }]);
+      return;
+    }
+    if (completesOnExtract(x)) { send({ type: 'extract' }); return; }
+    const msg = tr('目的は未達成です。今 extract すると撤退（報酬なし）になり、この遠征は終わります。撤退しますか？',
+      'The objective is not complete. Extracting now withdraws without the reward and ends this expedition. Withdraw?');
+    if (window.confirm(msg)) send({ type: 'extract', confirm: true });
+  };
+
+  /** rest: untilHp を指定すると、その HP まで（現在より大きく最大未満のときのみ） */
+  const doRest = (untilHp?: number) => {
+    const v = viewRef.current;
+    if (!v) return;
+    if (untilHp !== undefined && untilHp > v.self.stats.hp && untilHp < v.self.stats.maxHp) send({ type: 'rest', untilHp });
+    else send({ type: 'rest' });
+  };
+
+  const startExpedition = (offer: number | 'endless') => send({ type: 'start_expedition', offer });
+  const retire = () => {
+    const msg = tr('引退しますか？ ランは終了し、キャラクターは戻りません。', 'Retire? The run ends and the character does not return.');
+    if (window.confirm(msg)) send({ type: 'retire' });
   };
 
   const throwables = (v: PlayerView): string[] => v.inventory.filter((it) => {
@@ -175,7 +235,7 @@ export function Play({ runId }: { runId: string }) {
       const md = modeRef.current;
       const dir = MOVE_KEYS[e.key];
       let handled = true;
-      if (e.key === 'Escape') { throwSlotRef.current = null; setMode('normal'); }
+      if (e.key === 'Escape') { throwSlotRef.current = null; setMode('normal'); setBriefingNo(null); }
       else if (md === 'target') {
         if (dir && cursorRef.current) {
           const d = DIR_D[dir];
@@ -202,7 +262,8 @@ export function Play({ runId }: { runId: string }) {
       } else if (dir) send({ type: 'move', dir });
       else if (e.key === '.' || e.key === '5' || e.key === 'Clear') send({ type: 'wait' });
       else if (e.key === 'x') send({ type: 'explore' });
-      else if (e.key === 'R') send({ type: 'rest' });
+      else if (e.key === 'R') doRest();
+      else if (e.key === 'E') doExtract();
       else if (e.key === 'g' || e.key === ',') send({ type: 'pickup' });
       else if (e.key === '>' || e.key === '<') send({ type: 'stairs' });
       else if (e.key === 'T') send({ type: 'travel', to: 'stairs_down' });
@@ -241,6 +302,34 @@ export function Play({ runId }: { runId: string }) {
 
   const obs = useMemo(() => (view && catalog ? buildObservation(view, catalog, { detail: 'brief', map: false }) : null), [view, catalog]);
   const L = getLocale();
+
+  // 前回の自分の手番以降の変化（turnSnapshot / diffChanges）
+  useEffect(() => {
+    if (!view || !obs) return;
+    const cur: SnapAt = { snap: turnSnapshot(view, obs), seq: view.seq };
+    curSnapRef.current = cur;
+    const pb = pendingBaseRef.current;
+    if (pb && view.seq > pb.seq) { baseSnapRef.current = pb; pendingBaseRef.current = null; }
+    if (!baseSnapRef.current) { baseSnapRef.current = cur; return; }
+    if (view.status === 'waiting_others') return;
+    setChanges(diffChanges(baseSnapRef.current.snap, cur.snap, view, obs));
+  }, [obs]);
+
+  // 遠征の開始時（再開時を含む）に一度だけブリーフィングを出す
+  const expNo = view?.expedition && view.expedition.status !== 'ended' && view.status !== 'at_camp' ? view.expedition.no : null;
+  useEffect(() => {
+    if (expNo === null) return;
+    const key = `brief.${runId}`;
+    if (getPref(key, '') === String(expNo)) return;
+    setPref(key, String(expNo));
+    setBriefingNo(expNo);
+  }, [expNo]);
+
+  const turnText = view ? turnLine(view, buildTurnBlock(view, { reason: 'action_completed', changes })) : '';
+  const restEst = obs?.self.rest_estimate;
+  const atCamp = view?.status === 'at_camp';
+  const exp = view?.expedition ?? null;
+  const expActive = !!exp && exp.status !== 'ended' && !atCamp;
   const modeHint = mode === 'target'
     ? tr('投擲: 方向キー/Tab で狙い、Enter で投げる（Esc 取消）', 'Throw: aim with keys/Tab, Enter to throw (Esc cancels)')
     : mode === 'dir' ? tr('操作する方向を選ぶ（. で足元、Esc 取消）', 'Pick a direction (. for here, Esc cancels)')
@@ -258,6 +347,7 @@ export function Play({ runId }: { runId: string }) {
   return (
     <div class="page play">
       <Header title={`${tr('プレイ', 'Play')} ${runId}`}>
+        {view && <span class={`tag vstatus ${view.status}`}>{viewStatusLabel(view.status)}</span>}
         <span class={`ws ${wsStatus}`}>{wsStatus}</span>
         <ThemePicker themes={th.themes} themeId={th.themeId} onChange={th.setThemeId} />
         <a class="button small" href={`#/watch/${runId}`}>{tr('観戦画面', 'Spectate')}</a>
@@ -266,6 +356,7 @@ export function Play({ runId }: { runId: string }) {
       <div class="layout">
         <div class="main">
           {obs && <AlertsBar alerts={obs.alerts} />}
+          <TurnBar line={turnText} changes={changes} />
           <MapView
             theme={th.theme}
             onReady={(r) => { rRef.current = r; redraw(); }}
@@ -276,6 +367,8 @@ export function Play({ runId }: { runId: string }) {
                 {modeHint && <div class="modehint">{modeHint}</div>}
                 {macro?.state === 'running' && <div class="macro">{tr('自動行動中', 'Auto')}: {macro.kind} ({macro.steps})</div>}
                 {view && view.status === 'waiting_others' && <div class="macro">{tr('他のプレイヤーの手番を待っています…', 'Waiting for other players…')}</div>}
+                {view && atCamp && <div class="campwrap"><CampPanel view={view} onStart={startExpedition} onRetire={retire} /></div>}
+                {exp && expActive && briefingNo === exp.no && <BriefingCard x={exp} onClose={() => setBriefingNo(null)} />}
                 {view && view.status === 'dead' && !summary && (
                   <div class="deadbox">{tr('あなたは倒れた。', 'You have fallen.')} <a href={`#/watch/${runId}`}>{tr('観戦を続ける', 'Keep watching')}</a> / <a href={`#/replay/${runId}`}>{tr('リプレイ', 'Replay')}</a></div>
                 )}
@@ -284,15 +377,27 @@ export function Play({ runId }: { runId: string }) {
           />
           <div class="actions">
             <button class="small" onClick={() => send({ type: 'explore' })} title="x">{tr('探索', 'Explore')} (x)</button>
-            <button class="small" onClick={() => send({ type: 'rest' })} title="R">{tr('休憩', 'Rest')} (R)</button>
+            <button class="small" onClick={() => doRest()} title="R">{tr('休憩', 'Rest')} (R)</button>
+            <span class="resthp">
+              <input type="number" min={1} max={view?.self.stats.maxHp ?? 999} value={restHp} placeholder="HP"
+                onInput={(e) => setRestHp((e.target as HTMLInputElement).value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); doRest(parseInt(restHp, 10) || undefined); } }} />
+              <button class="small" onClick={() => doRest(parseInt(restHp, 10) || undefined)} title={tr('指定した HP まで休む', 'Rest until this HP')}>{tr('まで休む', 'Rest until')}</button>
+            </span>
             <button class="small" onClick={() => send({ type: 'wait' })} title=".">{tr('待機', 'Wait')} (.)</button>
             <button class="small" onClick={() => send({ type: 'pickup' })} title="g">{tr('拾う', 'Pick up')} (g)</button>
             <button class="small" onClick={() => send({ type: 'travel', to: 'stairs_down' })} title="T">{tr('下り階段へ', 'To stairs')} (T)</button>
             <button class="small" onClick={() => send({ type: 'stairs' })} title=">">{tr('階段を使う', 'Use stairs')} (&gt;)</button>
+            {exp && expActive && (
+              <button class={`small ${obs?.expedition?.can_extract ? 'exit' : ''}`} onClick={doExtract} title={tr('階段の上で遠征を終える', 'End the expedition on stairs')}>
+                {completesOnExtract(exp) ? tr('帰還', 'Extract') : tr('撤退', 'Withdraw')} (E)
+              </button>
+            )}
             <button class="small" onClick={() => setMode('dir')} title="o">{tr('操作', 'Interact')} (o)</button>
             <button class="small" onClick={() => startThrow(null)} title="t">{tr('投げる', 'Throw')} (t)</button>
-            <button class="small danger" onClick={() => { if (window.confirm(tr('ランから引退しますか？', 'Retire from this run?'))) send({ type: 'retire' }); }}>{tr('引退', 'Retire')}</button>
+            <button class="small danger" onClick={retire}>{tr('引退', 'Retire')}</button>
           </div>
+          {restEst && !atCamp && <RestEstimateLine est={restEst} />}
           {obs && (
             <details class="panel valid">
               <summary>{tr('できること', 'Valid actions')} ({obs.valid_actions.length})</summary>
@@ -301,6 +406,7 @@ export function Play({ runId }: { runId: string }) {
           )}
         </div>
         <aside class="side">
+          {view && <ExpeditionPanel view={view} obs={obs} onBriefing={exp && expActive ? () => setBriefingNo(exp.no) : undefined} />}
           {view && catalog && <StatusPanel view={view} catalog={catalog} />}
           {view && catalog && <InventoryPanel view={view} catalog={catalog} onAction={invAction} focused={mode === 'inv'} selected={selSlot} onSelect={setSelSlot} />}
           <MessageLog lines={log} />
@@ -311,8 +417,8 @@ export function Play({ runId }: { runId: string }) {
             <div class="muted small">{tr('選択中', 'Selected')}: {(() => { const it = view.inventory.find((x) => x.slot === selSlot); return it ? itemDisplayName(catalog, L, it.kind, it.appearanceId, it.affixes) : '-'; })()}</div>
           )}
           <div class="help muted">
-            {tr('移動: 矢印/テンキー/hjklyubn　待機: .　探索: x　休憩: R　拾う: g　階段: >　投擲: t　操作: o　所持品: i　クリック: その場所へ移動',
-              'Move: arrows/numpad/hjklyubn  Wait: .  Explore: x  Rest: R  Pick up: g  Stairs: >  Throw: t  Interact: o  Inventory: i  Click: travel')}
+            {tr('移動: 矢印/テンキー/hjklyubn　待機: .　探索: x　休憩: R　拾う: g　階段: >　帰還/撤退: E（階段の上）　投擲: t　操作: o　所持品: i　クリック: その場所へ移動',
+              'Move: arrows/numpad/hjklyubn  Wait: .  Explore: x  Rest: R  Pick up: g  Stairs: >  Extract: E (on stairs)  Throw: t  Interact: o  Inventory: i  Click: travel')}
           </div>
         </aside>
       </div>

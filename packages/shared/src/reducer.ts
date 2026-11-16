@@ -1,7 +1,7 @@
 // World State を書き換える唯一の関数。ルール（計算）を持たない: 代入・追加・削除のみ。
 // 仕様: docs/DESIGN.md §4.1
 import type { GameEvent } from './events';
-import type { Entity, FloorKnowledge, World } from './types';
+import type { Entity, Expedition, FloorKnowledge, World } from './types';
 import { rangesToIndices, rleDecode } from './util';
 
 const clone: <T>(v: T) => T = (v) => structuredClone(v);
@@ -29,6 +29,12 @@ function ent(world: World, id: string): Entity {
   return e;
 }
 
+function expedition(world: World, no: number): Expedition {
+  const x = world.expeditions?.find((e) => e.no === no);
+  if (!x) throw new Error(`applyEvent: unknown expedition ${no}`);
+  return x;
+}
+
 function floorKnowledge(world: World, playerId: string, key: string): FloorKnowledge {
   const p = world.players[playerId];
   let fk = p.knowledge.floors[key];
@@ -54,6 +60,7 @@ export function applyEvent(world: World, ev: GameEvent): void {
       break;
     case 'player_state':
       world.players[ev.player].state = ev.state;
+      if (ev.extractPos !== undefined) world.players[ev.player].extractPos = ev.extractPos ? clone(ev.extractPos) : null;
       break;
     case 'player_stats':
       world.players[ev.player].stats = clone(ev.stats);
@@ -101,6 +108,7 @@ export function applyEvent(world: World, ev: GameEvent): void {
       const e = ent(world, ev.id);
       e.actor!.nextActAt = ev.nextActAt;
       e.actor!.turns = ev.turns;
+      if (ev.regenAfter !== undefined) e.actor!.regen = ev.regenAfter;
       if (ev.floor && world.floors[ev.floor]?.currentActor === ev.id) world.floors[ev.floor].currentActor = null;
       break;
     }
@@ -117,7 +125,6 @@ export function applyEvent(world: World, ev: GameEvent): void {
     case 'thought':
     case 'chat':
     case 'trap_triggered':
-    case 'died':
     case 'item_picked_up':
     case 'item_dropped':
     case 'item_equipped':
@@ -125,7 +132,24 @@ export function applyEvent(world: World, ev: GameEvent): void {
     case 'item_used':
     case 'item_thrown':
       break;
+    case 'died':
+      // 生存中の個体だけを追う記録の後始末（削除のみ）
+      for (const pid of world.playerOrder) {
+        const ds = world.players[pid].knowledge.damageSeen;
+        if (ds && ev.id in ds) delete ds[ev.id];
+      }
+      break;
     case 'damaged':
+      ent(world, ev.target).stats!.hp = ev.hpAfter;
+      if (ev.seenTotals) {
+        for (const [pid, total] of Object.entries(ev.seenTotals)) {
+          const k = world.players[pid]?.knowledge;
+          if (!k) continue;
+          if (!k.damageSeen) k.damageSeen = {};
+          k.damageSeen[ev.target] = total;
+        }
+      }
+      break;
     case 'healed':
       ent(world, ev.target).stats!.hp = ev.hpAfter;
       break;
@@ -193,6 +217,32 @@ export function applyEvent(world: World, ev: GameEvent): void {
     case 'notes_updated':
       world.players[ev.player].knowledge.notes = clone(ev.notesAfter);
       break;
+    case 'expedition_offered':
+      world.camp = clone(ev.camp);
+      break;
+    case 'expedition_started':
+      world.expeditions = [...(world.expeditions ?? []), clone(ev.expedition)];
+      world.camp = null;
+      break;
+    case 'objective_progress': {
+      const x = expedition(world, ev.no);
+      x.progress = clone(ev.progressAfter);
+      x.status = ev.statusAfter;
+      if (ev.targetsAfter) x.targets = clone(ev.targetsAfter);
+      if (ev.extractedAfter) x.extracted = clone(ev.extractedAfter);
+      break;
+    }
+    case 'objective_completed':
+      expedition(world, ev.no).status = 'objective_complete';
+      break;
+    case 'expedition_ended': {
+      const x = expedition(world, ev.no);
+      x.status = 'ended';
+      x.endSeq = ev.seq;
+      x.endReason = ev.reason;
+      x.result = clone(ev.result);
+      break;
+    }
     case 'rng_advanced':
       for (const k of Object.keys(ev.states)) world.secret.rng[k] = clone(ev.states[k]);
       break;

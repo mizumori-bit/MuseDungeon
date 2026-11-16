@@ -79,7 +79,8 @@ export const AppearanceSchema = z.object({ id: IdSchema, name: NamesSchema, cate
 export const AffixSchema = z.object({
   id: IdSchema,
   name: NamesSchema,
-  target: z.enum(['monster', 'item']),
+  /** guardian: 遠征の守護者専用（通常の生成では付かない） */
+  target: z.enum(['monster', 'item', 'guardian']),
   depth: DepthSchema,
   rarity: z.number().int().min(1),
   categories: z.array(z.string()).default([]),
@@ -114,6 +115,18 @@ export const BiomeSchema = z.object({
   features: z.array(z.object({ feature: IdSchema, chancePct: z.number().int().min(0).max(100) })).default([]),
 });
 
+const Per1000Schema = z.object({ per1000: z.number().int().min(0) });
+/** 深度帯ごとのテンポ調整（IMPROVEMENTS_V2 §5.1）。最初に一致した帯を使う */
+export const PacingSchema = z.object({
+  depth: z.object({ min: z.number().int().min(1), max: z.number().int().min(1).optional() }),
+  size: z.object({ w: z.number().int().min(20), h: z.number().int().min(15) }).optional(),
+  /** 到着地点から下り階段までの歩行距離の範囲 */
+  stairsPath: z.object({ min: z.number().int().min(1), max: z.number().int().min(1) }).optional(),
+  monsters: Per1000Schema.optional(),
+  items: Per1000Schema.optional(),
+  traps: Per1000Schema.optional(),
+});
+
 export const FloorTypeSchema = z.object({
   id: IdSchema,
   name: NamesSchema,
@@ -130,6 +143,8 @@ export const FloorTypeSchema = z.object({
   guaranteedFeatures: z.array(IdSchema).default([]),
   rules: z.object({ noWander: z.boolean().default(false) }).default({}),
   validators: z.array(z.string()).default(['stairs_connected', 'start_safe', 'min_floor_area']),
+  /** 深度帯ごとの寸法・階段距離・密度（size / per1000 を上書き） */
+  pacing: z.array(PacingSchema).default([]),
 });
 
 export const PrefabCellSchema = z.object({
@@ -185,6 +200,32 @@ export const ClassSchema = z.object({
   stealthPct: z.number().int().min(0).max(100).default(0),
 });
 
+const Int = z.number().int();
+/** 調整値（IMPROVEMENTS_V2 §6）。get_rules の数値もここから作る */
+export const BalanceSchema = z.object({
+  id: IdSchema,
+  regen: z.object({
+    /** 自然回復の間隔（手番）= max(minInterval, baseInterval - floor(Lv / levelDiv)) */
+    baseInterval: Int.min(1), levelDiv: Int.min(1), minInterval: Int.min(1),
+    /** 休息中（追跡中の敵が見えない wait）の回復の速さ（倍） */
+    restMultiplier: Int.min(1),
+  }),
+  rest: z.object({ maxTurns: Int.min(1) }),
+  macro: z.object({ stepLimit: Int.min(1) }),
+  wander: z.object({ firstAt: Int.min(0), intervalMin: Int.min(1), intervalMax: Int.min(1), maxAwake: Int.min(0), minDistance: Int.min(0) }),
+  score: z.object({ perDepth: Int, perKill: Int, perLevel: Int }),
+  expedition: z.object({
+    firstTargetDepth: Int.min(2),
+    aheadMin: Int.min(1), aheadMax: Int.min(1),
+    /** 達成時の基礎点（目的の種類ごと） */
+    points: z.record(Int),
+    /** 目標が「最深到達＋aheadMin」より深い 1 階ごとの加点 */
+    pointsPerExtraDepth: Int,
+    /** retrieve_relic で遺物を守護者が守る確率 */
+    relicGuardianPct: Int.min(0).max(100),
+  }),
+});
+
 export const FeatureSchema = z.object({
   id: IdSchema,
   name: NamesSchema,
@@ -216,6 +257,8 @@ export type SpawnTableDef = z.infer<typeof SpawnTableSchema>;
 export type LootTableDef = z.infer<typeof LootTableSchema>;
 export type ClassDef = z.infer<typeof ClassSchema>;
 export type FeatureDef = z.infer<typeof FeatureSchema>;
+export type BalanceDef = z.infer<typeof BalanceSchema>;
+export type PacingDef = z.infer<typeof PacingSchema>;
 
 /** ファイル名 → スキーマ。新しい定義ファイル種別はここに 1 行足す */
 export const FILE_SCHEMAS = {
@@ -232,6 +275,7 @@ export const FILE_SCHEMAS = {
   lootTables: LootTableSchema,
   classes: ClassSchema,
   features: FeatureSchema,
+  balance: BalanceSchema,
 } as const;
 
 export type FileKind = keyof typeof FILE_SCHEMAS;

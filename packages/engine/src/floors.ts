@@ -1,8 +1,9 @@
 // フロアの遅延生成（初めて入ったとき）。生成結果は floor_generated（地形 RLE）と entity_spawned で記録する。
 // リプレイは生成器を必要としない。
-import type { Floor, FloorKey, Pos } from '@muse/shared';
+import type { Entity, Floor, FloorKey, Pos } from '@muse/shared';
 import { DIRS, DIR_VEC, rleEncode } from '@muse/shared';
 import type { Ctx } from './ctx';
+import { placementFor, recordTargets } from './expedition';
 import { generateFloor } from './gen/generate';
 import { spawnFromSpec } from './spawn';
 
@@ -11,14 +12,18 @@ export function ensureFloor(ctx: Ctx, key: FloorKey): Floor {
   if (existing) return existing;
   const [branch, depthStr] = key.split(':');
   const depth = parseInt(depthStr, 10);
-  const gen = generateFloor(ctx.content, ctx.world.secret.seed, branch, depth, ctx.world.meta.terrainTable);
+  // 遠征の目標階なら守護者・遺物を置く（生成の専用段。他の乱数ストリームはずれない）
+  const objective = placementFor(ctx, branch, depth);
+  const gen = generateFloor(ctx.content, ctx.world.secret.seed, branch, depth, ctx.world.meta.terrainTable, objective ?? undefined);
   const { terrain, ...floorData } = gen.floor;
   const prevFloor = ctx.curFloor;
   const prevNow = ctx.now;
   ctx.curFloor = key;
   ctx.now = 0;
   ctx.emit({ type: 'floor_generated', floorData, terrainRle: rleEncode(terrain), seenBy: [], floor: key, ft: 0 });
-  for (const spec of gen.spawns) spawnFromSpec(ctx, key, spec, 'generated');
+  const spawned: Entity[] = [];
+  for (const spec of gen.spawns) spawned.push(spawnFromSpec(ctx, key, spec, 'generated'));
+  if (objective) recordTargets(ctx, spawned);
   ctx.curFloor = prevFloor;
   ctx.now = prevNow;
   return ctx.world.floors[key];

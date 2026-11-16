@@ -25,7 +25,10 @@ export const CommandSchema = z.discriminatedUnion('type', [
   // マクロ（サーバーで基本行動へ展開）
   z.object({ type: z.literal('explore') }),
   z.object({ type: z.literal('travel'), to: TravelTargetSchema }),
-  z.object({ type: z.literal('rest') }),
+  z.object({ type: z.literal('rest'), untilHp: z.number().int().positive().optional(), maxTurns: z.number().int().positive().optional() }),
+  // 遠征
+  z.object({ type: z.literal('extract'), confirm: z.boolean().optional() }),
+  z.object({ type: z.literal('start_expedition'), offer: z.union([z.number().int().min(1).max(9), z.literal('endless')]) }),
   // 手番を消費しない
   z.object({ type: z.literal('say'), text: z.string().min(1).max(280) }),
   z.object({ type: z.literal('note'), add: z.string().min(1).max(280).optional(), remove: z.number().int().nonnegative().optional() }),
@@ -39,6 +42,8 @@ export type TravelTarget = z.infer<typeof TravelTargetSchema>;
 
 export const MACRO_COMMANDS: ReadonlySet<CommandType> = new Set<CommandType>(['explore', 'travel', 'rest']);
 export const FREE_COMMANDS: ReadonlySet<CommandType> = new Set<CommandType>(['say', 'note', 'retire']);
+/** キャンプでのみ有効（手番に関係しない） */
+export const CAMP_COMMANDS: ReadonlySet<CommandType> = new Set<CommandType>(['start_expedition']);
 
 /** システムコマンド（参加・離脱）。commands.jsonl に記録し、決定論的再実行で流す */
 export const JoinSchema = z.object({
@@ -71,7 +76,8 @@ export interface CommandRecord {
 export type ActionErrorCode =
   | 'invalid_direction' | 'blocked' | 'no_target' | 'out_of_range' | 'no_line_of_sight'
   | 'no_such_item' | 'cannot_use' | 'inventory_full' | 'nothing_here' | 'unknown_destination'
-  | 'unreachable' | 'not_your_turn' | 'stale_turn' | 'dead' | 'run_ended' | 'no_session' | 'bad_request';
+  | 'unreachable' | 'not_your_turn' | 'stale_turn' | 'dead' | 'run_ended' | 'no_session' | 'bad_request'
+  | 'confirm_required' | 'cannot_extract' | 'not_at_camp' | 'at_camp';
 
 export interface ActionError {
   code: ActionErrorCode;

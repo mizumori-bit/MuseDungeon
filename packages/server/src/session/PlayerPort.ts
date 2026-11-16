@@ -1,27 +1,41 @@
 // PlayerPort: プレイヤー（AI・人間とも）への唯一の窓口。PlayerView 経由の情報しか返さない。
 // MCP アダプタと人間用 WS の両方がこれを使う（どちらかを特別扱いしない）。
 import type {
-  ActionError, Catalog, Command, Locale, Observation, PerceivedEvent, PlayerId, PlayerView, Pos, RunSummary,
+  ActionError, Catalog, Command, Locale, Observation, PerceivedEvent, PlayerId, PlayerView, Pos, RunSummary, TurnBlock, TurnReason,
 } from '@muse/shared';
 import {
-  buildObservation, describeInventory, describeTarget, formatObservationText, kindName, nameOf, renderAsciiMap, t,
+  briefingLines, buildObservation, buildTurnBlock, campLines, changesLine, describeInventory, describeTarget, diffChanges,
+  formatObservationText, kindName, MACRO_COMPLETED_STOPS, nameOf, progressText, renderAsciiMap, resultText, t, turnLine, turnSnapshot,
 } from '@muse/shared';
+import type { MacroStop } from '@muse/shared';
 import type { RunSession, SubmitOpts } from './RunSession';
 
 export interface BriefEvent { seq: number; type: string; text: string }
+
+export interface RestReport { hp_gained: number; turns: number; time_elapsed: number | null; stopped_by: string }
 
 export interface ActionSuccess {
   ok: true;
   outcome: string;
   steps?: number;
   interrupted_by?: string;
+  /** マクロ: 歩いた手数・経過したフロア時間 */
+  distance?: number;
+  time_elapsed?: number | null;
+  /** rest の実績 */
+  rest?: RestReport;
   events: BriefEvent[];
   observation: Observation;
+  turn: TurnBlock;
+  /** start_expedition の応答: 遠征のブリーフィング */
+  briefing?: string[];
 }
-export interface ActionFailure { ok: false; error: ActionError; valid_actions: string[] }
+export interface ActionFailure { ok: false; error: ActionError; valid_actions: string[]; turn: TurnBlock }
 export type ActionPayload = ActionSuccess | ActionFailure;
 
 export interface InfoResult { text: string; data: unknown }
+
+export interface ObserveResult { observation: Observation; text: string; turn: TurnBlock }
 
 export interface PlayerPort {
   readonly runId: string;
@@ -30,8 +44,18 @@ export interface PlayerPort {
   locale(): Locale;
   view(): PlayerView;
   observe(opts?: { detail?: 'brief' | 'full'; map?: boolean; consume?: boolean }): { observation: Observation; text: string };
+  /**
+   * 観測＋turn ブロック。text には変化の行と末尾の状態行が付く。
+   * changes: true なら前回の応答からの変化を計算して基準を更新する（照会系は false）
+   */
+  observeWithTurn(reason: TurnReason, opts?: { detail?: 'brief' | 'full'; map?: boolean; consume?: boolean; changes?: boolean | 'peek' }): ObserveResult;
+  /** turn ブロックだけ（変化は計算しない） */
+  turnBlock(reason: TurnReason): TurnBlock;
+  turnLine(b: TurnBlock): string;
   act(cmd: Command, opts: SubmitOpts & { waitTurnMs?: number; map?: boolean }): Promise<ActionPayload>;
   waitForTurn(timeoutMs: number): Promise<boolean>;
+  /** 遠征のブリーフィング（開始時・再開時） */
+  briefing(kind: 'start' | 'resume'): string[];
   look(target: Pos | string): InfoResult;
   map(region?: { x: number; y: number; w: number; h: number }): InfoResult;
   inventory(): InfoResult;
@@ -55,11 +79,13 @@ const STOP_TEXT: Record<string, [string, string]> = {
   item_seen: ['新しいアイテムを見つけた', 'you spotted a new item'],
   stairs_seen: ['階段を見つけた', 'you found stairs'],
   arrived: ['到着した', 'arrived'],
-  explored: ['この階で辿り着ける場所は探索し尽くした（travel_to stairs_down で階段へ）', 'nothing reachable left to explore (try travel_to stairs_down)'],
+  explored: ['この階で辿り着ける場所は探索し尽くした', 'nothing reachable left to explore'],
   unreachable: ['既知の経路では到達できない', 'unreachable via known map'],
   unknown_destination: ['行き先が既知の地図に無い', 'destination is not on your known map'],
-  step_limit: ['1 回の上限（200 手）に達した', 'reached the 200-step limit'],
+  step_limit: ['1 回の手数の上限に達した', 'reached the step limit'],
   full_hp: ['HP が全快した', 'HP is full'],
+  target_hp: ['指定した HP に達した', 'reached the requested HP'],
+  max_turns: ['指定した手数を休んだ', 'rested for the requested turns'],
   status_changed: ['状態異常が変化した', 'a status effect changed'],
   not_your_turn: ['手番ではない', 'not your turn'],
   waiting_others: ['他プレイヤーの手番待ち', 'waiting for other players'],
@@ -67,8 +93,11 @@ const STOP_TEXT: Record<string, [string, string]> = {
   run_ended: ['ランが終了した', 'the run ended'],
   floor_changed: ['階が変わった', 'floor changed'],
   blocked: ['道が塞がれている', 'the path is blocked'],
+  left_board: ['盤面を離れた', 'you left the board'],
   error: ['行動できなかった', 'an action failed'],
 };
+
+const MILESTONE_TYPES = new Set(['entity_changed_floor', 'level_up', 'objective_completed', 'expedition_started', 'expedition_ended', 'item_identified', 'player_state', 'player_joined']);
 
 export class SessionPlayerPort implements PlayerPort {
   constructor(private readonly session: RunSession, readonly playerId: PlayerId) {}
@@ -91,6 +120,33 @@ export class SessionPlayerPort implements PlayerPort {
     return { observation, text: formatObservationText(observation, view.locale) };
   }
 
+  /** 観測から turn ブロックを作る。changes: true なら基準と比べて更新、'peek' なら比べるだけ */
+  private turnFor(view: PlayerView, obs: Observation, p: { reason: TurnReason; interruptedBy?: string; changes: boolean | 'peek'; expeditionEndedNow?: boolean }): TurnBlock {
+    let changes: TurnBlock['changes'] = [];
+    if (p.changes) {
+      const snap = turnSnapshot(view, obs);
+      changes = diffChanges(this.session.turnSnapshot(this.playerId), snap, view, obs);
+      if (p.changes === true) this.session.setTurnSnapshot(this.playerId, snap);
+    }
+    return buildTurnBlock(view, { reason: p.reason, interruptedBy: p.interruptedBy, changes, expeditionEndedNow: p.expeditionEndedNow });
+  }
+
+  observeWithTurn(reason: TurnReason, opts: { detail?: 'brief' | 'full'; map?: boolean; consume?: boolean; changes?: boolean | 'peek' } = {}): ObserveResult {
+    const o = this.observe(opts);
+    const view = this.view();
+    const turn = this.turnFor(view, o.observation, { reason, changes: opts.changes ?? true });
+    const extra = [changesLine(view.locale, turn.changes), turnLine(view, turn)].filter(Boolean).join('\n');
+    return { observation: o.observation, text: `${o.text}\n${extra}`, turn };
+  }
+
+  turnBlock(reason: TurnReason): TurnBlock {
+    return buildTurnBlock(this.view(), { reason, changes: [] });
+  }
+
+  turnLine(b: TurnBlock): string {
+    return turnLine(this.view(), b);
+  }
+
   waitForTurn(timeoutMs: number): Promise<boolean> {
     return this.session.waitForTurn(this.playerId, timeoutMs);
   }
@@ -102,43 +158,101 @@ export class SessionPlayerPort implements PlayerPort {
   async act(cmd: Command, opts: SubmitOpts & { waitTurnMs?: number; map?: boolean }): Promise<ActionPayload> {
     const r = await this.session.submit(this.playerId, cmd, opts);
     // 次に自分の手番が来るかランが終わるまで待つ（COOP で長引けば waiting_others のまま返す）
-    if (r.ok && opts.waitTurnMs && !this.session.isTurn(this.playerId)) await this.session.waitForTurn(this.playerId, opts.waitTurnMs);
+    if (r.ok && opts.waitTurnMs && this.view().status === 'waiting_others') await this.session.waitForTurn(this.playerId, opts.waitTurnMs);
     const view = this.view();
     if (!r.ok) {
       const obs = buildObservation(view, this.catalog, { detail: 'brief', map: false });
-      return { ok: false, error: r.error, valid_actions: obs.valid_actions };
+      return { ok: false, error: r.error, valid_actions: obs.valid_actions, turn: this.turnFor(view, obs, { reason: 'action_rejected', changes: true }) };
     }
     const perceived = this.session.consumeFor(this.playerId);
     const mine = perceived.filter((p) => p.seq > r.startSeq);
     const L = view.locale;
     let outcome: string;
+    let rest: RestReport | undefined;
     if (r.steps !== undefined) {
       const stop = r.interruptedBy ? STOP_TEXT[r.interruptedBy] : undefined;
-      outcome = t(L, `${cmd.type}: ${r.steps} 手進んだ。${stop ? `停止: ${stop[0]}。` : ''}`, `${cmd.type}: ${r.steps} steps.${stop ? ` Stopped: ${stop[1]}.` : ''}`);
-      const notable = mine.filter((m) => m.type !== 'entity_moved').slice(-2).map((m) => m.text);
+      const m = r.macro;
+      if (cmd.type === 'rest') {
+        rest = { hp_gained: m?.hpGained ?? 0, turns: r.steps, time_elapsed: m?.timeElapsed ?? null, stopped_by: r.interruptedBy ?? 'step_limit' };
+        outcome = t(L,
+          `rest: ${r.steps} 手休んだ。HP ${rest.hp_gained >= 0 ? '+' : ''}${rest.hp_gained}${rest.time_elapsed !== null ? `、時間 ${rest.time_elapsed}` : ''}。${stop ? `停止: ${stop[0]}。` : ''}`,
+          `rest: ${r.steps} turns. HP ${rest.hp_gained >= 0 ? '+' : ''}${rest.hp_gained}${rest.time_elapsed !== null ? `, time ${rest.time_elapsed}` : ''}.${stop ? ` Stopped: ${stop[1]}.` : ''}`);
+      } else {
+        const tm = m?.timeElapsed !== null && m?.timeElapsed !== undefined ? t(L, `（${m.distance} 歩、時間 ${m.timeElapsed}）`, ` (${m.distance} moves, time ${m.timeElapsed})`) : '';
+        outcome = t(L, `${cmd.type}: ${r.steps} 手進んだ${tm}。${stop ? `停止: ${stop[0]}。` : ''}`, `${cmd.type}: ${r.steps} steps${tm}.${stop ? ` Stopped: ${stop[1]}.` : ''}`);
+      }
+      const notable = mine.filter((x) => x.type !== 'entity_moved').slice(-2).map((x) => x.text);
       if (notable.length) outcome += ' ' + notable.join(' ');
     } else {
-      const texts = mine.map((m) => m.text).slice(0, 3);
+      const texts = mine.map((x) => x.text).slice(0, 3);
       outcome = texts.length ? texts.join(' ') : defaultOutcome(cmd, L);
     }
     const observation = buildObservation(view, this.catalog, { detail: 'brief', map: opts.map ?? true, recent: perceived.slice(-10) });
-    return {
+    const endedNow = r.events.some((e) => e.type === 'expedition_ended');
+    let reason: TurnReason = 'action_completed';
+    if (cmd.type === 'start_expedition') reason = 'expedition_started';
+    else if (r.steps !== undefined && r.interruptedBy && !MACRO_COMPLETED_STOPS.has(r.interruptedBy as MacroStop)) reason = 'macro_interrupted';
+    const turn = this.turnFor(view, observation, { reason, interruptedBy: r.steps !== undefined ? r.interruptedBy : undefined, changes: true, expeditionEndedNow: endedNow });
+    const payload: ActionSuccess = {
       ok: true, outcome, steps: r.steps, interrupted_by: r.interruptedBy,
       events: perceived.slice(-20).map((p) => ({ seq: p.seq, type: p.type, text: p.text })),
-      observation,
+      observation, turn,
     };
+    if (r.macro && cmd.type !== 'rest') { payload.distance = r.macro.distance; payload.time_elapsed = r.macro.timeElapsed; }
+    if (rest) payload.rest = rest;
+    if (cmd.type === 'start_expedition') payload.briefing = this.briefing('start');
+    return payload;
   }
 
   formatActionText(p: ActionPayload): string {
-    const L = this.locale();
+    const view = this.view();
+    const L = view.locale;
     if (!p.ok) {
       return [
         `${t(L, 'エラー', 'Error')} [${p.error.code}] ${p.error.message}`,
         p.error.hint ? `${t(L, 'ヒント', 'Hint')}: ${p.error.hint}` : '',
         `${t(L, 'できること', 'Actions')}: ${p.valid_actions.join(' / ')}`,
+        turnLine(view, p.turn),
       ].filter(Boolean).join('\n');
     }
-    return `${t(L, '結果', 'Result')}: ${p.outcome}\n${formatObservationText(p.observation, L)}`;
+    return [
+      `${t(L, '結果', 'Result')}: ${p.outcome}`,
+      ...(p.briefing ?? []),
+      formatObservationText(p.observation, L),
+      changesLine(L, p.turn.changes),
+      turnLine(view, p.turn),
+    ].filter(Boolean).join('\n');
+  }
+
+  briefing(kind: 'start' | 'resume'): string[] {
+    const view = this.view();
+    const L = view.locale;
+    const lines: string[] = [];
+    const x = view.expedition;
+    if (x && x.status !== 'ended' && view.status !== 'at_camp') {
+      lines.push(...briefingLines(L, x));
+      lines.push(t(L, `進捗: ${progressText(L, x, view.floor?.depth ?? null)}`, `Progress: ${progressText(L, x, view.floor?.depth ?? null)}`));
+    } else if (view.status === 'at_camp') {
+      if (x?.result) lines.push(resultText(L, x));
+      lines.push(...campLines(L, view));
+    } else if (!x) {
+      lines.push(t(L, '遠征は設定されていない（目的なし）。', 'No expedition is set (no objective).'));
+    }
+    if (kind === 'resume') {
+      lines.push(view.floor && view.self.pos
+        ? t(L, `現在地: 地下${view.floor.depth}階 (${view.self.pos.x},${view.self.pos.y})、HP ${view.self.stats.hp}/${view.self.stats.maxHp}`, `Location: depth ${view.floor.depth} (${view.self.pos.x},${view.self.pos.y}), HP ${view.self.stats.hp}/${view.self.stats.maxHp}`)
+        : view.status === 'at_camp' ? t(L, '現在地: キャンプ', 'Location: camp') : t(L, '現在地: なし', 'Location: none'));
+      const ms = this.session.messages(this.playerId).filter((m) => MILESTONE_TYPES.has(m.type) || (m.type === 'died' && m.text.includes(t(L, 'を倒した', 'You kill')))).slice(-10);
+      if (ms.length) {
+        lines.push(t(L, '直近の節目:', 'Recent milestones:'));
+        for (const m of ms) lines.push(`- [${m.seq}] ${m.text}`);
+      }
+      if (view.notes.length) {
+        lines.push(t(L, 'あなたのメモ:', 'Your notes:'));
+        view.notes.forEach((n, i) => lines.push(`- ${i}: ${n}`));
+      }
+    }
+    return lines;
   }
 
   look(target: Pos | string): InfoResult {
@@ -168,7 +282,7 @@ export class SessionPlayerPort implements PlayerPort {
       const st = this.catalog.terrain[tid]?.stairs;
       if (v && st) pois.push({ type: `stairs_${st}`, name: nameOf(this.catalog.terrain[tid].name, L), pos: { x: i % f.width, y: Math.trunc(i / f.width) } });
     });
-    for (const rem of view.memory.remembered) pois.push({ type: rem.cat, name: kindName(this.catalog, L, rem.kind, rem.appearanceId), pos: rem.pos });
+    for (const rem of view.memory.remembered) pois.push({ type: rem.role ?? rem.cat, name: kindName(this.catalog, L, rem.kind, rem.appearanceId), pos: rem.pos });
     const text = [
       t(L, `地下${f.depth}階の記憶地図（左上=(${m.origin.x},${m.origin.y})、${r.w}×${r.h}）`, `Known map of depth ${f.depth} (top-left=(${m.origin.x},${m.origin.y}), ${r.w}x${r.h})`),
       ...m.rows,
@@ -197,9 +311,12 @@ export class SessionPlayerPort implements PlayerPort {
     const mem = view.monsterMemory[kind];
     const name = kindName(this.catalog, L, kind);
     if (!mem) return { text: t(L, `${name}にはまだ遭遇していない。`, `You have not met a ${name} yet.`), data: { kind, memory: null } };
+    const hp = mem.hpSeen
+      ? t(L, `、倒した個体の体力 ${mem.hpSeen.min}〜${mem.hpSeen.max}（${mem.hpSeen.samples}体。接辞・深層強化・守護者はこれより頑丈なことがある）`, `, HP of those you killed ${mem.hpSeen.min}-${mem.hpSeen.max} (${mem.hpSeen.samples}; affixes, tiers and guardians can be sturdier)`)
+      : t(L, '、体力の記録なし（目の前で倒すと分かる）', ', no HP record yet (learned when you see one die)');
     const text = t(L,
-      `${name}: 遭遇 ${mem.encounters} 回、撃破 ${mem.kills} 回、受けた最大ダメージ ${mem.maxDamageToYou}、与えた最大ダメージ ${mem.maxDamageByYou}、観測した能力: ${mem.abilities.join(', ') || 'なし'}`,
-      `${name}: met ${mem.encounters}, killed ${mem.kills}, max damage to you ${mem.maxDamageToYou}, max damage by you ${mem.maxDamageByYou}, observed abilities: ${mem.abilities.join(', ') || 'none'}`);
+      `${name}: 遭遇 ${mem.encounters} 回、撃破 ${mem.kills} 回、受けた最大ダメージ ${mem.maxDamageToYou}、与えた最大ダメージ ${mem.maxDamageByYou}、観測した能力: ${mem.abilities.join(', ') || 'なし'}${hp}`,
+      `${name}: met ${mem.encounters}, killed ${mem.kills}, max damage to you ${mem.maxDamageToYou}, max damage by you ${mem.maxDamageByYou}, observed abilities: ${mem.abilities.join(', ') || 'none'}${hp}`);
     return { text, data: { kind, memory: mem } };
   }
 
@@ -215,6 +332,8 @@ function defaultOutcome(cmd: Command, L: Locale): string {
     case 'wait': return t(L, '待機した。', 'You wait.');
     case 'say': return t(L, '発言した。', 'Message sent.');
     case 'note': return t(L, 'メモを更新した。', 'Notes updated.');
+    case 'extract': return t(L, 'extract した。', 'You extract.');
+    case 'start_expedition': return t(L, '遠征を始めた。', 'The expedition begins.');
     default: return t(L, `${cmd.type} を実行した。`, `Did ${cmd.type}.`);
   }
 }

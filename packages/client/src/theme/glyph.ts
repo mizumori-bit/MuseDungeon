@@ -37,8 +37,9 @@ const ACTOR: Record<string, GlyphDrawable> = {
   'core:cave_troll': { kind: 'glyph', ch: 'T', fg: '#a0b8a0', bold: true },
 };
 
-const ITEM_CH: Record<string, string> = { potion: '!', scroll: '?', weapon: ')', armor: '[', throwing: '/', accessory: '"' };
-const ITEM_FG: Record<string, string> = { potion: '#e070e0', scroll: '#e8dcb0', weapon: '#c8d0dc', armor: '#c09050', throwing: '#d8d8d8', accessory: '#f0d060' };
+// relic: 遠征の遺物（core:relic）。目印の光と星はレンダラーが役割（role）から重ねる
+const ITEM_CH: Record<string, string> = { potion: '!', scroll: '?', weapon: ')', armor: '[', throwing: '/', accessory: '"', relic: '¤' };
+const ITEM_FG: Record<string, string> = { potion: '#e070e0', scroll: '#e8dcb0', weapon: '#c8d0dc', armor: '#c09050', throwing: '#d8d8d8', accessory: '#f0d060', relic: '#ffd54f' };
 
 const APPEARANCE_FG: Record<string, string> = {
   'core:potion_look_01': '#ff5050',

@@ -5,7 +5,13 @@
     "monsters": { "per1000": 7, "table": "core:default" },
     "items": { "per1000": 8, "table": "core:common_loot" },
     "traps": { "per1000": 2 },
-    "prefabs": { "tags": ["shrine", "hall", "treasure", "den"], "min": 0, "max": 2 }
+    "prefabs": { "tags": ["shrine", "hall", "treasure", "den"], "min": 0, "max": 2 },
+    "pacing": [
+      { "depth": { "min": 1, "max": 2 }, "size": { "w": 38, "h": 22 }, "stairsPath": { "min": 12, "max": 34 },
+        "monsters": { "per1000": 9 }, "items": { "per1000": 11 }, "traps": { "per1000": 2 } },
+      { "depth": { "min": 3, "max": 6 }, "size": { "w": 44, "h": 27 }, "stairsPath": { "min": 15, "max": 44 } },
+      { "depth": { "min": 7 }, "size": { "w": 54, "h": 32 }, "stairsPath": { "min": 18, "max": 64 } }
+    ]
   },
   {
     "id": "core:cavern", "name": { "ja": "大空洞", "en": "great cavern" },
@@ -14,7 +20,12 @@
     "monsters": { "per1000": 9, "table": "core:default" },
     "items": { "per1000": 7, "table": "core:common_loot" },
     "traps": { "per1000": 1 },
-    "prefabs": { "tags": ["den", "shrine"], "min": 0, "max": 1 }
+    "prefabs": { "tags": ["den", "shrine"], "min": 0, "max": 1 },
+    "pacing": [
+      { "depth": { "min": 1, "max": 2 }, "size": { "w": 40, "h": 24 }, "stairsPath": { "min": 12, "max": 34 }, "monsters": { "per1000": 10 }, "items": { "per1000": 10 } },
+      { "depth": { "min": 3, "max": 6 }, "size": { "w": 44, "h": 27 }, "stairsPath": { "min": 15, "max": 44 } },
+      { "depth": { "min": 7 }, "size": { "w": 54, "h": 32 }, "stairsPath": { "min": 18, "max": 64 } }
+    ]
   },
   {
     "id": "core:vault_floor", "name": { "ja": "宝物庫階", "en": "vault floor" },

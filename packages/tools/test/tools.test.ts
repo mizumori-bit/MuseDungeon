@@ -1,13 +1,17 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, existsSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
 import { buildCatalog, loadContent } from '@muse/content';
 import { generateFloor } from '@muse/engine';
 import type { GameEvent } from '@muse/shared';
-import { buildObservation, canonicalHash, filterEventsForPlayer, formatObservationText, narrate, rangesToIndices, Rng } from '@muse/shared';
-import { loadConfig, SessionManager } from '@muse/server';
+import {
+  buildObservation, canonicalHash, DIRS, DIR_VEC, filterEventsForPlayer, formatObservationText, hpLeftEstimate, narrate, rangesToIndices, Rng,
+} from '@muse/shared';
+import { createApp, loadConfig, RunSession, SessionManager } from '@muse/server';
 import type { PlayerPort } from '@muse/server';
-import { assetsCheck, assetsChecklist, foldAll, greedyDecide, runBot } from '../src/index';
+import { assetsCheck, assetsChecklist, drive, dummyInvoker, foldAll, greedyDecide, newMemo, playWithPort, runBot } from '../src/index';
 import { checkFloorForTest } from './genCheck';
 
 const content = loadContent();
@@ -31,7 +35,7 @@ describe('generation invariants', () => {
     }
     expect(failures.slice(0, 10)).toEqual([]);
     expect(worst).toBeLessThan(500);
-  });
+  }, FULL ? 900_000 : 120_000);
 
   it('same seed → identical floor; deep floors are scaled', () => {
     const table = content.terrain.map((t) => t.id);
@@ -55,12 +59,16 @@ describe('information hiding (leak property test)', () => {
       const world = r.session.world;
       const port: PlayerPort = r.port;
       const rng = Rng.fromSeed(seed);
-      const memo = { restFails: 0, avoid: new Set<string>(), blocked: 0 };
+      const memo = newMemo();
       for (let i = 0; i < 120; i++) {
         const v = port.view();
         if (v.status !== 'your_turn') break;
-        const { observation, text } = port.observe({ detail: 'full', map: true });
-        const json = JSON.stringify({ observation, view: v, pending: port.pending().map((p) => p.event) });
+        const { observation, text: obsText, turn } = port.observeWithTurn('observed', { detail: 'full', map: true });
+        const briefing = port.briefing('resume');
+        const text = obsText + briefing.join('\n');
+        const json = JSON.stringify({ observation, turn, briefing, view: v, pending: port.pending().map((p) => p.event) });
+        // 俯瞰専用（守護者・遺物の ID を含む）イベントはプレイヤーに渡らない
+        expect(port.pending().some((p) => p.type === 'objective_progress')).toBe(false);
         // (b) 視界外エンティティの ID
         const visibleIds = new Set([v.self.id, ...v.entities.map((e) => e.id), ...v.inventory.map((i) => i.id), ...v.memory.remembered.map((m) => m.id)]);
         for (const e of Object.values(world.entities)) {
@@ -169,6 +177,167 @@ describe('assets', () => {
     expect(list.some((a) => a.class === 'appearance' && a.key === 'core:potion_look_01')).toBe(true);
     const r = assetsCheck(content, resolve(__dirname, '..', '..', 'client', 'public', 'themes', 'sample'));
     expect(r.lines.filter((l) => l.startsWith('ERROR'))).toEqual([]);
+  });
+});
+
+describe('expeditions (V2-2)', () => {
+  it('greedy bot goes expedition → objective → extract → camp → next expedition; folds and recovers', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'muse-exp-'));
+    const config = loadConfig({ runsDir: dir, keyframeEvery: 200 });
+    const manager = new SessionManager(content, config);
+    let looped = 0;
+    const reasons = new Set<string>();
+    for (let i = 0; i < 6 && looped < 2; i++) {
+      const r = await manager.createRun({ name: 'Exp', seed: `exp-loop-${i}`, controller: { kind: 'agent', label: 'bot' } });
+      if ('error' in r) throw new Error(r.error.message);
+      await playWithPort(r.port, { kind: 'greedy', seed: `exp-loop-${i}`, maxActs: 1500, maxExpeditions: 2 });
+      const w = r.session.world;
+      for (const x of w.expeditions ?? []) if (x.endReason) reasons.add(x.endReason);
+      const first = w.expeditions?.[0];
+      if (first?.endReason === 'completed' && (w.expeditions?.length ?? 0) >= 2) looped++;
+      // 畳み込み等価とクラッシュ復旧（キャンプ・再開を含む）
+      expect(canonicalHash(r.session.foldHistory())).toBe(canonicalHash(w));
+      if (w.status === 'active') {
+        const rec = RunSession.recover({ content, catalog: manager.catalog, config }, r.session.runId);
+        expect(rec.verified).toBe(true);
+        expect(canonicalHash(rec.session.world)).toBe(canonicalHash(w));
+        rec.session.close();
+      }
+      r.session.close();
+    }
+    expect(looped).toBeGreaterThanOrEqual(2);
+    expect(reasons.has('completed')).toBe(true);
+    manager.closeAll();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it(`target floors always contain a reachable guardian / relic (${FULL ? 300 : 40} seeds × depth 3–12)`, () => {
+    const table = content.terrain.map((t) => t.id);
+    const bad: string[] = [];
+    for (let s = 0; s < (FULL ? 300 : 40); s++) {
+      for (let d = 3; d <= 12; d++) {
+        for (const obj of [{ guardian: true, relic: false }, { guardian: false, relic: true }, { guardian: true, relic: true }]) {
+          const g = generateFloor(content, `obj-${s}`, 'main', d, table, obj);
+          const f = g.floor;
+          const pass = (i: number) => { const t = content.terrain[content.terrainIndex[table[f.terrain[i]]]]; return t.passable || t.door === 'closed'; };
+          const dist = new Int32Array(f.width * f.height).fill(-1);
+          const start = f.entry.y * f.width + f.entry.x;
+          dist[start] = 0;
+          const q = [start];
+          for (let h = 0; h < q.length; h++) {
+            const c = q[h];
+            const cx = c % f.width, cy = (c - cx) / f.width;
+            for (const dd of DIRS) {
+              const nx = cx + DIR_VEC[dd][0], ny = cy + DIR_VEC[dd][1];
+              if (nx < 0 || ny < 0 || nx >= f.width || ny >= f.height) continue;
+              const ni = ny * f.width + nx;
+              if (dist[ni] < 0 && pass(ni)) { dist[ni] = dist[c] + 1; q.push(ni); }
+            }
+          }
+          const guardians = g.spawns.filter((x) => x.type === 'monster' && x.role === 'guardian');
+          const relics = g.spawns.filter((x) => x.type === 'item' && x.role === 'relic');
+          if (guardians.length !== (obj.guardian ? 1 : 0) || relics.length !== (obj.relic ? 1 : 0)) bad.push(`obj-${s}@${d} ${JSON.stringify(obj)}: count`);
+          for (const x of [...guardians, ...relics]) {
+            if (dist[x.y * f.width + x.x] < 0) bad.push(`obj-${s}@${d}: unreachable ${x.kind}`);
+            if (Math.max(Math.abs(x.x - f.entry.x), Math.abs(x.y - f.entry.y)) <= 6) bad.push(`obj-${s}@${d}: too close`);
+          }
+          for (const gd of guardians) {
+            if (gd.type === 'monster' && !gd.affixes.includes('core:guardian')) bad.push(`obj-${s}@${d}: no guardian affix`);
+            const arch = content.monsters[gd.kind]?.ai.archetype;
+            if (arch === 'stationary' || arch === 'skittish') bad.push(`obj-${s}@${d}: bad archetype ${arch}`);
+          }
+          // 目的の段は他のストリームをずらさない（地形と通常のスポーンは同じ）
+          const plain = generateFloor(content, `obj-${s}`, 'main', d, table);
+          if (plain.attempts === g.attempts && canonicalHash(plain.floor) !== canonicalHash(g.floor)) bad.push(`obj-${s}@${d}: terrain changed`);
+        }
+      }
+    }
+    expect(bad.slice(0, 10)).toEqual([]);
+  });
+});
+
+describe('rest and enemy durability (V2-4)', () => {
+  it('rest_estimate turns match the actual rest when not interrupted', async () => {
+    const manager = new SessionManager(content, loadConfig({ runsDir: null }));
+    let checked = 0;
+    for (let s = 0; s < 12 && checked < 3; s++) {
+      const r = await manager.createRun({ name: 'Rest', seed: `rest-${s}`, controller: { kind: 'agent', label: 'r' } });
+      if ('error' in r) throw new Error(r.error.message);
+      const rng = Rng.fromSeed(`rest-${s}`);
+      const memo = newMemo();
+      memo.restFails = 99; // bot 自身には休ませない
+      for (let i = 0; i < 400 && checked < 3; i++) {
+        const v = r.port.view();
+        if (v.status !== 'your_turn') break;
+        const o = r.port.observe({ map: false }).observation;
+        const est = o.self.rest_estimate;
+        if (est && !est.blocked_by && !o.visible.monsters.length && est.turns <= content.balance.rest.maxTurns) {
+          const out = await r.port.act({ type: 'rest' }, { source: 'bot' });
+          if (out.ok && out.interrupted_by === 'full_hp') {
+            expect(out.rest?.turns).toBe(est.turns);
+            expect(out.rest?.hp_gained).toBe(est.hp_to_full);
+            expect(out.rest?.time_elapsed).toBe(est.time);
+            checked++;
+          }
+          continue;
+        }
+        await r.port.act(greedyDecide(r.port, rng, memo), { source: 'bot' });
+      }
+      r.session.close();
+    }
+    expect(checked).toBeGreaterThanOrEqual(1);
+    manager.closeAll();
+  });
+
+  it('kills show actual damage, record hp_seen, and estimates use it', async () => {
+    const manager = new SessionManager(content, loadConfig({ runsDir: null }));
+    let overkillChecked = false;
+    let hpSeen = false;
+    for (let s = 0; s < 6 && !(overkillChecked && hpSeen); s++) {
+      const r = await runBot(manager, { kind: 'greedy', seed: `dur-${s}`, maxActs: 300, objective: 'endless' });
+      const sess = manager.get(r.runId)!;
+      const pid = sess.world.playerOrder[0];
+      const view = sess.view(pid);
+      for (const ev of sess.history) {
+        if (ev.type !== 'damaged' || ev.hpAfter !== 0 || ev.dealt === undefined || ev.dealt >= ev.amount || ev.source !== view.self.id) continue;
+        const pe = filterEventsForPlayer([ev], pid, view)[0];
+        const text = narrate(pe, { locale: 'ja', catalog, selfId: view.self.id, playerNames: {} })!;
+        expect(text).toContain(`${ev.dealt} ダメージ`);
+        expect(text).not.toContain(`${ev.amount} ダメージ`);
+        overkillChecked = true;
+      }
+      if (Object.values(view.monsterMemory).some((m) => m.hpSeen && m.hpSeen.samples > 0)) hpSeen = true;
+      sess.close();
+    }
+    expect(overkillChecked).toBe(true);
+    expect(hpSeen).toBe(true);
+    // 推定残り HP: 記録 4〜10、damage_seen 3、wounded（50〜74%）
+    const est = hpLeftEstimate({ kind: 'k', encounters: 1, kills: 1, maxDamageToYou: 0, maxDamageByYou: 0, abilities: [], hpSeen: { min: 4, max: 10, samples: 3 } }, 'wounded', 3)!;
+    expect(est.min).toBeGreaterThanOrEqual(2);
+    expect(est.max).toBeLessThanOrEqual(7);
+    expect(hpLeftEstimate({ kind: 'k', encounters: 1, kills: 0, maxDamageToYou: 0, maxDamageByYou: 0, abilities: [] }, 'healthy', 0)).toBeUndefined();
+    manager.closeAll();
+  });
+});
+
+describe('host drive (V2-3)', () => {
+  it('drive + dummy agent runs an expedition unattended; stopping and re-running continues it', async () => {
+    const config = loadConfig({ runsDir: null, idleNoticeMs: 1500 });
+    const app = createApp(new SessionManager(content, config), config);
+    await new Promise<void>((r) => app.server.listen(0, '127.0.0.1', () => r()));
+    const base = `http://127.0.0.1:${(app.server.address() as AddressInfo).port}`;
+    const res = await fetch(`${base}/api/runs`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Drive', seed: 'drive-1', controller: { kind: 'agent', label: 'dummy' } }) });
+    const j = await res.json() as { token: string; runId: string };
+    const first = await drive({ baseUrl: base, token: j.token, invoker: dummyInvoker(), maxTurns: 10 });
+    expect(first.outcome).toBe('interrupted');
+    expect(first.reason).toBe('max_turns');
+    expect(app.manager.get(j.runId)!.world.expeditions?.[0].status).not.toBe('ended');
+    const second = await drive({ baseUrl: base, token: j.token, invoker: dummyInvoker(), maxTurns: 3000 });
+    expect(second.outcome).toBe('ended');
+    const x = app.manager.get(j.runId)!.world.expeditions![0];
+    expect(x.status).toBe('ended');
+    expect(['completed', 'withdrawn', 'died']).toContain(x.endReason);
+    await app.close();
   });
 });
 

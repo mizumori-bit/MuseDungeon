@@ -11,4 +11,6 @@ export * from './nav';
 export * from './narrate';
 export * from './observation';
 export * from './macro';
+export * from './expedition';
+export * from './turn';
 export * from './protocol';

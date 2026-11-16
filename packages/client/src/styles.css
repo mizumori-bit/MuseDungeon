@@ -93,6 +93,8 @@ canvas.map { width: 100%; height: 100%; display: block; cursor: crosshair; }
 .alert.low_hp, .alert.poisoned { background: #5a4415; }
 .alert.enemy_adjacent, .alert.multiple_enemies { background: #5a2236; }
 .alert.on_stairs, .alert.item_here, .alert.new_floor { background: #1f4a5a; }
+.alert.at_camp { background: #2e3f2a; }
+.alert.can_extract { background: #1f5a3a; }
 .actions { display: flex; flex-wrap: wrap; gap: 4px; padding: 6px 8px; border-top: 1px solid var(--line); }
 .valid { margin: 0 8px 8px; font-size: 12px; }
 .help { font-size: 11px; }
@@ -126,6 +128,15 @@ th, td { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--line
 .marker.death { background: #e53935; height: 14px; }
 .marker.thought { background: #b39ddb; height: 6px; }
 .marker.join, .marker.end { background: #fff; }
+.marker.expedition_start { background: #26c6da; height: 16px; width: 4px; }
+.marker.objective { background: #ffca28; height: 16px; width: 4px; }
+.marker.expedition_end { background: #ec407a; height: 16px; width: 4px; }
+.expband { position: absolute; top: 2px; height: 8px; border-radius: 3px; background: rgba(79,195,247,0.22); cursor: pointer; }
+.expband.completed { background: rgba(102,187,106,0.3); }
+.expband.withdrawn { background: rgba(158,158,158,0.3); }
+.expband.died { background: rgba(229,57,53,0.3); }
+.expband.retired { background: rgba(171,71,188,0.3); }
+.expband.cur { outline: 1px solid var(--accent); }
 
 .modal { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 10; }
 .dialog { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 20px; max-width: 640px; width: calc(100% - 32px); }
@@ -137,3 +148,57 @@ th, td { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--line
   .mapwrap { min-height: 50vh; }
   .topbar, .toolbar, .lobby { padding-left: 16px; padding-right: 16px; }
 }
+
+/* ---- 遠征 ---- */
+.exp .badge { font-size: 10.5px; font-weight: normal; padding: 0 7px; border-radius: 8px; background: #2a3a5a; }
+.exp .badge.complete { background: #1f5a3a; }
+.exp .badge.ended { background: #3a3a3a; }
+.exp .badge.ended.completed { background: #1f5a3a; }
+.exp .badge.ended.died { background: #6b1c1c; }
+.exp .right { margin-left: auto; }
+.exp .objective { font-size: 13px; }
+.exp .progress { font-size: 12px; color: #b4d8ff; }
+.exp .extract { font-size: 12px; margin-top: 2px; }
+.exp .extract.ok { color: #8fe0a0; }
+.exp .extract.no { color: var(--muted); }
+.exp .note { font-size: 12px; color: #ffe08a; margin-top: 2px; }
+.offers { list-style: none; margin: 4px 0; padding: 0; }
+.offers li { display: flex; gap: 8px; align-items: center; padding: 4px 0; border-bottom: 1px dashed #2a2e3a; }
+.offers li .otext { flex: 1; }
+.offers.compact li { font-size: 12px; padding: 1px 0; color: var(--muted); }
+.sub.exp { color: #b4d8ff; }
+
+.turnbar { padding: 4px 8px; border-bottom: 1px solid var(--line); font-size: 12.5px; }
+.turnline { color: #cfe8ff; }
+.changes { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin-top: 3px; }
+.changes .lbl { color: var(--muted); font-size: 11.5px; }
+.chg { font-size: 11.5px; padding: 1px 7px; border-radius: 9px; background: #2a2e3a; }
+.chg.hp_dropped, .chg.hp_low, .chg.new_hostile { background: #5a2236; }
+.chg.objective_complete, .chg.objective_progress, .chg.can_extract { background: #1f5a3a; }
+.chg.floor_changed, .chg.stairs_found, .chg.item_found { background: #1f4a5a; }
+.chg.level_up { background: #5a4a15; }
+.chg.status_gained { background: #4a3a15; }
+
+.restest { font-size: 12px; color: #b4d8ff; padding: 0 8px 6px; }
+.restest.blocked { color: var(--muted); }
+.resthp { display: inline-flex; gap: 2px; align-items: center; }
+.resthp input { width: 56px; font-size: 12px; padding: 2px 4px; }
+button.exit { border-color: #2e8a4e; background: #1f4a30; }
+
+.briefing { position: absolute; top: 44px; left: 50%; transform: translateX(-50%); width: min(560px, calc(100% - 32px)); background: rgba(14,16,22,0.95); border: 1px solid #2c7fa8; border-radius: 8px; padding: 10px 14px; font-size: 13px; z-index: 2; }
+.briefing .head { font-weight: 700; margin-bottom: 4px; }
+.row.end { justify-content: flex-end; margin-top: 6px; }
+.campwrap { position: absolute; inset: 0; background: rgba(6,8,12,0.88); display: flex; align-items: flex-start; justify-content: center; overflow-y: auto; padding: 24px 16px; z-index: 3; }
+.campbox { background: var(--panel); border: 1px solid #3f6a3a; border-radius: 10px; padding: 14px 18px; width: min(640px, 100%); }
+.campbox h2 { margin: 0 0 6px; }
+.campbox h3 { font-size: 13px; margin: 10px 0 2px; }
+.campbox .result { color: #ffe08a; }
+.aiwait { position: absolute; left: 8px; top: 8px; background: rgba(40,24,60,0.92); border: 1px solid #8e6cc8; border-radius: 6px; padding: 3px 10px; font-size: 13px; }
+.pstate.at_camp { color: #a8d8a0; }
+.inv em.relic { color: #ffd54f; }
+.tag.ongoing { background: #2a4a5a; }
+.tag.vstatus { font-size: 11px; padding: 1px 8px; }
+.tag.vstatus.your_turn { background: #1e5a78; }
+.tag.vstatus.at_camp { background: #2e3f2a; }
+.tag.vstatus.dead, .tag.vstatus.ended { background: #5a1f1f; }
+.board td.primary-col { font-weight: 700; }

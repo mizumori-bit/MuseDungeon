@@ -45,5 +45,8 @@
   { "id": "core:throwing_knife", "name": { "ja": "投げナイフ", "en": "throwing knife" }, "category": "throwing", "depth": { "min": 1 }, "rarity": 1, "stack": true,
     "throw": { "dmg": "1d4+1", "range": 7, "acc": 1 } },
   { "id": "core:javelin", "name": { "ja": "投げ槍", "en": "javelin" }, "category": "throwing", "depth": { "min": 3 }, "rarity": 2, "stack": true,
-    "throw": { "dmg": "1d8+1", "range": 6 } }
+    "throw": { "dmg": "1d8+1", "range": 6 } },
+
+  { "id": "core:relic", "name": { "ja": "古の遺物", "en": "ancient relic" }, "category": "relic", "depth": { "min": 1 }, "rarity": 1,
+    "desc": { "ja": "遠征の目的の品。持ったまま階段の上で extract すると持ち帰れる。効果は無い", "en": "The object of your expedition. Extract on stairs while carrying it. It has no effect" } }
 ]

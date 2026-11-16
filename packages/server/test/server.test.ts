@@ -28,9 +28,22 @@ async function mcpClient(manager: SessionManager) {
   return { client, call };
 }
 
-const ALL_TOOLS = ['get_rules', 'list_runs', 'new_run', 'join_run', 'resume_run', 'retire', 'observe', 'look', 'get_map', 'inventory', 'recall',
+const ALL_TOOLS = ['get_rules', 'list_runs', 'new_run', 'join_run', 'resume_run', 'retire', 'observe', 'wait_for_turn', 'look', 'get_map', 'inventory', 'recall',
   'get_messages', 'notes', 'move', 'wait', 'rest', 'explore', 'travel_to', 'pickup', 'drop', 'equip', 'unequip', 'use_item', 'throw_item',
-  'interact', 'use_stairs', 'say'];
+  'interact', 'use_stairs', 'say', 'expedition', 'start_expedition', 'extract'];
+
+/** turn ブロックの形と、テキスト末尾の状態行 */
+function expectTurn(r: any): any {
+  const turn = r.structuredContent?.turn;
+  expect(turn, `turn missing in ${JSON.stringify(r).slice(0, 200)}`).toBeTruthy();
+  expect(['your_turn', 'waiting_others', 'at_camp', 'expedition_ended', 'run_ended']).toContain(turn.state);
+  expect(['action', 'camp_choice', 'nothing']).toContain(turn.awaiting);
+  expect(Array.isArray(turn.changes)).toBe(true);
+  expect(typeof turn.turn_no).toBe('number');
+  const lines = String(r.content[0].text).trim().split('\n');
+  expect(lines[lines.length - 1].startsWith('▶')).toBe(true);
+  return turn;
+}
 
 describe('MCP contract', () => {
   it('exposes all PROTOCOL tools with schemas', async () => {
@@ -95,6 +108,85 @@ describe('MCP contract', () => {
     expect(ret.structuredContent.ok).toBe(true);
     const after = await call('wait');
     expect(after.structuredContent.error.code).toBe('run_ended');
+  });
+
+  it('turn contract: every player-bound response carries a turn block; ended responses await nothing', async () => {
+    const manager = new SessionManager(content, loadConfig({ runsDir: null, waitOthersMs: 200 }));
+    const { call } = await mcpClient(manager);
+    const nr = await call('new_run', { character_name: 'Turn', seed: 'turn-contract-1' });
+    let turn = expectTurn(nr);
+    expect(turn.state).toBe('your_turn');
+    expect(turn.awaiting).toBe('action');
+    expect(turn.reason).toBe('run_started');
+    expect(nr.structuredContent.briefing.join('\n')).toContain('遠征 1');
+    expect(nr.structuredContent.observation.expedition.objective.type).toBe('reach_depth');
+    for (const [tool, args] of [
+      ['observe', {}], ['wait_for_turn', { timeout_s: 1 }], ['expedition', {}], ['look', { target: nr.structuredContent.observation.self.pos }],
+      ['get_map', {}], ['inventory', {}], ['recall', { kind_name: 'ゴブリン' }], ['get_messages', {}], ['notes', {}],
+      ['wait', {}], ['explore', {}], ['rest', { max_turns: 2 }], ['move', { dir: 'n' }], ['use_item', { slot: 'z' }], ['extract', {}],
+      ['start_expedition', { offer: 1 }],
+    ] as [string, Record<string, unknown>][]) {
+      const r = await call(tool, args);
+      turn = expectTurn(r);
+      if (r.structuredContent.ok === false) expect(turn.reason).toBe('action_rejected');
+    }
+    const obs = await call('observe');
+    expect(expectTurn(obs).reason).toBe('observed');
+    const ret = await call('retire', { confirm: true });
+    turn = expectTurn(ret);
+    expect(turn.state).toBe('run_ended');
+    expect(turn.awaiting).toBe('nothing');
+    const after = await call('observe');
+    expect(expectTurn(after).awaiting).toBe('nothing');
+    manager.closeAll();
+  });
+
+  it('expedition over MCP: extract needs stairs, withdraw needs confirm, camp offers the next expedition', async () => {
+    const manager = new SessionManager(content, loadConfig({ runsDir: null, waitOthersMs: 200 }));
+    const { call } = await mcpClient(manager);
+    const nr = await call('new_run', { character_name: 'Exp', seed: 'exp-mcp-2', objective: 'slay_guardian' });
+    expect(nr.structuredContent.observation.expedition.objective.type).toBe('slay_guardian');
+    const notOnStairs = await call('extract', {});
+    expect(notOnStairs.structuredContent.error.code).toBe('cannot_extract');
+    // 下り階段まで行く（盤面の操作は同じ PlayerPort で行う）
+    const port = manager.portForToken(nr.structuredContent.player_token)!;
+    for (let i = 0; i < 200; i++) {
+      const v = port.view();
+      if (v.status !== 'your_turn') break;
+      const o = port.observe({ map: false }).observation;
+      if (o.expedition?.can_extract) break;
+      const adj = o.visible.monsters.find((m) => m.dist === 1);
+      if (adj?.dir) { await port.act({ type: 'move', dir: adj.dir }, { source: 'bot' }); continue; }
+      // 階段の上で追跡中の敵が見えている → 待って迎え撃つ（extract はできない）
+      if (o.expedition?.extract_blocked_by === 'hostile_hunting') { await port.act({ type: 'wait' }, { source: 'bot' }); continue; }
+      const down = o.navigation.known_stairs.find((s) => s.type === 'down' && s.reachable);
+      await port.act(down ? { type: 'travel', to: 'stairs_down' } : o.navigation.frontiers.length ? { type: 'explore' } : { type: 'wait' }, { source: 'bot' });
+    }
+    expect(port.observe({ map: false }).observation.expedition?.can_extract).toBe(true);
+    const unconfirmed = await call('extract', {});
+    expect(unconfirmed.structuredContent.error.code).toBe('confirm_required');
+    expectTurn(unconfirmed);
+    const withdrawn = await call('extract', { confirm: true });
+    const t1 = expectTurn(withdrawn);
+    expect(t1.state).toBe('expedition_ended');
+    expect(t1.awaiting).toBe('nothing');
+    expect(withdrawn.structuredContent.observation.expedition.result.reason).toBe('withdrawn');
+    expect(withdrawn.structuredContent.observation.camp.offers).toHaveLength(3);
+    const camp = await call('observe');
+    const t2 = expectTurn(camp);
+    expect(t2.state).toBe('at_camp');
+    expect(t2.awaiting).toBe('camp_choice');
+    const moveAtCamp = await call('wait');
+    expect(moveAtCamp.structuredContent.error.code).toBe('at_camp');
+    const next = await call('start_expedition', { offer: 2 });
+    const t3 = expectTurn(next);
+    expect(t3.state).toBe('your_turn');
+    expect(t3.reason).toBe('expedition_started');
+    expect(next.structuredContent.briefing.join('\n')).toContain('遠征 2');
+    const s = manager.get(next.structuredContent.observation ? port.runId : '')!;
+    expect(s.world.expeditions?.map((x) => x.endReason)).toEqual(['withdrawn', null]);
+    expect(canonicalHash(s.foldHistory())).toBe(canonicalHash(s.world));
+    manager.closeAll();
   });
 });
 

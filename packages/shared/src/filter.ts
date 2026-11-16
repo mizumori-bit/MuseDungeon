@@ -15,6 +15,8 @@ const PLAYER_VISIBLE: ReadonlySet<EventType> = new Set<EventType>([
   'item_picked_up', 'item_dropped', 'item_equipped', 'item_unequipped', 'item_used', 'item_thrown',
   'item_identified', 'feature_state', 'trap_revealed', 'trap_triggered',
   'noise', 'thought', 'chat', 'entity_removed',
+  // 遠征（objective_progress は守護者・遺物の ID を含むので俯瞰専用）
+  'expedition_offered', 'expedition_started', 'objective_completed', 'expedition_ended',
 ]);
 
 /** 自分に関するときだけ渡す種別 */
@@ -60,9 +62,18 @@ export function filterEventsForPlayer(events: readonly GameEvent[], playerId: Pl
     }
     switch (ev.type) {
       case 'damaged':
+        delete pe.seenTotals;
+        if (ev.target !== selfId) delete pe.hpAfter;
+        break;
       case 'healed':
         if (ev.target !== selfId) delete pe.hpAfter;
         break;
+      case 'expedition_started': {
+        // 開始時点の他プレイヤーの成績と目標の ID は渡さない
+        const x = (pe.expedition ?? {}) as Record<string, unknown>;
+        pe.expedition = { no: x.no, objective: x.objective, points: x.points, relicGuarded: x.relicGuarded, participants: x.participants };
+        break;
+      }
       case 'max_hp_changed':
         if (ev.target !== selfId) continue;
         break;

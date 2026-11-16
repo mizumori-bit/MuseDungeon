@@ -8,6 +8,7 @@ AI エージェント（MetaMuse 等）が MCP 経由でプレイすることを
 2. `docs/PROTOCOL.md` — MCP ツール、Observation、イベント、WS／HTTP の仕様
 3. `docs/IMPLEMENTATION_PLAN.md` — マイルストーンと完了の定義
 4. `docs/ASSET_SPEC.md` — 画像アセットの技術仕様（画像は別途制作。クライアント実装時に読む）
+5. `docs/IMPROVEMENTS_V2.md` — AI プレイヤーの実プレイ評価を受けた改善設計（ターン契約、遠征、休憩、敵の耐久、探索密度）。**次に実装する内容**。実装したら DESIGN.md・PROTOCOL.md に反映する
 
 ## 破ってはいけない不変条件
 

@@ -9,6 +9,7 @@ import type { Canvas2DRenderer } from '../render/canvas2d';
 import { toViewEvents } from '../render/events';
 import { directorFloor, sceneFromView, sceneFromWorld } from '../render/scene';
 import { ErrorBanner, Header, MapView, ThemePicker, useCatalog, useLocaleRefresh, useTheme } from '../ui/common';
+import { AgentWaitBadge, directorExpInfo, ExpeditionStatusPanel, followExpInfo, type ExpInfo } from '../ui/expedition';
 import { narrateWorld, perceivedLines, thoughtsFrom } from '../ui/narration';
 import { AiPanel, MessageLog, PartyPanel, SummaryDialog, type LogLine, type ThoughtLine } from '../ui/panels';
 import { getLocale, getPref, setPref, tr } from '../util';
@@ -41,21 +42,54 @@ export function Watch({ runId }: { runId: string }) {
   const followRef = useRef<string | null>(follow);
   const floorRef = useRef<string | null>(floorSel);
   const bubblesRef = useRef<Bubble[]>([]);
+  /** 最後にイベント・AI の記録を受け取った時刻（「AI の応答待ち」の秒数） */
+  const lastMsgRef = useRef<number>(performance.now());
+  const macroRef = useRef<Record<string, string>>({});
   catalogRef.current = catalog;
   modeRef.current = mode;
   followRef.current = follow;
   floorRef.current = floorSel;
+  macroRef.current = macro;
 
   useEffect(() => {
     api.config().then((c) => setPolicy(c.spectatorPolicy)).catch(() => setPolicy('omniscient'));
     api.runs().then((rs) => {
       const r = rs.find((x) => x.runId === runId) ?? null;
       setListing(r);
-      if (r && !followRef.current) setFollow(r.players.find((p) => p.state === 'alive')?.id ?? r.players[0]?.id ?? null);
+      if (r && !followRef.current) setFollow(r.players.find((p) => p.state === 'alive' || p.state === 'at_camp')?.id ?? r.players[0]?.id ?? null);
     }).catch((e) => setError(errorText(e)));
   }, [runId]);
 
   const followOnly = policy === 'follow_only';
+
+  /** 表示中のフロア（追従中はそのプレイヤーのフロア、俯瞰は選択または自動） */
+  const featuredFloor = (w: World): string | null => {
+    const fpid = followRef.current;
+    if (modeRef.current === 'follow' && fpid && w.players[fpid]?.state === 'alive') {
+      const e = w.entities[w.players[fpid].entityId];
+      if (e?.pos) return e.pos.floor;
+    }
+    const fk = floorRef.current;
+    return fk && w.floors[fk] ? fk : directorFloor(w, fpid).floorKey;
+  };
+
+  /** 表示中のフロアの手番が AI 操作のプレイヤーなら、その名前（マクロ実行中は除く） */
+  const agentTurn = (): { name: string } | null => {
+    if (followOnly) {
+      const v = viewRef.current;
+      if (!v || v.runStatus === 'ended' || !v.turn.current) return null;
+      const p = v.party.find((pp) => pp.entityId === v.turn.current);
+      return p && p.controller.kind === 'agent' && p.state === 'alive' && !macroRef.current[p.playerId] ? { name: p.name } : null;
+    }
+    const w = worldRef.current;
+    if (!w || w.status === 'ended') return null;
+    const fk = featuredFloor(w);
+    const cur = fk ? w.floors[fk]?.currentActor : null;
+    const pid = cur ? w.entities[cur]?.player : undefined;
+    const pr = pid ? w.players[pid] : undefined;
+    if (!pid || !pr || pr.controller.kind !== 'agent' || pr.state !== 'alive' || macroRef.current[pid]) return null;
+    return { name: pr.name };
+  };
 
   const render = (events?: GameEvent[]) => {
     const c = catalogRef.current, r = rRef.current;
@@ -101,6 +135,7 @@ export function Watch({ runId }: { runId: string }) {
       : { t: 'hello' as const, role: 'spectator' as const, runId, mode: 'director' as const };
     const onMsg = (m: ServerMsg) => {
       const c = catalogRef.current;
+      if (m.t === 'snapshot' || m.t === 'events' || m.t === 'view' || m.t === 'agent' || m.t === 'macro') lastMsgRef.current = performance.now();
       switch (m.t) {
         case 'snapshot':
           worldRef.current = structuredClone(m.world);
@@ -189,6 +224,28 @@ export function Watch({ runId }: { runId: string }) {
     }
   }
   const floors = w ? Object.keys(w.floors).sort((a, b) => parseInt(a.split(':')[1], 10) - parseInt(b.split(':')[1], 10)) : [];
+  // 遠征の目的と状態: 俯瞰は World の最新の遠征、追従は射影した PlayerView
+  let expInfo: ExpInfo | null = null;
+  let campNote: string | null = null;
+  try {
+    if (followOnly) {
+      const v = viewRef.current;
+      if (v) {
+        expInfo = followExpInfo(v);
+        if (v.status === 'at_camp') campNote = tr(`${v.self.name} はキャンプにいる（盤面の外）`, `${v.self.name} is at camp (off the board)`);
+      }
+    } else if (w) {
+      if (mode === 'follow' && follow && w.players[follow]) {
+        expInfo = followExpInfo(projectPlayerView(w, follow));
+        if (w.players[follow].state === 'at_camp') campNote = tr(`${w.players[follow].name} はキャンプにいる（盤面の外）`, `${w.players[follow].name} is at camp (off the board)`);
+      } else {
+        const fk = featuredFloor(w);
+        expInfo = directorExpInfo(w, fk ? w.floors[fk]?.depth ?? null : null);
+      }
+    }
+  } catch {
+    expInfo = null;
+  }
   const players = w ? w.playerOrder.map((pid) => ({ id: pid, name: w.players[pid].name })) : (listing?.players ?? []).map((p) => ({ id: p.id, name: p.name }));
 
   return (
@@ -225,9 +282,19 @@ export function Watch({ runId }: { runId: string }) {
       </div>
       <div class="layout">
         <div class="main">
-          <MapView theme={th.theme} onReady={(r) => { rRef.current = r; render(); }} />
+          <MapView
+            theme={th.theme}
+            onReady={(r) => { rRef.current = r; render(); }}
+            overlay={
+              <>
+                <AgentWaitBadge probe={agentTurn} lastRef={lastMsgRef} />
+                {campNote && <div class="macro">{campNote}</div>}
+              </>
+            }
+          />
         </div>
         <aside class="side">
+          <ExpeditionStatusPanel info={expInfo} />
           {w && catalog && <PartyPanel world={w} catalog={catalog} follow={follow} onFollow={(pid) => setFollow(pid)} />}
           <AiPanel thoughts={thoughts} activities={activities} observationText={obsText} />
           <MessageLog lines={log} title={mode === 'follow' || followOnly ? tr('メッセージ（追従）', 'Messages (follow)') : tr('メッセージ（俯瞰）', 'Messages (director)')} />

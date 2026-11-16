@@ -22,12 +22,34 @@ ActionError {
   code: 'invalid_direction' | 'blocked' | 'no_target' | 'out_of_range' | 'no_line_of_sight'
       | 'no_such_item' | 'cannot_use' | 'inventory_full' | 'nothing_here' | 'unknown_destination'
       | 'unreachable' | 'not_your_turn' | 'stale_turn' | 'dead' | 'run_ended' | 'no_session' | 'bad_request'
+      | 'confirm_required' | 'cannot_extract' | 'not_at_camp' | 'at_camp'     // 遠征（v2）
   message: string      // 何が起きたか
   hint: string         // 次に何をすればよいか
 }
 ```
 
-エラー時の結果: `{ ok: false, error, valid_actions }`。
+エラー時の結果: `{ ok: false, error, valid_actions, turn }`（プレイヤーが束縛されていない `no_session` には `turn` が無い）。
+
+### 1.2 ターン契約（`turn` ブロック）
+
+プレイヤーが束縛された全応答（`new_run`・`resume_run`・`observe`・`wait_for_turn`・全行動ツール・照会ツール・エラー）の `structuredContent` に必ず付ける。テキストでは**末尾の 1 行**（`▶ ...`）に同じ内容を書く。定義は `packages/shared/src/turn.ts`。
+
+```ts
+turn: {
+  state: 'your_turn' | 'waiting_others' | 'at_camp' | 'expedition_ended' | 'run_ended'
+  turn_no: number                 // 自分の手番の通番（行動した手番数）
+  reason: 'run_started' | 'resumed' | 'action_completed' | 'macro_interrupted' | 'action_rejected'
+        | 'turn_arrived' | 'expedition_started' | 'observed' | 'wait_timeout'
+  interrupted_by?: string         // マクロの停止理由（macro_interrupted のとき。完了した停止 arrived / explored / full_hp なども入る）
+  awaiting: 'action' | 'camp_choice' | 'nothing'
+  changes: { code, text, entity? }[]   // 前回の応答以降の重要な変化（事実のみ、最大 8 件）
+}
+```
+
+- `state` と `awaiting` は**事実の通知**であり、行動の提案ではない。選択肢の列挙は `valid_actions` が担う。
+- `expedition_ended` は遠征を終わらせた行動（`extract`、死亡を伴う行動など）への応答、`at_camp` はその後のキャンプ中の応答。どちらも、`run_ended` と同じく「ここでやめてよい」正規の合図。`awaiting` は `expedition_ended`・`run_ended`・`waiting_others` で `nothing`、キャンプで候補があれば `camp_choice`。
+- `reason`: `observed` は `observe` と照会ツール、`wait_timeout` は `wait_for_turn` が時間切れになったとき（実装で追加した値）。
+- `changes` のコード: `floor_changed`, `objective_complete`, `objective_progress`, `can_extract`, `hp_low`, `hp_dropped`, `new_hostile`, `level_up`, `status_gained`, `status_lost`, `item_found`, `stairs_found`, `hostile_gone`（この優先順で最大 8 件）。PlayerView と観測だけから作る（`turnSnapshot` → `diffChanges`）。基準は「前回この プレイヤーに turn を返した時点」で、行動ツール・`observe`・`wait_for_turn`・`new_run`・`resume_run` が基準を更新する。照会ツール（`look` 等）の `turn.changes` は常に空。人間向け UI も同じ関数で自分の手番ごとの変化を出す。
 
 ---
 
@@ -37,12 +59,20 @@ ActionError {
 
 | ツール | 引数 | 結果 |
 |---|---|---|
-| `get_rules` | `topic?: 'overview'|'actions'|'combat'|'items'|'observation'|'all'`, `locale?` | ルールブック。式と操作方法のみで、個別のモンスター数値は含めない |
+| `get_rules` | `topic?: 'overview'|'expedition'|'actions'|'combat'|'items'|'observation'|'all'`, `locale?` | ルールブック。式・操作・遠征・観測の読み方のみで、個別のモンスター数値は含めない。数値は `balance.json` から生成 |
 | `list_runs` | – | 参加可能・再開可能なラン一覧 |
-| `new_run` | `character_name`, `class?`（`warrior`/`scout`）, `mode?: 'solo'|'coop'`, `seed?`, `locale?`, `brief_map?` | `{ run_id, player_token, player_id, observation }`。`seed` を指定しても結果には返さない |
-| `join_run` | `run_id`, `character_name`, `class?` | 同上（COOP） |
-| `resume_run` | `player_token` | 現在の MCP 接続にプレイヤーを再束縛し、`observation` を返す |
-| `retire` | `confirm: true` | ランを自主終了（スコア記録） |
+| `new_run` | `character_name`, `class?`（`warrior`/`scout`）, `mode?: 'solo'|'coop'`, `seed?`, `locale?`, `objective?: 'auto'|'reach_depth'|'slay_guardian'|'retrieve_relic'|'endless'`, `brief_map?` | 最初の遠征まで開始する。`{ run_id, player_token, player_id, briefing, observation, turn }`。`objective` 既定 `auto`（最初の候補）。`seed` を指定しても結果には返さない |
+| `join_run` | `run_id`, `character_name`, `class?` | 同上（COOP。進行中の遠征に加わる） |
+| `resume_run` | `player_token` | 現在の MCP 接続にプレイヤーを再束縛する。**再開ブリーフィング**（遠征の目的と進捗、現在地、直近の節目 最大 10 件、自分のメモ）＋ `observation` ＋ `turn` |
+| `retire` | `confirm: true` | ランを終了する（キャラクターは戻らない）。スコアを記録 |
+
+### 2.1.1 遠征（v2）
+
+| ツール | 引数 | 結果 |
+|---|---|---|
+| `expedition` | – | 遠征の目的・達成条件・進捗（ブリーフィング）。キャンプでは次の遠征の候補。手番を消費しない |
+| `extract` | `confirm?: boolean`, 共通引数 | 行動。階段（上り・下り）の上で、追跡中（逃走中を除く）の敵が見えていないときだけ可。目的を達成していれば**帰還**（遠征は `completed`）。未達成なら `confirm: true` で**撤退**（`withdrawn`、報酬なし）。`confirm` が無ければ `confirm_required` |
+| `start_expedition` | `offer: 1..n | 'endless'` | キャンプで次の遠征を始める。前回 `extract` した階段から再開する。結果に `briefing` |
 
 以降のツールは MCP 接続に束縛されたプレイヤーに対して作用する。ステートレスなクライアント向けに、全ツールが任意引数 `player_token` も受け付ける。
 
@@ -50,11 +80,12 @@ ActionError {
 
 | ツール | 引数 | 結果 |
 |---|---|---|
-| `observe` | `detail?: 'brief'|'full'` | Observation（§3） |
+| `observe` | `detail?: 'brief'|'full'` | Observation（§3）＋ `turn`。**待たずに返す**（v2） |
+| `wait_for_turn` | `timeout_s?`（既定 20、最大 60） | 自分の手番（または遠征・ランの終了）まで待って Observation ＋ `turn` を返す。既に自分の番なら即時。時間切れは `turn.reason = 'wait_timeout'` |
 | `look` | `target: {x,y} | entity_id` | 対象の説明。モンスターなら「思い出」に基づく既知情報 |
 | `get_map` | `floor?`, `region?: {x,y,w,h}` | 記憶しているフロアの ASCII 地図と凡例、既知の注目点一覧（MVP は現在フロアのみ） |
 | `inventory` | – | 所持品と装備の詳細 |
-| `recall` | `kind_name` | そのモンスター種について自キャラが学んだこと（遭遇数、撃破数、観測した最大ダメージ、見た能力） |
+| `recall` | `kind_name` | そのモンスター種について自キャラが学んだこと（遭遇数、撃破数、観測した最大ダメージ、見た能力、倒した個体の体力の範囲 `hpSeen`） |
 | `get_messages` | `since_seq?`, `limit?` | 自分が知覚したイベントの文章ログ |
 | `notes` | `add?: string`, `remove?: number` | 自分用メモの読み書き（長時間プレイでの文脈喪失対策。ゲームに影響しない） |
 
@@ -68,8 +99,8 @@ ActionError {
 | ツール | 引数 | 備考 |
 |---|---|---|
 | `move` | `dir` | 敵対者がいれば近接攻撃、閉じた扉は開ける |
-| `wait` | – | |
-| `rest` | – | マクロ。全快か中断まで |
+| `wait` | – | 追跡中の敵が見えなければ休息（回復が `restMultiplier` 倍） |
+| `rest` | `until_hp?`, `max_turns?` | マクロ。全快（かつ毒が抜ける）か、指定の HP・手数か、中断まで（上限 `rest.maxTurns`） |
 | `explore` | – | マクロ。未探索へ自動移動 |
 | `travel_to` | `to: {x,y} | 'stairs_down' | 'stairs_up' | entity_id` | マクロ。既知地図上のみ |
 | `pickup` | `item?: entity_id` | 省略時は足元の全て（入る分だけ） |
@@ -88,14 +119,19 @@ ActionResult {
   ok: true
   outcome: string                 // 1〜2 文の結果要約
   steps?: number                  // マクロで実際に進んだ手数
-  interrupted_by?: string         // マクロ中断理由 'hostile_in_view' | 'damaged' | 'item_seen' | 'arrived' | ...
+  interrupted_by?: string         // マクロの停止理由 'hostile_in_view' | 'damaged' | 'item_seen' | 'arrived' | 'full_hp' | 'target_hp' | 'max_turns' | ...
+  distance?: number               // explore / travel_to: 歩いた手数
+  time_elapsed?: number | null    // explore / travel_to: 経過したフロア時間（階を移ったら null）
+  rest?: { hp_gained, turns, time_elapsed, stopped_by }   // rest の実績
+  briefing?: string[]             // start_expedition: 遠征のブリーフィング
   events: { seq, type, text }[]   // 前回の行動結果以降に知覚した出来事（トークン節約のため文章のみ。WS では PerceivedEvent 全体）
   observation: Observation        // brief。次の判断に必要な現況
+  turn: TurnBlock                 // §1.2
 }
 ```
 
-- 行動ツールは「次に自分の手番が来る」か「ランが終わる」まで待ってから返る。
-- COOP で他プレイヤー待ちが 20 秒を超えたら `observation.status = 'waiting_others'` で一旦返す。その場合は `observe` を呼べば手番が来るまで（最大 20 秒）待って返る。
+- 行動ツールは「次に自分の手番が来る」か「遠征・ランが終わる」まで待ってから返る。
+- COOP で他プレイヤー待ちが 20 秒を超えたら `turn.state = 'waiting_others'` で一旦返す。その場合は `wait_for_turn` で手番が来るまで待てる。
 
 ---
 
@@ -106,7 +142,7 @@ ActionResult {
 ```ts
 Observation {
   seq: number
-  status: 'your_turn' | 'waiting_others' | 'dead' | 'ended'
+  status: 'your_turn' | 'waiting_others' | 'dead' | 'ended' | 'at_camp'
   summary: string                      // 1 行の現況
   alerts: Alert[]                      // 重要度順。例 { code:'enemy_adjacent', text, entity? }
   self: {
@@ -118,11 +154,16 @@ Observation {
     inventory_count, inventory_capacity
     inventory?: { slot, name, qty, category, identified, equipped }[]   // full のみ
     inventory_brief?: string        // brief のみ（例 "a)小剣* b)赤い薬x2"。* は装備中）
+    turns: number                   // 自分が行動した手番数
+    rest_estimate?: { hp_to_full, turns, time, wander_expected: string /* 例 "0〜1" */, blocked_by?: 'hostile_hunting'|'poisoned' }  // HP が減っているときのみ
   }
   visible: {
     monsters: { id, name, pos, dir, dist, hp_state: 'healthy'|'wounded'|'badly_wounded'|'near_death',
-                awareness: 'asleep'|'unaware'|'hunting', threat: 1|2|3|4|5, statuses }[]
-    items:    { id, name, pos, dir, dist, qty }[]
+                awareness: 'asleep'|'unaware'|'hunting', threat: 1|2|3|4|5, statuses,
+                role?: 'guardian', fleeing?: true,            // 守護者 / 手負いで逃走中
+                damage_seen?: number,                         // 見ている間にこの個体が受けた実ダメージの合計
+                hp_left_est?: { min, max } }[]                // 体力の記録がある種族のみ
+    items:    { id, name, pos, dir, dist, qty, role?: 'relic', remembered? }[]
     players:  { id, name, pos, dir, dist, hp_state }[]
     features: { type, pos, dir, dist, state? }[]   // 階段・扉・泉・発見済みの罠 など
   }
@@ -130,8 +171,19 @@ Observation {
     here: string                         // 足元の地形・アイテム
     passable_dirs: Dir[]
     frontiers: { pos, dir, dist }[]      // 未探索との境界（近い順、上限 5）
-    known_stairs: { type:'down'|'up', pos, dist, reachable }[]
+    known_stairs: { type:'down'|'up', pos, dist, reachable, path_len: number | null }[]   // path_len: 既知地図上の経路長
   }
+  expedition?: {                       // 遠征の事実（次の一手の指示ではない）
+    no, points, status: 'in_progress'|'objective_complete'|'ended'
+    objective: { type: 'reach_depth'|'slay_guardian'|'retrieve_relic'|'endless', target_depth: number|null, text }
+    progress: { depth, target_depth, reached?, guardian_slain?, relic_held? }
+    can_extract: boolean               // 今この場で extract できるか
+    extract_blocked_by?: 'not_on_stairs' | 'hostile_hunting' | 'not_your_turn' | 'ended'
+    extract_outcome: 'complete' | 'withdraw'   // 今 extract したら達成か撤退か
+    text: string                       // 1 行の要約
+    result?: { reason, points, deepest, kills, turns, text }   // 終了した遠征
+  }
+  camp?: { next_no, offers: { index, type, target_depth, points, text }[] }   // キャンプ（遠征と遠征の間）のみ
   recent_events: string[]              // 前回の行動結果以降に知覚した出来事の文章（最大 10）
   map?: { origin:{x,y}, rows: string[], legend: Record<string,string> }  // 自分中心の局所 ASCII（既定 21×15）
   valid_actions: string[]              // 例 "move e (attack ゴブリン)", "use_item a (回復の薬)", "use_stairs"
@@ -139,7 +191,10 @@ Observation {
 ```
 
 - `threat` は「自分の現在 HP」と「思い出にある観測済み最大ダメージ／未知なら深度からの控えめな推定」から出す。PlayerView 外の値は使わない。
-- `alerts` の主なコード: `low_hp`, `critical_hp`, `enemy_adjacent`, `multiple_enemies`, `poisoned`, `on_stairs`, `item_here`, `inventory_full`, `new_floor`。人間向け UI にも同じものを表示する。
+- `alerts` の主なコード: `low_hp`, `critical_hp`, `enemy_adjacent`, `multiple_enemies`, `poisoned`, `on_stairs`, `item_here`, `inventory_full`, `new_floor`, `can_extract`, `at_camp`。人間向け UI にも同じものを表示する。`alerts` は現在の状態、`turn.changes` は前回からの差分。
+- `hp_left_est` は思い出の `hpSeen`（目の前で倒した個体の最大 HP の範囲。守護者は除く）、`hp_state`、`damage_seen` だけから計算する（`hpLeftEstimate`）。記録の範囲と矛盾する（接辞・深層強化で頑丈な）個体には付かない。
+- `rest_estimate` は engine と同じ式（`regenInterval`・`regenStep`）と自分の回復の蓄積値（`self.regen`）で数える。中断が無ければ `rest` の実績と一致する。
+- `fleeing`: 逃走の閾値（種族データの `fleeBelowHpPct`）を下回った追跡中の敵。逃走中の敵は `extract` と休息を妨げない。
 - 目安: brief は約 400 トークン以内、full は約 1,500 トークン以内。`map` は brief では既定で付け、`new_run` のオプション `brief_map: false` で外せる。
 
 ### 3.1 テキスト表現の例（`content` に入るもの）
@@ -173,17 +228,23 @@ AI の Observation と人間のプレイ画面の**共通の元データ**。`pr
 ```ts
 PlayerView {
   runId, playerId, seq
-  status: 'your_turn' | 'waiting_others' | 'dead' | 'ended'
-  self: { entity（自分の全コンポーネント）, inventory: ItemView[] }
-  floor: { key, depth, biome, width, height, time }
+  status: 'your_turn' | 'waiting_others' | 'dead' | 'ended' | 'at_camp'
+  self: { entity（自分の全コンポーネント）, inventory: ItemView[], turns, regen }
+  floor: { key, depth, biome, width, height, time, noWander }
   visibleCells: number[]                  // セル index
   entities: EntityView[]                  // 視界内のみ。モンスターの stats は hp バケット等に縮約済み
   memory: { terrain: number[] /*0=未知*/, remembered: RememberedEntity[] }
   identified: string[]
   monsterMemory: Record<string, MonsterMemory>
   notes: string[]
+  runMode: 'solo' | 'coop'
+  expedition: ExpeditionView | null      // 現在（または直前）の遠征。目的・状態・進捗（reached / guardianSlain / relicHeld / relicHeldByYou）・結果。守護者・遺物の居場所や ID は含まない
+  camp: CampState | null                 // 遠征と遠征の間の候補 { nextNo, offers: { index, objective, points, relicGuarded }[] }
+  deepestDepth: number
 }
 ```
+
+`EntityView` は v2 で `role?: 'guardian'|'relic'`、`damageSeen?`（モンスター）、`fleeing?` を持つ。
 
 `ItemView.kind` は未鑑定なら `null` で、代わりに `appearanceId`（外見の ID。content で定義）と `appearance`（その表示名。例 "赤い薬"）を持つ。視界内の床にある未鑑定アイテム（`EntityView`）も同様。人間向けの描画は `appearanceId` で画像を引く（[ASSET_SPEC.md](ASSET_SPEC.md) §7.4）。
 
@@ -236,6 +297,11 @@ EventBase {
 | | `monster_memory_updated` | player, kind, memoryAfter |
 | 知覚 | `noise` | pos, loudness（状態は変えない） |
 | | `trap_revealed` / `trap_triggered` | trap, by |
+| 遠征（v2） | `expedition_offered` | camp（次の遠征の候補） |
+| | `expedition_started` | expedition（通番・目的・基礎点・参加者。プレイヤーには目的と参加者だけを渡す） |
+| | `objective_progress` | no, progressAfter, statusAfter, targetsAfter?, extractedAfter?（守護者・遺物の ID を含むので**俯瞰専用**） |
+| | `objective_completed` | no, objective |
+| | `expedition_ended` | no, reason（completed/withdrawn/died/retired）, result, summary（ラン継続中はシード無し） |
 | メタ | `thought` | player, text（状態は変えない） |
 | | `chat` | player, text |
 | 追加 | `player_state` / `player_stats` | プレイヤーの生死・離脱 / 撃破数・到達深度・死因 |
@@ -244,6 +310,14 @@ EventBase {
 | | `status_ticked` / `stats_changed` / `max_hp_changed` | 状態異常の残り手番 / 実効能力値（装備変更時）/ 最大 HP |
 | | `feature_state` / `notes_updated` | 地物の状態（泉の使用済み等）/ 自分用メモ |
 | 内部 | `rng_advanced` | 乱数ストリームの状態（プレイヤーには渡さない。観戦・HTTP には中身を空にして渡す） |
+
+v2 で既存イベントに足した項目（いずれも後方互換。旧ログはそのまま畳み込める）:
+
+- `damaged.dealt`: 実際に減った HP（とどめの超過分を含まない）。文章と「与えた最大ダメージ」の集計はこれを使う。`amount` は出目どおり。`damaged.seenTotals`: 見ていたプレイヤーごとの、その個体への累計実ダメージ（after 値。プレイヤーには渡さない）
+- `died.maxHp`: 目の前で倒れた個体の最大 HP（見ていない者には伏せる）
+- `actor_scheduled.regenAfter`: 自然回復の蓄積値（after 値）
+- `player_state.state` に `at_camp`、`player_state.extractPos`（再開地点）
+- `monster_memory_updated.memoryAfter.hpSeen`
 
 プレイヤーに渡す際は `filterEventsForPlayer(events, playerId, view)` を通す: `seenBy` に含まれないものを落とし、見えていないエンティティ参照を `null` にし、`knowledge_updated` 等の他人向け・内部用イベントを除く。`PerceivedEvent` はそれに `text`（`narrate` の出力）を付けたもの。
 
@@ -255,8 +329,8 @@ EventBase {
 CommandRecord {
   cseq: number
   player: PlayerId
-  command: Command              // move / wait / pickup / ... / explore / travel / rest
-  source: 'mcp' | 'ws' | 'macro' | 'timeout'
+  command: Command              // move / wait / pickup / ... / explore / travel / rest / extract / start_expedition
+  source: 'mcp' | 'ws' | 'macro' | 'timeout' | 'bot' | 'system'   // system: new_run が最初の遠征を始める start_expedition
   parent?: number               // マクロ展開元の cseq
   thought?: string
   wall: number
@@ -302,10 +376,24 @@ CommandRecord {
 | `GET /api/runs/:id/meta` | meta（終了前はシード無し） |
 | `GET /api/runs/:id/events?from=&to=` | イベント範囲（JSONL） |
 | `GET /api/runs/:id/keyframes` / `/:seq` | キーフレーム一覧／取得（進行中は secret 除去） |
-| `GET /api/runs/:id/index` | リプレイ用マーカー索引（フロア移動・撃破・死亡などの seq） |
-| `GET /api/leaderboard` | スコア一覧（`controller.kind` は表示用） |
+| `GET /api/runs/:id/index` | リプレイ用マーカー索引（フロア移動・撃破・死亡・遠征の開始／目的達成／終了などの seq）と `expeditions`（遠征単位の選択用） |
+| `GET /api/leaderboard` | 記録の一覧。達成した遠征の数を主な並び順にし、キャンプ中の途中経過（`ongoing`）も含む（`controller.kind` は表示用） |
+| `GET /api/player/feed` | **ターンフィード**（SSE、v2）。`Authorization: Bearer <player_token>` か `?token=`。下記 |
 | `GET /api/health` / `GET /api/config` | 生存確認 / `spectatorPolicy` |
 | `GET /api/content/catalog` | 公開カタログ |
-| `POST /api/runs` / `POST /api/runs/:id/join` | 人間がランを開始・参加（`{ name, classId?, seed?, mode?, locale? }` → `{ runId, playerId, token }`） |
+| `POST /api/runs` / `POST /api/runs/:id/join` | ランを開始・参加（`{ name, classId?, seed?, mode?, locale?, objective?, controller? }` → `{ runId, playerId, token }`）。開始時は最初の遠征まで始める |
 | `GET /api/runs/:id/commands` | commands.jsonl（AI パネルのツール呼び出し・thought 表示用） |
 | `GET /api/runs/:id/summary` | 終了時サマリー |
+
+### 8.1 ターンフィード（`GET /api/player/feed`）
+
+ホスト（AI を動かす側のループ）が「手番が来た」を外部から受け取る経路。ゲームの進行には影響しない（ソロでは手番を自動で進めない）。SSE の `event:` 名と `data:` の JSON（`FeedEvent`、`protocol.ts`）:
+
+| event | data | いつ |
+|---|---|---|
+| `hello` | runId, playerId, seq, turn | 接続直後 |
+| `turn` | …, turn, observation_text（brief。変化と状態行付き） | 自分の手番が来た（同じ手番では 1 回。マクロ展開中は送らない） |
+| `idle` | …, seconds, turn | 手番のまま `idleNoticeMs`（既定 60 秒、`MUSE_IDLE_NOTICE_MS`）入力が無い。その間隔ごと |
+| `ended` | …, scope: 'expedition' \| 'run', turn, text, summary | 遠征の終了（キャンプ）またはランの終了 |
+
+参照ドライバ `npm run drive`（`packages/tools/src/drive.ts`）がこのフィードを購読し、差し替え可能な「エージェント呼び出し」（任意のコマンド実行／HTTP POST／内蔵ダミー）を呼ぶ。MCP のリソース購読通知は実装していない（任意項目）。

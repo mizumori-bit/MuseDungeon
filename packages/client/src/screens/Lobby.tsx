@@ -1,10 +1,15 @@
 // ロビー: 進行中のラン（観戦・参加・再開）、終了したラン（リプレイ）、リーダーボード、新規ラン。
-import type { LeaderboardEntry, Locale, RunListing } from '@muse/shared';
-import { kindName, nameOf } from '@muse/shared';
+import type { LeaderboardEntry, Locale, ObjectiveChoice, RunListing } from '@muse/shared';
+import { endReasonText, kindName, nameOf, objectiveText } from '@muse/shared';
 import { useEffect, useState } from 'preact/hooks';
 import { api, errorText } from '../api';
 import { ErrorBanner, Header, useCatalog, useLocaleRefresh } from '../ui/common';
+import { OBJECTIVE_CHOICES, playerStateLabel } from '../ui/labels';
 import { fmtTime, getLocale, getPref, getToken, navigate, saveToken, setPref, tr } from '../util';
+
+function objectiveChoice(v: string): ObjectiveChoice {
+  return OBJECTIVE_CHOICES.find((o) => o.id === v)?.id ?? 'auto';
+}
 
 export function Lobby() {
   useLocaleRefresh();
@@ -17,6 +22,7 @@ export function Lobby() {
   const [seed, setSeed] = useState('');
   const [mode, setMode] = useState<'solo' | 'coop'>('solo');
   const [locale, setLoc] = useState<Locale>(getLocale());
+  const [objective, setObjective] = useState<ObjectiveChoice>(objectiveChoice(getPref('objective', 'auto')));
   const [busy, setBusy] = useState(false);
   const L = getLocale();
 
@@ -35,7 +41,8 @@ export function Lobby() {
     try {
       setPref('name', name);
       setPref('class', classId);
-      const r = await api.newRun({ name, classId, mode, seed: seed || undefined, locale, controller: { kind: 'human', label: 'browser' } });
+      setPref('objective', objective);
+      const r = await api.newRun({ name, classId, mode, seed: seed || undefined, locale, controller: { kind: 'human', label: 'browser' }, objective });
       saveToken(r.runId, { token: r.token, playerId: r.playerId, name });
       navigate(`#/play/${r.runId}`);
     } catch (e) {
@@ -62,7 +69,21 @@ export function Lobby() {
   const ended = (runs ?? []).filter((r) => r.status === 'ended').sort((a, b) => b.updatedAt - a.updatedAt);
   const classes = catalog ? Object.entries(catalog.classes) : [];
 
-  const playersText = (r: RunListing) => r.players.map((p) => `${p.name}(${p.controller.kind === 'agent' ? 'AI' : tr('人', 'H')}${p.depth ? ` B${p.depth}` : ''} Lv${p.level}${p.state !== 'alive' ? ` ${p.state}` : ''})`).join(', ');
+  const playersText = (r: RunListing) => r.players.map((p) => `${p.name}(${p.controller.kind === 'agent' ? 'AI' : tr('人', 'H')}${p.depth ? ` B${p.depth}` : ''} Lv${p.level}${p.state !== 'alive' ? ` ${playerStateLabel(p.state)}` : ''})`).join(', ');
+
+  /** 遠征の要約: 達成数と、今の遠征（またはキャンプ・最後の遠征の結果） */
+  const expeditionText = (r: RunListing): string | null => {
+    const xs = r.expeditions;
+    if (!xs?.length) return null;
+    const done = xs.filter((x) => x.endReason === 'completed').length;
+    const last = xs[xs.length - 1];
+    const cur = last.status !== 'ended'
+      ? tr(`遠征 ${last.no} 進行中: ${objectiveText(L, last.objective)}`, `Expedition ${last.no} in progress: ${objectiveText(L, last.objective)}`)
+      : r.status === 'active'
+        ? tr(`キャンプ中（遠征 ${last.no} は${endReasonText(L, last.endReason)}）`, `At camp (expedition ${last.no}: ${endReasonText(L, last.endReason)})`)
+        : tr(`最後: 遠征 ${last.no}（${endReasonText(L, last.endReason)}）`, `Last: expedition ${last.no} (${endReasonText(L, last.endReason)})`);
+    return `${tr(`遠征達成 ${done}`, `${done} completed`)} / ${cur}`;
+  };
 
   return (
     <div class="page">
@@ -86,6 +107,11 @@ export function Lobby() {
                 <option value="coop">COOP</option>
               </select>
             </label>
+            <label>{tr('最初の遠征の目的', 'First expedition objective')}
+              <select value={objective} onChange={(e) => setObjective(objectiveChoice((e.target as HTMLSelectElement).value))}>
+                {OBJECTIVE_CHOICES.map((o) => <option key={o.id} value={o.id}>{L === 'en' ? o.en : o.ja}</option>)}
+              </select>
+            </label>
             <label>{tr('シード（任意）', 'Seed (optional)')}<input value={seed} onInput={(e) => setSeed((e.target as HTMLInputElement).value)} /></label>
             <label>{tr('メッセージ言語', 'Message language')}
               <select value={locale} onChange={(e) => setLoc((e.target as HTMLSelectElement).value as Locale)}>
@@ -107,6 +133,7 @@ export function Lobby() {
                 <li key={r.runId}>
                   <div><code>{r.runId}</code> <span class="tag">{r.mode}</span> <small>seq {r.seq}</small></div>
                   <div class="sub">{playersText(r)}</div>
+                  {expeditionText(r) && <div class="sub exp">{expeditionText(r)}</div>}
                   <div class="row">
                     <a class="button small" href={`#/watch/${r.runId}`}>{tr('観戦', 'Watch')}</a>
                     <a class="button small" href={`#/replay/${r.runId}`}>{tr('巻き戻し', 'Rewind')}</a>
@@ -127,6 +154,7 @@ export function Lobby() {
               <li key={r.runId}>
                 <div><code>{r.runId}</code> <small>{fmtTime(r.updatedAt)}</small></div>
                 <div class="sub">{playersText(r)}</div>
+                {expeditionText(r) && <div class="sub exp">{expeditionText(r)}</div>}
                 <div class="row"><a class="button small" href={`#/replay/${r.runId}`}>{tr('リプレイ', 'Replay')}</a></div>
               </li>
             ))}
@@ -138,12 +166,16 @@ export function Lobby() {
           {board.length === 0 && <div class="muted">{tr('記録なし', 'No records')}</div>}
           {board.length > 0 && (
             <table class="board">
-              <thead><tr><th>#</th><th>{tr('名前', 'Name')}</th><th>{tr('到達', 'Depth')}</th><th>Lv</th><th>{tr('撃破', 'Kills')}</th><th>{tr('スコア', 'Score')}</th><th></th></tr></thead>
+              <thead><tr><th>#</th><th>{tr('名前', 'Name')}</th><th title={tr('達成した遠征の数', 'Completed expeditions')}>{tr('遠征', 'Exp.')}</th><th>{tr('到達', 'Depth')}</th><th>Lv</th><th>{tr('撃破', 'Kills')}</th><th>{tr('スコア', 'Score')}</th><th></th></tr></thead>
               <tbody>
                 {board.slice(0, 20).map((b, i) => (
-                  <tr key={`${b.runId}-${b.playerId}`}>
+                  <tr key={`${b.runId}-${b.playerId}`} class={b.ongoing ? 'ongoing' : ''}>
                     <td>{i + 1}</td>
-                    <td>{b.name} <span class={`tag ${b.controller.kind}`}>{b.controller.kind === 'agent' ? 'AI' : tr('人間', 'human')}</span> <small>{catalog ? kindName(catalog, L, b.classId) : b.classId}</small></td>
+                    <td>
+                      {b.name} <span class={`tag ${b.controller.kind}`}>{b.controller.kind === 'agent' ? 'AI' : tr('人間', 'human')}</span> <small>{catalog ? kindName(catalog, L, b.classId) : b.classId}</small>
+                      {b.ongoing && <span class="tag ongoing" title={tr('ランは終了していない（キャンプ中の記録）', 'The run has not ended (recorded at camp)')}>{tr('継続中', 'ongoing')}</span>}
+                    </td>
+                    <td class="primary-col">{b.expeditions ?? 0}</td>
                     <td>{b.deepest}</td><td>{b.level}</td><td>{b.kills}</td><td>{b.score}</td>
                     <td><a href={`#/replay/${b.runId}`}>▶</a></td>
                   </tr>

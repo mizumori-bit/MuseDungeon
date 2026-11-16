@@ -1,9 +1,10 @@
 // 情報パネル（Preact）。表示名は公開カタログ、状態は PlayerView / World から。
 import type { AgentActivity, Alert, Catalog, CommandRecord, PlayerView, RunSummary, World } from '@muse/shared';
-import { hpState, itemDisplayName, kindName, nameOf, xpForLevel } from '@muse/shared';
+import { endReasonText, hpState, itemDisplayName, kindName, nameOf, objectiveText, xpForLevel } from '@muse/shared';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { PLAYER_COLORS } from '../render/scene';
 import { getLocale, tr } from '../util';
+import { playerStateLabel } from './labels';
 
 function HpBar({ hp, max }: { hp: number; max: number }) {
   const frac = max > 0 ? Math.max(0, Math.min(1, hp / max)) : 0;
@@ -54,7 +55,7 @@ export function InventoryPanel({ view, catalog, onAction, focused, selected, onS
           return (
             <li key={it.id} class={selected === it.slot ? 'sel' : ''} onClick={() => onSelect?.(it.slot)} title={ci ? nameOf(ci.desc, L, '') : tr('未鑑定', 'unidentified')}>
               <span class="slot">{it.slot})</span>
-              <span class="name">{name}{it.qty > 1 ? ` x${it.qty}` : ''}{it.equipped ? <em> [{tr('装備', 'eq')}]</em> : null}{it.kind === null ? <em class="muted"> ?</em> : null}</span>
+              <span class="name">{name}{it.qty > 1 ? ` x${it.qty}` : ''}{it.equipped ? <em> [{tr('装備', 'eq')}]</em> : null}{it.kind === null ? <em class="muted"> ?</em> : null}{cat === 'relic' ? <em class="relic"> ［{tr('遺物', 'relic')}］</em> : null}</span>
               {onAction && (
                 <span class="acts">
                   {usable && <button class="tiny" onClick={(e) => { e.stopPropagation(); onAction('use', it.slot); }}>{tr('使う', 'Use')}</button>}
@@ -118,7 +119,10 @@ export function PartyPanel({ world, catalog, follow, onFollow }: { world: World;
               <div class="sub">
                 {p.state === 'alive'
                   ? <>{depth ? `${tr('地下', 'B')}${depth}` : ''} {e?.stats && <HpBar hp={e.stats.hp} max={e.stats.maxHp} />} {hs && <span class="muted">{hs}</span>}</>
-                  : <span class="muted">{p.state === 'dead' ? tr('死亡', 'dead') : tr('離脱', 'left')}{p.stats.deathCause ? ` (${kindName(catalog, L, p.stats.deathCause)})` : ''}</span>}
+                  : p.state === 'at_camp'
+                    ? <span class="pstate at_camp">{playerStateLabel(p.state)}</span>
+                    : <span class="muted">{playerStateLabel(p.state)}{p.stats.deathCause ? ` (${kindName(catalog, L, p.stats.deathCause)})` : ''}</span>}
+                {(p.stats.expeditions ?? 0) > 0 && <span class="muted">{tr(`遠征達成 ${p.stats.expeditions}`, `${p.stats.expeditions} expeditions`)}</span>}
               </div>
             </li>
           );
@@ -177,13 +181,26 @@ export function SummaryDialog({ summary, catalog, onClose }: { summary: RunSumma
         <h2>{tr('冒険の記録', 'Run summary')}</h2>
         <p class="muted">{summary.reason}{summary.seed ? ` / seed: ${summary.seed}` : ''}</p>
         <table>
-          <thead><tr><th>{tr('名前', 'Name')}</th><th>{tr('到達', 'Deepest')}</th><th>Lv</th><th>{tr('撃破', 'Kills')}</th><th>{tr('手数', 'Turns')}</th><th>{tr('死因', 'Cause')}</th><th>{tr('スコア', 'Score')}</th></tr></thead>
+          <thead><tr><th>{tr('名前', 'Name')}</th><th>{tr('遠征達成', 'Expeditions')}</th><th>{tr('到達', 'Deepest')}</th><th>Lv</th><th>{tr('撃破', 'Kills')}</th><th>{tr('手数', 'Turns')}</th><th>{tr('状態', 'State')}</th><th>{tr('死因', 'Cause')}</th><th>{tr('スコア', 'Score')}</th></tr></thead>
           <tbody>
             {summary.players.map((p) => (
-              <tr key={p.id}><td>{p.name}</td><td>{p.deepest}</td><td>{p.level}</td><td>{p.kills}</td><td>{p.turns}</td><td>{p.deathCause ? (catalog ? kindName(catalog, L, p.deathCause) : p.deathCause) : '-'}</td><td>{p.score}</td></tr>
+              <tr key={p.id}><td>{p.name}</td><td><b>{p.expeditions ?? 0}</b></td><td>{p.deepest}</td><td>{p.level}</td><td>{p.kills}</td><td>{p.turns}</td><td>{playerStateLabel(p.state)}</td><td>{p.deathCause ? (catalog ? kindName(catalog, L, p.deathCause) : p.deathCause) : '-'}</td><td>{p.score}</td></tr>
             ))}
           </tbody>
         </table>
+        {summary.expeditions && summary.expeditions.length > 0 && (
+          <>
+            <h3>{tr('遠征の記録', 'Expeditions')}</h3>
+            <table>
+              <thead><tr><th>#</th><th>{tr('目的', 'Objective')}</th><th>{tr('結果', 'Result')}</th><th>{tr('基礎点', 'Points')}</th></tr></thead>
+              <tbody>
+                {summary.expeditions.map((x) => (
+                  <tr key={x.no}><td>{x.no}</td><td>{objectiveText(L, x.objective)}</td><td>{endReasonText(L, x.endReason)}</td><td>{x.endReason === 'completed' ? `+${x.points}` : '-'}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        )}
         <div class="row">
           <a class="button" href={`#/replay/${summary.runId}`}>{tr('リプレイを見る', 'Watch replay')}</a>
           <a class="button" href="#/">{tr('ロビーへ', 'Lobby')}</a>

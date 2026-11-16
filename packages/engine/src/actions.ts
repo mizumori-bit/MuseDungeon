@@ -5,10 +5,12 @@ import { actionError, DIR_VEC, EQUIP_SLOTS, stepPos, t } from '@muse/shared';
 import { endRun, melee, rollToHit, applyDamage, checkRunEnd } from './combat';
 import type { Ctx } from './ctx';
 import { applyEffects } from './effects';
+import { doExtract, extractError, maybeEndExpedition } from './expedition';
 import { ensureFloor, findFreeCell } from './floors';
 import { line } from './geom';
 import { isOpaqueFn, makeNoise, updateKnowledge } from './perception';
 import { Registry, roll } from './registry';
+import { regenTick } from './scheduler';
 import { recomputeStats } from './stats';
 
 export interface ActionOutcome { cost: number; scheduled?: boolean }
@@ -415,13 +417,14 @@ actions.register('stairs', (ctx, e, pr) => {
   if (depth < 1) return fail(pr, 'cannot_use', '地上への道は閉ざされている。', 'The way to the surface is sealed.', '下り階段を探す。', 'Find the stairs down.');
   return {
     run: () => {
+      const regenAfter = regenTick(ctx, e, false);
       const me = ctx.world.entities[e.id];
       const toKey = `${f.branch}:${depth}`;
       const to = ensureFloor(ctx, toKey);
       const arrival = tr.stairs === 'down' ? (to.stairs.up ?? to.entry) : (to.stairs.down[0] ?? to.entry);
       const cell = findFreeCell(ctx, toKey, arrival);
       ctx.curFloor = key;
-      ctx.emit({ type: 'actor_scheduled', id: me.id, nextActAt: me.actor!.nextActAt + 100, turns: me.actor!.turns + 1, seenBy: [pr.id], floor: key });
+      ctx.emit({ type: 'actor_scheduled', id: me.id, nextActAt: me.actor!.nextActAt + 100, turns: me.actor!.turns + 1, ...(regenAfter !== undefined ? { regenAfter } : {}), seenBy: [pr.id], floor: key });
       const from = { floor: key, x: me.pos!.x, y: me.pos!.y };
       ctx.emit({
         type: 'entity_changed_floor', id: me.id, kind: me.kind, from, to: { floor: toKey, x: cell.x, y: cell.y }, nextActAt: to.time,
@@ -433,6 +436,13 @@ actions.register('stairs', (ctx, e, pr) => {
       return { cost: 0, scheduled: true };
     },
   };
+});
+
+// 遠征: 階段の上で帰還（達成）または撤退（confirm）。盤面から外れてキャンプへ
+actions.register('extract', (ctx, e, pr, cmd: Extract<Command, { type: 'extract' }>) => {
+  const r = extractError(ctx, e, pr, cmd.confirm);
+  if ('error' in r) return { error: r.error };
+  return { run: () => { doExtract(ctx, e, pr, r.completed, r.expedition); return { cost: 0, scheduled: true }; } };
 });
 
 // ---- 手番を消費しない ----
@@ -454,7 +464,7 @@ export function freeCommand(ctx: Ctx, pr: PlayerRecord, cmd: Command): ActionErr
     return null;
   }
   if (cmd.type === 'retire') {
-    if (pr.state !== 'alive') return actionError('dead', t(pr.locale, '既にランから外れている。', 'You are no longer in the run.'), '');
+    if (pr.state !== 'alive' && pr.state !== 'at_camp') return actionError('dead', t(pr.locale, '既にランから外れている。', 'You are no longer in the run.'), '');
     const me = ctx.world.entities[pr.entityId];
     if (me.pos) {
       const body = structuredClone(me);
@@ -468,6 +478,7 @@ export function freeCommand(ctx: Ctx, pr: PlayerRecord, cmd: Command): ActionErr
       ctx.emit({ type: 'player_stats', player: pr.id, stats: { ...pr.stats, deathCause: 'retired', endedSeq: ctx.world.seq + 1 }, seenBy: [pr.id], put: [body], floor: fk });
     }
     ctx.emit({ type: 'player_state', player: pr.id, state: 'left', reason: 'retired', seenBy: 'all', floor: null });
+    maybeEndExpedition(ctx);
     checkRunEnd(ctx);
     void endRun;
     return null;

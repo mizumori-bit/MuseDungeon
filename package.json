@@ -26,7 +26,9 @@
     "replay:verify": "tsx packages/tools/src/cli.ts replay-verify",
     "assets:checklist": "tsx packages/tools/src/cli.ts assets-checklist",
     "assets:check": "tsx packages/tools/src/cli.ts assets-check",
-    "golden": "tsx packages/tools/src/cli.ts golden"
+    "golden": "tsx packages/tools/src/cli.ts golden",
+    "pacing": "tsx packages/tools/src/cli.ts pacing",
+    "drive": "tsx packages/tools/src/cli.ts drive"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",

@@ -1,9 +1,10 @@
 // 戦闘（整数のみ）。命中: d20 + acc >= 10 + eva。20 は必中＋クリティカル（ダイス 2 倍）、1 は必ず外れ。
 // ダメージ: ダイス + might - armor、最低 1。
-import type { DamageVia, Entity, PlayerRecord, RunSummary, RunSummaryPlayer } from '@muse/shared';
+import type { DamageVia, Entity, PlayerId, PlayerRecord, RunSummary, RunSummaryPlayer } from '@muse/shared';
 import { xpForLevel } from '@muse/shared';
 import type { Ctx } from './ctx';
 import { applyEffects } from './effects';
+import { maybeEndExpedition } from './expedition';
 import { pickLoot } from './gen/generate';
 import { makeNoise, updateMemory, wakeMonster } from './perception';
 import { roll } from './registry';
@@ -84,21 +85,32 @@ export function applyDamage(ctx: Ctx, target: Entity, amount: number, source: En
   const t = ctx.world.entities[target.id];
   if (!t?.stats || t.stats.hp <= 0) return;
   const hpAfter = Math.max(0, t.stats.hp - amount);
+  // 実際に減った HP（とどめの超過分を含めない）
+  const dealt = t.stats.hp - hpAfter;
   const key = t.pos?.floor ?? null;
-  const seen = key ? ctx.perceive(key, [
+  const seen: { seenBy: PlayerId[]; masks?: Record<PlayerId, string[]> } = key ? ctx.perceive(key, [
     { field: 'target', pos: t.pos, entity: t.id },
     { field: 'source', pos: source?.pos ?? null, entity: source?.id ?? null },
   ], t.player ? [t.player] : []) : { seenBy: t.player ? [t.player] : [] };
+  // 見ていたプレイヤーごとの、この個体への累計実ダメージ（after 値）
+  let seenTotals: Record<PlayerId, number> | undefined;
+  if (!t.player && t.actor && dealt > 0) {
+    for (const pid of seen.seenBy) {
+      if (seen.masks?.[pid]?.includes('target')) continue;
+      const prev = ctx.world.players[pid]?.knowledge.damageSeen?.[t.id] ?? 0;
+      (seenTotals ??= {})[pid] = prev + dealt;
+    }
+  }
   ctx.emit({
-    type: 'damaged', target: t.id, targetKind: t.kind, amount, hpAfter,
-    source: source?.id ?? null, sourceKind: source?.kind ?? null, via, ...seen,
+    type: 'damaged', target: t.id, targetKind: t.kind, amount, hpAfter, dealt,
+    source: source?.id ?? null, sourceKind: source?.kind ?? null, via, ...(seenTotals ? { seenTotals } : {}), ...seen,
   });
-  // 思い出
+  // 思い出（受けたダメージは脅威の見積もり用に出目どおり、与えたダメージは実ダメージ）
   if (source && t.player && !source.player) {
     updateMemory(ctx, t.player, source.kind, (m) => { m.maxDamageToYou = Math.max(m.maxDamageToYou, amount); });
   }
   if (source?.player && !t.player && t.actor) {
-    updateMemory(ctx, source.player, t.kind, (m) => { m.maxDamageByYou = Math.max(m.maxDamageByYou, amount); });
+    updateMemory(ctx, source.player, t.kind, (m) => { m.maxDamageByYou = Math.max(m.maxDamageByYou, dealt); });
   }
   if (hpAfter <= 0) {
     kill(ctx, ctx.world.entities[t.id], source, via);
@@ -140,10 +152,28 @@ export function kill(ctx: Ctx, victim: Entity, killer: Entity | null, via: Damag
     const cause = killer ? killer.kind : via;
     ctx.emit({ type: 'player_stats', player: pr.id, stats: { ...pr.stats, deathCause: cause, endedSeq: ctx.world.seq + 1 }, seenBy: [pr.id] });
     ctx.emit({ type: 'player_state', player: pr.id, state: 'dead', reason: cause, seenBy: 'all' });
+    maybeEndExpedition(ctx);
     checkRunEnd(ctx);
     return;
   }
-  ctx.emit({ type: 'died', id: victim.id, kind: victim.kind, killer: killer?.id ?? null, killerKind: killer?.kind ?? null, via, pos, ...seen });
+  // 目の前で倒れた個体は最大 HP が分かる（見えていない者には伏せる）
+  const maxHp = victim.stats?.maxHp ?? null;
+  const masks = { ...(seen.masks ?? {}) };
+  for (const pid of seen.seenBy) if (masks[pid]?.includes('id')) masks[pid] = [...masks[pid], 'maxHp'];
+  ctx.emit({
+    type: 'died', id: victim.id, kind: victim.kind, killer: killer?.id ?? null, killerKind: killer?.kind ?? null, via, pos, maxHp,
+    seenBy: seen.seenBy, ...(Object.keys(masks).length ? { masks } : {}),
+  });
+  if (maxHp !== null && victim.role !== 'guardian') {
+    for (const pid of seen.seenBy) {
+      if (masks[pid]?.includes('id')) continue;
+      updateMemory(ctx, pid, victim.kind, (m) => {
+        m.hpSeen = m.hpSeen
+          ? { min: Math.min(m.hpSeen.min, maxHp), max: Math.max(m.hpSeen.max, maxHp), samples: m.hpSeen.samples + 1 }
+          : { min: maxHp, max: maxHp, samples: 1 };
+      });
+    }
+  }
   // ドロップ
   const def = ctx.content.monsters[victim.kind];
   const rng = ctx.rng('runtime');
@@ -185,11 +215,13 @@ export function grantXp(ctx: Ctx, e: Entity, amount: number): void {
   }
 }
 
-export function scoreOf(p: { deepest: number; kills: number; level: number }): number {
-  return p.deepest * 1000 + p.kills * 10 + p.level * 25;
+export function scoreOf(ctx: Ctx, p: { deepest: number; kills: number; level: number; expeditionPoints?: number }): number {
+  const s = ctx.content.balance.score;
+  return p.deepest * s.perDepth + p.kills * s.perKill + p.level * s.perLevel + (p.expeditionPoints ?? 0);
 }
 
-export function buildSummary(ctx: Ctx, reason: string): RunSummary {
+/** hideSeed: ラン継続中（遠征の終了時）の要約ではシードを伏せる */
+export function buildSummary(ctx: Ctx, reason: string, hideSeed = false): RunSummary {
   const players: RunSummaryPlayer[] = ctx.world.playerOrder.map((pid) => {
     const pr: PlayerRecord = ctx.world.players[pid];
     const e = ctx.world.entities[pr.entityId];
@@ -202,10 +234,15 @@ export function buildSummary(ctx: Ctx, reason: string): RunSummary {
     return {
       id: pid, name: pr.name, classId: pr.classId, controller: pr.controller, level,
       deepest: pr.stats.deepest, turns: e?.actor?.turns ?? 0, kills: pr.stats.kills, state: pr.state,
-      deathCause: pr.stats.deathCause, equipment, score: scoreOf({ deepest: pr.stats.deepest, kills: pr.stats.kills, level }),
+      deathCause: pr.stats.deathCause, equipment,
+      score: scoreOf(ctx, { deepest: pr.stats.deepest, kills: pr.stats.kills, level, expeditionPoints: pr.stats.expeditionPoints }),
+      expeditions: pr.stats.expeditions ?? 0,
     };
   });
-  return { runId: ctx.world.meta.runId, reason, seed: ctx.world.secret.seed, endedSeq: ctx.world.seq + 1, players };
+  const expeditions = (ctx.world.expeditions ?? []).map((x) => ({
+    no: x.no, objective: { ...x.objective }, status: x.status, endReason: x.endReason, points: x.points, startSeq: x.startSeq, endSeq: x.endSeq,
+  }));
+  return { runId: ctx.world.meta.runId, reason, seed: hideSeed ? '' : ctx.world.secret.seed, endedSeq: ctx.world.seq + 1, players, expeditions };
 }
 
 export function endRun(ctx: Ctx, reason: string): void {
@@ -213,7 +250,11 @@ export function endRun(ctx: Ctx, reason: string): void {
   ctx.emit({ type: 'run_ended', reason, summary: buildSummary(ctx, reason), seenBy: 'all', floor: null });
 }
 
+/** 盤面かキャンプに誰も残っていなければランを終える */
 export function checkRunEnd(ctx: Ctx): void {
-  const anyAlive = ctx.world.playerOrder.some((pid) => ctx.world.players[pid].state === 'alive');
-  if (!anyAlive && ctx.world.playerOrder.length > 0) endRun(ctx, 'all_players_gone');
+  const anyPresent = ctx.world.playerOrder.some((pid) => {
+    const s = ctx.world.players[pid].state;
+    return s === 'alive' || s === 'at_camp';
+  });
+  if (!anyPresent && ctx.world.playerOrder.length > 0) endRun(ctx, 'all_players_gone');
 }

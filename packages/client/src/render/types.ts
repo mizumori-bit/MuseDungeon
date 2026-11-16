@@ -29,6 +29,8 @@ export interface SceneEntity {
   remembered?: boolean;
   /** 俯瞰でのみ見える未発見の罠 */
   hidden?: boolean;
+  /** 遠征の目的に関わる個体（守護者・遺物）。テーマに依らずレンダラーが印を重ねる */
+  role?: 'guardian' | 'relic';
 }
 
 export interface Scene {

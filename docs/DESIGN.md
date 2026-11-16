@@ -2,7 +2,7 @@
 
 - 版: 1.0（設計完了・実装引き渡し用）
 - 日付: 2026-11-15
-- 関連文書: [PROTOCOL.md](PROTOCOL.md)（MCPツール／観測／イベント／通信の仕様）、[ASSET_SPEC.md](ASSET_SPEC.md)（画像アセットの仕様）、[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md)（実装順序と受け入れ基準）
+- 関連文書: [PROTOCOL.md](PROTOCOL.md)（MCPツール／観測／イベント／通信の仕様）、[ASSET_SPEC.md](ASSET_SPEC.md)（画像アセットの仕様）、[IMPROVEMENTS_V2.md](IMPROVEMENTS_V2.md)（実プレイ評価を受けた改善設計。未反映の変更を含む）、[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md)（実装順序と受け入れ基準）
 
 ---
 
@@ -212,6 +212,8 @@ function applyEvent(world: World, ev: Event): void
 | `throw {slot, target}` | 投げる（射線判定あり） |
 | `interact {dir?}` | 扉の開閉、泉・祭壇などの地物を操作 |
 | `stairs` | 足元の階段を使う |
+| `extract {confirm?}` | 遠征を終える（階段の上で。達成なら帰還、未達成なら confirm で撤退）。§13 |
+| `start_expedition {offer}` | キャンプで次の遠征を始める（手番に関係しない）。§13 |
 
 マクロ行動（サーバー側で基本行動の列に展開。**AI も人間も同じものを使う**）:
 
@@ -219,9 +221,10 @@ function applyEvent(world: World, ev: Event): void
 |---|---|
 | `explore` | 既知地図上で最寄りの未探索フロンティアへ進む。新しい敵対者が視界に入る／被ダメージ／新しいアイテムや階段を発見／フロンティア無し、で中断 |
 | `travel {to}` | 既知地図上の経路で座標・既知の階段・記憶した対象へ移動。中断条件は同上＋到着 |
-| `rest` | HP 全快または中断まで `wait` を繰り返す |
+| `rest {untilHp?, maxTurns?}` | HP 全快（かつ毒が抜ける）、指定の HP・手数、または中断まで `wait` を繰り返す |
 
-- マクロは 1 回の呼び出しにつき最大 200 手。各手は `source: 'macro'` の通常コマンドとして記録される。
+- マクロは 1 回の呼び出しにつき最大 `balance.macro.stepLimit`（200）手、`rest` は `balance.rest.maxTurns`（400）手。各手は `source: 'macro'` の通常コマンドとして記録される。
+- マクロの結果には実績（歩いた手数・経過したフロア時間・休憩の HP 回復量）を付ける。
 - 経路探索は `shared/nav` にあり、**プレイヤーの既知地図だけ**を入力とする（未知セルは通行不可扱い）。
 
 ### 4.4 戦闘（MVP）
@@ -231,8 +234,9 @@ function applyEvent(world: World, ev: Event): void
 - 命中: `d20 + acc >= 10 + eva`。出目 20 は必中かつクリティカル（ダメージダイス 2 倍）、出目 1 は必ず外れ。
 - ダメージ: `武器ダイス + might - armor`、最低 1。
 - 状態異常（MVP）: 毒・加速・減速・睡眠。手番開始時に処理する。
-- 経験値とレベルアップ。HP は手番経過で緩やかに自然回復する。
-- 永久死。ラン終了時にサマリー（到達深度・手数・撃破数・死因・装備）を出力する。
+- 経験値とレベルアップ。HP は手番経過で緩やかに自然回復する。追跡中の敵が見えない状態での `wait` は休息で、回復が速い（§13.4）。
+- 表示するダメージは実際に減った HP（とどめの超過分を含まない）。
+- 永久死。遠征の終了ごととラン終了時にサマリー（達成した遠征・到達深度・手数・撃破数・死因・装備）を出力する。
 - 休憩し放題への圧力として、フロア滞在時間に応じた徘徊モンスターの湧きを入れる（空腹度は MVP に入れない）。
 
 ### 4.5 モンスター AI
@@ -275,14 +279,14 @@ function applyEvent(world: World, ev: Event): void
 ### 6.1 シードと乱数ストリーム
 
 - PRNG は `sfc32`（32bit 整数演算のみ）。シード文字列からのハッシュは `cyrb128`。
-- `floorSeed = hash(runSeed, branch, depth)`。さらに**用途別の名前付きサブストリーム**に分ける: `layout`, `prefab`, `monsters`, `items`, `features`。実行時の戦闘などは `runtime` ストリーム。
+- `floorSeed = hash(runSeed, branch, depth)`。さらに**用途別の名前付きサブストリーム**に分ける: `layout`, `prefab`, `monsters`, `items`, `features`, `objective`（遠征の守護者・遺物）。実行時の戦闘などは `runtime` ストリーム。遠征の候補は `hash(runSeed, 'expedition', 通番)` から作る（状態を持たない）。
 - 効果: アイテム表を増やしても地形が変わらない。フロア N の地形は、そこまでの行動に依存せず同一シードなら常に同じ。
 - 深度に上限は無い。フロアは初めて入った時に生成し、ラン中は状態を保持する（MVP ではメモリ保持。将来はキーフレーム形式で退避）。
 
 ### 6.2 生成パイプライン
 
 ```
-selectFloorType → selectBiome → layout → prefab配置 → 階段/接続 → populate → validate
+selectFloorType → selectBiome → (pacing) → layout → prefab配置 → 階段/接続 → populate → (遠征の目的) → validate
 ```
 
 各段は**レジストリから ID で選ばれるプラグイン**で、データ定義の重みと深度条件で抽選される。
@@ -294,10 +298,11 @@ selectFloorType → selectBiome → layout → prefab配置 → 階段/接続 �
 | layout | `layoutGenerators` | `rooms_corridors`（BSP）, `cellular_cave`（セルオートマトン＋連結化） |
 | prefab | `prefabs` | ASCII テンプレート＋凡例のデータ定義（Vault・祭壇部屋など）。回転／反転あり |
 | populate | `spawnTables` | 深度・レア度・タグによる割当。低確率で深層の敵が混ざる |
-| validate | `validators` | 上り下り階段が相互到達可能、開始地点が安全、床面積の下限 等 |
+| 遠征の目的 | （生成段） | 遠征の目標階でだけ、守護者・遺物を入口から離れた到達可能なセルに置く（`objective` ストリームのみ使用） |
+| validate | `validators` | 上り下り階段が相互到達可能、開始地点が安全、床面積の下限、到着地点から下り階段までの歩行距離（`stairs_path`） 等 |
 
 - validate に失敗したら `attempt` を増やして同じ段からやり直す（`hash(floorSeed, attempt)`、決定的）。8 回失敗したら必ず成功する単純レイアウトにフォールバックする。
-- 標準フロアサイズ 64×40（floorType が上書き可）。
+- フロアの寸法・階段距離・密度は floorType の `pacing`（深度帯ごと）で決まる（§13.5）。帯が無い floorType は `size`（既定 64×40）と `per1000`。
 
 ### 6.3 コンテンツ定義
 
@@ -327,7 +332,7 @@ selectFloorType → selectBiome → layout → prefab配置 → 階段/接続 �
 }
 ```
 
-定義ファイル: `terrain`, `monsters`, `items`, `appearances`（未鑑定アイテムの外見 ID と表示名）, `affixes`, `statuses`, `biomes`, `floorTypes`, `prefabs`, `spawnTables`, `lootTables`, `classes`, `features`（泉・祭壇などの操作可能な地物）。
+定義ファイル: `terrain`, `monsters`, `items`, `appearances`（未鑑定アイテムの外見 ID と表示名）, `affixes`（`target: monster | item | guardian`）, `statuses`, `biomes`, `floorTypes`（`pacing` を含む）, `prefabs`, `spawnTables`, `lootTables`, `classes`, `features`（泉・祭壇などの操作可能な地物）, `balance`（調整値。§13.6）。
 
 - **効果（effect）・AI archetype・layout generator・validator** はコード側のハンドラをレジストリに登録し、データからは ID で参照する。新しい効果が要る時だけコードを足す。
 - 見た目（グリフ・色・スプライト）はコンテンツに書かない。`client/themes/<theme>/` が kind ID → 見た目の対応表を持つ（P7）。
@@ -348,7 +353,7 @@ selectFloorType → selectBiome → layout → prefab配置 → 階段/接続 �
 
 - 定義済みの最深帯（monsters の `depth.peak` の最大値）を超えた深度では、出現時に `tier = floor((depth - 定義最深) / 5) + 1` を付与し、HP（+50%/tier）・命中（+2/tier）・威力（+1/tier）・回避と装甲（+1/2tier）を整数演算で上げる。種の抽選は定義最深の深度で行う。
 - モンスター接辞（例: 「俊敏な」「古の」）とアイテム接辞（エゴ）を深度に応じて付与する。接辞もデータ定義。
-- スコアは到達深度を主軸にし、手数と撃破数を副次とする。
+- スコア = 到達深度×perDepth + 撃破×perKill + レベル×perLevel + 達成した遠征の基礎点（係数は `balance.json`）。記録の並び順は「達成した遠征の数」を主軸にする。
 
 ---
 
@@ -508,9 +513,9 @@ interface Renderer {
 - 複数の主体を持つイベント（攻撃・被弾・死亡・投擲・移動・扉）は、プレイヤーごとに見えていない主体のフィールドを `masks` で伏せる（ID・種別・位置 `from/to` とも）。`filterEventsForPlayer` は `masks` を適用し、`seenBy/masks/put/del` を除去し、他者の HP の after 値を消す。
 - 観戦用の World は `stripSecret` を通す。`seed` と `rng` は除去し、`appearances`（未鑑定の外見表）は残す（追従視点を観戦側で再射影するため。俯瞰観戦は全情報を見る前提）。`follow_only` では World を送らず PlayerView だけを送る。
 
-### 12.3 ルール値（MVP）
+### 12.3 ルール値（MVP。v2 で `balance.json` へ移した）
 - レベルアップ: 次のレベルに必要な累計 XP = `15 × Lv²`。
-- 自然回復: プレイヤーの手番数が `max(3, 9 - floor(Lv/2))` の倍数のとき HP+1。
+- 自然回復: 回復の蓄積値を手番ごとに +1（休息なら +restMultiplier）し、`max(3, 9 - floor(Lv/2))` に達するごとに HP+1（§13.4）。
 - 徘徊モンスター: フロア時刻が `nextWanderAt` を過ぎたら、視界外かつプレイヤーから 12 マス以上離れた所に 1 体（覚醒済みが 30 体未満のとき）。次は 4000〜6000 時間単位後。聖域（sanctuary）では湧かない。
 - 深層の敵が混ざる確率は spawnTable の `oodChancePct`、深度差は `min(oodDepth, depth)`。
 - 睡眠中モンスターは、プレイヤーの手番ごとに、そのモンスターがプレイヤーを視認できれば一定確率（斥候は stealth で低下）で起きる。騒音でも起きる。
@@ -519,3 +524,53 @@ interface Renderer {
 - 行動ツールは次の自分の手番まで待って返る（COOP で 20 秒を超えたら `waiting_others`）。マクロは 1 手ごとに直列化キューへ投入するので、COOP では他プレイヤーの手と交互に進む。
 - COOP の手番タイムアウトは、同じフロアに他の生存プレイヤーがいるときだけ働く。
 - 起動は `node packages/server/bin/muse-server.mjs`（tsx を API で登録するランチャー。作業ディレクトリに依存しない）。stdio ブリッジも同様に `bin/muse-mcp-stdio.mjs`。
+
+---
+
+## 13. 改善 v2（遠征・ターン契約・休憩・敵の耐久・探索密度）
+
+経緯と評価の受け止めは [IMPROVEMENTS_V2.md](IMPROVEMENTS_V2.md)。ここには実装で確定した設計を書く。プロトコルの詳細は [PROTOCOL.md](PROTOCOL.md) §1.2・§2.1.1・§3・§5・§8.1。
+
+### 13.1 ターン契約
+- 全応答（プレイヤーが束縛されたもの）に `turn` ブロックとテキスト末尾の `▶` 行を付ける（`shared/turn.ts`）。`state` と `awaiting` は事実の通知で、提案は書かない。
+- `changes` は PlayerView と観測だけから作る差分（`turnSnapshot` → `diffChanges`）。基準はサーバーがプレイヤーごとに持つ（RunSession のメモリ上。復旧直後の最初の応答は差分なし）。人間向け UI も同じ関数で計算する。
+- `observe` は待たない。待つのは `wait_for_turn`。
+
+### 13.2 遠征
+- 構造: ラン（無限・永久死）の中に遠征（目的 → 帰還／撤退／死亡／引退）が並び、間にキャンプ（時間が進まない幕間）が入る。
+- World: `expeditions: Expedition[]`（通番・目的・基礎点・状態・開始／終了 seq・終了理由・参加者・開始時の成績・守護者／遺物の ID・進捗・extract 済みの記録・結果）と `camp`（次の遠征の候補）。プレイヤーの状態に `at_camp`（盤面から外れている）と `extractPos`（再開地点）。どれも任意フィールドで、v1 のログはそのまま畳み込める。
+- 目的: `reach_depth`（目標の階に誰かが着く）、`slay_guardian`（守護者のエンティティが消える）、`retrieve_relic`（遺物を参加者が持つ。手放せば未達成に戻る）、`endless`。目標深度は生成済みの最深階＋`aheadMin`〜`aheadMax`（最初は `firstTargetDepth`）なので、目標階は必ず未生成。目標階の生成時に `objective` ストリームで守護者・遺物を置く。
+- 守護者: その深度の通常モンスター（深層の敵の混入抽選は使わない。動かない・逃げ回る archetype は除く）に `target: guardian` の接辞を付けたもの。遺物 `core:relic` は効果を持たない専用アイテムで、通常の生成では出ない。観測では `role` で分かる（居場所は教えない）。
+- 進捗は各 step の終わりに engine が World から計算し、変化があれば `objective_progress`（俯瞰専用）と `objective_completed` を出す。
+- `extract`: 階段（上り・下り）の上で、追跡中の敵（逃走中を除く）が見えていないこと。達成していれば帰還、未達成なら `confirm` 付きで撤退。プレイヤーを盤面から外し（全回復・状態異常解除）、`at_camp` にする。盤面に誰も残らなければ遠征を終える（`expedition_ended`）。キャンプに誰かいれば次の候補 3 つを出す（`expedition_offered`）。
+- 死亡・引退でも盤面に誰も残らなければ遠征を終える（`died` / `retired`）。キャンプにも盤面にも誰もいなければランを終える。
+- `start_expedition`: キャンプの全員を各自の `extractPos` に戻して始める（フロアの時刻はそのまま）。`new_run` は参加の直後に `start_expedition`（`source: 'system'`）を流して最初の遠征を始める（commands.jsonl に残るので再実行で再現できる）。
+- COOP: 目的はパーティで共有。各自が `extract` し、盤面に誰も残らなくなった時点で、達成のうえで帰還した人が 1 人以上いれば `completed`。達成の基礎点は達成で帰還した人の成績に入る。途中参加者は参加者一覧に入らない（成績の差分に含めない）。
+- 記録: `expedition_ended` に途中経過の `RunSummary`（シード無し）を入れ、サーバーは遠征の終了ごとに `summary.json/md` を書き直す（キャンプで止めても記録が残る）。`summary.md` は遠征ごとの節を持つ。リプレイ索引には遠征の開始・目的達成・終了のマーカーと `expeditions` を入れる。
+
+### 13.3 ホスト駆動
+- ターンフィード `GET /api/player/feed`（SSE）: `turn`（手番が来た。マクロ展開中は送らない）、`idle`（`idleNoticeMs` ごと）、`ended`（遠征／ラン）。
+- 参照ドライバ `tools/drive.ts`（`npm run drive`）: フィードを購読し、エージェント呼び出しを差し替え可能にする（コマンド実行：標準入力に観測テキスト、環境変数 `MUSE_PLAYER_TOKEN`・`MUSE_MCP_URL`・`MUSE_TURN_JSON`／HTTP POST／内蔵ダミー）。行動は選ばない。上限（手番数・実時間・連続エラー・idle の再送回数）で中断し、遠征は進行中のまま残る。
+- 再開ブリーフィング: `resume_run` に遠征の目的と進捗・現在地・直近の節目（最大 10 件）・メモを付ける。
+- MCP のリソース購読通知は実装していない（任意項目。必要になったら `muse://player/turn` を追加する）。
+- MetaMuse 用の呼び出し設定は未確定（依頼者に確認する）。コマンド実行か HTTP POST のどちらでも繋げる。
+
+### 13.4 休憩
+- 回復の蓄積値 `actor.regen`: 手番の終わりに +1（休息なら +`restMultiplier`）、回復間隔に達するごとに 1 HP。満タンなら 0。値は `actor_scheduled.regenAfter` に after 値として記録する。
+- 休息 = 追跡中の敵（逃走中を除く）が見えない状態での `wait`。`rest` の各手も同じ。
+- 観測の `self.rest_estimate` は engine と同じ関数（`regenInterval`・`regenStep`、shared/catalog.ts）と `self.regen` で数える。徘徊の目安は公開ルールの湧き間隔から `floor(time/intervalMax)〜ceil(time/intervalMin)`。次に湧く正確な時刻は出さない。
+- 初期値で Lv1 の戦士（HP 30）が半分から全快するのに 45 手番。徘徊の湧き間隔（4000〜6000）に対して「おおよそ 1 回湧くかどうか」。
+
+### 13.5 敵の耐久の学習
+- `damaged.dealt`（実ダメージ）を文章と「与えた最大ダメージ」に使う。`amount` は出目どおり（脅威の見積もりに使う「受けた最大ダメージ」は出目どおり）。
+- `knowledge.damageSeen[個体]`: 見ていたプレイヤーの、その個体への累計実ダメージ（`damaged.seenTotals` の after 値）。個体が死んだら消す。
+- 目の前で倒れた個体は `died.maxHp` で最大 HP が分かり、思い出の `hpSeen {min,max,samples}` に入る（守護者は除く）。
+- `hp_left_est` は `hpSeen`・4 段階表示・`damage_seen` から計算する（`hpLeftEstimate`）。
+- 逃走中（`fleeing`）: 追跡中で、HP が種族データの `fleeBelowHpPct` を下回っている敵。逃げ回る手負いの敵が extract と休息を永久に妨げないようにするための区別（実装で追加。HP 4 段階と同程度の公開情報）。
+
+### 13.6 探索密度と調整値
+- `floorTypes.pacing`: 深度帯ごとの `size`・`stairsPath`（到着地点から下り階段までの歩行距離。範囲内のセルに下り階段を置き、`stairs_path` validator で確かめる）・`monsters`／`items`／`traps` の `per1000`。設計書の例の `features` は、通常の生成で密度を持つ地物が罠だけなので `traps` とした。
+- 現在の値（standard）: 深度 1〜2 は 38×22・階段距離 12〜34・敵 9／アイテム 11／罠 2（per1000）、3〜6 は 44×27・15〜44、7 以上は 54×32・18〜64。cavern は深度 1〜2 だけ 40×24（敵 10／アイテム 10）で、ほかは同じ。
+- 計測（`npx tsx packages/tools/src/cli.ts pacing --runs 100`、貪欲 bot）: 階段発見までの手番の中央値は深度 1〜2 で 45（目安 60）、3〜6 で 87（目安 90）、7 以上で 182。判断間隔（マクロ 1 回の平均手数）5.2（目安 20 以下）。1 階あたり 225 手番。最初の遠征は中央値 340 手番・行動の呼び出し 105 回で、100 ラン中 92 ランが達成。
+- `balance.json`（core:balance）: 回復・休息の倍率・休憩の上限・マクロの上限・徘徊・スコア係数・遠征の目標深度の幅と基礎点・遺物を守護者が守る確率。`get_rules` の数値は公開カタログの `rules` から生成する。
+- 生成が変わったのでコンテンツのバージョンが変わる（旧リプレイはイベントから再生するので影響しない）。v1 で進行中だったランは、復旧時の再実行が一致しない（ログはそのまま再生できる）。

@@ -3,7 +3,8 @@
 import type { ActionError, Command, CommandRecord } from './commands';
 import type { GameEvent } from './events';
 import type { PerceivedEvent } from './filter';
-import type { Controller, Locale, PlayerId, RunSummary, World } from './types';
+import type { TurnBlock } from './turn';
+import type { Controller, ExpeditionBrief, Locale, ObjectiveType, PlayerId, PlayerState, RunSummary, World } from './types';
 import type { PlayerView } from './view';
 
 export type SpectatorPolicy = 'omniscient' | 'follow_only' | 'delayed';
@@ -47,7 +48,7 @@ export interface RunListingPlayer {
   name: string;
   classId: string;
   controller: Controller;
-  state: 'alive' | 'dead' | 'left';
+  state: PlayerState;
   depth: number | null;
   level: number;
 }
@@ -63,6 +64,8 @@ export interface RunListing {
   joinable: boolean;
   players: RunListingPlayer[];
   summary?: RunSummary;
+  /** 遠征の一覧（遠征単位のリプレイ選択用） */
+  expeditions?: ExpeditionBrief[];
 }
 
 export interface RunMetaFile {
@@ -81,9 +84,10 @@ export interface RunMetaFile {
   lastSeq?: number;
 }
 
-export type MarkerType = 'join' | 'floor' | 'level_up' | 'kill' | 'near_death' | 'death' | 'thought' | 'end';
+export type MarkerType = 'join' | 'floor' | 'level_up' | 'kill' | 'near_death' | 'death' | 'thought' | 'end'
+  | 'expedition_start' | 'objective' | 'expedition_end';
 export interface Marker { seq: number; type: MarkerType; label: string; player?: PlayerId }
-export interface RunIndex { runId: string; lastSeq: number; markers: Marker[]; keyframes: number[] }
+export interface RunIndex { runId: string; lastSeq: number; markers: Marker[]; keyframes: number[]; expeditions?: ExpeditionBrief[] }
 
 export interface LeaderboardEntry {
   runId: string;
@@ -98,7 +102,13 @@ export interface LeaderboardEntry {
   score: number;
   deathCause: string | null;
   endedAt: number;
+  /** 達成した遠征の数（主な並び順） */
+  expeditions: number;
+  /** ラン終了前（キャンプ中）の記録か */
+  ongoing: boolean;
 }
+
+export type ObjectiveChoice = 'auto' | ObjectiveType;
 
 export interface NewRunRequest {
   name: string;
@@ -107,7 +117,19 @@ export interface NewRunRequest {
   seed?: string;
   locale?: Locale;
   controller?: Controller;
+  /** 最初の遠征の目的（既定 auto = 最初の候補） */
+  objective?: ObjectiveChoice;
 }
+
+// ---- ターンフィード（GET /api/player/feed、SSE） ----
+export type FeedEvent =
+  | { type: 'hello'; runId: string; playerId: PlayerId; seq: number; turn: TurnBlock }
+  /** 手番が来た（マクロ実行中は送らない） */
+  | { type: 'turn'; runId: string; playerId: PlayerId; seq: number; turn: TurnBlock; observation_text: string }
+  /** 手番のまま一定時間入力が無い */
+  | { type: 'idle'; runId: string; playerId: PlayerId; seq: number; seconds: number; turn: TurnBlock }
+  /** 遠征またはランが終わった（scope で区別） */
+  | { type: 'ended'; runId: string; playerId: PlayerId; seq: number; scope: 'expedition' | 'run'; turn: TurnBlock; text: string; summary: RunSummary | null };
 export interface JoinRunRequest { name: string; classId?: string; locale?: Locale; controller?: Controller }
 export interface JoinedResponse { runId: string; playerId: PlayerId; token: string }
 

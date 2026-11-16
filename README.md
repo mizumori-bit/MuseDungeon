@@ -4,6 +4,7 @@ MetaMuse などの AI エージェントが **MCP 経由で、画面認識なし
 人間も同じ世界に 2D 画面で参加・観戦・リプレイ鑑賞できる。
 
 - World State が唯一の正。AI 向け観測（テキスト＋構造化 JSON）、人間向け 2D 画面、リプレイは、すべて World State とイベント列からの独立した射影。
+- 遊びは**遠征**単位。目的（目標の階に着く／守護者を倒す／遺物を持ち帰る）を達成して階段の上で帰還するか、撤退・死亡・引退で終わる。キャンプで全回復し、次の遠征を選んで続ける。
 - ダンジョンは階層ごとにシードからプロシージャル生成され、深さに上限は無い（深層では敵が tier・接辞で強化される）。
 - AI と人間は同じ `Command`・同じ `PlayerPort`・同じマクロ（explore / travel / rest）を使う。
 - 全イベントを `runs/<runId>/` に記録し、ゲームロジック無しで再生できる（シーク・速度変更・視点切替・AI の thought 表示）。
@@ -59,17 +60,32 @@ npm run server     # http://127.0.0.1:7777
 
 ### AI のプレイの流れ
 
-1. `get_rules` でルールを読む（式・操作・観測の読み方。個別の敵の数値は含まない）
-2. `new_run { character_name, class?: "warrior"|"scout", locale?: "ja"|"en", seed? }` → `player_token` を控える（接続が切れても `resume_run` で再開できる）
-3. 行動ツール（`move` / `explore` / `travel_to` / `rest` / `pickup` / `use_item` / `throw_item` / `use_stairs` …）を呼ぶ。結果に「何が起きたか」と次の観測が付く
-4. 迷ったら観測の `valid_actions` と `alerts` を見る。不正な行動は状態を変えず、`error.hint` と `valid_actions` が返る
-5. 任意引数 `thought` に判断理由を書くと、観戦画面とリプレイに吹き出しで表示される（裁定には使われない）
-6. `expect_seq` を渡すと、前提にした観測より状態が進んでいた場合に二重実行せず `stale_turn` を返す
+1. `get_rules` でルールを読む（式・操作・遠征・観測の読み方。個別の敵の数値は含まない）
+2. `new_run { character_name, class?: "warrior"|"scout", objective?: "auto"|"reach_depth"|"slay_guardian"|"retrieve_relic"|"endless", locale?, seed? }` → 最初の遠征まで始まる。`player_token` を控える（接続が切れても `resume_run` で再開ブリーフィング付きで再開できる）
+3. 行動ツール（`move` / `explore` / `travel_to` / `rest` / `pickup` / `use_item` / `throw_item` / `use_stairs` / `extract` …）を呼ぶ。結果に「何が起きたか」と次の観測が付く
+4. **全応答に `turn` ブロック**が付く。`turn.state` が `your_turn` の間はゲームが次の行動を待っている。`expedition_ended` / `at_camp` / `run_ended` はやめてよい合図。`turn.changes` に前回からの変化
+5. 目的を達成したら、いずれかの階段の上で `extract`（帰還）。未達成で切り上げるなら `extract { confirm: true }`（撤退）。キャンプでは `start_expedition { offer }` で次の遠征
+6. 迷ったら観測の `valid_actions`・`alerts`・`expedition` を見る。不正な行動は状態を変えず、`error.hint` と `valid_actions` が返る
+7. 任意引数 `thought` に判断理由を書くと、観戦画面とリプレイに吹き出しで表示される（裁定には使われない）
+8. `expect_seq` を渡すと、前提にした観測より状態が進んでいた場合に二重実行せず `stale_turn` を返す
+
+### ホスト駆動（AI を外から回す）
+
+MCP は「AI が呼んだら返す」方式なので、ゲーム側から AI を起こすことはできない。AI を動かす側のループ（ホスト）のために:
+
+- **ターンフィード** `GET /api/player/feed`（SSE、`Authorization: Bearer <player_token>`）: 手番が来たら `turn`、入力が無いまま一定時間（既定 60 秒）経ったら `idle`、遠征・ランが終わったら `ended` が流れる
+- **参照ドライバ** `npm run drive`: フィードを購読し、手番ごとに「エージェント呼び出し」を行う薄いループ。呼び出しは差し替え可能
+  - `--agent-cmd "<command>"`: コマンドを実行（標準入力に観測テキスト、環境変数 `MUSE_PLAYER_TOKEN`・`MUSE_MCP_URL`・`MUSE_TURN_JSON`）
+  - `--agent-url <url>`: JSON を POST
+  - 省略時: 内蔵ダミー（MCP で 1 手打って切断する）
+- 例（PowerShell）: `npm.cmd run drive -- --new-run Bot` / `npm.cmd run drive -- --token <player_token> --agent-cmd "node my-agent.mjs"`
+- 上限（`--max-turns` など）で止めても遠征は終わらない。もう一度実行すると続きから進む
 
 観測の例（テキスト。同じ内容が `structuredContent` に JSON で入る）:
 
 ```
 [seq 72 | 地下1階 湿った洞窟 | HP 22/22 | Lv1 | 位置(61,24) | あなたの番]
+【遠征1】地下3階に到達し、階段から帰還する | 進行中 | 地下1/3階 | 目標階に未到達 | extract: 不可(階段の上ではない)
 !! 敵が視界内: ゴブリン
 見えるもの:
 - ゴブリン e_mivwj8 (54,19) 西7北5  負傷:健康  状態:睡眠中  脅威:1
@@ -80,13 +96,15 @@ npm run server     # http://127.0.0.1:7777
    .........@##
   凡例: #=壁 .=床 G=ゴブリン @=自分 ~=浅い水たまり (空白)=未知
 できること: move n,ne,se,s,sw,w,nw / wait / explore / throw_item c (投げナイフ) -> e_mivwj8 / use_item d (回復の薬)
+変化: 新たな敵: ゴブリン(e_mivwj8) 北西7マス
+▶ あなたの番です（手番 41）。遠征は進行中で、あなたが行動ツールを呼ぶまで世界は止まっています。
 ```
 
 ## 人間のプレイ・観戦・リプレイ
 
 ロビー（`/`）から:
 
-- **新しいラン**: 名前・クラスを選んで開始。キー操作: 矢印／テンキー／`hjklyubn` で移動（敵にぶつかると攻撃）、`.` 待機、`x` 自動探索、`R` 休憩、`g` 拾う、`>` 階段、`T` 下り階段へ移動、`t` 投擲、`o` 操作、`i` 所持品。既知のマスをクリックするとそこまで移動。
+- **新しいラン**: 名前・クラス・最初の遠征の目的を選んで開始。キー操作: 矢印／テンキー／`hjklyubn` で移動（敵にぶつかると攻撃）、`.` 待機、`x` 自動探索、`R` 休憩、`g` 拾う、`>` 階段、`T` 下り階段へ移動、`E` 帰還／撤退（階段の上）、`t` 投擲、`o` 操作、`i` 所持品。既知のマスをクリックするとそこまで移動。遠征が終わるとキャンプ画面で次の遠征を選ぶ。
 - **観戦**: 進行中のランを俯瞰（全情報）／追従（そのプレイヤーの視界だけ）で見る。AI パネルに thought・ツール呼び出し・AI が受け取った観測テキスト。
 - **リプレイ**: 再生／停止、0.25x〜16x、1 イベント／1 手番送り、タイムラインのシーク、マーカー（階移動・Lv up・撃破・瀕死・死亡・思考）ジャンプ、視点切替。進行中のランも巻き戻せる。
 - **COOP**: モード「COOP」で開始したランには、ロビーや MCP の `join_run` から参加できる（同じフロアでは手番順に交代。放置は 30 秒でタイムアウトして待機扱い）。
@@ -94,6 +112,8 @@ npm run server     # http://127.0.0.1:7777
 見た目はテーマで差し替える（`packages/client/public/themes/<id>/theme.json`。画像が無いものは文字表示 `glyph` にフォールバック）。検証用の最小テーマ `sample` 付き。
 
 ## 開発用コマンド
+
+PowerShell では `npm run <script> -- --flag` の `--` が npm に届かずオプションが無視されるので、**`npm.cmd run <script> -- --flag`** と書く（下の表は bash／cmd の書き方）。
 
 | コマンド | 内容 |
 |---|---|
@@ -105,6 +125,8 @@ npm run server     # http://127.0.0.1:7777
 | `npm run gen:check -- --seeds 1000 --depth 50` | 生成不変条件の検査 |
 | `npm run replay:verify -- <runId>` | events.jsonl の畳み込みとキーフレームの一致、commands.jsonl の再実行と events.jsonl の一致を検証 |
 | `npm run golden` | ゴールデンリプレイ（reducer 互換性テスト用）を作り直す |
+| `npm run pacing -- --runs 100` | テンポの計測（階段発見までの手番・判断間隔・1 階あたりの手番・最初の遠征の長さ） |
+| `npm run drive -- --token <player_token>` / `--new-run <name>` | 参照ドライバ（ターンフィードを購読してエージェントを呼ぶ） |
 | `npm run assets:checklist` / `npm run assets:check -- <themeDir>` | 画像アセットの発注表 / テーマの検証 |
 | `npm run dev:client` | クライアントの開発サーバー（Vite。API は 7777 へプロキシ） |
 

@@ -3,16 +3,39 @@
 // 各段はレジストリのプラグイン。乱数は用途別の名前付きサブストリーム（地形はアイテム表の変更に影響されない）。
 // 生成は純関数: (content, runSeed, branch, depth) → { floor, spawns }。World を読まない。
 import type { BiomeDef, Content, FloorTypeDef, MonsterDef, PrefabDef } from '@muse/content';
-import type { Floor, Pos, Region } from '@muse/shared';
-import { DIRS, DIR_VEC, floorDiv, floorKey, Rng } from '@muse/shared';
+import type { EntityRole, Floor, Pos, Region } from '@muse/shared';
+import { cheb, DIRS, DIR_VEC, floorDiv, floorKey, Rng } from '@muse/shared';
 import { Registry, roll } from '../registry';
 import { DOOR, FLOOR, GenGrid, WALL } from './grid';
 import { layoutGenerators } from './layouts';
 
 export type SpawnSpec =
-  | { type: 'monster'; kind: string; x: number; y: number; hp: number; affixes: string[]; tier: number; asleep: boolean; delay: number }
-  | { type: 'item'; kind: string; x: number; y: number; qty: number; affixes: string[] }
+  | { type: 'monster'; kind: string; x: number; y: number; hp: number; affixes: string[]; tier: number; asleep: boolean; delay: number; role?: EntityRole }
+  | { type: 'item'; kind: string; x: number; y: number; qty: number; affixes: string[]; role?: EntityRole }
   | { type: 'feature'; kind: string; x: number; y: number };
+
+/** 遠征の目標階に置くもの */
+export interface ObjectiveSpec { guardian: boolean; relic: boolean }
+
+/** 深度帯ごとのテンポ（floorType.pacing の一致した帯、無ければ既定値） */
+export interface Pacing {
+  size: { w: number; h: number };
+  stairsPath: { min: number; max: number } | null;
+  monstersPer1000: number;
+  itemsPer1000: number;
+  trapsPer1000: number;
+}
+
+export function resolvePacing(ft: FloorTypeDef, depth: number): Pacing {
+  const band = ft.pacing.find((p) => depth >= p.depth.min && (p.depth.max === undefined || depth <= p.depth.max));
+  return {
+    size: band?.size ?? ft.size,
+    stairsPath: band?.stairsPath ?? null,
+    monstersPer1000: band?.monsters?.per1000 ?? ft.monsters.per1000,
+    itemsPer1000: band?.items?.per1000 ?? ft.items.per1000,
+    trapsPer1000: band?.traps?.per1000 ?? ft.traps.per1000,
+  };
+}
 
 export interface GeneratedFloor {
   floor: Floor;
@@ -29,6 +52,7 @@ export interface GenState {
   attempt: number;
   floorType: FloorTypeDef;
   biome: BiomeDef;
+  pacing: Pacing;
   grid: GenGrid;
   entry: Pos;
   up: Pos | null;
@@ -280,12 +304,14 @@ function placeStairs(s: GenState): void {
     s.up = { ...s.entry };
     g.override.set(e, 'core:stairs_up');
   }
-  // 入口から遠いセルを下り階段に
+  // 下り階段: 到着地点からの歩行距離が pacing.stairsPath に収まるセル（指定が無ければ入口から遠いセル）
   const dist = bfsDist(g, e, s.passable);
   const reach = cand.filter((i) => dist[i] > 0).sort((a, b) => dist[a] - dist[b] || a - b);
   if (!reach.length) return;
-  const far = reach.slice(Math.trunc(reach.length * 0.7));
-  const d = far[rng.int(far.length)];
+  const sp = s.pacing.stairsPath;
+  const inRange = sp ? reach.filter((i) => dist[i] >= sp.min && dist[i] <= sp.max) : [];
+  const pool = inRange.length ? inRange : reach.slice(Math.trunc(reach.length * 0.7));
+  const d = pool[rng.int(pool.length)];
   s.down = [{ x: d % g.w, y: Math.trunc(d / g.w) }];
   g.override.set(d, 'core:stairs_down');
 }
@@ -336,8 +362,8 @@ function populate(s: GenState): void {
 
   // モンスター
   const mrng = s.stream('monsters');
-  if (ft.monsters.per1000 > 0) {
-    let n = floorDiv(floorCount * ft.monsters.per1000, 1000) + floorDiv(s.depth, 3) + mrng.range(-1, 2);
+  if (s.pacing.monstersPer1000 > 0) {
+    let n = floorDiv(floorCount * s.pacing.monstersPer1000, 1000) + floorDiv(s.depth, 3) + mrng.range(-1, 2);
     n = Math.max(1, n);
     for (let k = 0; k < n; k++) {
       const pick = pickMonster(s, mrng);
@@ -362,7 +388,7 @@ function populate(s: GenState): void {
 
   // アイテム
   const irng = s.stream('items');
-  const ni = floorDiv(floorCount * ft.items.per1000, 1000) + irng.range(0, 2);
+  const ni = floorDiv(floorCount * s.pacing.itemsPer1000, 1000) + irng.range(0, 2);
   for (let k = 0; k < ni; k++) {
     const l = pickLoot(s.content, ft.items.table, s.depth, irng);
     if (!l) continue;
@@ -381,13 +407,78 @@ function populate(s: GenState): void {
     if (at !== null) s.spawns.push({ type: 'feature', kind: f, x: at % g.w, y: Math.trunc(at / g.w) });
   }
   const traps = s.content.lists.features.filter((f) => f.category === 'trap' && depthOk(f.depth, s.depth));
-  const nt = ft.traps.per1000 > 0 ? floorDiv(floorCount * ft.traps.per1000, 1000) + frng.range(0, 1) : 0;
+  const nt = s.pacing.trapsPer1000 > 0 ? floorDiv(floorCount * s.pacing.trapsPer1000, 1000) + frng.range(0, 1) : 0;
   for (let k = 0; k < nt && traps.length; k++) {
     const tr = frng.weighted(traps, (t) => floorDiv(100, t.rarity));
     const at = take(farFromEntry, frng);
     if (!tr || at === null) break;
     s.spawns.push({ type: 'feature', kind: tr.id, x: at % g.w, y: Math.trunc(at / g.w) });
   }
+}
+
+/** 守護者になれない行動様式（動かない・逃げ回るものは討伐目標に向かない） */
+const GUARDIAN_EXCLUDED_ARCHETYPES = new Set(['stationary', 'skittish']);
+
+/**
+ * 遠征の目標階の専用段: 守護者・遺物を入口から離れた到達可能なセルに置く。
+ * 乱数は 'objective' ストリームだけを使う（他の段の結果は変わらない）。
+ */
+function placeObjective(s: GenState, obj: ObjectiveSpec): boolean {
+  const g = s.grid;
+  const rng = s.stream('objective');
+  const dist = bfsDist(g, g.idx(s.entry.x, s.entry.y), s.passable);
+  const occupied = new Set<number>(s.spawns.map((sp) => g.idx(sp.x, sp.y)));
+  for (const p of [s.entry, ...s.down, ...(s.up ? [s.up] : [])]) occupied.add(g.idx(p.x, p.y));
+  const isStairs = (i: number) => {
+    const o = g.override.get(i);
+    return o !== undefined && !!s.content.terrain[s.content.terrainIndex[o]].stairs;
+  };
+  const ok = (i: number, minDist: number) => s.passable(i) && dist[i] >= minDist && !occupied.has(i) && !isStairs(i) && g.cells[i] !== DOOR
+    && cheb({ x: i % g.w, y: Math.trunc(i / g.w) }, s.entry) > 7;
+  let cands: number[] = [];
+  for (const minDist of [12, 8, 1]) {
+    cands = [];
+    for (let i = 0; i < g.cells.length; i++) if (ok(i, minDist)) cands.push(i);
+    if (cands.length) break;
+  }
+  if (!cands.length) return false;
+  // 遠い側の半分から選ぶ
+  cands.sort((a, b) => dist[a] - dist[b] || a - b);
+  const far = cands.slice(Math.trunc(cands.length / 2));
+  const at = far[rng.int(far.length)];
+  const ax = at % g.w, ay = Math.trunc(at / g.w);
+  occupied.add(at);
+  if (obj.relic) s.spawns.push({ type: 'item', kind: 'core:relic', x: ax, y: ay, qty: 1, affixes: [], role: 'relic' });
+  if (obj.guardian) {
+    let gx = ax, gy = ay;
+    if (obj.relic) {
+      const near = DIRS.map((d) => g.idx(ax + DIR_VEC[d][0], ay + DIR_VEC[d][1])).filter((i) => ok(i, 1));
+      if (!near.length) return false;
+      const ni = near[rng.int(near.length)];
+      gx = ni % g.w; gy = Math.trunc(ni / g.w);
+    }
+    // 守護者は「その深度の通常モンスター」から選ぶ（深層の敵が混ざる抽選は使わない）
+    const effective = Math.min(s.depth, s.content.deepestDefined);
+    let pick: { def: MonsterDef; tier: number } | null = null;
+    for (let k = 0; k < 20 && !pick; k++) {
+      const p = pickMonster(s, rng);
+      if (p && !GUARDIAN_EXCLUDED_ARCHETYPES.has(p.def.ai.archetype) && p.def.depth.min <= effective) pick = p;
+    }
+    if (!pick) {
+      const def = s.content.lists.monsters.find((m) => !GUARDIAN_EXCLUDED_ARCHETYPES.has(m.ai.archetype) && depthOk(m.depth, Math.min(s.depth, s.content.deepestDefined)))
+        ?? s.content.lists.monsters.find((m) => !GUARDIAN_EXCLUDED_ARCHETYPES.has(m.ai.archetype));
+      if (!def) return false;
+      pick = { def, tier: s.depth > s.content.deepestDefined ? floorDiv(s.depth - s.content.deepestDefined, 5) + 1 : 0 };
+    }
+    const guardAffix = s.content.lists.affixes.find((a) => a.target === 'guardian');
+    const spec = monsterSpec(s, pick.def, pick.tier, gx, gy, false, rng);
+    if (spec.type === 'monster') {
+      spec.affixes = [...(guardAffix ? [guardAffix.id] : []), ...spec.affixes];
+      spec.role = 'guardian';
+    }
+    s.spawns.push(spec);
+  }
+  return true;
 }
 
 // ---- validators ----
@@ -406,13 +497,25 @@ validators.register('min_floor_area', (s) => {
   for (let i = 0; i < s.grid.cells.length; i++) if (s.passable(i)) n++;
   return n * 100 >= s.grid.w * s.grid.h * 15;
 });
+/** 到着地点から下り階段までの歩行距離が pacing.stairsPath に収まる（指定がある帯のみ。全ての階に暗黙に適用） */
+validators.register('stairs_path', (s) => {
+  const sp = s.pacing.stairsPath;
+  if (!sp) return true;
+  if (!s.down.length) return false;
+  const dist = bfsDist(s.grid, s.grid.idx(s.entry.x, s.entry.y), s.passable);
+  return s.down.every((p) => {
+    const d = dist[s.grid.idx(p.x, p.y)];
+    return d >= sp.min && d <= sp.max;
+  });
+});
 
 export const MAX_ATTEMPTS = 8;
 
-export function generateFloor(content: Content, seed: string, branch: string, depth: number, terrainTable: string[]): GeneratedFloor {
+export function generateFloor(content: Content, seed: string, branch: string, depth: number, terrainTable: string[], objective?: ObjectiveSpec): GeneratedFloor {
   const floorType = selectFloorType(content, seed, branch, depth);
   const biome = selectBiome(content, seed, branch, depth);
-  const { w, h } = floorType.size;
+  const pacing = resolvePacing(floorType, depth);
+  const { w, h } = pacing.size;
   for (let attempt = 0; attempt <= MAX_ATTEMPTS; attempt++) {
     const stream = streamFor(seed, branch, depth, attempt);
     const fallback = attempt === MAX_ATTEMPTS;
@@ -421,7 +524,7 @@ export function generateFloor(content: Content, seed: string, branch: string, de
     const layoutId = fallback ? 'core:fallback' : (layoutRng.weighted(Object.keys(layouts).sort(), (k) => layouts[k]) ?? 'core:rooms_corridors');
     const grid = layoutGenerators.get(layoutId)({ w, h, rng: layoutRng });
     const s: GenState = {
-      content, seed, branch, depth, attempt, floorType, biome, grid,
+      content, seed, branch, depth, attempt, floorType, biome, pacing, grid,
       entry: { x: 1, y: 1 }, up: null, down: [], spawns: [], stream,
       passable: (i: number) => {
         const o = grid.override.get(i);
@@ -434,7 +537,8 @@ export function generateFloor(content: Content, seed: string, branch: string, de
     if (!fallback) applyBiomeExtras(s);
     placeStairs(s);
     populate(s);
-    const vs = fallback ? ['stairs_connected'] : floorType.validators;
+    if (objective && !placeObjective(s, objective) && !fallback) continue;
+    const vs = fallback ? ['stairs_connected'] : [...floorType.validators, 'stairs_path'];
     if (!fallback && !vs.every((v) => validators.get(v)(s))) continue;
     // 地形 index へ変換
     const tIdx = (id: string) => {
@@ -453,7 +557,7 @@ export function generateFloor(content: Content, seed: string, branch: string, de
     const floor: Floor = {
       key, branch, depth, biome: biome.id, floorType: floorType.id, width: w, height: h,
       time: 0, terrain, regions, entry: s.entry, stairs: { up: s.up, down: s.down },
-      currentActor: null, nextWanderAt: 5000, rules: { noWander: floorType.rules.noWander },
+      currentActor: null, nextWanderAt: content.balance.wander.firstAt, rules: { noWander: floorType.rules.noWander },
     };
     // 決定的な順序（生成順のまま）
     return { floor, spawns: s.spawns, attempts: attempt + 1, layout: layoutId };

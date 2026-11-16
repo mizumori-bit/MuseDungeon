@@ -5,6 +5,8 @@ import { loadConfig, SessionManager } from '@muse/server';
 import { runBot } from './bot';
 import type { BotKind } from './bot';
 import { assetsCheck, assetsChecklist } from './assets';
+import { commandInvoker, drive, dummyInvoker, httpInvoker } from './drive';
+import { formatPacing, pacingReport } from './pacing';
 import { verifyRunDir, writeGolden } from './replay';
 import { resolve } from 'node:path';
 
@@ -146,8 +148,48 @@ async function main() {
       if (errs.length) process.exitCode = 1;
       break;
     }
+    case 'pacing': {
+      const runs = Number(flag('runs', '40'));
+      const manager = new SessionManager(content, loadConfig({ runsDir: null }));
+      const results = [];
+      for (let i = 0; i < runs; i++) {
+        results.push(await runBot(manager, { kind: 'greedy', seed: `${flag('seed', 'pacing')}-${i}`, maxActs: Number(flag('max-acts', '1500')) }));
+        for (const [id, s] of manager.sessions) if (s.world.status === 'ended') { s.close(); manager.sessions.delete(id); }
+      }
+      const rep = pacingReport(results);
+      if (has('json')) console.log(JSON.stringify(rep, null, 2));
+      else console.log(formatPacing(rep));
+      break;
+    }
+    case 'drive': {
+      // 参照ドライバ: npm run drive -- --token <player_token> [--agent dummy|--agent-cmd "<command>"|--agent-url <url>] [--base http://127.0.0.1:7777]
+      const base = flag('base', `http://127.0.0.1:${process.env.MUSE_PORT ?? 7777}`)!;
+      let token = flag('token');
+      if (!token && flag('new-run')) {
+        const r = await fetch(new URL('/api/runs', base), {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name: flag('new-run'), classId: flag('class') ? `core:${flag('class')}` : undefined, objective: flag('objective'), controller: { kind: 'agent', label: 'drive' } }),
+        });
+        const j = await r.json() as { runId?: string; token?: string; error?: { message: string } };
+        if (!j.token) throw new Error(`new run failed: ${j.error?.message ?? r.status}`);
+        token = j.token;
+        console.log(`new run ${j.runId} player_token=${token}`);
+      }
+      if (!token) throw new Error('usage: drive --token <player_token> | --new-run <name>  [--agent dummy | --agent-cmd "<cmd>" | --agent-url <url>]');
+      const invoker = flag('agent-cmd') ? commandInvoker(flag('agent-cmd')!) : flag('agent-url') ? httpInvoker(flag('agent-url')!) : dummyInvoker();
+      console.log(`driving with ${invoker.name}`);
+      const r = await drive({
+        baseUrl: base, token, invoker,
+        maxTurns: Number(flag('max-turns', '5000')), maxMs: Number(flag('max-minutes', '360')) * 60000, maxErrors: Number(flag('max-errors', '5')),
+        log: (m) => console.log(m),
+      });
+      console.log(`drive: ${r.outcome} (${r.reason}) after ${r.invocations} agent calls`);
+      if (r.text) console.log(r.text);
+      if (r.outcome === 'interrupted') console.log('遠征は進行中のまま。もう一度 drive を実行すると続きから進む。');
+      break;
+    }
     default:
-      console.log('usage: tsx packages/tools/src/cli.ts <bot|seed|gen-check|replay-verify|golden|assets-checklist|assets-check|validate> [options]');
+      console.log('usage: tsx packages/tools/src/cli.ts <bot|seed|gen-check|replay-verify|golden|assets-checklist|assets-check|validate|pacing|drive> [options]');
   }
 }
 

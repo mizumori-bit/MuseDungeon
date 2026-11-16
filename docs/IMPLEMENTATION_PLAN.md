@@ -7,17 +7,22 @@
 ## 0. 現状
 
 - M0〜M7 を実装済み（2026-11-16）。起動方法と MetaMuse の接続設定は `README.md`。設計からの確定事項・差分は DESIGN.md §12。
+- 改善 v2（V2-1〜V2-5: ターン契約・遠征・ホスト駆動・休憩と敵の耐久・探索密度）を実装済み（2026-11-16）。確定した設計は DESIGN.md §13、プロトコルは PROTOCOL.md。経緯は [IMPROVEMENTS_V2.md](IMPROVEMENTS_V2.md)。
 - 環境: Windows 11、Node.js 22.14、npm。シェルは PowerShell。Makefile や WSL 前提の仕組みは使わない。
 
 ### 完了の確認方法
 
+PowerShell では `npm run <script> -- --flag` の `--` を PowerShell が消すため、オプションが届かない。**PowerShell では `npm.cmd run <script> -- --flag` と書く**（または `npx tsx packages/tools/src/cli.ts <command> --flag`）。
+
 | 項目 | コマンド |
 |---|---|
 | 型検査・lint（境界ルール） | `npm run typecheck` / `npm run lint` |
-| テスト（決定論・畳み込み等価・漏洩・MCP 契約・対等性・COOP・復旧・ゴールデンリプレイ・生成不変条件 60 シード・bot 12 ラン） | `npm test` |
-| 完全版（生成 1,000 シード × 深度 1〜50、bot 100 ラン、漏洩 20 ラン） | `npm run test:full`、または `npm run gen:check -- --seeds 1000 --depth 50` と `npm run bot -- --runs 100` |
-| 記録の再実行検証 | `npm run replay:verify -- <runId>` |
-| アセット | `npm run assets:checklist` / `npm run assets:check -- packages/client/public/themes/sample` |
+| テスト（決定論・畳み込み等価・漏洩・MCP 契約と turn ブロック・対等性・COOP・復旧・ゴールデンリプレイ・生成不変条件 60 シード・bot 12 ラン・遠征の一周・目標階の配置・休憩の見積もり・実ダメージ・ドライバ） | `npm test` |
+| 完全版（生成 1,000 シード × 深度 1〜50、bot 100 ラン、漏洩 20 ラン、目標階の配置 300 シード） | `npm run test:full`、または `npm.cmd run gen:check -- --seeds 1000 --depth 50` と `npm.cmd run bot -- --runs 100` |
+| テンポの計測（V2-5） | `npm.cmd run pacing -- --runs 100` |
+| ホスト駆動（V2-3） | サーバー起動中に `npm.cmd run drive -- --new-run Bot`（内蔵ダミー）。`--token <player_token>` で既存のランを引き継ぐ |
+| 記録の再実行検証 | `npm.cmd run replay:verify -- <runId>` |
+| アセット | `npm run assets:checklist` / `npm.cmd run assets:check -- packages/client/public/themes/sample` |
 
 ## 1. 守るべき不変条件（レビュー観点）
 
@@ -95,6 +100,20 @@
 - **ログ書き込み**は追記のみで、イベント適用と同じ順序で flush する。キーフレームは別ファイルに書き、書き終えてからリネームする。
 - **テーマと名前の分離**: 表示名は content の `name.{ja,en}`、見た目は client のテーマ。engine は名前も見た目も参照しない。
 - **決定論の落とし穴**: 配列の sort には必ず全順序の比較関数を渡す。経路探索の同値タイブレークを固定する。JSON の数値は安全な整数範囲に収める。
+
+## 3.5 改善 v2（実装済み）
+
+MVP（M0〜M7）の後の作業は [IMPROVEMENTS_V2.md](IMPROVEMENTS_V2.md) に定める。順序と完了の定義は同書 §8（V2-1 ターン契約 → V2-2 遠征 → V2-3 ホスト駆動 → V2-4 休憩と敵の耐久 → V2-5 探索密度）。完了の定義に対応するテスト:
+
+| 段階 | 確認 |
+|---|---|
+| V2-1 | `server.test.ts`「turn contract」: 全ツールの応答に `turn` と末尾の `▶` 行、終了後は `awaiting: 'nothing'`。漏洩テストは `turn`・ブリーフィングも対象 |
+| V2-2 | `tools.test.ts`「expeditions」: 貪欲 bot が 遠征開始 → 達成 → 帰還 → キャンプ → 次の遠征 を通し、畳み込み等価と復旧の一致も確認。目標階に守護者／遺物が必ずあり到達可能（40 シード、完全版 300 シード）。`server.test.ts` で MCP 経由の extract／撤退／キャンプ／再開 |
+| V2-3 | `tools.test.ts`「host drive」: ダミーのエージェントで無人で 1 遠征が終わる。上限で中断してから再実行すると続きから進む |
+| V2-4 | `tools.test.ts`「rest and enemy durability」: `rest_estimate` の手数・回復量・時間が実際の rest と一致。とどめの表示が実ダメージ。`hpSeen` が記録され推定に使われる |
+| V2-5 | 生成不変条件テストが新しい寸法で通る。テンポの計測結果は DESIGN.md §13.6 |
+
+V2-1 と V2-2 が終わったので、MetaMuse による再評価ができる。
 
 ## 4. 設計時に置いた前提（必要なら依頼者に確認）
 

@@ -1,0 +1,18 @@
+[
+  {
+    "id": "core:balance",
+    "regen": { "baseInterval": 9, "levelDiv": 2, "minInterval": 3, "restMultiplier": 3 },
+    "rest": { "maxTurns": 400 },
+    "macro": { "stepLimit": 200 },
+    "wander": { "firstAt": 5000, "intervalMin": 4000, "intervalMax": 6000, "maxAwake": 30, "minDistance": 12 },
+    "score": { "perDepth": 1000, "perKill": 10, "perLevel": 25 },
+    "expedition": {
+      "firstTargetDepth": 3,
+      "aheadMin": 2,
+      "aheadMax": 4,
+      "points": { "reach_depth": 2000, "slay_guardian": 3000, "retrieve_relic": 3500 },
+      "pointsPerExtraDepth": 500,
+      "relicGuardianPct": 50
+    }
+  }
+]

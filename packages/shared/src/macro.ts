@@ -8,12 +8,17 @@ import type { Pos } from './types';
 import { cheb } from './util';
 import type { PlayerView } from './view';
 
+/** 既定値（実際の上限は catalog.rules.macroStepLimit / restMaxTurns） */
 export const MACRO_STEP_LIMIT = 200;
 
 export type MacroStop =
   | 'hostile_in_view' | 'damaged' | 'item_seen' | 'stairs_seen' | 'arrived' | 'explored'
   | 'unreachable' | 'unknown_destination' | 'step_limit' | 'full_hp' | 'status_changed'
-  | 'not_your_turn' | 'dead' | 'run_ended' | 'floor_changed' | 'blocked' | 'error';
+  | 'not_your_turn' | 'dead' | 'run_ended' | 'floor_changed' | 'blocked' | 'error'
+  | 'target_hp' | 'max_turns' | 'left_board';
+
+/** 自然に終わった（中断ではない）停止理由 */
+export const MACRO_COMPLETED_STOPS: ReadonlySet<MacroStop> = new Set<MacroStop>(['arrived', 'explored', 'full_hp', 'target_hp', 'max_turns']);
 
 export interface MacroState {
   kind: 'explore' | 'travel' | 'rest';
@@ -26,6 +31,15 @@ export interface MacroState {
   steps: number;
   /** explore: 選んだフロンティア（到達するか、フロンティアでなくなるまで固定。同距離の振動を防ぐ） */
   goal?: number;
+  /** 手数の上限 */
+  limit: number;
+  /** rest: この HP に達したら止まる */
+  untilHp?: number;
+  /** rest: この手数で止まる */
+  maxTurns?: number;
+  /** 開始時の HP とフロア時刻（結果の報告用） */
+  startHp: number;
+  startTime: number;
 }
 
 function hostileIds(view: PlayerView): string[] {
@@ -46,7 +60,8 @@ function stairsCount(view: PlayerView, catalog: Catalog): number {
 }
 
 export function macroStart(view: PlayerView, cmd: Command, catalog: Catalog): MacroState {
-  return {
+  const rules = catalog.rules;
+  const st: MacroState = {
     kind: cmd.type as MacroState['kind'],
     target: cmd.type === 'travel' ? cmd.to : undefined,
     floorKey: view.floor?.key ?? '',
@@ -55,7 +70,15 @@ export function macroStart(view: PlayerView, cmd: Command, catalog: Catalog): Ma
     knownItems: itemIds(view),
     knownStairs: stairsCount(view, catalog),
     steps: 0,
+    limit: cmd.type === 'rest' ? (rules?.restMaxTurns ?? 400) : (rules?.macroStepLimit ?? MACRO_STEP_LIMIT),
+    startHp: view.self.stats.hp,
+    startTime: view.floor?.time ?? 0,
   };
+  if (cmd.type === 'rest') {
+    if (cmd.untilHp !== undefined) st.untilHp = cmd.untilHp;
+    if (cmd.maxTurns !== undefined) st.maxTurns = cmd.maxTurns;
+  }
+  return st;
 }
 
 function resolveTravelGoal(view: PlayerView, catalog: Catalog, target: TravelTarget): { goals: number[]; adjacentOk: boolean } | null {
@@ -90,6 +113,7 @@ export type MacroDecision = { command: Command } | { stop: MacroStop };
 export function macroNext(state: MacroState, view: PlayerView, catalog: Catalog, events: readonly ProjectedEvent[]): MacroDecision {
   if (view.runStatus === 'ended') return { stop: 'run_ended' };
   if (view.status === 'dead') return { stop: 'dead' };
+  if (view.status === 'at_camp') return { stop: 'left_board' };
   if (view.status !== 'your_turn') return { stop: 'not_your_turn' };
   if (!view.floor || !view.self.pos) return { stop: 'error' };
   if (view.floor.key !== state.floorKey) return { stop: 'floor_changed' };
@@ -105,20 +129,24 @@ export function macroNext(state: MacroState, view: PlayerView, catalog: Catalog,
   const newHostile = hostiles.some((h) => !state.knownHostiles.includes(h.id));
   if (newHostile) return { stop: 'hostile_in_view' };
   if (hostiles.some((h) => cheb(h.pos, pos) <= 1 && h.awareness !== 'asleep')) return { stop: 'hostile_in_view' };
-  if (state.kind === 'rest' && hostiles.some((h) => h.awareness === 'hunting')) return { stop: 'hostile_in_view' };
+  if (state.kind === 'rest' && hostiles.some((h) => h.awareness === 'hunting' && !h.fleeing)) return { stop: 'hostile_in_view' };
   if (state.kind === 'explore') {
     const items = itemIds(view);
     if (items.some((i) => !state.knownItems.includes(i))) return { stop: 'item_seen' };
     if (stairsCount(view, catalog) > state.knownStairs) return { stop: 'stairs_seen' };
   }
-  if (state.steps >= MACRO_STEP_LIMIT) return { stop: 'step_limit' };
   state.lastHp = me.stats.hp;
 
   if (state.kind === 'rest') {
     const poisoned = me.statuses.some((s) => s.id === 'core:poison');
     if (me.stats.hp >= me.stats.maxHp && !poisoned) return { stop: 'full_hp' };
+    if (state.untilHp !== undefined && me.stats.hp >= state.untilHp && !poisoned) return { stop: 'target_hp' };
+    if (state.maxTurns !== undefined && state.steps >= state.maxTurns) return { stop: 'max_turns' };
+    if (state.steps >= state.limit) return { stop: 'step_limit' };
+    state.steps += 1;
     return { command: { type: 'wait' } };
   }
+  if (state.steps >= state.limit) return { stop: 'step_limit' };
 
   const grid = buildNavGrid(view, catalog)!;
   let path: Pos[] | null;

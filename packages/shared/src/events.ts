@@ -1,12 +1,13 @@
 // Event の型。仕様: docs/PROTOCOL.md §5
 // 規約: イベントは結果値（after 値）を持ち、applyEvent は代入・追加・削除しかしない。
 import type {
-  AiState, BaseStats, Entity, EntityId, EquipSlot, Floor, FloorKey, FloorPos, MonsterMemory,
-  PlayerId, PlayerRecord, PlayerStats, Pos, RememberedEntity, RngState, RunMeta, RunSummary,
-  Stats, StatusInst, WorldSecret,
+  AiState, BaseStats, CampState, Entity, EntityId, EquipSlot, Expedition, ExpeditionEndReason, ExpeditionResult, Floor,
+  FloorKey, FloorPos, MonsterMemory, Objective, ObjectiveProgress, PlayerId, PlayerRecord, PlayerStats, Pos,
+  RememberedEntity, RngState, RunMeta, RunSummary, Stats, StatusInst, WorldSecret,
 } from './types';
 
-export const EVENT_VERSION = 1;
+/** 2: 遠征・実ダメージ・回復の蓄積値（IMPROVEMENTS_V2）。1 のログもそのまま畳み込める */
+export const EVENT_VERSION = 2;
 
 export interface EventBase {
   seq: number;
@@ -36,7 +37,7 @@ export type GameEvent =
   // ラン
   | E<'run_started', { meta: RunMeta; secret: WorldSecret | null }>
   | E<'player_joined', { player: PlayerRecord; entity: Entity }>
-  | E<'player_state', { player: PlayerId; state: PlayerRecord['state']; reason: string }>
+  | E<'player_state', { player: PlayerId; state: PlayerRecord['state']; reason: string; extractPos?: FloorPos | null }>
   | E<'player_stats', { player: PlayerId; stats: PlayerStats }>
   | E<'run_ended', { reason: string; summary: RunSummary }>
   // フロア
@@ -49,7 +50,7 @@ export type GameEvent =
   | E<'entity_removed', { id: EntityId; kind: string; reason: string }>
   | E<'entity_moved', { id: EntityId; kind: string; from: Pos; to: Pos; mode: MoveMode }>
   | E<'entity_changed_floor', { id: EntityId; kind: string; from: FloorPos; to: FloorPos; nextActAt: number; dir: 'up' | 'down' }>
-  | E<'actor_scheduled', { id: EntityId; nextActAt: number; turns: number }>
+  | E<'actor_scheduled', { id: EntityId; nextActAt: number; turns: number; regenAfter?: number }>
   | E<'ai_state_changed', { id: EntityId; ai: AiState; dormant: boolean; nextActAt: number }>
   // 戦闘
   | E<'attack', {
@@ -59,12 +60,15 @@ export type GameEvent =
       from: Pos | null; to: Pos;
     }>
   | E<'damaged', {
-      target: EntityId; targetKind: string; amount: number; hpAfter: number;
+      /** amount は出目どおりのダメージ、dealt は実際に減った HP（とどめの超過分を含まない） */
+      target: EntityId; targetKind: string; amount: number; hpAfter: number; dealt?: number;
       source: EntityId | null; sourceKind: string | null; via: DamageVia;
+      /** 見ていたプレイヤーごとの、その個体への累計実ダメージ（after 値。プレイヤーには渡さない） */
+      seenTotals?: Record<PlayerId, number>;
     }>
   | E<'healed', { target: EntityId; targetKind: string; amount: number; hpAfter: number; via: string }>
   | E<'max_hp_changed', { target: EntityId; targetKind: string; maxHpAfter: number; hpAfter: number }>
-  | E<'died', { id: EntityId; kind: string; killer: EntityId | null; killerKind: string | null; via: DamageVia; pos: Pos }>
+  | E<'died', { id: EntityId; kind: string; killer: EntityId | null; killerKind: string | null; via: DamageVia; pos: Pos; maxHp?: number | null }>
   | E<'status_applied', { target: EntityId; targetKind: string; status: StatusInst; statusesAfter: StatusInst[] }>
   | E<'status_expired', { target: EntityId; targetKind: string; statusId: string; statusesAfter: StatusInst[] }>
   | E<'status_ticked', { target: EntityId; statusesAfter: StatusInst[] }>
@@ -99,6 +103,15 @@ export type GameEvent =
     }>
   | E<'monster_memory_updated', { player: PlayerId; kind: string; memoryAfter: MonsterMemory }>
   | E<'notes_updated', { player: PlayerId; notesAfter: string[] }>
+  // 遠征
+  | E<'expedition_offered', { camp: CampState }>
+  | E<'expedition_started', { expedition: Expedition }>
+  | E<'objective_progress', {
+      no: number; progressAfter: ObjectiveProgress; statusAfter: Expedition['status'];
+      targetsAfter?: Expedition['targets']; extractedAfter?: Expedition['extracted'];
+    }>
+  | E<'objective_completed', { no: number; objective: Objective }>
+  | E<'expedition_ended', { no: number; reason: ExpeditionEndReason; result: ExpeditionResult; summary: RunSummary }>
   // 知覚（状態を変えない）
   | E<'noise', { pos: Pos; loudness: number; source: EntityId | null }>
   // メタ

@@ -48,6 +48,7 @@ export function makeMonster(ctx: Ctx, floor: FloorKey, spec: Extract<SpawnSpec, 
   };
   if (spec.asleep) e.actor!.dormant = true;
   if (tier > 0 || spec.affixes.length) e.scale = { tier, affixes: [...spec.affixes] };
+  if (spec.role) e.role = spec.role;
   return e;
 }
 
@@ -71,8 +72,10 @@ export function spawnFromSpec(ctx: Ctx, floor: FloorKey, spec: SpawnSpec, reason
   const sid = ctx.nextSid();
   let e: Entity;
   if (spec.type === 'monster') e = makeMonster(ctx, floor, spec, id, sid);
-  else if (spec.type === 'item') e = makeItem(floor, spec.kind, spec.x, spec.y, spec.qty, spec.affixes, id, sid);
-  else e = makeFeature(ctx, floor, spec.kind, spec.x, spec.y, id, sid);
+  else if (spec.type === 'item') {
+    e = makeItem(floor, spec.kind, spec.x, spec.y, spec.qty, spec.affixes, id, sid);
+    if (spec.role) e.role = spec.role;
+  } else e = makeFeature(ctx, floor, spec.kind, spec.x, spec.y, id, sid);
   const seen = ctx.perceive(floor, [{ field: 'entity', pos: e.pos }]);
   ctx.emit({ type: 'entity_spawned', entity: e, reason, floor, seenBy: seen.seenBy });
   return ctx.world.entities[id];

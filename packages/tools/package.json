@@ -10,6 +10,7 @@
     "@muse/shared": "0.1.0",
     "@muse/content": "0.1.0",
     "@muse/engine": "0.1.0",
-    "@muse/server": "0.1.0"
+    "@muse/server": "0.1.0",
+    "@modelcontextprotocol/sdk": "1.32.2"
   }
 }

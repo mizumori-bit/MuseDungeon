@@ -7,6 +7,7 @@ import type { ActionError, Controller, GameEvent, JoinRunRequest, NewRunRequest,
 import { actionError, stripSecret } from '@muse/shared';
 import type { ServerConfig } from '../config';
 import { McpHttpHandler } from '../mcp/http';
+import { feedToken, handleFeed } from './feed';
 import { MarkerBuilder, spectatorEvent } from '../log/RunStore';
 import type { SessionManager } from '../session/SessionManager';
 import { WsHub } from '../ws/hub';
@@ -77,6 +78,11 @@ export function createApp(manager: SessionManager, config: ServerConfig): App {
       return;
     }
     if (p === '/api/health') return json(res, 200, { ok: true, contentVersion: manager.catalog.contentVersion });
+    if (p === '/api/player/feed' && m === 'GET') {
+      const tok = feedToken(req, url);
+      if (!tok || !handleFeed(req, res, manager, config, tok)) return fail(res, 401, actionError('no_session', 'unknown or missing player token', 'Authorization: Bearer <player_token> か ?token= を付ける'));
+      return;
+    }
     if (p === '/api/config') return json(res, 200, { spectatorPolicy: config.spectatorPolicy });
     if (p === '/api/content/catalog') return json(res, 200, manager.catalog);
     if (p === '/api/leaderboard') return json(res, 200, { entries: store?.leaderboard() ?? [] });
@@ -131,7 +137,7 @@ export function createApp(manager: SessionManager, config: ServerConfig): App {
         if (live) {
           const mb = new MarkerBuilder();
           for (const ev of live.history) mb.add(ev);
-          return json(res, 200, { runId, lastSeq: live.world.seq, markers: mb.markers, keyframes: store?.keyframeSeqs(runId) ?? [] });
+          return json(res, 200, { runId, lastSeq: live.world.seq, markers: mb.markers, keyframes: store?.keyframeSeqs(runId) ?? [], expeditions: mb.expeditions });
         }
         return json(res, 200, store!.index(runId));
       }

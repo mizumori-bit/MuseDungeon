@@ -4,15 +4,16 @@ import type { Content } from '@muse/content';
 import type {
   ActionError, Command, Entity, GameEvent, JoinCommand, PlayerId, PlayerRecord, RunMeta, RunOptions, World, WorldSecret,
 } from '@muse/shared';
-import { actionError, emptyWorld, EVENT_VERSION, FREE_COMMANDS, MACRO_COMMANDS, Rng, t } from '@muse/shared';
+import { actionError, CAMP_COMMANDS, emptyWorld, EVENT_VERSION, FREE_COMMANDS, MACRO_COMMANDS, Rng, t } from '@muse/shared';
 import { actions, freeCommand } from './actions';
 import { Ctx } from './ctx';
+import { checkObjective, huntingInView, offerExpeditions, startExpedition } from './expedition';
 import { ensureFloor, findFreeCell } from './floors';
 import { updateKnowledge } from './perception';
 import { advance, endTurn } from './scheduler';
 import { recomputeStats } from './stats';
 
-export const ENGINE_VERSION = '0.1.0';
+export const ENGINE_VERSION = '0.2.0';
 
 export interface CreateRunParams {
   runId: string;
@@ -61,13 +62,15 @@ export function createRun(content: Content, p: CreateRunParams): { world: World;
   const ctx = new Ctx(world, content, null, p.wall ?? 0);
   ctx.emit({ type: 'run_started', meta, secret, seenBy: 'all', floor: null, ft: 0 });
   ensureFloor(ctx, 'main:1');
+  // 最初の遠征の候補（参加後に start_expedition で始める）
+  offerExpeditions(ctx);
   return { world, events: ctx.finish() };
 }
 
 export function joinPlayer(world: World, content: Content, join: JoinCommand, meta: { cseq: number | null; wall: number }): { ok: true; playerId: PlayerId; events: GameEvent[] } | { ok: false; error: ActionError; events: GameEvent[] } {
   const loc = join.locale ?? 'ja';
   if (world.status === 'ended') return { ok: false, error: actionError('run_ended', t(loc, 'ランは終了している。', 'The run has ended.'), t(loc, 'new_run で新しいランを始める。', 'Start a new run with new_run.')), events: [] };
-  const activePlayers = world.playerOrder.filter((pid) => world.players[pid].state === 'alive').length;
+  const activePlayers = world.playerOrder.filter((pid) => world.players[pid].state === 'alive' || world.players[pid].state === 'at_camp').length;
   if (activePlayers >= world.meta.options.maxPlayers) return { ok: false, error: actionError('bad_request', t(loc, 'このランは満員だ。', 'This run is full.'), t(loc, '別のランに参加するか new_run。', 'Join another run or use new_run.')), events: [] };
   const classId = join.classId ?? 'core:warrior';
   const cls = content.classes[classId];
@@ -141,6 +144,19 @@ export function step(world: World, content: Content, playerId: PlayerId, cmd: Co
     if (fk) advance(ctx, fk);
     return { ok: true, events: ctx.finish() };
   }
+  if (CAMP_COMMANDS.has(cmd.type) && cmd.type === 'start_expedition') {
+    const err = startExpedition(ctx, pr, cmd.offer);
+    if (err) return { ok: false, error: err, events: [] };
+    const floors = [...new Set(world.playerOrder.map((pid) => world.entities[world.players[pid].entityId]?.pos?.floor).filter((k): k is string => !!k))].sort();
+    for (const k of floors) updateKnowledge(ctx, k);
+    checkObjective(ctx);
+    for (const k of floors) advance(ctx, k);
+    checkObjective(ctx);
+    return { ok: true, events: ctx.finish() };
+  }
+  if (pr.state === 'at_camp') {
+    return { ok: false, error: actionError('at_camp', t(L, 'あなたはキャンプにいる（盤面にいない）。', 'You are at camp (off the board).'), t(L, 'start_expedition { offer } で次の遠征を始める。ここで終えてもよい。', 'Start the next expedition with start_expedition { offer }, or stop here.')), events: [] };
+  }
   if (pr.state !== 'alive') return { ok: false, error: actionError('dead', t(L, 'あなたは既に死んでいる。', 'You are dead.'), t(L, 'new_run で新しいランを始める。', 'Start a new run with new_run.')), events: [] };
   const e = world.entities[pr.entityId];
   const key = e.pos!.floor;
@@ -153,13 +169,17 @@ export function step(world: World, content: Content, playerId: PlayerId, cmd: Co
     const prep = actions.get(cmd.type)(ctx, e, pr, cmd);
     if ('error' in prep) return { ok: false, error: prep.error, events: [] };
     if (meta.thought) ctx.emit({ type: 'thought', player: playerId, text: meta.thought.slice(0, 280), seenBy: [playerId] });
+    // 休息: 追跡中の敵が見えない状態での wait は回復が速い
+    const restful = cmd.type === 'wait' && !huntingInView(ctx, pr);
     const r = prep.run();
     const cur = world.entities[e.id];
-    if (!r.scheduled && cur?.pos && world.players[playerId].state === 'alive' && world.floors[key].currentActor === e.id) endTurn(ctx, cur, r.cost);
+    if (!r.scheduled && cur?.pos && world.players[playerId].state === 'alive' && world.floors[key].currentActor === e.id) endTurn(ctx, cur, r.cost, restful);
     const after = world.entities[e.id]?.pos?.floor ?? key;
     const touched = after === key ? [key] : [key, after];
     for (const k of touched) updateKnowledge(ctx, k);
+    checkObjective(ctx);
     for (const k of touched) advance(ctx, k);
+    checkObjective(ctx);
     return { ok: true, events: ctx.finish() };
   } catch (err) {
     const events = ctx.finish();

@@ -1,7 +1,7 @@
 // 検証済みコンテンツの束。ID → 定義の表と、決定的な走査用の ID 順リストを持つ。
 import { canonicalHash } from '@muse/shared';
 import type {
-  AffixDef, AppearanceDef, BiomeDef, ClassDef, FeatureDef, FileKind, FloorTypeDef, ItemDef,
+  AffixDef, AppearanceDef, BalanceDef, BiomeDef, ClassDef, FeatureDef, FileKind, FloorTypeDef, ItemDef,
   LootTableDef, MonsterDef, PrefabDef, SpawnTableDef, StatusDef, TerrainDef,
 } from './schema';
 import { FILE_SCHEMAS } from './schema';
@@ -24,6 +24,8 @@ export interface Content {
   lootTables: Record<string, LootTableDef>;
   classes: Record<string, ClassDef>;
   features: Record<string, FeatureDef>;
+  /** 調整値（core:balance。後の pack が同じ ID で上書きできる） */
+  balance: BalanceDef;
   /** 各表の ID 昇順リスト（決定的な走査用） */
   lists: {
     monsters: MonsterDef[]; items: ItemDef[]; appearances: AppearanceDef[]; affixes: AffixDef[];
@@ -94,6 +96,7 @@ export function buildContent(packs: RawPack[]): Content {
     lootTables: table(list('lootTables') as LootTableDef[], 'lootTables'),
     classes: table(list('classes') as ClassDef[], 'classes'),
     features: table(list('features') as FeatureDef[], 'features'),
+    balance: merged.balance.get('core:balance') as BalanceDef,
     lists: {
       monsters: list('monsters') as MonsterDef[], items: list('items') as ItemDef[], appearances: list('appearances') as AppearanceDef[],
       affixes: list('affixes') as AffixDef[], biomes: list('biomes') as BiomeDef[], floorTypes: list('floorTypes') as FloorTypeDef[],
@@ -107,6 +110,7 @@ export function buildContent(packs: RawPack[]): Content {
     terrain: c.terrain, monsters: c.lists.monsters, items: c.lists.items, appearances: c.lists.appearances,
     affixes: c.lists.affixes, statuses: c.statuses, biomes: c.lists.biomes, floorTypes: c.lists.floorTypes,
     prefabs: c.lists.prefabs, spawnTables: c.spawnTables, lootTables: c.lootTables, classes: c.lists.classes, features: c.lists.features,
+    balance: c.balance,
   }).slice(0, 12);
   return c;
 }
@@ -114,6 +118,14 @@ export function buildContent(packs: RawPack[]): Content {
 function crossValidate(c: Content): void {
   const errs: string[] = [];
   const need = (ok: boolean, msg: string) => { if (!ok) errs.push(msg); };
+  need(!!c.balance, 'balance.json に core:balance が必要');
+  if (c.balance) {
+    for (const k of ['reach_depth', 'slay_guardian', 'retrieve_relic']) need(k in c.balance.expedition.points, `balance.expedition.points に ${k} が必要`);
+    need(c.balance.expedition.aheadMax >= c.balance.expedition.aheadMin, 'balance.expedition: aheadMax >= aheadMin');
+    need(c.balance.wander.intervalMax >= c.balance.wander.intervalMin, 'balance.wander: intervalMax >= intervalMin');
+  }
+  need(!!c.items['core:relic'], '遠征の遺物 core:relic が必要');
+  need(c.lists.affixes.some((a) => a.target === 'guardian'), '守護者用の接辞（target: guardian）が必要');
   const t = (id: string, where: string) => need(id in c.terrainIndex, `${where}: 未定義の terrain ${id}`);
   for (const b of c.lists.biomes) {
     t(b.palette.floor, b.id); t(b.palette.wall, b.id); t(b.palette.doorClosed, b.id); t(b.palette.doorOpen, b.id);

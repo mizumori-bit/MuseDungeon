@@ -18,6 +18,8 @@ export interface ServerConfig {
   keyframeEvery: number;
   /** MCP の行動ツールが他プレイヤー待ちで一旦返るまでの時間 */
   waitOthersMs: number;
+  /** ターンフィードの idle 通知の間隔（手番のまま入力が無いとき） */
+  idleNoticeMs: number;
 }
 
 export function loadConfig(overrides: Partial<ServerConfig> = {}): ServerConfig {
@@ -32,6 +34,7 @@ export function loadConfig(overrides: Partial<ServerConfig> = {}): ServerConfig 
     clientDist: resolve(REPO_ROOT, 'packages', 'client', 'dist'),
     keyframeEvery: 500,
     waitOthersMs: 20000,
+    idleNoticeMs: env.MUSE_IDLE_NOTICE_MS ? parseInt(env.MUSE_IDLE_NOTICE_MS, 10) : 60000,
     ...overrides,
   };
 }
