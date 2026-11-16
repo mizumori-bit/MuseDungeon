@@ -16,7 +16,7 @@
     "equip": { "slot": "armor", "armor": 5, "eva": -2 } },
 
   { "id": "core:potion_healing", "name": { "ja": "回復の薬", "en": "potion of healing" }, "category": "potion", "unidentified": true,
-    "depth": { "min": 1 }, "rarity": 1, "stack": true, "shatter": true,
+    "depth": { "min": 1 }, "rarity": 2, "stack": true, "shatter": true,
     "onUse": [{ "effect": "heal", "amount": "2d8+4" }, { "effect": "cure", "status": "core:poison" }],
     "desc": { "ja": "傷を癒やし毒を消す", "en": "Heals wounds and cures poison" } },
   { "id": "core:potion_haste", "name": { "ja": "加速の薬", "en": "potion of haste" }, "category": "potion", "unidentified": true,

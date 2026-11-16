@@ -41,6 +41,18 @@ export function handleFeed(req: IncomingMessage, res: ServerResponse, manager: S
       }
       return;
     }
+    if (v.status === 'at_camp' && !v.expedition) {
+      // キャンプから始まったラン: 最初の遠征を選ぶ番（終了ではないので turn として 1 回送る）
+      const key = 'camp:first';
+      if (lastTurnKey !== key) {
+        lastTurnKey = key;
+        lastTurnAt = Date.now();
+        lastIdleAt = lastTurnAt;
+        const o = port.observeWithTurn('turn_arrived', { detail: 'brief', map: false, changes: 'peek' });
+        send({ type: 'turn', ...base(), turn: o.turn, observation_text: o.text });
+      }
+      return;
+    }
     if (v.status === 'at_camp') {
       const key = `expedition:${v.expedition?.no ?? 0}`;
       if (endedScope !== key) {

@@ -5,8 +5,8 @@ import type {
   RestEstimate, World,
 } from '@muse/shared';
 import {
-  briefingLines, buildObservation, currentExpedition, dangerOf, endReasonText, haulTotal, latestExpedition, multText, nameOf, nextOverreach,
-  objectiveText, offerText, overreachPoints, partsText, progressText, recommendedLevel, resultText, slotName,
+  briefingLines, buildObservation, currentExpedition, deepestGenerated, endReasonText, haulTotal, latestExpedition, multText, nameOf, nextCampOf,
+  nextOverreach, objectiveText, offerGap, offerText, overreachPoints, partsText, progressText, resultText, slotName,
 } from '@muse/shared';
 import type { RefObject } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
@@ -32,11 +32,25 @@ export function SlotBadge({ slot }: { slot: OfferSlot | null | undefined }) {
   return <span class={`slot-badge ${slot}`}>{slotName(getLocale(), slot)}</span>;
 }
 
-/** 危険度 1〜5 を点で表す */
-export function DangerPips({ n }: { n: number }) {
+const signed = (n: number): string => (n > 0 ? `+${n}` : `${n}`);
+
+/**
+ * 候補の難しさ（V3-2R §14.4）: 推奨レベルと自分のレベルの差、条件の危険度の合計。段階に丸めない。
+ * 「推奨 Lv6・あなた Lv2（差 +4）／条件 +1」。差が正（推奨より低い）なら強調する
+ */
+export function OfferGap({ rec, level, gap, traitDanger }: { rec: number | null; level: number; gap: number | null; traitDanger: number }) {
+  if (rec === null && !traitDanger) return null;
+  const cls = gap === null ? '' : gap >= 3 ? 'over far' : gap > 0 ? 'over' : 'ok';
   return (
-    <span class={`danger d${n}`} title={tr(`危険度 ${n}（1〜5。推奨レベルとの差と条件から公開の式で計算）`, `Danger ${n} (1-5, from the recommended level and traits)`)}>
-      {tr('危険度', 'Danger')} {[1, 2, 3, 4, 5].map((i) => <i key={i} class={i <= n ? 'on' : ''} />)} {n}
+    <span class={`ogap ${cls}`} title={tr('推奨レベル: その深さに着いたときのレベルの目安（公開の表）。差が正なら推奨より低い。条件: 遠征の条件の危険度の合計',
+      'Recommended level: the typical level on arrival at that depth (public table). A positive gap means you are below it. Traits: sum of the traits\' danger')}>
+      {rec !== null && (
+        <>
+          {tr(`推奨 Lv${rec}・あなた Lv${level}`, `recommended Lv${rec}, you Lv${level}`)}
+          {gap !== null && <b class="gapn">{tr(`（差 ${signed(gap)}）`, ` (gap ${signed(gap)})`)}</b>}
+        </>
+      )}
+      {traitDanger !== 0 && <span class="tdanger">{rec !== null ? tr('／', ' / ') : ''}{tr(`条件 ${signed(traitDanger)}`, `traits ${signed(traitDanger)}`)}</span>}
     </span>
   );
 }
@@ -74,18 +88,42 @@ export interface HaulInfo {
   /** 今 extract すると撤退になる（目的の基礎点を除いて withdrawPct %、倍率なし） */
   withdraw?: boolean;
   withdrawPct?: number;
-  next: { depth: number; points: number } | null;
+  /**
+   * 次の踏破: その階の下り階段に立てば点が入る（V3-2R §14.1）。
+   * here: 今その階にいる（pathLen が null なら下り階段は未発見）。俯瞰では here を付けない
+   */
+  next: { depth: number; points: number; pathLen?: number | null; here?: boolean } | null;
+  /** 今帰った場合の次の候補の下限と推奨レベル（潜るほど深くなる） */
+  nextCamp?: { minTargetDepth: number; recommendedLevel: number } | null;
+  /** 自分のレベル（次の候補の推奨レベルと比べる。プレイヤー視点のみ） */
+  level?: number;
   /** 確定済みの点（プレイヤー視点のみ） */
   banked?: number;
 }
 
-export function haulFromObs(ox: ObsExpedition | undefined, banked: number, rules: CatalogRules | undefined): HaulInfo | null {
+export function haulFromObs(ox: ObsExpedition | undefined, banked: number, rules: CatalogRules | undefined, level?: number): HaulInfo | null {
   const h = ox?.haul;
   if (!ox || !h) return null;
+  const nx = h.next_overreach;
+  const nc = h.next_camp;
   return {
     total: h.total, parts: h.parts, multiplierPct: h.multiplier_pct, ifExtractNow: h.if_extract_now,
-    withdraw: ox.extract_outcome === 'withdraw', withdrawPct: rules?.haul.withdrawPct, next: h.next_overreach, banked,
+    withdraw: ox.extract_outcome === 'withdraw', withdrawPct: rules?.haul.withdrawPct,
+    next: nx ? { depth: nx.depth, points: nx.points, pathLen: nx.path_len, here: ox.progress.depth === nx.depth } : null,
+    nextCamp: nc ? { minTargetDepth: nc.min_target_depth, recommendedLevel: nc.recommended_level } : null,
+    level, banked,
   };
+}
+
+/** 「地下4階の下り階段に着けば +600（経路 23）」「（未発見）」 */
+export function nextOverreachText(n: NonNullable<HaulInfo['next']>): string {
+  const where = n.here ? (n.pathLen !== null && n.pathLen !== undefined ? tr(`（経路 ${n.pathLen}）`, ` (path ${n.pathLen})`) : tr('（未発見）', ' (not found yet)')) : '';
+  return tr(`地下${n.depth}階の下り階段に着けば +${n.points}${where}`, `Reach the down stairs of depth ${n.depth}: +${n.points}${where}`);
+}
+
+/** 「帰ると次の候補は地下5階以上・推奨 Lv4」 */
+export function nextCampText(c: NonNullable<HaulInfo['nextCamp']>): string {
+  return tr(`帰ると次の候補は地下${c.minTargetDepth}階以上・推奨 Lv${c.recommendedLevel}`, `If you extract now, next offers start at depth ${c.minTargetDepth} (recommended Lv${c.recommendedLevel})`);
 }
 
 export function HaulBlock({ h }: { h: HaulInfo }) {
@@ -110,7 +148,17 @@ export function HaulBlock({ h }: { h: HaulInfo }) {
                 : tr(`今帰れば +${h.ifExtractNow}`, `Extract now: +${h.ifExtractNow}`)}
             </span>
           )}
-          {h.next && <span class="next">{tr(`地下${h.next.depth}階に着けば +${h.next.points}`, `Reach depth ${h.next.depth}: +${h.next.points}`)}</span>}
+          {h.next && (
+            <span class="next" title={tr('踏破: 目標より深い階の下り階段に立ったときに点が入る（着いただけでは入らない）', 'Crossing: points are added when you stand on the down stairs of a floor deeper than the target (arriving is not enough)')}>
+              {nextOverreachText(h.next)}
+            </span>
+          )}
+        </div>
+      )}
+      {h.nextCamp && (
+        <div class={`haul-camp ${h.level !== undefined && h.nextCamp.recommendedLevel > h.level ? 'over' : ''}`}
+          title={tr('次の遠征の候補の目標深度は、生成済みの最深階が基準になる（潜るほど次が深くなる）', 'Next offers are based on the deepest floor generated so far (the deeper you go, the deeper they get)')}>
+          {nextCampText(h.nextCamp)}{h.level !== undefined ? tr(`（あなた Lv${h.level}）`, ` (you Lv${h.level})`) : ''}
         </div>
       )}
     </div>
@@ -121,7 +169,9 @@ export function HaulBlock({ h }: { h: HaulInfo }) {
 export function extractConfirmText(ox: ObsExpedition | undefined, complete: boolean, rules: CatalogRules | undefined): string {
   const h = ox?.haul;
   const pct = rules?.haul.withdrawPct ?? 50;
-  const next = h?.next_overreach ? tr(`\n（参考: 地下${h.next_overreach.depth}階に着けば戦利品に +${h.next_overreach.points}）`, `\n(For reference: reaching depth ${h.next_overreach.depth} adds +${h.next_overreach.points} to the haul)`) : '';
+  const info = haulFromObs(ox, 0, rules);
+  const refs = [info?.next ? nextOverreachText(info.next) : '', info?.nextCamp ? nextCampText(info.nextCamp) : ''].filter(Boolean);
+  const next = refs.length ? tr(`\n（参考: ${refs.join(' / ')}）`, `\n(For reference: ${refs.join(' / ')})`) : '';
   if (complete) {
     const pay = h ? tr(`\n確定する点: +${h.if_extract_now}（戦利品 ${h.total} ${multText(h.multiplier_pct)}）`, `\nBanked: +${h.if_extract_now} (haul ${h.total} ${multText(h.multiplier_pct)})`) : '';
     return tr(`帰還して遠征${ox ? ` ${ox.no}` : ''}を終えますか？${pay}${next}`, `Extract and end the expedition?${pay}${next}`);
@@ -175,8 +225,9 @@ export function ExpeditionPanel({ view, obs, catalog, onBriefing }: { view: Play
   const ox = obs?.expedition;
   const active = x.status !== 'ended' && view.status !== 'at_camp';
   const done = completesOnExtract(x);
-  const haul = active ? haulFromObs(ox, view.record.banked, rules) : null;
+  const haul = active ? haulFromObs(ox, view.record.banked, rules, view.self.level) : null;
   const now = ox?.haul?.if_extract_now;
+  const sense = active ? ox?.sense : undefined;
   return (
     <section class="panel exp">
       <h3>
@@ -188,6 +239,7 @@ export function ExpeditionPanel({ view, obs, catalog, onBriefing }: { view: Play
       </h3>
       <div class="objective">{objectiveText(L, x.objective)}</div>
       <div class="progress">{progressText(L, x, view.floor?.depth ?? null)}</div>
+      {sense && <SenseLine sense={sense} />}
       {x.traits.length > 0 && <TraitList traits={x.traits} rules={rules} compact />}
       {haul && <HaulBlock h={haul} />}
       {active && ox && (
@@ -202,6 +254,17 @@ export function ExpeditionPanel({ view, obs, catalog, onBriefing }: { view: Play
       )}
       {x.status === 'ended' && x.result && <ResultBlock x={x} playerId={view.playerId} rules={rules} />}
     </section>
+  );
+}
+
+const SENSE_ARROW: Record<string, string> = { n: '↑', ne: '↗', e: '→', se: '↘', s: '↓', sw: '↙', w: '←', nw: '↖' };
+
+/** 目標の気配（目標階にいる間。方角と 10 マス以内かどうか。地図では自分の横に矢印を出す） */
+export function SenseLine({ sense }: { sense: NonNullable<ObsExpedition['sense']> }) {
+  return (
+    <div class={`sense ${sense.what} ${sense.range}`} title={tr('正確な位置は、見るまで分からない', 'The exact position is unknown until you see it')}>
+      <span class="sarrow">{SENSE_ARROW[sense.dir] ?? '?'}</span> {sense.text}
+    </div>
   );
 }
 
@@ -245,9 +308,7 @@ export function RestEstimateLine({ est }: { est: RestEstimate }) {
 
 function OfferCard({ o, rules, level, onStart }: { o: ExpeditionOffer; rules: CatalogRules | undefined; level: number; onStart: (offer: number) => void }) {
   const L = getLocale();
-  const td = o.objective.targetDepth;
-  const danger = rules && td !== null ? dangerOf(rules, td, o.traits ?? [], level) : null;
-  const rec = rules && td !== null ? recommendedLevel(rules, td) : null;
+  const g = rules ? offerGap(rules, o.objective.targetDepth, o.traits ?? [], level) : null;
   const guarded = o.objective.type === 'retrieve_relic' && o.relicGuarded ? tr('（守護者付き）', ' (guarded)') : '';
   return (
     <li class={`offer ${o.slot ?? ''}`}>
@@ -262,10 +323,7 @@ function OfferCard({ o, rules, level, onStart }: { o: ExpeditionOffer; rules: Ca
         <span class="omult" title={tr('帰還（達成）したとき戦利品に掛かる倍率', 'Multiplier on the haul when you extract with the objective complete')}>
           {tr('倍率', 'multiplier')} {multText(o.multiplierPct ?? 100)}
         </span>
-        {danger !== null && <DangerPips n={danger} />}
-        {rec !== null && (
-          <span class={`olevel ${level < rec ? 'under' : ''}`}>{tr(`推奨 Lv${rec}（あなたは Lv${level}）`, `recommended Lv${rec} (you are Lv${level})`)}</span>
-        )}
+        {g && <OfferGap rec={g.recommendedLevel} level={level} gap={g.levelGap} traitDanger={g.traitDanger} />}
       </div>
       <TraitList traits={o.traits ?? []} rules={rules} />
     </li>
@@ -278,22 +336,29 @@ export function CampPanel({ view, catalog, onStart, onRetire }: { view: PlayerVi
   const camp = view.camp;
   const rules = rulesOf(catalog);
   const rec = view.record;
+  // 最初のキャンプ（new_run で objective を省いた）: 前の遠征も成績もまだ無い
+  const first = !x;
   return (
     <div class="campbox">
-      <h2>{tr('キャンプ', 'Camp')}</h2>
-      <div class="record">
-        <span>{tr('確定点', 'Banked')} <b>{rec.banked}</b></span>
-        <span>{tr('達成した遠征', 'Expeditions completed')} <b>{rec.expeditions}</b></span>
-        {rec.lost > 0 && <span class="lost">{tr('失った戦利品', 'Haul lost')} <b>{rec.lost}</b></span>}
-      </div>
+      <h2>{first ? tr('キャンプ — 最初の遠征を選ぶ', 'Camp — choose your first expedition') : tr('キャンプ', 'Camp')}</h2>
+      {!first && (
+        <div class="record">
+          <span>{tr('確定点', 'Banked')} <b>{rec.banked}</b></span>
+          <span>{tr('達成した遠征', 'Expeditions completed')} <b>{rec.expeditions}</b></span>
+          {rec.lost > 0 && <span class="lost">{tr('失った戦利品', 'Haul lost')} <b>{rec.lost}</b></span>}
+        </div>
+      )}
       {x?.result && <ResultBlock x={x} playerId={view.playerId} rules={rules} />}
       <p class="muted">
-        {tr(`盤面の外にいる（時間は進まない）。HP ${view.self.stats.hp}/${view.self.stats.maxHp}・Lv${view.self.level}。最深到達: 地下${view.deepestDepth}階。ここで終えてもよい。`,
-          `You are off the board (time does not pass). HP ${view.self.stats.hp}/${view.self.stats.maxHp}, Lv${view.self.level}. Deepest: ${view.deepestDepth}. You may stop here.`)}
+        {first
+          ? tr(`盤面の外にいる（時間は進まない）。HP ${view.self.stats.hp}/${view.self.stats.maxHp}・Lv${view.self.level}。目標の深さ・推奨レベル・条件を比べて、3 つの候補から最初の遠征を選ぶ。`,
+            `You are off the board (time does not pass). HP ${view.self.stats.hp}/${view.self.stats.maxHp}, Lv${view.self.level}. Compare depth, recommended level and traits, and pick your first expedition.`)
+          : tr(`盤面の外にいる（時間は進まない）。HP ${view.self.stats.hp}/${view.self.stats.maxHp}・Lv${view.self.level}。最深到達: 地下${view.deepestDepth}階。ここで終えてもよい。`,
+            `You are off the board (time does not pass). HP ${view.self.stats.hp}/${view.self.stats.maxHp}, Lv${view.self.level}. Deepest: ${view.deepestDepth}. You may stop here.`)}
       </p>
       {camp ? (
         <>
-          <h3>{tr(`次の遠征の候補（遠征 ${camp.nextNo}）`, `Offers for expedition ${camp.nextNo}`)}</h3>
+          <h3>{first ? tr(`最初の遠征の候補（遠征 ${camp.nextNo}）`, `Offers for expedition ${camp.nextNo}`) : tr(`次の遠征の候補（遠征 ${camp.nextNo}）`, `Offers for expedition ${camp.nextNo}`)}</h3>
           <ul class="offers cards">
             {camp.offers.map((o) => <OfferCard key={o.index} o={o} rules={rules} level={view.self.level} onStart={onStart} />)}
             <li class="offer endless">
@@ -329,6 +394,8 @@ export interface ExpInfo {
   playerId?: string;
   note?: string;
   offers?: string[];
+  /** 追従しているプレイヤーの気配（その人の知識。俯瞰では出さない） */
+  sense?: NonNullable<ObsExpedition['sense']>;
 }
 
 function viewOf(x: Expedition): ExpeditionView {
@@ -337,7 +404,7 @@ function viewOf(x: Expedition): ExpeditionView {
     progress: { reached: x.progress.reached, guardianSlain: x.progress.guardianSlain, relicHeld: x.progress.relicHeldBy !== null, relicHeldByYou: false },
     extracted: false, result: x.result, startSeq: x.startSeq, endSeq: x.endSeq,
     slot: x.slot ?? null, traits: [...(x.traits ?? [])], multiplierPct: x.multiplierPct ?? 100,
-    haul: { ...(x.haul ?? { bounty: 0, discovery: 0, kills: 0 }) }, maxDepth: x.progress.maxDepth ?? 0,
+    haul: { ...(x.haul ?? { bounty: 0, discovery: 0, kills: 0 }) }, maxDepth: x.progress.maxDepth ?? 0, crossedDepth: x.progress.crossedDepth ?? 0,
   };
 }
 
@@ -346,8 +413,9 @@ function titleOf(x: { no: number; objective: ExpeditionView['objective'] }): str
 }
 
 /**
- * 俯瞰の戦利品: 共有分（賞金・発見・撃破）＋目的＋深追い＋参加者が持っている宝。
- * 払い戻しはプレイヤーごとなので「今帰れば」は出さない（式は shared の overreachPoints / haulTotal）。
+ * 俯瞰の戦利品: 共有分（賞金・発見・撃破）＋目的＋踏破＋参加者が持っている宝。
+ * 踏破の点は参加者が下り階段に立った最も深い階（progress.crossedDepth）で数える（着いただけでは入らない。V3-2R §14.1）。
+ * 払い戻しはプレイヤーごとなので「今帰れば」は出さない（式は shared の overreachPoints / haulTotal / nextCampOf）。
  */
 function directorHaul(world: World, x: Expedition, rules: CatalogRules | undefined): HaulInfo | null {
   if (x.status === 'ended' || !rules) return null;
@@ -359,13 +427,14 @@ function directorHaul(world: World, x: Expedition, rules: CatalogRules | undefin
     for (const id of me.inv?.items ?? []) treasure += world.entities[id]?.item?.value ?? 0;
   }
   const shared = x.haul ?? { bounty: 0, discovery: 0, kills: 0 };
-  const maxDepth = x.progress.maxDepth ?? 0;
+  const crossed = x.progress.crossedDepth ?? 0;
   const parts: HaulParts = {
     objective: x.status === 'objective_complete' ? x.points : 0,
-    overreach: overreachPoints(rules, x.objective.targetDepth, maxDepth),
+    overreach: overreachPoints(rules, x.objective.targetDepth, crossed),
     treasure, bounty: shared.bounty, discovery: shared.discovery, kills: shared.kills,
   };
-  return { total: haulTotal(parts), parts, multiplierPct: x.multiplierPct ?? 100, next: nextOverreach(rules, x.objective.targetDepth, maxDepth) };
+  const nc = rules.slots?.safe ? nextCampOf(rules, deepestGenerated(world)) : null;
+  return { total: haulTotal(parts), parts, multiplierPct: x.multiplierPct ?? 100, next: nextOverreach(rules, x.objective.targetDepth, crossed), nextCamp: nc };
 }
 
 /** 俯瞰: World の最新の遠征。depth は表示中のフロアの深さ */
@@ -407,7 +476,8 @@ export function followExpInfo(view: PlayerView, catalog?: Catalog | null): ExpIn
   if (catalog && x.status !== 'ended' && view.status !== 'at_camp') {
     try {
       const ox = buildObservation(view, catalog, { detail: 'brief', map: false }).expedition;
-      info.haul = haulFromObs(ox, view.record.banked, rules);
+      info.haul = haulFromObs(ox, view.record.banked, rules, view.self.level);
+      if (ox?.sense) info.sense = ox.sense;
     } catch {
       info.haul = null;
     }
@@ -428,6 +498,7 @@ export function ExpeditionStatusPanel({ info }: { info: ExpInfo | null }) {
     <section class="panel exp">
       <h3>{info.title} <SlotBadge slot={info.slot} /> <span class={`badge ${info.status.key}`}>{info.status.text}</span></h3>
       {info.progress && <div class="progress">{info.progress}</div>}
+      {info.sense && <SenseLine sense={info.sense} />}
       {info.traits && info.traits.length > 0 && <TraitList traits={info.traits} rules={info.rules} compact />}
       {info.haul && <HaulBlock h={info.haul} />}
       {info.ended && <ResultBlock x={info.ended} playerId={info.playerId} rules={info.rules} />}

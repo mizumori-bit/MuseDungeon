@@ -2,7 +2,7 @@
 // projectPlayerView はルール無しの純粋なフィルタ。仕様: docs/PROTOCOL.md §4
 import type {
   CampState, Controller, Entity, EntityId, EntityRole, EquipSlot, Expedition, ExpeditionEndReason, ExpeditionResult, FloorKey,
-  Locale, MonsterMemory, Objective, OfferSlot, PlayerId, PlayerState, Pos, RememberedEntity, Stats, StatusInst, World,
+  Locale, MonsterMemory, Objective, OfferSlot, PlayerId, PlayerState, Pos, RememberedEntity, Stats, StatusInst, World, Sense,
 } from './types';
 
 export type HpState = 'healthy' | 'wounded' | 'badly_wounded' | 'near_death';
@@ -124,6 +124,8 @@ export interface ExpeditionView {
   haul: { bounty: number; discovery: number; kills: number };
   /** この遠征で到達した最深階 */
   maxDepth: number;
+  /** この遠征で下り階段に立った最も深い階（踏破） */
+  crossedDepth: number;
 }
 
 export interface PlayerView {
@@ -138,7 +140,10 @@ export interface PlayerView {
   floor: { key: FloorKey; depth: number; biome: string; floorType: string; width: number; height: number; time: number; noWander: boolean } | null;
   visibleCells: number[];
   entities: EntityView[];
-  memory: { terrain: number[]; remembered: RememberedView[] };
+  /** unsighted: 地形は知っているが、まだ目で見ていないセル（地図の巻物で知った区画） */
+  memory: { terrain: number[]; remembered: RememberedView[]; unsighted?: number[] };
+  /** 目標の気配（遠征の目標階にいる間） */
+  sense: Sense | null;
   identified: string[];
   monsterMemory: Record<string, MonsterMemory>;
   notes: string[];
@@ -335,7 +340,7 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
       result: latest.result ? structuredClone(latest.result) : null,
       startSeq: latest.startSeq, endSeq: latest.endSeq,
       slot: latest.slot ?? null, traits: [...(latest.traits ?? [])], multiplierPct: latest.multiplierPct ?? 100,
-      haul: { ...(latest.haul ?? { bounty: 0, discovery: 0, kills: 0 }) }, maxDepth: latest.progress.maxDepth ?? 0,
+      haul: { ...(latest.haul ?? { bounty: 0, discovery: 0, kills: 0 }) }, maxDepth: latest.progress.maxDepth ?? 0, crossedDepth: latest.progress.crossedDepth ?? 0,
     };
   }
 
@@ -371,7 +376,8 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
     } : null,
     visibleCells: [...k.visible],
     entities,
-    memory: { terrain: fk ? [...fk.seen] : [], remembered },
+    memory: { terrain: fk ? [...fk.seen] : [], remembered, ...(fk?.mapped?.length ? { unsighted: [...fk.mapped] } : {}) },
+    sense: k.sense ? { ...k.sense } : null,
     identified: [...k.identified],
     monsterMemory: structuredClone(k.monsterMemory),
     notes: [...k.notes],

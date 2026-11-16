@@ -1,6 +1,6 @@
 // 知覚: プレイヤーの視界と知識（knowledge_updated）、モンスターの視認、騒音、起床、モンスターの思い出。
-import type { Entity, FloorKey, MonsterMemory, PlayerId, PlayerRecord, Pos, RememberedEntity } from '@muse/shared';
-import { indicesToRanges } from '@muse/shared';
+import type { Entity, FloorKey, MonsterMemory, PlayerId, PlayerRecord, Pos, RememberedEntity, Sense } from '@muse/shared';
+import { cheb, compassDir, currentExpedition, indicesToRanges } from '@muse/shared';
 import type { Ctx } from './ctx';
 import { computeFov, hasLos, inCircle, line } from './geom';
 
@@ -125,11 +125,18 @@ export function updateKnowledge(ctx: Ctx, key: FloorKey): void {
     }
     const prevShots = k.shots ?? [];
     const shotsChanged = shots.length !== prevShots.length || shots.some((s, i) => s !== prevShots[i]);
-    if (visChanged || newlySeen.length || rememberedSet.length || rememberedDel.length || met.length || shotsChanged) {
+    // 地図で知っていたセルを目で見た
+    const mappedDel = fk?.mapped?.length ? fk.mapped.filter((i) => fovSet.has(i)) : [];
+    // 目標の気配
+    const sense = senseFor(ctx, pr, key);
+    const prevSense = k.sense ?? null;
+    const senseChanged = JSON.stringify(sense) !== JSON.stringify(prevSense);
+    if (visChanged || newlySeen.length || rememberedSet.length || rememberedDel.length || met.length || shotsChanged || mappedDel.length || senseChanged) {
       ctx.emit({
         type: 'knowledge_updated', player: pr.id, floorKey: key,
         visible: visChanged ? indicesToRanges(fov) : null,
         newlySeen, rememberedSet, rememberedDel, metAdd: met, ...(shotsChanged ? { shotsAfter: shots } : {}),
+        ...(mappedDel.length ? { mappedDel } : {}), ...(senseChanged ? { senseAfter: sense } : {}),
         // このイベントの seq（emit が world.seq + 1 を振る）を初見の時点として記録する
         ...(met.length ? { metAtAfter: Object.fromEntries(met.map((id) => [id, ctx.world.seq + 1])) } : {}),
         seenBy: [pr.id], floor: key,
@@ -143,6 +150,26 @@ export function updateKnowledge(ctx: Ctx, key: FloorKey): void {
       });
     }
   }
+}
+
+/**
+ * 目標の気配（公開ルール）: 遠征の参加者が目標階にいる間、守護者（未討伐）か遺物（未入手）の方角と、10 マス以内かどうか。
+ * 正確な位置は出さない。
+ */
+function senseFor(ctx: Ctx, pr: PlayerRecord, key: FloorKey): Sense | null {
+  const x = currentExpedition(ctx.world);
+  const me = ctx.world.entities[pr.entityId];
+  if (!x || !me?.pos || !x.participants.includes(pr.id)) return null;
+  if (x.objective.targetDepth === null || ctx.world.floors[key]?.depth !== x.objective.targetDepth) return null;
+  let id: string | null = null;
+  let what: Sense['what'] = 'guardian';
+  if (x.objective.type === 'slay_guardian' && !x.progress.guardianSlain) id = x.targets.guardian;
+  else if (x.objective.type === 'retrieve_relic' && !x.progress.relicHeldBy) { id = x.targets.relic; what = 'relic'; }
+  const tgt = id ? ctx.world.entities[id] : undefined;
+  if (!tgt?.pos || tgt.pos.floor !== key) return null;
+  const dir = compassDir(me.pos, tgt.pos);
+  if (!dir) return null;
+  return { what, dir, range: cheb(me.pos, tgt.pos) <= 10 ? 'near' : 'far' };
 }
 
 /** モンスターがプレイヤーを視認できるか（プレイヤーの視界と対称、半径外は射線） */

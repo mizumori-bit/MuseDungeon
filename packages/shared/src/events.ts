@@ -3,7 +3,7 @@
 import type {
   AiState, BaseStats, CampState, Dir, Entity, EntityId, EquipSlot, Expedition, ExpeditionHaul, ExpeditionEndReason, ExpeditionResult, Floor,
   FloorKey, FloorPos, MonsterMemory, Objective, ObjectiveProgress, PlayerId, PlayerRecord, PlayerStats, Pos,
-  RememberedEntity, RngState, RunMeta, RunSummary, Stats, StatusInst, WorldSecret,
+  RememberedEntity, RngState, RunMeta, RunSummary, Sense, Stats, StatusInst, WorldSecret,
 } from './types';
 
 /** 2: 遠征・実ダメージ・回復の蓄積値（IMPROVEMENTS_V2）。1 のログもそのまま畳み込める */
@@ -56,6 +56,8 @@ export type GameEvent =
   | E<'attack', {
       attacker: EntityId | null; attackerKind: string | null;
       target: EntityId | null; targetKind: string | null;
+      /** 接辞（文章で「毒牙のゴブリン」と書くため。見えていない側は伏せる） */
+      attackerAffixes?: string[] | null; targetAffixes?: string[] | null;
       roll: number; hit: boolean; crit: boolean; ranged: boolean;
       from: Pos | null; to: Pos;
       /** 攻撃者が見えていない被害者にだけ残す、攻撃が来た方向 */
@@ -65,6 +67,7 @@ export type GameEvent =
       /** amount は出目どおりのダメージ、dealt は実際に減った HP（とどめの超過分を含まない） */
       target: EntityId; targetKind: string; amount: number; hpAfter: number; dealt?: number;
       source: EntityId | null; sourceKind: string | null; via: DamageVia;
+      targetAffixes?: string[] | null; sourceAffixes?: string[] | null;
       /** 見ていたプレイヤーごとの、その個体への累計実ダメージ（after 値。プレイヤーには渡さない） */
       seenTotals?: Record<PlayerId, number>;
       /** 攻撃元が見えていない被害者にだけ残す、攻撃が来た方向 */
@@ -72,13 +75,13 @@ export type GameEvent =
     }>
   | E<'healed', { target: EntityId; targetKind: string; amount: number; hpAfter: number; via: string }>
   | E<'max_hp_changed', { target: EntityId; targetKind: string; maxHpAfter: number; hpAfter: number }>
-  | E<'died', { id: EntityId; kind: string; killer: EntityId | null; killerKind: string | null; via: DamageVia; pos: Pos; maxHp?: number | null; bounty?: number }>
-  | E<'status_applied', { target: EntityId; targetKind: string; status: StatusInst; statusesAfter: StatusInst[] }>
+  | E<'died', { id: EntityId; kind: string; killer: EntityId | null; killerKind: string | null; via: DamageVia; pos: Pos; maxHp?: number | null; bounty?: number; affixes?: string[] }>
+  | E<'status_applied', { target: EntityId; targetKind: string; status: StatusInst; statusesAfter: StatusInst[]; targetAffixes?: string[] | null }>
   | E<'status_expired', { target: EntityId; targetKind: string; statusId: string; statusesAfter: StatusInst[] }>
   | E<'status_ticked', { target: EntityId; statusesAfter: StatusInst[] }>
   | E<'stats_changed', { target: EntityId; statsAfter: Stats; baseAfter: BaseStats | null; speedAfter: number | null; reason: string }>
   | E<'xp_gained', { target: EntityId; amount: number; xpAfter: number }>
-  | E<'level_up', { target: EntityId; levelAfter: number; xpAfter: number; statsAfter: Stats; baseAfter: BaseStats }>
+  | E<'level_up', { target: EntityId; levelAfter: number; xpAfter: number; statsAfter: Stats; baseAfter: BaseStats; gains?: { maxHp: number; acc: number; might: number; eva: number } }>
   // アイテム（状態変化は put/del で表す）
   | E<'item_picked_up', { actor: EntityId; item: EntityId; kind: string | null; appearanceId: string | null; qty: number; slot: string; affixes?: string[]; auto?: boolean }>
   | E<'item_dropped', { actor: EntityId; item: EntityId; kind: string | null; appearanceId: string | null; qty: number; pos: Pos; affixes?: string[] }>
@@ -93,6 +96,8 @@ export type GameEvent =
       blockedBy?: 'terrain' | 'actor' | null;
       /** 遮った・外れた相手（命中しなかった場合も含む） */
       reached?: EntityId | null; reachedKind?: string | null;
+      /** 当たった・遮った相手の接辞 */
+      reachedAffixes?: string[] | null;
     }>
   | E<'item_identified', { player: PlayerId; kind: string; appearanceId: string | null }>
   // 地物・罠
@@ -113,6 +118,11 @@ export type GameEvent =
       shotsAfter?: EntityId[];
       /** metAdd の各個体を初めて見た seq（after 値。v3 以降） */
       metAtAfter?: Record<EntityId, number>;
+      /** 地図の巻物などで地形だけ知ったセル（追加）と、自分の目で見たので外すセル（V3-2R） */
+      mappedAdd?: number[];
+      mappedDel?: number[];
+      /** 目標の気配（after 値。変化したときだけ。null は気配なし） */
+      senseAfter?: Sense | null;
     }>
   | E<'monster_memory_updated', { player: PlayerId; kind: string; memoryAfter: MonsterMemory }>
   | E<'notes_updated', { player: PlayerId; notesAfter: string[] }>

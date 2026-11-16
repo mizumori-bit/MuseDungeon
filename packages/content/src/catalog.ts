@@ -33,6 +33,9 @@ export function buildCatalog(c: Content): Catalog {
       slot: it.equip?.slot, usable: it.onUse.length > 0, throwable: !!it.throw || it.shatter,
       targeted: it.target !== 'none', desc: itemDesc(it), harmful: it.harmful, treasure: it.category === 'treasure',
       throwRange: it.throw?.range ?? (it.shatter ? 4 : null),
+      ...(it.equip?.slot === 'weapon' && it.equip.dmg ? { weapon: { dmg: it.equip.dmg, acc: it.equip.acc ?? 0 } } : {}),
+      ...(it.equip?.slot === 'armor' ? { armorStats: { armor: it.equip.armor ?? 0, eva: it.equip.eva ?? 0 } } : {}),
+      ...(it.throw ? { throwStats: { dmg: it.throw.dmg, acc: it.throw.acc ?? 0, range: it.throw.range } } : {}),
     };
   }
   return {
@@ -52,7 +55,10 @@ export function buildCatalog(c: Content): Catalog {
       name: f.name, category: f.category, states: f.states, interactable: f.onInteract.length > 0, passable: f.passable,
     }])),
     statuses: Object.fromEntries(Object.values(c.statuses).map((s) => [s.id, s.handler === 'speed_pct' ? { name: s.name, speedPct: s.params.pct ?? 100 } : { name: s.name }])),
-    affixes: Object.fromEntries(c.lists.affixes.map((a) => [a.id, { name: a.name, target: a.target }])),
+    affixes: Object.fromEntries(c.lists.affixes.map((a) => [a.id, {
+      name: a.name, target: a.target,
+      ...(a.target === 'item' ? { itemMods: { acc: a.mods?.acc ?? 0, dmgBonus: a.mods?.dmgBonus ?? 0, armor: a.mods?.armor ?? 0 } } : {}),
+    }])),
     biomes: Object.fromEntries(c.lists.biomes.map((b) => [b.id, { name: b.name }])),
     floorTypes: Object.fromEntries(c.lists.floorTypes.map((f) => [f.id, { name: f.name }])),
     rules: {
@@ -73,10 +79,11 @@ export function buildCatalog(c: Content): Catalog {
         ambitious: { ...c.balance.expedition.slots.ambitious },
       },
       afterObjectiveWanderPct: c.balance.expedition.afterObjective.wanderIntervalPct,
-      recommendedLevel: { ...c.balance.expedition.recommendedLevel },
+      recommendedLevel: { byDepth: [...c.balance.expedition.recommendedLevelByDepth] },
+      xp: { ...c.balance.xp },
       traits: Object.fromEntries(c.lists.expeditionTraits.map((t) => [t.id, { name: t.name, desc: t.desc, multiplierPct: t.multiplierPct, danger: t.danger }])),
       expedition: {
-        firstTargetDepth: c.balance.expedition.firstTargetDepth, aheadMin: c.balance.expedition.aheadMin, aheadMax: c.balance.expedition.aheadMax,
+        firstTargetDepth: { ...c.balance.expedition.firstTargetDepth }, aheadMin: c.balance.expedition.aheadMin, aheadMax: c.balance.expedition.aheadMax,
         points: { ...c.balance.expedition.points }, pointsPerExtraDepth: c.balance.expedition.pointsPerExtraDepth,
       },
       hpBands: [HP_BANDS[0], HP_BANDS[1], HP_BANDS[2]],

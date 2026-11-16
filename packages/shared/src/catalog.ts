@@ -30,6 +30,10 @@ export interface CatalogItem {
   throwRange: number | null;
   /** 宝（持ち帰ると点になる。価値は個体ごと） */
   treasure: boolean;
+  /** 自分の持ち物の性能（鑑定済みなら定義の値をそのまま見せる。V3-2R §14.3） */
+  weapon?: { dmg: string; acc: number };
+  armorStats?: { armor: number; eva: number };
+  throwStats?: { dmg: string; acc: number; range: number };
 }
 
 export interface CatalogClass {
@@ -51,7 +55,8 @@ export interface Catalog {
   features: Record<string, { name: Names; category: 'feature' | 'trap'; states: string[]; interactable: boolean; passable: boolean }>;
   /** speedPct: 速度を変える状態異常の倍率（%）。公開ルール（加速 x2 など） */
   statuses: Record<string, { name: Names; speedPct?: number }>;
-  affixes: Record<string, { name: Names; target: 'monster' | 'item' | 'guardian' }>;
+  /** itemMods: 品物の接辞の効果（自分の持ち物の性能表示に使う。敵の接辞の値は出さない） */
+  affixes: Record<string, { name: Names; target: 'monster' | 'item' | 'guardian'; itemMods?: { acc: number; dmgBonus: number; armor: number } }>;
   biomes: Record<string, { name: Names }>;
   floorTypes: Record<string, { name: Names }>;
   /** 公開ルールの数値（content の balance.json から。ルールブックと実際の挙動を一致させる） */
@@ -64,7 +69,7 @@ export interface CatalogRules {
   macroStepLimit: number;
   wander: { intervalMin: number; intervalMax: number };
   score: { perDepth: number; perKill: number; perLevel: number };
-  expedition: { firstTargetDepth: number; aheadMin: number; aheadMax: number; points: Record<string, number>; pointsPerExtraDepth: number };
+  expedition: { firstTargetDepth: Record<'safe' | 'standard' | 'ambitious', number>; aheadMin: number; aheadMax: number; points: Record<string, number>; pointsPerExtraDepth: number };
   /** 敵の HP 4 段階の境界（%）: healthy >= [0], wounded >= [1], badly_wounded >= [2], それ未満 near_death */
   hpBands: [number, number, number];
   /** 推定残り HP: 記録がこの数未満の間は上限を出さない */
@@ -79,25 +84,31 @@ export interface CatalogRules {
   slots: Record<'safe' | 'standard' | 'ambitious', { aheadMin: number; aheadMax: number; traitsMin: number; traitsMax: number; pointsPct: number }>;
   /** 目的達成後の徘徊の湧き間隔（%）と推奨レベルの式 */
   afterObjectiveWanderPct: number;
-  recommendedLevel: { mul: number; div: number };
+  /** 推奨レベルの表（深度 1 から。bot の実測） */
+  recommendedLevel: { byDepth: number[] };
+  /** 敵を倒す以外の経験値 */
+  xp: { perNewDepth: number; perObjective: number };
   /** 遠征の条件（公開） */
   traits: Record<string, { name: Names; desc: Names; multiplierPct: number; danger: number }>;
 }
 
-/** 深追いの点: 目標より深い k 階目ごとに first + step × (k - 1) */
-export function overreachPoints(rules: Pick<CatalogRules, 'haul'>, targetDepth: number | null, maxDepth: number): number {
+/**
+ * 深追い（踏破）の点: 目標より深い階を横切り、その階の下り階段に立つたびに入る（V3-2R §14.1）。
+ * crossedDepth = 下り階段に立った最も深い階。k 階目ごとに first + step × (k - 1)
+ */
+export function overreachPoints(rules: Pick<CatalogRules, 'haul'>, targetDepth: number | null, crossedDepth: number): number {
   if (targetDepth === null) return 0;
-  const k = Math.max(0, maxDepth - targetDepth);
+  const k = Math.max(0, crossedDepth - targetDepth);
   let total = 0;
   for (let i = 0; i < k; i++) total += rules.haul.overreachFirst + rules.haul.overreachStep * i;
   return total;
 }
 
-/** 次に深追いの点が入る階とその点 */
-export function nextOverreach(rules: Pick<CatalogRules, 'haul'>, targetDepth: number | null, maxDepth: number): { depth: number; points: number } | null {
+/** 次に踏破の点が入る階（その階の下り階段に立てば入る）とその点 */
+export function nextOverreach(rules: Pick<CatalogRules, 'haul'>, targetDepth: number | null, crossedDepth: number): { depth: number; points: number } | null {
   if (targetDepth === null) return null;
-  const k = Math.max(0, maxDepth - targetDepth);
-  return { depth: Math.max(targetDepth, maxDepth) + 1, points: rules.haul.overreachFirst + rules.haul.overreachStep * k };
+  const k = Math.max(0, crossedDepth - targetDepth);
+  return { depth: Math.max(targetDepth, crossedDepth) + 1, points: rules.haul.overreachFirst + rules.haul.overreachStep * k };
 }
 
 export function haulTotal(p: HaulParts): number {
@@ -110,15 +121,29 @@ export function payoutOf(rules: Pick<CatalogRules, 'haul'>, p: HaulParts, comple
   return Math.trunc(((haulTotal(p) - p.objective) * rules.haul.withdrawPct) / 100);
 }
 
-/** 推奨レベルと危険度（公開の式だけで出す） */
+/** 推奨レベル（公開の表。表より深い階は直近 4 階の傾きで外挿する。整数のみ） */
 export function recommendedLevel(rules: Pick<CatalogRules, 'recommendedLevel'>, depth: number): number {
-  return 1 + Math.trunc((depth * rules.recommendedLevel.mul) / rules.recommendedLevel.div);
+  const t = rules.recommendedLevel.byDepth;
+  const d = Math.max(1, depth);
+  if (d <= t.length) return t[d - 1];
+  const n = t.length;
+  const span = Math.min(4, n - 1);
+  const rise = t[n - 1] - t[n - 1 - span];
+  return t[n - 1] + Math.trunc(((d - n) * rise) / span);
 }
 
-export function dangerOf(rules: Pick<CatalogRules, 'recommendedLevel' | 'traits'>, targetDepth: number | null, traits: readonly string[], level: number): number {
-  if (targetDepth === null) return 3;
-  const d = 3 + (recommendedLevel(rules, targetDepth) - level) + traits.reduce((a, t) => a + (rules.traits[t]?.danger ?? 0), 0);
-  return Math.max(1, Math.min(5, d));
+/** 候補の難しさ（V3-2R §14.4）: 推奨レベルとの差と、条件の危険度の合計。段階に丸めない */
+export function offerGap(rules: Pick<CatalogRules, 'recommendedLevel' | 'traits'>, targetDepth: number | null, traits: readonly string[], level: number): { recommendedLevel: number | null; levelGap: number | null; traitDanger: number } {
+  const traitDanger = traits.reduce((a, id) => a + (rules.traits[id]?.danger ?? 0), 0);
+  if (targetDepth === null) return { recommendedLevel: null, levelGap: null, traitDanger };
+  const rec = recommendedLevel(rules, targetDepth);
+  return { recommendedLevel: rec, levelGap: rec - level, traitDanger };
+}
+
+/** 今帰った場合の次の候補の下限（生成済みの最深階 + 堅実の幅）と推奨レベル */
+export function nextCampOf(rules: Pick<CatalogRules, 'recommendedLevel' | 'slots'>, deepestGenerated: number): { minTargetDepth: number; recommendedLevel: number } {
+  const min = deepestGenerated + rules.slots.safe.aheadMin;
+  return { minTargetDepth: min, recommendedLevel: recommendedLevel(rules, min) };
 }
 
 /** 自然回復の間隔（手番）。engine と観測の見積もりで同じ式を使う */

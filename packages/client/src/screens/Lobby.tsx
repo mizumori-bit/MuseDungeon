@@ -1,14 +1,14 @@
 // ロビー: 進行中のラン（観戦・参加・再開）、終了したラン（リプレイ）、リーダーボード、新規ラン。
-import type { LeaderboardEntry, Locale, ObjectiveChoice, RunListing } from '@muse/shared';
+import type { LeaderboardEntry, Locale, RunListing } from '@muse/shared';
 import { endReasonText, kindName, nameOf, objectiveText } from '@muse/shared';
 import { useEffect, useState } from 'preact/hooks';
 import { api, errorText } from '../api';
 import { ErrorBanner, Header, useCatalog, useLocaleRefresh } from '../ui/common';
-import { OBJECTIVE_CHOICES, playerStateLabel } from '../ui/labels';
+import { FIRST_EXPEDITION_CHOICES, playerStateLabel, type FirstExpeditionChoice } from '../ui/labels';
 import { fmtTime, getLocale, getPref, getToken, navigate, saveToken, setPref, tr } from '../util';
 
-function objectiveChoice(v: string): ObjectiveChoice {
-  return OBJECTIVE_CHOICES.find((o) => o.id === v)?.id ?? 'auto';
+function firstChoice(v: string): FirstExpeditionChoice {
+  return FIRST_EXPEDITION_CHOICES.find((o) => o.id === v)?.id ?? 'camp';
 }
 
 export function Lobby() {
@@ -22,7 +22,8 @@ export function Lobby() {
   const [seed, setSeed] = useState('');
   const [mode, setMode] = useState<'solo' | 'coop'>('solo');
   const [locale, setLoc] = useState<Locale>(getLocale());
-  const [objective, setObjective] = useState<ObjectiveChoice>(objectiveChoice(getPref('objective', 'auto')));
+  // 旧版の pref（'objective'。既定 auto で保存されている）は読まない: 既定は「キャンプで選ぶ」
+  const [objective, setObjective] = useState<FirstExpeditionChoice>(firstChoice(getPref('firstExpedition', 'camp')));
   const [busy, setBusy] = useState(false);
   const L = getLocale();
 
@@ -41,8 +42,9 @@ export function Lobby() {
     try {
       setPref('name', name);
       setPref('class', classId);
-      setPref('objective', objective);
-      const r = await api.newRun({ name, classId, mode, seed: seed || undefined, locale, controller: { kind: 'human', label: 'browser' }, objective });
+      setPref('firstExpedition', objective);
+      // camp: objective を省くとキャンプから始まる（候補 3 つから最初の遠征を選ぶ）
+      const r = await api.newRun({ name, classId, mode, seed: seed || undefined, locale, controller: { kind: 'human', label: 'browser' }, ...(objective === 'camp' ? {} : { objective }) });
       saveToken(r.runId, { token: r.token, playerId: r.playerId, name });
       navigate(`#/play/${r.runId}`);
     } catch (e) {
@@ -131,11 +133,12 @@ export function Lobby() {
                 <option value="coop">COOP</option>
               </select>
             </label>
-            <label>{tr('最初の遠征の目的', 'First expedition objective')}
-              <select value={objective} onChange={(e) => setObjective(objectiveChoice((e.target as HTMLSelectElement).value))}>
-                {OBJECTIVE_CHOICES.map((o) => <option key={o.id} value={o.id}>{L === 'en' ? o.en : o.ja}</option>)}
+            <label>{tr('最初の遠征', 'First expedition')}
+              <select value={objective} onChange={(e) => setObjective(firstChoice((e.target as HTMLSelectElement).value))}>
+                {FIRST_EXPEDITION_CHOICES.map((o) => <option key={o.id} value={o.id}>{L === 'en' ? o.en : o.ja}</option>)}
               </select>
             </label>
+            {objective === 'camp' && <p class="muted">{tr('キャンプから始まり、目標の深さ・推奨レベル・条件の違う 3 つの候補から最初の遠征を選ぶ。', 'You start at camp and choose the first expedition from 3 offers with different depths, recommended levels and traits.')}</p>}
             <label>{tr('シード（任意）', 'Seed (optional)')}<input value={seed} onInput={(e) => setSeed((e.target as HTMLInputElement).value)} /></label>
             <label>{tr('メッセージ言語', 'Message language')}
               <select value={locale} onChange={(e) => setLoc((e.target as HTMLSelectElement).value as Locale)}>

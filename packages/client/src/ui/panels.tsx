@@ -1,6 +1,6 @@
 // 情報パネル（Preact）。表示名は公開カタログ、状態は PlayerView / World から。
-import type { AgentActivity, Alert, Catalog, CommandRecord, PlayerView, RunSummary, World } from '@muse/shared';
-import { endReasonText, hpState, itemDisplayName, kindName, nameOf, objectiveText, xpForLevel } from '@muse/shared';
+import type { AgentActivity, Alert, Catalog, CommandRecord, ObsMonster, PlayerView, RunSummary, World } from '@muse/shared';
+import { dirLabel, endReasonText, hpEstimateText, hpState, itemDisplayName, itemStats, itemStatsText, kindName, nameOf, objectiveText, xpForLevel } from '@muse/shared';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { PLAYER_COLORS } from '../render/scene';
 import { getLocale, tr } from '../util';
@@ -64,10 +64,15 @@ export function InventoryPanel({ view, catalog, onAction, focused, selected, onS
           const usable = cat === 'potion' || cat === 'scroll' || ci?.usable;
           const throwable = ci?.throwable || cat === 'throwing' || cat === 'potion';
           const name = itemDisplayName(catalog, L, it.kind, it.appearanceId, it.affixes);
+          // 鑑定済みの自分の持ち物は性能をそのまま見せる（V3-2R §14.3）
+          const stats = itemStatsText(L, itemStats(catalog, it.kind, it.affixes));
           return (
             <li key={it.id} class={selected === it.slot ? 'sel' : ''} onClick={() => onSelect?.(it.slot)} title={ci ? nameOf(ci.desc, L, '') : tr('未鑑定', 'unidentified')}>
               <span class="slot">{it.slot})</span>
-              <span class="name">{name}{it.qty > 1 ? ` x${it.qty}` : ''}{it.equipped ? <em> [{tr('装備', 'eq')}]</em> : null}{it.kind === null ? <em class="muted"> ?</em> : null}{cat === 'relic' ? <em class="relic"> ［{tr('遺物', 'relic')}］</em> : null}{it.value !== undefined ? <em class="treasure"> ［{tr(`宝・価値 ${it.value}`, `treasure ${it.value}`)}］</em> : null}</span>
+              <span class="name">
+                {name}{it.qty > 1 ? ` x${it.qty}` : ''}{it.equipped ? <em> [{tr('装備', 'eq')}]</em> : null}{it.kind === null ? <em class="muted"> ?</em> : null}{cat === 'relic' ? <em class="relic"> ［{tr('遺物', 'relic')}］</em> : null}{it.value !== undefined ? <em class="treasure"> ［{tr(`宝・価値 ${it.value}`, `treasure ${it.value}`)}］</em> : null}
+                {stats && <span class="istats">{stats}</span>}
+              </span>
               {onAction && (
                 <span class="acts">
                   {usable && <button class="tiny" onClick={(e) => { e.stopPropagation(); onAction('use', it.slot); }}>{tr('使う', 'Use')}</button>}
@@ -103,12 +108,79 @@ export function MessageLog({ lines, title }: { lines: LogLine[]; title?: string 
   );
 }
 
+/** 先頭に出して強調する警告（一撃で倒されうる・HP が危険域） */
+const URGENT_ALERTS: readonly string[] = ['lethal_range', 'critical_hp'];
+
 export function AlertsBar({ alerts }: { alerts: Alert[] }) {
   if (!alerts.length) return null;
+  const rank = (a: Alert) => { const i = URGENT_ALERTS.indexOf(a.code); return i < 0 ? URGENT_ALERTS.length : i; };
+  const sorted = [...alerts].sort((a, b) => rank(a) - rank(b));
   return (
     <div class="alerts">
-      {alerts.map((a) => <span key={a.code} class={`alert ${a.code}`}>{a.text}</span>)}
+      {sorted.map((a) => <span key={a.code} class={`alert ${a.code} ${URGENT_ALERTS.includes(a.code) ? 'urgent' : ''}`}>{a.code === 'lethal_range' ? `⚠ ${a.text}` : a.text}</span>)}
     </div>
+  );
+}
+
+/** 脅威の表示。記録が無い種族は「不明（被弾記録なし）」（V3-2R §14.3） */
+export function threatText(threat: ObsMonster['threat']): string {
+  return threat === null ? tr('脅威: 不明（被弾記録なし）', 'threat: unknown (never hit by it)') : tr(`脅威 ${threat}/5`, `threat ${threat}/5`);
+}
+
+/** その種族から受けた最大の一撃 */
+export function worstHitText(w: number | null): string {
+  return w === null ? tr('一撃の大きさは不明', 'hit size unknown') : tr(`最大の一撃 ${w}`, `worst hit ${w}`);
+}
+
+const AWARE_LABEL: Record<string, [string, string]> = { asleep: ['睡眠中', 'asleep'], unaware: ['未察知', 'unaware'], hunting: ['追跡中', 'hunting'] };
+const HP_LABEL: Record<string, [string, string]> = { healthy: ['健康', 'healthy'], wounded: ['軽傷', 'wounded'], badly_wounded: ['重傷', 'badly wounded'], near_death: ['瀕死', 'near death'] };
+
+/**
+ * 見えている敵（観測の visible.monsters）。脅威・最大の一撃・推定残り HP・投擲の可否を並べる。
+ * 隣にいる相手には「戦う」（fight マクロ）を出す
+ */
+export function MonstersPanel({ monsters, hp, onFight }: { monsters: ObsMonster[]; hp: number; onFight?: (id: string) => void }) {
+  if (!monsters.length) return null;
+  const L = getLocale();
+  return (
+    <section class="panel mons">
+      <h3>{tr('見えている敵', 'Enemies in view')} <small>{monsters.length}</small></h3>
+      <ul>
+        {monsters.map((m) => {
+          const aw = AWARE_LABEL[m.awareness];
+          const hs = HP_LABEL[m.hp_state];
+          const lethal = m.awareness === 'hunting' && !m.fleeing && m.worst_hit !== null && m.worst_hit >= hp;
+          const clear = m.shots.filter((s) => s.state === 'clear').map((s) => s.slot);
+          const far = m.shots.filter((s) => s.state === 'out_of_range').map((s) => s.slot);
+          const shot = m.shot === 'blocked' ? tr('射線: 通らない', 'shot: blocked')
+            : m.shots.length ? [clear.length ? tr(`投擲可: ${clear.join(',')}`, `throw: ${clear.join(',')}`) : '', far.length ? tr(`射程外: ${far.join(',')}`, `out of range: ${far.join(',')}`) : ''].filter(Boolean).join(' / ')
+              : '';
+          return (
+            <li key={m.id} class={`${lethal ? 'lethal' : ''} ${m.role ?? ''}`}>
+              <div class="mhead">
+                <b>{m.name}</b>
+                <small>{dirLabel(L, m.dir)} {m.dist}</small>
+                {aw && <span class={`maw ${m.awareness}`}>{tr(aw[0], aw[1])}{m.fleeing ? tr('・逃走中', ', fleeing') : ''}</span>}
+                {hs && <span class={`mhp ${m.hp_state}`}>{tr(hs[0], hs[1])}</span>}
+                {onFight && m.dist === 1 && (
+                  <button class="tiny right" onClick={() => onFight(m.id)} title={tr('倒れる・離れる・HP が半分を下回るまで殴り続ける（F）', 'Keep attacking until it falls, moves away, or your HP drops below half (F)')}>
+                    {tr('戦う', 'Fight')}
+                  </button>
+                )}
+              </div>
+              <div class="msub">
+                <span class={`mthreat ${m.threat === null ? 'unknown' : `t${m.threat}`}`}>{threatText(m.threat)}</span>
+                <span class={lethal ? 'mworst lethal' : 'mworst'}>{worstHitText(m.worst_hit)}{lethal ? tr('（今の HP 以上）', ' (>= your HP)') : ''}</span>
+                {m.hp_left_est && <span>{hpEstimateText(L, m.hp_left_est)}</span>}
+                {m.damage_seen ? <span>{tr(`与ダメ累計 ${m.damage_seen}`, `dmg dealt ${m.damage_seen}`)}</span> : null}
+                {shot && <span class={m.shot === 'blocked' ? 'mshot blocked' : 'mshot'}>{shot}</span>}
+                {m.bounty ? <span class="mbounty">{tr(`賞金 ${m.bounty}`, `bounty ${m.bounty}`)}</span> : null}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }
 

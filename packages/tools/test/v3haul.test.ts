@@ -53,31 +53,37 @@ describe('V3-2 payout rules', () => {
 });
 
 describe('V3-2 offers, treasure, haul', () => {
-  it('camp offers come in safe / standard / ambitious slots with traits, multiplier, danger and recommended level', async () => {
+  it('new_run without objective starts at camp; offers are 3 slots with distinct types and non-overlapping depths, level gap and trait danger (V3-2R §14.4)', async () => {
     const manager = new SessionManager(content, loadConfig({ runsDir: null, waitOthersMs: 100 }));
     const r = await manager.createRun({ name: 'O', seed: 'v3-offers-1', controller: { kind: 'agent', label: 't' } });
     if ('error' in r) throw new Error(r.error.message);
-    const x = r.session.world.expeditions![0];
-    expect(x.slot).toBe('safe');
-    const offers = r.session.world.camp ?? null;
-    expect(offers).toBeNull(); // 遠征中はキャンプの候補は無い
-    // 最初の候補（run_started 直後の expedition_offered）を履歴から読む
-    const first = r.session.history.find((e) => e.type === 'expedition_offered') as Extract<GameEvent, { type: 'expedition_offered' }>;
-    expect(first.camp.offers.map((o) => o.slot)).toEqual(['safe', 'standard', 'ambitious']);
-    const amb = first.camp.offers[2];
-    expect(amb.traits!.length).toBeGreaterThanOrEqual(1);
-    const expectMult = amb.traits!.reduce((m, id) => Math.trunc((m * content.expeditionTraits[id].multiplierPct) / 100), 100);
-    expect(amb.multiplierPct).toBe(expectMult);
-    // 観測（キャンプの形）では危険度と推奨レベルが出る
     const view = r.port.view();
-    const camp = structuredClone(view);
-    camp.status = 'at_camp';
-    camp.camp = first.camp;
-    const o = buildObservation(camp, catalog, { detail: 'brief', map: false });
-    expect(o.camp!.offers[2].danger).toBeGreaterThanOrEqual(1);
-    expect(o.camp!.offers[2].danger).toBeLessThanOrEqual(5);
-    expect(o.camp!.offers[2].text).toMatch(/危険度 \d（推奨 Lv\d+、あなたは Lv\d+）/);
-    expect(o.camp!.offers[0].text).toContain('[堅実]');
+    expect(view.status).toBe('at_camp');
+    expect(r.session.world.expeditions ?? []).toHaveLength(0);
+    const o = r.port.observeWithTurn('observed', { map: false });
+    expect(o.turn.awaiting).toBe('camp_choice');
+    const offers = o.observation.camp!.offers;
+    expect(offers.map((x) => x.slot)).toEqual(['safe', 'standard', 'ambitious']);
+    // 最初の候補は浅い（堅実 地下2階、標準・野心 地下3階）。種類は 3 枠で別
+    expect(offers.map((x) => x.target_depth)).toEqual([2, 3, 3]);
+    expect(new Set(offers.map((x) => x.type)).size).toBe(3);
+    for (const x of offers) {
+      expect(x.level_gap).toBe(x.recommended_level! - view.self.level);
+      expect(x.text).toMatch(/推奨 Lv\d+・あなた Lv\d+（差 [+-]?\d+）/);
+    }
+    const amb = r.session.world.camp!.offers[2];
+    expect(amb.traits!.length).toBeGreaterThanOrEqual(1);
+    expect(offers[2].trait_danger).toBe(amb.traits!.reduce((a, id) => a + content.expeditionTraits[id].danger, 0));
+    expect(amb.multiplierPct).toBe(amb.traits!.reduce((m, id) => Math.trunc((m * content.expeditionTraits[id].multiplierPct) / 100), 100));
+    expect(offers[0].text).toContain('[堅実]');
+    // 候補を選ぶと最初の遠征が始まり、入口から盤面に出る
+    const st = await r.port.act({ type: 'start_expedition', offer: 1 }, { source: 'bot' });
+    expect(st.ok).toBe(true);
+    expect(r.port.view().status).toBe('your_turn');
+    expect(r.session.world.expeditions![0].slot).toBe('safe');
+    // 2 回目以降も枠の深さは重ならない（堅実 +1・標準 +2・野心 +3〜4）
+    const rules = content.balance.expedition.slots;
+    expect([rules.safe.aheadMax < rules.standard.aheadMin, rules.standard.aheadMax < rules.ambitious.aheadMin]).toEqual([true, true]);
     manager.closeAll();
   });
 
@@ -95,7 +101,7 @@ describe('V3-2 offers, treasure, haul', () => {
 
   it('a carried treasure counts in the haul, shows its value, and is removed from the inventory and banked on extract', async () => {
     const manager = new SessionManager(content, loadConfig({ runsDir: null, waitOthersMs: 100 }));
-    const run = await manager.createRun({ name: 'T', seed: 'v3-treasure-1', controller: { kind: 'agent', label: 't' } });
+    const run = await manager.createRun({ name: 'T', seed: 'v3-treasure-1', controller: { kind: 'agent', label: 't' }, objective: 'auto' });
     if ('error' in run) throw new Error(run.error.message);
     const world = run.session.world;
     const pid = run.port.playerId;

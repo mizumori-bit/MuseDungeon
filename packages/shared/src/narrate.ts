@@ -32,10 +32,13 @@ export function kindName(catalog: Catalog, locale: Locale, kind: string | null, 
   return locale === 'en' ? 'something' : '何か';
 }
 
-function who(ctx: NarrateCtx, id: unknown, kind: unknown): string {
+function who(ctx: NarrateCtx, id: unknown, kind: unknown, affixes?: unknown): string {
   if (typeof id === 'string' && id === ctx.selfId) return ctx.locale === 'en' ? 'you' : 'あなた';
   if (typeof id === 'string' && ctx.playerNames[id]) return ctx.playerNames[id];
-  return kindName(ctx.catalog, ctx.locale, (kind as string | null) ?? null);
+  const base = kindName(ctx.catalog, ctx.locale, (kind as string | null) ?? null);
+  const af = Array.isArray(affixes) ? (affixes as string[]).map((a) => nameOf(ctx.catalog.affixes[a]?.name, ctx.locale, a)) : [];
+  if (!af.length) return base;
+  return ctx.locale === 'en' ? `${af.join(' ')} ${base}` : `${af.join('')}${base}`;
 }
 
 function itemName(ctx: NarrateCtx, ev: Record<string, unknown>): string {
@@ -62,15 +65,15 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
     case 'attack': {
       if (ev.hit && !ev.crit) return null;
       const unseen = ev.attacker === null && ev.fromDir ? (ja ? `${DIR_FROM_JA[ev.fromDir]}からの何か` : `something from the ${DIR_EN[ev.fromDir]}`) : null;
-      const a = unseen ?? who(ctx, ev.attacker, ev.attackerKind);
-      const tg = who(ctx, ev.target, ev.targetKind);
+      const a = unseen ?? who(ctx, ev.attacker, ev.attackerKind, ev.attackerAffixes);
+      const tg = who(ctx, ev.target, ev.targetKind, ev.targetAffixes);
       if (ev.crit) return ja ? `${a}の会心の一撃！` : `${cap(a)} land${ev.attacker === self ? '' : 's'} a critical hit!`;
       if (ja) return ev.attacker === self ? `${tg}への攻撃は外れた。` : `${a}の${ev.ranged ? '射撃' : '攻撃'}は${tg === 'あなた' ? 'あなたに' : tg + 'に'}当たらなかった。`;
       return `${cap(a)} miss${ev.attacker === self ? '' : 'es'} ${tg}.`;
     }
     case 'damaged': {
-      const tg = who(ctx, ev.target, ev.targetKind);
-      const src = ev.source ? who(ctx, ev.source, ev.sourceKind) : null;
+      const tg = who(ctx, ev.target, ev.targetKind, ev.targetAffixes);
+      const src = ev.source ? who(ctx, ev.source, ev.sourceKind, ev.sourceAffixes) : null;
       // 実際に減った HP（とどめの超過分を含めない）
       const amt = ev.dealt ?? ev.amount;
       if (amt <= 0 && ev.amount <= 0) return null;
@@ -95,14 +98,14 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
     case 'max_hp_changed':
       return ja ? `最大 HP が ${ev.maxHpAfter} になった。` : `Your max HP is now ${ev.maxHpAfter}.`;
     case 'died': {
-      const v = who(ctx, ev.id, ev.kind);
+      const v = who(ctx, ev.id, ev.kind, ev.affixes);
       if (ev.id === self) return ja ? 'あなたは死んだ……' : 'You die...';
       const hpNote = typeof ev.maxHp === 'number' ? (ja ? `（この${v}の体力は ${ev.maxHp} だった）` : ` (it had ${ev.maxHp} HP)`) : '';
       if (ev.killer === self) return ja ? `${v}を倒した。${hpNote}` : `You kill ${v}.${hpNote}`;
       return ja ? `${v}は倒れた。${hpNote}` : `${cap(v)} dies.${hpNote}`;
     }
     case 'status_applied': {
-      const tg = who(ctx, ev.target, ev.targetKind);
+      const tg = who(ctx, ev.target, ev.targetKind, ev.targetAffixes);
       const st = nameOf(ctx.catalog.statuses[ev.status?.id]?.name, L, ev.status?.id);
       return ja ? `${tg}は${st}状態になった。` : `${cap(tg)} ${ev.target === self ? 'are' : 'is'} now ${st}.`;
     }
@@ -111,8 +114,14 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
       const st = nameOf(ctx.catalog.statuses[ev.statusId]?.name, L, ev.statusId);
       return ja ? `${tg}の${st}状態が解けた。` : `${cap(tg)} ${ev.target === self ? 'are' : 'is'} no longer ${st}.`;
     }
-    case 'level_up':
-      return ja ? `レベル ${ev.levelAfter} に上がった！` : `You reach level ${ev.levelAfter}!`;
+    case 'level_up': {
+      // 上がった能力値を並べる（V3-2R §14.5）
+      const g = ev.gains;
+      const ups = g ? ([[g.maxHp, '最大HP', 'max HP'], [g.acc, '命中', 'acc'], [g.might, '威力', 'might'], [g.eva, '回避', 'eva']] as [number, string, string][])
+        .filter(([v]) => v > 0).map(([v, j, e]) => (ja ? `${j}+${v}` : `${e} +${v}`)) : [];
+      const tail = ups.length ? (ja ? `（${ups.join('・')}）` : ` (${ups.join(', ')})`) : '';
+      return ja ? `レベル ${ev.levelAfter} に上がった！${tail}` : `You reach level ${ev.levelAfter}!${tail}`;
+    }
     case 'xp_gained':
       return null;
     case 'item_picked_up': {
@@ -143,8 +152,8 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
     case 'item_thrown': {
       const n = itemName(ctx, ev);
       const a = who(ctx, ev.actor, ev.actorKind);
-      const hit = ev.hit ? who(ctx, ev.hit, ev.hitKind) : null;
-      const reached = ev.reached ? who(ctx, ev.reached, ev.reachedKind) : (ja ? '何か' : 'something');
+      const hit = ev.hit ? who(ctx, ev.hit, ev.hitKind, ev.reachedAffixes) : null;
+      const reached = ev.reached ? who(ctx, ev.reached, ev.reachedKind, ev.reachedAffixes) : (ja ? '何か' : 'something');
       const at = ev.landed ? `(${ev.landed.x},${ev.landed.y})` : '';
       const fall = ev.broke ? (ja ? '砕け散った。' : ' It shatters.') : at ? (ja ? `${at} に落ちた。` : ` It lands at ${at}.`) : '';
       if (!ev.outcome) {
@@ -222,6 +231,7 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
     case 'player_state':
       if (ev.state === 'dead') return ja ? `${ctx.playerNames[ev.player] ?? '仲間'} は倒れた。` : `${ctx.playerNames[ev.player] ?? 'An ally'} has fallen.`;
       if (ev.state === 'left') return ja ? 'プレイヤーが離脱した。' : 'A player left.';
+      if (ev.state === 'at_camp' && ev.reason === 'joined') return ja ? `${ctx.playerNames[ev.player] ?? 'プレイヤー'} はキャンプにいる。最初の遠征を選ぶ。` : `${ctx.playerNames[ev.player] ?? 'A player'} is at camp, choosing the first expedition.`;
       if (ev.state === 'at_camp') return ja ? `${ctx.playerNames[ev.player] ?? 'プレイヤー'} はキャンプに戻った（全回復）。` : `${ctx.playerNames[ev.player] ?? 'A player'} returns to camp (fully healed).`;
       return null;
     case 'expedition_started':

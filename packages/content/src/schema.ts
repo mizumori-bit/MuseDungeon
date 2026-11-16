@@ -221,7 +221,9 @@ export const BalanceSchema = z.object({
   wander: z.object({ firstAt: Int.min(0), intervalMin: Int.min(1), intervalMax: Int.min(1), maxAwake: Int.min(0), minDistance: Int.min(0) }),
   score: z.object({ perDepth: Int, perKill: Int, perLevel: Int }),
   /** 推定残り HP: 記録がこの数未満の間は上限を出さない */
-  estimate: z.object({ minSamples: Int.min(1) }).default({ minSamples: 3 }),
+  estimate: z.object({ minSamples: Int.min(1) }).default({ minSamples: 5 }),
+  /** 敵を倒す以外の経験値（V3-2R §14.5）: 新しい深度に初めて着く（× 深度）、遠征の目的を達成する（× 目標深度） */
+  xp: z.object({ perNewDepth: Int.min(0), perObjective: Int.min(0) }).default({ perNewDepth: 0, perObjective: 0 }),
   /** 戦利品（IMPROVEMENTS_V3 §2.2） */
   haul: z.object({
     overreachFirst: Int.min(0), overreachStep: Int.min(0), perKill: Int.min(0),
@@ -231,7 +233,8 @@ export const BalanceSchema = z.object({
     guardianBounty: z.object({ base: Int.min(0), perDepth: Int.min(0) }),
   }),
   expedition: z.object({
-    firstTargetDepth: Int.min(2),
+    /** 最初の遠征の目標深度（枠ごと） */
+    firstTargetDepth: z.object({ safe: Int.min(2), standard: Int.min(2), ambitious: Int.min(2) }),
     aheadMin: Int.min(1), aheadMax: Int.min(1),
     /** 達成時の基礎点（目的の種類ごと） */
     points: z.record(Int),
@@ -241,8 +244,8 @@ export const BalanceSchema = z.object({
     relicGuardianPct: Int.min(0).max(100),
     /** 目的達成後の圧力（slay_guardian / retrieve_relic）: 徘徊の湧き間隔の割合 */
     afterObjective: z.object({ wanderIntervalPct: Int.min(1).max(100) }),
-    /** 推奨レベル = 1 + floor(深度 × mul / div) */
-    recommendedLevel: z.object({ mul: Int.min(1), div: Int.min(1) }),
+    /** 推奨レベル（深度 1 から順。bot の実測の中央値。表より深い階は直近 4 階の傾きで外挿する） */
+    recommendedLevelByDepth: z.array(Int.min(1)).min(5),
     /** 候補の 3 枠: 目標の深さ（最深 + aheadMin〜aheadMax）、条件の数、基礎点の割合 */
     slots: z.record(z.object({ aheadMin: Int.min(1), aheadMax: Int.min(1), traitsMin: Int.min(0), traitsMax: Int.min(0), pointsPct: Int.min(1) })),
   }),

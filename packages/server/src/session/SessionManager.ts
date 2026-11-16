@@ -55,8 +55,11 @@ export class SessionManager {
   async createRun(req: NewRunRequest & { controller: Controller }): Promise<Joined | { error: ActionError }> {
     const session = RunSession.create(this.deps, { seed: req.seed, mode: req.mode ?? 'solo' });
     this.sessions.set(session.runId, session);
-    const joined = await this.joinSession(session, { name: req.name, classId: req.classId, locale: req.locale, controller: req.controller }, req.controller.kind === 'agent' ? 'mcp' : 'ws');
+    // objective を省くとキャンプから始まる（最初の遠征も候補 3 つから選ぶ。V3-2R §14.4）
+    const atCamp = req.objective === undefined;
+    const joined = await this.joinSession(session, { name: req.name, classId: req.classId, locale: req.locale, controller: req.controller, atCamp }, req.controller.kind === 'agent' ? 'mcp' : 'ws');
     if ('error' in joined) return joined;
+    if (atCamp) return joined;
     const offer = firstOffer(joined.port.view().camp?.offers ?? [], req.objective ?? 'auto');
     if (offer !== null) {
       const r = await session.submit(joined.playerId, { type: 'start_expedition', offer }, { source: 'system' });
@@ -71,8 +74,8 @@ export class SessionManager {
     return this.joinSession(session, req, req.controller.kind === 'agent' ? 'mcp' : 'ws');
   }
 
-  private async joinSession(session: RunSession, req: { name: string; classId?: string; locale?: Locale; controller: Controller }, source: 'mcp' | 'ws'): Promise<Joined | { error: ActionError }> {
-    const join: JoinCommand = { type: 'join', name: req.name.slice(0, 32) || 'Muse', classId: req.classId, controller: req.controller, locale: req.locale ?? 'ja' };
+  private async joinSession(session: RunSession, req: { name: string; classId?: string; locale?: Locale; controller: Controller; atCamp?: boolean }, source: 'mcp' | 'ws'): Promise<Joined | { error: ActionError }> {
+    const join: JoinCommand = { type: 'join', name: req.name.slice(0, 32) || 'Muse', classId: req.classId, controller: req.controller, locale: req.locale ?? 'ja', ...(req.atCamp ? { atCamp: true } : {}) };
     const r = await session.join(join, source);
     if (!r.ok) return { error: r.error };
     return { session, playerId: r.playerId, token: r.token, port: new SessionPlayerPort(session, r.playerId) };

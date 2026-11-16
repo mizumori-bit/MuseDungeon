@@ -3,7 +3,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { ActionError, Command, Controller, ObjectiveChoice, TurnBlock } from '@muse/shared';
-import { actionError } from '@muse/shared';
+import { actionError, CommandSchema, t } from '@muse/shared';
 import type { PlayerPort, ActionPayload } from '../session/PlayerPort';
 import type { SessionManager } from '../session/SessionManager';
 import { rulesText, RULE_TOPICS } from './rules';
@@ -89,6 +89,19 @@ export function createMcpServer(ctx: McpContext): McpServer {
   const act = async (tool: string, args: Record<string, unknown>, cmd: Command) => {
     const port = portOf(args.player_token as string | undefined);
     if (!port) return noSession();
+    // 引数の形が合わないときも、ゲームのエラー形式（code / hint / valid_actions / turn）で返す（V3-2R §14.7）
+    const parsed = CommandSchema.safeParse(cmd);
+    if (!parsed.success) {
+      const L = port.locale();
+      const where = parsed.error.issues.map((i) => i.path.join('.')).filter(Boolean).join(', ') || tool;
+      const err = actionError('bad_request', t(L, `引数の形が正しくない: ${where}`, `Invalid argument: ${where}`), t(L,
+        'target は方向（n ne e se s sw w nw）・座標 {"x":3,"y":4}・エンティティ ID（e_xxxxxx）のどれか。鑑定の巻物で対象を選ぶなら target_slot にスロット文字。slot は a〜z。',
+        'target is a direction (n ne e se s sw w nw), a position {"x":3,"y":4} or an entity id (e_xxxxxx). To choose what an identify scroll identifies, pass target_slot (a slot letter). slot is a-z.'));
+      const tb = port.turnBlock('action_rejected');
+      const va = port.observe({ map: false }).observation.valid_actions;
+      record(port, tool, args, `${err.code} ${err.message}`);
+      return errOut(err, va, { block: tb, line: port.turnLine(tb) });
+    }
     const r: ActionPayload = await port.act(cmd, {
       source: 'mcp', thought: args.thought as string | undefined, expectSeq: args.expect_seq as number | undefined,
       waitTurnMs: waitMs, map: ctx.briefMap,
@@ -342,15 +355,27 @@ export function createMcpServer(ctx: McpContext): McpServer {
     description: 'マクロ: 全快（または until_hp / max_turns）まで休む。休息中は回復が速い。追跡中の敵が見えると止まる。観測の self.rest_estimate に事前の見積もり、結果に実績（hp_gained・turns・time_elapsed）。',
     inputSchema: { ...actionCommon, until_hp: z.number().int().positive().optional().describe('この HP に達したら止まる'), max_turns: z.number().int().positive().optional().describe('この手数で止まる') },
   }, async (a) => act('rest', a, { type: 'rest', untilHp: a.until_hp, maxTurns: a.max_turns }));
-  server.registerTool('explore', { title: '自動探索', description: 'マクロ: 既知地図上で最寄りの未探索へ進む（最大 200 手）。新しい敵・被弾・新アイテム/階段で停止。', inputSchema: { ...actionCommon } },
-    async (a) => act('explore', a, { type: 'explore' }));
+  const moveArgs = {
+    mode: z.enum(['careful', 'steady', 'flee']).optional().describe("慎重さ: careful（既定。初見の種族・届く追跡中の敵の出現・被攻撃・HP 50%/25% で止まる）/ steady（隣接した追跡中の敵・初見の種族・HP が hp_floor 未満で止まる。弱い射撃や毒を受けながら進む）/ flee（到着・進路をふさがれた・HP が hp_floor 未満で止まる。隣に敵がいても動く＝退却）"),
+    hp_floor: z.number().int().min(0).optional().describe('steady / flee: この HP を下回ったら止まる（既定 steady 50%・flee 25%）'),
+  };
+  server.registerTool('explore', {
+    title: '自動探索',
+    description: 'マクロ: 未見の区画へ進む（最大 200 手）。pickup（既定 true）なら通り道と見えているアイテムも拾う。止まる条件は mode で選ぶ。1 歩も進めないなら手番を使わずに理由付きで拒否する。',
+    inputSchema: { ...actionCommon, ...moveArgs, pickup: z.boolean().optional().describe('通り道と見えている・記憶したアイテムを拾う（既定 true。遺物と鑑定済みの有害品は拾わない）') },
+  }, async (a) => act('explore', a, { type: 'explore', mode: a.mode, hpFloor: a.hp_floor, pickup: a.pickup }));
   server.registerTool('travel_to', {
-    title: '移動（目的地）', description: 'マクロ: 既知地図上の経路で座標・階段・記憶した対象へ移動。',
-    inputSchema: { ...actionCommon, to: z.union([PosZ, z.enum(['stairs_down', 'stairs_up']), z.string().regex(/^e_[0-9a-z]{6}$/)]) },
-  }, async (a) => act('travel_to', a, { type: 'travel', to: a.to }));
+    title: '移動（目的地）', description: "マクロ: 既知地図上の経路で座標・階段・記憶した対象へ移動。目的地がアイテムなら着いて拾う。隣に敵がいても退くなら mode: 'flee'。",
+    inputSchema: { ...actionCommon, to: z.union([PosZ, z.enum(['stairs_down', 'stairs_up']), z.string().regex(/^e_[0-9a-z]{6}$/)]), ...moveArgs, pickup: z.boolean().optional().describe('通り道のアイテムも拾う（既定: 目的地がアイテムのとき true）') },
+  }, async (a) => act('travel_to', a, { type: 'travel', to: a.to, mode: a.mode, hpFloor: a.hp_floor, pickup: a.pickup }));
   server.registerTool('collect', {
-    title: '回収', description: 'マクロ: 既知の「自分が投げた物」を近い順に回って拾う（自分が投げた物は上を歩くだけで拾える）。結果に回収数と残り。', inputSchema: { ...actionCommon },
-  }, async (a) => act('collect', a, { type: 'collect' }));
+    title: '回収', description: "マクロ: what: 'thrown'（既定）は既知の自分が投げた物を、'items' は見えている・記憶したアイテム（遺物と鑑定済みの有害品を除く）を近い順に回って拾う。結果に回収数と残り。",
+    inputSchema: { ...actionCommon, what: z.enum(['thrown', 'items']).optional(), ...moveArgs },
+  }, async (a) => act('collect', a, { type: 'collect', what: a.what, mode: a.mode, hpFloor: a.hp_floor }));
+  server.registerTool('fight', {
+    title: '戦う', description: 'マクロ: 隣の相手に近接攻撃を繰り返す。相手が倒れた・離れた、HP が hp_floor（既定 50%）を下回った、追跡中の別の敵が現れた、状態異常を受けたら止まる。結果に与えた・受けた攻撃の回数と合計。',
+    inputSchema: { ...actionCommon, target: z.string().regex(/^e_[0-9a-z]{6}$/), hp_floor: z.number().int().min(0).optional() },
+  }, async (a) => act('fight', a, { type: 'fight', target: a.target, hpFloor: a.hp_floor }));
   server.registerTool('pickup', { title: '拾う', description: '足元のアイテムを拾う（省略時は全て）。', inputSchema: { ...actionCommon, item: z.string().regex(/^e_[0-9a-z]{6}$/).optional() } },
     async (a) => act('pickup', a, { type: 'pickup', item: a.item }));
   server.registerTool('drop', { title: '置く', description: '所持品を足元に置く。', inputSchema: { ...actionCommon, slot: SlotZ, qty: z.number().int().positive().optional() } },
@@ -359,10 +384,14 @@ export function createMcpServer(ctx: McpContext): McpServer {
     async (a) => act('equip', a, { type: 'equip', slot: a.slot }));
   server.registerTool('unequip', { title: '装備解除', description: '装備を外す（スロット文字か weapon/armor/accessory）。', inputSchema: { ...actionCommon, slot: z.union([SlotZ, z.enum(['weapon', 'armor', 'accessory'])]) } },
     async (a) => act('unequip', a, { type: 'unequip', slot: a.slot }));
-  server.registerTool('use_item', { title: '使う', description: '薬を飲む・巻物を読む。', inputSchema: { ...actionCommon, slot: SlotZ, target: TargetZ.optional() } },
-    async (a) => act('use_item', a, { type: 'use', slot: a.slot, target: a.target as never }));
-  server.registerTool('throw_item', { title: '投げる', description: '対象（エンティティ ID・座標・方向）へ投げる。射線判定あり。', inputSchema: { ...actionCommon, slot: SlotZ, target: TargetZ } },
-    async (a) => act('throw_item', a, { type: 'throw', slot: a.slot, target: a.target as never }));
+  server.registerTool('use_item', {
+    title: '使う', description: '薬を飲む・巻物を読む。鑑定の巻物は target_slot で対象を選べる（省略時はスロット順で最初の未鑑定品）。',
+    inputSchema: { ...actionCommon, slot: z.string().describe(SlotZ.description ?? ''), target: z.any().optional().describe(TargetZ.description ?? ''), target_slot: z.string().optional().describe('鑑定の巻物などの対象の所持品スロット') },
+  }, async (a) => act('use_item', a, { type: 'use', slot: a.slot, target: a.target as never, targetSlot: a.target_slot }));
+  server.registerTool('throw_item', {
+    title: '投げる', description: '対象（エンティティ ID・座標・方向）へ投げる。ID 指定で経路が通らなければ no_line_of_sight、射程外なら out_of_range（どちらも手番を使わない）。座標を狙えば遮られた位置・射程の端に落ちる。',
+    inputSchema: { ...actionCommon, slot: z.string().describe(SlotZ.description ?? ''), target: z.any().describe(TargetZ.description ?? '') },
+  }, async (a) => act('throw_item', a, { type: 'throw', slot: a.slot, target: a.target as never }));
   server.registerTool('interact', { title: '操作', description: '扉の開閉、泉・祭壇などの操作。dir 省略時は足元。', inputSchema: { ...actionCommon, dir: DirZ.optional() } },
     async (a) => act('interact', a, { type: 'interact', dir: a.dir }));
   server.registerTool('use_stairs', { title: '階段', description: '足元の階段を使う。', inputSchema: { ...actionCommon } },

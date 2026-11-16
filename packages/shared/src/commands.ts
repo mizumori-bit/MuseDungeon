@@ -10,6 +10,10 @@ export const TargetSchema = z.union([DirSchema, PosSchema, EntityRefSchema]);
 export const TravelTargetSchema = z.union([PosSchema, z.enum(['stairs_down', 'stairs_up']), EntityRefSchema]);
 export const SlotSchema = z.string().regex(/^[a-z]$/);
 export const EquipSlotSchema = z.enum(['weapon', 'armor', 'accessory']);
+/** 移動マクロの慎重さ（V3-2R §14.2）: careful 既定 / steady 弱い攻撃や毒を受けながら進む / flee 隣に敵がいても退く */
+export const MacroModeSchema = z.enum(['careful', 'steady', 'flee']);
+export type MacroMode = z.infer<typeof MacroModeSchema>;
+const HpFloorSchema = z.number().int().min(0);
 
 export const CommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('move'), dir: DirSchema }),
@@ -18,16 +22,19 @@ export const CommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('drop'), slot: SlotSchema, qty: z.number().int().positive().optional() }),
   z.object({ type: z.literal('equip'), slot: SlotSchema }),
   z.object({ type: z.literal('unequip'), slot: z.union([SlotSchema, EquipSlotSchema]) }),
-  z.object({ type: z.literal('use'), slot: SlotSchema, target: TargetSchema.optional() }),
+  /** targetSlot: 鑑定の巻物などの対象（所持品のスロット） */
+  z.object({ type: z.literal('use'), slot: SlotSchema, target: TargetSchema.optional(), targetSlot: SlotSchema.optional() }),
   z.object({ type: z.literal('throw'), slot: SlotSchema, target: TargetSchema }),
   z.object({ type: z.literal('interact'), dir: DirSchema.optional() }),
   z.object({ type: z.literal('stairs') }),
   // マクロ（サーバーで基本行動へ展開）
-  z.object({ type: z.literal('explore') }),
-  z.object({ type: z.literal('travel'), to: TravelTargetSchema }),
+  z.object({ type: z.literal('explore'), mode: MacroModeSchema.optional(), hpFloor: HpFloorSchema.optional(), pickup: z.boolean().optional() }),
+  z.object({ type: z.literal('travel'), to: TravelTargetSchema, mode: MacroModeSchema.optional(), hpFloor: HpFloorSchema.optional(), pickup: z.boolean().optional() }),
   z.object({ type: z.literal('rest'), untilHp: z.number().int().positive().optional(), maxTurns: z.number().int().positive().optional() }),
-  /** 既知の「自分が投げた物」を近い順に回収する */
-  z.object({ type: z.literal('collect') }),
+  /** 既知の「自分が投げた物」（what: 'thrown'、既定）か、見えている・記憶したアイテム（'items'）を近い順に拾う */
+  z.object({ type: z.literal('collect'), what: z.enum(['thrown', 'items']).optional(), mode: MacroModeSchema.optional(), hpFloor: HpFloorSchema.optional() }),
+  /** 隣の相手に近接攻撃を繰り返す（倒れた・離れた・HP が hpFloor を下回った・別の追跡中の敵・状態異常で止まる） */
+  z.object({ type: z.literal('fight'), target: EntityRefSchema, hpFloor: HpFloorSchema.optional() }),
   // 遠征
   z.object({ type: z.literal('extract'), confirm: z.boolean().optional() }),
   z.object({ type: z.literal('start_expedition'), offer: z.union([z.number().int().min(1).max(9), z.literal('endless')]) }),
@@ -42,7 +49,7 @@ export type CommandType = Command['type'];
 export type Target = z.infer<typeof TargetSchema>;
 export type TravelTarget = z.infer<typeof TravelTargetSchema>;
 
-export const MACRO_COMMANDS: ReadonlySet<CommandType> = new Set<CommandType>(['explore', 'travel', 'rest', 'collect']);
+export const MACRO_COMMANDS: ReadonlySet<CommandType> = new Set<CommandType>(['explore', 'travel', 'rest', 'collect', 'fight']);
 export const FREE_COMMANDS: ReadonlySet<CommandType> = new Set<CommandType>(['say', 'note', 'retire']);
 /** キャンプでのみ有効（手番に関係しない） */
 export const CAMP_COMMANDS: ReadonlySet<CommandType> = new Set<CommandType>(['start_expedition']);
@@ -54,6 +61,8 @@ export const JoinSchema = z.object({
   classId: z.string().optional(),
   controller: z.object({ kind: z.enum(['agent', 'human']), label: z.string().max(64) }),
   locale: z.enum(['ja', 'en']).default('ja'),
+  /** 参加したらキャンプに入る（最初の遠征を候補から選ぶ。V3-2R §14.4） */
+  atCamp: z.boolean().optional(),
 });
 export type JoinCommand = z.infer<typeof JoinSchema>;
 
@@ -79,7 +88,9 @@ export type ActionErrorCode =
   | 'invalid_direction' | 'blocked' | 'no_target' | 'out_of_range' | 'no_line_of_sight'
   | 'no_such_item' | 'cannot_use' | 'inventory_full' | 'nothing_here' | 'unknown_destination'
   | 'unreachable' | 'not_your_turn' | 'stale_turn' | 'dead' | 'run_ended' | 'no_session' | 'bad_request'
-  | 'confirm_required' | 'cannot_extract' | 'not_at_camp' | 'at_camp';
+  | 'confirm_required' | 'cannot_extract' | 'not_at_camp' | 'at_camp'
+  // マクロが 1 歩も進めないと分かったとき（手番を使わない。V3-2R §14.2）
+  | 'hostile_adjacent' | 'hostile_in_view' | 'hp_floor' | 'nothing_to_do';
 
 export interface ActionError {
   code: ActionErrorCode;

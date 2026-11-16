@@ -16,7 +16,9 @@ export const statusHandlers = new Registry<StatusHandler>('statusHandler');
 
 statusHandlers.register('dot', {
   tick(ctx, e, inst) {
-    applyDamage(ctx, e, Math.max(1, inst.power), null, 'poison');
+    // 毒を与えた者がまだいれば、その者のダメージとして数える（倒せばその者の撃破・賞金・経験値）
+    const src = inst.source ? ctx.world.entities[inst.source] ?? null : null;
+    applyDamage(ctx, e, Math.max(1, inst.power), src && (src.stats?.hp ?? 0) > 0 ? src : null, 'poison');
   },
 });
 statusHandlers.register('speed_pct', {});
@@ -26,7 +28,7 @@ function statusSeen(ctx: Ctx, e: Entity) {
   return e.pos ? ctx.perceive(e.pos.floor, [{ field: 'target', pos: e.pos, entity: e.id }], e.player ? [e.player] : []) : { seenBy: e.player ? [e.player] : [] };
 }
 
-export function addStatus(ctx: Ctx, e: Entity, id: string, turns: number, power: number): void {
+export function addStatus(ctx: Ctx, e: Entity, id: string, turns: number, power: number, source: string | null = null): void {
   if (!ctx.content.statuses[id] || turns <= 0) return;
   const cur = (e.statuses ?? []).map((s) => ({ ...s }));
   const existing = cur.find((s) => s.id === id);
@@ -34,12 +36,16 @@ export function addStatus(ctx: Ctx, e: Entity, id: string, turns: number, power:
   if (existing) {
     existing.turnsLeft = Math.max(existing.turnsLeft, turns);
     existing.power = Math.max(existing.power, power);
+    if (source) existing.source = source;
     inst = existing;
   } else {
-    inst = { id, turnsLeft: turns, power };
+    inst = { id, turnsLeft: turns, power, ...(source ? { source } : {}) };
     cur.push(inst);
   }
-  ctx.emit({ type: 'status_applied', target: e.id, targetKind: e.kind, status: { ...inst }, statusesAfter: cur, ...statusSeen(ctx, e) });
+  ctx.emit({
+    type: 'status_applied', target: e.id, targetKind: e.kind, status: { ...inst }, statusesAfter: cur,
+    ...(e.scale?.affixes?.length ? { targetAffixes: [...e.scale.affixes] } : {}), ...statusSeen(ctx, e),
+  });
 }
 
 export function removeStatus(ctx: Ctx, e: Entity, id: string): boolean {

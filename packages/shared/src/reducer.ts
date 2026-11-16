@@ -214,6 +214,12 @@ export function applyEvent(world: World, ev: GameEvent): void {
         for (const [id, s] of Object.entries(ev.metAtAfter)) p.knowledge.metAt[id] = s;
       }
       if (ev.shotsAfter) p.knowledge.shots = [...ev.shotsAfter];
+      if (ev.mappedAdd?.length) fk.mapped = [...(fk.mapped ?? []), ...ev.mappedAdd];
+      if (ev.mappedDel?.length && fk.mapped) {
+        const del = new Set(ev.mappedDel);
+        fk.mapped = fk.mapped.filter((i) => !del.has(i));
+      }
+      if (ev.senseAfter !== undefined) p.knowledge.sense = ev.senseAfter ? { ...ev.senseAfter } : null;
       break;
     }
     case 'monster_memory_updated':

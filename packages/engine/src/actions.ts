@@ -1,8 +1,8 @@
 // プレイヤーの基本行動。各ハンドラは「検証（イベント無し）→ 実行」の二段。
 // 不正なコマンドはイベントを出さず時間も消費しない（ActionError を返す）。
 import type { ActionError, Command, Entity, EquipSlot, PlayerRecord, Pos } from '@muse/shared';
-import { actionError, DIR_VEC, EQUIP_SLOTS, stepPos, t } from '@muse/shared';
-import { endRun, melee, rollToHit, applyDamage, checkRunEnd } from './combat';
+import { actionError, diceMax, DIR_VEC, EQUIP_SLOTS, stepPos, t } from '@muse/shared';
+import { endRun, grantXp, melee, rollToHit, applyDamage, checkRunEnd } from './combat';
 import type { Ctx } from './ctx';
 import { applyEffects } from './effects';
 import { doExtract, extractError, maybeEndExpedition } from './expedition';
@@ -265,6 +265,16 @@ actions.register('use', (ctx, e, pr, cmd: Extract<Command, { type: 'use' }>) => 
   if (!def || !def.onUse.length) {
     return fail(pr, 'cannot_use', 'それは使えない。', 'You cannot use that.', def?.equip ? '装備品は equip で装備する。' : def?.throw ? '投擲武器は throw_item で投げる。' : '別のアイテムを選ぶ。', def?.equip ? 'Equip it with equip.' : def?.throw ? 'Throw it with throw_item.' : 'Choose another item.');
   }
+  // 鑑定の対象（target_slot）。手番を使う前に確かめる
+  let identifySlot: string | undefined;
+  if (cmd.targetSlot && def.onUse.some((x) => x.effect === 'identify')) {
+    const tgt = invItem(ctx, e, cmd.targetSlot);
+    if (!tgt) return fail(pr, 'no_such_item', `スロット ${cmd.targetSlot} にアイテムは無い。`, `No item in slot ${cmd.targetSlot}.`, 'inventory で確認する。', 'Check with inventory.');
+    if (!ctx.world.secret.appearances[tgt.kind] || pr.knowledge.identified.includes(tgt.kind)) {
+      return fail(pr, 'cannot_use', 'それは鑑定の必要が無い。', 'That needs no identification.', '未鑑定の品のスロットを指定する。', 'Pick the slot of an unidentified item.');
+    }
+    identifySlot = cmd.targetSlot;
+  }
   return {
     run: () => {
       const me = ctx.world.entities[e.id];
@@ -283,7 +293,7 @@ actions.register('use', (ctx, e, pr, cmd: Extract<Command, { type: 'use' }>) => 
         del.push(it.id);
       }
       ctx.emit({ type: 'item_used', actor: e.id, item: it.id, kind: it.kind, appearanceId: appearanceOf(ctx, it.kind), category: def.category, qtyAfter, put, del, ...selfSeen(ctx, me), floor: key });
-      applyEffects(ctx, def.onUse, { user: ctx.world.entities[e.id], target: ctx.world.entities[e.id], pos: { x: me.pos!.x, y: me.pos!.y }, source: me, via: 'item' });
+      applyEffects(ctx, def.onUse, { user: ctx.world.entities[e.id], target: ctx.world.entities[e.id], pos: { x: me.pos!.x, y: me.pos!.y }, source: me, via: 'item', ...(identifySlot ? { itemSlot: identifySlot } : {}), usedKind: it.kind });
       const pNow = ctx.world.players[pr.id];
       if (appearanceOf(ctx, it.kind) && !pNow.knowledge.identified.includes(it.kind)) {
         ctx.emit({ type: 'item_identified', player: pr.id, kind: it.kind, appearanceId: appearanceOf(ctx, it.kind), seenBy: [pr.id], floor: key });
@@ -313,6 +323,11 @@ function resolveTarget(ctx: Ctx, e: Entity, pr: PlayerRecord, target: unknown, r
     const vis = ctx.visibleSet(pr.id);
     if (!te?.pos || te.pos.floor !== key || !vis.has(te.pos.y * f.width + te.pos.x)) {
       return actionError('no_target', t(pr.locale, 'その対象は見えていない。', 'You cannot see that target.'), t(pr.locale, 'visible.monsters の id を指定する。', 'Use an id from visible.monsters.'));
+    }
+    // 射程外の対象（ID 指定）は拒否する。手番も品物も失わない（座標を狙えば手前に落ちる）
+    if (line(e.pos!, te.pos).length > range) {
+      return actionError('out_of_range', t(pr.locale, `射程（${range}）の外だ。`, `Out of range (${range}).`),
+        t(pr.locale, '近づくか、visible.monsters の shots が clear の相手を選ぶ。座標を狙えば射程の端に落ちる。', 'Move closer or pick a target whose shots entry is clear. Targeting a position lands at the end of the range.'));
     }
     if (!shotClear(ctx, key, e.pos!, te.pos)) {
       return actionError('no_line_of_sight', t(pr.locale, 'そこまで投擲の経路が通っていない（壁か他の者に遮られる）。', 'No clear throwing line to that target (blocked by a wall or someone).'),
@@ -401,11 +416,12 @@ actions.register('throw', (ctx, e, pr, cmd: Extract<Command, { type: 'throw' }>)
         type: 'item_thrown', actor: me.id, actorKind: me.kind, item: thrownId, kind: it.kind, appearanceId: appearanceOf(ctx, it.kind),
         from, to: tp, landed: broke ? null : landed, hit: hit?.id ?? null, hitKind: hit?.kind ?? null, broke, put, del, ...seen, floor: key,
         outcome, blockedBy, reached: hitEnt?.id ?? null, reachedKind: hitEnt?.kind ?? null,
+        ...(hitEnt?.scale?.affixes?.length ? { reachedAffixes: [...hitEnt.scale.affixes] } : {}),
       });
       makeNoise(ctx, key, landed, 4, me);
       if (hit) {
         const dmgDice = def?.throw?.dmg ?? '1d2';
-        const dmg = Math.max(1, roll(ctx.rng('runtime'), dmgDice, crit) - (hit.stats?.armor ?? 0));
+        const dmg = crit ? Math.max(1, diceMax(dmgDice)) : Math.max(1, roll(ctx.rng('runtime'), dmgDice) - (hit.stats?.armor ?? 0));
         applyDamage(ctx, hit, dmg, ctx.world.entities[me.id], 'thrown');
         const stillThere = ctx.world.entities[hit.id];
         if (broke && def?.onUse.length && stillThere && (stillThere.stats?.hp ?? 0) > 0) {
@@ -478,7 +494,11 @@ actions.register('stairs', (ctx, e, pr) => {
         dir: tr.stairs!, ...ctx.perceive(key, [{ field: 'from', pos: from }], [pr.id]), floor: key,
       });
       const p = ctx.world.players[pr.id];
-      if (depth > p.stats.deepest) ctx.emit({ type: 'player_stats', player: pr.id, stats: { ...p.stats, deepest: depth }, seenBy: [pr.id], floor: toKey });
+      if (depth > p.stats.deepest) {
+        ctx.emit({ type: 'player_stats', player: pr.id, stats: { ...p.stats, deepest: depth }, seenBy: [pr.id], floor: toKey });
+        // 新しい深度に初めて着いた経験値（敵を避けて進んでも深度相応に育つ）
+        grantXp(ctx, ctx.world.entities[me.id], ctx.content.balance.xp.perNewDepth * depth);
+      }
       updateKnowledge(ctx, toKey);
       return { cost: 0, scheduled: true };
     },

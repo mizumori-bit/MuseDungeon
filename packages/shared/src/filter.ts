@@ -1,8 +1,9 @@
 // プレイヤー向けイベントフィルタ（ルール無し）。仕様: docs/PROTOCOL.md §5
 // seenBy に含まれないものを落とし、見えていないエンティティ参照を null にし、内部用イベントを除く。
+import { dirTo } from './util';
 import type { GameEvent, EventType } from './events';
 import { INTERNAL_EVENT_TYPES } from './events';
-import type { PlayerId } from './types';
+import type { PlayerId, Pos } from './types';
 import type { PlayerView } from './view';
 
 /** プレイヤーに渡してよいイベント種別（これ以外は内部・俯瞰専用） */
@@ -59,6 +60,13 @@ export function filterEventsForPlayer(events: readonly GameEvent[], playerId: Pl
     for (const f of masked) {
       if (f in pe) pe[f] = null;
       if (`${f}Kind` in pe) pe[`${f}Kind`] = null;
+      if (`${f}Affixes` in pe) pe[`${f}Affixes`] = null;
+    }
+    // 見えていた個体が視界の外へ動いた: 行き先は伏せ、向きだけ残す（「北東へ」）
+    if (ev.type === 'entity_moved' && masked.includes('to') && !masked.includes('from')) {
+      const raw = ev as unknown as { from: Pos; to: Pos };
+      const d = dirTo(raw.from, raw.to);
+      if (d) pe.dirOut = d;
     }
     switch (ev.type) {
       case 'damaged':

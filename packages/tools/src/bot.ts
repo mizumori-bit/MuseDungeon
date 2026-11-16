@@ -49,17 +49,42 @@ export interface BotMemo {
   overreach: number;
   /** 方針: キャンプで選ぶ枠（無ければ 1 番目） */
   offerSlot?: OfferSlot;
+  /** 方針: 踏破の途中で HP が 60% を切ったらその場で帰る（既定 true） */
+  cautious: boolean;
 }
 
-export function newMemo(policy: { overreach?: number; offerSlot?: OfferSlot } = {}): BotMemo {
-  return { restFails: 0, avoid: new Set<string>(), blocked: 0, descend: false, gaveUp: null, overreach: policy.overreach ?? 0, offerSlot: policy.offerSlot };
+export function newMemo(policy: { overreach?: number; offerSlot?: OfferSlot; cautious?: boolean } = {}): BotMemo {
+  return { restFails: 0, avoid: new Set<string>(), blocked: 0, descend: false, gaveUp: null, overreach: policy.overreach ?? 0, offerSlot: policy.offerSlot, cautious: policy.cautious ?? true };
 }
 
 /** 既知の階段のうち一番近い到達可能なものへの travel（無ければ null） */
 function toNearestStairs(port: PlayerPort): Command | null {
   const ks = port.observe({ map: false }).observation.navigation.known_stairs.filter((s) => s.reachable);
   if (!ks.length) return null;
-  return { type: 'travel', to: ks[0].type === 'down' ? 'stairs_down' : 'stairs_up' };
+  const hp = hpPct(port.view());
+  return { type: 'travel', to: ks[0].type === 'down' ? 'stairs_down' : 'stairs_up', ...steadyIf(hp) };
+}
+
+/** 余力（HP 60% 以上）があれば steady で進む */
+function steadyIf(hp: number): { mode?: 'steady' } {
+  return hp >= 60 ? { mode: 'steady' } : {};
+}
+
+function hunting0(v: PlayerView): boolean {
+  return v.entities.some((e) => e.cat === 'monster' && e.awareness === 'hunting');
+}
+
+const DIR_ORDER: Dir[] = ['n', 'ne', 'e', 'se', 's', 'sw', 'w', 'nw'];
+/** 隣り合う方角か（北と北東など） */
+function neighborDir(a: Dir | null, b: Dir): boolean {
+  if (!a) return false;
+  const d = Math.abs(DIR_ORDER.indexOf(a) - DIR_ORDER.indexOf(b));
+  return d === 1 || d === 7;
+}
+
+/** 方針の階数だけ踏破したか */
+function crossedEnough(x: NonNullable<PlayerView['expedition']>, memo: BotMemo): boolean {
+  return x.objective.targetDepth === null || memo.overreach === 0 || x.crossedDepth >= x.objective.targetDepth + memo.overreach;
 }
 
 export function greedyDecide(port: PlayerPort, rng: Rng, memo: BotMemo): Command {
@@ -80,16 +105,20 @@ export function greedyDecide(port: PlayerPort, rng: Rng, memo: BotMemo): Command
   const hp = hpPct(v);
   const x = v.expedition && v.expedition.status !== 'ended' ? v.expedition : null;
   const complete = !!x && x.status === 'objective_complete' && (x.objective.type !== 'retrieve_relic' || x.progress.relicHeldByYou);
-  // 深追いの方針: 目標より overreach 階深く着くまでは帰らない。ただし余力（HP 60% 以上）が無くなったらその場で帰る
-  const done = complete && (x!.objective.targetDepth === null || x!.maxDepth >= x!.objective.targetDepth + memo.overreach || (x!.maxDepth > x!.objective.targetDepth && hp < 60));
+  // 踏破の方針: 目標より overreach 階深い下り階段に立つまでは帰らない。ただし余力（HP 60% 以上）が無くなったらその場で帰る
+  const done = complete && (x!.objective.targetDepth === null || crossedEnough(x!, memo) || (memo.cautious && x!.maxDepth > x!.objective.targetDepth && hp < 60));
   const onTarget = !!x && x.objective.targetDepth !== null && v.floor?.depth === x.objective.targetDepth;
 
   if (hp < 35 && healing && (adj || hostiles.length)) return { type: 'use', slot: healing.slot };
   if (hp < 25 && unknownPotion && adj) return { type: 'use', slot: unknownPotion.slot };
-  if (adj && adj.awareness !== 'asleep' || adj && hp > 50) return { type: 'move', dir: dirTo(pos, adj.pos)! };
+  // 隣の敵: 余力があれば fight（1 回の呼び出しで殴り続ける）、無ければ 1 発ずつ
+  if (adj && (adj.awareness !== 'asleep' || hp > 50)) {
+    const floor = Math.trunc((v.self.stats.maxHp * 35) / 100);
+    return v.self.stats.hp > floor ? { type: 'fight', target: adj.id, hpFloor: floor } : { type: 'move', dir: dirTo(pos, adj.pos)! };
+  }
   const hunting = hostiles.filter((h) => h.awareness === 'hunting');
   if (hunting.length && throwable && cheb(hunting[0].pos, pos) <= 6 && cheb(hunting[0].pos, pos) > 1) return { type: 'throw', slot: throwable.slot, target: hunting[0].id };
-  if (hunting.length && cheb(hunting[0].pos, pos) <= 8 && !memo.avoid.has(hunting[0].id)) return { type: 'travel', to: hunting[0].id };
+  if (hunting.length && hp < 60 && cheb(hunting[0].pos, pos) <= 8 && !memo.avoid.has(hunting[0].id)) return { type: 'travel', to: hunting[0].id };
   // 遠征の目的
   if (done || memo.gaveUp !== null) {
     const ex = port.observe({ map: false }).observation.expedition;
@@ -98,6 +127,16 @@ export function greedyDecide(port: PlayerPort, rng: Rng, memo: BotMemo): Command
     const go = toNearestStairs(port);
     if (go && ex?.extract_blocked_by === 'not_on_stairs') return go;
   }
+  if (x && onTarget && !done && v.sense && !hunting0(v)) {
+    const want = v.sense.dir;
+    const seenTarget = v.entities.some((e) => e.role === (v.sense!.what === 'relic' ? 'relic' : 'guardian'));
+    if (!seenTarget) {
+      const fr = port.observe({ map: false }).observation.navigation.frontiers.filter((f) => f.dir === want || neighborDir(f.dir, want));
+      // 近すぎる行き先は explore に任せる（短い呼び出しを増やさない）
+      const far = fr.filter((f) => f.dist >= 5);
+      if (far.length) return { type: 'travel', to: far[0].pos, ...steadyIf(hp) };
+    }
+  }
   if (x && onTarget && !done) {
     if (x.objective.type === 'slay_guardian' && !x.progress.guardianSlain) {
       const g = hostiles.find((h) => h.role === 'guardian');
@@ -105,13 +144,17 @@ export function greedyDecide(port: PlayerPort, rng: Rng, memo: BotMemo): Command
     }
     if (x.objective.type === 'retrieve_relic' && !x.progress.relicHeld) {
       const here = v.entities.find((e) => e.role === 'relic' && e.pos.x === pos.x && e.pos.y === pos.y);
+      if (here && inv.length >= me.capacity) {
+        // 一杯なら要らない物を置く（装備していない武器・防具 → 未鑑定の巻物 → 先頭）
+        const junk = inv.find((i) => !i.equipped && (WEAPON_RANK.includes(i.kind ?? '') || ARMOR_RANK.includes(i.kind ?? '')))
+          ?? inv.find((i) => !i.equipped && i.kind === null && i.appearanceId?.includes('scroll')) ?? inv.find((i) => !i.equipped && i.kind !== 'core:potion_healing');
+        if (junk) return { type: 'drop', slot: junk.slot };
+      }
       if (here) return { type: 'pickup', item: here.id };
       const seen = v.entities.find((e) => e.role === 'relic') ?? v.memory.remembered.find((r) => r.role === 'relic');
       if (seen && !memo.avoid.has(seen.id) && !hunting.length) return { type: 'travel', to: seen.id };
     }
   }
-  // 足元のアイテム
-  if (v.entities.some((e) => e.cat === 'item' && e.pos.x === pos.x && e.pos.y === pos.y) && inv.length < me.capacity) return { type: 'pickup' };
   // 装備の更新（公開情報: 名前の序列のみ）
   for (const it of inv) {
     if (!it.kind || it.equipped) continue;
@@ -133,10 +176,8 @@ export function greedyDecide(port: PlayerPort, rng: Rng, memo: BotMemo): Command
   if (!hostiles.length && hp < 60 && memo.restFails < 3) { memo.restFails++; return { type: 'rest' }; }
   memo.restFails = 0;
   if (!hostiles.length && unknownScroll) return { type: 'use', slot: unknownScroll.slot };
-  // 見えているアイテムへ
-  const item = v.entities.find((e) => e.cat === 'item' && inv.length < me.capacity && !memo.avoid.has(e.id));
-  if (item && !hostiles.some((h) => h.awareness === 'hunting')) return { type: 'travel', to: item.id };
-  return { type: 'explore' };
+  // アイテムは explore が通り道と見えている物を拾う。余力があれば steady（敵は隣に来たら止まって fight）
+  return { type: 'explore', ...steadyIf(hp) };
 }
 
 export function randomDecide(port: PlayerPort, rng: Rng): Command {
@@ -167,14 +208,15 @@ export interface BotOptions {
   overreach?: number;
   /** 方針: キャンプで選ぶ枠 */
   offerSlot?: OfferSlot;
+  /** 方針: 踏破の途中で HP が 60% を切ったら帰る（既定 true） */
+  cautious?: boolean;
 }
 
 /** 1 ランを最後まで（死亡・終了・上限）bot で遊ぶ */
 export async function runBot(manager: SessionManager, opts: BotOptions): Promise<BotResult> {
   const t0 = Date.now();
-  // 最初の遠征も方針の枠で選ぶ（safe=到達、standard=守護者、ambitious=遺物）
-  const first = opts.objective ?? (opts.offerSlot === 'standard' ? 'slay_guardian' : opts.offerSlot === 'ambitious' ? 'retrieve_relic' : undefined);
-  const r = await manager.createRun({ name: `${opts.kind}-bot`, classId: opts.classId, seed: opts.seed, controller: { kind: 'agent', label: `${opts.kind}-bot` }, objective: first });
+  // objective を省くとキャンプから始まり、最初の遠征も方針の枠で選ぶ
+  const r = await manager.createRun({ name: `${opts.kind}-bot`, classId: opts.classId, seed: opts.seed, controller: { kind: 'agent', label: `${opts.kind}-bot` }, objective: opts.objective === 'auto' ? undefined : opts.objective });
   if ('error' in r) throw new Error(r.error.message);
   const res = await playWithPort(r.port, opts);
   return { ...res, runId: r.session.runId, seed: opts.seed, ms: Date.now() - t0 };
@@ -182,7 +224,7 @@ export async function runBot(manager: SessionManager, opts: BotOptions): Promise
 
 export async function playWithPort(port: PlayerPort, opts: BotOptions): Promise<Omit<BotResult, 'runId' | 'seed' | 'ms'>> {
   const rng = Rng.fromSeed(`bot|${opts.seed}`);
-  const memo = newMemo({ overreach: opts.overreach, offerSlot: opts.offerSlot });
+  const memo = newMemo({ overreach: opts.overreach, offerSlot: opts.offerSlot, cautious: opts.cautious });
   const maxActs = opts.maxActs ?? 2500;
   const brief: number[] = [];
   const full: number[] = [];
@@ -234,7 +276,7 @@ export async function playWithPort(port: PlayerPort, opts: BotOptions): Promise<
         cmd = toNearestStairs(port) ?? { type: 'wait' };
       } else {
         memo.descend = true;
-        cmd = { type: 'travel', to: 'stairs_down' };
+        cmd = { type: 'travel', to: 'stairs_down', ...steadyIf(hpPct(v)) };
       }
     }
     const xno = v.expedition?.no ?? 0;
@@ -251,12 +293,21 @@ export async function playWithPort(port: PlayerPort, opts: BotOptions): Promise<
     if (out.ok) {
       if (cmd.type === 'explore') explored = out.interrupted_by === 'explored';
       if (memo.descend && cmd.type === 'travel' && cmd.to === 'stairs_down' && (out.interrupted_by === 'arrived' || out.observation.alerts.some((a) => a.code === 'on_stairs'))) {
-        const s = await port.act({ type: 'stairs' }, { source: 'bot' });
-        if (s.ok) { explored = false; memo.descend = false; }
+        // 踏破の方針を満たしたら下りずに、この下り階段で帰る（次の判断で extract）
+        const xv = port.view().expedition;
+        const enough = !!xv && xv.status === 'objective_complete' && memo.overreach > 0 && crossedEnough(xv, memo);
+        if (enough) { memo.descend = false; explored = false; }
+        else {
+          const s = await port.act({ type: 'stairs' }, { source: 'bot' });
+          if (s.ok) { explored = false; memo.descend = false; }
+        }
       }
       if (cmd.type === 'travel' && cmd.to === 'stairs_down' && (out.interrupted_by === 'unknown_destination' || out.interrupted_by === 'unreachable' || out.interrupted_by === 'blocked')) { explored = false; memo.descend = false; }
     } else if (opts.kind === 'greedy') {
-      // 行き詰まったら探索に戻す
+      // 行き詰まったら探索に戻す（1 歩も進めないマクロは手番を使わずに拒否される）
+      if (cmd.type === 'travel' && typeof cmd.to === 'string' && cmd.to.startsWith('e_')) memo.avoid.add(cmd.to);
+      if (cmd.type === 'explore' && out.error.code === 'nothing_to_do') explored = true;
+      if (cmd.type === 'rest') memo.restFails = 3;
       if (cmd.type === 'travel' && cmd.to === 'stairs_down') { explored = false; memo.descend = false; }
       if (port.view().status === 'your_turn') await port.act({ type: 'wait' }, { source: 'bot' });
     }

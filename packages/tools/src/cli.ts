@@ -8,6 +8,7 @@ import { assetsCheck, assetsChecklist } from './assets';
 import { commandInvoker, drive, dummyInvoker, httpInvoker } from './drive';
 import { formatPacing, pacingReport } from './pacing';
 import { choicesReport, formatChoices } from './choices';
+import { budgetReport, formatBudget } from './budget';
 import { verifyRunDir, writeGolden } from './replay';
 import { resolve } from 'node:path';
 
@@ -162,6 +163,12 @@ async function main() {
       else console.log(formatPacing(rep));
       break;
     }
+    case 'budget': {
+      const manager = new SessionManager(content, loadConfig({ runsDir: null }));
+      const rep = await budgetReport(manager, { runs: Number(flag('runs', '30')), maxActs: Number(flag('max-acts', '600')), seed: flag('seed', 'budget')!, log: has('verbose') ? (s) => console.log(s) : undefined });
+      console.log(has('json') ? JSON.stringify(rep, null, 2) : formatBudget(rep));
+      break;
+    }
     case 'choices': {
       const manager = new SessionManager(content, loadConfig({ runsDir: null }));
       const rep = await choicesReport(manager, { runs: Number(flag('runs', '40')), maxActs: Number(flag('max-acts', '1500')), seed: flag('seed', 'choices')!, log: (s) => console.log(s) });
@@ -197,7 +204,7 @@ async function main() {
       break;
     }
     default:
-      console.log('usage: tsx packages/tools/src/cli.ts <bot|seed|gen-check|replay-verify|golden|assets-checklist|assets-check|validate|pacing|choices|drive> [options]');
+      console.log('usage: tsx packages/tools/src/cli.ts <bot|seed|gen-check|replay-verify|golden|assets-checklist|assets-check|validate|pacing|choices|budget|drive> [options]');
   }
 }
 

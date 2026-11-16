@@ -6,25 +6,26 @@
     "macro": { "stepLimit": 200 },
     "wander": { "firstAt": 5000, "intervalMin": 4000, "intervalMax": 6000, "maxAwake": 30, "minDistance": 12 },
     "score": { "perDepth": 1000, "perKill": 10, "perLevel": 25 },
-    "estimate": { "minSamples": 3 },
+    "estimate": { "minSamples": 5 },
+    "xp": { "perNewDepth": 4, "perObjective": 8 },
     "haul": {
-      "overreachFirst": 1000, "overreachStep": 500, "perKill": 10,
+      "overreachFirst": 600, "overreachStep": 300, "perKill": 10,
       "discovery": { "species": 50, "identify": 30, "room": 100, "inscription": 50 },
       "withdrawPct": 50,
       "guardianBounty": { "base": 300, "perDepth": 60 }
     },
     "expedition": {
-      "firstTargetDepth": 3,
+      "firstTargetDepth": { "safe": 2, "standard": 3, "ambitious": 3 },
       "aheadMin": 2,
       "aheadMax": 4,
       "points": { "reach_depth": 2000, "slay_guardian": 3000, "retrieve_relic": 3500 },
       "pointsPerExtraDepth": 500,
       "relicGuardianPct": 50,
       "afterObjective": { "wanderIntervalPct": 50 },
-      "recommendedLevel": { "mul": 3, "div": 4 },
+      "recommendedLevelByDepth": [1, 2, 2, 4, 4, 5, 6, 7],
       "slots": {
-        "safe": { "aheadMin": 1, "aheadMax": 2, "traitsMin": 0, "traitsMax": 0, "pointsPct": 80 },
-        "standard": { "aheadMin": 2, "aheadMax": 3, "traitsMin": 0, "traitsMax": 1, "pointsPct": 100 },
+        "safe": { "aheadMin": 1, "aheadMax": 1, "traitsMin": 0, "traitsMax": 0, "pointsPct": 80 },
+        "standard": { "aheadMin": 2, "aheadMax": 2, "traitsMin": 0, "traitsMax": 1, "pointsPct": 100 },
         "ambitious": { "aheadMin": 3, "aheadMax": 4, "traitsMin": 1, "traitsMax": 2, "pointsPct": 150 }
       }
     }

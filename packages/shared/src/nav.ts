@@ -15,6 +15,8 @@ export interface NavGrid {
   occupied: Uint8Array;
   /** 発見済みの罠（できれば避ける） */
   hazard: Uint8Array;
+  /** 地形は知っているが目で見ていないセル（explore の行き先は「見ていない区画」） */
+  unsighted: Uint8Array;
 }
 
 /** 経路探索の厳しさ: strict = アクターと罠を避ける / actors = アクターだけ避ける / none = 地形のみ */
@@ -53,7 +55,9 @@ export function buildNavGrid(view: PlayerView, catalog: Catalog): NavGrid | null
   // 発見済みの罠はできれば避ける
   for (const e of view.entities) if (e.cat === 'trap') hazard[e.pos.y * width + e.pos.x] = 1;
   for (const r of view.memory.remembered) if (r.cat === 'trap') hazard[r.pos.y * width + r.pos.x] = 1;
-  return { width, height, passable, known, occupied, hazard };
+  const unsighted = new Uint8Array(n);
+  for (const i of view.memory.unsighted ?? []) unsighted[i] = 1;
+  return { width, height, passable, known, occupied, hazard, unsighted };
 }
 
 export interface BfsResult {
@@ -125,12 +129,13 @@ export function findFrontiers(grid: NavGrid): number[] {
   for (let y = 0; y < grid.height; y++) {
     for (let x = 0; x < grid.width; x++) {
       const i = y * grid.width + x;
-      if (!grid.passable[i]) continue;
+      if (!grid.passable[i] || grid.unsighted[i]) continue;
       for (const d of DIRS) {
         const nx = x + DIR_VEC[d][0];
         const ny = y + DIR_VEC[d][1];
         if (nx < 0 || ny < 0 || nx >= grid.width || ny >= grid.height) continue;
-        if (!grid.known[ny * grid.width + nx]) { out.push(i); break; }
+        const j = ny * grid.width + nx;
+        if (!grid.known[j] || grid.unsighted[j]) { out.push(i); break; }
       }
     }
   }

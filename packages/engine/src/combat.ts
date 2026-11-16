@@ -1,7 +1,7 @@
-// 戦闘（整数のみ）。命中: d20 + acc >= 10 + eva。20 は必中＋クリティカル（ダイス 2 倍）、1 は必ず外れ。
-// ダメージ: ダイス + might - armor、最低 1。
+// 戦闘（整数のみ）。命中: d20 + acc >= 10 + eva。20 は必中＋会心、1 は必ず外れ。
+// ダメージ: ダイス + might - armor、最低 1。会心は「ダイスの最大値 + might、装甲無視」（V3-2R §14.3）。
 import type { DamageVia, Dir, Entity, PlayerId, PlayerRecord, RunSummary, RunSummaryPlayer } from '@muse/shared';
-import { cheb, dirTo, xpForLevel } from '@muse/shared';
+import { cheb, diceMax, dirTo, xpForLevel } from '@muse/shared';
 import type { Ctx } from './ctx';
 import { applyEffects } from './effects';
 import { maybeEndExpedition } from './expedition';
@@ -38,9 +38,16 @@ function emitAttack(ctx: Ctx, attacker: Entity, target: Entity, o: AttackOutcome
   ctx.emit({
     type: 'attack', attacker: attacker.id, attackerKind: attacker.kind, target: target.id, targetKind: target.kind,
     roll: o.roll, hit: o.hit, crit: o.crit, ranged,
+    ...affixFields('attacker', attacker), ...affixFields('target', target),
     from: { x: attacker.pos!.x, y: attacker.pos!.y }, to: { x: target.pos!.x, y: target.pos!.y },
     ...fromDirFor(target, attacker, seen.masks, 'attacker'), ...seen,
   });
+}
+
+/** 接辞（文章用）。無ければ付けない */
+function affixFields(field: string, e: Entity | null): Record<string, string[]> {
+  const a = e?.scale?.affixes;
+  return a?.length ? { [`${field}Affixes`]: [...a] } : {};
 }
 
 /** 攻撃者が見えていない被害者（プレイヤー）にだけ、攻撃が来た方向を残す */
@@ -56,7 +63,9 @@ export function melee(ctx: Ctx, attacker: Entity, target: Entity): void {
   emitAttack(ctx, attacker, target, o, false);
   makeNoise(ctx, attacker.pos!.floor, target.pos!, 5, attacker);
   if (o.hit) {
-    const dmg = Math.max(1, roll(ctx.rng('runtime'), attacker.stats!.dmg, o.crit) + attacker.stats!.might - (target.stats?.armor ?? 0));
+    const dmg = o.crit
+      ? Math.max(1, diceMax(attacker.stats!.dmg) + attacker.stats!.might)
+      : Math.max(1, roll(ctx.rng('runtime'), attacker.stats!.dmg) + attacker.stats!.might - (target.stats?.armor ?? 0));
     applyDamage(ctx, target, dmg, attacker, 'melee');
     if ((ctx.world.entities[target.id]?.stats?.hp ?? 0) > 0) onHitEffects(ctx, attacker, ctx.world.entities[target.id]);
   } else provoke(ctx, target, attacker);
@@ -75,7 +84,7 @@ export function rangedAttack(ctx: Ctx, attacker: Entity, target: Entity, dice: s
     updateMemory(ctx, pr.id, attacker.kind, (m) => { m.abilities.push('ranged'); m.rangeMax = Math.max(m.rangeMax ?? 0, dist); });
   }
   if (o.hit) {
-    const dmg = Math.max(1, roll(ctx.rng('runtime'), dice, o.crit) - (target.stats?.armor ?? 0));
+    const dmg = o.crit ? Math.max(1, diceMax(dice)) : Math.max(1, roll(ctx.rng('runtime'), dice) - (target.stats?.armor ?? 0));
     applyDamage(ctx, target, dmg, attacker, 'ranged');
   } else provoke(ctx, target, attacker);
 }
@@ -119,6 +128,7 @@ export function applyDamage(ctx: Ctx, target: Entity, amount: number, source: En
   ctx.emit({
     type: 'damaged', target: t.id, targetKind: t.kind, amount, hpAfter, dealt,
     source: source?.id ?? null, sourceKind: source?.kind ?? null, via, ...(seenTotals ? { seenTotals } : {}),
+    ...affixFields('target', t), ...affixFields('source', source),
     ...fromDirFor(t, source, seen.masks, 'source'), ...seen,
   });
   // 思い出（受けたダメージは脅威の見積もり用に出目どおり、与えたダメージは実ダメージ）
@@ -178,7 +188,7 @@ export function kill(ctx: Ctx, victim: Entity, killer: Entity | null, via: Damag
   for (const pid of seen.seenBy) if (masks[pid]?.includes('id')) masks[pid] = [...masks[pid], 'maxHp'];
   ctx.emit({
     type: 'died', id: victim.id, kind: victim.kind, killer: killer?.id ?? null, killerKind: killer?.kind ?? null, via, pos, maxHp,
-    ...(victim.bounty ? { bounty: victim.bounty } : {}),
+    ...(victim.bounty ? { bounty: victim.bounty } : {}), ...(victim.scale?.affixes?.length ? { affixes: [...victim.scale.affixes] } : {}),
     seenBy: seen.seenBy, ...(Object.keys(masks).length ? { masks } : {}),
   });
   if (maxHp !== null && victim.role !== 'guardian') {
@@ -230,7 +240,8 @@ export function grantXp(ctx: Ctx, e: Entity, amount: number): void {
     if (lu.evaEvery && lv % lu.evaEvery === 0) base.eva += 1;
     const tmp: Entity = { ...cur, base, stats: { ...cur.stats!, hp: cur.stats!.hp + lu.hp } };
     const stats = effectiveStats(ctx, tmp);
-    ctx.emit({ type: 'level_up', target: e.id, levelAfter: lv, xpAfter: cur.level.xp, statsAfter: stats, baseAfter: base, seenBy: e.player ? [e.player] : [] });
+    const gains = { maxHp: base.maxHp - cur.base!.maxHp, acc: base.acc - cur.base!.acc, might: base.might - cur.base!.might, eva: base.eva - cur.base!.eva };
+    ctx.emit({ type: 'level_up', target: e.id, levelAfter: lv, xpAfter: cur.level.xp, statsAfter: stats, baseAfter: base, gains, seenBy: e.player ? [e.player] : [] });
     cur = ctx.world.entities[e.id];
   }
 }

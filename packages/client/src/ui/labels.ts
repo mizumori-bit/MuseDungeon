@@ -48,3 +48,11 @@ export const OBJECTIVE_CHOICES: { id: ObjectiveChoice; ja: string; en: string }[
   { id: 'retrieve_relic', ja: '遺物を持ち帰る', en: 'Retrieve the relic' },
   { id: 'endless', ja: '目的なし（endless: ひたすら潜る）', en: 'Endless (no objective)' },
 ];
+
+/** 新しいランの最初の遠征: camp はキャンプから始めて 3 候補から選ぶ（objective を省く。V3-2R §14.4） */
+export type FirstExpeditionChoice = 'camp' | ObjectiveChoice;
+
+export const FIRST_EXPEDITION_CHOICES: { id: FirstExpeditionChoice; ja: string; en: string }[] = [
+  { id: 'camp', ja: 'キャンプで選ぶ（3 候補から）', en: 'Choose at camp (from 3 offers)' },
+  ...OBJECTIVE_CHOICES,
+];

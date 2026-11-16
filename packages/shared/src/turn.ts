@@ -3,7 +3,7 @@
 import type { Observation } from './observation';
 import { endReasonText } from './expedition';
 import type { PerceivedEvent } from './filter';
-import type { Locale } from './types';
+import type { Dir, Locale } from './types';
 import { t } from './util';
 import { dirLabel } from './observation';
 import type { PlayerView } from './view';
@@ -19,7 +19,7 @@ export type Awaiting = 'action' | 'camp_choice' | 'nothing';
 
 export type ChangeCode =
   | 'new_hostile' | 'reappeared' | 'hostile_gone' | 'killed' | 'died_seen' | 'hp_dropped' | 'hp_low' | 'status_gained' | 'status_lost' | 'level_up'
-  | 'item_found' | 'stairs_found' | 'floor_changed' | 'objective_progress' | 'objective_complete' | 'can_extract';
+  | 'item_found' | 'stairs_found' | 'floor_changed' | 'objective_progress' | 'objective_complete' | 'can_extract' | 'next_camp';
 
 export interface Change { code: ChangeCode; text: string; entity?: string }
 
@@ -54,6 +54,10 @@ export interface TurnSnapshot {
   /** 状態異常の表示名（解けた後の文章に使う） */
   statusNames?: Record<string, string>;
   hostiles: Record<string, string>;
+  /** これまでの応答で報告した敵（「再び見えた」の判定。diffChanges が引き継ぐ） */
+  reported?: string[];
+  /** 見えていた敵の位置（消えたときに「最後に見た位置」を添える） */
+  hostilePos?: Record<string, { x: number; y: number }>;
   items: Record<string, string>;
   stairs: string[];
   expNo: number | null;
@@ -62,6 +66,10 @@ export interface TurnSnapshot {
   relicHeld: boolean;
   reached: boolean;
   canExtract: boolean;
+  /** 今帰った場合の次の候補の下限（変わったら changes に出す） */
+  nextCampMin?: number | null;
+  /** 踏破した最も深い階 */
+  crossed?: number;
 }
 
 export function turnSnapshot(view: PlayerView, obs: Observation, state: TurnState | null = null): TurnSnapshot {
@@ -81,6 +89,7 @@ export function turnSnapshot(view: PlayerView, obs: Observation, state: TurnStat
     statuses: view.self.statuses.map((s) => s.id).sort(),
     statusNames: Object.fromEntries(obs.self.statuses.map((s) => [s.id, s.name])),
     hostiles: Object.fromEntries(obs.visible.monsters.map((m) => [m.id, m.name])),
+    hostilePos: Object.fromEntries(obs.visible.monsters.map((m) => [m.id, { x: m.pos.x, y: m.pos.y }])),
     items: Object.fromEntries(obs.visible.items.map((i) => [i.id, i.name])),
     stairs: obs.navigation.known_stairs.map((s) => `${s.type}@${s.pos.x},${s.pos.y}`).sort(),
     expNo: x?.no ?? null,
@@ -89,11 +98,13 @@ export function turnSnapshot(view: PlayerView, obs: Observation, state: TurnStat
     relicHeld: x?.progress.relicHeldByYou ?? false,
     reached: x?.progress.reached ?? false,
     canExtract: obs.expedition?.can_extract ?? false,
+    nextCampMin: obs.expedition?.haul?.next_camp?.min_target_depth ?? null,
+    crossed: x?.crossedDepth ?? 0,
   };
 }
 
 const PRIORITY: ChangeCode[] = [
-  'floor_changed', 'objective_complete', 'objective_progress', 'can_extract', 'hp_low', 'killed', 'died_seen', 'hp_dropped', 'new_hostile',
+  'floor_changed', 'objective_complete', 'objective_progress', 'next_camp', 'can_extract', 'hp_low', 'killed', 'died_seen', 'hp_dropped', 'new_hostile',
   'level_up', 'status_gained', 'status_lost', 'item_found', 'stairs_found', 'reappeared', 'hostile_gone',
 ];
 
@@ -120,6 +131,11 @@ export function diffChanges(prev: TurnSnapshot | null, cur: TurnSnapshot, view: 
       });
     }
     if (cur.reached && !prev.reached) out.push({ code: 'objective_progress', text: t(L, '目標の階に到達した', 'Reached the target depth') });
+    if ((cur.crossed ?? 0) > (prev.crossed ?? 0)) out.push({ code: 'objective_progress', text: t(L, `地下${cur.crossed}階を踏破した（下り階段に着いた。戦利品に踏破の点）`, `Crossed depth ${cur.crossed} (reached its down stairs; crossing points added)`) });
+    const nc = obs.expedition?.haul?.next_camp;
+    if (nc && prev.nextCampMin != null && cur.nextCampMin != null && cur.nextCampMin !== prev.nextCampMin) {
+      out.push({ code: 'next_camp', text: t(L, `今帰ると、次の候補は地下${nc.min_target_depth}階以上・推奨 Lv${nc.recommended_level} になった`, `If you extract now, next offers start at depth ${nc.min_target_depth} (recommended Lv${nc.recommended_level})`) });
+    }
     if (cur.relicHeld && !prev.relicHeld) out.push({ code: 'objective_progress', text: t(L, '遺物を手に入れた（この階の眠っていた敵が目を覚ました）', 'You now carry the relic (the sleepers on this floor have woken)') });
     if (!cur.relicHeld && prev.relicHeld) out.push({ code: 'objective_progress', text: t(L, '遺物を手放した', 'You no longer carry the relic') });
     if (cur.progress !== prev.progress && view.expedition?.progress.guardianSlain && !JSON.parse(prev.progress || '{}').guardianSlain) {
@@ -150,10 +166,12 @@ export function diffChanges(prev: TurnSnapshot | null, cur: TurnSnapshot, view: 
       : { code: 'died_seen', text: t(L, `目の前で倒れた: ${name}`, `Died in front of you: ${name}`), entity: id });
   }
   if (sameFloor) {
+    const reported = new Set([...(prev.reported ?? []), ...Object.keys(prev.hostiles)]);
+    cur.reported = [...new Set([...reported, ...Object.keys(cur.hostiles)])];
     for (const m of obs.visible.monsters) {
       if (m.id in prev.hostiles) continue;
-      const first = view.entities.find((e) => e.id === m.id)?.firstSeenSeq;
-      if (first !== undefined && first <= prev.seq) {
+      // 前の応答で一度でも報告した個体だけを「再び見えた」にする（マクロの途中で一瞬見えただけの個体は「新たな敵」）
+      if (reported.has(m.id)) {
         out.push({ code: 'reappeared', text: t(L, `再び見えた: ${m.name}(${m.id}) ${dirLabel(L, m.dir)}${m.dist}マス`, `Back in sight: ${m.name} (${m.id}) ${dirLabel(L, m.dir)} ${m.dist}`), entity: m.id });
         continue;
       }
@@ -161,7 +179,15 @@ export function diffChanges(prev: TurnSnapshot | null, cur: TurnSnapshot, view: 
     }
     for (const [id, name] of Object.entries(prev.hostiles)) {
       if (id in cur.hostiles || dead.has(id)) continue;
-      out.push({ code: 'hostile_gone', text: t(L, `見えなくなった敵: ${name}`, `Out of sight: ${name}`) });
+      // 最後に見た位置と、視界の外へ出た一歩の向き（知覚した移動の向きだけ。行き先は分からない）
+      const lp = prev.hostilePos?.[id];
+      let out1: string | null = null;
+      for (const e of events) {
+        const ev = e.event as Record<string, unknown>;
+        if (e.type === 'entity_moved' && ev.id === id && typeof ev.dirOut === 'string') out1 = ev.dirOut;
+      }
+      const where = [lp ? t(L, `最後に見た位置 (${lp.x},${lp.y})`, `last seen (${lp.x},${lp.y})`) : '', out1 ? t(L, `${dirLabel(L, out1 as Dir)}へ`, `heading ${out1}`) : ''].filter(Boolean).join(L === 'en' ? ', ' : '・');
+      out.push({ code: 'hostile_gone', text: t(L, `見えなくなった敵: ${name}${where ? `（${where}）` : ''}`, `Out of sight: ${name}${where ? ` (${where})` : ''}`), entity: id });
     }
     const newItems = Object.entries(cur.items).filter(([id]) => !(id in prev.items));
     if (newItems.length) out.push({ code: 'item_found', text: t(L, `アイテムを見つけた: ${newItems.map(([, n]) => n).join(', ')}`, `Found: ${newItems.map(([, n]) => n).join(', ')}`), entity: newItems[0][0] });
@@ -218,6 +244,10 @@ export function turnLine(view: PlayerView, b: TurnBlock, short = false): string 
         `▶ 遠征は終了しました（${endReasonText(L, x?.endReason ?? null)}）。これ以上の行動は不要です。次の遠征は start_expedition で選べます。`,
         `▶ The expedition has ended (${endReasonText(L, x?.endReason ?? null)}). No further action is required. You can choose the next one with start_expedition.`);
     case 'at_camp':
+      if (view.camp && !view.expedition) {
+        return t(L, '▶ キャンプにいます。最初の遠征を 3 つの候補から start_expedition { offer } で選びます（目標の深さ・推奨レベル・条件を比べて）。',
+          '▶ You are at camp. Choose the first expedition from the 3 offers with start_expedition { offer } (compare depth, recommended level and traits).');
+      }
       return view.camp
         ? t(L, '▶ キャンプにいます（遠征は終了済み）。ここで終えてもかまいません。続けるなら start_expedition で次の遠征を選びます。', '▶ You are at camp (the expedition is over). It is fine to stop here. To continue, choose the next expedition with start_expedition.')
         : t(L, '▶ キャンプにいます。仲間の遠征が終わるまで次の遠征は選べません。', '▶ You are at camp. The next expedition can be chosen when your allies finish.');

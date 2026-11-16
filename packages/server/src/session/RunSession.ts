@@ -10,7 +10,7 @@ import type {
 } from '@muse/shared';
 import {
   actionError, applyEvent, canonicalHash, emptyWorld, filterEventsForPlayer, FREE_COMMANDS, MACRO_COMMANDS,
-  macroNext, macroStart, narrate, projectPlayerView, t,
+  macroNext, macroStart, macroStopError, narrate, projectPlayerView, t,
 } from '@muse/shared';
 import type { ServerConfig } from '../config';
 import { LogWriter } from '../log/LogWriter';
@@ -411,6 +411,12 @@ export class RunSession {
     if (startView.status === 'at_camp') return { ok: false, error: actionError('at_camp', t(startView.locale, 'あなたはキャンプにいる（盤面にいない）。', 'You are at camp (off the board).'), t(startView.locale, 'start_expedition { offer } で次の遠征を始める。ここで終えてもよい。', 'Start the next expedition with start_expedition { offer }, or stop here.')) };
     if (startView.status !== 'your_turn') {
       return { ok: false, error: actionError('not_your_turn', t(startView.locale, 'まだあなたの番ではない。', 'It is not your turn yet.'), t(startView.locale, 'observe で手番を待つ。', 'Call observe to wait.')) };
+    }
+    // 1 歩も進めないと分かるなら、手番を使わずに理由付きで拒否する（V3-2R §14.2）
+    {
+      const probe = macroStart(startView, cmd, this.deps.catalog);
+      const d0 = macroNext(probe, startView, this.deps.catalog, []);
+      if ('stop' in d0) return { ok: false, error: macroStopError(startView.locale, d0.stop, cmd) };
     }
     // 元の呼び出し 1 件（イベント無し）を記録
     const parent = await this.enqueue(() => {

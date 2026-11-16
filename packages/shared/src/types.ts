@@ -26,7 +26,8 @@ export interface AiState {
   params: Record<string, number>;
 }
 
-export interface StatusInst { id: string; turnsLeft: number; power: number }
+/** source: 状態異常を与えた者（毒で倒したときの撃破者。V3-2R 評価の修正） */
+export interface StatusInst { id: string; turnsLeft: number; power: number; source?: EntityId | null }
 
 export interface Stats {
   hp: number; maxHp: number;
@@ -140,7 +141,12 @@ export interface FloorKnowledge {
   /** width*height。記憶した地形（terrainTable index）。0 = 未知 */
   seen: number[];
   remembered: RememberedEntity[];
+  /** 地形は知っているが、まだ自分の目で見ていないセル（地図の巻物で知った区画。V3-2R §14.2） */
+  mapped?: number[];
 }
+
+/** 遺物・守護者の気配（目標階にいる間。方角と、10 マス以内かどうか。正確な位置は見るまで出さない） */
+export interface Sense { what: 'guardian' | 'relic'; dir: Dir; range: 'far' | 'near' }
 
 export interface Knowledge {
   floors: Record<FloorKey, FloorKnowledge>;
@@ -157,6 +163,8 @@ export interface Knowledge {
   shots?: EntityId[];
   /** 個体を初めて見た seq（met と同時に記録） */
   metAt?: Record<EntityId, number>;
+  /** 目標の気配（目標階にいる間だけ） */
+  sense?: Sense | null;
 }
 
 export interface PlayerStats {
@@ -253,6 +261,8 @@ export interface ObjectiveProgress {
   relicHeldBy: EntityId | null;
   /** この遠征で参加者が到達した最深階（深追いの計算用） */
   maxDepth?: number;
+  /** 踏破: 参加者が下り階段に立った最も深い階（目標より深い階だけが点になる。V3-2R） */
+  crossedDepth?: number;
 }
 
 export interface ExpeditionResult {

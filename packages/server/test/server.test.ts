@@ -30,7 +30,7 @@ async function mcpClient(manager: SessionManager) {
 
 const ALL_TOOLS = ['get_rules', 'list_runs', 'new_run', 'join_run', 'resume_run', 'retire', 'observe', 'wait_for_turn', 'look', 'get_map', 'inventory', 'recall',
   'get_messages', 'notes', 'move', 'wait', 'rest', 'explore', 'travel_to', 'pickup', 'drop', 'equip', 'unequip', 'use_item', 'throw_item',
-  'interact', 'use_stairs', 'say', 'expedition', 'start_expedition', 'extract', 'collect', 'set_options'];
+  'interact', 'use_stairs', 'say', 'expedition', 'start_expedition', 'extract', 'collect', 'set_options', 'fight'];
 
 /** turn ブロックの形と、テキスト末尾の状態行 */
 function expectTurn(r: any): any {
@@ -61,7 +61,7 @@ describe('MCP contract', () => {
     expect(noSession.structuredContent.error.code).toBe('no_session');
     const rules = await call('get_rules', { topic: 'combat' });
     expect(rules.content[0].text).toContain('d20');
-    const nr = await call('new_run', { character_name: 'Muse', class: 'warrior', seed: 'contract-seed-XYZ' });
+    const nr = await call('new_run', { character_name: 'Muse', class: 'warrior', seed: 'contract-seed-XYZ', objective: 'auto' });
     expect(nr.structuredContent.player_token).toBeTruthy();
     expect(JSON.stringify(nr)).not.toContain('contract-seed-XYZ');
     const obs = nr.structuredContent.observation;
@@ -94,6 +94,12 @@ describe('MCP contract', () => {
     expect(typeof ex.structuredContent.steps).toBe('number');
     const bad = await call('use_item', { slot: 'z' });
     expect(bad.structuredContent.error.code).toBe('no_such_item');
+    // 引数の形が合わないときもゲームのエラー形式（code / hint / valid_actions / turn）で返す（V3-2R §14.7）
+    const badTarget = await call('use_item', { slot: 'a', target: 'not-a-target' });
+    expect(badTarget.structuredContent.error.code).toBe('bad_request');
+    expect(badTarget.structuredContent.error.hint).toContain('target_slot');
+    expect(Array.isArray(badTarget.structuredContent.valid_actions)).toBe(true);
+    expectTurn(badTarget);
     const notes = await call('notes', { add: 'remember the fountain' });
     expect(notes.structuredContent.notes).toContain('remember the fountain');
     const recall = await call('recall', { kind_name: 'ゴブリン' });
@@ -113,7 +119,7 @@ describe('MCP contract', () => {
   it('turn contract: every player-bound response carries a turn block; ended responses await nothing', async () => {
     const manager = new SessionManager(content, loadConfig({ runsDir: null, waitOthersMs: 200 }));
     const { call } = await mcpClient(manager);
-    const nr = await call('new_run', { character_name: 'Turn', seed: 'turn-contract-1' });
+    const nr = await call('new_run', { character_name: 'Turn', seed: 'turn-contract-1', objective: 'auto' });
     let turn = expectTurn(nr);
     expect(turn.state).toBe('your_turn');
     expect(turn.awaiting).toBe('action');
@@ -194,7 +200,7 @@ describe('logs, recovery, determinism', () => {
   it('re-executing commands.jsonl reproduces events.jsonl; recovery matches the live world', async () => {
     const config = loadConfig({ runsDir, waitOthersMs: 200, keyframeEvery: 100 });
     const manager = new SessionManager(content, config);
-    const r = await manager.createRun({ name: 'Rec', seed: 'recover-1', controller: { kind: 'agent', label: 't' } });
+    const r = await manager.createRun({ name: 'Rec', seed: 'recover-1', controller: { kind: 'agent', label: 't' }, objective: 'auto' });
     if ('error' in r) throw new Error(r.error.message);
     for (let i = 0; i < 40; i++) {
       const out = await r.port.act({ type: i % 7 === 0 ? 'rest' : 'explore' }, { source: 'mcp' });
@@ -213,7 +219,7 @@ describe('logs, recovery, determinism', () => {
 describe('two players in one run (coop)', () => {
   it('both bots can act in the same run without deadlock', async () => {
     const manager = new SessionManager(content, loadConfig({ runsDir: null, waitOthersMs: 300 }));
-    const a = await manager.createRun({ name: 'A', mode: 'coop', seed: 'coop-1', controller: { kind: 'agent', label: 'a' } });
+    const a = await manager.createRun({ name: 'A', mode: 'coop', seed: 'coop-1', controller: { kind: 'agent', label: 'a' }, objective: 'auto' });
     if ('error' in a) throw new Error(a.error.message);
     const b = await manager.joinRun(a.session.runId, { name: 'B', classId: 'core:scout', controller: { kind: 'human', label: 'b' } });
     if ('error' in b) throw new Error(b.error.message);
@@ -228,7 +234,7 @@ describe('two players in one run (coop)', () => {
         if (v.status !== 'your_turn') { await port.waitForTurn(500); continue; }
         const cmd: Command = lastExploreEmpty || counts[key] >= target ? { type: 'wait' } : { type: 'explore' };
         const r = await port.act(cmd, { source: 'bot', waitTurnMs: 300 });
-        lastExploreEmpty = r.ok && cmd.type === 'explore' && (r.steps ?? 0) === 0;
+        lastExploreEmpty = cmd.type === 'explore' && (!r.ok || (r.steps ?? 0) === 0);
         if (r.ok && !lastExploreEmpty) counts[key]++;
       }
     };
@@ -266,7 +272,7 @@ describe('HTTP + WebSocket', () => {
   });
 
   it('human play over WS uses the same PlayerView as MCP (parity) and spectators fold to the same world', async () => {
-    const res = await fetch(`http://${base}/api/runs`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Human', classId: 'core:scout' }) });
+    const res = await fetch(`http://${base}/api/runs`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Human', classId: 'core:scout', objective: 'auto' }) });
     const joined = await res.json() as { runId: string; token: string; playerId: string };
     expect(joined.token).toBeTruthy();
     const { ws, msgs } = await wsMessages({ t: 'hello', role: 'player', runId: joined.runId, token: joined.token }, (m) => m.some((x) => x.t === 'view'));
@@ -325,7 +331,7 @@ describe('HTTP + WebSocket', () => {
     const { StreamableHTTPClientTransport } = await import('@modelcontextprotocol/sdk/client/streamableHttp.js');
     const client = new Client({ name: 'http-test', version: '0' });
     await client.connect(new StreamableHTTPClientTransport(new URL(`http://${base}/mcp`)));
-    const r = (await client.callTool({ name: 'new_run', arguments: { character_name: 'Http' } })) as any;
+    const r = (await client.callTool({ name: 'new_run', arguments: { character_name: 'Http', objective: 'auto' } })) as any;
     expect(r.structuredContent.observation.status).toBe('your_turn');
     const w = (await client.callTool({ name: 'wait', arguments: {} })) as any;
     expect(w.structuredContent.ok).toBe(true);

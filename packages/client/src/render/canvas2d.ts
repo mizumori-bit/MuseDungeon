@@ -22,7 +22,8 @@ function itemRank(e: SceneEntity | undefined): number {
   if (!e) return -1;
   return e.role === 'relic' ? 2 : e.treasure ? 1 : 0;
 }
-const STATUS_COLORS: Record<string, string> = { 'core:poison': '#7ee060', 'core:haste': '#f0e060', 'core:slow': '#60a0f0', 'core:sleep': '#c0c0ff' };
+const SENSE_VEC: Record<string, [number, number]> = { n: [0, -1], ne: [1, -1], e: [1, 0], se: [1, 1], s: [0, 1], sw: [-1, 1], w: [-1, 0], nw: [-1, -1] };
+const STATUS_COLORS: Record<string, string> ={ 'core:poison': '#7ee060', 'core:haste': '#f0e060', 'core:slow': '#60a0f0', 'core:sleep': '#c0c0ff' };
 
 export class Canvas2DRenderer implements Renderer {
   private canvas: HTMLCanvasElement | null = null;
@@ -374,15 +375,41 @@ export class Canvas2DRenderer implements Renderer {
         ctx.globalAlpha = 1;
       }
     }
-    // L6 視界: 記憶セルの暗転
+    // L6 視界: 記憶セルの暗転。地形だけ判明（地図の巻物・未見）のセルはさらに暗く、紫がかった色と斜線で区別する
     ctx.fillStyle = 'rgba(0,0,10,0.55)';
     for (let y = y0; y <= y1; y++) {
       for (let x = x0; x <= x1; x++) {
         if (s.vis[y * s.width + x] === 1) ctx.fillRect(sx(x), sy(y), cs + 0.5, cs + 0.5);
       }
     }
+    let unsighted = false;
+    ctx.fillStyle = 'rgba(14,4,34,0.76)';
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        if (s.vis[y * s.width + x] === 3) { ctx.fillRect(sx(x), sy(y), cs + 0.5, cs + 0.5); unsighted = true; }
+      }
+    }
+    if (unsighted) {
+      ctx.save();
+      ctx.strokeStyle = 'rgba(170,140,255,0.22)';
+      ctx.lineWidth = Math.max(1, cs * 0.05);
+      ctx.beginPath();
+      for (let y = y0; y <= y1; y++) {
+        for (let x = x0; x <= x1; x++) {
+          if (s.vis[y * s.width + x] !== 3) continue;
+          ctx.moveTo(sx(x) + cs * 0.25, sy(y) + cs * 0.75);
+          ctx.lineTo(sx(x) + cs * 0.75, sy(y) + cs * 0.25);
+        }
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
     // L7 オーバーレイ
     for (const { e, p } of actors) this.drawOverlay(ctx, e, sx(p.x), sy(p.y), cs, now);
+    if (s.sense && s.focusId) {
+      const me = actors.find((a) => a.e.id === s.focusId);
+      if (me) this.drawSenseArrow(ctx, s.sense, sx(me.p.x), sy(me.p.y), cs);
+    }
     if (s.path) {
       ctx.fillStyle = 'rgba(120,200,255,0.55)';
       for (const c of s.path) {
@@ -507,6 +534,43 @@ export class Canvas2DRenderer implements Renderer {
       ctx.fillStyle = e.color ?? '#fff';
       ctx.fillText(e.name, px + cs / 2, py - 1);
     }
+  }
+
+  /**
+   * 目標の気配: 自分のセルの外側に、その方角を指す三角を描く（遺物は金、守護者は赤）。
+   * 近い（10 マス以内）は大きく塗りつぶし、遠いは小さく輪郭だけ。正確な位置は示さない
+   */
+  private drawSenseArrow(ctx: CanvasRenderingContext2D, sense: NonNullable<Scene['sense']>, px: number, py: number, cs: number): void {
+    const v = SENSE_VEC[sense.dir];
+    if (!v) return;
+    const len = Math.hypot(v[0], v[1]);
+    const ux = v[0] / len, uy = v[1] / len;
+    const near = sense.range === 'near';
+    const cx = px + cs / 2 + ux * cs * 0.95, cy = py + cs / 2 + uy * cs * 0.95;
+    const size = cs * (near ? 0.34 : 0.26);
+    const tipX = cx + ux * size, tipY = cy + uy * size;
+    const bx = cx - ux * size * 0.6, by = cy - uy * size * 0.6;
+    const nx = -uy * size * 0.7, ny = ux * size * 0.7;
+    const color = sense.what === 'relic' ? '#ffd54f' : '#ff6e50';
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(tipX, tipY);
+    ctx.lineTo(bx + nx, by + ny);
+    ctx.lineTo(bx - nx, by - ny);
+    ctx.closePath();
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = Math.max(1.5, cs * 0.07);
+    ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+    ctx.stroke();
+    if (near) {
+      ctx.fillStyle = color;
+      ctx.fill();
+    } else {
+      ctx.lineWidth = Math.max(1, cs * 0.045);
+      ctx.strokeStyle = color;
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 
   // ---- 遠征の目的に関わる個体の印（テーマ非依存のベクター描画。画像・glyph のどちらの上にも重ねる） ----

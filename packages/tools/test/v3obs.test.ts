@@ -217,7 +217,7 @@ describe('V3-1 throwing (report 1, 2, 11)', () => {
     expect(out.ok).toBe(true);
     if (out.ok) {
       expect(out.collected?.picked).toBeGreaterThan(0);
-      expect(out.observation.valid_actions.some((a) => a.startsWith('collect'))).toBe(out.collected!.remaining > 0);
+      expect(out.observation.valid_actions.some((a) => a.startsWith('collect ('))).toBe(out.collected!.remaining > 0);
     }
     const after = r.port.view().inventory.find((i) => i.kind === 'core:throwing_knife')?.qty ?? 0;
     expect(after).toBeGreaterThan(before);
@@ -247,6 +247,7 @@ describe('V3-1 changes, macros and outcome (report 3, 4, 5, 10, 15)', () => {
     const o2 = buildObservation(v2, catalog, { detail: 'brief', map: false });
     const p2 = turnSnapshot(view, obs);
     p2.seq = 50;
+    p2.reported = ['e_back01']; // 前の応答で報告した個体（V3-2R: 報告した個体だけを「再び見えた」にする）
     const c2 = diffChanges(p2, turnSnapshot(v2, o2), v2, o2, []);
     expect(c2.some((c) => c.code === 'reappeared' && c.entity === 'e_back01')).toBe(true);
     expect(c2.some((c) => c.code === 'new_hostile')).toBe(false);
@@ -255,6 +256,8 @@ describe('V3-1 changes, macros and outcome (report 3, 4, 5, 10, 15)', () => {
   it('macros: fleeing monsters do not stop them; a visible monster turning hunting does (report 15); rest stops for any newcomer (report 10)', () => {
     const { view } = base();
     const v: PlayerView = structuredClone(view);
+    // ゴブリンは既知の種族（初見の種族では止まるので、ここでは個体の振る舞いだけを見る）
+    v.monsterMemory['core:goblin'] = { kind: 'core:goblin', encounters: 1, kills: 0, maxDamageToYou: 0, maxDamageByYou: 0, abilities: [] };
     const mk = (id: string, awareness: 'asleep' | 'unaware' | 'hunting', fleeing = false, first = 1) =>
       ({ id, cat: 'monster' as const, kind: 'core:goblin', appearanceId: null, pos: { x: (v.self.pos!.x + 5), y: v.self.pos!.y }, hp: 'healthy' as const, awareness, fleeing, firstSeenSeq: first });
     // travel 中に既知の逃走中の個体が入っても止まらない
@@ -272,7 +275,7 @@ describe('V3-1 changes, macros and outcome (report 3, 4, 5, 10, 15)', () => {
     const v2 = structuredClone(v1);
     v2.entities = v2.entities.map((e) => (e.id === 'e_flee01' ? { ...e, awareness: 'hunting' as const, fleeing: false } : e));
     const d2 = macroNext(st2, v2, catalog, []);
-    expect('stop' in d2 && d2.stop).toBe('hostile_in_view');
+    expect('stop' in d2 && d2.stop).toBe('hostile_alerted');
     // rest は状態によらず、視界に入ったら止まる（ルール文も同じ）
     const hurt = structuredClone(v);
     hurt.self.stats.hp = 1;
@@ -323,7 +326,7 @@ describe('V3-1 changes, macros and outcome (report 3, 4, 5, 10, 15)', () => {
         const startSeq = v.seq;
         const out = await r.port.act(adj ? { type: 'wait' } : { type: 'explore' }, { source: 'bot' });
         if (!out.ok) continue;
-        const m = /合計 (\d+) ダメージ(?:を受けた)?（HP (\d+)→(\d+)(?:、回復 \+(\d+))?）/.exec(out.outcome);
+        const m = /合計 (\d+) ダメージ(?:を受けた)?（(?:攻撃 \d+・毒など \d+、)?HP (\d+)→(\d+)(?:、回復 \+(\d+))?）/.exec(out.outcome);
         if (!m) continue;
         const since = r.session.history.filter((e) => e.seq > startSeq);
         const dealt = since.filter((e) => e.type === 'damaged' && e.target === v.self.id)
@@ -357,11 +360,12 @@ describe('V3-1 text and map (report 6, 7, 8, 9, 12, 13, 14)', () => {
     const mem = { kind: 'core:cave_rat', encounters: 1, kills: 1, maxDamageToYou: 0, maxDamageByYou: 0, abilities: [], hpSeen: { min: 3, max: 3, samples: 1 } };
     const e1 = hpLeftEstimate(mem, 'healthy', 0, 3)!;
     expect(e1.max).toBeNull();
-    expect(hpEstimateText('ja', e1)).toBe(`${e1.min} 以上（記録 1 体）`);
+    // 記録は標本なので「記録どおりなら」と言い、記録の体力を添える（V3-2R §14.3）
+    expect(hpEstimateText('ja', e1)).toBe(`記録どおりなら残り ${e1.min} 以上（記録 1 体: 体力 3）`);
     // 最大 HP 4（記録 3 体で確定）、見ている間に 3 与えて重傷 → 残り 1
     const e3 = hpLeftEstimate({ ...mem, hpSeen: { min: 4, max: 4, samples: 3 } }, 'badly_wounded', 3, 3)!;
     expect(e3.min).toBe(e3.max);
-    expect(hpEstimateText('ja', e3)).toBe(`${e3.min}`);
+    expect(hpEstimateText('ja', e3)).toBe(`記録どおりなら残り ${e3.min}（記録 3 体: 体力 4）`);
   });
 
   it('pick-up and equip texts keep affixes (report 7); ranged hits use the same verb as misses (report 13); unseen attackers give a direction', () => {

@@ -54,7 +54,7 @@ describe('information hiding (leak property test)', () => {
     const manager = new SessionManager(content, loadConfig({ runsDir: null, waitOthersMs: 100 }));
     for (let run = 0; run < (FULL ? 20 : 4); run++) {
       const seed = `LEAKSEED-${run}-qx7`;
-      const r = await manager.createRun({ name: 'Leak', seed, controller: { kind: 'agent', label: 'leak' } });
+      const r = await manager.createRun({ name: 'Leak', seed, controller: { kind: 'agent', label: 'leak' }, objective: 'auto' });
       if ('error' in r) throw new Error(r.error.message);
       const world = r.session.world;
       const port: PlayerPort = r.port;
@@ -114,7 +114,7 @@ describe('information hiding (leak property test)', () => {
 
   it('player-filtered events hide unseen actors and monster HP', async () => {
     const manager = new SessionManager(content, loadConfig({ runsDir: null }));
-    const r = await manager.createRun({ name: 'F', seed: 'filter-1', controller: { kind: 'agent', label: 'f' } });
+    const r = await manager.createRun({ name: 'F', seed: 'filter-1', controller: { kind: 'agent', label: 'f' }, objective: 'auto' });
     if ('error' in r) throw new Error(r.error.message);
     for (let i = 0; i < 60; i++) {
       const out = await r.port.act({ type: 'explore' }, { source: 'bot' });
@@ -261,7 +261,7 @@ describe('rest and enemy durability (V2-4)', () => {
     const manager = new SessionManager(content, loadConfig({ runsDir: null }));
     let checked = 0;
     for (let s = 0; s < 12 && checked < 3; s++) {
-      const r = await manager.createRun({ name: 'Rest', seed: `rest-${s}`, controller: { kind: 'agent', label: 'r' } });
+      const r = await manager.createRun({ name: 'Rest', seed: `rest-${s}`, controller: { kind: 'agent', label: 'r' }, objective: 'auto' });
       if ('error' in r) throw new Error(r.error.message);
       const rng = Rng.fromSeed(`rest-${s}`);
       const memo = newMemo();
@@ -312,7 +312,7 @@ describe('rest and enemy durability (V2-4)', () => {
     expect(overkillChecked).toBe(true);
     expect(hpSeen).toBe(true);
     // 推定残り HP: 記録 4〜10、damage_seen 3、wounded（50〜74%）
-    const est = hpLeftEstimate({ kind: 'k', encounters: 1, kills: 1, maxDamageToYou: 0, maxDamageByYou: 0, abilities: [], hpSeen: { min: 4, max: 10, samples: 3 } }, 'wounded', 3)!;
+    const est = hpLeftEstimate({ kind: 'k', encounters: 1, kills: 1, maxDamageToYou: 0, maxDamageByYou: 0, abilities: [], hpSeen: { min: 4, max: 10, samples: 5 } }, 'wounded', 3)!;
     expect(est.min).toBeGreaterThanOrEqual(2);
     expect(est.max).toBeLessThanOrEqual(7);
     expect(hpLeftEstimate({ kind: 'k', encounters: 1, kills: 0, maxDamageToYou: 0, maxDamageByYou: 0, abilities: [] }, 'healthy', 0)).toBeUndefined();
@@ -344,7 +344,7 @@ describe('host drive (V2-3)', () => {
 describe('observation size', () => {
   it('brief observation text stays compact', async () => {
     const manager = new SessionManager(content, loadConfig({ runsDir: null }));
-    const r = await manager.createRun({ name: 'S', seed: 'size-1', controller: { kind: 'agent', label: 's' } });
+    const r = await manager.createRun({ name: 'S', seed: 'size-1', controller: { kind: 'agent', label: 's' }, objective: 'auto' });
     if ('error' in r) throw new Error(r.error.message);
     const sizes: number[] = [];
     for (let i = 0; i < 30; i++) {

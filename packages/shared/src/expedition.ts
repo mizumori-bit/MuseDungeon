@@ -1,7 +1,7 @@
 // 遠征の文章化（目的・達成条件・進捗・結果・候補）。入力は PlayerView 由来の事実だけ。
 // 仕様: docs/IMPROVEMENTS_V2.md §2.6。「次に何をすべきか」の提案は書かない（事実とルールのみ）。
 import type { CatalogRules } from './catalog';
-import { dangerOf, recommendedLevel } from './catalog';
+import { offerGap } from './catalog';
 import type { ExpeditionEndReason, ExpeditionOffer, Locale, Objective, OfferSlot } from './types';
 import { t } from './util';
 import type { ExpeditionView, PlayerView } from './view';
@@ -85,17 +85,20 @@ export function traitsText(L: Locale, rules: Pick<CatalogRules, 'traits'> | unde
   }).join(' / ');
 }
 
-/** 候補の文章。rules と level があれば危険度と推奨レベルも付ける（公開の式だけで計算） */
+/** 候補の文章。rules と level があれば推奨レベルとの差と条件の危険度も付ける（公開の表と式だけで計算） */
 export function offerText(L: Locale, o: ExpeditionOffer, ctx?: { rules: Pick<CatalogRules, 'traits' | 'recommendedLevel'>; level: number }): string {
   const guard = o.objective.type === 'retrieve_relic' && o.relicGuarded ? t(L, '（守護者付き）', ' (guarded)') : '';
   const slot = o.slot ? `[${slotName(L, o.slot)}] ` : '';
   const head = `${o.index}) ${slot}${objectiveText(L, o.objective)}${guard}`;
   const mult = o.multiplierPct ?? 100;
   const traits = traitsText(L, ctx?.rules, o.traits ?? []);
-  const danger = ctx && o.objective.targetDepth !== null
-    ? t(L, ` / 危険度 ${dangerOf(ctx.rules, o.objective.targetDepth, o.traits ?? [], ctx.level)}（推奨 Lv${recommendedLevel(ctx.rules, o.objective.targetDepth)}、あなたは Lv${ctx.level}）`,
-      ` / danger ${dangerOf(ctx.rules, o.objective.targetDepth, o.traits ?? [], ctx.level)} (recommended Lv${recommendedLevel(ctx.rules, o.objective.targetDepth)}, you are Lv${ctx.level})`)
-    : '';
+  let danger = '';
+  if (ctx && o.objective.targetDepth !== null) {
+    const g = offerGap(ctx.rules, o.objective.targetDepth, o.traits ?? [], ctx.level);
+    const gap = g.levelGap! > 0 ? `+${g.levelGap}` : `${g.levelGap}`;
+    const td = g.traitDanger ? t(L, `／条件 ${g.traitDanger > 0 ? '+' : ''}${g.traitDanger}`, ` / traits ${g.traitDanger > 0 ? '+' : ''}${g.traitDanger}`) : '';
+    danger = t(L, ` / 推奨 Lv${g.recommendedLevel}・あなた Lv${ctx.level}（差 ${gap}）${td}`, ` / recommended Lv${g.recommendedLevel}, you Lv${ctx.level} (gap ${gap})${td}`);
+  }
   return t(L, `${head} — 基礎 +${o.points} / 倍率 ${multText(mult)}${traits ? `（${traits}）` : ''}${danger}`,
     `${head} — base +${o.points} / multiplier ${multText(mult)}${traits ? ` (${traits})` : ''}${danger}`);
 }

@@ -1,7 +1,7 @@
 // Scene の組み立て。(a) PlayerView（プレイ・追従観戦）と (b) World 全体（俯瞰）。
 // プレイヤー視点では未知セルを描かない。未鑑定アイテムは外見 ID でしか描かない。
 import type { Catalog, EntityView, Pos, PlayerView, World } from '@muse/shared';
-import { hpEstimateText, hpLeftEstimate, itemDisplayName, kindName, monsterDisplayName, nameOf } from '@muse/shared';
+import { hpEstimateText, hpLeftEstimate, itemDisplayName, kindName, monsterDisplayName, nameOf, threatOf } from '@muse/shared';
 import type { AssetRef } from '../theme/types';
 import { getLocale, tr } from '../util';
 import type { Scene, SceneEntity } from './types';
@@ -45,12 +45,19 @@ export interface SceneExtras {
   bubbles?: { id: string; text: string }[];
 }
 
-/** ツールチップ用: 自分が見た与ダメージの累計・推定残り HP・射線（PlayerView の知識だけから。観測と同じ計算） */
+/**
+ * ツールチップ用: 脅威・受けた最大の一撃・自分が見た与ダメージの累計・推定残り HP・射線
+ * （PlayerView の知識だけから。観測の threat / worst_hit / hp_left_est と同じ計算）
+ */
 function monsterKnowledge(view: PlayerView, catalog: Catalog, e: EntityView): string {
   const parts: string[] = [];
+  const threat = threatOf(view, e);
+  parts.push(threat === null ? tr('脅威: 不明（被弾記録なし）', 'threat: unknown (never hit by it)') : tr(`脅威 ${threat}/5`, `threat ${threat}/5`));
+  const worst = e.kind ? view.monsterMemory[e.kind]?.maxDamageToYou ?? 0 : 0;
+  parts.push(worst > 0 ? tr(`最大の一撃 ${worst}`, `worst hit ${worst}`) : tr('一撃の大きさは不明', 'hit size unknown'));
   if (e.damageSeen) parts.push(tr(`与ダメ累計 ${e.damageSeen}`, `dmg seen ${e.damageSeen}`));
   const est = e.role !== 'guardian' && e.hp
-    ? hpLeftEstimate(e.kind ? view.monsterMemory[e.kind] : undefined, e.hp, e.damageSeen ?? 0, catalog.rules?.estimateMinSamples ?? 3)
+    ? hpLeftEstimate(e.kind ? view.monsterMemory[e.kind] : undefined, e.hp, e.damageSeen ?? 0, catalog.rules?.estimateMinSamples ?? 5)
     : undefined;
   if (est) parts.push(`${tr('推定残りHP', 'est. HP left')} ${hpEstimateText(getLocale(), est)}`);
   if (e.shot === false) parts.push(tr('射線: 通らない', 'shot: blocked'));
@@ -69,6 +76,8 @@ export function sceneFromView(view: PlayerView, catalog: Catalog, extras: SceneE
     terrain[i] = t ? view.terrainTable[t] ?? null : null;
     if (t) vis[i] = 1;
   }
+  // 地形は知っているが、まだ目で見ていないセル（地図の巻物）。見たセルの記憶より暗く描く
+  for (const i of view.memory.unsighted ?? []) if (vis[i] === 1) vis[i] = 3;
   for (const i of view.visibleCells) if (terrain[i]) vis[i] = 2;
   const colorOf = (pid: string | undefined) => {
     const idx = view.party.findIndex((p) => p.playerId === pid);
@@ -117,9 +126,13 @@ export function sceneFromView(view: PlayerView, catalog: Catalog, extras: SceneE
     });
   }
   markStacks(ents);
+  // 目標の気配（遠征中、目標階にいる間だけ。観測の expedition.sense と同じ条件）
+  const xv = view.expedition;
+  const sense = view.sense && xv && xv.status !== 'ended' && view.status !== 'at_camp' ? { ...view.sense } : null;
   return {
     mode: 'player', floorKey: f.key, width: f.width, height: f.height, biome: f.biome, terrain, vis, entities: ents,
     focus: me.pos, focusId: me.id, cursor: extras.cursor ?? null, path: extras.path ?? null, bubbles: extras.bubbles ?? [], catalog,
+    sense,
   };
 }
 

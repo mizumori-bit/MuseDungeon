@@ -128,6 +128,23 @@ export function stepPos(p: Pos, d: Dir): Pos {
 }
 
 /** a から b へのおおよその 8 方向（同一点なら null） */
+/**
+ * 表示用の方角（8 方向に丸める）。ほぼ真北なら「北」。整数のみ: |dx| と |dy| の比が 5:12（約 22.5°）より小さければ軸方向とみなす。
+ */
+export function compassDir(a: Pos, b: Pos): Dir | null {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  if (dx === 0 && dy === 0) return null;
+  const ax = Math.abs(dx), ay = Math.abs(dy);
+  const sx = ax * 12 < ay * 5 ? 0 : Math.sign(dx);
+  const sy = ay * 12 < ax * 5 ? 0 : Math.sign(dy);
+  for (const d of DIRS) {
+    const v = DIR_VEC[d];
+    if (v[0] === sx && v[1] === sy) return d;
+  }
+  return null;
+}
+
 export function dirTo(a: Pos, b: Pos): Dir | null {
   const dx = Math.sign(b.x - a.x);
   const dy = Math.sign(b.y - a.y);

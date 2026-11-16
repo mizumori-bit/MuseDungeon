@@ -13,7 +13,7 @@ import { updateKnowledge } from './perception';
 import { advance, endTurn } from './scheduler';
 import { recomputeStats } from './stats';
 
-export const ENGINE_VERSION = '0.2.0';
+export const ENGINE_VERSION = '0.3.0';
 
 export interface CreateRunParams {
   runId: string;
@@ -124,6 +124,14 @@ export function joinPlayer(world: World, content: Content, join: JoinCommand, me
       ctx.emit({ type: 'item_identified', player: pid, kind: si.item, appearanceId: app, seenBy: [pid], floor: key });
     }
   }
+  if (join.atCamp) {
+    // キャンプから始める: 盤面から外れ、最初の遠征の候補を選ぶ（再開地点は入口）
+    const body = structuredClone(world.entities[eid]);
+    delete body.pos;
+    body.actor = { ...body.actor!, dormant: true, regen: 0 };
+    ctx.emit({ type: 'player_state', player: pid, state: 'at_camp', reason: 'joined', extractPos: { floor: key, x: pos.x, y: pos.y }, put: [body], seenBy: 'all', floor: key });
+    return { ok: true, playerId: pid, events: ctx.finish() };
+  }
   updateKnowledge(ctx, key);
   advance(ctx, key);
   return { ok: true, playerId: pid, events: ctx.finish() };
@@ -170,7 +178,7 @@ export function step(world: World, content: Content, playerId: PlayerId, cmd: Co
     if ('error' in prep) return { ok: false, error: prep.error, events: [] };
     if (meta.thought) ctx.emit({ type: 'thought', player: playerId, text: meta.thought.slice(0, 280), seenBy: [playerId] });
     // 休息: 追跡中の敵が見えない状態での wait は回復が速い
-    const restful = cmd.type === 'wait' && !huntingInView(ctx, pr);
+    const restful = cmd.type === 'wait' && !huntingInView(ctx, pr, true);
     const r = prep.run();
     const cur = world.entities[e.id];
     if (!r.scheduled && cur?.pos && world.players[playerId].state === 'alive' && world.floors[key].currentActor === e.id) endTurn(ctx, cur, r.cost, restful);

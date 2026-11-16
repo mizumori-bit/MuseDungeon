@@ -15,6 +15,10 @@ export interface EffectCtx {
   pos: Pos;
   source: Entity | null;
   via: string;
+  /** 鑑定などの対象スロット（use_item の target_slot） */
+  itemSlot?: string;
+  /** 使った品の種類（鑑定の既定の対象から除く） */
+  usedKind?: string;
 }
 
 export type EffectHandler = (ctx: Ctx, params: EffectDef, ec: EffectCtx) => void;
@@ -30,7 +34,7 @@ effects.register('cure', (ctx, p, ec) => { removeStatus(ctx, ec.target, String(p
 
 effects.register('status', (ctx, p, ec) => {
   const st = String(p.status);
-  addStatus(ctx, ec.target, st, dice(ctx, p.turns, '5'), num(p.power, 1));
+  addStatus(ctx, ec.target, st, dice(ctx, p.turns, '5'), num(p.power, 1), ec.source?.id ?? null);
   if (st === 'core:poison' && ec.source && !ec.source.player && ec.target.player) {
     updateMemory(ctx, ec.target.player, ec.source.kind, (m) => { m.abilities.push('poison'); });
   }
@@ -68,14 +72,15 @@ effects.register('identify', (ctx, p, ec) => {
   const user = ec.user ?? ec.target;
   if (!user.player) return;
   const pr = ctx.world.players[user.player];
+  // 対象: target_slot があればその品。無ければスロット順で最初の未鑑定品（使った巻物自身の種類は除く。公開ルール）
+  const items = (user.inv?.items ?? []).map((id) => ctx.world.entities[id]).filter((it): it is Entity => !!it?.item)
+    .sort((a, b) => (a.item!.slot ?? '').localeCompare(b.item!.slot ?? ''));
   const kinds: string[] = [];
-  for (const id of user.inv?.items ?? []) {
-    const it = ctx.world.entities[id];
-    if (!it) continue;
+  const pick = (it: Entity) => {
     if (ctx.world.secret.appearances[it.kind] && !pr.knowledge.identified.includes(it.kind) && !kinds.includes(it.kind)) kinds.push(it.kind);
-  }
-  const rng = ctx.rng('runtime');
-  rng.shuffle(kinds);
+  };
+  if (ec.itemSlot) { const it = items.find((x) => x.item!.slot === ec.itemSlot); if (it) pick(it); }
+  for (const it of items) if (it.kind !== ec.usedKind) pick(it);
   for (const k of kinds.slice(0, num(p.count, 1))) {
     ctx.emit({ type: 'item_identified', player: pr.id, kind: k, appearanceId: ctx.world.secret.appearances[k] ?? null, seenBy: [pr.id] });
   }
@@ -108,7 +113,18 @@ effects.register('map', (ctx, _p, ec) => {
       newly.push(i, tv);
     }
   }
-  ctx.emit({ type: 'knowledge_updated', player: pr.id, floorKey: key, visible: null, newlySeen: newly, rememberedSet: [], rememberedDel: [], metAdd: [], seenBy: [pr.id], floor: key });
+  // 地形は分かったが目で見ていないセル（今の視界の外で、まだ記憶に無かったもの）
+  const vis = new Set(pr.knowledge.visible);
+  const already = new Set(fk?.mapped ?? []);
+  const mappedAdd: number[] = [];
+  for (let j = 0; j + 1 < newly.length; j += 2) {
+    const i = newly[j];
+    if (!vis.has(i) && !already.has(i) && (fk?.seen[i] ?? 0) === 0) mappedAdd.push(i);
+  }
+  ctx.emit({
+    type: 'knowledge_updated', player: pr.id, floorKey: key, visible: null, newlySeen: newly, rememberedSet: [], rememberedDel: [], metAdd: [],
+    ...(mappedAdd.length ? { mappedAdd } : {}), seenBy: [pr.id], floor: key,
+  });
 });
 
 effects.register('noise', (ctx, p, ec) => {

@@ -29,7 +29,8 @@
     "golden": "tsx packages/tools/src/cli.ts golden",
     "pacing": "tsx packages/tools/src/cli.ts pacing",
     "drive": "tsx packages/tools/src/cli.ts drive",
-    "choices": "tsx packages/tools/src/cli.ts choices"
+    "choices": "tsx packages/tools/src/cli.ts choices",
+    "budget": "tsx packages/tools/src/cli.ts budget"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",

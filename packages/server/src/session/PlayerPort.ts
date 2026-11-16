@@ -5,7 +5,7 @@ import type {
 } from '@muse/shared';
 import {
   briefingLines, buildObservation, buildTurnBlock, campLines, changesLine, describeInventory, describeTarget, diffChanges,
-  formatObservationText, kindName, MACRO_COMPLETED_STOPS, mapTextLines, memoryCombatText, mineCount, nameOf, progressText, renderAsciiMap, resultText, t,
+  formatObservationText, kindName, MACRO_COMPLETED_STOPS, mapTextLines, memoryCombatText, mineCount, nameOf, pickableItems, progressText, renderAsciiMap, resultText, t,
   turnLine, turnSnapshot, turnStateOf,
 } from '@muse/shared';
 import type { PlayerOptions } from './RunSession';
@@ -82,7 +82,13 @@ export interface PlayerPort {
 
 const STOP_TEXT: Record<string, [string, string]> = {
   hostile_in_view: ['敵が視界に入った', 'a hostile came into view'],
-  hostile_adjacent: ['隣に起きている敵がいる（マクロでは動かない。離れるなら move）', 'an awake enemy is adjacent (macros will not move; use move to step away)'],
+  hostile_adjacent: ['隣に起きている敵がいる（退くなら mode: flee、戦うなら fight）', "an awake enemy is adjacent (retreat with mode: 'flee', or fight)"],
+  hp_floor: ['HP が hp_floor を下回った', 'HP fell below hp_floor'],
+  hostile_alerted: ['見えている敵が追跡に変わった', 'a visible enemy started hunting you'],
+  hp_threshold: ['HP が 50%・25% の線をまたいだ', 'HP crossed the 50% / 25% line'],
+  target_down: ['相手が倒れた', 'the target fell'],
+  target_gone: ['相手が見えなくなった', 'the target is out of sight'],
+  target_moved: ['相手が隣から離れた', 'the target moved away'],
   damaged: ['ダメージを受けた', 'you took damage'],
   item_seen: ['新しいアイテムを見つけた', 'you spotted a new item'],
   stairs_seen: ['階段を見つけた', 'you found stairs'],
@@ -104,7 +110,7 @@ const STOP_TEXT: Record<string, [string, string]> = {
   left_board: ['盤面を離れた', 'you left the board'],
   error: ['行動できなかった', 'an action failed'],
   attacked: ['攻撃を受けた', 'you were attacked'],
-  collected: ['自分が投げた物を回収し終えた', 'all known thrown items recovered'],
+  collected: ['回収し終えた', 'nothing left to collect'],
 };
 
 const LONG_REASONS: ReadonlySet<TurnReason> = new Set<TurnReason>(['run_started', 'resumed', 'expedition_started']);
@@ -113,14 +119,18 @@ const LONG_REASONS: ReadonlySet<TurnReason> = new Set<TurnReason>(['run_started'
  * 自分が受けた攻撃と被害の合計。行動から次の自分の手番までのイベント（自分が対象のものだけ）から数える。
  * 知覚ログ（文章のある出来事）は通常の命中の attack を持たないので使わない。
  */
-function harmSummary(events: readonly GameEvent[], selfId: string): { hits: number; misses: number; total: number; healed: number } {
-  let hits = 0, misses = 0, total = 0, healed = 0;
+function harmSummary(events: readonly GameEvent[], selfId: string): { hits: number; misses: number; total: number; other: number; healed: number } {
+  let hits = 0, misses = 0, total = 0, other = 0, healed = 0;
   for (const ev of events) {
     if (ev.type === 'attack' && ev.target === selfId) { if (ev.hit) hits++; else misses++; }
-    if (ev.type === 'damaged' && ev.target === selfId) total += ev.dealt ?? ev.amount;
+    if (ev.type === 'damaged' && ev.target === selfId) {
+      const d = ev.dealt ?? ev.amount;
+      total += d;
+      if (ev.via !== 'melee' && ev.via !== 'ranged' && ev.via !== 'thrown') other += d;
+    }
     if (ev.type === 'healed' && ev.target === selfId) healed += ev.amount;
   }
-  return { hits, misses, total, healed };
+  return { hits, misses, total, other, healed };
 }
 
 /** HP の前後（回復が混ざったら添える） */
@@ -215,7 +225,6 @@ export class SessionPlayerPort implements PlayerPort {
 
   async act(cmd: Command, opts: SubmitOpts & { waitTurnMs?: number; map?: boolean }): Promise<ActionPayload> {
     const before = this.view();
-    const mineBefore = mineCount(before);
     const r = await this.session.submit(this.playerId, cmd, opts);
     // 次に自分の手番が来るかランが終わるまで待つ（COOP で長引けば waiting_others のまま返す）
     if (r.ok && opts.waitTurnMs && this.view().status === 'waiting_others') await this.session.waitForTurn(this.playerId, opts.waitTurnMs);
@@ -243,8 +252,10 @@ export class SessionPlayerPort implements PlayerPort {
         const tm = m?.timeElapsed !== null && m?.timeElapsed !== undefined ? t(L, `（${m.distance} 歩、時間 ${m.timeElapsed}）`, ` (${m.distance} moves, time ${m.timeElapsed})`) : '';
         outcome = t(L, `${cmd.type}: ${r.steps} 手進んだ${tm}。${stop ? `停止: ${stop[0]}。` : ''}`, `${cmd.type}: ${r.steps} steps${tm}.${stop ? ` Stopped: ${stop[1]}.` : ''}`);
         if (cmd.type === 'collect') {
-          const remaining = mineCount(view);
-          collected = { picked: Math.max(0, mineBefore - remaining), remaining };
+          // 実際に拾った数（イベントから）と、まだ拾える数
+          const picked = r.events.filter((e) => e.type === 'item_picked_up' && e.actor === view.self.id).length;
+          const remaining = (cmd.what ?? 'thrown') === 'items' ? pickableItems(view, this.catalog).length : mineCount(view);
+          collected = { picked, remaining };
           outcome += t(L, ` 回収 ${collected.picked} 個、残り ${remaining} 個。`, ` Recovered ${collected.picked}, ${remaining} left.`);
         }
       }
@@ -256,8 +267,19 @@ export class SessionPlayerPort implements PlayerPort {
       outcome = texts.length ? texts.join(' ') : defaultOutcome(cmd, L);
     }
     // 行動から次の自分の手番までに受けた被害の合計（必ず書く）
+    if (cmd.type === 'fight') {
+      let swings = 0, hits = 0, dealt = 0;
+      for (const e of r.events) {
+        if (e.type === 'attack' && e.attacker === view.self.id && e.target === cmd.target) { swings++; if (e.hit) hits++; }
+        if (e.type === 'damaged' && e.source === view.self.id && e.target === cmd.target) dealt += e.dealt ?? e.amount;
+      }
+      outcome += ' ' + t(L, `${swings} 回攻撃し ${hits} 回命中・合計 ${dealt} ダメージを与えた。`, `Swung ${swings} times, ${hits} hit for ${dealt} total.`);
+    }
     const harm = harmSummary(r.events, view.self.id);
-    const hpText = hpDelta(L, before.self.stats.hp, view.self.stats.hp, harm.total);
+    // 攻撃によるダメージと、毒・罠などのダメージを分けて書く
+    const split = harm.other && harm.other < harm.total ? t(L, `攻撃 ${harm.total - harm.other}・毒など ${harm.other}、`, `attacks ${harm.total - harm.other}, poison etc. ${harm.other}; `)
+      : harm.other && (harm.hits || harm.misses) ? t(L, `攻撃 0・毒など ${harm.other}、`, `attacks 0, poison etc. ${harm.other}; `) : '';
+    const hpText = split + hpDelta(L, before.self.stats.hp, view.self.stats.hp, harm.total);
     if (harm.hits || harm.misses) {
       outcome += ' ' + t(L,
         `${harm.hits + harm.misses} 回攻撃を受け、${harm.hits} 回命中・合計 ${harm.total} ダメージ（${hpText}）${harm.misses ? `、外れ ${harm.misses} 回` : ''}。`,
@@ -269,7 +291,9 @@ export class SessionPlayerPort implements PlayerPort {
     let reason: TurnReason = 'action_completed';
     if (cmd.type === 'start_expedition') reason = 'expedition_started';
     else if (r.steps !== undefined && r.interruptedBy && !MACRO_COMPLETED_STOPS.has(r.interruptedBy as MacroStop)) reason = 'macro_interrupted';
-    const res = this.render(view, reason, { recent: perceived, changes: true, interruptedBy: r.steps !== undefined ? r.interruptedBy : undefined, expeditionEndedNow: endedNow });
+    // 結果の文に含めた出来事は「直前の出来事」に重ねて出さない
+    const recent = perceived.filter((pe) => !pe.text || !outcome.includes(pe.text));
+    const res = this.render(view, reason, { recent, changes: true, interruptedBy: r.steps !== undefined ? r.interruptedBy : undefined, expeditionEndedNow: endedNow });
     const payload: ActionSuccess = {
       ok: true, outcome, steps: r.steps, interrupted_by: r.interruptedBy,
       events: perceived.slice(-20).map((p) => ({ seq: p.seq, type: p.type, text: p.text })),

@@ -4,8 +4,8 @@ import type {
   ActionError, Entity, Expedition, ExpeditionEndReason, ExpeditionHaul, ExpeditionOffer, ExpeditionResult, HaulParts, Objective,
   ObjectiveProgress, ObjectiveType, OfferSlot, PlayerId, PlayerRecord,
 } from '@muse/shared';
-import { actionError, currentExpedition, deepestGenerated, haulTotal, isPursuing, offerPoints, overreachPoints, payoutOf, Rng, t } from '@muse/shared';
-import { buildSummary } from './combat';
+import { actionError, cheb, currentExpedition, deepestGenerated, haulTotal, isPursuing, offerPoints, overreachPoints, payoutOf, Rng, t } from '@muse/shared';
+import { buildSummary, grantXp } from './combat';
 import type { Ctx } from './ctx';
 import { findFreeCell } from './floors';
 import { recomputeStats } from './stats';
@@ -55,7 +55,7 @@ export function sharedParts(ctx: Ctx, x: Expedition): HaulParts {
   const h: ExpeditionHaul = x.haul ?? { bounty: 0, discovery: 0, kills: 0 };
   return {
     objective: x.status === 'objective_complete' ? x.points : 0,
-    overreach: overreachPoints(ctx.content.balance, x.objective.targetDepth, x.progress.maxDepth ?? 0),
+    overreach: overreachPoints(ctx.content.balance, x.objective.targetDepth, x.progress.crossedDepth ?? 0),
     treasure: 0, bounty: h.bounty, discovery: h.discovery, kills: h.kills,
   };
 }
@@ -79,11 +79,13 @@ export function makeOffers(ctx: Ctx, no: number): ExpeditionOffer[] {
   const deepest = deepestGenerated(ctx.world);
   const rng = Rng.fromSeed(`${ctx.world.secret.seed}|expedition|${no}`);
   const traitIds = ctx.content.lists.expeditionTraits.map((x) => x.id);
+  // 目的の種類は 3 枠で別にする（最初の遠征は 到達・守護者・遺物 の順）
+  const types = no === 1 ? [...OFFER_TYPES] : rng.shuffle([...OFFER_TYPES]);
   return SLOTS.map((slot, i) => {
     const s = b.slots[slot];
-    // 最初の遠征は 地下(firstTargetDepth) を基本に、種類は 到達・守護者・遺物 の順（野心だけ 1 階深い）
-    const type = no === 1 ? OFFER_TYPES[i] : OFFER_TYPES[rng.int(OFFER_TYPES.length)];
-    const target = no === 1 ? Math.max(b.firstTargetDepth, deepest + 1) + (slot === 'ambitious' ? 1 : 0) : deepest + rng.range(s.aheadMin, s.aheadMax);
+    const type = types[i % types.length];
+    // 目標の深さは枠ごとに重ならない（堅実 +1・標準 +2・野心 +3〜4）。最初の遠征は浅い固定値から
+    const target = no === 1 ? Math.max(b.firstTargetDepth[slot], deepest + 1) : deepest + rng.range(s.aheadMin, s.aheadMax);
     const n = rng.range(s.traitsMin, s.traitsMax);
     const traits = rng.shuffle([...traitIds]).slice(0, n).sort();
     const multiplierPct = traits.reduce((m, id) => Math.trunc((m * ctx.content.expeditionTraits[id].multiplierPct) / 100), 100);
@@ -135,10 +137,17 @@ export function computeProgress(ctx: Ctx, x: Expedition): ObjectiveProgress {
     }
   }
   let maxDepth = x.progress.maxDepth ?? 0;
+  let crossedDepth = x.progress.crossedDepth ?? 0;
   for (const pid of x.participants) {
     const pr = w.players[pid];
     const e = pr?.state === 'alive' ? w.entities[pr.entityId] : undefined;
-    if (e?.pos) maxDepth = Math.max(maxDepth, w.floors[e.pos.floor]?.depth ?? 0);
+    if (!e?.pos) continue;
+    const depth = w.floors[e.pos.floor]?.depth ?? 0;
+    maxDepth = Math.max(maxDepth, depth);
+    // 踏破: 目標より深い階の下り階段に立った（その階を横切り終えた）
+    if (x.objective.targetDepth !== null && depth > x.objective.targetDepth && ctx.terrainAt(e.pos.floor, e.pos.x, e.pos.y).stairs === 'down') {
+      crossedDepth = Math.max(crossedDepth, depth);
+    }
   }
   const guardianSlain = x.progress.guardianSlain || (x.targets.guardian !== null && !w.entities[x.targets.guardian]);
   let relicHeldBy: string | null = null;
@@ -147,7 +156,7 @@ export function computeProgress(ctx: Ctx, x: Expedition): ObjectiveProgress {
     const he = holder ? w.entities[holder] : undefined;
     if (he?.player && present(w.players[he.player])) relicHeldBy = he.id;
   }
-  return { reached, guardianSlain, relicHeldBy, maxDepth };
+  return { reached, guardianSlain, relicHeldBy, maxDepth, ...(crossedDepth ? { crossedDepth } : {}) };
 }
 
 function statusFor(o: Objective, p: ObjectiveProgress): Expedition['status'] {
@@ -167,10 +176,17 @@ export function checkObjective(ctx: Ctx): void {
   const status = statusFor(x.objective, p);
   const prev = x.status;
   if (p.reached === x.progress.reached && p.guardianSlain === x.progress.guardianSlain && p.relicHeldBy === x.progress.relicHeldBy
-    && (p.maxDepth ?? 0) === (x.progress.maxDepth ?? 0) && status === prev) return;
+    && (p.maxDepth ?? 0) === (x.progress.maxDepth ?? 0) && (p.crossedDepth ?? 0) === (x.progress.crossedDepth ?? 0) && status === prev) return;
   ctx.emit({ type: 'objective_progress', no: x.no, progressAfter: p, statusAfter: status, seenBy: [], floor: null });
   if (status === 'objective_complete' && prev !== 'objective_complete') {
     ctx.emit({ type: 'objective_completed', no: x.no, objective: { ...x.objective }, seenBy: 'all', floor: null });
+    // 達成の経験値（盤面にいる参加者。目標深度に比例）
+    const amount = ctx.content.balance.xp.perObjective * (x.objective.targetDepth ?? 0);
+    for (const pid of x.participants) {
+      const pr = ctx.world.players[pid];
+      const e = pr?.state === 'alive' ? ctx.world.entities[pr.entityId] : undefined;
+      if (e) grantXp(ctx, e, amount);
+    }
   }
 }
 
@@ -219,8 +235,11 @@ export function accrueHaul(ctx: Ctx): void {
   ctx.emit({ type: 'haul_changed', no: x.no, haulAfter: after, gains: g, reasons, seenBy: [...x.participants].sort(), floor: null });
 }
 
-/** 自分の視界に追跡中（逃走中を除く）の敵がいるか（観測と同じ判定） */
-export function huntingInView(ctx: Ctx, pr: PlayerRecord): boolean {
+/**
+ * 自分の視界に追跡中（逃走中を除く）の敵がいるか（観測と同じ判定）。
+ * forRest: 休憩の判定では、動かない敵は隣接していなければ数えない（V3-2R §14.2）
+ */
+export function huntingInView(ctx: Ctx, pr: PlayerRecord, forRest = false): boolean {
   const me = ctx.world.entities[pr.entityId];
   if (!me?.pos) return false;
   const key = me.pos.floor;
@@ -229,6 +248,7 @@ export function huntingInView(ctx: Ctx, pr: PlayerRecord): boolean {
   for (const e of ctx.entitiesOn(key)) {
     if (!e.actor || e.player || !e.pos || (e.stats?.hp ?? 0) <= 0) continue;
     if (!vis.has(e.pos.y * f.width + e.pos.x)) continue;
+    if (forRest && ctx.content.monsters[e.kind]?.tags.includes('stationary') && cheb(e.pos, me.pos) > 1) continue;
     if (isPursuing(e)) return true;
   }
   return false;
@@ -265,7 +285,9 @@ export function doExtract(ctx: Ctx, e: Entity, pr: PlayerRecord, completed: bool
   // 持ち帰った宝は換金する（所持品から外す）
   const cur0 = ctx.world.entities[e.id];
   const treasure = treasureHeld(ctx, cur0);
-  const treasureIds = (cur0.inv?.items ?? []).filter((id) => ctx.content.items[ctx.world.entities[id]?.kind ?? '']?.category === 'treasure');
+  // 宝と、達成して持ち帰った遺物は所持品から外す（遺物は納める）
+  const treasureIds = (cur0.inv?.items ?? []).filter((id) => ctx.content.items[ctx.world.entities[id]?.kind ?? '']?.category === 'treasure'
+    || (completed && ctx.world.entities[id]?.kind === 'core:relic'));
   ctx.emit({
     type: 'objective_progress', no: x.no, progressAfter: { ...x.progress }, statusAfter: x.status,
     extractedAfter: [...x.extracted, { player: pr.id, completed, treasure }], seenBy: [], floor: key,

@@ -1,6 +1,6 @@
 // Renderer インターフェース（docs/DESIGN.md §9.1）と、描画対象 Scene。
 // Scene は「種別 ID ＋ 状態」だけを持ち、見た目はテーマが決める。
-import type { Catalog, HpState, Pos } from '@muse/shared';
+import type { Catalog, Dir, HpState, Pos } from '@muse/shared';
 import type { AssetRef, Theme } from '../theme/types';
 
 export interface SceneEntity {
@@ -43,7 +43,7 @@ export interface Scene {
   biome: string;
   /** セルごとの地形 ID（未知は null） */
   terrain: (string | null)[];
-  /** 0=未知 1=記憶 2=視界内 */
+  /** 0=未知 1=記憶（見たことがある） 2=視界内 3=地形だけ判明（地図の巻物。まだ見ていない） */
   vis: Uint8Array;
   entities: SceneEntity[];
   focus: Pos | null;
@@ -53,6 +53,8 @@ export interface Scene {
   /** 吹き出し（AI の thought など） */
   bubbles: { id: string; text: string }[];
   catalog: Catalog;
+  /** 目標（守護者・遺物）の気配。focusId の横に方角の矢印を出す（プレイヤー視点のみ） */
+  sense?: { what: 'guardian' | 'relic'; dir: Dir; range: 'far' | 'near' } | null;
 }
 
 /** 演出用のイベント（クライアントがゲームイベントから導出する。見た目専用） */
