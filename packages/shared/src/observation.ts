@@ -55,6 +55,8 @@ export interface ObsMonster {
   hits?: { your_melee?: [number, number]; your_thrown?: [number, number]; theirs?: [number, number] };
   /** 遠征の守護者 */
   role?: EntityRole;
+  /** 名前付きの強敵の名前（V3-5 §5.4。role: elite） */
+  named?: string;
   /** 手負いで逃げている（追跡中でも extract・休息を妨げない） */
   fleeing?: boolean;
   /** 自分が見ている間にこの個体が受けた実ダメージの合計 */
@@ -183,8 +185,8 @@ export interface ItemStats {
   mods?: CatalogEquipStats;
 }
 /** curse: 'unknown' は呪いの有無をまだ確かめていない装備品、'cursed' は呪われている（外せない。V3-4） */
-/** kind: 鑑定済みの品の種類 ID（fight の with に渡せる。スロット文字は拾い物で変わる。V3-7a 後の評価） */
-export interface ObsInvItem { slot: string; name: string; qty: number; category: string; identified: boolean; equipped: boolean; kind?: string; value?: number; stats?: ItemStats; curse?: 'unknown' | 'cursed' }
+/** kind: 鑑定済みの品の種類 ID（fight の with に渡せる。スロット文字は拾い物で変わる。V3-7a 後の評価）。clue: 未鑑定の手がかり（V3-5 §5.4） */
+export interface ObsInvItem { slot: string; name: string; qty: number; category: string; identified: boolean; equipped: boolean; kind?: string; value?: number; stats?: ItemStats; curse?: 'unknown' | 'cursed'; clue?: string }
 /** 推定残り HP。record は記録した個体の体力の範囲（標本であって種族の範囲ではない） */
 export interface HpEstimate { min: number; max: number | null; samples: number; record: { min: number; max: number } }
 
@@ -197,7 +199,8 @@ export interface Observation {
     name: string; class: string; level: number; xp: number; xp_next: number;
     hp: number; max_hp: number; statuses: { id: string; name: string; turns_left: number }[];
     /** draft: 下り階段が未発見のときの方角（下への風）。explored: 見た割合の 4 段階（1 約 1/4 … 4 ほぼ全て。V3-2R2 §18.4） */
-    pos: Pos | null; floor: { depth: number; biome_name: string; floor_type: string; floor_type_id?: string; time: number; draft?: Dir; explored?: 1 | 2 | 3 | 4; hint_text?: string } | null;
+    /** event_text: 階の異変の到着の文（V3-5 §5.3。ID と中身は出さない） */
+    pos: Pos | null; floor: { depth: number; biome_name: string; floor_type: string; floor_type_id?: string; time: number; draft?: Dir; explored?: 1 | 2 | 3 | 4; hint_text?: string; event_text?: string } | null;
     /** throws: 投げられる持ち物（命中は自分の命中値込み） */
     attack: { acc: number; dmg: string; throws?: { slot: string; kind?: string; name: string; dmg: string | null; acc: number; range: number }[] }; defense: { eva: number; armor: number };
     equipment: { weapon?: string; armor?: string; accessory?: string };
@@ -820,6 +823,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
         };
       }
       if (e.role) m.role = e.role;
+      if (e.named) m.named = nameOf(e.named, L, '?');
       if (e.bounty) m.bounty = e.bounty;
       if (e.fleeing) m.fleeing = true;
       if (e.damageSeen) m.damage_seen = e.damageSeen;
@@ -1043,6 +1047,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       slot: it.slot, name: itemDisplayName(catalog, L, it.kind, it.appearanceId, it.affixes), qty: it.qty,
       category: itemCategory(catalog, it.kind, it.appearanceId), identified: it.kind !== null, equipped: it.equipped !== null,
       ...(it.kind ? { kind: shortId(it.kind) } : {}),
+      ...(!it.kind && it.appearanceId && view.clues?.[it.appearanceId] ? { clue: nameOf(view.clues[it.appearanceId], L, '') } : {}),
       ...(it.value !== undefined ? { value: it.value } : {}),
       ...(st ? { stats: st } : {}),
       ...(curse ? { curse } : {}),
@@ -1053,7 +1058,8 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
     const cu = i.curse === 'cursed' ? t(L, '{呪い:外せない}', '{cursed}') : i.curse === 'unknown' ? t(L, '{呪い?}', '{curse?}') : '';
     // 投げられる物には種類 ID（fight の with に使う）
     const kd = i.stats?.throw && i.kind && !i.equipped ? `{with:${i.kind}}` : '';
-    return `${i.slot})${i.name}${i.qty > 1 ? `x${i.qty}` : ''}${i.equipped ? '*' : ''}${i.value !== undefined ? `(${i.value})` : ''}${st ? `[${st}]` : ''}${kd}${cu}`;
+    const cl = i.clue ? t(L, `{手がかり:${i.clue}}`, `{clue: ${i.clue}}`) : '';
+    return `${i.slot})${i.name}${i.qty > 1 ? `x${i.qty}` : ''}${i.equipped ? '*' : ''}${i.value !== undefined ? `(${i.value})` : ''}${st ? `[${st}]` : ''}${kd}${cl}${cu}`;
   }).join(' ');
 
   const biomeName = f ? nameOf(catalog.biomes[f.biome]?.name, L, f.biome) : '';
@@ -1298,6 +1304,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       statuses: me.statuses.map((s) => ({ id: s.id, name: nameOf(catalog.statuses[s.id]?.name, L, s.id), turns_left: s.turnsLeft })),
       pos, floor: f ? {
         depth: f.depth, biome_name: biomeName, floor_type: nameOf(catalog.floorTypes[f.floorType]?.name, L, f.floorType), floor_type_id: f.floorType, time: f.time,
+        ...(view.floorEvent ? { event_text: nameOf(view.floorEvent, L, '') } : {}),
         ...(view.floorHint?.draft ? { draft: view.floorHint.draft } : {}),
         ...(view.floorHint ? { explored: view.floorHint.explored } : {}),
         ...(view.floorHint ? {
@@ -1736,7 +1743,9 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
     lines.push(t(L, '見えるもの:', 'In view:'));
     const from = s.pos ?? { x: 0, y: 0 };
     for (const m of vis.monsters) {
-      const role = m.role === 'guardian' ? (m.guardian?.warden ? t(L, ` [大守護者・賞金 ${m.bounty ?? 0}]`, ` [warden, bounty ${m.bounty ?? 0}]`) : t(L, ` [守護者・賞金 ${m.bounty ?? 0}]`, ` [guardian, bounty ${m.bounty ?? 0}]`)) : m.bounty ? t(L, ` [賞金 ${m.bounty}]`, ` [bounty ${m.bounty}]`) : '';
+      const role = m.role === 'guardian' ? (m.guardian?.warden ? t(L, ` [大守護者・賞金 ${m.bounty ?? 0}]`, ` [warden, bounty ${m.bounty ?? 0}]`) : t(L, ` [守護者・賞金 ${m.bounty ?? 0}]`, ` [guardian, bounty ${m.bounty ?? 0}]`))
+        : m.role === 'elite' ? t(L, ` [強敵「${m.named ?? '?'}」・賞金 ${m.bounty ?? 0}・宝を必ず落とす]`, ` [elite "${m.named ?? '?'}", bounty ${m.bounty ?? 0}, always drops treasure]`)
+          : m.bounty ? t(L, ` [賞金 ${m.bounty}]`, ` [bounty ${m.bounty}]`) : '';
       const dmg = m.damage_seen ? t(L, `  与ダメ累計:${m.damage_seen}`, ` dmg_seen:${m.damage_seen}`) : '';
       const est = m.hp_left_est ? t(L, `  推定残りHP:${hpEstimateText(L, m.hp_left_est)}`, ` hp_left_est:${hpEstimateText(L, m.hp_left_est)}`) : '';
       // 眠っている敵と 8 マスより遠い敵は、名前・位置・脅威・体力の目安だけ（命中と通りの記録・射線は省く。V3-4b §28.8）
@@ -1778,7 +1787,7 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
   }
   if (alive) {
     lines.push(t(L, '足元: ', 'Here: ') + nav.here);
-    const hint = s.floor?.hint_text ? t(L, `（この階: ${s.floor.hint_text}）`, ` (this floor: ${s.floor.hint_text})`) : '';
+    const hint = s.floor?.hint_text || s.floor?.event_text ? t(L, `（この階: ${[s.floor?.event_text, s.floor?.hint_text].filter(Boolean).join('・')}）`, ` (this floor: ${[s.floor?.event_text, s.floor?.hint_text].filter(Boolean).join(', ')})`) : '';
     if (nav.frontiers.length) {
       const mapped = obs.navigation.unsighted ? t(L, '（地形は判明・未見の区画あり）', ' (layout known, unseen areas remain)') : '';
       lines.push(t(L, '未探索: ', 'Unexplored: ') + nav.frontiers.map((fr) => `${dirLabel(L, fr.dir)}(${fr.pos.x},${fr.pos.y}) ${t(L, '距離', 'dist')}${fr.dist}`).join(' / ') + mapped + hint);
@@ -1920,7 +1929,11 @@ export function describeInventory(view: PlayerView, catalog: Catalog): { text: s
       desc: (() => {
         const st = itemStats(catalog, it.kind, it.affixes);
         const stText = st ? itemStatsText(L, st, catalog) : '';
-        if (!ci) return t(L, '未鑑定。使うか鑑定するまで正体は分からない。', 'Unidentified. Use or identify it to learn what it is.');
+        if (!ci) {
+          // 未鑑定の手がかり（V3-5 §5.4）
+          const clue = it.appearanceId ? view.clues?.[it.appearanceId] : undefined;
+          return clue ? t(L, `未鑑定。手がかり: ${nameOf(clue, L, '')}`, `Unidentified. Clue: ${nameOf(clue, L, '')}`) : t(L, '未鑑定。使うか鑑定するまで正体は分からない（拾ってしばらく持つと手がかりに気づく）。', 'Unidentified. Use or identify it to learn what it is (carry it a while and you notice a clue).');
+        }
         return [stText, stText ? (ci.note ? nameOf(ci.note, L, '') : '') : nameOf(ci.desc, L, '')].filter(Boolean).join(' — ');
       })(),
     };

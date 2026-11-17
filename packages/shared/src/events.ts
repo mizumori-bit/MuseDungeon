@@ -7,7 +7,7 @@ import type {
 } from './types';
 
 /** 2: 遠征・実ダメージ・回復の蓄積値（IMPROVEMENTS_V2）。3: ビルド（特技・能動技・呪い。V3-4）。古いログもそのまま畳み込める */
-export const EVENT_VERSION = 15;
+export const EVENT_VERSION = 16;
 
 export interface EventBase {
   seq: number;
@@ -120,7 +120,10 @@ export type GameEvent =
   /** 守護者の弱点を知った（V3-3 §3.1。弱点が効いた場面を見た本人だけ） */
   | E<'guardian_intel', { player: PlayerId; guardian: EntityId; guardianName: Names; weakness: string; miss?: boolean }>
   /** 敵が目を覚ました・気づいた理由（V3-4b §28.8）。見えている者にだけ。reason: noise（音。by が音を立てた者、ring は欠点が効いた指輪）/ sight（姿）/ pack（仲間の声） */
-  | E<'monster_woke', { id: EntityId; kind: string; reason: 'noise' | 'sight' | 'pack'; by: EntityId | null; ring: string | null; wasAsleep: boolean }>
+  | E<'monster_woke', { id: EntityId; kind: string; reason: 'noise' | 'sight' | 'pack' | 'floor'; by: EntityId | null; ring: string | null; wasAsleep: boolean }>
+  /** 未鑑定の手がかり（V3-5 §5.4）: 拾った（数え始め）・分かった */
+  | E<'clue_noted', { player: PlayerId; appearanceId: string; turns: number }>
+  | E<'clue_learned', { player: PlayerId; appearanceId: string; clue: Names }>
   /** 条件付きの特技が効いた（V3-4b §28.6）。effect: not_woken（忍び足）/ crit（不意打ち）/ picked（回収の手）/ braced（盾の構え）/ might（踏みとどまる）/ poison_halved（鉄の胃）/ cowed（威圧） */
   | E<'perk_triggered', { actor: EntityId; perk: string; effect: 'not_woken' | 'crit' | 'picked' | 'braced' | 'might' | 'poison_halved' | 'cowed'; subject?: EntityId | null; subjectKind?: string | null; amount?: number }>
   /** 能動技を使った。cooldownLeft はこの手番の後の残り手番 */

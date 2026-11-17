@@ -7,7 +7,7 @@
     "layouts": { "core:rooms_corridors": 85, "core:cellular_cave": 15 },
     "spawnTags": { "humanoid": 150, "halls": 160 },
     "features": [{ "feature": "core:fountain", "chancePct": 15 }, { "feature": "core:altar", "chancePct": 10 }]
-  },
+  , "desc": {"ja": "切り出した石の広間と通路。人の手が入っている", "en": "Halls and passages of cut stone, shaped by hands"} },
   {
     "id": "core:damp_caves", "name": { "ja": "湿った洞窟", "en": "Damp Caves" },
     "depth": { "min": 1 }, "weight": 8,
@@ -16,7 +16,7 @@
     "layouts": { "core:cellular_cave": 80, "core:rooms_corridors": 20 },
     "spawnTags": { "cave": 160, "animal": 130 },
     "features": [{ "feature": "core:fountain", "chancePct": 20 }]
-  },
+  , "desc": {"ja": "水の滴る洞窟。浅い水たまりが多い", "en": "Dripping caves with many shallow pools"} },
   {
     "id": "core:overgrown_ruins", "name": { "ja": "苔むした遺跡", "en": "Overgrown Ruins" },
     "depth": { "min": 2 }, "weight": 7,
@@ -25,5 +25,5 @@
     "layouts": { "core:rooms_corridors": 70, "core:cellular_cave": 30 },
     "spawnTags": { "ruins": 160, "plant": 140, "pack": 130 },
     "features": [{ "feature": "core:altar", "chancePct": 20 }, { "feature": "core:fountain", "chancePct": 10 }]
-  }
+  , "desc": {"ja": "草と苔に覆われた遺跡。背の高い草が視界をさえぎる", "en": "Ruins overgrown with grass and moss; tall grass blocks the view"} }
 ]

@@ -28,6 +28,9 @@ export interface AiState {
   intent?: Intent;
   /** 最後に大振りした手番（V3-5b §44.7。swingEvery 手番ごとに構える） */
   swingAt?: number;
+  /** 巡回の道（V3-5 §5.3。番人の巡回・賞金首）と、次に向かう点 */
+  route?: Pos[];
+  routeIdx?: number;
 }
 
 /** 予備動作: winding_up（突進の構え）/ summoning（手下を呼ぶ）/ enraging（怒る）/ swinging（大振りの構え。pos: 打つマス。V3-5b） */
@@ -109,6 +112,8 @@ export interface Entity {
   lairOf?: EntityId;
   /** 持っている品（倒すと落とす。宝物庫の鍵。V3-5 §5.1。見れば分かる） */
   carries?: string;
+  /** 名前付きの強敵の名前（V3-5 §5.4。role: elite） */
+  named?: Names;
   /** 持ち場（守護者が置かれたマス。V3-2R3b §23.2）。気づいていない間はここから guardian.leash マス以内だけを動く。プレイヤーには渡さない */
   home?: { x: number; y: number };
   /** ビルド（プレイヤー。V3-4 §4.1・§4.2） */
@@ -142,7 +147,7 @@ export interface PlayerBuild { perks: string[]; pending: PerkOffer[]; abilities:
   offered?: string[];
 }
 
-export type EntityRole = 'guardian' | 'relic';
+export type EntityRole = 'guardian' | 'relic' | 'elite';
 
 export interface Region {
   id: number;
@@ -172,6 +177,8 @@ export interface Floor {
   currentActor: EntityId | null;
   nextWanderAt: number;
   rules: { noWander: boolean };
+  /** 階の異変（V3-5 §5.3）。arrival だけをプレイヤーに渡す（ID と中身は渡さない） */
+  event?: { id: string; handler: string; arrival: Names };
 }
 
 export interface MonsterMemory {
@@ -249,6 +256,9 @@ export interface Knowledge {
   guardianIntel?: Record<EntityId, string>;
   /** 試して外れた弱点（守護者 → 弱点 ID の一覧。V3-3a §35.3） */
   guardianTried?: Record<EntityId, string[]>;
+  /** 未鑑定の手がかり（V3-5 §5.4）: 分かった見た目 → 手がかりの文。clueSince: 拾った手番（clueTurns たてば分かる） */
+  clues?: Record<string, Names>;
+  clueSince?: Record<string, number>;
   /** 記録庫が返した節目の大守護者の記憶（深さ → 弱点・体力・最大の一撃。V3-3a §35.7） */
   wardenIntel?: Record<string, { weakness?: string; hp?: number; maxHit?: number; armor?: number }>;
   /** 記録庫に納めた遺物の種類 */

@@ -57,6 +57,9 @@ export function makeMonster(ctx: Ctx, floor: FloorKey, spec: Extract<SpawnSpec, 
   if (spec.guardian) e.guardian = structuredClone(spec.guardian);
   // 持たせる品（宝物庫の鍵。V3-5 §5.1）
   if (spec.carries) e.carries = spec.carries;
+  // 名前付きの強敵（V3-5 §5.4）と巡回の道（V3-5 §5.3）
+  if (spec.elite) { e.named = { ...spec.elite }; if (!e.role) e.role = 'elite'; }
+  if (spec.route?.length) e.actor!.ai = { ...e.actor!.ai!, archetype: 'patrol', route: spec.route.map((q) => ({ ...q })), routeIdx: 1 % spec.route.length };
   return e;
 }
 

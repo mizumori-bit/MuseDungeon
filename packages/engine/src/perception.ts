@@ -257,7 +257,7 @@ export function monsterSees(ctx: Ctx, m: Entity, target: Entity): boolean {
 
 /** 睡眠中（休眠）のモンスターを起こす */
 /** 起きた理由（V3-4b §28.8。見えている者に monster_woke で知らせる。無ければ知らせない） */
-export interface WakeWhy { cause: 'noise' | 'sight' | 'pack'; by?: Entity | null; ring?: string | null }
+export interface WakeWhy { cause: 'noise' | 'sight' | 'pack' | 'floor'; by?: Entity | null; ring?: string | null }
 
 export function wakeMonster(ctx: Ctx, m: Entity, targetPos: Pos | null, why?: WakeWhy): void {
   const ai = m.actor?.ai;
@@ -281,6 +281,13 @@ export function wakeMonster(ctx: Ctx, m: Entity, targetPos: Pos | null, why?: Wa
     const seen = ctx.perceive(m.pos.floor, [{ field: 'id', pos: m.pos, entity: m.id }], []);
     if (seen.seenBy.length) {
       ctx.emit({ type: 'monster_woke', id: m.id, kind: m.kind, reason: why.cause, by: why.by?.id ?? null, ring: why.ring ?? null, wasAsleep, ...seen, floor: m.pos.floor });
+    }
+  }
+  // 階の異変「深い眠り」（V3-5 §5.3）: 1 体起きると全員が起きる
+  if (wasAsleep && f.event?.handler === 'deep_sleep' && why?.cause !== 'floor' && m.pos) {
+    for (const o of ctx.entitiesOn(m.pos.floor)) {
+      if (o.id === m.id || !o.actor?.ai || o.player || o.guardian) continue;
+      if (o.actor.dormant || o.actor.ai.state === 'asleep') wakeMonster(ctx, ctx.world.entities[o.id] ?? o, targetPos, { cause: 'floor' });
     }
   }
 }

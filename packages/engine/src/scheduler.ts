@@ -95,7 +95,9 @@ function beginPlayerTurn(ctx: Ctx, pe: Entity): boolean {
     const wp = wanderPct(ctx);
     if (!wp.none) spawnWanderer(ctx, key);
     const base = wb.intervalMin + ctx.rng('runtime').int(Math.max(1, wb.intervalMax - wb.intervalMin));
-    ctx.emit({ type: 'floor_wander', nextWanderAt: cur.actor!.nextActAt + Math.max(1, floorDiv(base * wp.pct, 100)), seenBy: [], floor: key });
+    // 階の異変「溢れた宝」（V3-5 §5.3）: 徘徊の湧きも多い（間隔が半分）
+    const glut = f.event?.handler === 'treasure_glut' ? 50 : 100;
+    ctx.emit({ type: 'floor_wander', nextWanderAt: cur.actor!.nextActAt + Math.max(1, floorDiv(base * wp.pct * glut, 10000)), seenBy: [], floor: key });
   }
   // 罠の発見
   const cls = ctx.content.classes[pr.classId];

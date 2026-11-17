@@ -70,6 +70,8 @@ export interface EntityView {
   lair?: { name: Names; title?: Names };
   /** 持っている品（倒すと落とす。宝物庫の鍵。V3-5 §5.1） */
   carries?: string;
+  /** 名前付きの強敵の名前（V3-5 §5.4） */
+  named?: Names;
 }
 
 export interface RememberedView {
@@ -181,6 +183,10 @@ export interface PlayerView {
   sense: Sense | null;
   /** 護りの火の手がかり（V3-3c §44.6） */
   wardHints?: WardHint[];
+  /** 未鑑定の手がかり（V3-5 §5.4）: 見た目 → 手がかり */
+  clues?: Record<string, Names>;
+  /** 今いる階の異変の到着の文（V3-5 §5.3。ID と中身は渡さない） */
+  floorEvent?: Names;
   /** 今いる階の手がかり（下への風・探索の進み具合）。今いる階のものだけ */
   floorHint: FloorHint | null;
   identified: string[];
@@ -373,6 +379,8 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
           if (e.actor?.ai?.intent) v.intent = { ...e.actor.ai.intent };
           // 持っている品（宝物庫の鍵。見れば分かる。V3-5 §5.1）
           if (e.carries) v.carries = e.carries;
+          // 名前付きの強敵（V3-5 §5.4）
+          if (e.named) v.named = { ...e.named };
           const met = k.metAt?.[e.id];
           if (met !== undefined) v.firstSeenSeq = met;
         } else {
@@ -487,6 +495,8 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
     memory: { terrain: fk ? [...fk.seen] : [], remembered, ...(fk?.mapped?.length ? { unsighted: [...fk.mapped] } : {}) },
     sense: k.sense ? { ...k.sense } : null,
     ...(wardHints.length ? { wardHints } : {}),
+    ...(k.clues && Object.keys(k.clues).length ? { clues: structuredClone(k.clues) } : {}),
+    ...(floor?.event ? { floorEvent: { ...floor.event.arrival } } : {}),
     floorHint: k.floorHint && k.floorHint.floor === floorKey ? { ...k.floorHint } : null,
     identified: [...k.identified],
     monsterMemory: structuredClone(k.monsterMemory),

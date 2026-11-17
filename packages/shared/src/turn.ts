@@ -3,7 +3,9 @@
 import type { Observation } from './observation';
 import { endReasonText } from './expedition';
 import type { PerceivedEvent } from './filter';
-import type { Dir, Locale } from './types';
+import type { Dir, Locale, Names } from './types';
+import type { Catalog } from './catalog';
+import { nameOf } from './catalog';
 import { t } from './util';
 import { dirLabel } from './observation';
 import type { PlayerView } from './view';
@@ -27,7 +29,9 @@ export type ChangeCode =
   /** 守護者のしたこと・分かった弱点（V3-3） */
   | 'guardian' | 'intel'
   /** 得た加護・効いた加護（V3-3 §3.3）・物語の 1 文（§3.4） */
-  | 'boon' | 'story';
+  | 'boon' | 'story'
+  /** このランで初めて見た種族・地物・バイオームの描写（V3-5 §5.4） */
+  | 'first_seen';
 
 export interface Change { code: ChangeCode; text: string; entity?: string }
 
@@ -77,6 +81,8 @@ export interface TurnSnapshot {
   items: Record<string, string>;
   /** これまでの応答で報告したアイテム（同じ階。記憶の一覧に出入りしても「見つけた」を繰り返さない） */
   reportedItems?: string[];
+  /** 描写を出した種族・地物・バイオーム（V3-5 §5.4。diffChanges が引き継ぐ） */
+  seenKinds?: string[];
   stairs: string[];
   expNo: number | null;
   expStatus: string | null;
@@ -125,15 +131,38 @@ export function turnSnapshot(view: PlayerView, obs: Observation, state: TurnStat
 
 const PRIORITY: ChangeCode[] = [
   'guardian_slain', 'guardian', 'intel', 'boon', 'story', 'floor_changed', 'objective_complete', 'objective_progress', 'next_camp', 'can_extract', 'hp_low', 'killed', 'died_seen', 'hp_dropped', 'new_hostile',
-  'level_up', 'status_gained', 'status_lost', 'woke', 'perk', 'item_found', 'stairs_found', 'reappeared', 'hostile_gone',
+  'level_up', 'status_gained', 'status_lost', 'woke', 'perk', 'item_found', 'stairs_found', 'reappeared', 'hostile_gone', 'first_seen',
 ];
+
+/** 初めて見たものの描写（V3-5 §5.4）: このランで初めて見た種族・地物・バイオーム・鑑定済みのアイテムの種類に 1 回だけ（1 回の応答で 3 件まで） */
+function firstSeen(prev: TurnSnapshot, cur: TurnSnapshot, view: PlayerView, catalog: Catalog): Change[] {
+  const L = view.locale;
+  const seen = new Set(prev.seenKinds ?? []);
+  const out: Change[] = [];
+  const note = (key: string, name: string, desc: Names | undefined) => {
+    // 3 件を超えた分は覚えず、次の応答に回す
+    if (seen.has(key) || (desc && out.length >= 3)) return;
+    seen.add(key);
+    if (desc) out.push({ code: 'first_seen', text: t(L, `初めて見る: ${name} — ${nameOf(desc, L, '')}`, `First sight: ${name} — ${nameOf(desc, L, '')}`) });
+  };
+  if (view.floor) note(`biome:${view.floor.biome}`, nameOf(catalog.biomes[view.floor.biome]?.name, L, view.floor.biome), catalog.biomes[view.floor.biome]?.desc);
+  for (const e of view.entities) {
+    if (!e.kind) continue;
+    if (e.cat === 'monster') note(e.kind, nameOf(catalog.monsters[e.kind]?.name, L, e.kind), catalog.monsters[e.kind]?.desc);
+    else if (e.cat === 'feature') note(e.kind, nameOf(catalog.features[e.kind]?.name, L, e.kind), catalog.features[e.kind]?.desc);
+    else if (e.cat === 'item' && catalog.items[e.kind]?.note) note(e.kind, nameOf(catalog.items[e.kind]?.name, L, e.kind), catalog.items[e.kind]?.note);
+  }
+  cur.seenKinds = [...seen];
+  return out;
+}
 
 /**
  * 前回の要約からの変化。prev が無ければ空。
  * events: 前回の要約以降に知覚した出来事（撃破・死亡の区別に使う）
  */
-export function diffChanges(prev: TurnSnapshot | null, cur: TurnSnapshot, view: PlayerView, obs: Observation, events: readonly PerceivedEvent[] = []): Change[] {
+export function diffChanges(prev: TurnSnapshot | null, cur: TurnSnapshot, view: PlayerView, obs: Observation, events: readonly PerceivedEvent[] = [], catalog?: Catalog): Change[] {
   if (!prev) return [];
+  const firsts = catalog ? firstSeen(prev, cur, view, catalog) : [];
   const L = view.locale;
   const out: Change[] = [];
   const sameFloor = prev.floorKey === cur.floorKey;
@@ -234,6 +263,7 @@ export function diffChanges(prev: TurnSnapshot | null, cur: TurnSnapshot, view: 
   for (const [s, n] of perkCount) out.push({ code: 'perk', text: n > 1 ? `${s} ×${n}` : s });
   for (const s of cur.statuses) if (!prev.statuses.includes(s)) out.push({ code: 'status_gained', text: t(L, `状態異常: ${statusName(obs, s)}`, `Status: ${statusName(obs, s)}`) });
   for (const s of prev.statuses) if (!cur.statuses.includes(s)) out.push({ code: 'status_lost', text: t(L, `状態異常が解けた: ${prev.statusNames?.[s] ?? s.split(':')[1] ?? s}`, `Status ended: ${prev.statusNames?.[s] ?? s.split(':')[1] ?? s}`) });
+  out.push(...firsts);
   out.sort((a, b) => PRIORITY.indexOf(a.code) - PRIORITY.indexOf(b.code));
   return out.slice(0, MAX_CHANGES);
 }

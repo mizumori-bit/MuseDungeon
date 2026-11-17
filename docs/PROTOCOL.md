@@ -414,6 +414,15 @@ V3-2R で足した項目（同じく後方互換。会心と経験値のルー�
 - `player_state.reason: 'joined'`（キャンプから始まる参加）。参加コマンドの `atCamp`
 - プレイヤー向けの射影で、見えていた個体が視界の外へ動いた `entity_moved` に `dirOut`（向きだけ。行き先は伏せたまま）
 
+V3-5d で足した項目（階の異変・描写と手がかり・名前付きの強敵。後方互換。生成と規則が変わったので `engineVersion` は 0.20.0、出来事が増えたので `eventVersion` は 16。DESIGN.md §32）:
+
+- コンテンツ: `floorEvents.json`（`FloorEventSchema { id, name, arrival, handler, depth, weight }`）。異変は賞金首（`bounty`）・深い眠り（`deep_sleep`）・荒らされた跡（`ransacked`）・溢れた宝（`treasure_glut`）・番人の巡回（`patrol`）。階の種類の `rules.events`（通常の階と大空洞）。`balance.floorEvent.chancePct`（25）・`balance.elite { chancePct 3, minDepth 3, affixes 2, bountyBase 150, bountyPerDepth 30 }`・`balance.clueTurns`（30）。種族とバイオームの `desc`、薬と巻物の `clue`、職業の `clueOnPickup`（斥候）。行動様式 `patrol`。公開カタログの `monsters[id].desc`・`biomes[id].desc`・`items[id].clue`・`rules.floorEventPct / elite / clueTurns`
+- World State: `Floor.event { id, handler, arrival }`（プレイヤーには arrival だけ）・`Entity.named`・`EntityRole` に `elite`・`AiState.route / routeIdx`・`Knowledge.clues / clueSince`
+- イベント: `clue_noted { player, appearanceId, turns }`・`clue_learned { player, appearanceId, clue }`（本人だけ）。`monster_woke.reason` に `floor`（深い眠りで、1 体が起きて全員が起きた）
+- PlayerView: `floorEvent`（到着の文）・`clues`（見た目 → 手がかり）・`EntityView.named`
+- 観測: `self.floor.event_text`（状態の行の「この階:」にも）。`visible.monsters[].named` と、強敵の行「強敵「名前」・賞金 N・宝を必ず落とす」。所持品の `clue`（所持品の行に `{手がかり:…}`、inventory に「未鑑定。手がかり: …」）。changes の `first_seen`（このランで初めて見た種族・地物・バイオーム・鑑定済みのアイテムの描写。1 回の応答で 3 件まで）
+- 規則: 異変は生成のとき（`events` ストリーム）に通常の階と大空洞の 25% に付く。深い眠り: 全員が眠っていて、1 体が起きると全員が起きる。荒らされた跡: 敵とアイテムが半分、先行者の野営跡がある。溢れた宝: 宝が倍、徘徊の湧きの間隔が半分。賞金首: 名前付きの強敵が 6 つの点を回る。番人の巡回: 名前付きの強敵（格 1 の守護者と同じ表から）が部屋の中心を 4 つ回り、見つけると追う。名前付きの強敵は、通常の敵（動かない種族・害獣を除く）の 3% が地下 3 階から（`elites` ストリーム）。接辞 2 つで、倒すと宝を必ず落とす
+
 V3-5c で足した項目（特殊部屋。後方互換。生成と規則が変わったので `engineVersion` は 0.19.0、出来事が増えたので `eventVersion` は 15。DESIGN.md §31）:
 
 - コンテンツ: 地形 `core:grate_locked`（通れないが見通せる）・`core:grate_open`・`core:bookshelf`（通れず見通せない）。アイテム `core:vault_key`（区分 `key`）。地物 `core:inscription`（碑文）・`core:old_note`（書き置き）・`core:gamble_altar`（賭けの祭壇。`gamble` に重みと効果の表）。地物の `desc`。部屋（prefab）の `name` とタグ `room`（見つけると発見の点）・`vault_locked`。戦利品の表 `core:scroll_loot`。物語の文の種類 `inscription`・`note`。効果 `inscription`（`clue` 1 で手がかり）・`affix_item`・`curse_item`・`summon`（`count`）・`damage` の `pct`（今の HP の %）

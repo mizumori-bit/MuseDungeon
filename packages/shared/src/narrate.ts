@@ -323,6 +323,12 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
       return (ev.full ? (ja ? `守護者「${nm}」は傷を癒やしていた（体力が戻っている）。` : `The guardian "${nm}" has healed its wounds (back to full).`)
         : (ja ? `守護者「${nm}」の傷が少し癒えている（追われていない間に回復した）。` : `The guardian "${nm}" has healed a little while it was not chasing you.`)) + gone;
     }
+    case 'clue_noted':
+      return null;
+    case 'clue_learned': {
+      const app = kindName(ctx.catalog, L, null, ev.appearanceId);
+      return ja ? `${app}の手がかりに気づいた: ${nameOf(ev.clue, L, '')}。` : `You notice something about the ${app}: ${nameOf(ev.clue, L, '')}.`;
+    }
     case 'room_found':
       return ja ? `${ev.player === self ? '' : '仲間が'}「${nameOf(ev.name, L, ev.room)}」を見つけた（発見）。` : `${ev.player === self ? 'Found' : 'An ally found'}: ${nameOf(ev.name, L, ev.room)} (discovery).`;
     case 'inscription_read': {

@@ -1,0 +1,12 @@
+[
+  { "id": "core:event_bounty", "name": { "ja": "賞金首", "en": "bounty" }, "handler": "bounty", "depth": { "min": 3 }, "weight": 2,
+    "arrival": { "ja": "何か大きなものが歩き回っている", "en": "Something large is walking about" } },
+  { "id": "core:event_deep_sleep", "name": { "ja": "深い眠り", "en": "deep sleep" }, "handler": "deep_sleep", "depth": { "min": 2 }, "weight": 2,
+    "arrival": { "ja": "この階は静まり返っている", "en": "This floor lies utterly still" } },
+  { "id": "core:event_ransacked", "name": { "ja": "荒らされた跡", "en": "ransacked" }, "handler": "ransacked", "depth": { "min": 1 }, "weight": 2,
+    "arrival": { "ja": "先に誰かが通ったようだ", "en": "Someone seems to have passed through before you" } },
+  { "id": "core:event_glut", "name": { "ja": "溢れた宝", "en": "glut of treasure" }, "handler": "treasure_glut", "depth": { "min": 2 }, "weight": 2,
+    "arrival": { "ja": "どこかで金属が光った", "en": "Somewhere, metal glints" } },
+  { "id": "core:event_patrol", "name": { "ja": "番人の巡回", "en": "patrol" }, "handler": "patrol", "depth": { "min": 4 }, "weight": 2,
+    "arrival": { "ja": "規則正しい足音が聞こえる", "en": "You hear measured, regular footsteps" } }
+]

@@ -50,6 +50,8 @@ export const MonsterSchema = z.object({
   abilities: z.array(z.string()).default([]),
   /** 体格（見れば分かる公開の性質。V3-2R3 §20.4）。大柄は宝を必ず落とす */
   size: z.enum(['small', 'medium', 'large']).default('medium'),
+  /** 初見の描写（1 文。V3-5 §5.4） */
+  desc: NamesSchema.optional(),
 });
 
 export const EquipSchema = z.object({
@@ -103,6 +105,8 @@ export const ItemSchema = z.object({
   /** 由来の 1 文（遺物。説明の前に付き、納めたときの物語の文にも使う。V3-3 §3.4） */
   origin: NamesSchema.optional(),
   desc: NamesSchema.optional(),
+  /** 未鑑定の手がかり（感覚の特徴。2〜3 種で共有する。V3-5 §5.4）。持って clueTurns 手番たつか、斥候なら拾った時点で分かる */
+  clue: NamesSchema.optional(),
 });
 
 export const AppearanceSchema = z.object({ id: IdSchema, name: NamesSchema, category: z.string().min(1) });
@@ -148,6 +152,8 @@ export const BiomeSchema = z.object({
   layouts: z.record(z.number().int().min(0)),
   spawnTags: z.record(z.number().int().min(0)).default({}),
   features: z.array(z.object({ feature: IdSchema, chancePct: z.number().int().min(0).max(100) })).default([]),
+  /** 初見の描写（1 文。V3-5 §5.4） */
+  desc: NamesSchema.optional(),
 });
 
 const Per1000Schema = z.object({ per1000: z.number().int().min(0) });
@@ -178,7 +184,8 @@ export const FloorTypeSchema = z.object({
   prefabs: z.object({ tags: z.array(z.string()).default([]), min: z.number().int().min(0).default(0), max: z.number().int().min(0).default(1) }).default({}),
   guaranteedFeatures: z.array(IdSchema).default([]),
   /** warden: 節目の大守護者の階（V3-3 §3.2）。レイアウトの目印の場所に大守護者を置き、倒すまで下り階段を封じる */
-  rules: z.object({ noWander: z.boolean().default(false), warden: z.boolean().default(false) }).default({}),
+  /** events: 階の異変（V3-5 §5.3）が付くことがある階の種類 */
+  rules: z.object({ noWander: z.boolean().default(false), warden: z.boolean().default(false), events: z.boolean().default(false) }).default({}),
   validators: z.array(z.string()).default(['stairs_connected', 'start_safe', 'min_floor_area']),
   /** 深度帯ごとの寸法・階段距離・密度（size / per1000 を上書き） */
   pacing: z.array(PacingSchema).default([]),
@@ -245,6 +252,8 @@ export const ClassSchema = z.object({
   searchPct: z.number().int().min(0).max(100).default(15),
   /** 寝ているモンスターを起こしにくさ（起床判定の確率補正 %） */
   stealthPct: z.number().int().min(0).max(100).default(0),
+  /** 未鑑定の品の手がかりが、拾った時点で分かる（V3-5 §5.4: 斥候） */
+  clueOnPickup: z.boolean().default(false),
 });
 
 /** 特技（V3-4 §4.1）。lineage: 'common' か職業の系統 ID。mods は取った時点で基本値に入る。hooks はエンジンのレジストリ（perkHooks）の ID と引数 */
@@ -330,6 +339,19 @@ export const LoreSchema = z.object({
   text: NamesSchema,
 });
 
+/**
+ * 階の異変（V3-5 §5.3）。生成時に低い確率で 1 つ付く。到着の文（arrival）だけを観測に出し、ID と中身は出さない。
+ * handler: エンジンのレジストリ（generate の floorEventHandlers）
+ */
+export const FloorEventSchema = z.object({
+  id: IdSchema,
+  name: NamesSchema,
+  arrival: NamesSchema,
+  handler: z.string().min(1),
+  depth: DepthSchema,
+  weight: z.number().int().min(1).default(1),
+});
+
 /** 守護者の名前の音節（V3-3 §3.1。シードで 2〜3 個つなぐ） */
 export const GuardianNamesSchema = z.object({
   id: IdSchema,
@@ -350,6 +372,13 @@ export const BalanceSchema = z.object({
   id: IdSchema,
   /** 種族の表を定義する深さ（V3-5b §44.7: この深さまでは接辞と深層強化で硬くするだけの階にしない）。種族の最も深い peak と大きいほう */
   monsterTableDepth: Int.min(1).default(1),
+  /** 階の異変（V3-5 §5.3）: 付く確率（%） */
+  floorEvent: z.object({ chancePct: Int.min(0).max(100) }).default({ chancePct: 0 }),
+  /** 名前付きの強敵（V3-5 §5.4）: 通常の出現に混ざる確率（%）・最初の深さ・接辞の数・賞金（基礎 + 深さごと） */
+  elite: z.object({ chancePct: Int.min(0).max(100), minDepth: Int.min(1), affixes: Int.min(0), bountyBase: Int.min(0), bountyPerDepth: Int.min(0) })
+    .default({ chancePct: 0, minDepth: 3, affixes: 2, bountyBase: 150, bountyPerDepth: 30 }),
+  /** 未鑑定の品の手がかり（V3-5 §5.4）: この手番だけ持てば分かる（斥候は拾った時点で） */
+  clueTurns: Int.min(0).default(30),
   regen: z.object({
     /** 自然回復の間隔（手番）= max(minInterval, baseInterval - floor(Lv / levelDiv)) */
     baseInterval: Int.min(1), levelDiv: Int.min(1), minInterval: Int.min(1),
@@ -501,6 +530,7 @@ export type GuardianWeaknessDef = z.infer<typeof GuardianWeaknessSchema>;
 export type GuardianNamesDef = z.infer<typeof GuardianNamesSchema>;
 export type BoonDef = z.infer<typeof BoonSchema>;
 export type LoreDef = z.infer<typeof LoreSchema>;
+export type FloorEventDef = z.infer<typeof FloorEventSchema>;
 
 /** ファイル名 → スキーマ。新しい定義ファイル種別はここに 1 行足す */
 export const FILE_SCHEMAS = {
@@ -527,6 +557,7 @@ export const FILE_SCHEMAS = {
   guardianNames: GuardianNamesSchema,
   boons: BoonSchema,
   lore: LoreSchema,
+  floorEvents: FloorEventSchema,
 } as const;
 
 export type FileKind = keyof typeof FILE_SCHEMAS;

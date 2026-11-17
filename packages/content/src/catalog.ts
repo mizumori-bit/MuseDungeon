@@ -58,13 +58,15 @@ export function buildCatalog(c: Content): Catalog {
       ...(it.throw ? { throwStats: { dmg: it.throw.dmg, acc: it.throw.acc ?? 0, range: it.throw.range } } : {}),
       ...(it.equip ? { equipStats: equipStats(it) } : {}),
       ...(it.boon ? { boon: it.boon } : {}),
+      // 未鑑定の手がかり（V3-5 §5.4。2〜3 種で共有する公開の表）
+      ...(it.clue ? { clue: it.clue } : {}),
     };
   }
   return {
     contentVersion: c.version,
     terrain: Object.fromEntries(c.terrain.map((t) => [t.id, { name: t.name, passable: t.passable, opaque: t.opaque, layer: t.layer, door: t.door, stairs: t.stairs, tags: t.tags }])),
     // size・armored・evasive は見れば分かる性質（V3-2R3 §20.4・V3-3b §40.2）。armored は素の装甲が 3 以上、evasive は素の回避が 5 以上（値そのものは出さない）
-    monsters: Object.fromEntries(c.lists.monsters.map((m) => [m.id, { name: m.name, tags: m.tags, glyph: m.glyph, size: m.size, armored: m.stats.armor >= 3, evasive: m.stats.eva >= 5 }])),
+    monsters: Object.fromEntries(c.lists.monsters.map((m) => [m.id, { name: m.name, tags: m.tags, glyph: m.glyph, size: m.size, armored: m.stats.armor >= 3, evasive: m.stats.eva >= 5, ...(m.desc ? { desc: m.desc } : {}) }])),
     classes: Object.fromEntries(c.lists.classes.map((k) => [k.id, {
       name: k.name, desc: k.desc,
       // 自キャラの初期値と成長は公開情報（キー名 hp は使わない: 能力値を出さないカタログの検査に合わせる）
@@ -110,12 +112,14 @@ export function buildCatalog(c: Content): Catalog {
       name: w.name, desc: w.desc,
       ...(w.handler === 'reach' ? { reach: w.params.range ?? 2 } : {}), ...(w.handler === 'attack_cost' ? { attackCost: w.params.cost ?? 100 } : {}),
     }])),
-    biomes: Object.fromEntries(c.lists.biomes.map((b) => [b.id, { name: b.name }])),
+    biomes: Object.fromEntries(c.lists.biomes.map((b) => [b.id, { name: b.name, ...(b.desc ? { desc: b.desc } : {}) }])),
     floorTypes: Object.fromEntries(c.lists.floorTypes.map((f) => [f.id, { name: f.name }])),
     rules: {
       regen: { ...c.balance.regen },
       restMaxTurns: c.balance.rest.maxTurns,
       restCapPct: c.balance.rest.capPct,
+      // 階の異変・名前付きの強敵・未鑑定の手がかり（V3-5 §5.3・§5.4）
+      floorEventPct: c.balance.floorEvent.chancePct, elite: { chancePct: c.balance.elite.chancePct, minDepth: c.balance.elite.minDepth, affixes: c.balance.elite.affixes }, clueTurns: c.balance.clueTurns,
       guardianAwayHealPct: c.balance.guardian.awayHealPct,
       ...((): { milestone?: { every: number; min: number; boonOptions: number; levelBonus: number; hpRule: { hpPct: number; minHpBase: number; minHpPerDepth: number; maxHpBase: number; maxHpPerDepth: number }; minSpeed: number } } => {
         const f = c.lists.floorTypes.find((x) => x.rules.warden && x.every > 0);

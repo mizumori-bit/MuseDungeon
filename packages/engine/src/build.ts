@@ -215,6 +215,31 @@ export function rollPerkOptions(ctx: Ctx, pr: PlayerRecord, level: number, owned
   return out;
 }
 
+/**
+ * 未鑑定の品の手がかり（V3-5 §5.4）: 手がかりのある未鑑定の見た目を持っていれば、拾った手番を覚え（clue_noted）、
+ * clueTurns 手番たったら（斥候は拾った時点で）手がかりが分かる（clue_learned）
+ */
+export function noteClues(ctx: Ctx, pid: string): void {
+  const pr = ctx.world.players[pid];
+  const e = pr?.state === 'alive' ? ctx.world.entities[pr.entityId] : undefined;
+  if (!e?.inv || !e.actor) return;
+  const k = pr.knowledge;
+  const quick = !!ctx.content.classes[pr.classId]?.clueOnPickup;
+  const turns = e.actor.turns;
+  const done = new Set<string>();
+  for (const id of e.inv.items) {
+    const it = ctx.world.entities[id];
+    if (!it) continue;
+    const app = ctx.world.secret.appearances[it.kind];
+    const clue = ctx.content.items[it.kind]?.clue;
+    if (!app || !clue || done.has(app) || k.identified.includes(it.kind) || k.clues?.[app]) continue;
+    done.add(app);
+    const since = k.clueSince?.[app];
+    if (quick || (since !== undefined && turns - since >= ctx.content.balance.clueTurns)) ctx.emit({ type: 'clue_learned', player: pid, appearanceId: app, clue: { ...clue }, seenBy: [pid] });
+    else if (since === undefined) ctx.emit({ type: 'clue_noted', player: pid, appearanceId: app, turns, seenBy: [pid] });
+  }
+}
+
 /** 特技のフックの値の合計（ランクの数だけ足す。V3-3c §44.4: 強肩・重い一撃） */
 export function perkHookSum(ctx: Ctx, e: Entity | null | undefined, hook: string, field: string): number {
   let n = 0;

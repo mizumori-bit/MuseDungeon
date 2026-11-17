@@ -93,6 +93,19 @@ export function applyEvent(world: World, ev: GameEvent): void {
     case 'entity_removed':
       delete world.entities[ev.id];
       break;
+    case 'clue_noted': {
+      const k = world.players[ev.player]?.knowledge;
+      if (k) k.clueSince = { ...(k.clueSince ?? {}), [ev.appearanceId]: ev.turns };
+      break;
+    }
+    case 'clue_learned': {
+      const k = world.players[ev.player]?.knowledge;
+      if (k) {
+        k.clues = { ...(k.clues ?? {}), [ev.appearanceId]: clone(ev.clue) };
+        if (k.clueSince) { const { [ev.appearanceId]: _d, ...rest } = k.clueSince; k.clueSince = rest; }
+      }
+      break;
+    }
     case 'room_found': {
       const r = world.floors[ev.floorKey]?.regions.find((x) => x.id === ev.region);
       if (r) r.found = true;

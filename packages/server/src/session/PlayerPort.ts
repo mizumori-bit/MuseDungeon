@@ -331,7 +331,7 @@ export class SessionPlayerPort implements PlayerPort {
     let changes: TurnBlock['changes'] = [];
     if (p.changes) {
       const events = prev ? this.session.messages(this.playerId).filter((m) => m.seq > prev.seq) : [];
-      changes = diffChanges(prev, cur, view, observation, events);
+      changes = diffChanges(prev, cur, view, observation, events, this.catalog);
       if (p.changes === true) this.session.setTurnSnapshot(this.playerId, cur);
     }
     const turn = buildTurnBlock(view, { reason, interruptedBy: p.interruptedBy, changes, expeditionEndedNow: p.expeditionEndedNow });

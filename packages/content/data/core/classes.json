@@ -36,6 +36,6 @@
       { "id": "scout_shadow", "name": { "ja": "影", "en": "shadow" } }
     ],
     "startPerks": ["core:perk_aimed_throw"],
-    "searchPct": 30, "stealthPct": 40
+    "searchPct": 30, "stealthPct": 40, "clueOnPickup": true
   }
 ]

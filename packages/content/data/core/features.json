@@ -4,34 +4,34 @@
     "states": ["idle", "used"], "initialState": "idle", "passable": true,
     "onInteract": [{ "effect": "heal", "amount": "3d6+2" }, { "effect": "cure", "status": "core:poison" }],
     "afterInteract": "used"
-  },
+  , "desc": {"ja": "澄んだ水が湧いている。飲むと（interact）傷が癒え、毒が消える。1 回だけ", "en": "Clear water wells up. Drinking (interact) heals and cures poison, once"} },
   {
     "id": "core:altar", "name": { "ja": "祭壇", "en": "altar" }, "category": "feature",
     "states": ["idle", "used"], "initialState": "idle", "passable": true,
     "onInteract": [{ "effect": "identify", "count": 99 }, { "effect": "uncurse" }],
     "afterInteract": "used"
-  },
+  , "desc": {"ja": "古い祭壇。祈ると（interact）持ち物がすべて鑑定され、呪いが解ける。1 回だけ", "en": "An old altar. Praying (interact) identifies everything you carry and lifts curses, once"} },
   {
     "id": "core:ward_fire", "name": { "ja": "護りの火", "en": "ward fire" }, "category": "feature",
     "states": ["lit", "out"], "initialState": "lit", "passable": true,
     "onInteract": [],
     "afterInteract": "out"
-  },
+  , "desc": {"ja": "護られし者の守りの火。灯っている間、その守護者の装甲が上がる。隣で interact するか、投げた物を当てると消える", "en": "A ward fire. While lit, its guardian has more armor. Put it out with interact next to it or by hitting it with a throw"} },
   {
     "id": "core:trap_dart", "name": { "ja": "毒矢の罠", "en": "poison dart trap" }, "category": "trap",
     "passable": true, "depth": { "min": 1 }, "rarity": 1,
     "onEnter": [{ "effect": "damage", "amount": "1d4" }, { "effect": "status", "status": "core:poison", "turns": "1d4+2", "power": 1, "chancePct": 70 }]
-  },
+  , "desc": {"ja": "踏むと毒矢が飛ぶ罠", "en": "A trap that shoots a poison dart when stepped on"} },
   {
     "id": "core:trap_teleport", "name": { "ja": "転移の罠", "en": "teleport trap" }, "category": "trap",
     "passable": true, "depth": { "min": 3 }, "rarity": 2,
     "onEnter": [{ "effect": "teleport" }]
-  },
+  , "desc": {"ja": "踏むと同じ階のどこかへ飛ばされる罠", "en": "A trap that sends you somewhere else on this floor"} },
   {
     "id": "core:trap_alarm", "name": { "ja": "警報の罠", "en": "alarm trap" }, "category": "trap",
     "passable": true, "depth": { "min": 1 }, "rarity": 2,
     "onEnter": [{ "effect": "noise", "loudness": 18 }]
-  },
+  , "desc": {"ja": "踏むと大きな音が鳴り、近くの敵が目を覚ます罠", "en": "A trap that makes a loud noise and wakes nearby monsters"} },
   {
     "id": "core:inscription", "name": { "ja": "碑文", "en": "inscription" }, "category": "feature",
     "states": ["unread", "read"], "initialState": "unread", "passable": false,

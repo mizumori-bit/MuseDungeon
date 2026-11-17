@@ -14,6 +14,8 @@ export interface CatalogTerrain {
 
 export interface CatalogItem {
   name: Names;
+  /** 未鑑定の手がかり（V3-5 §5.4） */
+  clue?: Names;
   category: string;
   unidentified: boolean;
   stack: boolean;
@@ -93,7 +95,7 @@ export interface Catalog {
   terrain: Record<string, CatalogTerrain>;
   /** glyph: 地図の 1 文字（種族ごとに一意） */
   /** size・armored: 見れば分かる性質（V3-2R3 §20.4） */
-  monsters: Record<string, { name: Names; tags: string[]; glyph: string; size?: 'small' | 'medium' | 'large'; armored?: boolean; evasive?: boolean }>;
+  monsters: Record<string, { name: Names; tags: string[]; glyph: string; size?: 'small' | 'medium' | 'large'; armored?: boolean; evasive?: boolean; desc?: Names }>;
   classes: Record<string, CatalogClass>;
   items: Record<string, CatalogItem>;
   appearances: Record<string, { name: Names; category: string }>;
@@ -116,7 +118,7 @@ export interface Catalog {
   boons: Record<string, CatalogBoon>;
   /** 物語の枠（V3-3 §3.4。get_rules に出す） */
   lore?: { frame: Names[] };
-  biomes: Record<string, { name: Names }>;
+  biomes: Record<string, { name: Names; desc?: Names }>;
   floorTypes: Record<string, { name: Names }>;
   /** 公開ルールの数値（content の balance.json から。ルールブックと実際の挙動を一致させる） */
   rules: CatalogRules;
@@ -127,6 +129,10 @@ export interface CatalogRules {
   restMaxTurns: number;
   /** 休憩と自然回復で戻る上限（最大 HP の %。V3-4b §28.3） */
   restCapPct?: number;
+  /** 階の異変の確率・名前付きの強敵・未鑑定の手がかりの手番（V3-5 §5.3・§5.4） */
+  floorEventPct?: number;
+  elite?: { chancePct: number; minDepth: number; affixes: number };
+  clueTurns?: number;
   /** 守護者が、相手が階を離れている間に手番 1 つにつき回復する最大体力の %（V3-3a §35.1） */
   guardianAwayHealPct?: number;
   /** 節目の大守護者の階（V3-3 §3.2）: 深度 every の倍数（min 以上）。levelBonus: 節目に挑む候補の推奨レベルの上乗せ */

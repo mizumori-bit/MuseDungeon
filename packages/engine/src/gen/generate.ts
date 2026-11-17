@@ -2,16 +2,16 @@
 //   selectFloorType → selectBiome → layout → prefab配置 → バイオーム地形 → 階段/接続 → populate → validate
 // 各段はレジストリのプラグイン。乱数は用途別の名前付きサブストリーム（地形はアイテム表の変更に影響されない）。
 // 生成は純関数: (content, runSeed, branch, depth) → { floor, spawns }。World を読まない。
-import type { BiomeDef, Content, FloorTypeDef, MonsterDef, PrefabDef } from '@muse/content';
-import type { EntityRole, Floor, GuardianInfo, Pos, Region } from '@muse/shared';
+import type { BiomeDef, Content, FloorEventDef, FloorTypeDef, MonsterDef, PrefabDef } from '@muse/content';
+import type { EntityRole, Floor, GuardianInfo, Names, Pos, Region } from '@muse/shared';
 import { cheb, DIRS, DIR_VEC, floorDiv, floorKey, Rng } from '@muse/shared';
 import { Registry, roll } from '../registry';
-import { guardianAsleep, lairPlan, rollWardenInfo } from '../guardians';
+import { guardianAsleep, lairPlan, makeName, rollWardenInfo } from '../guardians';
 import { DOOR, FLOOR, GenGrid, WALL } from './grid';
 import { layoutGenerators } from './layouts';
 
 export type SpawnSpec =
-  | { type: 'monster'; kind: string; x: number; y: number; hp: number; affixes: string[]; tier: number; asleep: boolean; delay: number; role?: EntityRole; bounty?: number; minHp?: number; /** 体力の上限（大守護者。V3-3a §35.2） */ maxHp?: number; hpBonusPct?: number; guardian?: GuardianInfo; /** 速さの下限（大守護者。V3-3c §44.2） */ minSpeed?: number; /** 持たせる品（宝物庫の鍵。V3-5 §5.1） */ carries?: string }
+  | { type: 'monster'; kind: string; x: number; y: number; hp: number; affixes: string[]; tier: number; asleep: boolean; delay: number; role?: EntityRole; bounty?: number; minHp?: number; /** 体力の上限（大守護者。V3-3a §35.2） */ maxHp?: number; hpBonusPct?: number; guardian?: GuardianInfo; /** 速さの下限（大守護者。V3-3c §44.2） */ minSpeed?: number; /** 持たせる品（宝物庫の鍵。V3-5 §5.1） */ carries?: string; /** 名前付きの強敵（V3-5 §5.4） */ elite?: Names; /** 巡回の道（V3-5 §5.3） */ route?: Pos[] }
   | { type: 'item'; kind: string; x: number; y: number; qty: number; affixes: string[]; role?: EntityRole; value?: number; hidden?: string[] }
   | { type: 'feature'; kind: string; x: number; y: number; /** 棲み処の地物（直前に置いた守護者のもの。V3-3c §44.6） */ lair?: boolean };
 
@@ -60,6 +60,8 @@ export interface GenState {
   biome: BiomeDef;
   pacing: Pacing;
   mods?: GenMods;
+  /** 階の異変（V3-5 §5.3） */
+  event?: FloorEventDef;
   grid: GenGrid;
   entry: Pos;
   up: Pos | null;
@@ -211,10 +213,17 @@ function placePrefabs(s: GenState): void {
   const cands = s.content.lists.prefabs.filter((p) => depthOk(p.depth, s.depth) && p.tags.some((t) => ft.prefabs.tags.includes(t)));
   if (!cands.length) return;
   const count = rng.range(ft.prefabs.min, ft.prefabs.max);
-  const g = s.grid;
   for (let k = 0; k < count; k++) {
     const pf = rng.weighted(cands, (p) => p.weight);
     if (!pf) break;
+    tryPlacePrefab(s, pf, rng);
+  }
+}
+
+/** prefab を 1 つ置く（部屋の内側を優先。置けなければ false） */
+function tryPlacePrefab(s: GenState, pf: PrefabDef, rng: Rng): boolean {
+  const g = s.grid;
+  {
     const map = transformPrefab(pf.map, pf.rotate ? rng.int(4) : 0, pf.flip ? rng.chance(50) : false);
     const ph = map.length, pw = map[0].length;
     let placed = false;
@@ -237,6 +246,91 @@ function placePrefabs(s: GenState): void {
       stampPrefab(s, pf, map, x0, y0);
       placed = true;
     }
+    return placed;
+  }
+}
+
+// ---------------- 階の異変（V3-5 §5.3） ----------------
+
+/** 異変を引く（events ストリーム。階の種類が events を許すときだけ） */
+function rollFloorEvent(s: GenState): FloorEventDef | null {
+  const rng = s.stream('events');
+  if (!rng.chance(s.content.balance.floorEvent.chancePct)) return null;
+  const cands = s.content.lists.floorEvents.filter((e) => depthOk(e.depth, s.depth));
+  return rng.weighted(cands, (e) => e.weight) ?? null;
+}
+
+const MODS0: GenMods = { monstersPct: 100, itemsPct: 100, treasurePct: 100, noFountain: false };
+
+/** 異変の生成の前の効果（敵・アイテムの数、野営跡） */
+function applyEventBefore(s: GenState): void {
+  const h = s.event?.handler;
+  if (h === 'ransacked') {
+    const m = s.mods ?? MODS0;
+    s.mods = { ...m, monstersPct: floorDiv(m.monstersPct * 50, 100), itemsPct: floorDiv(m.itemsPct * 50, 100) };
+    const camp = s.content.prefabs['core:camp_remains'];
+    if (camp) tryPlacePrefab(s, camp, s.stream('events'));
+  } else if (h === 'treasure_glut') {
+    const m = s.mods ?? MODS0;
+    s.mods = { ...m, treasurePct: Math.max(200, floorDiv(m.treasurePct * 200, 100)) };
+  }
+}
+
+/** 異変の生成の後の効果（全員眠る・賞金首・巡回） */
+function applyEventAfter(s: GenState): void {
+  const h = s.event?.handler;
+  const rng = s.stream('events');
+  if (h === 'deep_sleep') {
+    for (const sp of s.spawns) if (sp.type === 'monster' && !sp.guardian) sp.asleep = true;
+    return;
+  }
+  if (h !== 'bounty' && h !== 'patrol') return;
+  const cands = guardianCandidates(s.content, s.floorType, s.biome, s.depth, h === 'patrol' ? 1 : 2).filter((m) => m.ai.archetype !== 'stationary');
+  if (!cands.length) return;
+  const def = cands[rng.int(cands.length)];
+  const cells: number[] = [];
+  for (let i = 0; i < s.grid.cells.length; i++) {
+    const x = i % s.grid.w, y = Math.trunc(i / s.grid.w);
+    if (s.passable(i) && Math.max(Math.abs(x - s.entry.x), Math.abs(y - s.entry.y)) > 8 && !s.spawns.some((sp) => 'x' in sp && sp.x === x && sp.y === y)) cells.push(i);
+  }
+  if (cells.length < 4) return;
+  // 道: 巡回は部屋の中心を 4 つ（足りなければ離れたマス）、賞金首は離れたマスを 6 つ
+  const rooms = s.grid.regions.filter((r) => r.kind === 'room').map((r) => s.grid.idx(r.x + Math.trunc(r.w / 2), r.y + Math.trunc(r.h / 2))).filter((i) => s.passable(i));
+  const n = h === 'patrol' ? 4 : 6;
+  const pts: number[] = [];
+  const pool = h === 'patrol' && rooms.length >= 4 ? [...rooms] : [...cells];
+  while (pts.length < n && pool.length) pts.push(pool.splice(rng.int(pool.length), 1)[0]);
+  const route = pts.map((i) => ({ x: i % s.grid.w, y: Math.trunc(i / s.grid.w) }));
+  const start = route[0];
+  const spec = monsterSpec(s, def, 0, start.x, start.y, false, rng);
+  if (spec.type !== 'monster') return;
+  spec.route = route;
+  spec.delay = 0;
+  makeElite(s, spec, rng);
+  s.spawns.push(spec);
+}
+
+/** 名前付きの強敵にする（V3-5 §5.4）: 接辞 N 個・名前・賞金。倒すと宝を必ず落とす（接辞付きの決まり） */
+function makeElite(s: GenState, spec: Extract<SpawnSpec, { type: 'monster' }>, rng: Rng): void {
+  const eb = s.content.balance.elite;
+  const pool = s.content.lists.affixes.filter((a) => a.target === 'monster' && depthOk(a.depth, s.depth));
+  const picked: string[] = [];
+  while (picked.length < eb.affixes && pool.length) picked.push(pool.splice(rng.int(pool.length), 1)[0].id);
+  spec.affixes = picked;
+  spec.elite = makeName(s.content, rng);
+  spec.bounty = eb.bountyBase + eb.bountyPerDepth * s.depth;
+}
+
+/** 通常の出現に、低い確率で名前付きの強敵が混ざる（elites ストリーム） */
+function assignElites(s: GenState): void {
+  const eb = s.content.balance.elite;
+  if (s.depth < eb.minDepth || !eb.chancePct) return;
+  const rng = s.stream('elites');
+  for (const sp of s.spawns) {
+    if (sp.type !== 'monster' || sp.guardian || sp.elite || sp.carries) continue;
+    const def = s.content.monsters[sp.kind];
+    if (!def || def.ai.archetype === 'stationary' || def.tags.includes('vermin')) continue;
+    if (rng.chance(eb.chancePct)) makeElite(s, sp, rng);
   }
 }
 
@@ -744,11 +838,16 @@ export function generateFloor(content: Content, seed: string, branch: string, de
       },
     };
     if (!fallback) placePrefabs(s);
+    // 階の異変（V3-5 §5.3）
+    if (!fallback && floorType.rules.events) { const ev = rollFloorEvent(s); if (ev) s.event = ev; }
+    applyEventBefore(s);
     grid.connectAll(layoutRng, s.passable);
     if (!fallback) applyBiomeExtras(s);
     placeStairs(s);
     populate(s);
     assignVaultKeys(s);
+    assignElites(s);
+    applyEventAfter(s);
     // 節目の大守護者（V3-3 §3.2）
     if (floorType.rules.warden && !fallback) placeWarden(s);
     if (objective && !placeObjective(s, objective) && !fallback) continue;
@@ -774,6 +873,7 @@ export function generateFloor(content: Content, seed: string, branch: string, de
       key, branch, depth, biome: biome.id, floorType: floorType.id, width: w, height: h,
       time: 0, terrain, regions, entry: s.entry, stairs: { up: s.up, down: s.down },
       currentActor: null, nextWanderAt: content.balance.wander.firstAt, rules: { noWander: floorType.rules.noWander },
+      ...(s.event ? { event: { id: s.event.id, handler: s.event.handler, arrival: { ...s.event.arrival } } } : {}),
     };
     // 決定的な順序（生成順のまま）
     return { floor, spawns: s.spawns, attempts: attempt + 1, layout: layoutId };

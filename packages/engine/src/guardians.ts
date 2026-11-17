@@ -89,7 +89,7 @@ function pickTypes(content: Content, count: number, rng: Rng): string[] {
   return out;
 }
 
-function makeName(content: Content, rng: Rng): Names {
+export function makeName(content: Content, rng: Rng): Names {
   const table = Object.keys(content.guardianNames).sort().map((k) => content.guardianNames[k])[0];
   const parts = table?.parts ?? [];
   if (!parts.length) return { ja: '名無し', en: 'Nameless' };

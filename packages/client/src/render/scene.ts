@@ -29,7 +29,8 @@ function markStacks(ents: SceneEntity[]): void {
 }
 
 /** ツールチップ用: 役割の表示（守護者・遺物）。bounty があれば賞金も（守護者・名前付きの強敵） */
-export function roleLabel(role: 'guardian' | 'relic' | undefined, bounty?: number): string {
+export function roleLabel(role: 'guardian' | 'relic' | 'elite' | undefined, bounty?: number): string {
+  if (role === 'elite') return bounty ? tr(` ［強敵・賞金 ${bounty}］`, ` [elite, bounty ${bounty}]`) : tr(' ［強敵］', ' [elite]');
   if (role === 'guardian') return bounty ? tr(` ［守護者・賞金 ${bounty}］`, ` [guardian, bounty ${bounty}]`) : tr(' ［守護者］', ' [guardian]');
   if (role === 'relic') return tr(' ［遺物］', ' [relic]');
   if (bounty) return tr(` ［賞金 ${bounty}］`, ` [bounty ${bounty}]`);

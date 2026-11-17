@@ -13,6 +13,7 @@
   },
   {
     "id": "core:standard", "name": { "ja": "通常階", "en": "standard floor" },
+    "rules": { "events": true },
     "depth": { "min": 1 }, "weight": 70,
     "monsters": { "per1000": 7, "table": "core:default" },
     "items": { "per1000": 8, "table": "core:common_loot" },
@@ -27,6 +28,7 @@
   },
   {
     "id": "core:cavern", "name": { "ja": "大空洞", "en": "great cavern" },
+    "rules": { "events": true },
     "depth": { "min": 2 }, "weight": 20,
     "layouts": { "core:cellular_cave": 100 },
     "monsters": { "per1000": 9, "table": "core:default" },

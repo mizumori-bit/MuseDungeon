@@ -199,6 +199,20 @@ archetypes.register('ranged_kiter', (ctx, m, { target, ai, def }) => {
   return 100;
 });
 
+// 巡回（V3-5 §5.3 番人の巡回・賞金首）: 相手を見たら追う（近接）。見失って探し終えたら、決まった道（route）の点を順に回る
+archetypes.register('patrol', (ctx, m, { target, ai, def }) => {
+  if (target || (ai.state === 'searching' && ai.targetPos)) return archetypes.get('melee_chaser')(ctx, m, { target, ai, def });
+  const route = ai.route ?? [];
+  if (!route.length) return noTarget(ctx, m, ai);
+  const idx = (ai.routeIdx ?? 0) % route.length;
+  const goal = route[idx];
+  if (cheb(m.pos!, goal) <= 0 || !approach(ctx, m, goal)) {
+    const next: AiState = { ...ai, targetPos: null, routeIdx: (idx + 1) % route.length };
+    ctx.emit({ type: 'ai_state_changed', id: m.id, ai: next, dormant: false, nextActAt: m.actor!.nextActAt, seenBy: [], floor: m.pos!.floor });
+  }
+  return 100;
+});
+
 // その場で撃つ（V3-5b §44.7 骨の射手）: 距離を取らない。隣なら殴り、射程と射線が通れば撃ち、通らなければ寄る
 archetypes.register('ranged_stand', (ctx, m, { target, ai, def }) => {
   if (!target) return noTarget(ctx, m, ai);
