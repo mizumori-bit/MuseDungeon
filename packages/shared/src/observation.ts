@@ -64,7 +64,7 @@ export interface ObsMonster {
   bounty?: number;
 }
 /** 同じセルの同種の物は 1 行にまとめる（ids に全て。id は先頭） */
-export interface ObsItem { id: string; ids?: string[]; name: string; pos: Pos; dir: Dir | null; dist: number; qty: number; remembered?: boolean; role?: EntityRole; mine?: boolean; value?: number }
+export interface ObsItem { id: string; ids?: string[]; name: string; pos: Pos; dir: Dir | null; dist: number; qty: number; remembered?: boolean; role?: EntityRole; mine?: boolean; value?: number; /** まとめた「自分が投げた物」の、最寄りのマスの本数 */ near_qty?: number }
 
 export interface RestEstimate {
   hp_to_full: number;
@@ -704,7 +704,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       const names = new Set(mineAll.map((i) => i.name));
       const merged: ObsItem = {
         id: near.id, ids: mineAll.flatMap((i) => i.ids ?? [i.id]), name: names.size === 1 ? near.name : t(L, '自分が投げた物', 'your thrown items'),
-        pos: near.pos, dir: near.dir, dist: near.dist, qty: mineAll.reduce((a, i) => a + i.qty, 0), mine: true,
+        pos: near.pos, dir: near.dir, dist: near.dist, qty: mineAll.reduce((a, i) => a + i.qty, 0), near_qty: near.qty, mine: true,
         ...(mineAll.every((i) => i.remembered) ? { remembered: true } : {}),
       };
       for (let i = items.length - 1; i >= 0; i--) if (items[i].mine) items.splice(i, 1);
@@ -1222,7 +1222,7 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
       const turns = catalog.rules?.lifeline?.turns ?? 0;
       const risk = x.huntingReach.length
         ? t(L, `・追跡中 ${x.huntingReach.length} 体の 1 手の最悪の被害 ${x.worstSum}${x.unrecorded ? `＋記録なし ${x.unrecorded} 体` : ''}`, `, ${x.huntingReach.length} hunting: worst ${x.worstSum}/turn${x.unrecorded ? ` + ${x.unrecorded} unrecorded` : ''}`) : '';
-      const how = (turns > 0 ? t(L, `${turns} 手番動けずにキャンプへ戻る`, `${turns} turns helpless, then back to camp`) : t(L, 'その場でキャンプへ戻る（達成は捨てる）', 'back to camp at once (no completion)'))
+      const how = (turns > 0 ? t(L, `${turns} 手番動けずにキャンプへ戻る`, `${turns} turns helpless, then back to camp`) : t(L, 'その場でキャンプへ戻る（達成した遠征には数えない）', 'back to camp at once (not counted as a completed expedition)'))
         + t(L, '・次の遠征はこの遠征を始めた階段から', '; the next expedition starts from where this one began');
       const line = `use_item ${it.slot} (${t(L, `${name}: ${how}${x.ifLifeline !== undefined ? `・+${x.ifLifeline} 確定` : ''}${risk}`, `${name}: ${how}${x.ifLifeline !== undefined ? `, banks +${x.ifLifeline}` : ''}${risk}`)})`;
       out.push(line);
@@ -1232,8 +1232,9 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
     // 隣に起きている追跡中の敵がいれば、使う間にその敵が行動する（V3-2R3 §20.4）
     const exposed = adjAwake.some((m) => m.awareness === 'hunting') ? t(L, '・使う間に隣の敵が行動する', '; adjacent enemies act while you use it') : '';
     if ((cat === 'potion' || cat === 'scroll' || ci?.usable) && !harmful) out.push(`use_item ${it.slot} (${name}${exposed})`);
-    // 同じか劣る装備は勧めない（V3-2R3 §20.6）
-    if (ci?.slot && !it.equipped && !sameOrWorseEquip(view, catalog, it)) out.push(`equip ${it.slot} (${name})`);
+    // 同じか劣る装備は勧めない（V3-2R3 §20.6）。未鑑定の品は外見の種類から装備の枠を引く（未鑑定の指輪・首飾り）
+    const eqSlot = ci?.slot ?? (!it.kind && cat ? Object.values(catalog.items).find((c) => c.category === cat && c.slot)?.slot : undefined);
+    if (eqSlot && !it.equipped && !sameOrWorseEquip(view, catalog, it)) out.push(`equip ${it.slot} (${name})`);
     // 投擲: 射程内で経路の通る相手だけ（自分を攻撃している相手を先に、近い順に最大 3）。対象が同じ品目はまとめる
     if ((cat === 'throwing' || harmful) && ci?.throwRange != null && !it.equipped) {
       const targets = x.hostiles
@@ -1315,7 +1316,7 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
     }
     if (obs.recent_events.length) {
       lines.push(t(L, '直前の出来事:', 'Recent events:'));
-      for (const e of obs.recent_events) lines.push(`- ${e}`);
+      for (const e of collapseRepeats(obs.recent_events)) lines.push(`- ${e}`);
     }
     lines.push(t(L, 'できること: ', 'Actions: ') + obs.valid_actions.join(' / '));
     return lines.join('\n');
@@ -1372,7 +1373,9 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
     for (const p of vis.players) lines.push(`- ${t(L, '味方', 'ally')} ${p.name} (${p.pos.x},${p.pos.y}) ${relLabel(L, from, p.pos)} ${L === 'en' ? p.hp_state : HP_JA[p.hp_state]}`);
     for (const it of vis.items) {
       const tags = `${it.role === 'relic' ? t(L, ' [遺物]', ' [relic]') : ''}${it.mine ? t(L, ' [自分が投げた]', ' [yours]') : ''}${it.value !== undefined ? t(L, ` [宝・価値 ${it.value}]`, ` [treasure ${it.value}]`) : ''}`;
-      lines.push(`- ${it.name}${it.qty > 1 ? ` x${it.qty}` : ''}${tags} ${it.id} (${it.pos.x},${it.pos.y}) ${relLabel(L, from, it.pos)}${it.remembered ? t(L, ' (記憶)', ' (remembered)') : ''}`);
+      // まとめた「自分が投げた物」は合計の本数と、最寄りのマスの本数
+      const qtyText = it.near_qty !== undefined ? t(L, ` 合計${it.qty}（最寄りのマスに${it.near_qty}）`, ` ${it.qty} in all (${it.near_qty} at the nearest)`) : it.qty > 1 ? ` x${it.qty}` : '';
+      lines.push(`- ${it.name}${qtyText}${tags} ${it.id} (${it.pos.x},${it.pos.y}) ${relLabel(L, from, it.pos)}${it.remembered ? t(L, ' (記憶)', ' (remembered)') : ''}`);
     }
     if (vis.items_omitted) lines.push(`- ${t(L, `ほかに記憶しているアイテム ${vis.items_omitted} 件（get_map の注目点）`, `${vis.items_omitted} more remembered items (see get_map)`)}`);
     for (const ft of vis.features) lines.push(`- ${ft.name} (${ft.pos.x},${ft.pos.y}) ${relLabel(L, from, ft.pos)}${ft.state && ft.state !== 'idle' ? ` [${featureStateText(L, ft.state)}]` : ''}`);
@@ -1393,7 +1396,7 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
   }
   if (obs.recent_events.length) {
     lines.push(t(L, '直前の出来事:', 'Recent events:'));
-    for (const e of obs.recent_events) lines.push(`- ${e}`);
+    for (const e of collapseRepeats(obs.recent_events)) lines.push(`- ${e}`);
   }
   // 装備は所持品の * に一本化
   if (fmt.inventory !== false) {
@@ -1485,6 +1488,19 @@ export function describeTarget(view: PlayerView, catalog: Catalog, target: Pos |
   return { text: parts.join(' / '), data };
 }
 
+/** 続けて同じ文が並ぶときは 1 行にまとめて「×N」を添える（回収の繰り返しなど） */
+export function collapseRepeats(lines: readonly string[]): string[] {
+  const out: string[] = [];
+  let n = 0;
+  for (let i = 0; i < lines.length; i++) {
+    n++;
+    if (lines[i + 1] === lines[i]) continue;
+    out.push(n > 1 ? `${lines[i]} ×${n}` : lines[i]);
+    n = 0;
+  }
+  return out;
+}
+
 export function describeInventory(view: PlayerView, catalog: Catalog): { text: string; items: (ObsInvItem & { desc: string; id: string })[] } {
   const L = view.locale;
   const items = view.inventory.map((it: ItemView) => {
@@ -1492,7 +1508,12 @@ export function describeInventory(view: PlayerView, catalog: Catalog): { text: s
     return {
       id: it.id, slot: it.slot, name: itemDisplayName(catalog, L, it.kind, it.appearanceId, it.affixes), qty: it.qty,
       category: itemCategory(catalog, it.kind, it.appearanceId), identified: it.kind !== null, equipped: it.equipped !== null,
-      desc: [itemStatsText(L, itemStats(catalog, it.kind, it.affixes)), ci ? nameOf(ci.desc, L, '') : t(L, '未鑑定。使うか鑑定するまで正体は分からない。', 'Unidentified. Use or identify it to learn what it is.')].filter(Boolean).join(' — '),
+      desc: (() => {
+        const st = itemStats(catalog, it.kind, it.affixes);
+        const stText = st ? itemStatsText(L, st, catalog) : '';
+        if (!ci) return t(L, '未鑑定。使うか鑑定するまで正体は分からない。', 'Unidentified. Use or identify it to learn what it is.');
+        return [stText, stText ? (ci.note ? nameOf(ci.note, L, '') : '') : nameOf(ci.desc, L, '')].filter(Boolean).join(' — ');
+      })(),
     };
   });
   const text = [

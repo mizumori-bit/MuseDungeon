@@ -100,7 +100,7 @@ function ja(r: CatalogRules): Record<Topic, string> {
   - 踏破（深追い）: 目標より深い階を横切り、その階の**下り階段に立った**とき（着いただけでは入らない）。n 階目 = 目的の基礎点 × (${h.overreachPct.first} + ${h.overreachPct.step}×(n−1))%、下限 ${h.overreachFirst} + ${h.overreachStep}×(n−1)（1 階目 ${h.overreachPct.first}%・2 階目 ${h.overreachPct.first + h.overreachPct.step}%…）。着いた階段ですぐ帰ることもできる（逃げ道であって報酬ではない）
   - 宝: 分類 treasure の所持品の価値の合計（落とせば減る。帰還・撤退で換金され所持品から消える）。持ち帰った遺物は帰還で納められ、所持品から消える
   - 賞金: 守護者を倒すと（${h.guardianBounty.base} + 深度×${h.guardianBounty.perDepth}）。観測の bounty に出る。守護者は宝を必ず落とす
-  - 発見: このランで初めて、ある種族を倒す +${h.discovery.species}／あるアイテム種を鑑定する +${h.discovery.identify}
+  - 発見: このランで初めて、ある種族を倒す +${h.discovery.species}／外見で呼ばれていたアイテム種の正体が分かる +${h.discovery.identify}（使う・鑑定する。装備品の呪いの有無を確かめても入らない）
   - 撃破: 種族の経験値 × ${h.killPerXp} × 深さの係数（${x.depthPct.base} + ${x.depthPct.perDepth}×深度 %）。接辞付きは × ${h.killAffixPct}%（大ネズミは 6 点前後、強い種族ほど大きい）
   - 大柄な種族と接辞付きの個体は宝を必ず落とす（守護者も）
 - 観測の expedition.haul に、内訳（parts）・合計・倍率・今 extract した場合の確定点（if_extract_now）・今綱を使った場合の確定点（if_lifeline_now）・次に踏破の点が入る階（next_overreach。その階の下り階段までの経路長が分かれば path_len、未発見なら下への風の方角 dir）・今帰った場合の次の候補の下限と推奨レベル（next_camp。目標として達成した最深の階から数えるので、踏破しても深くならない）が毎回出る。self.score に確定済みの点。
@@ -161,7 +161,7 @@ ${traitsLines(r, true)}
 - 眠っている相手には命中 +5。攻撃すると相手は目を覚ます。
 - 近接ダメージ: 武器ダイス + 威力(might) - 相手の装甲(armor)、最低 1。投擲: 投擲ダイス - 装甲、最低 1。表示されるダメージは実際に減った HP（とどめの超過分は含まない）。
 - 習熟: 職業ごとに近接・投擲の命中の修正がある（戦士は投擲 −2、斥候は投擲 +2。get_rules classes）。装備の「近接の命中」「投擲の命中」も足す。
-- 状態異常: 毒（毎手番 1 ダメージ）、加速（速度 2 倍）、減速（速度半分）、睡眠（行動不能、ダメージで解ける）、朦朧（行動不能。強打・鎚矛）、身かわし（次の自分の手番まで近接が当たらない）、構え（次の自分の手番までに受ける最初の一撃の装甲が上がる）、怯え（逃げ出す HP の閾値が上がる。威圧）、帰還中（帰還の綱。行動不能、切れるとキャンプへ）。手番開始時に処理。毒で倒れた敵は、毒を与えた者が倒した扱い（賞金・撃破点・経験値）。視界の外で毒が効いている間は相手の名前・体力・位置は出ず、倒れたときだけ「あなたの毒で何かが倒れた」と知らされる。
+- 状態異常: 毒（毎手番 1 ダメージ）、加速（速度 2 倍）、減速（速度半分）、睡眠（行動不能、ダメージで解ける）、朦朧（行動不能。強打・鎚矛）、身かわし（次の自分の手番まで近接が当たらない）、構え（次の自分の手番までに受ける最初の一撃の装甲が上がる）、怯え（逃げ出す HP の閾値が上がる。威圧）${r.lifeline.turns > 0 ? '、帰還中（帰還の綱。行動不能、切れるとキャンプへ）' : ''}。手番開始時に処理。毒で倒れた敵は、毒を与えた者が倒した扱い（賞金・撃破点・経験値）。視界の外で毒が効いている間は相手の名前・体力・位置は出ず、倒れたときだけ「あなたの毒で何かが倒れた」と知らされる。
 - 経験値でレベルアップ（次のレベルに必要な累計 XP = 15×Lv²）。最大 HP が上がり、特技を 1 つ選べる（choose_perk。get_rules classes）。
 - 自然回復: max(${rg.minInterval}, ${rg.baseInterval} - floor(Lv/${rg.levelDiv})) 手番ごとに 1 HP。追跡中の敵が見えない状態での wait（rest の各手を含む）は休息となり ${rg.restMultiplier} 倍の速さで回復する。観測の self.rest_estimate に全快までの手数・時間・その間の徘徊の目安が出る。
 - 敵の HP は 4 段階でしか分からない: healthy（${b1}% 以上）/ wounded（${b2}% 以上）/ badly_wounded（${b3}% 以上）/ near_death（それ未満）。
@@ -193,7 +193,7 @@ ${traitsLines(r, true)}
 - 投擲武器（投げナイフ・投げ槍）は throw_item で対象（エンティティ ID か座標か方向）へ投げる。投げた物は着地点に落ちるので拾い直せる。
 - 遺物（retrieve_relic の目的の品）は効果を持たない。持ったまま階段の上で extract すると持ち帰れる。
 - 帰還の綱: 遠征ごとにキャンプが 1 本持たせる。use_item で使うと${r.lifeline.turns > 0 ? ` ${r.lifeline.turns} 手番後に` : 'その場で'}キャンプへ戻る（戦利品の ${r.lifeline.pct}% が確定。達成した遠征の数には入らない）。捨てる・投げることはできず、所持数に数えない。
-- 地物: 泉（回復、1 回）、祭壇（所持品を鑑定し呪いを解く、1 回）。罠は見つけるまで見えない（隣接すると発見判定）。発見済みの罠は経路探索で避ける。`,
+- 地物: 泉（回復、1 回）、祭壇（所持品を鑑定し呪いを解く、1 回）。罠は見つけるまで見えない（隣接すると発見判定）。発見済みの罠は経路探索で避ける（罠を通る道しか無ければ、移動マクロは罠の手前で止まる。踏むなら move）。`,
     observation: `# 観測と turn ブロック
 - 全応答の turn: state（your_turn / waiting_others / at_camp / expedition_ended / run_ended）、turn_no、reason、awaiting（action / camp_choice / nothing）、changes（前回の応答からの重要な変化）。テキストでは末尾の ▶ 行が同じ内容。
 - changes のコード: new_hostile（このランで初めて見た）, reappeared（前に見た個体が再び見えた）, killed（あなたが倒した）, died_seen（目の前で倒れた）, hostile_gone（倒れた以外の理由で見えなくなった）, hp_dropped, hp_low, status_gained, status_lost, level_up, item_found, stairs_found, floor_changed, objective_progress, objective_complete, can_extract。alerts は「現在の状態」、changes は「前回からの差分」。
@@ -254,7 +254,7 @@ function en(r: CatalogRules): Record<Topic, string> {
   - crossing (overreach): when you cross a floor deeper than the target and **stand on its down stairs** (arriving is not enough): the n-th pays objective points x (${h.overreachPct.first} + ${h.overreachPct.step}*(n-1))%, at least ${h.overreachFirst} + ${h.overreachStep}*(n-1). You may still extract on the arrival stairs (an escape route, not a reward)
   - treasure: value of treasure items you carry (drop one and it is gone; cashed in and removed on extract)
   - bounty: slaying a guardian (${h.guardianBounty.base} + depth*${h.guardianBounty.perDepth}); shown as bounty. Guardians always drop a treasure
-  - discovery: first time this run you kill a species +${h.discovery.species} / identify an item kind +${h.discovery.identify}
+  - discovery: first time this run you kill a species +${h.discovery.species} / learn what an item known only by its look is +${h.discovery.identify} (by using or identifying it; checking gear for curses does not count)
   - kills: species XP x ${h.killPerXp} x depth factor (${x.depthPct.base} + ${x.depthPct.perDepth}*depth %), x ${h.killAffixPct}% with affixes (a cave rat is about 6; stronger species pay more)
   - large species and affixed individuals always drop a treasure (guardians too)
 - expedition.haul shows parts, total, multiplier, if_extract_now (banked if you extract right now), if_lifeline_now (banked if you use the lifeline now), next_overreach (the depth whose down stairs pay next, with path_len when known, or dir = the draft when not found yet) and next_camp (where the next offers would start if you extract now; counted from the deepest target you have achieved, so crossings do not push it deeper) every time. self.score shows your banked points.
@@ -313,7 +313,7 @@ Free: choose_perk{option} / observe / wait_for_turn / expedition / look / get_ma
 - +5 to hit sleeping targets; attacking wakes them.
 - Melee damage: weapon dice + might - armor (min 1). Thrown: thrown dice - armor (min 1). Reported damage is the HP actually lost (overkill excluded).
 - Proficiency: each class has melee and thrown accuracy modifiers (warrior thrown -2, scout thrown +2; get_rules classes). Equipment "melee acc" / "thrown acc" add to them.
-- Statuses: poison (1 dmg/turn), haste (x2 speed), slow (x0.5), sleep (helpless, damage wakes), stunned (helpless; bash, mace), evasive (melee misses you until your next turn), braced (the first hit before your next turn meets more armor), cowed (flees at more HP; intimidate), recalling (lifeline; helpless, then back to camp). Processed at turn start. A monster killed by poison counts as killed by whoever poisoned it (bounty, kill points, XP). While your poison works on something out of sight you learn nothing about it; only its death is reported ("something fell to your poison").
+- Statuses: poison (1 dmg/turn), haste (x2 speed), slow (x0.5), sleep (helpless, damage wakes), stunned (helpless; bash, mace), evasive (melee misses you until your next turn), braced (the first hit before your next turn meets more armor), cowed (flees at more HP; intimidate)${r.lifeline.turns > 0 ? ', recalling (lifeline; helpless, then back to camp)' : ''}. Processed at turn start. A monster killed by poison counts as killed by whoever poisoned it (bounty, kill points, XP). While your poison works on something out of sight you learn nothing about it; only its death is reported ("something fell to your poison").
 - Level up at total XP = 15*Lv^2: more max HP and one perk of your choice (choose_perk; get_rules classes).
 - Regeneration: 1 HP every max(${rg.minInterval}, ${rg.baseInterval} - floor(Lv/${rg.levelDiv})) turns. wait with no hunting enemy in view (each rest turn too) counts as resting and regenerates ${rg.restMultiplier}x faster. self.rest_estimate shows turns/time to full and expected wanderers.
 - Monster HP is shown in 4 bands: healthy (>= ${b1}%), wounded (>= ${b2}%), badly_wounded (>= ${b3}%), near_death (below).
@@ -345,7 +345,7 @@ Free: choose_perk{option} / observe / wait_for_turn / expedition / look / get_ma
 - Throwing weapons: throw_item at an entity id, position or direction. They land and can be picked up again.
 - The relic (retrieve_relic) has no effect; extract on stairs while carrying it.
 - Lifeline: camp gives one per expedition. use_item it to return to camp${r.lifeline.turns > 0 ? ` after ${r.lifeline.turns} turns` : ' at once'} (${r.lifeline.pct}% of the haul is banked; it does not count as a completed expedition). It cannot be dropped or thrown and does not count toward capacity.
-- Features: fountain (heal, once), altar (identify inventory and lift curses, once). Traps are hidden until found (search happens when adjacent). Known traps are avoided by pathing.`,
+- Features: fountain (heal, once), altar (identify inventory and lift curses, once). Traps are hidden until found (search happens when adjacent). Known traps are avoided by pathing (if the only way crosses one, movement macros stop before it; step on it with move).`,
     observation: `# Observation and the turn block
 - Every response has turn: state (your_turn / waiting_others / at_camp / expedition_ended / run_ended), turn_no, reason, awaiting (action / camp_choice / nothing), changes (important changes since your last response). The final ▶ line of the text says the same.
 - change codes: new_hostile (first time this run), reappeared, killed (by you), died_seen, hostile_gone (left view without dying), hp_dropped, hp_low, status_gained, status_lost, level_up, item_found, stairs_found, floor_changed, objective_progress, objective_complete, can_extract. alerts = current state, changes = what changed.

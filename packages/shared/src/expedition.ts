@@ -53,14 +53,14 @@ export function briefingLines(L: Locale, x: ExpeditionView, rules?: Pick<Catalog
       `Reward: the haul you build (objective +${x.points}, overreach, treasure, bounty, discovery, kills) is banked ${multText(x.multiplierPct)} when you extract. Withdrawal banks half without the objective; death loses it all. At camp you are healed and choose the next expedition`));
   }
   if (x.traits.length) lines.push(t(L, `条件: ${traitsText(L, rules, x.traits) || x.traits.join(', ')}`, `Traits: ${traitsText(L, rules, x.traits) || x.traits.join(', ')}`));
-  if (x.objective.type === 'retrieve_relic' && x.relicGuarded) lines.push(t(L, '情報: 遺物は守護者が守っている', 'Note: the relic is guarded'));
+  if (x.objective.type === 'retrieve_relic') lines.push(x.relicGuarded ? t(L, '情報: 遺物は守護者が守っている', 'Note: the relic is guarded') : t(L, '情報: 遺物に守護者はいない', 'Note: the relic is unguarded'));
   return lines;
 }
 
 /** 2 回目以降の遠征の開始時の説明（1 行。V3-2R3 §20.6） */
 export function briefingShort(L: Locale, x: ExpeditionView, rules?: Pick<CatalogRules, 'traits'>): string {
   const tr = x.traits.length ? t(L, `・条件: ${traitsText(L, rules, x.traits) || x.traits.join(', ')}`, `, traits: ${traitsText(L, rules, x.traits) || x.traits.join(', ')}`) : '';
-  const guard = x.objective.type === 'retrieve_relic' && x.relicGuarded ? t(L, '（守護者付き）', ' (guarded)') : '';
+  const guard = x.objective.type === 'retrieve_relic' ? (x.relicGuarded ? t(L, '（守護者付き）', ' (guarded)') : t(L, '（守護者なし）', ' (unguarded)')) : '';
   return t(L, `【遠征 ${x.no}】${objectiveText(L, x.objective)}${guard}・目的 +${x.points}・帰還で ${multText(x.multiplierPct)}${tr}`,
     `[Expedition ${x.no}] ${objectiveText(L, x.objective)}${guard}, objective +${x.points}, ${multText(x.multiplierPct)} on extract${tr}`);
 }

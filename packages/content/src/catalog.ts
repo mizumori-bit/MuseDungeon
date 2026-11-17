@@ -46,7 +46,7 @@ export function buildCatalog(c: Content): Catalog {
     items[it.id] = {
       name: it.name, category: it.category, unidentified: it.unidentified, stack: it.stack,
       slot: it.equip?.slot, usable: it.onUse.length > 0, throwable: !!it.throw || it.shatter,
-      targeted: it.target !== 'none', desc: itemDesc(it), harmful: it.harmful, treasure: it.category === 'treasure', bound: it.bound,
+      targeted: it.target !== 'none', desc: itemDesc(it), ...(it.desc ? { note: it.desc } : {}), harmful: it.harmful, treasure: it.category === 'treasure', bound: it.bound,
       throwRange: it.throw?.range ?? (it.shatter ? 4 : null),
       ...(it.equip?.slot === 'weapon' && it.equip.dmg ? { weapon: { dmg: it.equip.dmg, acc: it.equip.acc ?? 0 } } : {}),
       ...(it.equip?.slot === 'armor' ? { armorStats: { armor: it.equip.armor ?? 0, eva: it.equip.eva ?? 0 } } : {}),

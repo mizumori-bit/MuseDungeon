@@ -441,6 +441,20 @@ export async function playWithPort(port: PlayerPort, opts: BotOptions): Promise<
         }
       }
       if (cmd.type === 'travel' && cmd.to === 'stairs_down' && (out.interrupted_by === 'unknown_destination' || out.interrupted_by === 'unreachable' || out.interrupted_by === 'blocked')) { explored = false; memo.descend = false; }
+    } else if (opts.kind === 'greedy' && cmd.type === 'travel' && cmd.to === 'stairs_down' && out.error.code === 'nothing_to_do') {
+      // すでに下り階段の上にいる（「すでに目的地にいる」で断られた）: 着いたときと同じに扱う（断られて待つのを繰り返さない）
+      const xv = port.view().expedition;
+      const enough = !!xv && xv.status === 'objective_complete' && memo.overreach > 0 && crossedEnough(xv, memo);
+      if (enough) { memo.descend = false; explored = false; }
+      else {
+        const s = await port.act({ type: 'stairs' }, { source: 'bot' });
+        if (s.ok) { explored = false; memo.descend = false; }
+        else if (port.view().status === 'your_turn') await port.act({ type: 'wait' }, { source: 'bot' });
+      }
+    } else if (opts.kind === 'greedy' && /move \{ dir: '([a-z]+)' \}/.test(out.error.hint)) {
+      // 残りの道が発見済みの罠を通る（マクロは罠を踏まない）: 自分で 1 歩踏む
+      const dir = /move \{ dir: '([a-z]+)' \}/.exec(out.error.hint)![1] as Dir;
+      if (port.view().status === 'your_turn') await port.act({ type: 'move', dir }, { source: 'bot' });
     } else if (opts.kind === 'greedy') {
       // 行き詰まったら探索に戻す（1 歩も進めないマクロは手番を使わずに拒否される）
       if (cmd.type === 'travel' && typeof cmd.to === 'string' && cmd.to.startsWith('e_')) memo.avoid.add(cmd.to);

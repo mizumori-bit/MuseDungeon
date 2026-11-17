@@ -144,7 +144,8 @@ export function createMcpServer(ctx: McpContext): McpServer {
   const joinedOut = async (port: PlayerPort, token: string, runId: string, tool: string, args: Record<string, unknown>, reason: 'run_started' | 'resumed') => {
     ctx.boundToken = token;
     applyOptions(port, args);
-    const briefing = port.briefing(reason === 'resumed' ? 'resume' : 'start');
+    // キャンプの候補は観測の文に入るので重ねない
+    const briefing = port.briefing(reason === 'resumed' ? 'resume' : 'start', { camp: false });
     const o = port.observeWithTurn(reason, { detail: 'full', consume: true });
     const head = `run_id: ${runId}\nplayer_token: ${token}\n(このトークンで resume_run できる / keep this token to resume)\n\n`;
     const text = head + (briefing.length ? briefing.join('\n') + '\n\n' : '') + o.text;
@@ -199,7 +200,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
     if (!port) return errOut(actionError('no_session', 'そのトークンのランは見つからない / unknown token', 'new_run で新しく始める / start a new run'));
     ctx.boundToken = args.player_token;
     applyOptions(port, args);
-    const briefing = port.briefing('resume');
+    const briefing = port.briefing('resume', { camp: false });
     const o = port.observeWithTurn('resumed', { detail: 'full', consume: true });
     const text = (briefing.length ? briefing.join('\n') + '\n\n' : '') + o.text;
     record(port, 'resume_run', {}, text);

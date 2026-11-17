@@ -36,7 +36,7 @@
   { "id": "core:potion_healing", "name": { "ja": "回復の薬", "en": "potion of healing" }, "category": "potion", "unidentified": true,
     "depth": { "min": 1 }, "rarity": 2, "stack": true, "shatter": true,
     "onUse": [{ "effect": "heal", "amount": "2d8+4" }, { "effect": "cure", "status": "core:poison" }],
-    "desc": { "ja": "傷を癒やし毒を消す", "en": "Heals wounds and cures poison" } },
+    "desc": { "ja": "HP を 2d8+4 回復し、毒を消す", "en": "Heals 2d8+4 HP and cures poison" } },
   { "id": "core:potion_haste", "name": { "ja": "加速の薬", "en": "potion of haste" }, "category": "potion", "unidentified": true,
     "depth": { "min": 2 }, "rarity": 2, "stack": true, "shatter": true,
     "onUse": [{ "effect": "status", "status": "core:haste", "turns": "2d6+10", "power": 1 }],
@@ -48,7 +48,7 @@
   { "id": "core:potion_vigor", "name": { "ja": "活力の薬", "en": "potion of vigor" }, "category": "potion", "unidentified": true,
     "depth": { "min": 3 }, "rarity": 3, "stack": true,
     "onUse": [{ "effect": "max_hp", "amount": 3 }, { "effect": "heal", "amount": "1d6+4" }],
-    "desc": { "ja": "最大 HP を永続的に高める", "en": "Permanently raises max HP" } },
+    "desc": { "ja": "最大 HP を永続的に +3 し、HP を 1d6+4 回復する", "en": "Permanently raises max HP by 3 and heals 1d6+4 HP" } },
 
   { "id": "core:scroll_teleport", "name": { "ja": "転移の巻物", "en": "scroll of teleportation" }, "category": "scroll", "unidentified": true,
     "depth": { "min": 1 }, "rarity": 2, "stack": true,

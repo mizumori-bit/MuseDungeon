@@ -22,6 +22,8 @@ export interface CatalogItem {
   throwable: boolean;
   /** use 時に対象指定が必要か */
   targeted: boolean;
+  /** データに書いた説明だけ（素の性能の列を含まない。所持品の詳細で、接辞込みの性能と並べるとき） */
+  note?: Names;
   /** 鑑定済み・装備品の説明（プレイヤーが知り得る範囲） */
   desc: Names;
   /** 自分に使うと害がある */

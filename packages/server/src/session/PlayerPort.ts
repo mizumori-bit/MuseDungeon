@@ -62,7 +62,8 @@ export interface PlayerPort {
   act(cmd: Command, opts: SubmitOpts & { waitTurnMs?: number; map?: boolean }): Promise<ActionPayload>;
   waitForTurn(timeoutMs: number): Promise<boolean>;
   /** 遠征のブリーフィング（開始時・再開時） */
-  briefing(kind: 'start' | 'resume'): string[];
+  /** camp: false でキャンプの候補を省く（観測の文と一緒に返すとき。既定は出す） */
+  briefing(kind: 'start' | 'resume', opts?: { camp?: boolean }): string[];
   look(target: Pos | string): InfoResult;
   map(region?: { x: number; y: number; w: number; h: number }): InfoResult;
   inventory(): InfoResult;
@@ -115,6 +116,7 @@ const STOP_TEXT: Record<string, [string, string]> = {
   run_ended: ['ランが終了した', 'the run ended'],
   floor_changed: ['階が変わった', 'floor changed'],
   blocked: ['道が塞がれている', 'the path is blocked'],
+  trap_ahead: ['次のマスが発見済みの罠（ほかに道が無い。踏むなら move）', 'the next step is a discovered trap (no other way; use move to step on it)'],
   left_board: ['盤面を離れた', 'you left the board'],
   error: ['行動できなかった', 'an action failed'],
   attacked: ['攻撃を受けた', 'you were attacked'],
@@ -350,7 +352,7 @@ export class SessionPlayerPort implements PlayerPort {
     return [`${t(L, '結果', 'Result')}: ${p.outcome}`, ...(p.briefing ?? []), body].filter(Boolean).join('\n');
   }
 
-  briefing(kind: 'start' | 'resume'): string[] {
+  briefing(kind: 'start' | 'resume', opts: { camp?: boolean } = {}): string[] {
     const view = this.view();
     const L = view.locale;
     const lines: string[] = [];
@@ -364,7 +366,7 @@ export class SessionPlayerPort implements PlayerPort {
       }
     } else if (view.status === 'at_camp') {
       if (x?.result) lines.push(resultText(L, x, this.catalog.rules));
-      lines.push(...campLines(L, view, this.catalog.rules));
+      if (opts.camp !== false) lines.push(...campLines(L, view, this.catalog.rules));
     } else if (!x) {
       lines.push(t(L, '遠征は設定されていない（目的なし）。', 'No expedition is set (no objective).'));
     }

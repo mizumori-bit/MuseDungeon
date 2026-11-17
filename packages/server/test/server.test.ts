@@ -147,6 +147,16 @@ describe('MCP contract', () => {
     manager.closeAll();
   });
 
+  it('new_run at camp lists the offers once (the observation text already carries them)', async () => {
+    const manager = new SessionManager(content, loadConfig({ runsDir: null, waitOthersMs: 200 }));
+    const { call } = await mcpClient(manager);
+    const nr = await call('new_run', { character_name: 'Camp', seed: 'camp-once-1' });
+    const camp = nr.structuredContent.observation.camp;
+    expect(camp?.offers?.length).toBeGreaterThan(0);
+    const text = String(nr.content[0].text);
+    expect(text.split(camp.offers[0].text).length - 1).toBe(1);
+  });
+
   it('expedition over MCP: extract needs stairs, withdraw needs confirm, camp offers the next expedition', async () => {
     const manager = new SessionManager(content, loadConfig({ runsDir: null, waitOthersMs: 200 }));
     const { call } = await mcpClient(manager);

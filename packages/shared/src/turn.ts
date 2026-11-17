@@ -134,7 +134,7 @@ export function diffChanges(prev: TurnSnapshot | null, cur: TurnSnapshot, view: 
           : t(L, '遠征の目的を達成した（いずれかの階段の上で extract すると帰還になる）', 'Objective complete (extract on any stairs to finish the expedition)'),
       });
     }
-    if (cur.reached && !prev.reached) out.push({ code: 'objective_progress', text: t(L, '目標の階を踏破した（下り階段に着いた）', 'Crossed the target depth (reached its down stairs)') });
+    if (cur.reached && !prev.reached && view.expedition?.objective.type === 'reach_depth') out.push({ code: 'objective_progress', text: t(L, '目標の階を踏破した（下り階段に着いた）', 'Crossed the target depth (reached its down stairs)') });
     if ((cur.crossed ?? 0) > (prev.crossed ?? 0)) out.push({ code: 'objective_progress', text: t(L, `地下${cur.crossed}階を踏破した（下り階段に着いた。戦利品に踏破の点）`, `Crossed depth ${cur.crossed} (reached its down stairs; crossing points added)`) });
     const nc = obs.expedition?.haul?.next_camp;
     if (nc && prev.nextCampMin != null && cur.nextCampMin != null && cur.nextCampMin !== prev.nextCampMin) {
