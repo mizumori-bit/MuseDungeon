@@ -6,11 +6,12 @@ import type {
 } from '@muse/shared';
 import {
   briefingLines, buildObservation, campDepthOf, currentExpedition, dirLabel, endReasonText, guardianForecastText, haulTotal, latestExpedition, multText, nameOf,
-  nextCampOf, nextOverreach, objectiveText, offerGap, offerText, overreachPoints, partsText, progressText, resultText, slotName,
+  nextCampOf, nextOverreach, objectiveText, offerGap, offerText, overreachPoints, partsText, progressText, recordsCampLine, resultText, slotName,
 } from '@muse/shared';
+import { api } from '../api';
 import type { RefObject } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
-import { getLocale, tr } from '../util';
+import { getLocale, getPref, tr } from '../util';
 import { DIR_ARROW, expStatusLabel, extractBlockLabel, lifelineEffectText, worstTurnText } from './labels';
 
 /** 守護者を倒す・遺物を持ち帰る等の目的を、自分が extract したら達成になる状態か（表示用。最終判定はサーバー） */
@@ -444,6 +445,22 @@ function GoalBox({ goal, onGoal }: { goal: GoalInfo; onGoal: (d: GoalDecl | null
   );
 }
 
+/**
+ * プロフィールの記録の 1 行（V3-7 §7.2。AI のキャンプの観測と同じ文）。トークンはロビーで作ったランのものがブラウザに残っている。
+ * 遠征が終わるたび（nextNo が変わる）に読み直す
+ */
+function CampRecords({ nextNo }: { nextNo: number }) {
+  const [line, setLine] = useState<string | null>(null);
+  useEffect(() => {
+    const tok = getPref('profileToken', '');
+    if (!tok) { setLine(null); return; }
+    const L = getLocale();
+    api.records(tok, L).then((r) => setLine(recordsCampLine(L, r.records))).catch(() => setLine(null));
+  }, [nextNo]);
+  if (!line) return null;
+  return <p class="muted records-line">{line} <a href="#/">{tr('（ロビーで全文）', '(full text in the lobby)')}</a></p>;
+}
+
 /** キャンプ（遠征と遠征の間）。成績・前の遠征の払い戻し・候補を出し、次の遠征を選ぶか、ここで終える */
 export function CampPanel({ view, catalog, onStart, onRetire, goal, onGoal }: { view: PlayerView; catalog?: Catalog | null; onStart: (offer: number | 'endless') => void; onRetire: () => void; goal?: GoalInfo | null; onGoal?: (d: GoalDecl | null) => void }) {
   const x = view.expedition;
@@ -470,6 +487,7 @@ export function CampPanel({ view, catalog, onStart, onRetire, goal, onGoal }: { 
           : tr(`盤面の外にいる（時間は進まない）。HP ${view.self.stats.hp}/${view.self.stats.maxHp}・Lv${view.self.level}。最深到達: 地下${view.deepestDepth}階。ここで終えてもよい。`,
             `You are off the board (time does not pass). HP ${view.self.stats.hp}/${view.self.stats.maxHp}, Lv${view.self.level}. Deepest: ${view.deepestDepth}. You may stop here.`)}
       </p>
+      {camp && <CampRecords nextNo={camp.nextNo} />}
       {camp && goal && onGoal && <GoalBox goal={goal} onGoal={onGoal} />}
       {camp ? (
         <>

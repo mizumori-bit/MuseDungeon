@@ -324,7 +324,7 @@ export function nextMilestonesLine(L: Locale, r: ProfileRecords): string {
 export function recordsCampLine(L: Locale, r: ProfileRecords): string {
   const head = r.runs.ended
     ? t(L, `記録: ラン ${r.runs.total}（終了 ${r.runs.ended}）・確定の最高 ${r.banked.best}・最深 地下${r.deepest}階`, `Records: ${r.runs.total} runs (${r.runs.ended} ended), best banked ${r.banked.best}, deepest ${r.deepest}`)
-    : t(L, `記録: 最初のラン`, `Records: first run`);
+    : r.runs.total > 1 ? t(L, `記録: ラン ${r.runs.total}（終了 0）`, `Records: ${r.runs.total} runs (none ended)`) : t(L, `記録: 最初のラン`, `Records: first run`);
   return `${head}。${nextMilestonesLine(L, r)}`;
 }
 
