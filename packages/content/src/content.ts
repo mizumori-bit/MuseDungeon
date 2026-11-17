@@ -3,7 +3,7 @@ import { canonicalHash } from '@muse/shared';
 import type {
   AbilityDef, AffixDef, AppearanceDef, BalanceDef, BiomeDef, ClassDef, ExpeditionTraitDef, FeatureDef, FileKind, FloorTypeDef, ItemDef,
   LootTableDef, MonsterDef, PerkDef, PrefabDef, SpawnTableDef, StatusDef, TerrainDef, WeaponTraitDef,
-  GuardianTypeDef, GuardianWeaknessDef, GuardianNamesDef,
+  GuardianTypeDef, GuardianWeaknessDef, GuardianNamesDef, BoonDef,
 } from './schema';
 import { FILE_SCHEMAS } from './schema';
 
@@ -36,12 +36,16 @@ export interface Content {
   guardianTypes: Record<string, GuardianTypeDef>;
   guardianWeaknesses: Record<string, GuardianWeaknessDef>;
   guardianNames: Record<string, GuardianNamesDef>;
+  /** 加護（V3-3 §3.3） */
+  boons: Record<string, BoonDef>;
   /** 各表の ID 昇順リスト（決定的な走査用） */
   lists: {
     monsters: MonsterDef[]; items: ItemDef[]; appearances: AppearanceDef[]; affixes: AffixDef[];
     biomes: BiomeDef[]; floorTypes: FloorTypeDef[]; prefabs: PrefabDef[]; classes: ClassDef[]; features: FeatureDef[];
     expeditionTraits: ExpeditionTraitDef[]; perks: PerkDef[]; abilities: AbilityDef[]; weaponTraits: WeaponTraitDef[];
-    guardianTypes: GuardianTypeDef[]; guardianWeaknesses: GuardianWeaknessDef[];
+    guardianTypes: GuardianTypeDef[]; guardianWeaknesses: GuardianWeaknessDef[]; boons: BoonDef[];
+    /** 加護を持つ遺物（category: relic で boon のある品） */
+    relics: ItemDef[];
   };
   /** 定義済みの最深の出現深度（深層スケーリングの基準） */
   deepestDefined: number;
@@ -116,6 +120,7 @@ export function buildContent(packs: RawPack[]): Content {
     guardianTypes: table(list('guardianTypes') as GuardianTypeDef[], 'guardianTypes'),
     guardianWeaknesses: table(list('guardianWeaknesses') as GuardianWeaknessDef[], 'guardianWeaknesses'),
     guardianNames: table(list('guardianNames') as GuardianNamesDef[], 'guardianNames'),
+    boons: table(list('boons') as BoonDef[], 'boons'),
     lists: {
       monsters: list('monsters') as MonsterDef[], items: list('items') as ItemDef[], appearances: list('appearances') as AppearanceDef[],
       affixes: list('affixes') as AffixDef[], biomes: list('biomes') as BiomeDef[], floorTypes: list('floorTypes') as FloorTypeDef[],
@@ -123,6 +128,8 @@ export function buildContent(packs: RawPack[]): Content {
       expeditionTraits: list('expeditionTraits') as ExpeditionTraitDef[],
       perks: list('perks') as PerkDef[], abilities: list('abilities') as AbilityDef[], weaponTraits: list('weaponTraits') as WeaponTraitDef[],
       guardianTypes: list('guardianTypes') as GuardianTypeDef[], guardianWeaknesses: list('guardianWeaknesses') as GuardianWeaknessDef[],
+      boons: list('boons') as BoonDef[],
+      relics: (list('items') as ItemDef[]).filter((it) => it.category === 'relic' && !!it.boon),
     },
     deepestDefined: 1,
   };
@@ -135,6 +142,7 @@ export function buildContent(packs: RawPack[]): Content {
     balance: c.balance, expeditionTraits: c.lists.expeditionTraits,
     perks: c.lists.perks, abilities: c.lists.abilities, weaponTraits: c.lists.weaponTraits,
     guardianTypes: c.lists.guardianTypes, guardianWeaknesses: c.lists.guardianWeaknesses, guardianNames: c.guardianNames,
+    boons: c.lists.boons,
   }).slice(0, 12);
   return c;
 }
@@ -149,6 +157,7 @@ function crossValidate(c: Content): void {
     need(c.balance.wander.intervalMax >= c.balance.wander.intervalMin, 'balance.wander: intervalMax >= intervalMin');
   }
   need(!!c.items['core:relic'], '遠征の遺物 core:relic が必要');
+  for (const it of c.lists.items) if (it.boon) need(!!c.boons[it.boon], `${it.id}: 未定義の加護 ${it.boon}`);
   need(!!c.items['core:lifeline']?.bound, '帰還の綱 core:lifeline（bound）が必要');
   need(!!c.statuses['core:recall'], '帰還中の状態 core:recall が必要');
   if (c.balance) need(c.balance.guardian.ranks.length >= 3, 'balance.guardian.ranks は格 1〜3 の 3 つが必要');

@@ -18,7 +18,7 @@ export type SpawnSpec =
 /** 遠征の目標階に置くもの */
 /** rank: 守護者の格（堅実 1・標準 2・野心 3）。guardianKind: 候補で決めた種族（無ければ生成時に格で選ぶ） */
 /** info: 守護者の型・名前・弱点（V3-3。候補で決めたもの） */
-export interface ObjectiveSpec { guardian: boolean; relic: boolean; rank?: 1 | 2 | 3; guardianKind?: string; info?: GuardianInfo }
+export interface ObjectiveSpec { guardian: boolean; relic: boolean; rank?: 1 | 2 | 3; guardianKind?: string; info?: GuardianInfo; relicKind?: string }
 
 /** 遠征の条件による生成の修飾（目標階までの新しい階に効く） */
 export interface GenMods { monstersPct: number; itemsPct: number; treasurePct: number; noFountain: boolean }
@@ -576,7 +576,7 @@ function placeObjective(s: GenState, obj: ObjectiveSpec): boolean {
   const at = far[rng.int(far.length)];
   const ax = at % g.w, ay = Math.trunc(at / g.w);
   occupied.add(at);
-  if (obj.relic) s.spawns.push({ type: 'item', kind: 'core:relic', x: ax, y: ay, qty: 1, affixes: [], role: 'relic' });
+  if (obj.relic) s.spawns.push({ type: 'item', kind: obj.relicKind ?? 'core:relic', x: ax, y: ay, qty: 1, affixes: [], role: 'relic' });
   if (obj.guardian) {
     let gx = ax, gy = ay;
     if (obj.relic) {

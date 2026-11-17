@@ -8,6 +8,7 @@ import {
   notePerk, perkHook, perkWithHook, reachLine, reachOf, resolveAbilityId, thrownAccOf,
 } from './build';
 import { armorOf, guardianCritIfUnaware, guardianIncoming } from './guardians';
+import { boonHook } from './boons';
 import { huntingInView } from './expedition';
 import { addStatus } from './statuses';
 import type { Ctx } from './ctx';
@@ -492,6 +493,9 @@ export function prepareThrow(ctx: Ctx, e: Entity, pr: PlayerRecord, slot: string
         if (broke && def?.onUse.length && stillThere && (stillThere.stats?.hp ?? 0) > 0) {
           applyEffects(ctx, def.onUse, { user: ctx.world.entities[me.id], target: stillThere, pos: landed, source: ctx.world.entities[me.id], via: 'thrown' });
         }
+        // 加護（狩人。V3-3 §3.3）: 当たった投げ物が pct % で手元に戻る（割れる物は除く）
+        const hunter = !broke ? boonHook(ctx, ctx.world.entities[me.id], 'throw_return') : null;
+        if (hunter && ctx.rng('runtime').chance(hunter.params.pct ?? 50)) returnThrown(ctx, me.id, thrownId, it.id, it.item!.slot!, hunter.boon);
       } else if (hitEnt) {
         // 外れても狙われたことには気づく
         applyDamage(ctx, hitEnt, 0, null, 'thrown');
@@ -506,6 +510,33 @@ export function prepareThrow(ctx: Ctx, e: Entity, pr: PlayerRecord, slot: string
       return { cost: perkHook(ctx, me, 'throw_cost')?.cost ?? 100 };
     },
   };
+}
+
+/** 投げた物を手元に戻す（狩人の加護）。持っている同じ山があれば足し、無ければ元のスロットへ */
+function returnThrown(ctx: Ctx, actorId: string, thrownId: string, stackId: string, slot: string, boon: string): void {
+  const me = ctx.world.entities[actorId];
+  const thrown = ctx.world.entities[thrownId];
+  if (!me?.inv || !thrown?.item || !thrown.pos) return;
+  const put: Entity[] = [];
+  const del: string[] = [];
+  const stack = thrownId !== stackId ? ctx.world.entities[stackId] : undefined;
+  if (stack?.item && stack.item.heldBy === me.id) {
+    const s = structuredClone(stack);
+    s.item!.qty += 1;
+    put.push(s);
+    del.push(thrownId);
+  } else {
+    if (me.inv.items.some((id) => ctx.world.entities[id]?.item?.slot === slot)) return;
+    const back = structuredClone(thrown);
+    delete back.pos;
+    delete back.item!.thrownBy;
+    back.item!.heldBy = me.id;
+    back.item!.slot = slot;
+    const actor = structuredClone(me);
+    actor.inv!.items.push(thrownId);
+    put.push(back, actor);
+  }
+  ctx.emit({ type: 'boon_triggered', actor: me.id, boon, effect: 'returned', item: thrownId, itemKind: thrown.kind, put, ...(del.length ? { del } : {}), seenBy: me.player ? [me.player] : [], floor: thrown.pos.floor });
 }
 
 // 近接攻撃（V3-4）: 隣の敵、または長柄の武器なら直線で 2 マス先（間のマスが通れて誰もいない）
@@ -618,6 +649,12 @@ actions.register('stairs', (ctx, e, pr) => {
         ctx.emit({ type: 'player_stats', player: pr.id, stats: { ...p.stats, deepest: depth }, seenBy: [pr.id], floor: toKey });
         // 新しい深度に初めて着いた経験値（敵を避けて進んでも深度相応に育つ）
         grantXp(ctx, ctx.world.entities[me.id], ctx.content.balance.xp.perNewDepth * depth);
+      }
+      // 加護（俊足。V3-3 §3.3）: 階段を使った直後の N 手番、加速
+      const swift = boonHook(ctx, ctx.world.entities[me.id], 'stairs_haste');
+      if (swift) {
+        addStatus(ctx, ctx.world.entities[me.id], 'core:haste', swift.params.turns ?? 10, 1);
+        ctx.emit({ type: 'boon_triggered', actor: me.id, boon: swift.boon, effect: 'haste', seenBy: [pr.id], floor: toKey });
       }
       updateKnowledge(ctx, toKey);
       return { cost: 0, scheduled: true };

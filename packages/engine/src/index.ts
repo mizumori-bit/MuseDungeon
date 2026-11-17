@@ -17,6 +17,7 @@ export { generateFloor, guardianCandidates, selectBiome, selectFloorType } from 
 export type { GeneratedFloor, SpawnSpec } from './gen/generate';
 export { computeFov, hasLos, line } from './geom';
 export { shotLine } from './perception';
+export { pickRelic, relicInfo } from './boons';
 export { actions, archetypes, effects, validators, layoutGenerators, statusHandlers, abilityHandlers, weaponTraits };
 
 /** コンテンツが参照するハンドラ ID が全てレジストリに登録されているか検証する */

@@ -294,6 +294,19 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
         default: return null;
       }
     }
+    case 'boon_granted': {
+      if (ev.target !== self) return null;
+      const b = ctx.catalog.boons?.[ev.boon];
+      const from = ev.source === 'warden' ? (ja ? '大守護者を倒し、' : 'The warden falls; ') : ctx.catalog.items[ev.source] ? (ja ? `${nameOf(ctx.catalog.items[ev.source].name, L, ev.source)}を納め、` : `You deliver the ${nameOf(ctx.catalog.items[ev.source].name, L, ev.source)}; `) : '';
+      return ja ? `${from}加護「${nameOf(b?.name, L, ev.boon)}」を得た（${nameOf(b?.desc, L, '')}）。` : `${from}you gain the boon ${nameOf(b?.name, L, ev.boon)} (${nameOf(b?.desc, L, '')}).`;
+    }
+    case 'boon_triggered': {
+      if (ev.actor !== self) return null;
+      const bn = nameOf(ctx.catalog.boons?.[ev.boon]?.name, L, ev.boon);
+      if (ev.effect === 'last_stand') return ja ? `加護「${bn}」: 倒れずに HP 1 で踏みとどまった（この遠征ではもう効かない）。` : `Boon ${bn}: you stay on your feet with 1 HP (not again this expedition).`;
+      if (ev.effect === 'returned') return ja ? `加護「${bn}」: 投げた${ev.itemKind ? kindName(ctx.catalog, L, ev.itemKind) : '物'}が手元に戻った。` : `Boon ${bn}: the thrown ${ev.itemKind ? kindName(ctx.catalog, L, ev.itemKind) : 'item'} comes back to your hand.`;
+      return ja ? `加護「${bn}」: 階段を抜けて足が速くなった。` : `Boon ${bn}: you are hasted after the stairs.`;
+    }
     case 'guardian_intel': {
       // 本人にだけ届く（filter の SELF_ONLY）
       const nm = nameOf(ev.guardianName, L, '?');

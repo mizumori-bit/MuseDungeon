@@ -52,6 +52,7 @@ export function buildCatalog(c: Content): Catalog {
       ...(it.equip?.slot === 'armor' ? { armorStats: { armor: it.equip.armor ?? 0, eva: it.equip.eva ?? 0 } } : {}),
       ...(it.throw ? { throwStats: { dmg: it.throw.dmg, acc: it.throw.acc ?? 0, range: it.throw.range } } : {}),
       ...(it.equip ? { equipStats: equipStats(it) } : {}),
+      ...(it.boon ? { boon: it.boon } : {}),
     };
   }
   return {
@@ -90,6 +91,7 @@ export function buildCatalog(c: Content): Catalog {
     }])),
     guardianTypes: Object.fromEntries(c.lists.guardianTypes.map((g) => [g.id, { name: g.name, desc: g.desc, strongVs: g.strongVs, handler: g.handler }])),
     guardianWeaknesses: Object.fromEntries(c.lists.guardianWeaknesses.map((w) => [w.id, { name: w.name, desc: w.desc, handler: w.handler }])),
+    boons: Object.fromEntries(c.lists.boons.map((b) => [b.id, { name: b.name, desc: b.desc, hooks: b.hooks.map((h) => ({ ...h })) }])),
     weaponTraits: Object.fromEntries(c.lists.weaponTraits.map((w) => [w.id, {
       name: w.name, desc: w.desc,
       ...(w.handler === 'reach' ? { reach: w.params.range ?? 2 } : {}), ...(w.handler === 'attack_cost' ? { attackCost: w.params.cost ?? 100 } : {}),

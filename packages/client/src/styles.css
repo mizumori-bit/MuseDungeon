@@ -288,6 +288,9 @@ button.exit { border-color: #2e8a4e; background: #1f4a30; }
 .mons .mshot.blocked { color: var(--muted); }
 .mons .mbounty { color: #ffe08a; }
 .mons .mgname { color: #ffd27a; font-size: 12px; }
+.boons { display: flex; flex-wrap: wrap; gap: 6px; }
+.boons .boon { color: #b8e0ff; }
+.boons .boon.used { color: var(--muted); }
 .mons .mguard { display: flex; gap: 10px; font-size: 11.5px; color: #e8c98a; }
 .mons .mintent { font-size: 12px; padding: 1px 6px; border-radius: 4px; background: #4a3a10; color: #ffe08a; }
 .mons .mintent.online { background: #6a1f1f; color: #ffd0d0; font-weight: bold; }

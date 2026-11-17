@@ -1,0 +1,23 @@
+[
+  { "id": "core:boon_breath", "name": { "ja": "息吹", "en": "Breath" },
+    "desc": { "ja": "自然回復の間隔 −2（最短 2 手番に 1 回。傷が早く癒える）", "en": "Natural regeneration interval −2 (at best once every 2 turns; wounds heal faster)" },
+    "hooks": [{ "hook": "regen", "interval": -2 }] },
+  { "id": "core:boon_hunter", "name": { "ja": "狩人", "en": "Hunter" },
+    "desc": { "ja": "投げた物が当たったとき、50% で手元に戻る（割れる物は戻らない）", "en": "A thrown item that hits comes back to your hand 50% of the time (not items that shatter)" },
+    "hooks": [{ "hook": "throw_return", "pct": 50 }] },
+  { "id": "core:boon_lamp", "name": { "ja": "灯", "en": "Lamp" },
+    "desc": { "ja": "視界 +1", "en": "Sight +1" },
+    "mods": { "sight": 1 } },
+  { "id": "core:boon_calm", "name": { "ja": "鎮め", "en": "Calm" },
+    "desc": { "ja": "眠っている敵が、あなたの姿や音で起きる確率が半分", "en": "Sleeping enemies wake to your presence or noise half as often" },
+    "hooks": [{ "hook": "soothe", "pct": 50 }] },
+  { "id": "core:boon_steel", "name": { "ja": "鋼", "en": "Steel" },
+    "desc": { "ja": "装甲 +1", "en": "Armor +1" },
+    "mods": { "armor": 1 } },
+  { "id": "core:boon_swift", "name": { "ja": "俊足", "en": "Swiftness" },
+    "desc": { "ja": "階段を使った直後の 10 手番、加速", "en": "Hasted for 10 turns after taking stairs" },
+    "hooks": [{ "hook": "stairs_haste", "turns": 10 }] },
+  { "id": "core:boon_will", "name": { "ja": "執念", "en": "Tenacity" },
+    "desc": { "ja": "致死のダメージを、1 遠征に 1 回だけ HP 1 で耐える", "en": "Once per expedition, survive a lethal blow with 1 HP" },
+    "hooks": [{ "hook": "last_stand" }] }
+]

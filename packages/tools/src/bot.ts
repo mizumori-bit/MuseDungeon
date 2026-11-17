@@ -463,7 +463,8 @@ export async function playWithPort(port: PlayerPort, opts: BotOptions): Promise<
     if (out.ok && cmd.type === 'rest' && (out.steps ?? 0) === 0) memo.restFails = 3;
     if (out.ok && out.interrupted_by === 'blocked') memo.blocked = 5;
     if (out.ok) {
-      if (cmd.type === 'explore') explored = out.interrupted_by === 'explored';
+      // 残りの未探索が発見済みの罠の先にしか無い（trap_ahead）なら、探索済みとして階段へ向かう（罠の手前で往復しない）
+      if (cmd.type === 'explore') explored = out.interrupted_by === 'explored' || out.interrupted_by === 'trap_ahead';
       if (memo.descend && cmd.type === 'travel' && cmd.to === 'stairs_down' && (out.interrupted_by === 'arrived' || out.observation.alerts.some((a) => a.code === 'on_stairs'))) {
         // 踏破の方針を満たしたら下りずに、この下り階段で帰る（次の判断で extract）
         const xv = port.view().expedition;
@@ -486,7 +487,9 @@ export async function playWithPort(port: PlayerPort, opts: BotOptions): Promise<
         else if (port.view().status === 'your_turn') await port.act({ type: 'wait' }, { source: 'bot' });
       }
     } else if (opts.kind === 'greedy' && cmd.type === 'travel' && out.error.code === 'blocked' && !/move \{ dir: '([a-z]+)' \}/.test(out.error.hint)) {
-      // 既知の道を敵がふさいでいる（マクロは攻撃しない）: 最寄りの見えている敵へ寄って殴る（断られて待つのを繰り返さない）
+      // 既知の道を敵か罠がふさいでいる（マクロは攻撃せず、罠を踏まない）: その相手は避け、最寄りの見えている敵へ寄って殴る
+      // （避けないと、射撃する敵へ寄る → 断られる → 待つ、を繰り返した。V3-3 の計測で 1 ランが 2000 回待った）
+      if (typeof cmd.to === 'string' && cmd.to.startsWith('e_')) memo.avoid.add(cmd.to);
       const nv = port.view();
       const me = nv.self.pos;
       const foe = me ? nv.entities.filter((e) => e.cat === 'monster').sort((a, b) => cheb(a.pos, me) - cheb(b.pos, me))[0] : undefined;
@@ -494,6 +497,7 @@ export async function playWithPort(port: PlayerPort, opts: BotOptions): Promise<
         if (cheb(foe.pos, me) <= 1) await port.act({ type: 'move', dir: dirTo(me, foe.pos)! }, { source: 'bot' });
         else {
           const tr = await port.act({ type: 'travel', to: foe.id, mode: 'steady' }, { source: 'bot' });
+          if (!tr.ok) memo.avoid.add(foe.id);
           if (!tr.ok && port.view().status === 'your_turn') await port.act({ type: 'wait' }, { source: 'bot' });
         }
       } else if (nv.status === 'your_turn') await port.act({ type: 'wait' }, { source: 'bot' });

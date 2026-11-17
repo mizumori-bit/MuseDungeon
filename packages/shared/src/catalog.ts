@@ -40,6 +40,15 @@ export interface CatalogItem {
   throwStats?: { dmg: string; acc: number; range: number };
   /** 装備の性能（V3-4。鑑定済みなら定義の値をそのまま見せる）。0 / 既定値の項目は省く */
   equipStats?: CatalogEquipStats;
+  /** 遺物が持ち帰られるとなる加護（V3-3 §3.3） */
+  boon?: string;
+}
+
+/** 加護（V3-3 §3.3）。hooks は観測の見積もり（自然回復の間隔）でも使う */
+export interface CatalogBoon {
+  name: Names;
+  desc: Names;
+  hooks: ({ hook: string } & Record<string, number | string>)[];
 }
 
 /** 装備の修正（V3-4 §4.4・§14.5）。traits は武器の特性の ID */
@@ -98,6 +107,8 @@ export interface Catalog {
   guardianTypes: Record<string, { name: Names; desc: Names; strongVs: 'melee' | 'thrown'; handler: string }>;
   /** 守護者の弱点（V3-3 §3.1）。どの守護者が持つかは試すまで伏せる */
   guardianWeaknesses: Record<string, { name: Names; desc: Names; handler: string }>;
+  /** 加護（V3-3 §3.3） */
+  boons: Record<string, CatalogBoon>;
   biomes: Record<string, { name: Names }>;
   floorTypes: Record<string, { name: Names }>;
   /** 公開ルールの数値（content の balance.json から。ルールブックと実際の挙動を一致させる） */
@@ -245,9 +256,20 @@ export function memoryKey(kind: string, role?: string | null): string {
 }
 
 /** 自然回復の間隔（手番）。engine と観測の見積もりで同じ式を使う */
-export function regenInterval(rules: Pick<CatalogRules, 'regen'>, level: number): number {
+export function regenInterval(rules: Pick<CatalogRules, 'regen'>, level: number, boonDelta = 0): number {
   const r = rules.regen;
-  return Math.max(r.minInterval, r.baseInterval - Math.trunc(level / r.levelDiv));
+  const base = Math.max(r.minInterval, r.baseInterval - Math.trunc(level / r.levelDiv));
+  if (!boonDelta) return base;
+  // 加護（息吹。V3-3 §3.3）: 間隔を縮める。下限は 1 だけ下げる（下限の後に −2 すると、レベル 12 以上で毎手番 1 回復になり、
+  // 1 ダメージずつ撃つ相手と永久に釣り合った。bot の計測で 1 ランが止まらなくなった）
+  return Math.max(Math.max(1, r.minInterval - 1), base + boonDelta);
+}
+
+/** 加護の hooks の数値の合計（engine と観測で同じ計算。例: regen の interval） */
+export function boonHookSum(boons: Record<string, { hooks: ({ hook: string } & Record<string, number | string>)[] } | undefined>, ids: readonly string[] | undefined, hook: string, field: string): number {
+  let n = 0;
+  for (const id of ids ?? []) for (const h of boons[id]?.hooks ?? []) if (h.hook === hook && typeof h[field] === 'number') n += h[field] as number;
+  return n;
 }
 
 /** 休憩と自然回復で戻る上限の HP（最大 HP × restCapPct %。V3-4b §28.3）。engine と観測で同じ式を使う */

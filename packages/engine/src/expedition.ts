@@ -12,6 +12,7 @@ import { hasLos, inCircle } from './geom';
 import { isOpaqueFn } from './perception';
 import { guardianSpec, pickGuardianKind } from './gen/generate';
 import { lairPlan, rollGuardianInfo } from './guardians';
+import { grantBoon, ownedBoons, pickRelic } from './boons';
 import { spawnFromSpec } from './spawn';
 import { recomputeStats } from './stats';
 
@@ -78,7 +79,7 @@ export function treasureHeld(ctx: Ctx, e: Entity): number {
 }
 
 /** 目標階に置くもの。rank: 守護者の格、guardianKind: 候補で決めた種族 */
-export interface ObjectivePlacement { guardian: boolean; relic: boolean; rank?: 1 | 2 | 3; guardianKind?: string; info?: GuardianInfo }
+export interface ObjectivePlacement { guardian: boolean; relic: boolean; rank?: 1 | 2 | 3; guardianKind?: string; info?: GuardianInfo; relicKind?: string }
 
 /** 枠ごとの守護者の格（V3-2R3 §20.1）: 堅実 1・標準 2・野心 3。枠の無い遠征は 2 */
 export function guardianRankOf(slot: OfferSlot | undefined | null): 1 | 2 | 3 {
@@ -108,6 +109,8 @@ export function makeOffers(ctx: Ctx, no: number): ExpeditionOffer[] {
   const deepest = deepestGenerated(ctx.world);
   const rng = Rng.fromSeed(`${ctx.world.secret.seed}|expedition|${no}`);
   const traitIds = ctx.content.lists.expeditionTraits.map((x) => x.id);
+  // 参加者がもう持っている加護（遺物の候補はまだ持っていない加護から引く。V3-3 §3.3）
+  const owned = ownedBoons(ctx);
   // 目的の種類は 3 枠で別にする（最初の遠征は 到達・守護者・遺物 の順）
   const types = no === 1 ? [...OFFER_TYPES] : rng.shuffle([...OFFER_TYPES]);
   return SLOTS.map((slot, i) => {
@@ -125,6 +128,11 @@ export function makeOffers(ctx: Ctx, no: number): ExpeditionOffer[] {
     // 点 = 枠の基礎点 × 種類の係数 × 深さの係数（V3-2R2 §18.3）
     const points = offerPoints({ expedition: b, slots: b.slots as Record<OfferSlot, typeof s> }, slot, type, relicGuarded, target);
     const offer: ExpeditionOffer = { index: i + 1, objective: { type, targetDepth: target }, points, relicGuarded, slot, traits, multiplierPct };
+    // 遺物（V3-3 §3.3）: 候補の時点で名前と加護を出す
+    if (type === 'retrieve_relic') {
+      const ri = pickRelic(ctx.content, ctx.world.secret.seed, no, i, owned);
+      if (ri) offer.relic = ri;
+    }
     // 守護者の見込み（格は枠で決まる。種族はここで決め、プレイヤーには特徴だけを出す）
     if (type === 'slay_guardian' || relicGuarded) {
       const rank = guardianRankOf(slot);
@@ -155,7 +163,7 @@ export function placementFor(ctx: Ctx, branch: string, depth: number): Objective
     ...(x.guardianName ? { info: { name: { ...x.guardianName }, ...(x.guardianTitle ? { title: { ...x.guardianTitle } } : {}), types: [...(x.guardianTypes ?? [])], weakness: x.guardianWeakness ?? null } } : {}),
   };
   if (x.objective.type === 'slay_guardian') return { guardian: true, relic: false, ...g };
-  if (x.objective.type === 'retrieve_relic') return { guardian: x.relicGuarded, relic: true, ...g };
+  if (x.objective.type === 'retrieve_relic') return { guardian: x.relicGuarded, relic: true, ...g, ...(x.relic ? { relicKind: x.relic.kind } : {}) };
   return null;
 }
 
@@ -208,7 +216,7 @@ function placeOnExistingFloor(ctx: Ctx, x: Expedition): void {
   const at = far[rng.int(far.length)];
   const ax = at % f.width, ay = Math.trunc(at / f.width);
   const spawned: Entity[] = [];
-  if (pl.relic) spawned.push(spawnFromSpec(ctx, key, { type: 'item', kind: 'core:relic', x: ax, y: ay, qty: 1, affixes: [], role: 'relic' }, 'objective'));
+  if (pl.relic) spawned.push(spawnFromSpec(ctx, key, { type: 'item', kind: pl.relicKind ?? 'core:relic', x: ax, y: ay, qty: 1, affixes: [], role: 'relic' }, 'objective'));
   if (pl.guardian) {
     let gx = ax, gy = ay;
     if (pl.relic) {
@@ -428,11 +436,20 @@ export function doExtract(ctx: Ctx, e: Entity, pr: PlayerRecord, completed: bool
   ctx.curFloor = key;
   ctx.emit({ type: 'actor_scheduled', id: me.id, nextActAt: me.actor!.nextActAt + 100, turns: me.actor!.turns + 1, seenBy: [pr.id], floor: key });
   // 持ち帰った宝は換金する（所持品から外す）
-  const cur0 = ctx.world.entities[e.id];
+  let cur0 = ctx.world.entities[e.id];
   const treasure = treasureHeld(ctx, cur0);
   // 宝と、達成して持ち帰った遺物は所持品から外す（遺物は納める）。綱で戻ると、持っていた遺物は失う（運べない。V3-4b §28.1）
-  const relicIds = (cur0.inv?.items ?? []).filter((id) => ctx.world.entities[id]?.kind === 'core:relic');
+  const relicIds = (cur0.inv?.items ?? []).filter((id) => ctx.content.items[ctx.world.entities[id]?.kind ?? '']?.category === 'relic');
+  // 達成して階段の上で持ち帰った遺物は加護になる（綱では持ち帰れない。V3-3 §3.3・§28.9）
+  if (completed && !lifeline) {
+    for (const id of relicIds) {
+      const kind = ctx.world.entities[id]?.kind ?? '';
+      const boon = ctx.content.items[kind]?.boon;
+      if (boon) grantBoon(ctx, cur0, boon, kind);
+    }
+  }
   const relicLost = lifeline && relicIds.length > 0;
+  cur0 = ctx.world.entities[e.id];
   const treasureIds = (cur0.inv?.items ?? []).filter((id) => ctx.content.items[ctx.world.entities[id]?.kind ?? '']?.category === 'treasure'
     || ((completed || lifeline) && relicIds.includes(id)));
   ctx.emit({
@@ -571,6 +588,7 @@ export function startExpedition(ctx: Ctx, pr: PlayerRecord, offer: number | 'end
   let multiplierPct = 100;
   let guardianKind: string | undefined;
   let guardianInfo: { name?: Names; title?: Names; types?: string[]; weakness?: string | null } = {};
+  let relic: Expedition['relic'];
   if (offer === 'endless') objective = { type: 'endless', targetDepth: null };
   else {
     const o = camp.offers.find((c) => c.index === offer);
@@ -583,6 +601,7 @@ export function startExpedition(ctx: Ctx, pr: PlayerRecord, offer: number | 'end
     multiplierPct = o.multiplierPct ?? 100;
     guardianKind = o.guardianKind;
     if (o.guardian?.name) guardianInfo = { name: { ...o.guardian.name }, ...(o.guardian.title ? { title: { ...o.guardian.title } } : {}), types: [...(o.guardian.types ?? [])], weakness: o.guardianWeakness ?? null };
+    if (o.relic) relic = structuredClone(o.relic);
   }
   const participants: PlayerId[] = w.playerOrder.filter((pid) => present(w.players[pid]));
   const start: Expedition['start'] = {};
@@ -607,6 +626,7 @@ export function startExpedition(ctx: Ctx, pr: PlayerRecord, offer: number | 'end
     ...(slot ? { slot } : {}), traits, multiplierPct, haul: { bounty: 0, discovery: 0, kills: 0 },
     ...(guardianKind ? { guardianKind } : {}), guardianRank: guardianRankOf(slot),
     ...(guardianInfo.name ? { guardianName: guardianInfo.name, ...(guardianInfo.title ? { guardianTitle: guardianInfo.title } : {}), guardianTypes: guardianInfo.types ?? [], guardianWeakness: guardianInfo.weakness ?? null } : {}),
+    ...(relic ? { relic } : {}),
   };
   ctx.emit({ type: 'expedition_started', expedition: exp, seenBy: 'all', floor: null });
   // キャンプにいる間に、再開する階は落ち着く（V3-2R3a §22.1）: 追跡をやめて全快し、再開するマスが見える敵は離れた場所へ

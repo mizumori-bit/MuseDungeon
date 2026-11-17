@@ -1,8 +1,8 @@
 // 遠征の文章化（目的・達成条件・進捗・結果・候補）。入力は PlayerView 由来の事実だけ。
 // 仕様: docs/IMPROVEMENTS_V2.md §2.6。「次に何をすべきか」の提案は書かない（事実とルールのみ）。
 import type { CatalogRules } from './catalog';
-import { offerGap } from './catalog';
-import type { ExpeditionEndReason, ExpeditionOffer, Locale, Names, Objective, OfferSlot } from './types';
+import { nameOf, offerGap } from './catalog';
+import type { ExpeditionEndReason, ExpeditionOffer, Locale, Names, Objective, OfferSlot, RelicInfo } from './types';
 import { t } from './util';
 import type { ExpeditionView, PlayerView } from './view';
 
@@ -56,6 +56,9 @@ export function briefingLines(L: Locale, x: ExpeditionView, rules?: Pick<Catalog
   }
   if (x.traits.length) lines.push(t(L, `条件: ${traitsText(L, rules, x.traits) || x.traits.join(', ')}`, `Traits: ${traitsText(L, rules, x.traits) || x.traits.join(', ')}`));
   if (x.objective.type === 'retrieve_relic') lines.push(x.relicGuarded ? t(L, '情報: 遺物は守護者が守っている', 'Note: the relic is guarded') : t(L, '情報: 遺物に守護者はいない', 'Note: the relic is unguarded'));
+  // 遺物と加護（V3-3 §3.3）: 階段の上で持ち帰ると加護になる。綱では持ち帰れない。拾うと階が目覚める
+  if (x.relic) lines.push(t(L, `${relicText(L, x.relic)}。階段の上で持ち帰ると加護になり、ランの終わりまで残る（綱では持ち帰れない）。拾うと階の眠っている敵がすべて起きる`,
+    `${relicText(L, x.relic)}. Carried out on stairs it becomes a boon for the rest of the run (not by lifeline). Picking it up wakes every sleeping enemy on the floor`));
   return lines;
 }
 
@@ -118,6 +121,14 @@ export function guardianForecastText(L: Locale, g: { rank: number; traits: strin
   return t(L, `守護者${who}: 格 ${g.rank}・${tr.join('・')}`, `guardian${who}: rank ${g.rank}, ${tr.join(', ')}`);
 }
 
+/** 遺物の文（「遺物「息吹の欠片」→ 加護「息吹」: 自然回復の間隔 −2」。V3-3 §3.3） */
+export function relicText(L: Locale, r: RelicInfo): string {
+  const nm = nameOf(r.name, L, r.kind);
+  if (!r.boon || !r.boonName) return t(L, `遺物「${nm}」`, `relic "${nm}"`);
+  const own = r.owned ? t(L, '（もう持っている加護。新しくは付かない）', ' (a boon you already have; no new boon)') : '';
+  return t(L, `遺物「${nm}」→ 加護「${nameOf(r.boonName, L, '')}」: ${nameOf(r.boonDesc, L, '')}${own}`, `relic "${nm}" -> boon ${nameOf(r.boonName, L, '')}: ${nameOf(r.boonDesc, L, '')}${own}`);
+}
+
 /** 候補の文章。rules と level があれば推奨レベルとの差と条件の危険度も付ける（公開の表と式だけで計算） */
 export function offerText(L: Locale, o: ExpeditionOffer, ctx?: { rules: Pick<CatalogRules, 'traits' | 'recommendedLevel'>; level: number }): string {
   const guard = o.objective.type === 'retrieve_relic' && o.relicGuarded ? t(L, '（守護者付き）', ' (guarded)') : '';
@@ -132,7 +143,7 @@ export function offerText(L: Locale, o: ExpeditionOffer, ctx?: { rules: Pick<Cat
     const td = g.traitDanger ? t(L, `／条件 ${g.traitDanger > 0 ? '+' : ''}${g.traitDanger}`, ` / traits ${g.traitDanger > 0 ? '+' : ''}${g.traitDanger}`) : '';
     danger = t(L, ` / 推奨 Lv${g.recommendedLevel}・あなた Lv${ctx.level}（差 ${gap}）${td}`, ` / recommended Lv${g.recommendedLevel}, you Lv${ctx.level} (gap ${gap})${td}`);
   }
-  const gf = o.guardian ? ` / ${guardianForecastText(L, o.guardian)}` : '';
+  const gf = (o.guardian ? ` / ${guardianForecastText(L, o.guardian)}` : '') + (o.relic ? ` / ${relicText(L, o.relic)}` : '');
   return t(L, `${head} — 基礎 +${o.points} / 倍率 ${multText(mult)}${traits ? `（${traits}）` : ''}${danger}${gf}`,
     `${head} — base +${o.points} / multiplier ${multText(mult)}${traits ? ` (${traits})` : ''}${danger}${gf}`);
 }

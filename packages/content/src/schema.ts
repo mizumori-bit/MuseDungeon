@@ -97,6 +97,8 @@ export const ItemSchema = z.object({
   bound: z.boolean().default(false),
   /** 宝（category: treasure）の価値: dice × mult × (100 + 深度 × perDepthPct) / 100。見えた時点で分かる */
   value: z.object({ dice: DiceSchema, mult: z.number().int().min(1), perDepthPct: z.number().int().min(0).default(10) }).optional(),
+  /** 遺物（category: relic）が持ち帰られるとなる加護（boons の ID。V3-3 §3.3） */
+  boon: IdSchema.optional(),
   desc: NamesSchema.optional(),
 });
 
@@ -289,6 +291,19 @@ export const GuardianWeaknessSchema = z.object({
   params: z.record(z.number()).default({}),
 });
 
+/** 加護（V3-3 §3.3）: 遺物を持ち帰る・大守護者を倒すと付き、ランの終わりまで残る。mods は取ったときに素の能力値へ足す。
+ * hooks はエンジンの各所が読む（regen: 自然回復の間隔 / throw_return: 投げた物が戻る / soothe: 起きにくい / stairs_haste: 階段の後に加速 / last_stand: 致死を耐える） */
+export const BoonSchema = z.object({
+  id: IdSchema,
+  name: NamesSchema,
+  desc: NamesSchema,
+  mods: z.object({
+    maxHp: z.number().int().default(0), acc: z.number().int().default(0), eva: z.number().int().default(0),
+    might: z.number().int().default(0), armor: z.number().int().default(0), sight: z.number().int().default(0),
+  }).default({}),
+  hooks: z.array(z.object({ hook: z.string().min(1) }).catchall(z.number())).default([]),
+});
+
 /** 守護者の名前の音節（V3-3 §3.1。シードで 2〜3 個つなぐ） */
 export const GuardianNamesSchema = z.object({
   id: IdSchema,
@@ -433,6 +448,7 @@ export type WeaponTraitDef = z.infer<typeof WeaponTraitSchema>;
 export type GuardianTypeDef = z.infer<typeof GuardianTypeSchema>;
 export type GuardianWeaknessDef = z.infer<typeof GuardianWeaknessSchema>;
 export type GuardianNamesDef = z.infer<typeof GuardianNamesSchema>;
+export type BoonDef = z.infer<typeof BoonSchema>;
 
 /** ファイル名 → スキーマ。新しい定義ファイル種別はここに 1 行足す */
 export const FILE_SCHEMAS = {
@@ -457,6 +473,7 @@ export const FILE_SCHEMAS = {
   guardianTypes: GuardianTypeSchema,
   guardianWeaknesses: GuardianWeaknessSchema,
   guardianNames: GuardianNamesSchema,
+  boons: BoonSchema,
 } as const;
 
 export type FileKind = keyof typeof FILE_SCHEMAS;

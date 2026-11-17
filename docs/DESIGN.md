@@ -951,3 +951,35 @@ bot は投擲を `fight { with }`（3 マス以上離れた相手だけ）で、
 | 弾く者 | 15 勝 | 21 勝 | 離れて投げ続ける（読まない）／寄って隣で投げる（読む） |
 
 bot の計測（`bot --runs 10`・`npm run budget -- --runs 20`）は IMPROVEMENTS_V3 §30。型の付いた守護者で、枠の達成率は V3-4b の後（§29）と同じくらい（堅実 68%・標準 26.7%・野心 33.9%）。
+
+## 21. 遺物と加護 V3-3 の 2 段目（IMPROVEMENTS_V3 §3.3・§28.9）
+
+設計は IMPROVEMENTS_V3 §3.3・§28.9、実装メモは同書 §31。遺物の種類と加護が入り、新しいイベントがあるので `engineVersion` は 0.11.0、`eventVersion` は 6。
+
+### 21.1 データ
+- 加護は `boons.json`（名前・説明・`mods`（最大 HP・命中・回避・威力・装甲・視界）・`hooks`）。遺物は `items.json` の `category: relic` の品で、`boon` に加護の ID を持つ（説明は由来の 1 文）。加護を遺物と別の表にしたのは、3 段目の大守護者が加護を選ばせる（§3.2）ため。
+- 遺物 7 つ: 息吹の欠片（息吹: 自然回復の間隔 −2）・狩人の欠片（狩人: 当たった投げ物が 50% で手元に戻る）・灯の欠片（灯: 視界 +1）・鎮めの欠片（鎮め: 眠っている敵が起きる確率が半分）・鋼の欠片（鋼: 装甲 +1）・俊足の欠片（俊足: 階段を使った直後の 10 手番、加速）・執念の欠片（執念: 致死のダメージを 1 遠征に 1 回、HP 1 で耐える）。§3.3 の「目利きの欠片」は、手がかり（§5.4）が V3-5 なので、そのときに足す。
+- 古い遺物 `core:relic`（加護なし）は、遺物の種類を持たない遠征の予備として残す。
+
+### 21.2 候補と配置
+- retrieve_relic の候補は、作る時点で遺物を決める（`pickRelic`: `Rng.fromSeed(seed|expedition|通番|relic|枠)`。状態を持たない）。参加者（盤面とキャンプにいる者）がまだ持っていない加護の遺物から引き、すべて持っていれば全体から引いて `owned` を付ける（持ち帰っても新しい加護は付かない）。
+- 候補（`Offer.relic: RelicInfo { kind, name, boon, boonName, boonDesc, owned? }`）・遠征（`Expedition.relic`）・ExpeditionView に名前と加護を出す（公開）。候補の文は「遺物「息吹の欠片」→ 加護「息吹」: 自然回復の間隔 −2」、ブリーフィングに「階段の上で持ち帰ると加護になり、ランの終わりまで残る（綱では持ち帰れない）。拾うと階の眠っている敵がすべて起きる」。
+- 目標階に置く遺物はその種類（生成時の `ObjectiveSpec.relicKind`・生成済みの階に置くときも同じ）。足元の遺物の valid_actions は「pickup（遺物を拾うと階が目覚める: …）」。
+
+### 21.3 加護が付く・残る
+- 達成して階段の上で extract したとき（`doExtract` で completed かつ綱でない）、持っている遺物ごとに加護を付ける（`grantBoon`）。遺物を持っている本人に付く（COOP で他の参加者には付かない）。綱で戻ると遺物は失われ、加護も付かない（V3-4b §28.1 のまま）。
+- 加護は `Entity.boons`（ランの終わりまで残る）。`mods` は取ったときに素の能力値（`base`）へ足し、能力値を作り直す（特技と同じ）。同じ加護は二重に付かない。
+- `boon_granted { target, boon, source }`（本人だけ。source は遺物の種類）。文は「息吹の欠片を納め、加護「息吹」を得た（自然回復の間隔 −2）。」で、`turn.changes` の `boon`。
+
+### 21.4 効き目（hooks）
+- 息吹 `regen { interval }`: 自然回復の間隔に足す。下限（`regen.minInterval`、3）は 1 だけ下がる（最短 2 手番に 1 回）。engine と観測の休憩の見積もりは同じ式（`regenInterval(rules, level, boonHookSum(...))`）。
+- 狩人 `throw_return { pct }`: 投げた物が当たったとき（割れる物を除く）pct % で手元に戻る。持っている同じ山に足すか、空いていれば元のスロットへ。`boon_triggered { effect: 'returned' }`。
+- 鎮め `soothe { pct }`: 視界の中の眠っている敵が起きる確率（手番ごとの判定）に pct % を掛ける（最小 1）。自分の立てた音で眠っている敵が起きる確率も 50% → 25%。引く乱数の回数は変えない。
+- 俊足 `stairs_haste { turns }`: 階段を使った直後に加速（`core:haste`）を turns 手番。`boon_triggered { effect: 'haste' }`。
+- 執念 `last_stand`: プレイヤーが致死のダメージを受けたとき、その遠征でまだ使っていなければ HP 1 で残る。使った遠征の通番を `Entity.boonUsed[加護]` に記録する。`boon_triggered { effect: 'last_stand' }`。
+- 灯・鋼は `mods` だけ（視界 +1・装甲 +1）。
+
+### 21.5 観測と文
+- `self.boons: { id, name, desc, used? }[]`（used: 遠征に 1 回の加護をこの遠征で使った）。盤面の文に「加護: …」（持っているときだけ）、キャンプの文に「加護: …／なし（遺物を階段の上で持ち帰ると付く）」。
+- 候補の `camp.offers[].relic { kind, name, boon, boon_name, boon_desc, owned? }`。get_rules topic=classes に加護の一覧（遺物の名前付き）。
+- クライアントの自分の欄に加護（使った執念は「使用済み」）。

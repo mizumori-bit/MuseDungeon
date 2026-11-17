@@ -77,6 +77,18 @@ export function StatusPanel({ view, catalog, speed, floor }: { view: PlayerView;
         <span>{tr('速さ', 'Speed')}</span><span>{sp}{sp !== 100 ? <small class="muted"> {tr('（標準 100）', '(normal 100)')}</small> : null}</span>
         <span>{tr('状態', 'Status')}</span>
         <span>{s.statuses.length ? s.statuses.map((x) => `${nameOf(catalog.statuses[x.id]?.name, L, x.id)}(${x.turnsLeft})`).join(' ') : tr('なし', 'none')}</span>
+        {(s.boons ?? []).length > 0 && (
+          <>
+            <span>{tr('加護', 'Boons')}</span>
+            <span class="boons">
+              {s.boons.map((id) => {
+                const b = catalog.boons?.[id];
+                const used = !!view.expedition && view.expedition.status !== 'ended' && s.boonUsed?.[id] === view.expedition.no;
+                return <span key={id} class={used ? 'boon used' : 'boon'} title={nameOf(b?.desc, L, '')}>{nameOf(b?.name, L, id)}{used ? tr('（使用済み）', ' (used)') : ''}</span>;
+              })}
+            </span>
+          </>
+        )}
         {(bonus.melee !== 0 || bonus.thrown !== 0) && (
           <>
             <span>{rows.bonus}</span>

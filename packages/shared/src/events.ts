@@ -7,7 +7,7 @@ import type {
 } from './types';
 
 /** 2: 遠征・実ダメージ・回復の蓄積値（IMPROVEMENTS_V2）。3: ビルド（特技・能動技・呪い。V3-4）。古いログもそのまま畳み込める */
-export const EVENT_VERSION = 5;
+export const EVENT_VERSION = 6;
 
 export interface EventBase {
   seq: number;
@@ -91,6 +91,10 @@ export type GameEvent =
   | E<'guardian_state', { id: EntityId }>
   /** 守護者のしたこと（手下を呼んだ・突進した・突進が外れた・怒った。見えている者に） */
   | E<'guardian_acted', { id: EntityId; kind: string; guardianName: Names; act: 'summoned' | 'charged' | 'missed' | 'enraged'; count?: number }>
+  /** 加護を得た（V3-3 §3.3。本人だけ）。source: 持ち帰った遺物の種類（大守護者なら 'warden'） */
+  | E<'boon_granted', { target: EntityId; boon: string; source: string }>
+  /** 加護が効いた（本人だけ）。effect: last_stand（致死を HP 1 で耐えた）/ returned（投げた物が戻った）/ haste（階段の後の加速） */
+  | E<'boon_triggered', { actor: EntityId; boon: string; effect: 'last_stand' | 'returned' | 'haste'; item?: EntityId | null; itemKind?: string | null }>
   /** 守護者の弱点を知った（V3-3 §3.1。弱点が効いた場面を見た本人だけ） */
   | E<'guardian_intel', { player: PlayerId; guardian: EntityId; guardianName: Names; weakness: string }>
   /** 敵が目を覚ました・気づいた理由（V3-4b §28.8）。見えている者にだけ。reason: noise（音。by が音を立てた者、ring は欠点が効いた指輪）/ sight（姿）/ pack（仲間の声） */

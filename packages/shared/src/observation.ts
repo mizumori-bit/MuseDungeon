@@ -2,7 +2,7 @@
 // 派生情報は PlayerView（とカタログ）だけから計算する。仕様: docs/PROTOCOL.md §3
 import type { Catalog, CatalogEquipStats } from './catalog';
 import { abilityStatus, accBonuses, curseUnknown, isCursedItem, perkChoice, shortId, weaponReach } from './build';
-import { haulTotal, nameOf, nextCampOf, nextOverreach, offerGap, overreachPoints, payoutOf, regenInterval, regenStep, restCapHp } from './catalog';
+import { boonHookSum, haulTotal, nameOf, nextCampOf, nextOverreach, offerGap, overreachPoints, payoutOf, regenInterval, regenStep, restCapHp } from './catalog';
 import { guardianDisplayName, multText, objectiveText, offerText, partsText, progressText, resultText } from './expedition';
 import { isStationary, pickableItems, sameOrWorseEquip, worseEquip } from './macro';
 import { attacksPerTurn, chaseAttacks, memoryOf, monsterSpeedOf, selfSpeed } from './danger';
@@ -134,8 +134,13 @@ export interface ObsCamp {
     recommended_level: number | null; level_gap: number | null; trait_danger: number;
     /** 守護者の見込み（格と見れば分かる特徴。種族名は会うまで出さない。V3-2R3 §20.1） */
     guardian?: { rank: 1 | 2 | 3; traits: string[] };
+    /** 遺物の名前と、持ち帰るとなる加護（V3-3 §3.3）。owned: もう持っている加護（新しくは付かない） */
+    relic?: { kind: string; name: string; boon: string | null; boon_name?: string; boon_desc?: string; owned?: boolean };
   }[];
 }
+
+/** 加護の一覧（V3-3 §3.3）。used: 遠征に 1 回の加護をこの遠征で使った */
+export interface ObsBoon { id: string; name: string; desc: string; used?: boolean }
 export interface ObsPlayer { id: string; name: string; pos: Pos; dir: Dir | null; dist: number; hp_state: HpState }
 export interface ObsFeature { type: string; name: string; pos: Pos; dir: Dir | null; dist: number; state?: string }
 /**
@@ -182,6 +187,8 @@ export interface Observation {
     abilities: { id: string; name: string; cooldown_left: number; uses_left?: number; target: 'adjacent' | 'throw' | 'dir' | 'none' }[];
     /** 選べる特技の候補（choose_perk { option }）。more は後に控えている候補の数 */
     perk_choice?: { level: number; options: { option: number; id: string; name: string; desc: string; lineage: string }[]; more: number };
+    /** 加護（V3-3 §3.3）: 持ち帰った遺物から。ランの終わりまで残る */
+    boons: ObsBoon[];
   };
   /** items_omitted: 記憶の中の遠いアイテムのうち省いた件数 */
   visible: { monsters: ObsMonster[]; items: ObsItem[]; players: ObsPlayer[]; features: ObsFeature[]; items_omitted?: number };
@@ -438,7 +445,7 @@ export function restEstimate(view: PlayerView, catalog: Catalog, huntingVisible:
   const limit = restCapHp(rules, me.stats.maxHp);
   const poisoned = me.statuses.some((s) => s.id === 'core:poison');
   if (me.stats.hp >= limit && !poisoned) return undefined;
-  const interval = regenInterval(rules, me.level);
+  const interval = regenInterval(rules, me.level, boonHookSum(catalog.boons ?? {}, me.boons, 'regen', 'interval'));
   const mult = rules.regen.restMultiplier;
   let acc = me.regen;
   let hp = me.stats.hp;
@@ -495,6 +502,23 @@ export function chaseEstimate(view: PlayerView, catalog: Catalog, hunters: reado
     if (mem && mem.maxDamageToYou > 0) worst += hits * mem.maxDamageToYou;
   }
   return { recordedWorst: worst, worst, catchers, shooters };
+}
+
+/** 加護の一覧（V3-3 §3.3）。遠征に 1 回の加護（執念）は、進行中の遠征で使っていれば used */
+export function boonsOf(view: PlayerView, catalog: Catalog, L: Locale): ObsBoon[] {
+  const xNo = view.expedition && view.expedition.status !== 'ended' ? view.expedition.no : null;
+  return (view.self.boons ?? []).map((id) => {
+    const b = catalog.boons?.[id];
+    const used = xNo !== null && view.self.boonUsed?.[id] === xNo;
+    return { id, name: nameOf(b?.name, L, shortId(id)), desc: nameOf(b?.desc, L, ''), ...(used ? { used: true } : {}) };
+  });
+}
+
+/** 加護の 1 行（「加護: 息吹（自然回復の間隔 −2）・鋼（装甲 +1）」） */
+export function boonsText(L: Locale, boons: readonly ObsBoon[]): string {
+  if (!boons.length) return t(L, '加護: なし（遺物を階段の上で持ち帰ると付く）', 'Boons: none (carry a relic out on stairs to gain one)');
+  return t(L, `加護: ${boons.map((b) => `${b.name}（${b.desc}${b.used ? '。この遠征では使った' : ''}）`).join('・')}`,
+    `Boons: ${boons.map((b) => `${b.name} (${b.desc}${b.used ? '; used this expedition' : ''})`).join(', ')}`);
 }
 
 /** 予備動作の文（V3-3 §3.1）。突進は向きと、自分がその直線の上にいるか（6 マス以内） */
@@ -1020,6 +1044,11 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
         text: offerText(L, o, rules ? { rules, level: me.level } : undefined),
         ...(o.slot ? { slot: o.slot } : {}), ...(o.traits?.length ? { traits: [...o.traits] } : {}),
         ...(o.guardian ? { guardian: { rank: o.guardian.rank, traits: [...o.guardian.traits] } } : {}),
+        ...(o.relic ? { relic: {
+          kind: o.relic.kind, name: nameOf(o.relic.name, L, o.relic.kind), boon: o.relic.boon,
+          ...(o.relic.boonName ? { boon_name: nameOf(o.relic.boonName, L, '') } : {}), ...(o.relic.boonDesc ? { boon_desc: nameOf(o.relic.boonDesc, L, '') } : {}),
+          ...(o.relic.owned ? { owned: true } : {}),
+        } } : {}),
         multiplier_pct: o.multiplierPct ?? 100,
         ...((): { recommended_level: number | null; level_gap: number | null; trait_danger: number } => {
           if (!rules?.recommendedLevel) return { recommended_level: null, level_gap: null, trait_danger: 0 };
@@ -1070,7 +1099,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
   const mineCount = items.filter((i) => i.mine).reduce((a, i) => a + i.qty, 0);
   const pickables = pickableItems(view, catalog).length;
   const valid_actions = buildValidActions(view, catalog, {
-    passable_dirs, onStairs, itemsHere: itemsHere.length > 0, hostiles, frontiers: frontiers.length, known_stairs, grid,
+    passable_dirs, onStairs, itemsHere: itemsHere.length > 0, relicHere: itemsHere.some((i) => i.role === 'relic'), hostiles, frontiers: frontiers.length, known_stairs, grid,
     canExtract: expedition?.can_extract ?? false, objectiveComplete: expedition?.extract_outcome === 'complete', restTurns: rest && !rest.blocked_by ? rest.turns : null,
     attackers, mineCount, pickables, huntingReach, worstSum, unrecorded, chaseOf,
     draft: view.floorHint?.draft ?? null,
@@ -1123,6 +1152,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       perks: perksList,
       abilities: abilitiesList,
       ...(perkChoiceObs ? { perk_choice: perkChoiceObs } : {}),
+      boons: boonsOf(view, catalog, L),
     },
     visible: { monsters, items, players, features, ...(itemsOmitted ? { items_omitted: itemsOmitted } : {}) },
     navigation: { here, passable_dirs, frontiers, known_stairs, ...(view.memory.unsighted?.length ? { unsighted: view.memory.unsighted.length } : {}) },
@@ -1145,7 +1175,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
 const EXTRACT_BLOCK_JA: Record<string, string> = { not_on_stairs: '階段の上ではない', not_your_turn: '手番ではない', ended: '終了済み' };
 
 interface VAInput {
-  passable_dirs: Dir[]; onStairs: 'up' | 'down' | null; itemsHere: boolean; hostiles: ObsMonster[]; pickables: number;
+  passable_dirs: Dir[]; onStairs: 'up' | 'down' | null; itemsHere: boolean; relicHere?: boolean; hostiles: ObsMonster[]; pickables: number;
   frontiers: number; known_stairs: Observation['navigation']['known_stairs']; grid: NavGrid | null;
   canExtract: boolean; objectiveComplete: boolean; restTurns: number | null;
   /** 自分を攻撃している相手 */
@@ -1307,7 +1337,7 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
   if (x.known_stairs.some((s) => s.type === 'down' && !(x.onStairs === 'down'))) out.push(stairsLine('down'));
   if (x.known_stairs.some((s) => s.type === 'up' && !(x.onStairs === 'up'))) out.push(stairsLine('up'));
   if (x.onStairs) out.push(`use_stairs (${x.onStairs === 'down' ? t(L, '降りる', 'descend') : t(L, '上る', 'ascend')})`);
-  if (x.itemsHere) out.push('pickup');
+  if (x.itemsHere) out.push(x.relicHere ? `pickup (${t(L, '遺物を拾うと階が目覚める: 眠っている敵がすべて起き、遺物の場所へ向かう', 'picking up the relic wakes the floor: every sleeping enemy wakes and heads for it')})` : 'pickup');
   if (x.mineCount > 0 && !adjAwake.length) out.push(`collect (${t(L, `自分が投げた物 ${x.mineCount} 個を回収`, `pick up ${x.mineCount} thrown items`)})`);
   if (x.pickables > 0 && !adjAwake.length) out.push(`collect what:items (${t(L, `見えている・記憶したアイテム ${x.pickables} 個を拾って回る（遺物は除く）`, `pick up ${x.pickables} known items (not the relic)`)})`);
   const throwGroups: { key: string; slots: string[]; targets: ObsMonster[] }[] = [];
@@ -1414,6 +1444,7 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
     lines.push(`[seq ${obs.seq} | ${t(L, 'キャンプ', 'Camp')} | HP ${s.hp}/${s.max_hp} | Lv${s.level} | ${statusText.at_camp[L === 'en' ? 1 : 0]}]`);
     if (obs.expedition?.result) lines.push(obs.expedition.result.text);
     lines.push(t(L, `確定済み ${s.score.banked} 点・達成した遠征 ${s.score.expeditions_completed}`, `Banked ${s.score.banked}, expeditions completed ${s.score.expeditions_completed}`));
+    lines.push(boonsText(L, s.boons ?? []));
     if (obs.alerts.length) lines.push('!! ' + obs.alerts.map((a) => a.text).join(' / '));
     if (obs.camp) {
       lines.push(t(L, `次の遠征の候補（遠征 ${obs.camp.next_no}）。start_expedition { offer } で始める:`, `Offers for expedition ${obs.camp.next_no} (start with start_expedition { offer }):`));
@@ -1448,6 +1479,7 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
     const pk = s.perks.map((x) => `${x.name}${x.ranks > 1 ? `×${x.ranks}` : ''}`).join(t(L, '・', ', '));
     lines.push(t(L, `能動技: ${ab || 'なし'} | 特技: ${pk || 'なし'}`, `Abilities: ${ab || 'none'} | Perks: ${pk || 'none'}`));
   }
+  if (s.boons?.length) lines.push(boonsText(L, s.boons));
   const re = s.rest_estimate;
   const alive = obs.status !== 'dead' && obs.status !== 'ended';
   if (re && alive) {

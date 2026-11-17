@@ -103,6 +103,20 @@ export interface Entity {
   build?: PlayerBuild;
   /** 守護者の型・名前・弱点（V3-3） */
   guardian?: GuardianInfo;
+  /** 加護（プレイヤー。V3-3 §3.3）: 持ち帰った遺物・倒した大守護者から。ランの終わりまで残る */
+  boons?: string[];
+  /** 遠征に 1 回の加護を使った遠征の通番（加護 ID → 通番。執念） */
+  boonUsed?: Record<string, number>;
+}
+
+/** 遺物の公開情報（V3-3 §3.3）: 候補の時点で名前と加護を出す。owned: 参加者がもう持っている加護 */
+export interface RelicInfo {
+  kind: string;
+  name: Names;
+  boon: string | null;
+  boonName?: Names;
+  boonDesc?: Names;
+  owned?: boolean;
 }
 
 /** 特技の候補（レベルアップごとに 1 つ）。options が空なのは、前の候補を選ぶまで引いていないもの */
@@ -285,6 +299,8 @@ export interface ExpeditionOffer {
   guardianKind?: string;
   /** 守護者の弱点（候補を作った時点で決める。プレイヤーには渡さない。V3-3） */
   guardianWeakness?: string | null;
+  /** 遺物（retrieve_relic。名前と加護は公開。V3-3 §3.3） */
+  relic?: RelicInfo;
 }
 
 /** 遠征の戦利品のうち、参加者で共有する部分（目的・深追い・宝は別に計算する） */
@@ -366,6 +382,8 @@ export interface Expedition {
   guardianTitle?: Names;
   guardianTypes?: string[];
   guardianWeakness?: string | null;
+  /** 遺物（候補から引き継ぐ。公開。V3-3 §3.3） */
+  relic?: RelicInfo;
 }
 
 export type RngState = [number, number, number, number];

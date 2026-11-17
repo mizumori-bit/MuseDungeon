@@ -1,7 +1,7 @@
 // 戦闘（整数のみ）。命中: d20 + acc >= 10 + eva。20 は必中＋会心、1 は必ず外れ。
 // ダメージ: ダイス + might - armor、最低 1。会心は「ダイスの最大値 + might、装甲無視」（V3-2R §14.3）。
 import type { DamageVia, Dir, Entity, PlayerId, PlayerRecord, RunSummary, RunSummaryPlayer } from '@muse/shared';
-import { cheb, diceMax, dirTo, xpForLevel } from '@muse/shared';
+import { cheb, currentExpedition, diceMax, dirTo, xpForLevel } from '@muse/shared';
 import type { Ctx } from './ctx';
 import { applyEffects } from './effects';
 import { maybeEndExpedition } from './expedition';
@@ -13,6 +13,7 @@ import { effectiveStats } from './stats';
 import { hasStatus, removeStatus } from './statuses';
 import { meleeAccOf, notePerk, offerPerk, perkHook, perkWithHook, sweeps, weaponOnHit } from './build';
 import { armorOf, guardianCritIfUnaware, guardianIncoming } from './guardians';
+import { boonHook } from './boons';
 
 export interface AttackOutcome { hit: boolean; crit: boolean; roll: number }
 
@@ -198,7 +199,12 @@ function provoke(ctx: Ctx, target: Entity, attacker: Entity): void {
 export function applyDamage(ctx: Ctx, target: Entity, amount: number, source: Entity | null, via: DamageVia): void {
   const t = ctx.world.entities[target.id];
   if (!t?.stats || t.stats.hp <= 0) return;
-  const hpAfter = Math.max(0, t.stats.hp - amount);
+  let hpAfter = Math.max(0, t.stats.hp - amount);
+  // 加護（執念。V3-3 §3.3）: 致死のダメージを、遠征に 1 回だけ HP 1 で耐える
+  const xNo = currentExpedition(ctx.world)?.no ?? 0;
+  const stand = hpAfter <= 0 && t.player ? boonHook(ctx, t, 'last_stand') : null;
+  const standing = !!stand && (t.boonUsed?.[stand.boon] ?? -1) !== xNo;
+  if (standing) hpAfter = 1;
   // 実際に減った HP（とどめの超過分を含めない）
   const dealt = t.stats.hp - hpAfter;
   const key = t.pos?.floor ?? null;
@@ -235,6 +241,11 @@ export function applyDamage(ctx: Ctx, target: Entity, amount: number, source: En
         m.dmgByYou = { ...(m.dmgByYou ?? {}), [kindOf]: [cur[0] + dealt, cur[1] + 1] };
       }
     });
+  }
+  if (standing && stand) {
+    const body = structuredClone(ctx.world.entities[t.id]);
+    body.boonUsed = { ...(body.boonUsed ?? {}), [stand.boon]: xNo };
+    ctx.emit({ type: 'boon_triggered', actor: t.id, boon: stand.boon, effect: 'last_stand', put: [body], seenBy: t.player ? [t.player] : [], floor: key });
   }
   if (hpAfter <= 0) {
     kill(ctx, ctx.world.entities[t.id], source, via);

@@ -4,6 +4,7 @@ import { cheb, compassDir, currentExpedition, indicesToRanges, memoryKey } from 
 import type { Ctx } from './ctx';
 import { computeFov, hasLos, inCircle, line } from './geom';
 import { firstStealthPerk, gearOf, noiseRingOf, notePerk, perkStealth, stealthOf } from './build';
+import { boonHook } from './boons';
 
 /**
  * 投げ物・射撃の経路（始点を含まず終点を含む）。from→to の直線か、to→from の直線を逆にたどったもののうち、
@@ -293,7 +294,9 @@ export function makeNoise(ctx: Ctx, key: FloorKey, pos: Pos, loudness: number, s
     const ai = m.actor.ai;
     if (!ai || (ai.state !== 'asleep' && ai.state !== 'unaware')) continue;
     if (!inCircle(m.pos, pos, loudness)) continue;
-    if (ai.state === 'asleep' && !always && !rng.chance(50)) continue;
+    // 加護（鎮め。V3-3 §3.3）: 自分の立てた音で眠っている敵が起きる確率を下げる（引く乱数は 1 回のまま）
+    const calm = source?.player ? boonHook(ctx, source, 'soothe') : null;
+    if (ai.state === 'asleep' && !always && !rng.chance(calm ? Math.trunc((50 * (calm.params.pct ?? 50)) / 100) : 50)) continue;
     // 欠点が効いたのは、眠っていた敵が「必ず起きる」で起きたときだけ
     wakeMonster(ctx, m, pos, { cause: 'noise', by: source, ring: ai.state === 'asleep' ? ring : null });
   }
@@ -312,7 +315,12 @@ export function wakeChecks(ctx: Ctx, key: FloorKey): void {
       if (!monsterSees(ctx, m, pe)) continue;
       // 起こしにくさ = 職業 + 特技（忍び足）+ 装備。重い鎧は起きる確率を足す（V3-4）
       const stealth = stealthOf(ctx, pr);
-      const wakePct = (s: number) => Math.max(3, 20 - Math.trunc((20 * s) / 100)) + gearOf(ctx, pe).wakePct;
+      // 加護（鎮め。V3-3 §3.3）: 起きる確率に pct % を掛ける（最小 1）
+      const calm = boonHook(ctx, pe, 'soothe');
+      const wakePct = (s: number) => {
+        const v = Math.max(3, 20 - Math.trunc((20 * s) / 100)) + gearOf(ctx, pe).wakePct;
+        return calm ? Math.max(1, Math.trunc((v * (calm.params.pct ?? 50)) / 100)) : v;
+      };
       const pct = wakePct(stealth);
       // rng.chance(pct) と同じ引き方（1 回引いて比べる）。特技が無ければ起きていた目なら、忍び足が効いたと知らせる（V3-4b §28.6）
       const roll = pct >= 100 ? -1 : rng.int(100);

@@ -137,6 +137,8 @@ export function applyEvent(world: World, ev: GameEvent): void {
     case 'monster_woke':
     case 'guardian_state':
     case 'guardian_acted':
+    case 'boon_granted':
+    case 'boon_triggered':
     case 'ability_used':
     case 'curse_revealed':
     case 'item_inspected':

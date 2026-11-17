@@ -110,7 +110,8 @@ function ja(r: CatalogRules): Record<Topic, string> {
 - COOP では戦利品（宝を除く）はパーティで共有し、extract した各自に払い戻される。宝は持っている本人の分。
 ## 目的を達成した後の圧力
 - slay_guardian と retrieve_relic は、達成した瞬間からその遠征の間、徘徊の湧き間隔が ${r.afterObjectiveWanderPct}% になる（changes に「坑が騒がしくなった」と出る）。reach_depth には付かない。
-- 遺物を拾うと、その階の眠っている・気づいていない敵が目を覚まし、遺物の場所へ向かう。
+- 遺物を拾うと、その階の眠っている・気づいていない敵が目を覚まし、遺物の場所へ向かう（足元の遺物の pickup には「階が目覚める」と出る）。
+- 遺物と加護: 遺物はそれぞれ名前と加護を持ち、候補の時点で分かる（参加者がまだ持っていない加護の遺物から選ばれる）。達成して階段の上で持ち帰ると、遺物は加護になり、そのキャラクターにランの終わりまで付く（帰還の綱では持ち帰れない）。加護は self.boons。一覧は get_rules topic=classes の「加護」。
 - 気配: 目標階にいる間、守護者（未討伐）か遺物（未入手）の方角（8 方向）と、10 マス以内かどうかが expedition.sense に出る。正確な位置は見るまで分からない。
 ## 遠征の候補（キャンプ）
 - 候補は 3 枠。目標の深度は「目標として達成した最深の階 + 幅」（踏破で先まで降りても深くならない。踏破は次の目標階の下見になる。最初の遠征は 堅実 地下${x.firstTargetDepth.safe}階・標準 地下${x.firstTargetDepth.standard}階・野心 地下${x.firstTargetDepth.ambitious}階）。目的の種類は 3 枠で別（目標の階の下り階段にすでに立ったことがあれば、その枠に踏破型は出ない）。目標の階が生成済みなら、守護者・遺物は遠征の開始時に置かれる:
@@ -193,7 +194,7 @@ ${traitsLines(r, true)}
 - 薬・巻物は最初は未鑑定で、「赤い薬」のような外見名でしか分からない（外見と正体の対応はランごとに異なる）。使うと正体が判明する。鑑定の巻物・祭壇でも判明する。
 - 未鑑定の薬には有害なもの（毒薬）もある。投げると対象に効果が及ぶ薬もある。
 - 投擲武器（投げナイフ・投げ槍）は throw_item で対象（エンティティ ID か座標か方向）へ投げる。投げた物は着地点に落ちるので拾い直せる。
-- 遺物（retrieve_relic の目的の品）は効果を持たない。持ったまま階段の上で extract すると持ち帰れる。
+- 遺物（retrieve_relic の目的の品）は持っている間は効果を持たない。持ったまま階段の上で extract すると持ち帰れ、加護になる。
 - 帰還の綱: 遠征ごとにキャンプが 1 本持たせる。use_item で使うと${r.lifeline.turns > 0 ? ` ${r.lifeline.turns} 手番後に` : 'その場で'}キャンプへ戻る（命と、目的を除く戦利品の ${r.lifeline.pct}% を持ち帰る。遺物は運べない。達成した遠征の数には入らない）。捨てる・投げることはできず、所持数に数えない。
 - 地物: 泉（回復、1 回）、祭壇（所持品を鑑定し呪いを解く、1 回）。罠は見つけるまで見えない（隣接すると発見判定）。発見済みの罠は経路探索で避ける（罠を通る道しか無ければ、移動マクロは罠の手前で止まる。踏むなら move）。`,
     observation: `# 観測と turn ブロック
@@ -266,7 +267,8 @@ function en(r: CatalogRules): Record<Topic, string> {
 - In COOP the haul (except treasure) is shared by the party and paid to each player who extracts. Treasure belongs to whoever carries it.
 ## Pressure after the objective
 - For slay_guardian and retrieve_relic, from the moment the objective is done until the expedition ends, the wanderer spawn interval becomes ${r.afterObjectiveWanderPct}% (changes says the pit grows restless). reach_depth has no such pressure.
-- Picking up the relic wakes sleeping/unaware monsters on that floor and sends them toward it.
+- Picking up the relic wakes sleeping/unaware monsters on that floor and sends them toward it (pickup on a relic says the floor wakes).
+- Relics and boons: each relic has a name and a boon, shown in the offer (drawn from boons the party does not have yet). Complete the expedition and carry the relic out on stairs and it becomes a boon on that character for the rest of the run (not by lifeline). Boons are in self.boons; the list is under "Boons" in get_rules topic=classes.
 - Sense: on the target floor, expedition.sense gives the direction (8-way) to the unslain guardian or untaken relic and whether it is within 10 cells. The exact position is not given until you see it.
 ## Offers at camp
 - Three slots. Target depth = deepest achieved target + range (crossings do not push it deeper; they scout the next target. First expedition: safe depth ${x.firstTargetDepth.safe}, standard ${x.firstTargetDepth.standard}, ambitious ${x.firstTargetDepth.ambitious}). Each slot has a different objective type (no crossing objective for a floor whose down stairs you have already stood on). If the target floor already exists, the guardian/relic is placed when the expedition starts:
@@ -347,7 +349,7 @@ Free: choose_perk{option} / observe / wait_for_turn / expedition / look / get_ma
 - Potions and scrolls start unidentified ("red potion"); the mapping is shuffled per run. Using one identifies it; so do identify scrolls and altars.
 - Some unidentified potions are harmful. Some potions affect the target when thrown.
 - Throwing weapons: throw_item at an entity id, position or direction. They land and can be picked up again.
-- The relic (retrieve_relic) has no effect; extract on stairs while carrying it.
+- The relic (retrieve_relic) does nothing while carried; extract on stairs while carrying it and it becomes a boon.
 - Lifeline: camp gives one per expedition. use_item it to return to camp${r.lifeline.turns > 0 ? ` after ${r.lifeline.turns} turns` : ' at once'} (you keep your life and ${r.lifeline.pct}% of the haul without the objective; a relic cannot come along; it does not count as a completed expedition). It cannot be dropped or thrown and does not count toward capacity.
 - Features: fountain (heal, once), altar (identify inventory and lift curses, once). Traps are hidden until found (search happens when adjacent). Known traps are avoided by pathing (if the only way crosses one, movement macros stop before it; step on it with move).`,
     observation: `# Observation and the turn block
@@ -376,6 +378,10 @@ function guardiansText(c: Catalog, locale: 'ja' | 'en'): string {
   for (const [id, g] of Object.entries(c.guardianTypes)) lines.push(`- ${nm(g.name)}（${id.split(':')[1]}）: ${nm(g.desc)}`);
   lines.push(ja ? '# 守護者の弱点（どれを持つかは伏せられている）' : '# Guardian weaknesses (which one a guardian has is hidden)');
   for (const [, w] of Object.entries(c.guardianWeaknesses)) lines.push(`- ${nm(w.name)}: ${nm(w.desc)}`);
+  // 加護（V3-3 §3.3）: 遺物を持ち帰ると付く
+  lines.push(ja ? '# 加護（遺物を階段の上で持ち帰ると付く。ランの終わりまで残る）' : '# Boons (gained by carrying a relic out on stairs; they last for the run)');
+  const relicOf = (boon: string) => Object.values(c.items).find((it) => it.boon === boon);
+  for (const [id, b] of Object.entries(c.boons ?? {})) { const r = relicOf(id); lines.push(`- ${nm(b.name)}${r ? (ja ? `（${nm(r.name)}）` : ` (${nm(r.name)})`) : ''}: ${nm(b.desc)}`); }
   return lines.join('\n');
 }
 

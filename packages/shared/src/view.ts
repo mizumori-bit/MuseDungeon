@@ -2,7 +2,7 @@
 // projectPlayerView はルール無しの純粋なフィルタ。仕様: docs/PROTOCOL.md §4
 import type {
   CampState, Controller, Entity, EntityId, EntityRole, EquipSlot, Expedition, ExpeditionEndReason, ExpeditionResult, FloorKey,
-  Locale, MonsterMemory, Objective, OfferSlot, PlayerBuild, PlayerId, PlayerState, Pos, RememberedEntity, Stats, StatusInst, World, Sense, FloorHint, Names, Intent,
+  Locale, MonsterMemory, Objective, OfferSlot, PlayerBuild, PlayerId, PlayerState, Pos, RememberedEntity, Stats, StatusInst, World, Sense, FloorHint, Names, Intent, RelicInfo,
 } from './types';
 
 export type HpState = 'healthy' | 'wounded' | 'badly_wounded' | 'near_death';
@@ -101,6 +101,9 @@ export interface SelfView {
   regen: number;
   /** ビルド（V3-4）: 取った特技・選んでいない候補・覚えた能動技（readyAt は手番数 turns と比べる） */
   build: PlayerBuild;
+  /** 加護（V3-3 §3.3）と、遠征に 1 回の加護を使った遠征の通番 */
+  boons: string[];
+  boonUsed: Record<string, number>;
 }
 
 export interface PartyMemberView {
@@ -139,6 +142,8 @@ export interface ExpeditionView {
   /** 守護者の名前と型（公開。V3-3）。弱点と種族は渡さない */
   /** 守護者（V3-3）。weakness は試して分かったときだけ */
   guardian?: { rank: 1 | 2 | 3; name: Names; title?: Names; types: string[]; weakness?: string };
+  /** 遺物の名前と加護（V3-3 §3.3。公開） */
+  relic?: RelicInfo;
 }
 
 export interface PlayerView {
@@ -390,6 +395,7 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
         rank: latest.guardianRank ?? 2, name: { ...latest.guardianName }, ...(latest.guardianTitle ? { title: { ...latest.guardianTitle } } : {}), types: [...(latest.guardianTypes ?? [])],
         ...(latest.targets.guardian && k.guardianIntel?.[latest.targets.guardian] ? { weakness: k.guardianIntel[latest.targets.guardian] } : {}),
       } } : {}),
+      ...(latest.relic ? { relic: structuredClone(latest.relic) } : {}),
     };
   }
 
@@ -418,6 +424,8 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
       turns: me.actor?.turns ?? 0,
       regen: me.actor?.regen ?? 0,
       build: me.build ? structuredClone(me.build) : { perks: [], pending: [], abilities: [] },
+      boons: [...(me.boons ?? [])],
+      boonUsed: { ...(me.boonUsed ?? {}) },
     },
     inventory,
     floor: floor ? {

@@ -411,6 +411,14 @@ V3-2R で足した項目（同じく後方互換。会心と経験値のルー�
 - `player_state.reason: 'joined'`（キャンプから始まる参加）。参加コマンドの `atCamp`
 - プレイヤー向けの射影で、見えていた個体が視界の外へ動いた `entity_moved` に `dirOut`（向きだけ。行き先は伏せたまま）
 
+V3-3 の 2 段目で足した項目（遺物と加護。同じく後方互換。遺物の種類と加護が入ったので `engineVersion` は 0.11.0、新しいイベントがあるので `eventVersion` は 6。DESIGN.md §21）:
+
+- World State: `Entity.boons: string[]`（加護。ランの終わりまで残る）・`Entity.boonUsed: Record<加護, 遠征の通番>`（遠征に 1 回の加護）・`RelicInfo { kind, name, boon, boonName?, boonDesc?, owned? }` を `Offer.relic`・`Expedition.relic` に（公開）
+- PlayerView: `self.boons`・`self.boonUsed`・`ExpeditionView.relic`
+- イベント: `boon_granted { target, boon, source }`（本人だけ。source は遺物の種類）・`boon_triggered { actor, boon, effect: 'last_stand' | 'returned' | 'haste', item?, itemKind? }`（本人だけ。状態の変化は `put`）
+- 観測: `self.boons: { id, name, desc, used? }[]`・`camp.offers[].relic { kind, name, boon, boon_name?, boon_desc?, owned? }`・`turn.changes` の `boon`。足元の遺物の valid_actions は `pickup（遺物を拾うと階が目覚める: …）`。候補とブリーフィングの文に遺物と加護。盤面・キャンプの文に「加護: …」
+- コンテンツ: `boons.json`（`mods`・`hooks`）、アイテムの `boon`（`category: relic`）。公開カタログ: `boons { name, desc, hooks }`・`items[*].boon`。get_rules topic=classes に加護の一覧
+
 V3-3 の 1 段目で足した項目（守護者の型・予備動作・弱点・棲み処。同じく後方互換。守護者の振る舞いが変わったので `engineVersion` は 0.10.0、新しいイベントがあるので `eventVersion` は 5。DESIGN.md §20）:
 
 - World State: `Entity.guardian { name, title?, types, weakness, summoned?, enraged?, unseen?, lurk?, struck? }`（守護者だけ。`weakness` と内部の数はプレイヤーに渡さない）・`AiState.intent { kind: 'winding_up' | 'summoning' | 'enraging', dir? }`・`Offer.guardian.name / title / types`・`Offer.guardianWeakness`（World だけ。射影で消す）・`Expedition.guardianName / guardianTitle / guardianTypes / guardianWeakness`・`Knowledge.guardianIntel: Record<守護者 id, 弱点 id>`
