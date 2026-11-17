@@ -241,9 +241,9 @@ export function createMcpServer(ctx: McpContext): McpServer {
   server.registerTool('profile', {
     title: 'プロフィール',
     description: 'プロフィールの表示名・記録の要約・進行中のラン（run_id だけ）。name で表示名を変える。ランに束縛されていなくても呼べる。手番を消費しない。Your profile (name, summary, runs in progress).',
-    inputSchema: { profile_token: z.string().optional(), name: z.string().min(1).max(32).optional(), locale: z.enum(['ja', 'en']).optional() },
+    inputSchema: { ...common, profile_token: z.string().optional(), name: z.string().min(1).max(32).optional(), locale: z.enum(['ja', 'en']).optional() },
   }, async (args) => {
-    const pp = profileOf(args.profile_token);
+    const pp = profileOf(args.profile_token, args.player_token);
     if (!pp) return noProfile();
     if (args.name && !args.profile_token) return errOut(actionError('bad_request', '表示名を変えるには profile_token が要る / renaming needs profile_token', ''));
     if (args.name) pp.rename(args.name);
