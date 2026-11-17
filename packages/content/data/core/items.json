@@ -35,8 +35,8 @@
 
   { "id": "core:potion_healing", "name": { "ja": "回復の薬", "en": "potion of healing" }, "category": "potion", "unidentified": true,
     "depth": { "min": 1 }, "rarity": 2, "stack": true, "shatter": true,
-    "onUse": [{ "effect": "heal", "amount": "2d8+4" }, { "effect": "cure", "status": "core:poison" }],
-    "desc": { "ja": "HP を 2d8+4 回復し、毒を消す", "en": "Heals 2d8+4 HP and cures poison" } },
+    "onUse": [{ "effect": "heal", "amount": "2d8+4", "minPct": 30 }, { "effect": "cure", "status": "core:poison" }],
+    "desc": { "ja": "HP を 2d8+4（ただし最大 HP の 30% を下回らない）回復し、毒を消す", "en": "Heals 2d8+4 HP (never less than 30% of max HP) and cures poison" } },
   { "id": "core:potion_haste", "name": { "ja": "加速の薬", "en": "potion of haste" }, "category": "potion", "unidentified": true,
     "depth": { "min": 2 }, "rarity": 2, "stack": true, "shatter": true,
     "onUse": [{ "effect": "status", "status": "core:haste", "turns": "2d6+10", "power": 1 }],

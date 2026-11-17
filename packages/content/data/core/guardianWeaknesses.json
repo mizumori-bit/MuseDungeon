@@ -1,10 +1,10 @@
 [
-  { "id": "core:weak_poison", "name": { "ja": "毒に弱い", "en": "weak to poison" }, "handler": "poison",
+  { "id": "core:weak_poison", "name": { "ja": "毒に弱い", "en": "weak to poison" }, "short": { "ja": "毒", "en": "poison" }, "handler": "poison",
     "desc": { "ja": "毒のダメージが 2 倍", "en": "Poison deals double damage" }, "params": { "mult": 2 } },
-  { "id": "core:weak_thrown", "name": { "ja": "投擲に弱い", "en": "weak to thrown weapons" }, "handler": "thrown",
+  { "id": "core:weak_thrown", "name": { "ja": "投擲に弱い", "en": "weak to thrown weapons" }, "short": { "ja": "投擲", "en": "thrown" }, "handler": "thrown",
     "desc": { "ja": "投擲のダメージが 2 倍", "en": "Thrown weapons deal double damage" }, "params": { "mult": 2 } },
-  { "id": "core:weak_sleep", "name": { "ja": "眠りが深い", "en": "a deep sleeper" }, "handler": "deep_sleep",
+  { "id": "core:weak_sleep", "name": { "ja": "眠りが深い", "en": "a deep sleeper" }, "short": { "ja": "眠り", "en": "sleep" }, "handler": "deep_sleep",
     "desc": { "ja": "棲み処で眠っていて、気づかれる前の一撃が必ず会心になる", "en": "It sleeps in its lair, and a blow struck before it notices you is always a critical hit" }, "params": {} },
-  { "id": "core:weak_water", "name": { "ja": "水場で遅い", "en": "slow in water" }, "handler": "water_slow",
+  { "id": "core:weak_water", "name": { "ja": "水場で遅い", "en": "slow in water" }, "short": { "ja": "水場", "en": "water" }, "handler": "water_slow",
     "desc": { "ja": "浅い水の上では速さが半分（棲み処に浅い水がある）", "en": "Moves at half speed in shallow water (its lair has some)" }, "params": { "speedPct": 50 } }
 ]

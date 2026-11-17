@@ -141,6 +141,7 @@ export function applyEvent(world: World, ev: GameEvent): void {
     case 'boon_triggered':
     case 'boon_offered':
     case 'story':
+    case 'guardian_rested':
     case 'ability_used':
     case 'curse_revealed':
     case 'item_inspected':
@@ -212,7 +213,9 @@ export function applyEvent(world: World, ev: GameEvent): void {
     }
     case 'guardian_intel': {
       const p = world.players[ev.player];
-      if (p) p.knowledge.guardianIntel = { ...(p.knowledge.guardianIntel ?? {}), [ev.guardian]: ev.weakness };
+      // miss: 試して外れた弱点（V3-3a §35.3）
+      if (p && ev.miss) p.knowledge.guardianTried = { ...(p.knowledge.guardianTried ?? {}), [ev.guardian]: [...new Set([...(p.knowledge.guardianTried?.[ev.guardian] ?? []), ev.weakness])] };
+      else if (p) p.knowledge.guardianIntel = { ...(p.knowledge.guardianIntel ?? {}), [ev.guardian]: ev.weakness };
       break;
     }
     case 'knowledge_updated': {
@@ -255,6 +258,19 @@ export function applyEvent(world: World, ev: GameEvent): void {
     case 'expedition_offered':
       world.camp = clone(ev.camp);
       break;
+    case 'archive_recalled': {
+      const p = world.players[ev.player];
+      if (!p) break;
+      p.knowledge.archive = [...(p.knowledge.archive ?? []), ev.relic];
+      if (ev.memory !== 'none') {
+        const key = String(ev.depth);
+        const cur = { ...(p.knowledge.wardenIntel?.[key] ?? {}) };
+        if (ev.memory === 'weakness' && ev.weakness) cur.weakness = ev.weakness;
+        if (ev.memory === 'vitals') { cur.hp = ev.hp; cur.maxHit = ev.maxHit; }
+        p.knowledge.wardenIntel = { ...(p.knowledge.wardenIntel ?? {}), [key]: cur };
+      }
+      break;
+    }
     case 'warden_slain': {
       const cleared = new Set(world.milestones?.cleared ?? []);
       cleared.add(ev.depth);

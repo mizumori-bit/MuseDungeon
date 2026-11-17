@@ -6,6 +6,9 @@ import { actionError, Rng, t } from '@muse/shared';
 import { grantBoon } from './boons';
 import type { Ctx } from './ctx';
 import { rollWardenInfo } from './guardians';
+import { generateFloor } from './gen/generate';
+import { addDiceBonus, diceMax, floorDiv } from '@muse/shared';
+import { sumAffixMods } from './spawn';
 
 /** 節目の間隔と最初の深さ（大守護者の間の floorType から。無ければ null） */
 export function milestoneRule(content: Content): { every: number; min: number } | null {
@@ -24,6 +27,26 @@ export function nextMilestone(ctx: Ctx): MilestoneInfo | null {
     return { depth: d, name: { ...gi.name }, ...(gi.title ? { title: { ...gi.title } } : {}), types: [...gi.types] };
   }
   return null;
+}
+
+/**
+ * 大守護者の下見（V3-3a §35.2・§35.7）: その深さの階を生成したときの大守護者の種族・体力・最大の一撃。
+ * 生成は決定的なので、階を作らずに同じ値が分かる（階が既にあればその個体の値）
+ */
+export function wardenPreview(ctx: Ctx, depth: number): { kind: string; hp: number; maxHit: number } | null {
+  const key = `main:${depth}`;
+  const live = ctx.world.floors[key] ? ctx.entitiesOn(key).find((e) => e.guardian?.warden) : undefined;
+  if (live?.stats) return { kind: live.kind, hp: live.stats.maxHp, maxHit: diceMax(live.stats.dmg) + live.stats.might };
+  const g = generateFloor(ctx.content, ctx.world.secret.seed, 'main', depth, ctx.world.meta.terrainTable);
+  const sp = g.spawns.find((x) => x.type === 'monster' && x.guardian?.warden);
+  if (!sp || sp.type !== 'monster') return null;
+  // makeMonster と同じ式（spawn.ts）
+  const def = ctx.content.monsters[sp.kind];
+  const mods = sumAffixMods(ctx.content, sp.affixes);
+  const raw = Math.max(1, sp.minHp ?? 0, floorDiv(sp.hp * (100 + 50 * sp.tier + mods.hpPct + (sp.hpBonusPct ?? 0)), 100));
+  const hp = sp.maxHp !== undefined ? Math.max(1, Math.min(raw, sp.maxHp)) : raw;
+  const might = (def?.stats.might ?? 0) + sp.tier + mods.might;
+  return { kind: sp.kind, hp, maxHit: diceMax(addDiceBonus(def?.attack.dice ?? '1d2', mods.dmgBonus)) + might };
 }
 
 /** その階で生きている大守護者（いれば下り階段は封じられている） */

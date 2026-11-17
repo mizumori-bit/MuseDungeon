@@ -290,6 +290,8 @@ export const GuardianTypeSchema = z.object({
 export const GuardianWeaknessSchema = z.object({
   id: IdSchema,
   name: NamesSchema,
+  /** 短い呼び名（外れた試しの「毒ではない」。V3-3a §35.3） */
+  short: NamesSchema.optional(),
   desc: NamesSchema,
   handler: z.string().min(1),
   params: z.record(z.number()).default({}),
@@ -348,7 +350,8 @@ export const BalanceSchema = z.object({
   rest: z.object({ maxTurns: Int.min(1), capPct: Int.min(1).max(100).default(100) }),
   macro: z.object({ stepLimit: Int.min(1) }),
   /** fight（V3-4b §28.4）: 追跡中で逃げていない標的が見えなくなったときに待つ手番 */
-  fight: z.object({ lostWait: Int.min(0) }).default({ lostWait: 5 }),
+  /** firstHitStopPct: 初被弾で止まるのは、その被弾が最大 HP のこの % 以上のときだけ。recordedKills: この数以上倒した種族は記録ありとして扱う（V3-3a §35.6） */
+  fight: z.object({ lostWait: Int.min(0), firstHitStopPct: Int.min(0).max(100).default(15), recordedKills: Int.min(1).default(3) }).default({ lostWait: 5, firstHitStopPct: 15, recordedKills: 3 }),
   wander: z.object({ firstAt: Int.min(0), intervalMin: Int.min(1), intervalMax: Int.min(1), maxAwake: Int.min(0), minDistance: Int.min(0) }),
   score: z.object({ perDepth: Int, perKill: Int, perLevel: Int }),
   /** 推定残り HP: 記録がこの数未満の間は上限を出さない */
@@ -380,9 +383,16 @@ export const BalanceSchema = z.object({
       types: Int.min(0).default(0) })).min(1),
     /** 持ち場の範囲（V3-2R3b §23.2）: 気づいていない守護者は持ち場からこのマス数（チェビシェフ）以内だけを動く */
     leash: Int.min(0).default(3),
+    /** 相手が階を離れている間、守護者が手番 1 つにつき回復する最大体力の %（V3-3a §35.1） */
+    awayHealPct: Int.min(0).default(2),
     /** 節目の大守護者（V3-3 §3.2）: 体力の上乗せと下限、賞金の倍率（%）、型の数、倒したときに選べる加護の数 */
-    warden: z.object({ hpPct: Int.min(0), minHpBase: Int.min(0), minHpPerDepth: Int.min(0), bountyPct: Int.min(0), types: Int.min(0), boonOptions: Int.min(1) })
-      .default({ hpPct: 250, minHpBase: 20, minHpPerDepth: 6, bountyPct: 300, types: 2, boonOptions: 3 }),
+    warden: z.object({
+      hpPct: Int.min(0), minHpBase: Int.min(0), minHpPerDepth: Int.min(0), bountyPct: Int.min(0), types: Int.min(0), boonOptions: Int.min(1),
+      /** 体力の上限（V3-3a §35.2）: maxHpBase + maxHpPerDepth × 深さ */
+      maxHpBase: Int.min(1).default(40), maxHpPerDepth: Int.min(0).default(10),
+      /** 節目に挑む候補の推奨レベルの上乗せ（V3-3a §35.2） */
+      levelBonus: Int.min(0).default(2),
+    }).default({ hpPct: 250, minHpBase: 20, minHpPerDepth: 6, bountyPct: 300, types: 2, boonOptions: 3, maxHpBase: 40, maxHpPerDepth: 10, levelBonus: 2 }),
   }),
   /** 特技の候補の数（V3-4 §4.1） */
   perks: z.object({ options: Int.min(1) }).default({ options: 3 }),
@@ -395,6 +405,8 @@ export const BalanceSchema = z.object({
     firstTargetDepth: z.object({ safe: Int.min(2), standard: Int.min(2), ambitious: Int.min(2) }),
     /** 候補の点（V3-2R2 §18.3）= 枠の基礎点 × 種類の係数 % × 深さの係数 %。retrieve_relic_guarded は守護者付きの遺物 */
     typePct: z.record(Int.min(1)),
+    /** 同じ階を目標にした達成を繰り返すと、目的の基礎点に掛かる %（2 回目 50%、3 回目 25%。V3-3a §35.2） */
+    repeatPct: Int.min(0).max(100).default(50),
     /** 深さの係数 = base + perDepth × 目標深度（%） */
     depthPct: z.object({ base: Int.min(1), perDepth: Int.min(0) }),
     /** retrieve_relic で遺物を守護者が守る確率 */

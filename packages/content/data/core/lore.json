@@ -24,6 +24,8 @@
     "text": { "ja": "地下{depth}階のどこかに、{relic}が眠っている。", "en": "Somewhere on depth {depth}, the {relic} lies waiting." } },
   { "id": "core:lore_brief_relic_guarded", "kind": "briefing", "when": { "objective": "retrieve_relic", "guarded": true },
     "text": { "ja": "地下{depth}階で、{guardian}が{relic}を守っている。", "en": "On depth {depth}, {guardian} guards the {relic}." } },
+  { "id": "core:lore_brief_warden", "kind": "briefing", "when": { "objective": "slay_warden" },
+    "text": { "ja": "地下{depth}階の節目で、{guardian}が下への道を閉ざしている。", "en": "At the milestone of depth {depth}, {guardian} bars the way down." } },
   { "id": "core:lore_brief_endless", "kind": "briefing", "when": { "objective": "endless" },
     "text": { "ja": "目的は無い。層の続く限り、潜る。", "en": "No objective. Dive as far as the layers go." } },
 

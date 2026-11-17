@@ -11,9 +11,9 @@ import { findFreeCell } from './floors';
 import { hasLos, inCircle } from './geom';
 import { isOpaqueFn } from './perception';
 import { guardianSpec, pickGuardianKind } from './gen/generate';
-import { lairPlan, rollGuardianInfo } from './guardians';
+import { lairPlan, rollGuardianInfo, rollWardenInfo, settleGuardian } from './guardians';
 import { grantBoon, ownedBoons, pickRelic } from './boons';
-import { livingWarden, nextMilestone } from './warden';
+import { livingWarden, nextMilestone, wardenPreview } from './warden';
 import { num, pickLore, tellStory } from './story';
 import { isMilestoneDepth } from './gen/generate';
 import { spawnFromSpec } from './spawn';
@@ -55,7 +55,7 @@ export function wanderPct(ctx: Ctx): { pct: number; none: boolean } {
   const x = currentExpedition(ctx.world);
   const fx = activeEffects(ctx);
   let pct = fx.wanderIntervalPct;
-  if (x && x.status === 'objective_complete' && (x.objective.type === 'slay_guardian' || x.objective.type === 'retrieve_relic')) {
+  if (x && x.status === 'objective_complete' && (x.objective.type === 'slay_guardian' || x.objective.type === 'slay_warden' || x.objective.type === 'retrieve_relic')) {
     pct = Math.trunc((pct * ctx.content.balance.expedition.afterObjective.wanderIntervalPct) / 100);
   }
   return { pct: Math.max(1, pct), none: fx.noWander };
@@ -125,19 +125,26 @@ export function makeOffers(ctx: Ctx, no: number): ExpeditionOffer[] {
   const ms = nextMilestone(ctx);
   // 目的の種類は 3 枠で別にする（最初の遠征は 到達・守護者・遺物 の順）
   const types = no === 1 ? [...OFFER_TYPES] : rng.shuffle([...OFFER_TYPES]);
-  let prevTarget = 0, prevBumped = false;
+  const M = ms?.depth ?? null;
+  // 同じ階を目標にした達成の回数（2 回目からは基礎点が減る。V3-3a §35.2）
+  const achievedAt = (d: number) => (ctx.world.expeditions ?? []).filter((x) => x.endReason === 'completed' && x.objective.targetDepth === d && x.objective.type !== 'endless').length;
   return SLOTS.map((slot, i) => {
     const s = b.slots[slot];
     let type = types[i % types.length];
     // 目標の深さは枠ごとに重ならない（堅実 +1・標準 +2・野心 +3）。最初の候補の深さより浅くしない
     let target = Math.max(b.firstTargetDepth[slot], campDepth + rng.range(s.aheadMin, s.aheadMax));
-    // 節目の階（大守護者の間）は目標にしない: 1 つ深くする。ずらした枠の次の枠は、それより深くする（V3-3 §3.2）
-    const bump = () => { while (isMilestoneDepth(ctx.content, target)) target++; };
-    const raw = target;
-    bump();
-    if (prevBumped && target <= prevTarget) { target = prevTarget + 1; bump(); }
-    prevBumped = target !== raw;
-    prevTarget = target;
+    let forceRank: 1 | 2 | 3 | null = null;
+    // 節目（V3-3a §35.2）: 未踏破の節目を越える目標は野心だけ。堅実と標準は越えない。
+    // 標準の目標が節目以上なら「節目に挑む」。堅実が節目以上なら、節目の 1 つ上の階の格 1 の守護者（力を付ける）。野心は節目より深く
+    if (M !== null && slot !== 'ambitious' && target >= M) {
+      if (slot === 'standard') { type = 'slay_warden'; target = M; }
+      else { type = 'slay_guardian'; target = M - 1; forceRank = 1; }
+    } else if (M !== null && slot === 'ambitious' && target === M) {
+      // 野心が節目の階に当たる: 越えた先にする（越える目標は野心だけ）
+      target = M + 1;
+    }
+    // 踏破済みの節目の階は目標にしない（1 つ深く）
+    while (type !== 'slay_warden' && isMilestoneDepth(ctx.content, target)) target++;
     // その階の下り階段にすでに立った（下の階が生成済み）なら、踏破型は出さず別の種類に替える
     if (type === 'reach_depth' && (target < deepest || target <= crossedMax)) type = rng.chance(50) ? 'slay_guardian' : 'retrieve_relic';
     const n = rng.range(s.traitsMin, s.traitsMax);
@@ -152,11 +159,22 @@ export function makeOffers(ctx: Ctx, no: number): ExpeditionOffer[] {
     const multiplierPct = traits.reduce((m, id) => Math.trunc((m * ctx.content.expeditionTraits[id].multiplierPct) / 100), 100);
     // 堅実の遺物は無防備（守護者付きは標準・野心だけ）
     const relicGuarded = type === 'retrieve_relic' && rng.chance(b.relicGuardianPct) && slot !== 'safe';
-    // 点 = 枠の基礎点 × 種類の係数 × 深さの係数（V3-2R2 §18.3）
-    const points = offerPoints({ expedition: b, slots: b.slots as Record<OfferSlot, typeof s> }, slot, type, relicGuarded, target);
+    // 点 = 枠の基礎点 × 種類の係数 × 深さの係数（V3-2R2 §18.3）。節目に挑むは、その深さの格 3 の守護者の目的と同じ式（V3-3a §35.2）
+    const pr = { expedition: b, slots: b.slots as Record<OfferSlot, typeof s> };
+    let points = type === 'slay_warden' ? offerPoints(pr, 'ambitious', 'slay_guardian', false, target) : offerPoints(pr, slot, type, relicGuarded, target);
+    // 同じ階の達成の繰り返しは基礎点を repeatPct % ずつ（2 回目 50%、3 回目 25%）
+    const done = achievedAt(target);
+    for (let k = 0; k < done; k++) points = Math.trunc((points * (b.repeatPct ?? 100)) / 100);
     const offer: ExpeditionOffer = { index: i + 1, objective: { type, targetDepth: target }, points, relicGuarded, slot, traits, multiplierPct };
+    if (done > 0) offer.repeatNo = done + 1;
     // 目標が次の節目より深い: 途中で大守護者を倒す必要がある
     if (ms && target > ms.depth) offer.passesWarden = structuredClone(ms);
+    // 節目に挑む: 大守護者の名前と型（種族は会うまで伏せる。見れば分かる特徴だけ）
+    if (type === 'slay_warden' && ms) {
+      offer.warden = structuredClone(ms);
+      const pv = wardenPreview(ctx, target);
+      offer.guardian = { rank: 3, traits: pv ? guardianTraits(ctx, pv.kind) : [], name: { ...ms.name }, ...(ms.title ? { title: { ...ms.title } } : {}), types: [...ms.types] };
+    }
     // 遺物（V3-3 §3.3）: 候補の時点で名前と加護を出す
     if (type === 'retrieve_relic') {
       const ri = pickRelic(ctx.content, ctx.world.secret.seed, no, i, owned);
@@ -164,7 +182,7 @@ export function makeOffers(ctx: Ctx, no: number): ExpeditionOffer[] {
     }
     // 守護者の見込み（格は枠で決まる。種族はここで決め、プレイヤーには特徴だけを出す）
     if (type === 'slay_guardian' || relicGuarded) {
-      const rank = guardianRankOf(slot);
+      const rank = forceRank ?? guardianRankOf(slot);
       const kind = pickGuardianKind(ctx.content, ctx.world.secret.seed, 'main', target, rank, rng);
       if (kind) {
         // 型・名前・弱点（V3-3 §3.1・§28.9）: 型と名前は候補に出す。弱点と種族は伏せる
@@ -326,7 +344,8 @@ export function computeProgress(ctx: Ctx, x: Expedition): ObjectiveProgress {
       crossedDepth = Math.max(crossedDepth, depth);
     }
   }
-  const guardianSlain = x.progress.guardianSlain || (x.targets.guardian !== null && !w.entities[x.targets.guardian]);
+  const guardianSlain = x.progress.guardianSlain
+    || (x.objective.type === 'slay_warden' ? (w.milestones?.cleared ?? []).includes(x.objective.targetDepth ?? -1) : (x.targets.guardian !== null && !w.entities[x.targets.guardian]));
   let relicHeldBy: string | null = null;
   if (x.targets.relic) {
     const holder = w.entities[x.targets.relic]?.item?.heldBy;
@@ -339,7 +358,8 @@ export function computeProgress(ctx: Ctx, x: Expedition): ObjectiveProgress {
 function statusFor(o: Objective, p: ObjectiveProgress): Expedition['status'] {
   switch (o.type) {
     case 'reach_depth': return p.reached ? 'objective_complete' : 'in_progress';
-    case 'slay_guardian': return p.guardianSlain ? 'objective_complete' : 'in_progress';
+    case 'slay_guardian':
+    case 'slay_warden': return p.guardianSlain ? 'objective_complete' : 'in_progress';
     case 'retrieve_relic': return p.relicHeldBy ? 'objective_complete' : 'in_progress';
     default: return 'in_progress';
   }
@@ -481,6 +501,7 @@ export function doExtract(ctx: Ctx, e: Entity, pr: PlayerRecord, completed: bool
         relic: { ...(def?.name ?? { ja: kind, en: kind }) }, origin: def?.origin ? { ...def.origin } : { ja: '', en: '' },
       }), key);
       if (def?.boon) grantBoon(ctx, cur0, def.boon, kind);
+      recallWarden(ctx, pr, kind, key);
     }
   }
   const relicLost = lifeline && relicIds.length > 0;
@@ -503,6 +524,23 @@ export function doExtract(ctx: Ctx, e: Entity, pr: PlayerRecord, completed: bool
   body.statuses = [];
   ctx.emit({ type: 'player_state', player: pr.id, state: 'at_camp', reason: lifeline ? 'lifeline' : completed ? 'extracted' : 'withdrew', extractPos, ...(relicLost ? { relicLost: true } : {}), put: [body], ...(treasureIds.length ? { del: treasureIds } : {}), seenBy: 'all', floor: key });
   maybeEndExpedition(ctx);
+}
+
+/** 記録庫が次の節目の大守護者の記憶を 1 つ返す（V3-3a §35.7）: 節目ごとに 1 つ目は弱点、2 つ目は体力と最大の一撃、3 つ目からは無い */
+function recallWarden(ctx: Ctx, pr: PlayerRecord, relic: string, floor: string): void {
+  const ms = nextMilestone(ctx);
+  if (!ms) return;
+  const known = ctx.world.players[pr.id]?.knowledge.wardenIntel?.[String(ms.depth)] ?? {};
+  const base = { type: 'archive_recalled' as const, player: pr.id, relic, depth: ms.depth, guardianName: { ...ms.name }, seenBy: [pr.id], floor };
+  if (!known.weakness) {
+    const w = rollWardenInfo(ctx.content, ctx.world.secret.seed, ms.depth).weakness;
+    if (w) { ctx.emit({ ...base, memory: 'weakness', weakness: w }); return; }
+  }
+  if (known.hp === undefined) {
+    const pv = wardenPreview(ctx, ms.depth);
+    if (pv) { ctx.emit({ ...base, memory: 'vitals', hp: pv.hp, maxHit: pv.maxHit }); return; }
+  }
+  ctx.emit({ ...base, memory: 'none' });
 }
 
 /** 帰還の綱の効果が終わった: その場からキャンプへ（確定は目的を除く戦利品の lifeline.pct %。遺物は失う。V3-4b §28.1） */
@@ -659,7 +697,7 @@ export function startExpedition(ctx: Ctx, pr: PlayerRecord, offer: number | 'end
     participants, start, targets: { guardian: null, relic: null }, progress: { reached: false, guardianSlain: false, relicHeldBy: null, maxDepth: startDepth },
     extracted: [], result: null,
     ...(slot ? { slot } : {}), traits, multiplierPct, haul: { bounty: 0, discovery: 0, kills: 0 },
-    ...(guardianKind ? { guardianKind } : {}), guardianRank: guardianRankOf(slot),
+    ...(guardianKind ? { guardianKind } : {}), guardianRank: objective.type === 'slay_warden' ? 3 : (camp.offers.find((c) => c.index === offer)?.guardian?.rank ?? guardianRankOf(slot)),
     ...(guardianInfo.name ? { guardianName: guardianInfo.name, ...(guardianInfo.title ? { guardianTitle: guardianInfo.title } : {}), guardianTypes: guardianInfo.types ?? [], guardianWeakness: guardianInfo.weakness ?? null } : {}),
     ...(relic ? { relic } : {}),
     ...(camp.milestone ? { milestone: structuredClone(camp.milestone) } : {}),
@@ -682,6 +720,8 @@ export function startExpedition(ctx: Ctx, pr: PlayerRecord, offer: number | 'end
     settled.add(k);
     settleFloor(ctx, at, settleRng);
   }
+  // キャンプで休んでいる間に、すべての階の守護者も全快して落ち着く（V3-3a §35.1）
+  for (const e of Object.values(w.entities).filter((x) => x.guardian && x.pos && (x.stats?.hp ?? 0) > 0).sort((a, b) => a.sid - b.sid)) settleGuardian(ctx, e);
   for (const pid of participants) if (w.players[pid].state === 'at_camp') returnFromCamp(ctx, pid);
   // キャンプが帰還の綱を 1 本持たせる
   for (const pid of participants) issueLifeline(ctx, pid);

@@ -122,6 +122,7 @@ export function armorOf(ctx: Ctx, e: Entity): number {
 /** 受けるダメージの修正（弾く者・投擲に弱い）。弱点が効いたら見ている者に知らせる */
 export function guardianIncoming(ctx: Ctx, m: Entity, dmg: number, via: 'melee' | 'thrown' | 'ranged', attacker: Entity | null): number {
   if (!m.guardian) return dmg;
+  if (via === 'thrown' && attacker?.player) noteTrial(ctx, m, 'thrown');
   let d = dmg;
   for (const t of typesOf(ctx, m)) if (t.h.incoming) d = t.h.incoming(ctx, m, d, via, attacker, t.params);
   const w = weaknessOf(ctx, m);
@@ -136,6 +137,7 @@ export function guardianIncoming(ctx: Ctx, m: Entity, dmg: number, via: 'melee' 
 /** 継続ダメージの倍率（毒に弱い）。効いたら知らせる */
 export function guardianDotMult(ctx: Ctx, m: Entity, statusId: string): number {
   if (statusId !== 'core:poison') return 1;
+  noteTrial(ctx, m, 'poison');
   const w = weaknessOf(ctx, m);
   const mult = w?.h.dotMult?.(w.params) ?? 1;
   if (mult !== 1) revealWeakness(ctx, m);
@@ -152,6 +154,7 @@ export function guardianCritIfUnaware(ctx: Ctx, m: Entity): boolean {
 
 /** 行動コストの倍率（水場で遅い）。効いたら知らせる */
 export function guardianCostPct(ctx: Ctx, m: Entity): number {
+  if (m.pos && ctx.terrainAt(m.pos.floor, m.pos.x, m.pos.y).id === 'core:shallow_water') noteTrial(ctx, m, 'water');
   const w = weaknessOf(ctx, m);
   const pct = w?.h.costPct?.(ctx, m, w.params) ?? 100;
   if (pct !== 100) revealWeakness(ctx, m);
@@ -164,6 +167,87 @@ export function guardianAsleep(content: Content, info: GuardianInfo, fallback: b
   const w = info.weakness ? content.guardianWeaknesses[info.weakness] : undefined;
   if (w && weaknessHandlers.get(w.handler).asleep) return true;
   return fallback;
+}
+
+/**
+ * 守護者を落ち着かせる（全快・状態異常を消す・追跡をやめる・持ち場へ・怒りと呼んだ回数を戻す・見ていた与ダメの累計を戻す）。
+ * キャンプから遠征を始めるとき（全階）と、離れている間の回復で全快したとき（V3-3a §35.1）
+ */
+export function settleGuardian(ctx: Ctx, m0: Entity): void {
+  const m = ctx.world.entities[m0.id];
+  if (!m?.guardian || !m.pos || !m.stats || !m.actor) return;
+  const key = m.pos.floor;
+  if (m.stats.hp < m.stats.maxHp) ctx.emit({ type: 'healed', target: m.id, targetKind: m.kind, amount: m.stats.maxHp - m.stats.hp, hpAfter: m.stats.maxHp, via: 'camp', resetSeen: true, seenBy: [], floor: key });
+  const cur = ctx.world.entities[m.id];
+  const body = structuredClone(cur);
+  body.statuses = [];
+  const g = body.guardian!;
+  if (g.enraged) {
+    const t = g.types.map((id) => ctx.content.guardianTypes[id]).find((d) => d?.handler === 'enrager');
+    body.actor!.speed -= t?.params.speed ?? 30;
+    body.stats!.might -= t?.params.might ?? 2;
+    if (body.base) body.base.might -= t?.params.might ?? 2;
+    g.enraged = false;
+  }
+  delete g.summoned; delete g.unseen; delete g.lurk; delete g.struck; delete g.awaySince;
+  if (body.actor!.ai) {
+    body.actor!.ai = { ...body.actor!.ai, state: body.actor!.ai.state === 'asleep' ? 'asleep' : 'unaware', targetPos: null, lostTurns: 0 };
+    delete body.actor!.ai.intent;
+  }
+  if (body.home && !(body.pos!.x === body.home.x && body.pos!.y === body.home.y) && !ctx.actorAt(key, body.home.x, body.home.y)) body.pos = { floor: key, x: body.home.x, y: body.home.y };
+  ctx.emit({ type: 'guardian_state', id: m.id, put: [body], seenBy: [], floor: key });
+}
+
+/** 最後のプレイヤーが階を離れた: その階の守護者に、離れたときの手番数を付ける */
+export function markGuardiansAway(ctx: Ctx, key: string, leaver: Entity): void {
+  if (ctx.playersOn(key).some((pr) => pr.entityId !== leaver.id && ctx.world.entities[pr.entityId]?.pos?.floor === key)) return;
+  for (const m of ctx.entitiesOn(key)) {
+    if (!m.guardian || (m.stats?.hp ?? 0) <= 0) continue;
+    setGuardian(ctx, m, (e) => { e.guardian!.awaySince = { player: leaver.player!, turns: leaver.actor?.turns ?? 0 }; });
+  }
+}
+
+/** プレイヤーが階に戻った: 離れていた手番 × awayHealPct % だけ守護者が回復する（全快なら落ち着く） */
+export function restGuardians(ctx: Ctx, key: string, arriver: Entity): void {
+  const pct = ctx.content.balance.guardian.awayHealPct ?? 0;
+  for (const m of ctx.entitiesOn(key)) {
+    const a = m.guardian?.awaySince;
+    if (!a || !m.stats || m.stats.hp <= 0) continue;
+    const away = Math.max(0, (arriver.actor?.turns ?? 0) - a.turns);
+    const heal = Math.trunc((m.stats.maxHp * pct * away) / 100);
+    const pr = arriver.player!;
+    if (m.stats.hp >= m.stats.maxHp) { setGuardian(ctx, m, (e) => { delete e.guardian!.awaySince; }); continue; }
+    if (m.stats.hp + heal >= m.stats.maxHp) {
+      settleGuardian(ctx, m);
+      ctx.emit({ type: 'guardian_rested', id: m.id, guardianName: { ...m.guardian!.name }, full: true, player: pr, seenBy: [pr], floor: key });
+    } else {
+      if (heal > 0) {
+        ctx.emit({ type: 'healed', target: m.id, targetKind: m.kind, amount: heal, hpAfter: m.stats.hp + heal, via: 'away', seenBy: [], floor: key });
+        ctx.emit({ type: 'guardian_rested', id: m.id, guardianName: { ...m.guardian!.name }, full: false, player: pr, seenBy: [pr], floor: key });
+      }
+      setGuardian(ctx, ctx.world.entities[m.id], (e) => { delete e.guardian!.awaySince; });
+    }
+  }
+}
+
+/** 弱点の試し（V3-3a §35.3）: 毒を与えた・投擲を当てた・気づかれる前に一撃を入れた・水場の上にいた */
+export type WeaknessTrial = 'poison' | 'thrown' | 'unaware_hit' | 'water';
+const TRIAL_HANDLER: Record<WeaknessTrial, string> = { poison: 'poison', thrown: 'thrown', unaware_hit: 'deep_sleep', water: 'water_slow' };
+
+/** 試した弱点が外れていたら、見ている者に「外れ」を記録する（当たりは今までどおり revealWeakness） */
+export function noteTrial(ctx: Ctx, m: Entity, trial: WeaknessTrial): void {
+  const g = m.guardian;
+  if (!g || !m.pos) return;
+  const def = ctx.content.lists.guardianWeaknesses.find((w) => w.handler === TRIAL_HANDLER[trial]);
+  if (!def || g.weakness === def.id) return;
+  const f = ctx.world.floors[m.pos.floor];
+  if (!f) return;
+  const cell = m.pos.y * f.width + m.pos.x;
+  for (const pr of ctx.playersOn(m.pos.floor)) {
+    if (pr.knowledge.guardianIntel?.[m.id] || pr.knowledge.guardianTried?.[m.id]?.includes(def.id)) continue;
+    if (!ctx.visibleSet(pr.id).has(cell)) continue;
+    ctx.emit({ type: 'guardian_intel', player: pr.id, guardian: m.id, guardianName: { ...g.name }, weakness: def.id, miss: true, seenBy: [pr.id], floor: m.pos.floor });
+  }
 }
 
 /** 弱点を知る（その守護者が見えている者のうち、まだ知らない者に） */

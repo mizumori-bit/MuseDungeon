@@ -412,6 +412,14 @@ V3-2R で足した項目（同じく後方互換。会心と経験値のルー�
 - `player_state.reason: 'joined'`（キャンプから始まる参加）。参加コマンドの `atCamp`
 - プレイヤー向けの射影で、見えていた個体が視界の外へ動いた `entity_moved` に `dirOut`（向きだけ。行き先は伏せたまま）
 
+V3-3a で足した項目（見直し 5。後方互換。規則と候補の作り方が変わったので `engineVersion` は 0.14.0、新しいイベントがあるので `eventVersion` は 9。DESIGN.md §24）:
+
+- 目的の種類 `slay_warden`（節目に挑む）。`Offer.warden`（挑む大守護者）・`Offer.repeatNo`（同じ階の何回目の達成か）
+- World State: `GuardianInfo.awaySince`・`Knowledge.guardianTried`（外れた弱点）・`Knowledge.wardenIntel`（記録庫の記憶）・`Knowledge.archive`（納めた遺物）・`PlayerBuild.offered`（候補に出た特技）。PlayerView: `wardenIntel`・`archive`・`EntityView.guardian.notWeak`
+- イベント: `guardian_rested { id, guardianName, full, player }`（本人）・`archive_recalled { player, relic, depth, guardianName, memory: 'weakness' | 'vitals' | 'none', weakness?, hp?, maxHit? }`（本人）・`guardian_intel.miss`
+- 観測: `visible.monsters[].guardian.not_weak`・`camp.milestone.memory`・`camp.archive { delivered, total }`・`expedition.milestone.memory`。候補の文に「節目に挑む」「この階は N 回目」「納めると、記録庫が…の記憶を 1 つ返す（残り K）」。fight の結果に「初被弾」と hp_risk のヒント
+- コンテンツ: `balance.guardian.awayHealPct`・`warden.maxHpBase / maxHpPerDepth / levelBonus`・`expedition.repeatPct`・`fight.firstHitStopPct / recordedKills`、効果 `heal` の `minPct`、弱点の `short`、格 1 の `types: 1`。公開カタログ: `rules.guardianAwayHealPct`・`rules.milestone.levelBonus`・`rules.expedition.repeatPct`・`rules.fightFirstHitStopPct / fightRecordedKills`・弱点の `short`
+
 V3-3 の後の AI 評価の修正で足した項目（後方互換。`engineVersion` は 0.13.1。DESIGN.md §23.1）:
 
 - マクロの停止理由: `hit_and_run`（fight: 待つ間に標的に殴られたが、標的は隣にいない）・`no_progress`（移動マクロが同じ 2 マスを往復した）。`target_not_approaching` は 3 手番続けて近づかないときにも出る

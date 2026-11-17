@@ -1,7 +1,7 @@
 // ベースライン bot（ランダム／貪欲）。AI と同じ PlayerPort・同じ Command・同じ観測だけを使う。
 // 貪欲 bot は遠征を遊ぶ: 目的を追い、達成したら階段の上で extract、キャンプでは次の遠征を選ぶ。
 import type { Command, Dir, ExpeditionEndReason, OfferSlot, PlayerView } from '@muse/shared';
-import { abilityStatus, buildNavGrid, cheb, compassDir, DIR_VEC, dirTo, DIRS, distanceField, isCursedItem, offerGap, perkChoice, Rng } from '@muse/shared';
+import { abilityStatus, buildNavGrid, cheb, compassDir, DIR_VEC, dirTo, DIRS, distanceField, isCursedItem, offerGap, offerWardenExtra, perkChoice, Rng } from '@muse/shared';
 import type { Catalog } from '@muse/shared';
 import type { PlayerPort, SessionManager } from '@muse/server';
 
@@ -177,7 +177,7 @@ export function greedyDecide(port: PlayerPort, rng: Rng, memo: BotMemo): Command
   if (v.status === 'at_camp') {
     let o = (memo.offerSlot ? v.camp?.offers.find((x) => x.slot === memo.offerSlot) : undefined) ?? v.camp?.offers[0];
     // 推奨レベルに届いていなければ堅実で育つ（公開の表と自分のレベルだけで判断）
-    if (memo.levelAware && o && o.objective.targetDepth !== null && offerGap(port.catalog.rules, o.objective.targetDepth, o.traits ?? [], v.self.level).levelGap! > 0) {
+    if (memo.levelAware && o && o.objective.targetDepth !== null && offerGap(port.catalog.rules, o.objective.targetDepth, o.traits ?? [], v.self.level, offerWardenExtra(o)).levelGap! > 0) {
       o = v.camp?.offers.find((x) => x.slot === 'safe') ?? o;
     }
     return { type: 'start_expedition', offer: o?.index ?? 'endless' };
@@ -287,7 +287,7 @@ export function greedyDecide(port: PlayerPort, rng: Rng, memo: BotMemo): Command
     if (v.floorHint?.draft) return { type: 'explore', toward: 'draft', ...steadyIf(hp) };
   }
   if (x && onTarget && !done) {
-    if (x.objective.type === 'slay_guardian' && !x.progress.guardianSlain) {
+    if ((x.objective.type === 'slay_guardian' || x.objective.type === 'slay_warden') && !x.progress.guardianSlain) {
       const g = hostiles.find((h) => h.role === 'guardian');
       if (g && hp >= 60 && !memo.avoid.has(g.id)) return { type: 'travel', to: g.id };
     }

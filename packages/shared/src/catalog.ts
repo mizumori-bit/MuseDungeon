@@ -106,7 +106,7 @@ export interface Catalog {
   /** 守護者の型（V3-3 §3.1）。name は称号 */
   guardianTypes: Record<string, { name: Names; desc: Names; strongVs: 'melee' | 'thrown'; handler: string }>;
   /** 守護者の弱点（V3-3 §3.1）。どの守護者が持つかは試すまで伏せる */
-  guardianWeaknesses: Record<string, { name: Names; desc: Names; handler: string }>;
+  guardianWeaknesses: Record<string, { name: Names; desc: Names; handler: string; short?: Names }>;
   /** 加護（V3-3 §3.3） */
   boons: Record<string, CatalogBoon>;
   /** 物語の枠（V3-3 §3.4。get_rules に出す） */
@@ -122,15 +122,20 @@ export interface CatalogRules {
   restMaxTurns: number;
   /** 休憩と自然回復で戻る上限（最大 HP の %。V3-4b §28.3） */
   restCapPct?: number;
-  /** 節目の大守護者の階（V3-3 §3.2）: 深度 every の倍数（min 以上） */
-  milestone?: { every: number; min: number; boonOptions: number };
+  /** 守護者が、相手が階を離れている間に手番 1 つにつき回復する最大体力の %（V3-3a §35.1） */
+  guardianAwayHealPct?: number;
+  /** 節目の大守護者の階（V3-3 §3.2）: 深度 every の倍数（min 以上）。levelBonus: 節目に挑む候補の推奨レベルの上乗せ */
+  milestone?: { every: number; min: number; boonOptions: number; levelBonus?: number };
   macroStepLimit: number;
   /** fight の標的（追跡中・逃げていない）が見えなくなったときに待つ手番（V3-4b §28.4） */
   fightLostWait?: number;
+  /** fight: 初被弾で止まる被弾の大きさ（最大 HP の %）と、記録ありとして扱う撃破数（V3-3a §35.6） */
+  fightFirstHitStopPct?: number;
+  fightRecordedKills?: number;
   wander: { intervalMin: number; intervalMax: number };
   score: { perDepth: number; perKill: number; perLevel: number };
   /** 候補の点 = 枠の基礎点 × typePct % × (depthPct.base + depthPct.perDepth × 目標深度) %（V3-2R2 §18.3） */
-  expedition: { firstTargetDepth: Record<'safe' | 'standard' | 'ambitious', number>; typePct: Record<string, number>; depthPct: { base: number; perDepth: number } };
+  expedition: { firstTargetDepth: Record<'safe' | 'standard' | 'ambitious', number>; typePct: Record<string, number>; depthPct: { base: number; perDepth: number }; repeatPct?: number };
   /** 敵の HP 4 段階の境界（%）: healthy >= [0], wounded >= [1], badly_wounded >= [2], それ未満 near_death */
   hpBands: [number, number, number];
   /** 推定残り HP: 記録がこの数未満の間は上限を出さない */
@@ -227,22 +232,34 @@ export function recommendedLevel(rules: Pick<CatalogRules, 'recommendedLevel'>, 
 }
 
 /** 候補の難しさ（V3-2R §14.4）: 推奨レベルとの差と、条件の危険度の合計。段階に丸めない */
-export function offerGap(rules: Pick<CatalogRules, 'recommendedLevel' | 'traits'>, targetDepth: number | null, traits: readonly string[], level: number): { recommendedLevel: number | null; levelGap: number | null; traitDanger: number } {
-  const traitDanger = traits.reduce((a, id) => a + (rules.traits[id]?.danger ?? 0), 0);
+export function offerGap(rules: Pick<CatalogRules, 'recommendedLevel' | 'traits'> & Partial<Pick<CatalogRules, 'milestone'>>, targetDepth: number | null, traits: readonly string[], level: number,
+  extra?: { warden?: boolean; passesWarden?: number }): { recommendedLevel: number | null; levelGap: number | null; traitDanger: number } {
+  let traitDanger = traits.reduce((a, id) => a + (rules.traits[id]?.danger ?? 0), 0);
   if (targetDepth === null) return { recommendedLevel: null, levelGap: null, traitDanger };
-  const rec = recommendedLevel(rules, targetDepth);
+  let rec = recommendedLevel(rules, targetDepth);
+  // 大守護者を推奨レベルと危険度に入れる（V3-3a §35.2）: 節目に挑む = その深さ + levelBonus、節目を越える = 目標と大守護者の大きいほう・危険度 +1
+  const bonus = rules.milestone?.levelBonus ?? 2;
+  if (extra?.warden) rec += bonus;
+  if (extra?.passesWarden) { rec = Math.max(rec, recommendedLevel(rules, extra.passesWarden) + bonus); traitDanger += 1; }
   return { recommendedLevel: rec, levelGap: rec - level, traitDanger };
+}
+
+/** 候補の大守護者の情報（offerGap の extra） */
+export function offerWardenExtra(o: { objective: { type: string }; passesWarden?: { depth: number } }): { warden?: boolean; passesWarden?: number } {
+  return { ...(o.objective.type === 'slay_warden' ? { warden: true } : {}), ...(o.passesWarden ? { passesWarden: o.passesWarden.depth } : {}) };
 }
 
 /**
  * 次の候補の下限（V3-2R3 §20.2）: 目標として達成した最深の階（campDepth）+ 堅実の幅。最初の候補の深さより浅くはならない。
  * 踏破で先まで降りても深くならない
  */
-export function nextCampOf(rules: Pick<CatalogRules, 'recommendedLevel' | 'slots' | 'expedition'> & Partial<Pick<CatalogRules, 'milestone'>>, campDepth: number): { minTargetDepth: number; recommendedLevel: number } {
+export function nextCampOf(rules: Pick<CatalogRules, 'recommendedLevel' | 'slots' | 'expedition'> & Partial<Pick<CatalogRules, 'milestone'>>, campDepth: number, cleared: readonly number[] = []): { minTargetDepth: number; recommendedLevel: number } {
   let min = Math.max(rules.expedition.firstTargetDepth?.safe ?? 1, campDepth + rules.slots.safe.aheadMin);
-  // 節目の階（大守護者の間）は目標にならない（V3-3 §3.2）
+  // 節目の階（大守護者の間）は目標にならない: 未踏破なら堅実はその 1 つ上（力を付ける）、踏破済みなら 1 つ深く（V3-3a §35.2）
   const ms = rules.milestone;
-  while (ms && min >= ms.min && min % ms.every === 0) min++;
+  const isMs = (d: number) => !!ms && d >= ms.min && d % ms.every === 0;
+  if (isMs(min) && !cleared.includes(min)) min -= 1;
+  while (isMs(min)) min++;
   return { minTargetDepth: min, recommendedLevel: recommendedLevel(rules, min) };
 }
 

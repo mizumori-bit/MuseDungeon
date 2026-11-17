@@ -294,8 +294,11 @@ function nearDirs(d: Dir): Dir[] {
 }
 
 /** その種族（守護者は別）から被弾した記録がある（fight は記録の無い種族の出現でだけ止まる。V3-4b §28.4） */
-function hasHitRecord(view: PlayerView, h: EntityView): boolean {
-  return !!h.kind && (view.monsterMemory[memoryKey(h.kind, h.role)]?.maxDamageToYou ?? 0) > 0;
+function hasHitRecord(view: PlayerView, h: EntityView, catalog?: Catalog): boolean {
+  if (!h.kind) return false;
+  const mem = view.monsterMemory[memoryKey(h.kind, h.role)];
+  // 3 体以上倒した種族は、被弾の記録が無くても記録ありとして扱う（V3-3a §35.6: 何度も倒したジャッカルのたびに止まった）
+  return (mem?.maxDamageToYou ?? 0) > 0 || (mem?.kills ?? 0) >= (catalog?.rules.fightRecordedKills ?? 3);
 }
 
 /** until: 'clear' の次の相手: 隣にいる追跡中の敵、いなければ最も近い追跡中の敵（逃走中を除く。動かない敵は隣にいるときだけ） */
@@ -371,7 +374,7 @@ export function macroStart(view: PlayerView, cmd: Command, catalog: Catalog): Ma
     everSeen: hostileIds(view),
     ...(cmd.type === 'explore' && cmd.toward ? { toward: cmd.toward } : {}),
     ...(cmd.type === 'fight' ? {
-      unrecorded: view.entities.filter((e) => e.cat === 'monster' && e.kind && !(view.monsterMemory[memoryKey(e.kind, e.role)]?.maxDamageToYou)).map((e) => memoryKey(e.kind!, e.role)),
+      unrecorded: view.entities.filter((e) => e.cat === 'monster' && e.kind && !hasHitRecord(view, e, catalog)).map((e) => memoryKey(e.kind!, e.role)),
     } : {}),
     knownDown: downStairsCount(view, catalog),
     adjacent: view.self.pos ? view.entities.filter((e) => e.cat === 'monster' && cheb(e.pos, view.self.pos!) <= 1).map((e) => e.id) : [],
@@ -475,7 +478,9 @@ export function macroNext(state: MacroState, view: PlayerView, catalog: Catalog,
         const src = view.entities.find((h) => h.id === x.source);
         const key = memoryKey(x.sourceKind as string, src?.role);
         state.unrecorded = (state.unrecorded ?? []).filter((k) => k !== key);
-        return { stop: 'first_hit' };
+        // 小さい初被弾では止めない（最大 HP の firstHitStopPct % 未満。記録は付けて続ける。V3-3a §35.6）
+        const amount = typeof x.amount === 'number' ? x.amount : 0;
+        if (amount * 100 >= maxHp * (catalog.rules.fightFirstHitStopPct ?? 0)) return { stop: 'first_hit' };
       }
     } else if (mode === 'careful') {
       if (attacked) return { stop: 'attacked' };
@@ -511,8 +516,8 @@ export function macroNext(state: MacroState, view: PlayerView, catalog: Catalog,
       if (isNew) return { stop: 'hostile_in_view' };
     } else if (kind === 'fight') {
       // 被弾の記録がある種族の追跡中の敵が新しく見えても止まらない。止めるのは記録の無い種族だけ（V3-4b §28.4）
-      if (isNew && h.id !== state.fightTarget && pursuing(h) && reaches(h) && !hasHitRecord(view, h)) return { stop: 'hostile_in_view' };
-      if (isNew && h.kind && !hasHitRecord(view, h)) {
+      if (isNew && h.id !== state.fightTarget && pursuing(h) && reaches(h) && !hasHitRecord(view, h, catalog)) return { stop: 'hostile_in_view' };
+      if (isNew && h.kind && !hasHitRecord(view, h, catalog)) {
         const key = memoryKey(h.kind, h.role);
         if (!(state.unrecorded ?? []).includes(key)) state.unrecorded = [...(state.unrecorded ?? []), key];
       }

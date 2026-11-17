@@ -108,6 +108,7 @@ export const OBJECTIVE_CHOICES: { id: ObjectiveChoice; ja: string; en: string }[
   { id: 'auto', ja: 'おまかせ（最初の候補）', en: 'Auto (first offer)' },
   { id: 'reach_depth', ja: '目標の階を踏破して帰還（その階の下り階段に着く）', en: 'Cross the target depth (reach its down stairs)' },
   { id: 'slay_guardian', ja: '守護者を倒して帰還', en: 'Slay the guardian' },
+  { id: 'slay_warden', ja: '節目に挑む（大守護者を倒して帰還）', en: 'Challenge the milestone (slay the warden)' },
   { id: 'retrieve_relic', ja: '遺物を持ち帰る', en: 'Retrieve the relic' },
   { id: 'endless', ja: '目的なし（endless: ひたすら潜る）', en: 'Endless (no objective)' },
 ];

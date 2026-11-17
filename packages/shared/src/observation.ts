@@ -2,7 +2,7 @@
 // 派生情報は PlayerView（とカタログ）だけから計算する。仕様: docs/PROTOCOL.md §3
 import type { Catalog, CatalogEquipStats } from './catalog';
 import { abilityStatus, accBonuses, curseUnknown, isCursedItem, perkChoice, shortId, weaponReach } from './build';
-import { boonHookSum, haulTotal, nameOf, nextCampOf, nextOverreach, offerGap, overreachPoints, payoutOf, regenInterval, regenStep, restCapHp } from './catalog';
+import { boonHookSum, haulTotal, nameOf, nextCampOf, nextOverreach, offerGap, offerWardenExtra, overreachPoints, payoutOf, regenInterval, regenStep, restCapHp } from './catalog';
 import { guardianDisplayName, multText, objectiveText, offerText, partsText, progressText, resultText } from './expedition';
 import { isStationary, pickableItems, sameOrWorseEquip, worseEquip } from './macro';
 import { attacksPerTurn, chaseAttacks, memoryOf, monsterSpeedOf, selfSpeed } from './danger';
@@ -63,7 +63,7 @@ export interface ObsMonster {
   /** 倒すと戦利品に入る賞金 */
   bounty?: number;
   /** 守護者の呼び名・型・分かった弱点（V3-3 §3.1。弱点は試して分かったものだけ） */
-  guardian?: { name: string; types: { id: string; name: string }[]; weakness?: { id: string; name: string }; warden?: boolean };
+  guardian?: { name: string; types: { id: string; name: string }[]; weakness?: { id: string; name: string }; warden?: boolean; not_weak?: { id: string; name: string }[] };
   /** 予備動作（見えていれば出る。V3-3 §3.1）。on_line: 突進の直線の上に自分がいる */
   intent?: { code: 'winding_up' | 'summoning' | 'enraging'; dir?: Dir; on_line?: boolean; text: string };
 }
@@ -141,10 +141,12 @@ export interface ObsCamp {
   }[];
   /** 次の節目（V3-3 §3.2）: まだ倒していない最も浅い大守護者の階 */
   milestone?: ObsMilestone;
+  /** 記録庫に納めた欠片の数（V3-3a §35.7） */
+  archive?: { delivered: number; total: number };
 }
 
 /** 節目の大守護者（V3-3 §3.2）。弱点と種族は伏せる */
-export interface ObsMilestone { depth: number; name: string; types: { id: string; name: string }[]; cleared: boolean; text: string }
+export interface ObsMilestone { depth: number; name: string; types: { id: string; name: string }[]; cleared: boolean; text: string; memory?: { weakness?: string; hp?: number; max_hit?: number } }
 
 /** 加護の一覧（V3-3 §3.3）。used: 遠征に 1 回の加護をこの遠征で使った */
 export interface ObsBoon { id: string; name: string; desc: string; used?: boolean }
@@ -225,6 +227,8 @@ export interface ObservationOptions {
   mapWidth?: number;
   mapHeight?: number;
   recent?: PerceivedEvent[];
+  /** 帰還の綱の長い説明はこの遠征で出した（以降は短い行。V3-3a §35.8） */
+  lifelineShort?: boolean;
 }
 
 const DIR_JA: Record<Dir, string> = { n: '北', ne: '北東', e: '東', se: '南東', s: '南', sw: '南西', w: '西', nw: '北西' };
@@ -514,15 +518,22 @@ export function chaseEstimate(view: PlayerView, catalog: Catalog, hunters: reado
 }
 
 /** 節目の文（「次の節目: 地下5階の大守護者「呼び集める者ヴォルン」（型: 呼び集める者・突き進む者。未踏破）」） */
-export function milestoneObs(L: Locale, catalog: Catalog, m: { depth: number; name: Names; title?: Names; types: string[] }, cleared: readonly number[]): ObsMilestone {
+export function milestoneObs(L: Locale, catalog: Catalog, m: { depth: number; name: Names; title?: Names; types: string[] }, cleared: readonly number[], intel?: { weakness?: string; hp?: number; maxHit?: number }): ObsMilestone {
   const name = guardianDisplayName(L, m);
   const types = m.types.map((id) => ({ id, name: nameOf(catalog.guardianTypes[id]?.name, L, id) }));
   const done = cleared.includes(m.depth);
   const opts = catalog.rules?.milestone?.boonOptions ?? 3;
+  // 記録庫が返した記憶（V3-3a §35.7）
+  const mem = [
+    intel?.weakness ? t(L, `弱点 ${nameOf(catalog.guardianWeaknesses[intel.weakness]?.name, L, intel.weakness)}`, `weakness: ${nameOf(catalog.guardianWeaknesses[intel.weakness]?.name, L, intel.weakness)}`) : '',
+    intel?.hp !== undefined ? t(L, `体力およそ ${intel.hp}・一撃 ${intel.maxHit} まで`, `about ${intel.hp} HP, hits up to ${intel.maxHit}`) : '',
+  ].filter(Boolean);
+  const memText = mem.length ? t(L, `。記録庫の記憶: ${mem.join('・')}`, `; the archive remembers: ${mem.join(', ')}`) : '';
   return {
     depth: m.depth, name, types, cleared: done,
-    text: t(L, `次の節目: 地下${m.depth}階の大守護者「${name}」（型: ${types.map((x) => x.name).join('・') || 'なし'}。${done ? '踏破済み' : `未踏破。倒すまでその階の下り階段は封じられている。倒すと加護を ${opts} つの候補から 1 つ選べる`}）`,
-      `Next milestone: the warden "${name}" on depth ${m.depth} (types: ${types.map((x) => x.name).join('/') || 'none'}; ${done ? 'cleared' : `not cleared; its stairs down stay sealed until it falls; slay it to choose 1 of ${opts} boons`})`),
+    ...(intel && (intel.weakness || intel.hp !== undefined) ? { memory: { ...(intel.weakness ? { weakness: intel.weakness } : {}), ...(intel.hp !== undefined ? { hp: intel.hp, max_hit: intel.maxHit } : {}) } } : {}),
+    text: t(L, `次の節目: 地下${m.depth}階の大守護者「${name}」（型: ${types.map((x) => x.name).join('・') || 'なし'}。${done ? '踏破済み' : `未踏破。倒すまでその階の下り階段は封じられている。倒すと加護を ${opts} つの候補から 1 つ選べる`}${memText}）`,
+      `Next milestone: the warden "${name}" on depth ${m.depth} (types: ${types.map((x) => x.name).join('/') || 'none'}; ${done ? 'cleared' : `not cleared; its stairs down stay sealed until it falls; slay it to choose 1 of ${opts} boons`}${memText})`),
   };
 }
 
@@ -700,7 +711,8 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
   const players: ObsPlayer[] = [];
   const features: ObsFeature[] = [];
   const rel = (p: Pos) => ({ dir: pos ? compassDir(pos, p) : null, dist: pos ? cheb(pos, p) : 0 });
-  const mySpeed = effectiveSpeed(view, catalog);
+  // 敵の速さの表示は、加速・減速を除いた自分の速さと比べる（V3-3a §35.8: 加速中は普通のゴブリンが「遅い」と出た）
+  const mySpeed = view.self.speed;
   const visibleOfKind = new Map<string, number>();
   for (const e of view.entities) if (e.cat === 'monster' && e.kind) visibleOfKind.set(e.kind, (visibleOfKind.get(e.kind) ?? 0) + 1);
   for (const e of view.entities) {
@@ -751,6 +763,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
           types: e.guardian.types.map((id) => ({ id, name: nameOf(catalog.guardianTypes[id]?.name, L, id) })),
           ...(w ? { weakness: { id: w, name: nameOf(catalog.guardianWeaknesses[w]?.name, L, w) } } : {}),
           ...(e.guardian.warden ? { warden: true } : {}),
+          ...(e.guardian.notWeak?.length ? { not_weak: e.guardian.notWeak.map((id) => ({ id, name: nameOf(catalog.guardianWeaknesses[id]?.short ?? catalog.guardianWeaknesses[id]?.name, L, id) })) } : {}),
         };
       }
       if (e.intent) m.intent = intentOf(L, e, pos);
@@ -980,7 +993,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
     const blocked: ObsExpedition['extract_blocked_by'] = !active ? 'ended' : view.status !== 'your_turn' ? 'not_your_turn' : !onStairs ? 'not_on_stairs' : undefined;
     const prog: ObsExpedition['progress'] = { depth: f?.depth ?? null, target_depth: xv.objective.targetDepth };
     if (xv.objective.type === 'reach_depth') prog.reached = xv.progress.reached;
-    if (xv.objective.type === 'slay_guardian') prog.guardian_slain = xv.progress.guardianSlain;
+    if (xv.objective.type === 'slay_guardian' || xv.objective.type === 'slay_warden') prog.guardian_slain = xv.progress.guardianSlain;
     if (xv.objective.type === 'retrieve_relic') prog.relic_held = xv.progress.relicHeldByYou;
     const extractText = blocked === undefined ? t(L, 'extract: 可', 'extract: possible')
       : blocked === 'ended' ? '' : t(L, `extract: 不可(${EXTRACT_BLOCK_JA[blocked]})`, `extract: not now (${blocked})`);
@@ -1011,7 +1024,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
     }
     // 次の節目（V3-3 §3.2）: 戦利品の行の近くに常に出す
     if (xv.milestone) {
-      expedition.milestone = milestoneObs(L, catalog, xv.milestone, view.milestonesCleared ?? []);
+      expedition.milestone = milestoneObs(L, catalog, xv.milestone, view.milestonesCleared ?? [], view.wardenIntel?.[String(xv.milestone.depth)]);
       if (active) expedition.text += ` | ${expedition.milestone.cleared ? t(L, `節目: 地下${expedition.milestone.depth}階 踏破済み`, `milestone: depth ${expedition.milestone.depth} cleared`) : t(L, `次の節目: 地下${expedition.milestone.depth}階の大守護者「${expedition.milestone.name}」（未踏破）`, `next milestone: warden "${expedition.milestone.name}" on depth ${expedition.milestone.depth} (not cleared)`)}`;
     }
     if (xv.result) expedition.result = { ...xv.result, text: resultText(L, xv, catalog.rules) };
@@ -1055,7 +1068,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       }
       // 次の候補の下限は「目標として達成した最深の階」から（踏破しても深くならない。V3-2R3 §20.2）
       const reachedCamp = expedition.extract_outcome === 'complete' && xv.objective.targetDepth !== null ? Math.max(view.campDepth, xv.objective.targetDepth) : view.campDepth;
-      const nc = catalog.rules.recommendedLevel ? nextCampOf(catalog.rules, reachedCamp) : null;
+      const nc = catalog.rules.recommendedLevel ? nextCampOf(catalog.rules, reachedCamp, view.milestonesCleared ?? []) : null;
       const campText = nc ? t(L, ` / 帰ると次の候補は地下${nc.minTargetDepth}階以上（推奨 Lv${nc.recommendedLevel}）`, ` / next offers from depth ${nc.minTargetDepth} (recommended Lv${nc.recommendedLevel})`) : '';
       // 綱は目的の点を運ばない。遺物を持っていれば失う（V3-4b §28.1）
       const relicNote = xv.objective.type === 'retrieve_relic' && xv.progress.relicHeldByYou ? t(L, '（遺物は失う）', ' (the relic is lost)') : '';
@@ -1073,11 +1086,20 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
   if (view.camp) {
     const rules = catalog.rules;
     camp = {
-      ...(view.camp.milestone ? { milestone: milestoneObs(L, catalog, view.camp.milestone, view.milestonesCleared ?? []) } : {}),
+      ...(view.camp.milestone ? { milestone: milestoneObs(L, catalog, view.camp.milestone, view.milestonesCleared ?? [], view.wardenIntel?.[String(view.camp.milestone.depth)]) } : {}),
+      // 記録庫に納めた欠片の数（V3-3a §35.7）
+      archive: { delivered: view.archive?.length ?? 0, total: Object.values(catalog.items).filter((it) => it.category === 'relic' && it.boon).length },
       next_no: view.camp.nextNo,
       offers: view.camp.offers.map((o) => ({
         index: o.index, type: o.objective.type, target_depth: o.objective.targetDepth, points: o.points,
-        text: offerText(L, o, rules ? { rules, level: me.level } : undefined),
+        text: offerText(L, o, rules ? { rules, level: me.level } : undefined) + ((): string => {
+          // 遺物を納めると、記録庫が次の節目の番人の記憶を 1 つ返す（V3-3a §35.7）
+          const msd = view.camp?.milestone?.depth;
+          if (!o.relic || msd === undefined) return '';
+          const kn = view.wardenIntel?.[String(msd)] ?? {};
+          const left = 2 - (kn.weakness ? 1 : 0) - (kn.hp !== undefined ? 1 : 0);
+          return left > 0 ? t(L, ` / 納めると、記録庫が地下${msd}階の番人の記憶を 1 つ返す（残り ${left}）`, ` / delivering it makes the archive recall one memory of the depth-${msd} keeper (${left} left)`) : '';
+        })(),
         ...(o.slot ? { slot: o.slot } : {}), ...(o.traits?.length ? { traits: [...o.traits] } : {}),
         ...(o.guardian ? { guardian: { rank: o.guardian.rank, traits: [...o.guardian.traits] } } : {}),
         ...(o.relic ? { relic: {
@@ -1088,7 +1110,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
         multiplier_pct: o.multiplierPct ?? 100,
         ...((): { recommended_level: number | null; level_gap: number | null; trait_danger: number } => {
           if (!rules?.recommendedLevel) return { recommended_level: null, level_gap: null, trait_danger: 0 };
-          const g = offerGap(rules, o.objective.targetDepth, o.traits ?? [], me.level);
+          const g = offerGap(rules, o.objective.targetDepth, o.traits ?? [], me.level, offerWardenExtra(o));
           return { recommended_level: g.recommendedLevel, level_gap: g.levelGap, trait_danger: g.traitDanger };
         })(),
       })),
@@ -1148,7 +1170,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
   const valid_actions = buildValidActions(view, catalog, {
     passable_dirs, onStairs, itemsHere: itemsHere.length > 0, relicHere: itemsHere.some((i) => i.role === 'relic'), hostiles, frontiers: frontiers.length, known_stairs, grid,
     canExtract: expedition?.can_extract ?? false, objectiveComplete: expedition?.extract_outcome === 'complete', restTurns: rest && !rest.blocked_by ? rest.turns : null,
-    attackers, mineCount, pickables, huntingReach, worstSum, unrecorded, chaseOf,
+    attackers, mineCount, pickables, huntingReach, worstSum, unrecorded, chaseOf, lifelineShort: !!opts.lifelineShort,
     draft: view.floorHint?.draft ?? null,
     ifLifeline: expedition?.haul?.if_lifeline_now,
     perkChoice: perkChoiceObs, boonChoice: boonChoiceObs, abilities: abilitiesList, bonuses,
@@ -1223,6 +1245,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
 const EXTRACT_BLOCK_JA: Record<string, string> = { not_on_stairs: '階段の上ではない', not_your_turn: '手番ではない', ended: '終了済み' };
 
 interface VAInput {
+  lifelineShort?: boolean;
   passable_dirs: Dir[]; onStairs: 'up' | 'down' | null; itemsHere: boolean; relicHere?: boolean; hostiles: ObsMonster[]; pickables: number;
   frontiers: number; known_stairs: Observation['navigation']['known_stairs']; grid: NavGrid | null;
   canExtract: boolean; objectiveComplete: boolean; restTurns: number | null;
@@ -1397,9 +1420,11 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
   const ms = catalog.rules?.milestone;
   const depthNow = view.floor?.depth ?? 0;
   const sealed = !!ms && depthNow >= ms.min && depthNow % ms.every === 0 && !(view.milestonesCleared ?? []).includes(depthNow);
+  // 守護者に気づかれているときは、階を離れている間に守護者が回復することを添える（V3-3a §35.1）
+  const guardWatch = x.hostiles.some((m) => m.role === 'guardian' && m.awareness === 'hunting') ? t(L, '。階を離れている間、守護者は回復する', '; guardians heal while you are away') : '';
   if (x.onStairs) out.push(x.onStairs === 'down' && sealed
     ? `use_stairs (${t(L, '不可: 下り階段は封じられている。この階の大守護者を倒すまで降りられない', 'unavailable: the stairs down are sealed until this floor\'s warden falls')})`
-    : `use_stairs (${x.onStairs === 'down' ? t(L, '降りる', 'descend') : t(L, '上る', 'ascend')})`);
+    : `use_stairs (${x.onStairs === 'down' ? t(L, '降りる', 'descend') : t(L, '上る', 'ascend')}${guardWatch})`);
   if (x.itemsHere) out.push(x.relicHere ? `pickup (${t(L, '遺物を拾うと階が目覚める: 眠っている敵がすべて起き、遺物の場所へ向かう', 'picking up the relic wakes the floor: every sleeping enemy wakes and heads for it')})` : 'pickup');
   if (x.mineCount > 0 && !adjAwake.length) out.push(`collect (${t(L, `自分が投げた物 ${x.mineCount} 個を回収`, `pick up ${x.mineCount} thrown items`)})`);
   if (x.pickables > 0 && !adjAwake.length) out.push(`collect what:items (${t(L, `見えている・記憶したアイテム ${x.pickables} 個を拾って回る（遺物は除く）`, `pick up ${x.pickables} known items (not the relic)`)})`);
@@ -1419,8 +1444,8 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
       const turns = catalog.rules?.lifeline?.turns ?? 0;
       const risk = x.huntingReach.length
         ? t(L, `・追跡中 ${x.huntingReach.length} 体の 1 手の最悪の被害 ${x.worstSum}${x.unrecorded ? `＋記録なし ${x.unrecorded} 体` : ''}`, `, ${x.huntingReach.length} hunting: worst ${x.worstSum}/turn${x.unrecorded ? ` + ${x.unrecorded} unrecorded` : ''}`) : '';
-      const how = (turns > 0 ? t(L, `${turns} 手番動けずにキャンプへ戻る`, `${turns} turns helpless, then back to camp`) : t(L, 'その場でキャンプへ戻る（命と、目的を除く戦利品の半分を持ち帰る）', 'back to camp at once (you keep your life and half the haul without the objective)'))
-        + t(L, '・次の遠征はこの遠征を始めた階段から', '; the next expedition starts from where this one began');
+      const how = x.lifelineShort ? t(L, 'キャンプへ戻る', 'back to camp') : (turns > 0 ? t(L, `${turns} 手番動けずにキャンプへ戻る`, `${turns} turns helpless, then back to camp`) : t(L, 'その場でキャンプへ戻る（命と、目的を除く戦利品の半分を持ち帰る）', 'back to camp at once (you keep your life and half the haul without the objective)'))
+        + (x.lifelineShort ? '' : t(L, '・次の遠征はこの遠征を始めた階段から', '; the next expedition starts from where this one began'));
       const line = `use_item ${it.slot} (${t(L, `${name}: ${how}${x.ifLifeline !== undefined ? `・+${x.ifLifeline} 確定` : ''}${risk}`, `${name}: ${how}${x.ifLifeline !== undefined ? `, banks +${x.ifLifeline}` : ''}${risk}`)})`;
       out.push(line);
       lifelineLines.push(line);
@@ -1509,6 +1534,7 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
     lines.push(t(L, `確定済み ${s.score.banked} 点・達成した遠征 ${s.score.expeditions_completed}`, `Banked ${s.score.banked}, expeditions completed ${s.score.expeditions_completed}`));
     lines.push(boonsText(L, s.boons ?? []));
     if (obs.camp?.milestone) lines.push(obs.camp.milestone.text);
+    if (obs.camp?.archive) lines.push(t(L, `記録庫: 欠片 ${obs.camp.archive.delivered}/${obs.camp.archive.total}`, `Archive: shards ${obs.camp.archive.delivered}/${obs.camp.archive.total}`));
     if (obs.alerts.length) lines.push('!! ' + obs.alerts.map((a) => a.text).join(' / '));
     if (obs.camp) {
       lines.push(t(L, `次の遠征の候補（遠征 ${obs.camp.next_no}）。start_expedition { offer } で始める:`, `Offers for expedition ${obs.camp.next_no} (start with start_expedition { offer }):`));
@@ -1581,7 +1607,7 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
       // 守護者の呼び名・型・分かった弱点、予備動作（V3-3）
       const gtext = m.guardian ? (L === 'en'
         ? ` "${m.guardian.name}"${m.guardian.types.length ? ` type:${m.guardian.types.map((x) => x.name).join('/')}` : ''}${m.guardian.weakness ? ` weakness:${m.guardian.weakness.name}` : ''}`
-        : `  「${m.guardian.name}」${m.guardian.types.length ? `  型:${m.guardian.types.map((x) => x.name).join('・')}` : ''}${m.guardian.weakness ? `  弱点:${m.guardian.weakness.name}` : ''}`) : '';
+        : `  「${m.guardian.name}」${m.guardian.types.length ? `  型:${m.guardian.types.map((x) => x.name).join('・')}` : ''}${m.guardian.weakness ? `  弱点:${m.guardian.weakness.name}` : m.guardian.not_weak?.length ? `  弱点:不明（${m.guardian.not_weak.map((x) => x.name).join('ではない・')}ではない）` : ''}`) : '';
       const itext = m.intent ? (L === 'en' ? ` INTENT:${m.intent.text}` : `  予備動作:${m.intent.text}`) : '';
       lines.push(L === 'en'
         ? `- ${m.name}${role}${gtext} ${m.id} (${m.pos.x},${m.pos.y}) ${relLabel(L, from, m.pos)} hp:${m.hp_state} ${m.awareness}${m.fleeing ? '(fleeing)' : ''}${looksText} threat:${threat}${worst}${hits}${dmg}${est}${shot}${m.statuses.length ? ' ' + m.statuses.join(',') : ''}${itext}`
@@ -1691,9 +1717,12 @@ export function describeTarget(view: PlayerView, catalog: Catalog, target: Pos |
       // 守護者の呼び名・型の説明・分かった弱点（V3-3）。弱点は試して分かるまで「不明」
       const g = e.guardian;
       const gText = g ? t(L,
-        `・「${guardianDisplayName(L, g)}」${g.types.map((id) => `・型「${nameOf(catalog.guardianTypes[id]?.name, L, id)}」: ${nameOf(catalog.guardianTypes[id]?.desc, L, '')}`).join('')}・弱点: ${g.weakness ? `${nameOf(catalog.guardianWeaknesses[g.weakness]?.name, L, g.weakness)}（${nameOf(catalog.guardianWeaknesses[g.weakness]?.desc, L, '')}）` : '不明（試して確かめる）'}`,
+        `・「${guardianDisplayName(L, g)}」${g.types.map((id) => `・型「${nameOf(catalog.guardianTypes[id]?.name, L, id)}」: ${nameOf(catalog.guardianTypes[id]?.desc, L, '')}`).join('')}・弱点: ${g.weakness ? `${nameOf(catalog.guardianWeaknesses[g.weakness]?.name, L, g.weakness)}（${nameOf(catalog.guardianWeaknesses[g.weakness]?.desc, L, '')}）` : g.notWeak?.length ? `不明（${g.notWeak.map((id) => nameOf(catalog.guardianWeaknesses[id]?.short ?? catalog.guardianWeaknesses[id]?.name, L, id)).join('ではない・')}ではない。試して確かめる）` : '不明（試して確かめる）'}`,
         `, "${guardianDisplayName(L, g)}"${g.types.map((id) => `, type ${nameOf(catalog.guardianTypes[id]?.name, L, id)}: ${nameOf(catalog.guardianTypes[id]?.desc, L, '')}`).join('')}, weakness: ${g.weakness ? `${nameOf(catalog.guardianWeaknesses[g.weakness]?.name, L, g.weakness)} (${nameOf(catalog.guardianWeaknesses[g.weakness]?.desc, L, '')})` : 'unknown (try things to find out)'}`) : '';
-      parts.push(`${name} [${L === 'en' ? e.hp : HP_JA[e.hp ?? 'healthy']}, ${L === 'en' ? e.awareness : AW_JA[e.awareness ?? 'unaware']}] ${memText}${hpText}${ds}${estText}${shotText}${sturdy}${gText}`);
+      // 大守護者: 記録庫の記憶（体力と最大の一撃の目安。V3-3a §35.7）
+      const wi = g?.warden && view.floor ? view.wardenIntel?.[String(view.floor.depth)] : undefined;
+      const wiText = wi?.hp !== undefined ? t(L, `・記録庫の記憶: 体力およそ ${wi.hp}・一撃 ${wi.maxHit} まで`, `, the archive remembers: about ${wi.hp} HP, hits up to ${wi.maxHit}`) : '';
+      parts.push(`${name} [${L === 'en' ? e.hp : HP_JA[e.hp ?? 'healthy']}, ${L === 'en' ? e.awareness : AW_JA[e.awareness ?? 'unaware']}] ${memText}${hpText}${ds}${estText}${shotText}${sturdy}${gText}${wiText}`);
       list.push({ id: e.id, name, hp_state: e.hp, awareness: e.awareness, memory: mem ?? null, threat: threatOf(view, e), role: e.role, damage_seen: e.damageSeen ?? 0, hp_left_est: est ?? null });
     } else if (e.cat === 'item') {
       const name = itemDisplayName(catalog, L, e.kind, e.appearanceId, e.affixes);

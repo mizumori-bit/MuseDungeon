@@ -96,7 +96,7 @@ export function buildCatalog(c: Content): Catalog {
       name: ab.name, desc: ab.desc, target: ab.target, cooldown: ab.cooldown, handler: ab.handler, ...(ab.perExpedition ? { perExpedition: ab.perExpedition } : {}),
     }])),
     guardianTypes: Object.fromEntries(c.lists.guardianTypes.map((g) => [g.id, { name: g.name, desc: g.desc, strongVs: g.strongVs, handler: g.handler }])),
-    guardianWeaknesses: Object.fromEntries(c.lists.guardianWeaknesses.map((w) => [w.id, { name: w.name, desc: w.desc, handler: w.handler }])),
+    guardianWeaknesses: Object.fromEntries(c.lists.guardianWeaknesses.map((w) => [w.id, { name: w.name, desc: w.desc, handler: w.handler, ...(w.short ? { short: w.short } : {}) }])),
     boons: Object.fromEntries(c.lists.boons.map((b) => [b.id, { name: b.name, desc: b.desc, hooks: b.hooks.map((h) => ({ ...h })) }])),
     lore: { frame: c.lists.lore.filter((l) => l.kind === 'frame').map((l) => ({ ...l.text })) },
     weaponTraits: Object.fromEntries(c.lists.weaponTraits.map((w) => [w.id, {
@@ -109,12 +109,15 @@ export function buildCatalog(c: Content): Catalog {
       regen: { ...c.balance.regen },
       restMaxTurns: c.balance.rest.maxTurns,
       restCapPct: c.balance.rest.capPct,
-      ...((): { milestone?: { every: number; min: number; boonOptions: number } } => {
+      guardianAwayHealPct: c.balance.guardian.awayHealPct,
+      ...((): { milestone?: { every: number; min: number; boonOptions: number; levelBonus: number } } => {
         const f = c.lists.floorTypes.find((x) => x.rules.warden && x.every > 0);
-        return f ? { milestone: { every: f.every, min: f.depth.min, boonOptions: c.balance.guardian.warden.boonOptions } } : {};
+        return f ? { milestone: { every: f.every, min: f.depth.min, boonOptions: c.balance.guardian.warden.boonOptions, levelBonus: c.balance.guardian.warden.levelBonus } } : {};
       })(),
       macroStepLimit: c.balance.macro.stepLimit,
       fightLostWait: c.balance.fight.lostWait,
+      fightFirstHitStopPct: c.balance.fight.firstHitStopPct,
+      fightRecordedKills: c.balance.fight.recordedKills,
       wander: { intervalMin: c.balance.wander.intervalMin, intervalMax: c.balance.wander.intervalMax },
       score: { ...c.balance.score },
       estimateMinSamples: c.balance.estimate.minSamples,
@@ -140,7 +143,7 @@ export function buildCatalog(c: Content): Catalog {
       traits: Object.fromEntries(c.lists.expeditionTraits.map((t) => [t.id, { name: t.name, desc: t.desc, multiplierPct: t.multiplierPct, danger: t.danger }])),
       expedition: {
         firstTargetDepth: { ...c.balance.expedition.firstTargetDepth },
-        typePct: { ...c.balance.expedition.typePct }, depthPct: { ...c.balance.expedition.depthPct },
+        typePct: { ...c.balance.expedition.typePct }, depthPct: { ...c.balance.expedition.depthPct }, repeatPct: c.balance.expedition.repeatPct,
       },
       hpBands: [HP_BANDS[0], HP_BANDS[1], HP_BANDS[2]],
     },

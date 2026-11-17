@@ -7,7 +7,7 @@ import {
   abilityHandlers, abilityReadyError, abilityState, attackCostOf, choosePerk, cursedSlot, gearOf, inspectItem, isCursed, markAbilityUsed,
   notePerk, perkHook, perkWithHook, reachLine, reachOf, resolveAbilityId, thrownAccOf,
 } from './build';
-import { armorOf, guardianCritIfUnaware, guardianIncoming } from './guardians';
+import { armorOf, guardianCritIfUnaware, guardianIncoming, markGuardiansAway, noteTrial, restGuardians } from './guardians';
 import { boonHook } from './boons';
 import { chooseBoon, livingWarden } from './warden';
 import { huntingInView } from './expedition';
@@ -434,6 +434,7 @@ export function prepareThrow(ctx: Ctx, e: Entity, pr: PlayerRecord, slot: string
         if (opts.critIfUnaware && isUnaware(hitEnt)) o = { hit: true, crit: true, roll: o.roll };
         // 眠りが深い守護者への、気づかれる前の一投は会心（V3-3）
         if (!o.crit && isUnaware(hitEnt) && hitEnt.guardian && guardianCritIfUnaware(ctx, hitEnt)) o = { hit: true, crit: true, roll: o.roll };
+        if (o.hit && isUnaware(hitEnt) && hitEnt.guardian) noteTrial(ctx, hitEnt, 'unaware_hit');
         if (o.hit) { hit = hitEnt; crit = o.crit; }
         recordHit(ctx, me, hitEnt, o.hit, 'thrown');
       }
@@ -648,6 +649,9 @@ actions.register('stairs', (ctx, e, pr) => {
         type: 'entity_changed_floor', id: me.id, kind: me.kind, from, to: { floor: toKey, x: cell.x, y: cell.y }, nextActAt: to.time,
         dir: tr.stairs!, ...ctx.perceive(key, [{ field: 'from', pos: from }], [pr.id]), floor: key,
       });
+      // 守護者は、相手が階を離れている間に回復する（V3-3a §35.1）
+      markGuardiansAway(ctx, key, ctx.world.entities[me.id]);
+      restGuardians(ctx, toKey, ctx.world.entities[me.id]);
       const p = ctx.world.players[pr.id];
       if (depth > p.stats.deepest) {
         ctx.emit({ type: 'player_stats', player: pr.id, stats: { ...p.stats, deepest: depth }, seenBy: [pr.id], floor: toKey });

@@ -12,7 +12,7 @@ import { makeItem } from './spawn';
 import { effectiveStats } from './stats';
 import { hasStatus, removeStatus } from './statuses';
 import { meleeAccOf, notePerk, offerPerk, perkHook, perkWithHook, sweeps, weaponOnHit } from './build';
-import { armorOf, guardianCritIfUnaware, guardianIncoming } from './guardians';
+import { armorOf, guardianCritIfUnaware, guardianIncoming, noteTrial } from './guardians';
 import { boonHook } from './boons';
 import { wardenSlain } from './warden';
 import { pickLore, tellStory } from './story';
@@ -127,6 +127,7 @@ export function melee(ctx: Ctx, attacker: Entity, target: Entity, opts: MeleeOpt
   // 守護者（V3-3）: 視界の外からの一撃（潜む者）・眠りが深い守護者への気づかれる前の一撃は会心
   if (opts.forceCrit) o = { hit: true, crit: true, roll: o.roll };
   if (!o.crit && attacker.player && unaware && target.guardian && guardianCritIfUnaware(ctx, target)) o = { hit: true, crit: true, roll: o.roll };
+  if (o.hit && attacker.player && unaware && target.guardian) noteTrial(ctx, target, 'unaware_hit');
   // 身をかわした相手には近接が当たらない（次のその者の手番まで）
   if (hasStatus(target, 'core:evasive')) o = { hit: false, crit: false, roll: o.roll };
   if (ambush && o.crit) notePerk(ctx, attacker, perkWithHook(ctx, attacker, 'ambush'), 'crit', { subject: target });

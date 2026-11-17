@@ -543,6 +543,7 @@ export function directorExpInfo(world: World, depth: number | null, catalog?: Ca
   if (o.targetDepth !== null) parts.push(tr(`表示中 地下${depth ?? '-'}階 / 目標 地下${o.targetDepth}階`, `showing depth ${depth ?? '-'} / target ${o.targetDepth}`));
   // 踏破: 目標階の下り階段に立つと達成（V3-2R3 §20.1。文は shared の progressText と同じ）
   if (o.type === 'reach_depth') parts.push(x.progress.reached ? tr('目標階を踏破済み', 'target crossed') : tr('目標階の下り階段に未到達', 'target not crossed yet'));
+  if (o.type === 'slay_warden') parts.push(x.progress.guardianSlain ? tr('大守護者: 討伐済み', 'warden: slain') : tr('大守護者: 未討伐', 'warden: alive'));
   if (o.type === 'slay_guardian') parts.push(x.progress.guardianSlain ? tr('守護者: 討伐済み', 'guardian: slain') : tr('守護者: 未討伐', 'guardian: alive'));
   if (o.type === 'retrieve_relic') {
     const holder = x.progress.relicHeldBy ? world.entities[x.progress.relicHeldBy]?.player : undefined;

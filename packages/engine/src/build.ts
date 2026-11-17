@@ -176,15 +176,25 @@ export function reachLine(ctx: Ctx, from: Pos & { floor: string }, to: Pos): Pos
 // ---------------- 特技の候補と選択 ----------------
 
 /** 候補を引く（状態を持たないハッシュ: seed|perk|プレイヤー|レベル。V3-4 §4.1）。取得済み（段階の上限）と前提を満たさないものは除く */
-export function rollPerkOptions(ctx: Ctx, pr: PlayerRecord, level: number, owned: readonly string[]): string[] {
+export function rollPerkOptions(ctx: Ctx, pr: PlayerRecord, level: number, owned: readonly string[], offered: readonly string[] = []): string[] {
   const cls = ctx.content.classes[pr.classId];
-  const lineages = new Set(['common', ...(cls?.lineages ?? []).map((l) => l.id)]);
+  const classLineages = new Set((cls?.lineages ?? []).map((l) => l.id));
+  const lineages = new Set(['common', ...classLineages]);
   const count = (id: string) => owned.filter((x) => x === id).length;
   const cands = ctx.content.lists.perks
     .filter((pk) => lineages.has(pk.lineage) && count(pk.id) < pk.maxRanks && pk.requires.every((r) => owned.includes(r)))
     .map((pk) => pk.id);
   const rng = Rng.fromSeed(`${ctx.world.secret.seed}|perk|${pr.id}|${level}`);
-  return rng.shuffle(cands).slice(0, ctx.content.balance.perks.options);
+  const out = rng.shuffle(cands).slice(0, ctx.content.balance.perks.options);
+  // Lv6: まだ一度も候補に出ていない職業の能動技があれば、最後の 1 枠をそれに替える（V3-3a §35.4: 戦士は Lv8 まで立て直しが出なかった）
+  if (level === 6 && out.length) {
+    const missing = cands.find((id) => {
+      const pk = ctx.content.perks[id];
+      return !!pk?.ability && classLineages.has(pk.lineage) && !offered.includes(id) && !out.includes(id);
+    });
+    if (missing) out[out.length - 1] = missing;
+  }
+  return out;
 }
 
 /** レベルアップ: 特技の候補を足す（前の候補を選んでいなければ、引くのは選んだ後） */
@@ -193,10 +203,10 @@ export function offerPerk(ctx: Ctx, e: Entity, level: number): void {
   if (!cur?.player) return;
   const pr = ctx.world.players[cur.player];
   const b = buildOf(cur);
-  const options = b.pending.length ? [] : rollPerkOptions(ctx, pr, level, b.perks);
+  const options = b.pending.length ? [] : rollPerkOptions(ctx, pr, level, b.perks, b.offered ?? []);
   if (!b.pending.length && !options.length) return;
   const body = structuredClone(cur);
-  body.build = { perks: [...b.perks], abilities: b.abilities.map((a) => ({ ...a })), pending: [...b.pending.map((o) => ({ ...o, options: [...o.options] })), { level, options }] };
+  body.build = { perks: [...b.perks], abilities: b.abilities.map((a) => ({ ...a })), pending: [...b.pending.map((o) => ({ ...o, options: [...o.options] })), { level, options }], offered: [...new Set([...(b.offered ?? []), ...options])] };
   ctx.emit({ type: 'perk_offered', target: cur.id, level, options, put: [body], seenBy: [pr.id], floor: cur.pos?.floor ?? null });
 }
 
@@ -244,13 +254,13 @@ export function choosePerk(ctx: Ctx, pr: PlayerRecord, option: number | string):
       t(L, `1〜${offer.options.length} の番号か、候補の ID（${offer.options.join(', ')}）を渡す。`, `Pass 1-${offer.options.length} or one of: ${offer.options.join(', ')}.`));
   }
   const body = structuredClone(me);
-  body.build = { perks: [...b.perks], abilities: b.abilities.map((a) => ({ ...a })), pending: b.pending.slice(1).map((o) => ({ ...o, options: [...o.options] })) };
+  body.build = { perks: [...b.perks], abilities: b.abilities.map((a) => ({ ...a })), pending: b.pending.slice(1).map((o) => ({ ...o, options: [...o.options] })), offered: [...(b.offered ?? [])] };
   const ability = applyPerk(ctx, body, id);
   // 次の候補（前の候補を選ぶまで引いていなかったもの）を、取った特技を除いて引く。引けなければ捨てる
   const nb = body.build;
   while (nb.pending.length && !nb.pending[0].options.length) {
-    const opts = rollPerkOptions(ctx, pr, nb.pending[0].level, nb.perks);
-    if (opts.length) { nb.pending[0].options = opts; break; }
+    const opts = rollPerkOptions(ctx, pr, nb.pending[0].level, nb.perks, nb.offered ?? []);
+    if (opts.length) { nb.pending[0].options = opts; nb.offered = [...new Set([...(nb.offered ?? []), ...opts])]; break; }
     nb.pending.shift();
   }
   const fk = me.pos?.floor ?? null;

@@ -302,6 +302,20 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
     }
     case 'story':
       return nameOf(ev.line as Names, L, '');
+    case 'archive_recalled': {
+      const nm = nameOf(ev.guardianName as Names, L, '?');
+      if (ev.memory === 'weakness') {
+        const w = nameOf(ctx.catalog.guardianWeaknesses[ev.weakness as string]?.name, L, String(ev.weakness));
+        return ja ? `記録庫が思い出した: 地下${ev.depth}階の番人「${nm}」の弱点は「${w}」。` : `The archive remembers: the keeper "${nm}" of depth ${ev.depth} is "${w}".`;
+      }
+      if (ev.memory === 'vitals') return ja ? `記録庫が思い出した: 地下${ev.depth}階の番人「${nm}」は、体力およそ ${ev.hp}、一撃は ${ev.maxHit} まで。` : `The archive remembers: the keeper "${nm}" of depth ${ev.depth} has about ${ev.hp} HP and hits for up to ${ev.maxHit}.`;
+      return null;
+    }
+    case 'guardian_rested': {
+      const nm = nameOf(ev.guardianName as Names, L, '?');
+      return ev.full ? (ja ? `守護者「${nm}」は傷を癒やしていた（体力が戻っている）。` : `The guardian "${nm}" has healed its wounds (back to full).`)
+        : (ja ? `守護者「${nm}」の傷が少し癒えている（離れている間に回復した）。` : `The guardian "${nm}" has healed a little while you were away.`);
+    }
     case 'warden_slain': {
       const nm = nameOf(ev.guardianName, L, '?');
       return ja ? `節目の大守護者${nm}が倒れた（地下${ev.depth}階）。下り階段の封印が解けた。` : `The warden ${nm} falls (depth ${ev.depth}). The stairs down are unsealed.`;
@@ -322,6 +336,8 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
       // 本人にだけ届く（filter の SELF_ONLY）
       const nm = nameOf(ev.guardianName, L, '?');
       const w = nameOf(ctx.catalog.guardianWeaknesses[ev.weakness]?.name, L, ev.weakness);
+      const ws = nameOf(ctx.catalog.guardianWeaknesses[ev.weakness]?.short ?? ctx.catalog.guardianWeaknesses[ev.weakness]?.name, L, ev.weakness);
+      if (ev.miss) return ja ? `${nm}の弱点は${ws}ではない。` : `${nm}'s weakness is not ${ws}.`;
       return ja ? `${nm}の弱点が分かった: ${w}。` : `You learn ${nm}'s weakness: ${w}.`;
     }
     case 'trap_revealed':

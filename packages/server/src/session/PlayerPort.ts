@@ -194,10 +194,15 @@ export class SessionPlayerPort implements PlayerPort {
   }): ObserveResult {
     const L = view.locale;
     const opts = this.options();
-    const observation = buildObservation(view, this.catalog, { detail: p.detail ?? 'brief', map: true, recent: p.recent.slice(-10) });
+    const prev = this.session.turnSnapshot(this.playerId);
+    // 帰還の綱の長い説明は遠征ごとに最初の 1 回だけ（V3-3a §35.8）
+    const xNo = view.expedition && view.expedition.status !== 'ended' ? view.expedition.no : undefined;
+    const lifelineShort = xNo !== undefined && prev?.lifeNo === xNo;
+    const observation = buildObservation(view, this.catalog, { detail: p.detail ?? 'brief', map: true, recent: p.recent.slice(-10), lifelineShort });
     const state = turnStateOf(view, p.expeditionEndedNow ?? false).state;
     const cur = turnSnapshot(view, observation, state);
-    const prev = this.session.turnSnapshot(this.playerId);
+    const longLife = observation.valid_actions.some((a) => a.includes('次の遠征はこの遠征を始めた階段から') || a.includes('the next expedition starts from where this one began'));
+    cur.lifeNo = lifelineShort ? prev?.lifeNo : longLife ? xNo : prev?.lifeNo;
     let changes: TurnBlock['changes'] = [];
     if (p.changes) {
       const events = prev ? this.session.messages(this.playerId).filter((m) => m.seq > prev.seq) : [];
@@ -290,6 +295,26 @@ export class SessionPlayerPort implements PlayerPort {
       } else {
         const tm = m?.timeElapsed !== null && m?.timeElapsed !== undefined ? t(L, `（${m.distance} 歩、時間 ${m.timeElapsed}）`, ` (${m.distance} moves, time ${m.timeElapsed})`) : '';
         outcome = t(L, `${cmd.type}: ${r.steps} 手進んだ${tm}。${stop ? `停止: ${stop[0]}。` : ''}`, `${cmd.type}: ${r.steps} steps${tm}.${stop ? ` Stopped: ${stop[1]}.` : ''}`);
+        // hp_risk: 何にすれば、あと 1 回の最悪の被害まで続けられるか（V3-3a §35.6）
+        if (r.interruptedBy === 'hp_risk' && cmd.type === 'fight') {
+          const after = this.view();
+          const obsNow = buildObservation(after, this.catalog, { detail: 'brief', map: false });
+          const inc = obsNow.visible.monsters.filter((x) => x.awareness === 'hunting' && !x.fleeing && (x.dist <= 1 || x.traits.includes('ranged'))).reduce((a, x) => a + (x.worst_turn ?? 0), 0);
+          const nf = Math.max(0, after.self.stats.hp - inc);
+          if (inc > 0) outcome += t(L, ` hp_floor を ${nf} にすれば、あと 1 回の最悪の被害（${inc}）まで続けられる。`, ` With hp_floor ${nf} you can take one more worst turn (${inc}).`);
+        }
+        // 初被弾（記録の無い種族から。止まらずに続けた小さい被弾も）: 名前と値（V3-3a §35.6）
+        if (cmd.type === 'fight') {
+          const firsts = new Map<string, number>();
+          for (const e of r.events) {
+            if (e.type !== 'damaged' || e.target !== view.self.id || !e.sourceKind) continue;
+            const src = view.entities.find((x) => x.id === e.source);
+            const key = memoryKey(e.sourceKind, src?.role);
+            if ((view.monsterMemory[key]?.maxDamageToYou ?? 0) > 0 || firsts.has(key)) continue;
+            firsts.set(key, e.amount);
+          }
+          if (firsts.size) outcome += ' ' + t(L, `初被弾: ${[...firsts].map(([k, a]) => `${nameOf(this.catalog.monsters[k.replace('guardian|', '')]?.name, L, k)} ${a}`).join('・')}。`, `First hits: ${[...firsts].map(([k, a]) => `${nameOf(this.catalog.monsters[k.replace('guardian|', '')]?.name, L, k)} ${a}`).join(', ')}.`);
+        }
         if (cmd.type === 'collect') {
           // 実際に拾った数（イベントから）と、まだ拾える数
           const picked = r.events.filter((e) => e.type === 'item_picked_up' && e.actor === view.self.id).length;

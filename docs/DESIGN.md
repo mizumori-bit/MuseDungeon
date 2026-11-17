@@ -1034,3 +1034,41 @@ bot の計測（`bot --runs 10`・`npm run budget -- --runs 20`）は IMPROVEMEN
 - 観測: 状態の変わる地物（`afterInteract`。護りの火）も interact に出す（変わった後は出さない）。守護者は、同じ種族の通常の個体を知っていれば初見にしない。守護者には推定残り HP を出さない。封じられた階の踏破の見込みに注記。身をかわすは離れる向きをすべて 1 行（`use_ability slip <n|ne|w>`）。既知の経路で届かない階段は「travel_to stairs_down (不可: …)」。見出しに通常でない階の種類（`self.floor.floor_type_id`）。遠征の行の次の節目は短い形。
 - fight until: clear の「倒した」は接辞付きの名前と守護者の呼び名。
 - 移動マクロ（travel・explore・collect）は、同じ 2 マスを往復したら `no_progress` で止まる（直近 5 手の位置が A・B・A・B・A）。
+
+## 24. 見直し 5 V3-3a（IMPROVEMENTS_V3 §35.1〜§35.8）
+
+設計は IMPROVEMENTS_V3 §35、実装メモは同書 §36。規則と候補の作り方が変わり、新しいイベントがあるので `engineVersion` は 0.14.0、`eventVersion` は 9。
+
+### 24.1 守護者は、相手が階を離れている間に回復する（§35.1）
+- 最後のプレイヤーが階段で階を離れると、その階の守護者（大守護者を含む）に離れたときの手番数（`GuardianInfo.awaySince`）を付ける。プレイヤーが戻ったとき、離れていた手番 × `guardian.awayHealPct`（2）% を一度に回復する。
+- 全快したら落ち着く（`settleGuardian`）: 状態異常を消し、追跡をやめ、持ち場へ戻り、怒り（速さ・威力）と呼んだ回数を戻し、見ていた与ダメの累計を戻す。全快しなければ位置と状態はそのまま。
+- キャンプから遠征を始めるとき、すべての階の守護者を落ち着かせる（キャンプで休む間に守護者も戻る）。通常の敵は今までどおり回復しない。
+- `guardian_rested { id, guardianName, full, player }`（戻ってきた本人に。変化の `guardian`）。守護者に気づかれているときの use_stairs に「階を離れている間、守護者は回復する」。
+
+### 24.2 節目を候補に入れる（§35.2）
+- 目的の種類 `slay_warden`（節目に挑む）。目的の点はその深さの格 3 の守護者と同じ式。節目が踏破済み（`milestones.cleared`）になれば達成で、どちらの階段で extract してもよい。
+- 候補の目標: 未踏破の節目 M を越える目標は野心だけ。堅実・標準の目標が M 以上になるとき、標準は「節目に挑む」（地下 M 階）、堅実は M − 1 階の格 1 の守護者。野心の目標が M に当たれば M + 1。次の候補の下限（`nextCampOf`）も、未踏破の節目なら M − 1、踏破済みなら飛ばす。
+- 同じ階を目標にした達成を繰り返すと、目的の基礎点に `expedition.repeatPct`（50）% を回数分掛ける（`Offer.repeatNo`。文に「この階は N 回目」）。
+- 推奨レベルと危険度（`offerGap` の `extra`）: 節目に挑む = その深さ + `warden.levelBonus`（2）。節目を越える（`passesWarden`）= 目標と大守護者の大きいほう、危険度 +1。
+- 大守護者の体力に上限 `warden.maxHpBase`（40）+ `maxHpPerDepth`（10）× 深さ（SpawnSpec の `maxHp`）。
+- 節目に挑む候補は `Offer.warden`（名前と型）と見込み（種族は伏せ、見れば分かる特徴だけ。`wardenPreview` で生成と同じ種族を求める）。
+
+### 24.3 外れた弱点も記録する（§35.3）
+- 試しの場面（毒を与えた・投擲を当てた・気づかれる前に一撃を入れた・水場の上にいた）で、その弱点でなければ `guardian_intel { miss: true }` を出し、`knowledge.guardianTried` に入れる。同じ守護者・同じ弱点では 1 回だけ。
+- `EntityView.guardian.notWeak`・観測の `guardian.not_weak`・敵の行と look に「弱点: 不明（毒ではない・投擲ではない）」（弱点の短い呼び名 `short`）。変化に「…の弱点は毒ではない」。
+
+### 24.4 回復の薬・特技・格 1・fight（§35.4〜§35.6）
+- 回復の薬は 2d8+4、ただし最大 HP の 30% を下回らない（効果 `heal` の `minPct`）。get_rules と鑑定済みの説明に式。
+- Lv6 の特技の候補で、まだ一度も候補に出ていない職業の能動技（職業の系統で能動技を覚える特技）があれば、最後の 1 枠をそれに替える。出た候補は `build.offered` に記録する。
+- 格 1 の守護者も型 1 つ。種族は目標の深度の表の上位半分（射撃して距離を取る型は除く）。
+- fight の `first_hit` は、その被弾が最大 HP の `fight.firstHitStopPct`（15）% 以上のときだけ止まる。`fight.recordedKills`（3）体以上倒した種族は記録ありとして扱う。fight の結果に「初被弾: 名前 値」、`hp_risk` で止まったら「hp_floor を N にすれば、あと 1 回の最悪の被害（M）まで続けられる」。
+
+### 24.5 納めた欠片が、次の番人の記憶を返す（§35.7）
+- 遺物を階段の上で納めるたびに、記録庫が次の節目の大守護者の記憶を 1 つ返す（`archive_recalled { player, relic, depth, guardianName, memory, weakness?, hp?, maxHit? }`。本人だけ）。節目ごとに 1 つ目は弱点（`rollWardenInfo` の値）、2 つ目は体力と最大の一撃（`wardenPreview`: 階が無ければ生成と同じ計算で求める）、3 つ目からは無い。
+- `knowledge.wardenIntel[深さ]`・`knowledge.archive`（納めた遺物）。PlayerView の `wardenIntel`・`archive`。大守護者の弱点は記憶からも分かる（EntityView に出る）。
+- 文: キャンプと遠征の「次の節目」に「記録庫の記憶: 弱点 …・体力およそ N・一撃 M まで」、キャンプに「記録庫: 欠片 n/7」、遺物の候補に「納めると、記録庫が地下 N 階の番人の記憶を 1 つ返す（残り K）」、大守護者の look に体力と一撃の目安。
+
+### 24.6 実装担当の判断（§35.8）
+- 帰還の綱の valid_actions の長い説明は、遠征ごとに最初の 1 回だけ（`TurnSnapshot.lifeNo`）。以降は「キャンプへ戻る・+N 確定・追跡中の…」。
+- 敵の速さの表示は、加速・減速を除いた自分の速さと比べる。
+- 見送ったもの: explore の toward の理由の表示、collect の有害品の拾得、地図の x 座標の見出し（§36）。

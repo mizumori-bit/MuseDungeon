@@ -61,7 +61,7 @@ export interface EntityView {
   /** 速さ（モンスター。状態異常を除く素の値。見れば分かる性質。観測では自分との比較の 3 段階にする。V3-2R2 §18.2） */
   speed?: number;
   /** 守護者の名前と型（公開）。weakness は試して分かったときだけ（V3-3 §3.1） */
-  guardian?: { name: Names; title?: Names; types: string[]; weakness?: string; warden?: boolean };
+  guardian?: { name: Names; title?: Names; types: string[]; weakness?: string; warden?: boolean; notWeak?: string[] };
   /** 予備動作（見えていれば公開。V3-3 §3.1） */
   intent?: Intent;
 }
@@ -172,6 +172,9 @@ export interface PlayerView {
   floorHint: FloorHint | null;
   identified: string[];
   monsterMemory: Record<string, MonsterMemory>;
+  /** 記録庫が返した節目の大守護者の記憶と、納めた遺物（V3-3a §35.7） */
+  wardenIntel: Record<string, { weakness?: string; hp?: number; maxHit?: number }>;
+  archive: string[];
   notes: string[];
   party: PartyMemberView[];
   turn: { current: EntityId | null; mine: boolean };
@@ -349,8 +352,10 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
           if (e.actor) v.speed = e.actor.speed;
           // 守護者の名前と型は公開。弱点は試して分かったものだけ（V3-3 §3.1）
           if (e.guardian) {
-            const known = k.guardianIntel?.[e.id];
-            v.guardian = { name: { ...e.guardian.name }, ...(e.guardian.title ? { title: { ...e.guardian.title } } : {}), types: [...e.guardian.types], ...(known ? { weakness: known } : {}), ...(e.guardian.warden ? { warden: true } : {}) };
+            // 大守護者の弱点は、記録庫の記憶からも分かる（V3-3a §35.7）
+            const known = k.guardianIntel?.[e.id] ?? (e.guardian.warden && e.pos ? k.wardenIntel?.[String(world.floors[e.pos.floor]?.depth ?? 0)]?.weakness : undefined);
+            const tried = k.guardianTried?.[e.id];
+            v.guardian = { name: { ...e.guardian.name }, ...(e.guardian.title ? { title: { ...e.guardian.title } } : {}), types: [...e.guardian.types], ...(known ? { weakness: known } : {}), ...(e.guardian.warden ? { warden: true } : {}), ...(!known && tried?.length ? { notWeak: [...tried] } : {}) };
           }
           if (e.actor?.ai?.intent) v.intent = { ...e.actor.ai.intent };
           const met = k.metAt?.[e.id];
@@ -450,6 +455,8 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
     floorHint: k.floorHint && k.floorHint.floor === floorKey ? { ...k.floorHint } : null,
     identified: [...k.identified],
     monsterMemory: structuredClone(k.monsterMemory),
+    wardenIntel: structuredClone(k.wardenIntel ?? {}),
+    archive: [...(k.archive ?? [])],
     notes: [...k.notes],
     party,
     turn: { current: floor?.currentActor ?? null, mine: status === 'your_turn' },

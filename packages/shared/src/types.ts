@@ -41,6 +41,8 @@ export interface GuardianInfo {
   unseen?: boolean; lurk?: number; struck?: boolean;
   /** 節目の大守護者（V3-3 §3.2）。倒すまでその階の下り階段は封じられる */
   warden?: boolean;
+  /** 最後のプレイヤーが階を離れたときの、そのプレイヤーの手番数（戻ったときに離れていた手番だけ回復する。V3-3a §35.1） */
+  awaySince?: { player: string; turns: number };
 }
 
 /** source: 状態異常を与えた者（毒で倒したときの撃破者。V3-2R 評価の修正） */
@@ -128,7 +130,9 @@ export interface PerkOffer { level: number; options: string[] }
 /** 覚えた能動技。readyAt: 自分の手番数（actor.turns）がこの値以上なら使える。usedNo: 最後に使った遠征の番号、uses: その遠征で使った回数 */
 export interface AbilityState { id: string; readyAt: number; usedNo?: number; uses?: number }
 /** perks: 取った特技（段階のある特技は段階の数だけ並ぶ）、pending: 選んでいない候補（古い順） */
-export interface PlayerBuild { perks: string[]; pending: PerkOffer[]; abilities: AbilityState[] }
+export interface PlayerBuild { perks: string[]; pending: PerkOffer[]; abilities: AbilityState[]   /** これまでに候補に出た特技（職業の能動技を Lv6 までに一度は出すため。V3-3a §35.4） */
+  offered?: string[];
+}
 
 export type EntityRole = 'guardian' | 'relic';
 
@@ -233,6 +237,12 @@ export interface Knowledge {
   floorHint?: FloorHint | null;
   /** 試して分かった守護者の弱点（V3-3 §3.1。守護者の ID → 弱点の ID） */
   guardianIntel?: Record<EntityId, string>;
+  /** 試して外れた弱点（守護者 → 弱点 ID の一覧。V3-3a §35.3） */
+  guardianTried?: Record<EntityId, string[]>;
+  /** 記録庫が返した節目の大守護者の記憶（深さ → 弱点・体力・最大の一撃。V3-3a §35.7） */
+  wardenIntel?: Record<string, { weakness?: string; hp?: number; maxHit?: number }>;
+  /** 記録庫に納めた遺物の種類 */
+  archive?: string[];
 }
 
 export interface PlayerStats {
@@ -270,7 +280,8 @@ export interface PlayerRecord {
 export type PlayerState = 'alive' | 'dead' | 'left' | 'at_camp';
 
 // ---- 遠征（IMPROVEMENTS_V2 §2） ----
-export type ObjectiveType = 'reach_depth' | 'slay_guardian' | 'retrieve_relic' | 'endless';
+/** slay_warden: 節目に挑む（節目の大守護者を倒して帰る。V3-3a §35.2） */
+export type ObjectiveType = 'reach_depth' | 'slay_guardian' | 'retrieve_relic' | 'slay_warden' | 'endless';
 /** lifeline: 帰還の綱で戻った（V3-2R2 §18.1） */
 export type ExpeditionEndReason = 'completed' | 'withdrawn' | 'lifeline' | 'died' | 'retired';
 export const OBJECTIVE_TYPES: readonly ObjectiveType[] = ['reach_depth', 'slay_guardian', 'retrieve_relic', 'endless'];
@@ -307,6 +318,10 @@ export interface ExpeditionOffer {
   relic?: RelicInfo;
   /** 目標へ行く途中で倒す必要がある節目の大守護者（V3-3 後の AI 評価） */
   passesWarden?: MilestoneInfo;
+  /** 節目に挑む候補の大守護者（V3-3a §35.2。公開） */
+  warden?: MilestoneInfo;
+  /** 同じ階を目標にした何回目の達成か（2 以上で基礎点に repeatPct が掛かる。V3-3a §35.2） */
+  repeatNo?: number;
 }
 
 /** 遠征の戦利品のうち、参加者で共有する部分（目的・深追い・宝は別に計算する） */

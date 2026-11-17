@@ -11,7 +11,7 @@ import { DOOR, FLOOR, GenGrid, WALL } from './grid';
 import { layoutGenerators } from './layouts';
 
 export type SpawnSpec =
-  | { type: 'monster'; kind: string; x: number; y: number; hp: number; affixes: string[]; tier: number; asleep: boolean; delay: number; role?: EntityRole; bounty?: number; minHp?: number; hpBonusPct?: number; guardian?: GuardianInfo }
+  | { type: 'monster'; kind: string; x: number; y: number; hp: number; affixes: string[]; tier: number; asleep: boolean; delay: number; role?: EntityRole; bounty?: number; minHp?: number; /** 体力の上限（大守護者。V3-3a §35.2） */ maxHp?: number; hpBonusPct?: number; guardian?: GuardianInfo }
   | { type: 'item'; kind: string; x: number; y: number; qty: number; affixes: string[]; role?: EntityRole; value?: number; hidden?: string[] }
   | { type: 'feature'; kind: string; x: number; y: number };
 
@@ -472,7 +472,7 @@ const GUARDIAN_EXCLUDED_ARCHETYPES = new Set(['stationary', 'skittish']);
  * 格 1 は経験値の下位半分（射撃して距離を取る型も除く）、格 2・3 は上位半分（切り上げ）
  */
 export function guardianCandidates(content: Content, floorType: FloorTypeDef, biome: BiomeDef, depth: number, rank: 1 | 2 | 3): MonsterDef[] {
-  // 格で引く表の深さを変える（格 1 は目標の深度の下位半分、格 2 は +1、格 3 は +2 の表の上位半分。V3-4b §28.2）
+  // 格で引く表の深さを変える（格 1 は目標の深度、格 2 は +1、格 3 は +2 の表の、どれも上位半分。V3-4b §28.2・V3-3a §35.5）
   const ranks = content.balance.guardian.ranks;
   const tableDepth = ranks[Math.min(ranks.length, rank) - 1]?.tableDepth ?? 0;
   const effective = Math.min(depth + tableDepth, content.deepestDefined);
@@ -483,7 +483,7 @@ export function guardianCandidates(content: Content, floorType: FloorTypeDef, bi
   if (rank === 1) cands = cands.filter((m) => m.ai.archetype !== 'ranged_kiter');
   cands.sort((a, b) => b.xp - a.xp || (a.id < b.id ? -1 : 1));
   const half = Math.max(1, Math.ceil(cands.length / 2));
-  return rank === 1 ? cands.slice(cands.length - half) : cands.slice(0, half);
+  return cands.slice(0, half);
 }
 
 /** 守護者の種族を選ぶ（候補を作るときと生成時で同じ規則）。階の種類と地形は深度とシードから決まる */
@@ -601,6 +601,8 @@ export function wardenSpec(content: Content, depth: number, kind: string, x: num
     const wb = content.balance.guardian.warden;
     spec.hpBonusPct = wb.hpPct;
     spec.minHp = wb.minHpBase + wb.minHpPerDepth * depth;
+    // 体力の上限（V3-3a §35.2: 種族で 52〜122 と開いた難しさをそろえる）
+    spec.maxHp = wb.maxHpBase + wb.maxHpPerDepth * depth;
     spec.bounty = Math.trunc(((spec.bounty ?? 0) * wb.bountyPct) / 100);
   }
   return spec;

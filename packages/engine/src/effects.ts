@@ -32,7 +32,12 @@ export const effects = new Registry<EffectHandler>('effect');
 const num = (v: unknown, d = 0) => (typeof v === 'number' ? v : d);
 const dice = (ctx: Ctx, v: unknown, d = '1') => roll(ctx.rng('runtime'), typeof v === 'string' ? v : typeof v === 'number' ? String(v) : d);
 
-effects.register('heal', (ctx, p, ec) => heal(ctx, ec.target, dice(ctx, p.amount, '1d8'), ec.via));
+// minPct: 最大 HP の minPct % を下回らない（回復の薬。V3-3a §35.4）
+effects.register('heal', (ctx, p, ec) => {
+  const n = dice(ctx, p.amount, '1d8');
+  const floorHp = p.minPct !== undefined ? Math.trunc(((ec.target.stats?.maxHp ?? 0) * num(p.minPct, 0)) / 100) : 0;
+  heal(ctx, ec.target, Math.max(n, floorHp), ec.via);
+});
 
 effects.register('cure', (ctx, p, ec) => { removeStatus(ctx, ec.target, String(p.status)); });
 

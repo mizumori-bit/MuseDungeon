@@ -58,7 +58,8 @@ describe('V3-3 offers and names (§3.1)', () => {
       for (const { manager } of runs) manager.closeAll();
     }
     expect(typed).toBeGreaterThan(0);
-    expect(content.balance.guardian.ranks[0].types ?? 0).toBe(0);
+    // 格 1 にも型を 1 つ付ける（V3-3a §35.5）
+    expect(content.balance.guardian.ranks[0].types ?? 0).toBe(1);
   });
 
   it('the guardian placed by an expedition has the offer’s name, types and weakness; the briefing names it', async () => {

@@ -221,12 +221,14 @@ describe('V3-2R3 lifeline and reading danger (§20.3, §20.4)', () => {
     const refused = await t.act({ type: 'fight', target: 'e_r3ft01', hpFloor: 15 });
     expect(refused.ok).toBe(false);
     if (!refused.ok) expect(refused.error.code).toBe('hp_floor');
-    // 記録の無い種族（守護者の記録は別）: 初めて被弾したら一度止まる
+    // 記録の無い種族（守護者の記録は別）: 初めて被弾したら一度止まる（最大 HP の 15% 以上の被弾のとき。V3-3a §35.6）
     t.clearMonsters();
     const me2 = structuredClone(t.me());
     me2.stats!.hp = me2.stats!.maxHp;
     // 視界はすでに隣のマスを含む（待つと相手が先に攻撃して記録ができてしまうので、待たずに戦う）
-    t.inject({ put: [me2, monster('e_r3ft02', 'core:jackal', key, ln.p.x + ln.dx, ln.p.y + ln.dy, { hp: 200, acc: 40 })] });
+    const jk = monster('e_r3ft02', 'core:jackal', key, ln.p.x + ln.dx, ln.p.y + ln.dy, { hp: 200, acc: 40 });
+    jk.stats!.dmg = `${Math.ceil(me2.stats!.maxHp * 0.2)}d1`;
+    t.inject({ put: [me2, jk] });
     if (!t.obs().visible.monsters.some((m) => m.id === 'e_r3ft02' && m.dist === 1)) return;
     if ((t.r.port.view().monsterMemory['core:jackal']?.maxDamageToYou ?? 0) > 0) return;
     const f = await t.act({ type: 'fight', target: 'e_r3ft02', hpFloor: 0 });

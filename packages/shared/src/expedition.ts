@@ -1,7 +1,7 @@
 // 遠征の文章化（目的・達成条件・進捗・結果・候補）。入力は PlayerView 由来の事実だけ。
 // 仕様: docs/IMPROVEMENTS_V2.md §2.6。「次に何をすべきか」の提案は書かない（事実とルールのみ）。
 import type { CatalogRules } from './catalog';
-import { nameOf, offerGap } from './catalog';
+import { nameOf, offerGap, offerWardenExtra } from './catalog';
 import type { ExpeditionEndReason, ExpeditionOffer, Locale, Names, Objective, OfferSlot, RelicInfo } from './types';
 import { t } from './util';
 import type { ExpeditionView, PlayerView } from './view';
@@ -12,6 +12,7 @@ export function objectiveText(L: Locale, o: Objective): string {
     case 'reach_depth': return t(L, `地下${d}階を踏破し（その階の下り階段に着き）、階段から帰還する`, `Cross depth ${d} (reach its down stairs), then extract from any stairs`);
     case 'slay_guardian': return t(L, `地下${d}階の守護者を倒し、階段から帰還する`, `Slay the guardian on depth ${d}, then extract from any stairs`);
     case 'retrieve_relic': return t(L, `地下${d}階の遺物を見つけ、持ったまま階段から帰還する`, `Find the relic on depth ${d} and extract from any stairs while carrying it`);
+    case 'slay_warden': return t(L, `節目に挑む: 地下${d}階の大守護者を倒し、階段から帰還する`, `Challenge the milestone: slay the warden on depth ${d}, then extract from any stairs`);
     default: return t(L, '目的なし。できるだけ深く潜る', 'No objective: descend as deep as you can');
   }
 }
@@ -21,6 +22,7 @@ export function conditionText(L: Locale, o: Objective): string {
     case 'reach_depth': return t(L, `地下${o.targetDepth}階の下り階段に着く（着いただけでは達成しない）→ いずれかの階段の上で extract`, `Stand on the down stairs of depth ${o.targetDepth} (arriving is not enough) → extract while standing on any stairs`);
     case 'slay_guardian': return t(L, '守護者を倒す → いずれかの階段の上で extract', 'Slay the guardian → extract while standing on any stairs');
     case 'retrieve_relic': return t(L, '遺物を拾う → 持ったままいずれかの階段の上で extract', 'Pick up the relic → extract on any stairs while carrying it');
+    case 'slay_warden': return t(L, '大守護者を倒す → いずれかの階段の上で extract（広間の下り階段でも、前室の上り階段でもよい）', 'Slay the warden → extract while standing on any stairs (the hall\'s stairs down or the antechamber\'s stairs up)');
     default: return t(L, '達成条件なし（階段の上で extract(confirm) すると撤退として終わる）', 'No completion condition (extract(confirm) on stairs ends it as a withdrawal)');
   }
 }
@@ -80,6 +82,7 @@ export function progressText(L: Locale, x: ExpeditionView, depth: number | null)
   else if (depth !== null) parts.push(t(L, `地下${depth}階`, `depth ${depth}`));
   if (o.type === 'reach_depth') parts.push(x.progress.reached ? t(L, '目標階を踏破済み', 'target crossed') : t(L, '目標階の下り階段に未到達', 'target not crossed yet'));
   if (o.type === 'slay_guardian') parts.push(x.progress.guardianSlain ? t(L, '守護者: 討伐済み', 'guardian: slain') : t(L, '守護者: 未討伐', 'guardian: alive'));
+  if (o.type === 'slay_warden') parts.push(x.progress.guardianSlain ? t(L, '大守護者: 討伐済み', 'warden: slain') : t(L, '大守護者: 未討伐', 'warden: alive'));
   if (o.type === 'retrieve_relic') {
     parts.push(x.progress.relicHeldByYou ? t(L, '遺物: 所持', 'relic: carried') : x.progress.relicHeld ? t(L, '遺物: 仲間が所持', 'relic: carried by an ally') : t(L, '遺物: 未入手', 'relic: not held'));
   }
@@ -143,12 +146,15 @@ export function offerText(L: Locale, o: ExpeditionOffer, ctx?: { rules: Pick<Cat
   const traits = traitsText(L, ctx?.rules, o.traits ?? []);
   let danger = '';
   if (ctx && o.objective.targetDepth !== null) {
-    const g = offerGap(ctx.rules, o.objective.targetDepth, o.traits ?? [], ctx.level);
+    const g = offerGap(ctx.rules, o.objective.targetDepth, o.traits ?? [], ctx.level, offerWardenExtra(o));
     const gap = g.levelGap! > 0 ? `+${g.levelGap}` : `${g.levelGap}`;
     const td = g.traitDanger ? t(L, `／条件 ${g.traitDanger > 0 ? '+' : ''}${g.traitDanger}`, ` / traits ${g.traitDanger > 0 ? '+' : ''}${g.traitDanger}`) : '';
     danger = t(L, ` / 推奨 Lv${g.recommendedLevel}・あなた Lv${ctx.level}（差 ${gap}）${td}`, ` / recommended Lv${g.recommendedLevel}, you Lv${ctx.level} (gap ${gap})${td}`);
   }
-  const gf = (o.guardian ? ` / ${guardianForecastText(L, o.guardian)}` : '') + (o.relic ? ` / ${relicText(L, o.relic)}` : '')
+  // 節目に挑む: 大守護者の名前と型（V3-3a §35.2）。同じ階の繰り返しは基礎点が減る
+  const wd = o.warden ? t(L, ` / 大守護者「${guardianDisplayName(L, o.warden)}」（型: ${o.warden.types.length}）`, ` / warden "${guardianDisplayName(L, o.warden)}" (${o.warden.types.length} types)`) : '';
+  const rep = (o.repeatNo ?? 1) > 1 ? t(L, ` / この階は ${o.repeatNo} 回目: 基礎点が減っている`, ` / attempt ${o.repeatNo} at this depth: reduced base`) : '';
+  const gf = wd + rep + (o.guardian ? ` / ${guardianForecastText(L, o.guardian)}` : '') + (o.relic ? ` / ${relicText(L, o.relic)}` : '')
     + (o.passesWarden ? t(L, ` / 途中の地下${o.passesWarden.depth}階で大守護者「${guardianDisplayName(L, o.passesWarden)}」を倒す必要がある（倒すまで下り階段が封じられている）`, ` / you must slay the warden "${guardianDisplayName(L, o.passesWarden)}" on depth ${o.passesWarden.depth} on the way (its stairs down are sealed until then)`) : '');
   return t(L, `${head} — 基礎 +${o.points} / 倍率 ${multText(mult)}${traits ? `（${traits}）` : ''}${danger}${gf}`,
     `${head} — base +${o.points} / multiplier ${multText(mult)}${traits ? ` (${traits})` : ''}${danger}${gf}`);
