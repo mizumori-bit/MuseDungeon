@@ -140,6 +140,7 @@ export function applyEvent(world: World, ev: GameEvent): void {
     case 'boon_granted':
     case 'boon_triggered':
     case 'boon_offered':
+    case 'story':
     case 'ability_used':
     case 'curse_revealed':
     case 'item_inspected':

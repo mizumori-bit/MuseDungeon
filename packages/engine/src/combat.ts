@@ -4,7 +4,7 @@ import type { DamageVia, Dir, Entity, PlayerId, PlayerRecord, RunSummary, RunSum
 import { cheb, currentExpedition, diceMax, dirTo, xpForLevel } from '@muse/shared';
 import type { Ctx } from './ctx';
 import { applyEffects } from './effects';
-import { maybeEndExpedition } from './expedition';
+import { displayName, maybeEndExpedition } from './expedition';
 import { pickLoot } from './gen/generate';
 import { makeNoise, updateMemory, wakeMonster } from './perception';
 import { roll } from './registry';
@@ -15,6 +15,7 @@ import { meleeAccOf, notePerk, offerPerk, perkHook, perkWithHook, sweeps, weapon
 import { armorOf, guardianCritIfUnaware, guardianIncoming } from './guardians';
 import { boonHook } from './boons';
 import { wardenSlain } from './warden';
+import { pickLore, tellStory } from './story';
 
 export interface AttackOutcome { hit: boolean; crit: boolean; roll: number }
 
@@ -331,6 +332,12 @@ export function kill(ctx: Ctx, victim: Entity, killer: Entity | null, via: Damag
   ctx.emit({ type: 'entity_removed', id: victim.id, kind: victim.kind, reason: 'died', seenBy: ctx.seersOf(key, pos), floor: key });
   // 節目の大守護者（V3-3 §3.2）: 節目を記録し、加護の候補を出す
   if (victim.guardian?.warden) wardenSlain(ctx, victim, killer, key);
+  // 物語の 1 文（V3-3 §3.4）: 遠征の守護者・大守護者を倒した
+  const xNow = currentExpedition(ctx.world);
+  if (victim.guardian && (victim.guardian.warden || xNow?.targets.guardian === victim.id)) {
+    const kind = victim.guardian.warden ? 'warden_slain' as const : 'guardian_slain' as const;
+    tellStory(ctx, kind, pickLore(ctx.content, ctx.world.secret.seed, `${kind}|${victim.id}`, kind, { guardianTypes: victim.guardian.types }, { guardian: displayName(victim.guardian) }), key);
+  }
   if (killer?.player) {
     const pr = ctx.world.players[killer.player];
     ctx.emit({ type: 'player_stats', player: pr.id, stats: { ...pr.stats, kills: pr.stats.kills + 1 }, seenBy: [pr.id] });

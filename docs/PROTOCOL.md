@@ -412,6 +412,13 @@ V3-2R で足した項目（同じく後方互換。会心と経験値のルー�
 - `player_state.reason: 'joined'`（キャンプから始まる参加）。参加コマンドの `atCamp`
 - プレイヤー向けの射影で、見えていた個体が視界の外へ動いた `entity_moved` に `dirOut`（向きだけ。行き先は伏せたまま）
 
+V3-3 の 4 段目で足した項目（物語の文。同じく後方互換。新しいイベントがあるので `engineVersion` は 0.13.0、`eventVersion` は 8。DESIGN.md §23）:
+
+- World State: `Expedition.story`（ブリーフィングの物語の 1 文。公開）。PlayerView: `ExpeditionView.story`
+- イベント: `story { reason: 'guardian_slain' | 'warden_slain' | 'relic_delivered', line }`（全員）。`turn.changes` の `story`
+- 文: ブリーフィングに物語の 1 文。遺物の説明の前に由来の 1 文。get_rules topic=all の先頭に世界の枠
+- コンテンツ: `lore.json`（`kind`・`when`・`weight`・`text`）、アイテムの `origin`。公開カタログ: `lore.frame`
+
 V3-3 の 3 段目で足した項目（節目の大守護者。同じく後方互換。生成と下り階段の規則が変わったので `engineVersion` は 0.12.0、新しいイベントとコマンドがあるので `eventVersion` は 7。DESIGN.md §22）:
 
 - コマンド: `choose_boon { option }`（手番を消費しない。`FREE_COMMANDS`）。MCP ツール `choose_boon`。行動のエラーコード `sealed`（封じられた下り階段）

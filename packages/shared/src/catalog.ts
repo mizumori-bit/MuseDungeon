@@ -109,6 +109,8 @@ export interface Catalog {
   guardianWeaknesses: Record<string, { name: Names; desc: Names; handler: string }>;
   /** 加護（V3-3 §3.3） */
   boons: Record<string, CatalogBoon>;
+  /** 物語の枠（V3-3 §3.4。get_rules に出す） */
+  lore?: { frame: Names[] };
   biomes: Record<string, { name: Names }>;
   floorTypes: Record<string, { name: Names }>;
   /** 公開ルールの数値（content の balance.json から。ルールブックと実際の挙動を一致させる） */

@@ -4,7 +4,7 @@ import type {
   ActionError, Entity, Expedition, ExpeditionEndReason, FloorPos, Pos, ExpeditionHaul, ExpeditionOffer, ExpeditionResult, HaulParts, Objective,
   ObjectiveProgress, ObjectiveType, OfferSlot, PlayerId, PlayerRecord, GuardianInfo, Names,
 } from '@muse/shared';
-import { campDepthOf, cheb, currentExpedition, deepestGenerated, haulTotal, isPursuing, killPoints, offerPoints, overreachPoints, payoutOf, Rng, actionError, t } from '@muse/shared';
+import { campDepthOf, cheb, currentExpedition, deepestGenerated, guardianDisplayName, haulTotal, isPursuing, killPoints, offerPoints, overreachPoints, payoutOf, Rng, actionError, t } from '@muse/shared';
 import { buildSummary, grantXp } from './combat';
 import type { Ctx } from './ctx';
 import { findFreeCell } from './floors';
@@ -14,6 +14,7 @@ import { guardianSpec, pickGuardianKind } from './gen/generate';
 import { lairPlan, rollGuardianInfo } from './guardians';
 import { grantBoon, ownedBoons, pickRelic } from './boons';
 import { livingWarden, nextMilestone } from './warden';
+import { num, pickLore, tellStory } from './story';
 import { isMilestoneDepth } from './gen/generate';
 import { spawnFromSpec } from './spawn';
 import { recomputeStats } from './stats';
@@ -86,6 +87,11 @@ export interface ObjectivePlacement { guardian: boolean; relic: boolean; rank?: 
 /** 枠ごとの守護者の格（V3-2R3 §20.1）: 堅実 1・標準 2・野心 3。枠の無い遠征は 2 */
 export function guardianRankOf(slot: OfferSlot | undefined | null): 1 | 2 | 3 {
   return slot === 'safe' ? 1 : slot === 'ambitious' ? 3 : 2;
+}
+
+/** 守護者の呼び名（称号＋名前）を両方の言語で（物語の文に埋める） */
+export function displayName(g: { name: Names; title?: Names }): Names {
+  return { ja: guardianDisplayName('ja', g), en: guardianDisplayName('en', g) };
 }
 
 /** 守護者の見込みに出す、見れば分かる特徴（速さ・射撃・大柄・重装）。種族名は出さない */
@@ -456,8 +462,12 @@ export function doExtract(ctx: Ctx, e: Entity, pr: PlayerRecord, completed: bool
   if (completed && !lifeline) {
     for (const id of relicIds) {
       const kind = ctx.world.entities[id]?.kind ?? '';
-      const boon = ctx.content.items[kind]?.boon;
-      if (boon) grantBoon(ctx, cur0, boon, kind);
+      const def = ctx.content.items[kind];
+      // 物語の 1 文（V3-3 §3.4）: 遺物を納めた（由来の文）
+      tellStory(ctx, 'relic_delivered', pickLore(ctx.content, ctx.world.secret.seed, `relic|${x.no}|${kind}`, 'relic_delivered', {}, {
+        relic: { ...(def?.name ?? { ja: kind, en: kind }) }, origin: def?.origin ? { ...def.origin } : { ja: '', en: '' },
+      }), key);
+      if (def?.boon) grantBoon(ctx, cur0, def.boon, kind);
     }
   }
   const relicLost = lifeline && relicIds.length > 0;
@@ -641,6 +651,12 @@ export function startExpedition(ctx: Ctx, pr: PlayerRecord, offer: number | 'end
     ...(relic ? { relic } : {}),
     ...(camp.milestone ? { milestone: structuredClone(camp.milestone) } : {}),
   };
+  // 物語の 1 文（V3-3 §3.4）: 目的・守護者の型・遺物から選ぶ
+  const gName = guardianInfo.name ? displayName({ name: guardianInfo.name, ...(guardianInfo.title ? { title: guardianInfo.title } : {}) }) : undefined;
+  const story = pickLore(ctx.content, w.secret.seed, `expedition|${exp.no}|briefing`, 'briefing',
+    { objective: objective.type, guarded: relicGuarded, guardianTypes: guardianInfo.types ?? [] },
+    { depth: num(objective.targetDepth ?? 0), ...(gName ? { guardian: gName } : {}), ...(relic ? { relic: { ...relic.name } } : {}) });
+  if (story) exp.story = story;
   ctx.emit({ type: 'expedition_started', expedition: exp, seenBy: 'all', floor: null });
   // キャンプにいる間に、再開する階は落ち着く（V3-2R3a §22.1）: 追跡をやめて全快し、再開するマスが見える敵は離れた場所へ
   const settleRng = Rng.fromSeed(`${w.secret.seed}|expedition|${exp.no}|settle`);

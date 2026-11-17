@@ -395,6 +395,8 @@ export interface Expedition {
   relic?: RelicInfo;
   /** 開始時点の次の節目（V3-3 §3.2） */
   milestone?: MilestoneInfo;
+  /** ブリーフィングの物語の 1 文（V3-3 §3.4。公開） */
+  story?: Names;
 }
 
 export type RngState = [number, number, number, number];

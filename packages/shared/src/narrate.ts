@@ -3,7 +3,7 @@ import type { Catalog } from './catalog';
 import { nameOf } from './catalog';
 import { endReasonText, objectiveText } from './expedition';
 import type { ProjectedEvent } from './filter';
-import type { Locale } from './types';
+import type { Locale, Names } from './types';
 import { dirTo } from './util';
 import type { Pos } from './types';
 
@@ -300,6 +300,8 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
       const from = ev.source === 'warden' ? (ja ? '大守護者を倒し、' : 'The warden falls; ') : ctx.catalog.items[ev.source] ? (ja ? `${nameOf(ctx.catalog.items[ev.source].name, L, ev.source)}を納め、` : `You deliver the ${nameOf(ctx.catalog.items[ev.source].name, L, ev.source)}; `) : '';
       return ja ? `${from}加護「${nameOf(b?.name, L, ev.boon)}」を得た（${nameOf(b?.desc, L, '')}）。` : `${from}you gain the boon ${nameOf(b?.name, L, ev.boon)} (${nameOf(b?.desc, L, '')}).`;
     }
+    case 'story':
+      return nameOf(ev.line as Names, L, '');
     case 'warden_slain': {
       const nm = nameOf(ev.guardianName, L, '?');
       return ja ? `節目の大守護者${nm}が倒れた（地下${ev.depth}階）。下り階段の封印が解けた。` : `The warden ${nm} falls (depth ${ev.depth}). The stairs down are unsealed.`;

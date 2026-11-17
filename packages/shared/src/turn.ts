@@ -26,8 +26,8 @@ export type ChangeCode =
   | 'perk' | 'woke'
   /** 守護者のしたこと・分かった弱点（V3-3） */
   | 'guardian' | 'intel'
-  /** 得た加護・効いた加護（V3-3 §3.3） */
-  | 'boon';
+  /** 得た加護・効いた加護（V3-3 §3.3）・物語の 1 文（§3.4） */
+  | 'boon' | 'story';
 
 export interface Change { code: ChangeCode; text: string; entity?: string }
 
@@ -120,7 +120,7 @@ export function turnSnapshot(view: PlayerView, obs: Observation, state: TurnStat
 }
 
 const PRIORITY: ChangeCode[] = [
-  'guardian_slain', 'guardian', 'intel', 'boon', 'floor_changed', 'objective_complete', 'objective_progress', 'next_camp', 'can_extract', 'hp_low', 'killed', 'died_seen', 'hp_dropped', 'new_hostile',
+  'guardian_slain', 'guardian', 'intel', 'boon', 'story', 'floor_changed', 'objective_complete', 'objective_progress', 'next_camp', 'can_extract', 'hp_low', 'killed', 'died_seen', 'hp_dropped', 'new_hostile',
   'level_up', 'status_gained', 'status_lost', 'woke', 'perk', 'item_found', 'stairs_found', 'reappeared', 'hostile_gone',
 ];
 
@@ -213,6 +213,8 @@ export function diffChanges(prev: TurnSnapshot | null, cur: TurnSnapshot, view: 
     if (cur.stairs.some((s) => !prev.stairs.includes(s))) out.push({ code: 'stairs_found', text: t(L, '階段を見つけた', 'Found stairs') });
   }
   if (cur.level > prev.level) out.push({ code: 'level_up', text: t(L, `レベル ${cur.level} になった`, `Reached level ${cur.level}`) });
+  // 物語の 1 文（V3-3 §3.4）
+  for (const e of events) if (e.seq > prev.seq && e.type === 'story' && e.text) out.push({ code: 'story', text: e.text.replace(/。$/, '') });
   // 得た加護・効いた加護（V3-3 §3.3）
   for (const e of events) if (e.seq > prev.seq && (e.type === 'boon_granted' || e.type === 'boon_triggered' || e.type === 'boon_offered' || e.type === 'warden_slain') && e.text) out.push({ code: 'boon', text: e.text.replace(/。$/, '') });
   // 守護者のしたこと・分かった弱点（V3-3）

@@ -148,6 +148,8 @@ export interface ExpeditionView {
   relic?: RelicInfo;
   /** 開始時点の次の節目（V3-3 §3.2） */
   milestone?: MilestoneInfo;
+  /** ブリーフィングの物語の 1 文（V3-3 §3.4） */
+  story?: Names;
 }
 
 export interface PlayerView {
@@ -403,6 +405,7 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
       } } : {}),
       ...(latest.relic ? { relic: structuredClone(latest.relic) } : {}),
       ...(latest.milestone ? { milestone: structuredClone(latest.milestone) } : {}),
+      ...(latest.story ? { story: { ...latest.story } } : {}),
     };
   }
 

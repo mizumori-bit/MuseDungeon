@@ -99,6 +99,8 @@ export const ItemSchema = z.object({
   value: z.object({ dice: DiceSchema, mult: z.number().int().min(1), perDepthPct: z.number().int().min(0).default(10) }).optional(),
   /** 遺物（category: relic）が持ち帰られるとなる加護（boons の ID。V3-3 §3.3） */
   boon: IdSchema.optional(),
+  /** 由来の 1 文（遺物。説明の前に付き、納めたときの物語の文にも使う。V3-3 §3.4） */
+  origin: NamesSchema.optional(),
   desc: NamesSchema.optional(),
 });
 
@@ -306,6 +308,18 @@ export const BoonSchema = z.object({
   hooks: z.array(z.object({ hook: z.string().min(1) }).catchall(z.number())).default([]),
 });
 
+/**
+ * 物語の文（V3-3 §3.4）。frame: 世界の枠（get_rules）／briefing: 遠征の開始の 1 文／guardian_slain・warden_slain: 倒したとき／
+ * relic_delivered: 遺物を納めたとき。when に合う中で、条件の多いものから weight で選ぶ。{depth} {guardian} {relic} {origin} を埋める
+ */
+export const LoreSchema = z.object({
+  id: IdSchema,
+  kind: z.enum(['frame', 'briefing', 'guardian_slain', 'warden_slain', 'relic_delivered']),
+  when: z.object({ objective: z.string().optional(), guarded: z.boolean().optional(), guardianType: IdSchema.optional() }).default({}),
+  weight: z.number().int().min(1).default(1),
+  text: NamesSchema,
+});
+
 /** 守護者の名前の音節（V3-3 §3.1。シードで 2〜3 個つなぐ） */
 export const GuardianNamesSchema = z.object({
   id: IdSchema,
@@ -454,6 +468,7 @@ export type GuardianTypeDef = z.infer<typeof GuardianTypeSchema>;
 export type GuardianWeaknessDef = z.infer<typeof GuardianWeaknessSchema>;
 export type GuardianNamesDef = z.infer<typeof GuardianNamesSchema>;
 export type BoonDef = z.infer<typeof BoonSchema>;
+export type LoreDef = z.infer<typeof LoreSchema>;
 
 /** ファイル名 → スキーマ。新しい定義ファイル種別はここに 1 行足す */
 export const FILE_SCHEMAS = {
@@ -479,6 +494,7 @@ export const FILE_SCHEMAS = {
   guardianWeaknesses: GuardianWeaknessSchema,
   guardianNames: GuardianNamesSchema,
   boons: BoonSchema,
+  lore: LoreSchema,
 } as const;
 
 export type FileKind = keyof typeof FILE_SCHEMAS;

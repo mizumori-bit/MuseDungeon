@@ -40,13 +40,18 @@ function equipStats(it: ItemDef): CatalogEquipStats {
   return out;
 }
 
+/** 由来の 1 文を説明の前に付ける（遺物。V3-3 §3.4） */
+function withOrigin(it: ItemDef, d: Names): Names {
+  return it.origin ? { ja: `${it.origin.ja}${d.ja}`, en: `${it.origin.en} ${d.en}` } : d;
+}
+
 export function buildCatalog(c: Content): Catalog {
   const items: Record<string, CatalogItem> = {};
   for (const it of c.lists.items) {
     items[it.id] = {
       name: it.name, category: it.category, unidentified: it.unidentified, stack: it.stack,
       slot: it.equip?.slot, usable: it.onUse.length > 0, throwable: !!it.throw || it.shatter,
-      targeted: it.target !== 'none', desc: itemDesc(it), ...(it.desc ? { note: it.desc } : {}), harmful: it.harmful, treasure: it.category === 'treasure', bound: it.bound,
+      targeted: it.target !== 'none', desc: withOrigin(it, itemDesc(it)), ...(it.desc ? { note: withOrigin(it, it.desc) } : {}), harmful: it.harmful, treasure: it.category === 'treasure', bound: it.bound,
       throwRange: it.throw?.range ?? (it.shatter ? 4 : null),
       ...(it.equip?.slot === 'weapon' && it.equip.dmg ? { weapon: { dmg: it.equip.dmg, acc: it.equip.acc ?? 0 } } : {}),
       ...(it.equip?.slot === 'armor' ? { armorStats: { armor: it.equip.armor ?? 0, eva: it.equip.eva ?? 0 } } : {}),
@@ -92,6 +97,7 @@ export function buildCatalog(c: Content): Catalog {
     guardianTypes: Object.fromEntries(c.lists.guardianTypes.map((g) => [g.id, { name: g.name, desc: g.desc, strongVs: g.strongVs, handler: g.handler }])),
     guardianWeaknesses: Object.fromEntries(c.lists.guardianWeaknesses.map((w) => [w.id, { name: w.name, desc: w.desc, handler: w.handler }])),
     boons: Object.fromEntries(c.lists.boons.map((b) => [b.id, { name: b.name, desc: b.desc, hooks: b.hooks.map((h) => ({ ...h })) }])),
+    lore: { frame: c.lists.lore.filter((l) => l.kind === 'frame').map((l) => ({ ...l.text })) },
     weaponTraits: Object.fromEntries(c.lists.weaponTraits.map((w) => [w.id, {
       name: w.name, desc: w.desc,
       ...(w.handler === 'reach' ? { reach: w.params.range ?? 2 } : {}), ...(w.handler === 'attack_cost' ? { attackCost: w.params.cost ?? 100 } : {}),

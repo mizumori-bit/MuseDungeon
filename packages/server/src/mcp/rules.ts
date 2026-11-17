@@ -390,6 +390,8 @@ function guardiansText(c: Catalog, locale: 'ja' | 'en'): string {
 export function rulesText(topic: RulesTopic = 'all', locale: 'ja' | 'en' = 'ja', catalog: Catalog): string {
   const src = locale === 'en' ? en(catalog.rules) : ja(catalog.rules);
   if (topic === 'classes') return [classesText(catalog, locale), guardiansText(catalog, locale)].join('\n\n');
-  if (topic === 'all') return [...Object.values(src), classesText(catalog, locale), guardiansText(catalog, locale)].join('\n\n');
+  // 物語の枠（V3-3 §3.4）は all の先頭に 1 段落
+  const frame = (catalog.lore?.frame ?? []).map((n) => (locale === 'en' ? n.en : n.ja));
+  if (topic === 'all') return [...(frame.length ? [frame.join(' ')] : []), ...Object.values(src), classesText(catalog, locale), guardiansText(catalog, locale)].join('\n\n');
   return src[topic];
 }

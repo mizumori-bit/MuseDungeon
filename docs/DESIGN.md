@@ -1014,3 +1014,14 @@ bot の計測（`bot --runs 10`・`npm run budget -- --runs 20`）は IMPROVEMEN
 ### 22.6 bot とクライアント
 - 貪欲 bot: 大守護者が見えていて HP 60% 以上なら挑む。封じられた下り階段で断られたら、降りるのをやめて探す。加護の候補は最初のものを取る。
 - クライアント: 加護の候補の欄（選ぶボタン）、`choose_boon` は手番を使わないコマンドとして送る。
+
+## 23. 物語の文 V3-3 の 4 段目（IMPROVEMENTS_V3 §3.4・§16.2・§28.9）
+
+設計は IMPROVEMENTS_V3 §3.4・§16.2・§28.9、実装メモは同書 §33。新しいイベントがあるので `engineVersion` は 0.13.0、`eventVersion` は 8。これで V3-3 の 4 段がそろった。
+
+- 文面はすべてデータ（`lore.json`。`kind`: `frame`（世界の枠）／`briefing`（遠征の開始の 1 文）／`guardian_slain`・`warden_slain`（倒したとき）／`relic_delivered`（遺物を納めたとき））。`when`（目的・守護者付きか・守護者の型）に合う中で、条件の多いものから `weight` で選ぶ（`pickLore`、`Rng.fromSeed(seed|lore|鍵)`。状態を持たない）。`{depth}` `{guardian}`（称号＋名前）`{relic}` `{origin}` を埋める。伏せている情報（弱点・種族）は埋めない。
+- 遠征の開始: 目的・守護者付きか・守護者の型・遺物から 1 文を選び、`Expedition.story` に入れる（ExpeditionView にも）。ブリーフィングの 2 行目（長い形）か、1 行の形の末尾に出す。
+- 遠征の守護者・大守護者を倒したとき、遺物を納めたとき: `story { reason, line }`（全員）。`turn.changes` の `story` に 1 行。遺物の文は、遺物の由来（アイテムの `origin`）を添える（「息吹の欠片を記録庫に納めた。記録庫の療院に残っていた、息づかいの記憶。」）。
+- 遺物の説明（カタログの `desc`）は、由来の 1 文を前に付ける。
+- get_rules の topic=all の先頭に、世界の枠の 1 段落（`catalog.lore.frame`）。
+- §16.2 のとおり、固有名詞は守護者と遺物だけ（都・坑には名前を付けない）。物語は判断を指示しない（型の説明と同じ公開の事実だけ）。

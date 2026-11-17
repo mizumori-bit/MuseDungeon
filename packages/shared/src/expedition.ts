@@ -41,6 +41,8 @@ export function briefingLines(L: Locale, x: ExpeditionView, rules?: Pick<Catalog
   const lt = rules?.lifeline?.turns ?? 0;
   const lines = [
     t(L, `【遠征 ${x.no}】目的: ${objectiveText(L, x.objective)}`, `[Expedition ${x.no}] Objective: ${objectiveText(L, x.objective)}`),
+    // 物語の 1 文（V3-3 §3.4）
+    ...(x.story ? [nameOf(x.story, L, '')] : []),
     t(L, `達成条件: ${conditionText(L, x.objective)}`, `Completion: ${conditionText(L, x.objective)}`),
     t(L, '撤退: 階段の上で extract(confirm) すると、未達成のまま生還して遠征を終えられる（追跡中の敵が見えていてもよい）', 'Withdraw: extract(confirm) on stairs ends the expedition alive, without the reward (even with hunters in view)'),
     t(L, `帰還の綱: 階段から遠くても use_item で使えば${lt > 0 ? ` ${lt} 手番後に` : 'その場で'}キャンプへ戻る（命と、目的を除く戦利品の半分を持ち帰る。遺物は運べない。達成した遠征には数えない）`,
@@ -66,8 +68,9 @@ export function briefingLines(L: Locale, x: ExpeditionView, rules?: Pick<Catalog
 export function briefingShort(L: Locale, x: ExpeditionView, rules?: Pick<CatalogRules, 'traits'>): string {
   const tr = x.traits.length ? t(L, `・条件: ${traitsText(L, rules, x.traits) || x.traits.join(', ')}`, `, traits: ${traitsText(L, rules, x.traits) || x.traits.join(', ')}`) : '';
   const guard = x.objective.type === 'retrieve_relic' ? (x.relicGuarded ? t(L, '（守護者付き）', ' (guarded)') : t(L, '（守護者なし）', ' (unguarded)')) : '';
-  return t(L, `【遠征 ${x.no}】${objectiveText(L, x.objective)}${guard}・目的 +${x.points}・帰還で ${multText(x.multiplierPct)}${tr}`,
-    `[Expedition ${x.no}] ${objectiveText(L, x.objective)}${guard}, objective +${x.points}, ${multText(x.multiplierPct)} on extract${tr}`);
+  const story = x.story ? ` ${nameOf(x.story, L, '')}` : '';
+  return t(L, `【遠征 ${x.no}】${objectiveText(L, x.objective)}${guard}・目的 +${x.points}・帰還で ${multText(x.multiplierPct)}${tr}。${story.trim()}`,
+    `[Expedition ${x.no}] ${objectiveText(L, x.objective)}${guard}, objective +${x.points}, ${multText(x.multiplierPct)} on extract${tr}.${story}`);
 }
 
 export function progressText(L: Locale, x: ExpeditionView, depth: number | null): string {
