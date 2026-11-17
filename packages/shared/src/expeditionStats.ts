@@ -7,6 +7,8 @@ import type { GameEvent } from './events';
 import { partsText, multText } from './expedition';
 import type { ProjectedEvent } from './filter';
 import { kindName } from './narrate';
+import type { GoalType } from './goals';
+import { goalText } from './goals';
 import type { ExpeditionEndReason, HaulParts, Locale, Names } from './types';
 import { t } from './util';
 
@@ -30,13 +32,16 @@ export interface ExpeditionReport {
   reason: ExpeditionEndReason | null;
   payout?: { parts: HaulParts; multiplier_pct: number; banked: number; lost: number };
   compare?: ReportCompare;
-  combat: { dealt: number; taken: number; hits: number; misses: number; crits: number; kills: number; melee_kills: number; thrown_kills: number; ability_uses: number };
+  /** min_hp_pct: この遠征で最も下がった HP（最大 HP に対する %。目標の「余力」。V3-7a） */
+  combat: { dealt: number; taken: number; hits: number; misses: number; crits: number; kills: number; melee_kills: number; thrown_kills: number; ability_uses: number; min_hp_pct?: number };
   economy: { potions_used: number; scrolls_read: number; items_left_unidentified: number; treasure_banked: number };
   tempo: { turns: number; turns_resting: number; floors: number; turns_per_floor: number; deepest: number; tool_calls: number; macro_share_pct: number };
   /** 場面（最大 8 件、seq 順。seq でリプレイのその場面へ飛べる） */
   moments: ReportMoment[];
   /** 死亡したとき: 倒した相手、直前 10 件の出来事、直近 20 手番の HP */
   death?: { killer: string | null; via: string; self_inflicted?: boolean; last_events: string[]; hp_trace: number[] };
+  /** この遠征に掛かっていた目標（V3-7a §40.8）。result: 達成・未達・取り下げ・まだ続く */
+  goal?: { type: string; value: number; within: number; diff_from_best: number | null; result: 'active' | 'achieved' | 'missed' | 'withdrawn' };
 }
 
 export interface ReportInput {
@@ -91,7 +96,8 @@ export function buildExpeditionReport(inp: ReportInput): ExpeditionReport {
   const ms = inp.milestone;
   const isMilestone = (d: number | null) => !!ms && d !== null && d >= ms.min && d % ms.every === 0;
   const name = (kind: string | null | undefined) => (kind ? kindName(cat, L, kind) : t(L, '見えない何か', 'something unseen'));
-  const combat = { dealt: 0, taken: 0, hits: 0, misses: 0, crits: 0, kills: 0, melee_kills: 0, thrown_kills: 0, ability_uses: 0 };
+  const combat: ExpeditionReport['combat'] = { dealt: 0, taken: 0, hits: 0, misses: 0, crits: 0, kills: 0, melee_kills: 0, thrown_kills: 0, ability_uses: 0 };
+  let minPct = 100;
   const economy = { potions_used: 0, scrolls_read: 0, items_left_unidentified: 0, treasure_banked: 0 };
   let objective: ExpeditionReport['objective'] = { type: 'unknown', target_depth: null };
   let reason: ExpeditionEndReason | null = null;
@@ -177,6 +183,7 @@ export function buildExpeditionReport(inp: ReportInput): ExpeditionReport {
           damageLog.push({ seq: e.seq, turn: turnAt(e.seq), src: e.source ?? null, kind: e.sourceKind ?? null, via: e.via, amt });
           if (!big || amt > big.amt) big = { seq: e.seq, amt, kind: e.sourceKind ?? null, via: e.via, crit };
           if (hp !== null && hp > 0 && (!minHp || hp < minHp.hp)) minHp = { seq: e.seq, hp, maxHp };
+          if (hp !== null && maxHp) minPct = Math.min(minPct, Math.max(0, Math.trunc((hp * 100) / maxHp)));
           if (hp !== null && hp > 0 && maxHp && hp * 100 <= maxHp * 25 && (!low || hp < low.hp)) low = { seq: e.seq, hp, maxHp };
           if (e.source && isGuardian(e.sourceAffixes)) fightOf(e.source, e.sourceKind ?? null, e.seq, e.floor).taken += amt;
         } else if (e.source === self) {
@@ -340,6 +347,7 @@ export function buildExpeditionReport(inp: ReportInput): ExpeditionReport {
   for (const u of levelUps.slice(0, 3)) cand.push({ seq: u.seq, turn_no: at(u.seq), kind: 'level_up', pri: 6, text: t(L, `手番 ${at(u.seq)}: レベル ${u.level} になった`, `Turn ${at(u.seq)}: reached level ${u.level}`) });
   const moments = cand.sort((a, b) => a.pri - b.pri || a.seq - b.seq).slice(0, 8).sort((a, b) => a.seq - b.seq).map(({ pri: _p, ...m }) => m);
 
+  combat.min_hp_pct = minPct;
   const report: ExpeditionReport = {
     no: inp.no, objective, status: reason === null ? 'in_progress' : 'ended', reason,
     ...(payout ? { payout } : {}),
@@ -437,6 +445,12 @@ export function reportLines(L: Locale, r: ExpeditionReport, opts: { payout?: boo
   if (opts.compare !== false && r.compare) {
     const parts = [r.compare.personal_best?.join(t(L, '・', ', ')), r.compare.vs_previous ? t(L, `前回（遠征 ${r.compare.vs_previous.no}）より ${vsText(L, r.compare.vs_previous)}`, `vs expedition ${r.compare.vs_previous.no}: ${vsText(L, r.compare.vs_previous)}`) : ''].filter(Boolean);
     if (parts.length) lines.push(t(L, `比較: ${parts.join('／')}`, `Compare: ${parts.join('; ')}`));
+  }
+  if (r.goal) {
+    const res = { achieved: t(L, '達成', 'achieved'), missed: t(L, '未達', 'missed'), withdrawn: t(L, '取り下げ', 'withdrawn'), active: t(L, 'まだ続く', 'still running') }[r.goal.result];
+    const what = goalText(L, { type: r.goal.type as GoalType, value: r.goal.value, within: r.goal.within });
+    const diff = r.goal.diff_from_best !== null ? t(L, `・自己最高との差 ${r.goal.diff_from_best > 0 ? '+' : ''}${r.goal.diff_from_best}`, `, vs best ${r.goal.diff_from_best > 0 ? '+' : ''}${r.goal.diff_from_best}`) : '';
+    lines.push(t(L, `目標: ${what} → ${res}${diff}`, `Goal: ${what} -> ${res}${diff}`));
   }
   if (r.death) {
     const d = r.death;

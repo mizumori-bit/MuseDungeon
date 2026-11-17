@@ -227,6 +227,30 @@ export function createMcpServer(ctx: McpContext): McpServer {
     const rep = port.expeditionReportLines();
     return withTurn(port, [...lines, ...rep.lines].join('\n'), { briefing: lines, expedition: o.observation.expedition ?? null, camp: o.observation.camp ?? null, ...(rep.progress ? { progress: rep.progress } : {}), ...(rep.report ? { report: rep.report } : {}) });
   });
+  server.registerTool('declare_goal', {
+    title: '目標を宣言する',
+    description: 'キャンプで、次の遠征からの目標を 1 つ宣言する（任意。点・経験値・戦利品には影響しない）。型は depth（最深到達を地下 N 階に。期限 1〜3 回の遠征）・banked（1 回の遠征で確定 X 点以上。次の遠征）・milestone（次の節目の大守護者を倒す。期限 1〜3 回）・margin（達成した遠征で、最も下がった HP を最大の N% 以上に保つ。次の遠征）。option に 1〜3 を渡すと候補（自己最高に並ぶ／少し超える／大きく超える）の値を使う。value で好きな値も宣言できる。type: none で取り下げ。宣言し直すと前の目標は取り下げになる。候補はキャンプの観測と expedition に出る。手番を消費しない。Declare an optional goal at camp (no effect on points).',
+    inputSchema: {
+      ...common,
+      type: z.enum(['depth', 'banked', 'milestone', 'margin', 'none']).describe('目標の型（none で取り下げ）'),
+      option: z.number().int().min(1).max(3).optional().describe('候補の番号（1: 自己最高に並ぶ・2: 少し超える・3: 大きく超える。節目は 1: 3 回以内・2: 2 回以内・3: 次の遠征）'),
+      value: z.number().int().min(1).optional().describe('値（深さ・確定点・HP の %。節目は次の節目の深さ）'),
+      within: z.number().int().min(1).max(3).optional().describe('期限の遠征の数（depth・milestone だけ。既定 1、候補を使えば候補の値）'),
+    },
+  }, async (args) => {
+    const port = portOf(args.player_token);
+    if (!port) return noSession();
+    const L = port.view().locale;
+    if (args.type === 'none') { const r = port.declareGoal(null); return withTurn(port, r.text, (r.data ?? {}) as Record<string, unknown>); }
+    let decl: { type: 'depth' | 'banked' | 'milestone' | 'margin'; value: number; within: number } | null = null;
+    if (args.option !== undefined) {
+      const c = port.goalInfo().candidates.filter((x) => x.type === args.type)[args.option - 1];
+      if (c) decl = { type: c.type, value: args.value ?? c.value, within: args.within ?? c.within };
+    } else if (args.value !== undefined) decl = { type: args.type, value: args.value, within: args.within ?? 1 };
+    if (!decl) return withTurn(port, t(L, 'value か option を渡す（候補はキャンプの観測の「目標の候補」）。', 'Pass value or option (see the goal options at camp).'), { error: 'no_value' });
+    const r = port.declareGoal(decl);
+    return withTurn(port, r.text, (r.data ?? {}) as Record<string, unknown>);
+  });
   server.registerTool('review', {
     title: '振り返り',
     description: '終わった遠征のレポート（確定・戦闘・消耗・進み・このランの前の遠征との比較・場面）。expedition を省くと直前の遠征。手番を消費しない。Review an ended expedition (facts only).',

@@ -59,7 +59,8 @@ describe('V3-6 expedition report (§6.1)', () => {
     const r = buildExpeditionReport({ locale: 'ja', catalog, selfId: ME, no: 1, ...s, milestone: { every: 5, min: 5 }, guardianNames: { objective: 'ヤオルト' } });
     expect(r.status).toBe('ended');
     expect(r.reason).toBe('completed');
-    expect(r.combat).toEqual({ dealt: 13, taken: 24, hits: 1, misses: 1, crits: 0, kills: 2, melee_kills: 2, thrown_kills: 0, ability_uses: 0 });
+    // min_hp_pct: 最も下がった HP（6/30 = 20%。V3-7a の余力の目標）
+    expect(r.combat).toEqual({ dealt: 13, taken: 24, hits: 1, misses: 1, crits: 0, kills: 2, melee_kills: 2, thrown_kills: 0, ability_uses: 0, min_hp_pct: 20 });
     expect(r.economy).toEqual({ potions_used: 1, scrolls_read: 0, items_left_unidentified: 1, treasure_banked: 40 });
     // 手番は開始時点（10）から最後の記録（16）まで。呼び出しはマクロの 1 手を除く 6 件、手は 8 件のうちマクロが 4
     expect(r.tempo).toMatchObject({ turns: 6, turns_resting: 2, tool_calls: 6, macro_share_pct: 50, deepest: 3 });
@@ -180,9 +181,9 @@ describe('V3-6 reports in the session (§6.1・§6.2・§35.9)', () => {
     expect(end.report!.tempo.turns).toBe(t.me().actor!.turns);
     const text = t.r.port.formatActionText(end);
     expect(text).toContain('振り返り（遠征 1・帰還・達成）:');
-    // キャンプの観測: 結果の行の後に比較の行（最初は 1 行）
-    expect(text).toContain('前回の遠征 1（帰還・達成）: 確定 +');
-    expect(text).toContain('（比べる記録はまだ無い）');
+    // キャンプの観測: 比較の行は目標の文に吸収された（V3-7a §40.8）。比較のデータは残る
+    expect(text).toContain('目標: 未宣言');
+    expect(text).toContain('目標の候補: 深さ 地下');
     const obs1 = t.r.port.observe({ map: false }).observation;
     expect(obs1.camp?.compare?.lines).toHaveLength(1);
     // キャンプの expedition: 直前の遠征のレポート

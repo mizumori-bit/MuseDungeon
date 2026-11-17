@@ -1,10 +1,10 @@
 // PlayerPort: プレイヤー（AI・人間とも）への唯一の窓口。PlayerView 経由の情報しか返さない。
 // MCP アダプタと人間用 WS の両方がこれを使う（どちらかを特別扱いしない）。
 import type {
-  ActionError, Catalog, Command, ExpeditionReport, GameEvent, Locale, Observation, ObservationOptions, PerceivedEvent, PlayerId, PlayerView, Pos, RunSummary, TurnBlock, TurnReason,
+  ActionError, Catalog, Command, ExpeditionReport, GameEvent, GoalDecl, GoalInfo, Locale, Observation, ObservationOptions, PerceivedEvent, PlayerId, PlayerView, Pos, RunSummary, TurnBlock, TurnReason,
 } from '@muse/shared';
 import {
-  actionError, briefingLines, briefingShort, buildObservation, buildTurnBlock, campLines, changesLine, compareLines, describeInventory, describeTarget, diffChanges, progressLines, reportLines,
+  actionError, briefingLines, briefingShort, buildObservation, buildTurnBlock, campLines, changesLine, compareLines, describeInventory, describeTarget, diffChanges, goalCampLines, goalCandidates, goalDiffText, goalProgressText, goalText, progressLines, reportLines,
   formatObservationText, guardianDisplayName, kindName, MACRO_COMPLETED_STOPS, mapTextLines, memoryCombatText, memoryKey, mineCount, nameOf, pickableItems, progressText, renderAsciiMap, resultText, t,
   turnLine, turnSnapshot, turnStateOf,
 } from '@muse/shared';
@@ -75,6 +75,10 @@ export interface PlayerPort {
   messages(sinceSeq?: number, limit?: number): InfoResult;
   /** 遠征レポート（V3-6 §6）。no を省くと最後の遠征（進行中なら途中経過） */
   report(no?: number): ExpeditionReport | null;
+  /** 目標（V3-7a §40.8）: 宣言中の目標・候補・記録・キャンプの文 */
+  goalInfo(): GoalInfo;
+  /** 目標を宣言する（キャンプで。null で取り下げ）。AI の declare_goal と人間の画面が同じ口を使う */
+  declareGoal(decl: GoalDecl | null): InfoResult;
   /** review: 終了した遠征のレポートと場面 */
   review(no?: number): InfoResult;
   /** expedition ツールに足す行（進行中なら途中経過、キャンプなら直前の遠征のレポート） */
@@ -189,8 +193,19 @@ export class SessionPlayerPort implements PlayerPort {
   observe(opts: { detail?: 'brief' | 'full'; map?: boolean; consume?: boolean } = {}): { observation: Observation; text: string } {
     const view = this.view();
     const recent = opts.consume ? this.session.consumeFor(this.playerId) : this.pending();
-    const observation = buildObservation(view, this.catalog, { detail: opts.detail ?? 'brief', map: opts.map ?? true, recent: recent.slice(-10), campCompare: this.campCompare(view) });
+    const observation = buildObservation(view, this.catalog, { detail: opts.detail ?? 'brief', map: opts.map ?? true, recent: recent.slice(-10), campCompare: this.campCompare(view), goal: this.goalOpt(view) });
     return { observation, text: formatObservationText(observation, view.locale) };
+  }
+
+  /** 観測に渡す目標（V3-7a §40.8）: キャンプでは候補と記録、遠征中は宣言中の目標といまの値 */
+  private goalOpt(view: PlayerView): ObservationOptions['goal'] {
+    if (view.status === 'at_camp') return { info: this.goalInfo() };
+    const active = this.session.activeGoal(this.playerId);
+    if (!active || !view.expedition || view.expedition.status === 'ended') return undefined;
+    // 余力: いままでの最も下がった HP（進行中の遠征レポートから。宣言しているときだけ作る）
+    const minHpPct = active.type === 'margin' ? this.session.expeditionReport(this.playerId)?.combat.min_hp_pct : undefined;
+    const done = this.session.endedReports(this.playerId).filter((r) => r.no >= active.fromNo).length;
+    return { active, live: { ...(minHpPct !== undefined ? { minHpPct } : {}), leftExpeditions: Math.max(1, active.within - done) } };
   }
 
   /** キャンプの観測に出す、直前の遠征の比較（2 行以内。V3-6 §35.9） */
@@ -206,10 +221,47 @@ export class SessionPlayerPort implements PlayerPort {
     const view = this.view();
     const L = view.locale;
     const r = this.session.expeditionReport(this.playerId);
-    if (!r) return { lines: [] };
-    if (r.status === 'in_progress') return { lines: progressLines(L, r), progress: { combat: r.combat, tempo: r.tempo } };
+    // キャンプ: 目標の候補と記録（V3-7a §40.8）
+    const goalLines = view.status === 'at_camp' ? this.goalInfo().lines : [];
+    if (!r) return { lines: goalLines };
+    if (r.status === 'in_progress') {
+      // 宣言中の目標（V3-7a §40.8）
+      const go = this.goalOpt(view);
+      const gl = go?.active ? [goalProgressText(L, go.active, { maxDepth: view.expedition?.maxDepth, minHpPct: go.live?.minHpPct, leftExpeditions: go.live?.leftExpeditions })] : [];
+      return { lines: [...progressLines(L, r), ...gl], progress: { combat: r.combat, tempo: r.tempo } };
+    }
     // キャンプのブリーフィングに結果の行が出ているので、確定の行は省く
-    return { lines: reportLines(L, r, { payout: false }), report: r };
+    return { lines: [...reportLines(L, r, { payout: false }), ...goalLines], report: r };
+  }
+
+  goalInfo(): GoalInfo {
+    const view = this.view();
+    const L = view.locale;
+    const reports = this.session.endedReports(this.playerId);
+    const msInfo = view.camp?.milestone ?? view.expedition?.milestone;
+    const ms = msInfo && !(view.milestonesCleared ?? []).includes(msInfo.depth) ? { depth: msInfo.depth, name: guardianDisplayName(L, msInfo) } : null;
+    const all = this.session.goalsOf(this.playerId);
+    const active = this.session.activeGoal(this.playerId);
+    const base = { active, candidates: goalCandidates(L, reports, ms), record: { declared: all.length, achieved: all.filter((g) => g.status === 'achieved').length } };
+    // 期限の残り（その目標で数え終えた遠征の数を引く）
+    const done = active ? reports.filter((r) => r.no >= active.fromNo).length : 0;
+    return { ...base, lines: goalCampLines(L, base, active ? Math.max(1, active.within - done) : undefined) };
+  }
+
+  declareGoal(decl: GoalDecl | null): InfoResult {
+    const L = this.view().locale;
+    const r = this.session.declareGoal(this.playerId, decl);
+    if (!r.ok) {
+      const msg: Record<string, [string, string]> = {
+        not_at_camp: ['目標はキャンプで宣言する（遠征の間は宣言し直せない）。', 'Declare goals at camp (not during an expedition).'],
+      };
+      const m = msg[r.error] ?? [`宣言できない: ${r.error}`, `Cannot declare: ${r.error}`];
+      return { text: t(L, m[0], m[1]), data: { error: r.error } };
+    }
+    const info = this.goalInfo();
+    const head = r.goal ? t(L, `目標を宣言した: ${goalText(L, r.goal)}${goalDiffText(L, r.goal) ? `（${goalDiffText(L, r.goal)}）` : ''}。点には影響しない。`, `Goal declared: ${goalText(L, r.goal)}${goalDiffText(L, r.goal) ? ` (${goalDiffText(L, r.goal)})` : ''}. It does not affect points.`)
+      : t(L, '目標を取り下げた。', 'Goal withdrawn.');
+    return { text: [head, ...info.lines].join(NL), data: { goal: r.goal, info } };
   }
 
   /** 遠征レポート（no を省くと最後の遠征。進行中なら途中経過） */
@@ -247,7 +299,7 @@ export class SessionPlayerPort implements PlayerPort {
     // 帰還の綱の長い説明は遠征ごとに最初の 1 回だけ（V3-3a §35.8）
     const xNo = view.expedition && view.expedition.status !== 'ended' ? view.expedition.no : undefined;
     const lifelineShort = xNo !== undefined && prev?.lifeNo === xNo;
-    const observation = buildObservation(view, this.catalog, { detail: p.detail ?? 'brief', map: true, recent: p.recent.slice(-10), lifelineShort, campCompare: this.campCompare(view) });
+    const observation = buildObservation(view, this.catalog, { detail: p.detail ?? 'brief', map: true, recent: p.recent.slice(-10), lifelineShort, campCompare: this.campCompare(view), goal: this.goalOpt(view) });
     const state = turnStateOf(view, p.expeditionEndedNow ?? false).state;
     const cur = turnSnapshot(view, observation, state);
     const longLife = observation.valid_actions.some((a) => a.includes('次の遠征はこの遠征を始めた階段から') || a.includes('the next expedition starts from where this one began'));

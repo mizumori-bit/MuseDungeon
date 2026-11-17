@@ -8,6 +8,8 @@ import { isStationary, pickableItems, sameOrWorseEquip, worseEquip } from './mac
 import { attacksPerTurn, chaseAttacks, memoryOf, monsterSpeedOf, selfSpeed } from './danger';
 import type { PerceivedEvent } from './filter';
 import type { ReportCompare } from './expeditionStats';
+import type { GoalInfo, GoalRecord } from './goals';
+import { goalProgressText } from './goals';
 import { kindName } from './narrate';
 import type { NavGrid } from './nav';
 import { buildNavGrid, distanceField, findFrontiers } from './nav';
@@ -109,6 +111,8 @@ export interface ObsExpedition {
   result?: { reason: string; points: number; deepest: number; kills: number; turns: number; text: string };
   slot?: OfferSlot;
   traits?: string[];
+  /** 宣言中の目標と、いまの値との差（V3-7a §40.8） */
+  goal?: { type: string; value: number; within: number; text: string };
   /** 目標の気配（目標階にいる間。方角と 10 マス以内かどうか。V3-2R §14.2） */
   sense?: { what: 'guardian' | 'relic'; dir: Dir; range: 'far' | 'near'; text: string };
   /** 未確定の戦利品（v3）。今 extract した場合の確定点と、次に踏破の点が入る階 */
@@ -145,8 +149,10 @@ export interface ObsCamp {
   milestone?: ObsMilestone;
   /** 記録庫に納めた欠片の数（V3-3a §35.7） */
   archive?: { delivered: number; total: number };
-  /** 直前の遠征の比較（2 行以内。V3-6 §35.9: 候補を選ぶ画面で自分の記録が目に入る） */
+  /** 直前の遠征の比較（2 行以内。V3-6 §35.9: 候補を選ぶ画面で自分の記録が目に入る）。目標があればその文に吸収する（V3-7a） */
   compare?: { no: number; lines: string[] } & ReportCompare;
+  /** 目標（V3-7a §40.8）: 宣言中の目標・候補（自己最高に並ぶ／少し超える／大きく超える）・記録・文（3 行以内） */
+  goal?: GoalInfo;
 }
 
 /** 節目の大守護者（V3-3 §3.2）。弱点と種族は伏せる */
@@ -235,6 +241,8 @@ export interface ObservationOptions {
   lifelineShort?: boolean;
   /** キャンプ: 直前の遠征の比較（遠征レポートから。V3-6 §35.9） */
   campCompare?: { no: number; lines: string[]; compare?: ReportCompare };
+  /** 目標（V3-7a §40.8）: キャンプでは info、遠征中は宣言中の目標といまの値（最も下がった HP・期限の残り） */
+  goal?: { info?: GoalInfo; active?: GoalRecord; live?: { minHpPct?: number; leftExpeditions?: number } };
 }
 
 const DIR_JA: Record<Dir, string> = { n: '北', ne: '北東', e: '東', se: '南東', s: '南', sw: '南西', w: '西', nw: '北西' };
@@ -1111,6 +1119,13 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
           `haul ${total} (${partsText(L, parts) || 'none'}) ${expedition.extract_outcome === 'complete' ? multText(xv.multiplierPct) : `withdraw ${catalog.rules.haul.withdrawPct}% without objective`} → extract now +${ifNow}${lifeText}${nextText}${campText} / banked ${view.record.banked}`),
       };
     }
+    // 宣言中の目標と、いまの値との差（V3-7a §40.8: 記録が判断の場面で目に入る）
+    const g = opts.goal?.active;
+    if (g && xv.status !== 'ended') {
+      expedition.goal = { type: g.type, value: g.value, within: g.within, text: goalProgressText(L, g, {
+        ifExtractNow: expedition.haul?.if_extract_now, maxDepth: xv.maxDepth, minHpPct: opts.goal?.live?.minHpPct, leftExpeditions: opts.goal?.live?.leftExpeditions,
+      }) };
+    }
   }
   let camp: ObsCamp | undefined;
   if (view.camp) {
@@ -1118,6 +1133,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
     camp = {
       ...(view.camp.milestone ? { milestone: milestoneObs(L, catalog, view.camp.milestone, view.milestonesCleared ?? [], view.wardenIntel?.[String(view.camp.milestone.depth)], view) } : {}),
       ...(opts.campCompare && view.status === 'at_camp' ? { compare: { no: opts.campCompare.no, lines: opts.campCompare.lines.slice(0, 2), ...(opts.campCompare.compare ?? {}) } } : {}),
+      ...(opts.goal?.info && view.status === 'at_camp' ? { goal: opts.goal.info } : {}),
       // 記録庫に納めた欠片の数（V3-3a §35.7）
       archive: { delivered: view.archive?.length ?? 0, total: Object.values(catalog.items).filter((it) => it.category === 'relic' && it.boon).length },
       next_no: view.camp.nextNo,
@@ -1202,6 +1218,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
     passable_dirs, onStairs, itemsHere: itemsHere.length > 0, relicHere: itemsHere.some((i) => i.role === 'relic'), hostiles, frontiers: frontiers.length, known_stairs, grid,
     canExtract: expedition?.can_extract ?? false, objectiveComplete: expedition?.extract_outcome === 'complete', restTurns: rest && !rest.blocked_by ? rest.turns : null,
     attackers, mineCount, pickables, huntingReach, worstSum, unrecorded, chaseOf, lifelineShort: !!opts.lifelineShort,
+    ...(opts.goal?.active?.type === 'banked' && expedition?.haul ? { goalBanked: opts.goal.active.value, ifExtractNow: expedition.haul.if_extract_now } : {}),
     draft: view.floorHint?.draft ?? null,
     ifLifeline: expedition?.haul?.if_lifeline_now,
     perkChoice: perkChoiceObs, boonChoice: boonChoiceObs, abilities: abilitiesList, bonuses,
@@ -1278,6 +1295,9 @@ const EXTRACT_BLOCK_JA: Record<string, string> = { not_on_stairs: '階段の上�
 
 interface VAInput {
   lifelineShort?: boolean;
+  /** 目標の確定点と、いま帰ったときの確定点（V3-7a） */
+  goalBanked?: number;
+  ifExtractNow?: number;
   passable_dirs: Dir[]; onStairs: 'up' | 'down' | null; itemsHere: boolean; relicHere?: boolean; hostiles: ObsMonster[]; pickables: number;
   frontiers: number; known_stairs: Observation['navigation']['known_stairs']; grid: NavGrid | null;
   canExtract: boolean; objectiveComplete: boolean; restTurns: number | null;
@@ -1367,7 +1387,10 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
   const fromHere = sealedHere
     ? t(L, '・次の遠征はこの階の上り階段から始まる（封じられた下り階段なので）。階の敵は追跡をやめて全快する', '; the next expedition starts from this floor\'s stairs up (these stairs down are sealed); monsters stop hunting and heal fully')
     : t(L, '・次の遠征はこの階段から始まる。階の敵は追跡をやめて全快する', '; the next expedition starts from these stairs, where monsters stop hunting and heal fully');
-  if (x.canExtract) out.push(x.objectiveComplete ? `extract (${t(L, '帰還: 遠征達成', 'complete the expedition')}${fromHere})` : `extract confirm:true (${t(L, '撤退: 未達成のまま終える', 'withdraw without the reward')}${fromHere})`);
+  // 目標の確定点との差（V3-7a §40.8）
+  const goalNote = x.goalBanked !== undefined && x.ifExtractNow !== undefined
+    ? (x.ifExtractNow >= x.goalBanked ? t(L, `・目標の確定 ${x.goalBanked} に届く`, `; reaches your goal of ${x.goalBanked}`) : t(L, `・目標の確定 ${x.goalBanked} まであと ${x.goalBanked - x.ifExtractNow}`, `; ${x.goalBanked - x.ifExtractNow} short of your goal of ${x.goalBanked}`)) : '';
+  if (x.canExtract) out.push(x.objectiveComplete ? `extract (${t(L, '帰還: 遠征達成', 'complete the expedition')}${fromHere}${goalNote})` : `extract confirm:true (${t(L, '撤退: 未達成のまま終える', 'withdraw without the reward')}${fromHere}${goalNote})`);
   // 移動マクロはその場で進める mode だけを出す（V3-2R §14.2）。隣に起きている敵がいれば careful では動かないので flee を出す
   const adjAwake = x.hostiles.filter((m) => m.dist <= 1 && m.awareness !== 'asleep' && !m.fleeing);
   // 既定の hp_floor の実数（steady・fight は最大 HP の 50%。V3-2R2 §18.5）
@@ -1581,7 +1604,8 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
     // キャンプ専用の形: 成績と候補だけ
     lines.push(`[seq ${obs.seq} | ${t(L, 'キャンプ', 'Camp')} | HP ${s.hp}/${s.max_hp} | Lv${s.level} | ${statusText.at_camp[L === 'en' ? 1 : 0]}]`);
     if (obs.expedition?.result) lines.push(obs.expedition.result.text);
-    if (obs.camp?.compare) lines.push(...obs.camp.compare.lines);
+    if (obs.camp?.goal) lines.push(...obs.camp.goal.lines);
+    else if (obs.camp?.compare) lines.push(...obs.camp.compare.lines);
     lines.push(t(L, `確定済み ${s.score.banked} 点・達成した遠征 ${s.score.expeditions_completed}`, `Banked ${s.score.banked}, expeditions completed ${s.score.expeditions_completed}`));
     lines.push(boonsText(L, s.boons ?? []));
     if (obs.camp?.milestone) lines.push(obs.camp.milestone.text);
@@ -1611,6 +1635,7 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
       ? t(L, `【遠征${x.no}】${x.can_extract ? 'この場で extract できる' : 'extract は階段の上で'}`, `[Expedition ${x.no}] ${x.can_extract ? 'you can extract here' : 'extract on stairs'}`)
       : x.text;
     lines.push([head, x.haul?.text, x.sense?.text].filter(Boolean).join(' | '));
+    if (x.goal) lines.push(x.goal.text);
   }
   if (obs.alerts.length) lines.push('!! ' + obs.alerts.map((a) => a.text).join(' / '));
   const st = s.statuses.length ? s.statuses.map((x) => `${x.name}(${x.turns_left})`).join(' ') : t(L, 'なし', 'none');

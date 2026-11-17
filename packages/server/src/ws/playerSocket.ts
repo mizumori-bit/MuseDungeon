@@ -15,7 +15,8 @@ export function attachPlayerSocket(ws: WebSocket, port: PlayerPort, policy: Spec
     const view = port.view();
     const events = port.perceivedSince(lastSent);
     lastSent = view.seq;
-    send({ t: 'view', view, events });
+    // 目標（V3-7a。World の外）: AI と同じ候補と記録を渡す
+    send({ t: 'view', view, events, goal: port.goalInfo() });
     const summary = port.summary();
     if (summary && !endedSent) { endedSent = true; send({ t: 'ended', summary }); }
   };
@@ -36,6 +37,13 @@ export function attachPlayerSocket(ws: WebSocket, port: PlayerPort, policy: Spec
       if (!parsed.success) return send({ t: 'error', error: actionError('bad_request', parsed.error.issues.map((i) => i.message).join('; '), 'Command スキーマを確認する') });
       const r = await port.act(parsed.data, { source: 'ws', expectSeq: msg.expectSeq, thought: msg.thought, map: false });
       if (!r.ok) send({ t: 'error', error: r.error, valid_actions: r.valid_actions });
+      schedule();
+      return;
+    }
+    if (msg.t === 'goal') {
+      // 目標の宣言（V3-7a。AI の declare_goal と同じ口）
+      const r = port.declareGoal(msg.decl ?? null);
+      send({ t: 'result', id: 'goal', data: r });
       schedule();
       return;
     }

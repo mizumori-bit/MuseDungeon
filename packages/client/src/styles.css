@@ -384,3 +384,9 @@ button.ability .astate { margin-left: 2px; }
 /* 呪い（?: 確かめていない装備品） */
 .inv em.curse.unknown { color: #ce93d8; }
 .inv em.curse.cursed { color: #ff6e6e; font-weight: 700; }
+
+/* 目標の宣言（V3-7a） */
+.goalbox { margin: 8px 0 12px; padding: 8px 10px; border: 1px solid var(--line, #444); border-radius: 6px; }
+.goalbox h3 { margin: 0 0 4px; font-size: 0.95em; }
+.goalbox .goal-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 4px 0; }
+.goalbox .goal-type { min-width: 4.5em; font-weight: bold; }

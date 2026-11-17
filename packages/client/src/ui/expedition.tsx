@@ -1,7 +1,7 @@
 // 遠征まわりの表示部品: 目的と進捗、戦利品（未確定の点）、ブリーフィング、手番の状態行と変化、休憩の見積もり、キャンプ、観戦用の要約、AI の応答待ち。
 // 文章と数値は shared の expedition.ts / turn.ts / catalog.ts / observation.ts で作る。ここでは並べて見せるだけで、ゲームの判定はしない。
 import type {
-  Catalog, CatalogRules, Change, Dir, Expedition, ExpeditionOffer, ExpeditionView, HaulParts, ObsExpedition, Observation, OfferSlot, PlayerView,
+  Catalog, CatalogRules, Change, Dir, Expedition, ExpeditionOffer, ExpeditionView, GoalDecl, GoalInfo, GoalType, HaulParts, ObsExpedition, Observation, OfferSlot, PlayerView,
   RestEstimate, World,
 } from '@muse/shared';
 import {
@@ -422,8 +422,30 @@ function OfferCard({ o, rules, level, onStart }: { o: ExpeditionOffer; rules: Ca
   );
 }
 
+/** 目標の宣言（V3-7a §40.8。AI の declare_goal と同じ候補・同じ口）。任意で、点には影響しない */
+function GoalBox({ goal, onGoal }: { goal: GoalInfo; onGoal: (d: GoalDecl | null) => void }) {
+  const typeName: Record<GoalType, string> = { depth: tr('深さ', 'Depth'), banked: tr('確定点', 'Banked'), milestone: tr('節目', 'Milestone'), margin: tr('余力', 'Margin') };
+  const levelName = { match: tr('自己最高に並ぶ', 'match your best'), beat: tr('少し超える', 'beat it'), beat_big: tr('大きく超える', 'beat it big'), start: tr('初期値', 'start') };
+  const types = [...new Set(goal.candidates.map((c) => c.type))];
+  return (
+    <div class="goalbox">
+      <h3>{tr('目標（任意・点には影響しない）', 'Goal (optional, no effect on points)')}</h3>
+      {goal.lines.map((l) => <p class="muted">{l}</p>)}
+      {types.map((ty) => (
+        <div class="row goal-row">
+          <span class="goal-type">{typeName[ty]}</span>
+          {goal.candidates.filter((c) => c.type === ty).map((c) => (
+            <button class="small" title={levelName[c.level]} onClick={() => onGoal({ type: c.type, value: c.value, within: c.within })}>{c.text}</button>
+          ))}
+        </div>
+      ))}
+      {goal.active && <button class="small" onClick={() => onGoal(null)}>{tr('目標を取り下げる', 'Withdraw the goal')}</button>}
+    </div>
+  );
+}
+
 /** キャンプ（遠征と遠征の間）。成績・前の遠征の払い戻し・候補を出し、次の遠征を選ぶか、ここで終える */
-export function CampPanel({ view, catalog, onStart, onRetire }: { view: PlayerView; catalog?: Catalog | null; onStart: (offer: number | 'endless') => void; onRetire: () => void }) {
+export function CampPanel({ view, catalog, onStart, onRetire, goal, onGoal }: { view: PlayerView; catalog?: Catalog | null; onStart: (offer: number | 'endless') => void; onRetire: () => void; goal?: GoalInfo | null; onGoal?: (d: GoalDecl | null) => void }) {
   const x = view.expedition;
   const camp = view.camp;
   const rules = rulesOf(catalog);
@@ -448,6 +470,7 @@ export function CampPanel({ view, catalog, onStart, onRetire }: { view: PlayerVi
           : tr(`盤面の外にいる（時間は進まない）。HP ${view.self.stats.hp}/${view.self.stats.maxHp}・Lv${view.self.level}。最深到達: 地下${view.deepestDepth}階。ここで終えてもよい。`,
             `You are off the board (time does not pass). HP ${view.self.stats.hp}/${view.self.stats.maxHp}, Lv${view.self.level}. Deepest: ${view.deepestDepth}. You may stop here.`)}
       </p>
+      {camp && goal && onGoal && <GoalBox goal={goal} onGoal={onGoal} />}
       {camp ? (
         <>
           <h3>{first ? tr(`最初の遠征の候補（遠征 ${camp.nextNo}）`, `Offers for expedition ${camp.nextNo}`) : tr(`次の遠征の候補（遠征 ${camp.nextNo}）`, `Offers for expedition ${camp.nextNo}`)}</h3>

@@ -6,6 +6,7 @@ import type { PerceivedEvent } from './filter';
 import type { TurnBlock } from './turn';
 import type { Controller, ExpeditionBrief, Locale, ObjectiveType, PlayerId, PlayerState, RunSummary, World } from './types';
 import type { PlayerView } from './view';
+import type { GoalDecl, GoalInfo } from './goals';
 
 export type SpectatorPolicy = 'omniscient' | 'follow_only' | 'delayed';
 
@@ -14,7 +15,9 @@ export type ClientMsg =
   | { t: 'hello'; role: 'player'; runId: string; token: string }
   | { t: 'hello'; role: 'spectator'; runId: string; mode: 'director' | 'follow'; follow?: PlayerId; fromSeq?: number }
   | { t: 'command'; command: Command; expectSeq?: number; thought?: string }
-  | { t: 'query'; id: string; kind: 'look' | 'recall' | 'map' | 'inventory' | 'messages' | 'observation'; args?: Record<string, unknown> };
+  | { t: 'query'; id: string; kind: 'look' | 'recall' | 'map' | 'inventory' | 'messages' | 'observation'; args?: Record<string, unknown> }
+  /** 目標の宣言（V3-7a。キャンプで。null で取り下げ）。AI の declare_goal と同じ口 */
+  | { t: 'goal'; decl: GoalDecl | null };
 
 /** AI パネル用: MCP ツール呼び出しの記録（観戦にのみ流す。ゲームに影響しない） */
 export interface AgentActivity {
@@ -31,7 +34,7 @@ export interface AgentActivity {
 export type ServerMsg =
   | { t: 'welcome'; role: 'player' | 'spectator'; runId: string; contentVersion: string; playerId?: PlayerId; policy: SpectatorPolicy; mode?: 'director' | 'follow' }
   /** player / follow_only の追従観戦: 状態が進むたび */
-  | { t: 'view'; view: PlayerView; events: PerceivedEvent[] }
+  | { t: 'view'; view: PlayerView; events: PerceivedEvent[]; /** 目標（V3-7a。World の外） */ goal?: GoalInfo }
   /** spectator: 接続時（secret の seed/rng 除去済み） */
   | { t: 'snapshot'; seq: number; world: World }
   /** spectator: 逐次（内部イベント除去済み） */
