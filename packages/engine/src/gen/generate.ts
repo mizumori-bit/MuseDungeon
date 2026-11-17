@@ -481,7 +481,8 @@ export function guardianCandidates(content: Content, floorType: FloorTypeDef, bi
   let cands = content.lists.monsters
     .filter((m) => (!table?.tagsAny.length || m.tags.some((t) => table.tagsAny.includes(t))) && !(table?.tagsNone ?? []).some((t) => m.tags.includes(t)))
     .filter((m) => !GUARDIAN_EXCLUDED_ARCHETYPES.has(m.ai.archetype) && !m.tags.includes('vermin') && monsterWeight(m, effective, biome) > 0);
-  if (rank === 1) cands = cands.filter((m) => m.ai.archetype !== 'ranged_kiter');
+  // 格 1 は射撃する型を除く（距離を取る型と、その場で撃つ型。V3-5b §44.7）
+  if (rank === 1) cands = cands.filter((m) => m.ai.archetype !== 'ranged_kiter' && m.ai.archetype !== 'ranged_stand');
   cands.sort((a, b) => b.xp - a.xp || (a.id < b.id ? -1 : 1));
   const half = Math.max(1, Math.ceil(cands.length / 2));
   return cands.slice(0, half);

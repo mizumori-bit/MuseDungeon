@@ -199,6 +199,50 @@ archetypes.register('ranged_kiter', (ctx, m, { target, ai, def }) => {
   return 100;
 });
 
+// その場で撃つ（V3-5b §44.7 骨の射手）: 距離を取らない。隣なら殴り、射程と射線が通れば撃ち、通らなければ寄る
+archetypes.register('ranged_stand', (ctx, m, { target, ai, def }) => {
+  if (!target) return noTarget(ctx, m, ai);
+  const d = cheb(m.pos!, target.pos!);
+  if (d <= 1) { melee(ctx, m, target); return 100; }
+  if (def.ranged && d <= def.ranged.range && clearShot(ctx, m, target)) {
+    rangedAttack(ctx, m, target, def.ranged.dice, def.ranged.acc, !!def.ranged.pierce);
+    return 100;
+  }
+  approach(ctx, m, target.pos!);
+  return 100;
+});
+
+/**
+ * 大振り（V3-5b §44.7 大鬼）: 隣の相手に 1 手構え（構えたときに相手がいたマスを覚える）、次の手番にそのマスを打つ（swingMult 倍）。
+ * 外れると 1 手朦朧。構えるのは swingEvery 手番に 1 回。構えは突き進む者と同じ予備動作（intent）で見える
+ */
+function heavySwing(ctx: Ctx, m: Entity, target: Entity | null, def: MonsterDef | undefined): number | null {
+  if (!def?.tags.includes('heavy_swing') || !m.pos || !m.actor?.ai) return null;
+  const ai = m.actor.ai;
+  const key = m.pos.floor;
+  const turns = m.actor.turns;
+  if (ai.intent?.kind === 'swinging' && ai.intent.pos) {
+    const p = ai.intent.pos;
+    const next: AiState = { ...ai, targetPos: ai.targetPos ? { ...ai.targetPos } : null, swingAt: turns };
+    delete next.intent;
+    ctx.emit({ type: 'ai_state_changed', id: m.id, ai: next, dormant: false, nextActAt: m.actor.nextActAt, seenBy: [], floor: key });
+    const cur = ctx.world.entities[m.id];
+    const occ = ctx.actorAt(key, p.x, p.y);
+    const hit = !!occ?.player && cheb(occ.pos!, cur.pos!) <= 1;
+    const seen = ctx.perceive(key, [{ field: 'id', pos: cur.pos, entity: cur.id }], []);
+    if (hit) melee(ctx, cur, occ!, { dmgMult: ai.params.swingMult ?? 2 });
+    else addStatus(ctx, cur, 'core:stun', 1, 0);
+    if (seen.seenBy.length) ctx.emit({ type: 'monster_acted', id: cur.id, kind: cur.kind, act: hit ? 'swing_hit' : 'swing_missed', ...seen, floor: key });
+    return 100;
+  }
+  if (target?.pos && cheb(target.pos, m.pos) <= 1 && turns - (ai.swingAt ?? -999) >= (ai.params.swingEvery ?? 3)) {
+    const next: AiState = { ...ai, targetPos: ai.targetPos ? { ...ai.targetPos } : null, intent: { kind: 'swinging', pos: { x: target.pos.x, y: target.pos.y } } };
+    ctx.emit({ type: 'ai_state_changed', id: m.id, ai: next, dormant: false, nextActAt: m.actor.nextActAt, seenBy: [], floor: key });
+    return 100;
+  }
+  return null;
+}
+
 /** 射撃の経路: 視線が通り、投擲と同じ経路（双方向）が通ること。プレイヤーの shots と同じ判定 */
 function clearShot(ctx: Ctx, m: Entity, target: Entity): boolean {
   const key = m.pos!.floor;
@@ -278,7 +322,9 @@ export function monsterTurn(ctx: Ctx, m: Entity): number {
   const cur = ctx.world.entities[m.id];
   // 守護者の型（V3-3）: 予備動作・突進・手下・怒り・潜む。手番を使わなければ通常の行動様式
   const gcost = cur.guardian ? guardianTurn(ctx, cur, target) : null;
-  const cost = gcost ?? archetypes.get(ai.archetype)(ctx, ctx.world.entities[m.id] ?? cur, { target, ai: next, def });
+  // 通常の敵の予備動作（V3-5b §44.7: 大振り）
+  const scost = gcost ?? heavySwing(ctx, ctx.world.entities[m.id] ?? cur, target, def);
+  const cost = scost ?? archetypes.get(ai.archetype)(ctx, ctx.world.entities[m.id] ?? cur, { target, ai: next, def });
   // 水場で遅い（弱点）: 浅い水の上では行動コストが増える
   const after = ctx.world.entities[m.id];
   return after?.guardian ? Math.trunc((cost * guardianCostPct(ctx, after)) / 100) : cost;

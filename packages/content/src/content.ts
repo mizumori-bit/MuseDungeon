@@ -137,7 +137,7 @@ export function buildContent(packs: RawPack[]): Content {
     },
     deepestDefined: 1,
   };
-  c.deepestDefined = Math.max(1, ...c.lists.monsters.map((m) => m.depth.peak ?? m.depth.min));
+  c.deepestDefined = Math.max(1, c.balance.monsterTableDepth ?? 1, ...c.lists.monsters.map((m) => m.depth.peak ?? m.depth.min));
   crossValidate(c);
   c.version = canonicalHash({
     terrain: c.terrain, monsters: c.lists.monsters, items: c.lists.items, appearances: c.lists.appearances,

@@ -21,6 +21,7 @@
     "perks": { "options": 3 },
     "curse": { "chancePct": 6 },
     "loot": { "throwStackMin": 1, "throwStackMax": 4 },
+    "monsterTableDepth": 18,
     "guardian": {
       "ranks": [
         { "hpPct": 50, "minHpBase": 6, "minHpPerDepth": 2, "tableDepth": 0, "types": 1 },

@@ -137,6 +137,9 @@ export function guardianTraits(ctx: Ctx, kind: string, affixes: readonly string[
   // 錆びさせる・装甲を抜く（V3-5a §35.10。見れば分かる特徴）
   if (def.tags.includes('rusting')) out.push('rusting');
   if (def.tags.includes('pierce') || def.ranged?.pierce) out.push('pierce');
+  // 血を吸う・大振り（V3-5b §44.7。見れば分かる特徴）
+  if (def.tags.includes('drain')) out.push('drain');
+  if (def.tags.includes('heavy_swing')) out.push('heavy_swing');
   return out;
 }
 

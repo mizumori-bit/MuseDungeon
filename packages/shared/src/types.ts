@@ -26,10 +26,12 @@ export interface AiState {
   params: Record<string, number>;
   /** 予備動作（V3-3 §3.1）: 次の手番に大きな行動を取る。見えていれば公開情報。dir: 突進の向き */
   intent?: Intent;
+  /** 最後に大振りした手番（V3-5b §44.7。swingEvery 手番ごとに構える） */
+  swingAt?: number;
 }
 
-/** 予備動作: winding_up（突進の構え）/ summoning（手下を呼ぶ）/ enraging（怒る） */
-export interface Intent { kind: 'winding_up' | 'summoning' | 'enraging'; dir?: Dir }
+/** 予備動作: winding_up（突進の構え）/ summoning（手下を呼ぶ）/ enraging（怒る）/ swinging（大振りの構え。pos: 打つマス。V3-5b） */
+export interface Intent { kind: 'winding_up' | 'summoning' | 'enraging' | 'swinging'; dir?: Dir; pos?: Pos }
 
 /**
  * 守護者の型と名前（V3-3 §3.1）。name・types は公開（候補にも出る）。weakness はプレイヤーには渡さない（試して分かったら knowledge.guardianIntel）。

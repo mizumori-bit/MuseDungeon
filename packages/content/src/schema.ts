@@ -346,6 +346,8 @@ const Int = z.number().int();
 /** 調整値（IMPROVEMENTS_V2 §6）。get_rules の数値もここから作る */
 export const BalanceSchema = z.object({
   id: IdSchema,
+  /** 種族の表を定義する深さ（V3-5b §44.7: この深さまでは接辞と深層強化で硬くするだけの階にしない）。種族の最も深い peak と大きいほう */
+  monsterTableDepth: Int.min(1).default(1),
   regen: z.object({
     /** 自然回復の間隔（手番）= max(minInterval, baseInterval - floor(Lv / levelDiv)) */
     baseInterval: Int.min(1), levelDiv: Int.min(1), minInterval: Int.min(1),

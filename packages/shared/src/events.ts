@@ -7,7 +7,7 @@ import type {
 } from './types';
 
 /** 2: 遠征・実ダメージ・回復の蓄積値（IMPROVEMENTS_V2）。3: ビルド（特技・能動技・呪い。V3-4）。古いログもそのまま畳み込める */
-export const EVENT_VERSION = 13;
+export const EVENT_VERSION = 14;
 
 export interface EventBase {
   seq: number;
@@ -93,6 +93,8 @@ export type GameEvent =
   | E<'guardian_acted', { id: EntityId; kind: string; guardianName: Names; act: 'summoned' | 'charged' | 'missed' | 'enraged'; count?: number }>
   /** 守護者が、相手が階を離れている間に回復した（V3-3a §35.1。戻ってきた本人に）。full: 全快して落ち着いた */
   | E<'guardian_rested', { id: EntityId; guardianName: Names; full: boolean; player: PlayerId; /** 落ち着いて去った手下の数（V3-3b §40.3） */ dispersed?: number }>
+  /** 通常の敵の大きな行動の結果（V3-5b §44.7: 大振りが当たった・空を切った） */
+  | E<'monster_acted', { id: EntityId; kind: string; act: 'swing_hit' | 'swing_missed' }>
   /** 目的でなくなった守護者が階を去った（V3-3c §44.1）。その守護者に会ったことのある参加者に。forget: 記憶から消す地物（棲み処の火） */
   | E<'guardian_departed', { id: EntityId; guardianName: Names; depth: number; player: PlayerId; forget: EntityId[] }>
   /** 遺物を記録庫に納めた。記録庫が次の節目の大守護者の記憶を 1 つ返す（V3-3a §35.7。本人に）。memory: weakness / vitals / none */

@@ -207,6 +207,17 @@ export function greedyDecide(port: PlayerPort, rng: Rng, memo: BotMemo): Command
     const side = sidestep(port, v, braced.pos, braced.intent!.dir!, pos);
     if (side) return { type: 'move', dir: side };
   }
+  // 大振りの的にいれば外れる（V3-5b）: 空いている隣のマスへ
+  if (pos && hostiles.some((h) => h.intent?.kind === 'swinging' && h.intent.pos?.x === pos.x && h.intent.pos?.y === pos.y)) {
+    const f = v.floor!;
+    const off = DIRS.find((d) => {
+      const nx = pos.x + DIR_VEC[d][0], ny = pos.y + DIR_VEC[d][1];
+      if (nx < 0 || ny < 0 || nx >= f.width || ny >= f.height) return false;
+      const t = port.catalog.terrain[v.terrainTable[v.memory.terrain[ny * f.width + nx]]];
+      return !!t?.passable && !v.entities.some((e) => (e.cat === 'monster' || e.cat === 'player') && e.pos.x === nx && e.pos.y === ny);
+    });
+    if (off) return { type: 'move', dir: off };
+  }
   if (hostiles.some((h) => h.guardian?.types.includes('core:warded'))) {
     const fire = v.entities.find((e) => e.cat === 'feature' && e.kind === 'core:ward_fire' && e.state === 'lit' && cheb(e.pos, pos) <= 1);
     if (fire) { const d = cheb(fire.pos, pos) === 0 ? undefined : dirTo(pos, fire.pos) ?? undefined; return d ? { type: 'interact', dir: d } : { type: 'interact' }; }

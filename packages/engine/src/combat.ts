@@ -154,7 +154,9 @@ export function melee(ctx: Ctx, attacker: Entity, target: Entity, opts: MeleeOpt
     if (ls > 0) notePerk(ctx, attacker, perkWithHook(ctx, attacker, 'last_stand'), 'might', { amount: ls });
     if (brace && !o.crit) notePerk(ctx, target, perkWithHook(ctx, target, 'brace'), 'braced', { amount: brace });
     if (brace) removeStatus(ctx, target, 'core:braced');
-    applyDamage(ctx, ctx.world.entities[target.id], dmg, attacker, 'melee');
+    const dealt = applyDamage(ctx, ctx.world.entities[target.id], dmg, attacker, 'melee');
+    // 血を吸う（V3-5b §44.7）: 与えた分だけ回復する
+    if (dealt > 0 && !attacker.player) drainHeal(ctx, attacker, dealt);
     if ((ctx.world.entities[target.id]?.stats?.hp ?? 0) > 0) onHitEffects(ctx, attacker, ctx.world.entities[target.id]);
     if (attacker.player) weaponOnHit(ctx, ctx.world.entities[attacker.id] ?? attacker, ctx.world.entities[target.id] ?? target);
   } else provoke(ctx, target, attacker);
@@ -200,6 +202,15 @@ function onHitEffects(ctx: Ctx, attacker: Entity, target: Entity): void {
   applyEffects(ctx, effects, { user: attacker, target, pos: target.pos!, source: attacker, via: 'melee' });
 }
 
+/** 血を吸う種族（タグ drain）: 与えたダメージの分だけ回復する（最大 HP まで） */
+function drainHeal(ctx: Ctx, attacker: Entity, dealt: number): void {
+  const a = ctx.world.entities[attacker.id];
+  if (!a?.stats || a.stats.hp <= 0 || a.stats.hp >= a.stats.maxHp || !ctx.content.monsters[a.kind]?.tags.includes('drain')) return;
+  const amount = Math.min(dealt, a.stats.maxHp - a.stats.hp);
+  const seen = a.pos ? ctx.perceive(a.pos.floor, [{ field: 'target', pos: a.pos, entity: a.id }], []) : { seenBy: [] as string[] };
+  ctx.emit({ type: 'healed', target: a.id, targetKind: a.kind, amount, hpAfter: a.stats.hp + amount, via: 'drain', ...seen, floor: a.pos?.floor ?? null });
+}
+
 /** 攻撃された（外れた）モンスターは攻撃者に気づく */
 function provoke(ctx: Ctx, target: Entity, attacker: Entity): void {
   if (target.actor?.ai && attacker.pos) {
@@ -208,9 +219,9 @@ function provoke(ctx: Ctx, target: Entity, attacker: Entity): void {
   }
 }
 
-export function applyDamage(ctx: Ctx, target: Entity, amount: number, source: Entity | null, via: DamageVia): void {
+export function applyDamage(ctx: Ctx, target: Entity, amount: number, source: Entity | null, via: DamageVia): number {
   const t = ctx.world.entities[target.id];
-  if (!t?.stats || t.stats.hp <= 0) return;
+  if (!t?.stats || t.stats.hp <= 0) return 0;
   let hpAfter = Math.max(0, t.stats.hp - amount);
   // 加護（執念。V3-3 §3.3）: 致死のダメージを、遠征に 1 回だけ HP 1 で耐える
   const xNo = currentExpedition(ctx.world)?.no ?? 0;
@@ -261,11 +272,12 @@ export function applyDamage(ctx: Ctx, target: Entity, amount: number, source: En
   }
   if (hpAfter <= 0) {
     kill(ctx, ctx.world.entities[t.id], source, via);
-    return;
+    return dealt;
   }
   const cur = ctx.world.entities[t.id];
   if (hasStatus(cur, 'core:sleep') && via !== 'poison') removeStatus(ctx, cur, 'core:sleep');
   if (source && cur.actor?.ai) provoke(ctx, cur, source);
+  return dealt;
 }
 
 export function heal(ctx: Ctx, target: Entity, amount: number, via: string): void {

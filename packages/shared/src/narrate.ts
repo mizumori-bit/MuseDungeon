@@ -322,6 +322,11 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
       return (ev.full ? (ja ? `守護者「${nm}」は傷を癒やしていた（体力が戻っている）。` : `The guardian "${nm}" has healed its wounds (back to full).`)
         : (ja ? `守護者「${nm}」の傷が少し癒えている（追われていない間に回復した）。` : `The guardian "${nm}" has healed a little while it was not chasing you.`)) + gone;
     }
+    case 'monster_acted': {
+      const nm = who(ctx, ev.id, ev.kind);
+      if (ev.act === 'swing_missed') return ja ? `${nm}の大振りは空を切った（1 手、朦朧になる）。` : `${cap(nm)}'s heavy swing hits nothing (stunned for a turn).`;
+      return ja ? `${nm}の大振りが当たった（2 倍）。` : `${cap(nm)}'s heavy swing lands (double damage).`;
+    }
     case 'guardian_departed': {
       const nm = nameOf(ev.guardianName as Names, L, '?');
       return ja ? `地下${ev.depth}階の守護者「${nm}」は棲み処を去っていた（目的ではなくなった）。` : `The guardian "${nm}" of depth ${ev.depth} has left its lair (no longer an objective).`;

@@ -414,6 +414,15 @@ V3-2R で足した項目（同じく後方互換。会心と経験値のルー�
 - `player_state.reason: 'joined'`（キャンプから始まる参加）。参加コマンドの `atCamp`
 - プレイヤー向けの射影で、見えていた個体が視界の外へ動いた `entity_moved` に `dirOut`（向きだけ。行き先は伏せたまま）
 
+V3-5b で足した項目（深層の敵。後方互換。種族と規則が増えたので `engineVersion` は 0.18.0、出来事が増えたので `eventVersion` は 14。DESIGN.md §30）:
+
+- 種族: 骨の射手（`core:bone_archer`。2 体組・射程 7 の 1d8・その場で撃つ）・血吸い蝙蝠（`core:blood_bat`。3〜4 体の群れ・速さ 140・血を吸う）・大鬼（`core:ogre`。大柄・大振り）。オークの荒くれの深さの上限は 14
+- コンテンツ: 行動様式 `ranged_stand`（距離を取らない射手）。種族のタグ `drain`（与えたダメージの分だけ回復）・`heavy_swing`（大振り。`ai.swingEvery`・`ai.swingMult`）。`balance.monsterTableDepth`（18。種族の表を定義する深さ。これより深い階だけ深層強化で硬くする）
+- イベント: `monster_acted { id, kind, act: 'swing_hit' | 'swing_missed' }`。回復の `healed.via` に `drain`
+- World State: `AiState.intent.kind` に `swinging`（`pos` が打つマス）・`AiState.swingAt`（最後に大振りした手番）
+- 観測: `visible.monsters[].traits` に `drain`・`heavy_swing`（見れば分かる特徴）。`intent.code` に `swinging`（`pos`・`on_line` はあなたがそのマスにいる）。valid_actions の move に「大振りの的から外れる」。候補の守護者の見込みの特徴にも `drain`・`heavy_swing`
+- 規則: 格 1 の守護者の候補から、その場で撃つ型も除く（距離を取る射手と同じ）
+
 V3-3c で足した項目（見直し 7。後方互換。規則と候補の作り方が変わったので `engineVersion` は 0.17.0、出来事が増えたので `eventVersion` は 13。DESIGN.md §29）:
 
 - イベント: `guardian_departed { id, guardianName, depth, player, forget }`（目的でなくなった守護者が階を去った。その守護者に会ったことのある参加者に。forget は記憶から消す棲み処の地物）

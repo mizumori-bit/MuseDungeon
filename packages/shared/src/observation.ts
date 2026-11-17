@@ -23,9 +23,9 @@ import { hpState, xpForLevel } from './view';
 export interface Alert { code: string; text: string; entity?: string; data?: Record<string, unknown> }
 
 /** 見れば分かる特徴（V3-2R2 §18.2）: 群れる・飛び道具・動かない。種族の公開タグから */
-export type MonsterTrait = 'pack' | 'ranged' | 'stationary' | 'armored' | 'rusting' | 'pierce' | 'evasive';
+export type MonsterTrait = 'pack' | 'ranged' | 'stationary' | 'armored' | 'rusting' | 'pierce' | 'evasive' | 'drain' | 'heavy_swing';
 /** 錆びさせる・装甲を抜く（V3-5a §35.10）も種族の公開タグから */
-const OBVIOUS_TRAITS: readonly MonsterTrait[] = ['pack', 'ranged', 'stationary', 'rusting', 'pierce'];
+const OBVIOUS_TRAITS: readonly MonsterTrait[] = ['pack', 'ranged', 'stationary', 'rusting', 'pierce', 'drain', 'heavy_swing'];
 
 export interface ObsMonster {
   id: string; name: string; pos: Pos; dir: Dir | null; dist: number;
@@ -71,7 +71,8 @@ export interface ObsMonster {
   /** 守護者の呼び名・型・分かった弱点（V3-3 §3.1。弱点は試して分かったものだけ） */
   guardian?: { name: string; types: { id: string; name: string }[]; weakness?: { id: string; name: string }; warden?: boolean; not_weak?: { id: string; name: string }[] };
   /** 予備動作（見えていれば出る。V3-3 §3.1）。on_line: 突進の直線の上に自分がいる */
-  intent?: { code: 'winding_up' | 'summoning' | 'enraging'; dir?: Dir; on_line?: boolean; text: string };
+  /** swinging（大振りの構え。V3-5b）: pos は打つマス、on_line はあなたがそのマスにいる */
+  intent?: { code: 'winding_up' | 'summoning' | 'enraging' | 'swinging'; dir?: Dir; pos?: Pos; on_line?: boolean; text: string };
 }
 /** 同じセルの同種の物は 1 行にまとめる（ids に全て。id は先頭） */
 export interface ObsItem { id: string; ids?: string[]; name: string; pos: Pos; dir: Dir | null; dist: number; qty: number; remembered?: boolean; role?: EntityRole; mine?: boolean; value?: number; /** まとめた「自分が投げた物」の、最寄りのマスの本数 */ near_qty?: number }
@@ -434,8 +435,8 @@ export function itemStatsText(L: Locale, s: ItemStats | undefined, catalog?: Cat
 
 /** 能力タグの表示名 */
 export function abilityName(locale: Locale, a: string): string {
-  const ja: Record<string, string> = { flees: '手負いで逃げる', ranged: '遠隔攻撃', fast: '速い', slow: '遅い', poison: '毒', stationary: '動かない', pack: '群れる', armored: '重装', rusting: '錆びさせる', pierce: '装甲を抜く', evasive: '回避が高い' };
-  const en: Record<string, string> = { flees: 'flees when hurt', ranged: 'ranged attack', fast: 'fast', slow: 'slow', poison: 'poison', stationary: 'stationary', pack: 'pack', armored: 'armored', rusting: 'rusts armor', pierce: 'pierces armor', evasive: 'evasive' };
+  const ja: Record<string, string> = { flees: '手負いで逃げる', ranged: '遠隔攻撃', fast: '速い', slow: '遅い', poison: '毒', stationary: '動かない', pack: '群れる', armored: '重装', rusting: '錆びさせる', pierce: '装甲を抜く', evasive: '回避が高い', drain: '血を吸う', heavy_swing: '大振り' };
+  const en: Record<string, string> = { flees: 'flees when hurt', ranged: 'ranged attack', fast: 'fast', slow: 'slow', poison: 'poison', stationary: 'stationary', pack: 'pack', armored: 'armored', rusting: 'rusts armor', pierce: 'pierces armor', evasive: 'evasive', drain: 'drains blood', heavy_swing: 'heavy swing' };
   return (locale === 'en' ? en[a] : ja[a]) ?? a;
 }
 
@@ -618,6 +619,10 @@ function intentOf(L: Locale, e: EntityView, me: Pos | null): NonNullable<ObsMons
     let on = false;
     if (me) for (let k = 1; k <= 6; k++) if (e.pos.x + DIR_VEC[it.dir][0] * k === me.x && e.pos.y + DIR_VEC[it.dir][1] * k === me.y) on = true;
     return { code: it.kind, dir: it.dir, on_line: on, text: t(L, `突進の構え（${DIR_JA[it.dir]}の直線。次の手番に突進する${on ? '。あなたは線の上にいる' : ''}）`, `bracing to charge (${it.dir} line; charges next turn${on ? '; you are on the line' : ''})`) };
+  }
+  if (it.kind === 'swinging' && it.pos) {
+    const on = !!me && me.x === it.pos.x && me.y === it.pos.y;
+    return { code: it.kind, pos: { ...it.pos }, on_line: on, text: t(L, `大振りの構え（次の手番に (${it.pos.x},${it.pos.y}) を 2 倍で打つ。外れると 1 手朦朧${on ? '。あなたはそのマスにいる' : ''}）`, `winding up a heavy swing (next turn it strikes (${it.pos.x},${it.pos.y}) for double; a miss stuns it for a turn${on ? '; you are on that cell' : ''})`) };
   }
   if (it.kind === 'summoning') return { code: it.kind, text: t(L, '手下を呼ぶ構え（次の手番に呼ぶ）', 'about to call minions (next turn)') };
   return { code: it.kind, text: t(L, '怒りの予兆（次の手番に速さと威力が上がる）', 'about to rage (faster and stronger next turn)') };
@@ -1400,6 +1405,10 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
       if (lx >= 0 && ly >= 0 && lx < f.width && ly < f.height) chargeLines.add(ly * f.width + lx);
     }
   }
+  // 大振りの的（V3-5b §44.7）: 構えたときに自分がいたマス。外れる一歩に印を付ける
+  const swingCells = new Set<number>();
+  for (const e of view.entities) if (e.cat === 'monster' && e.intent?.kind === 'swinging' && e.intent.pos) swingCells.add(e.intent.pos.y * f.width + e.intent.pos.x);
+  const onSwing = swingCells.has(pos.y * f.width + pos.x);
   const onLine = chargeLines.has(pos.y * f.width + pos.x);
   for (const d of DIRS) {
     const nx = pos.x + DIR_VEC[d][0];
@@ -1412,7 +1421,8 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
     const tid = view.terrainTable[view.memory.terrain[i]];
     const tr = catalog.terrain[tid];
     if (tr?.door === 'closed') { out.push(`move ${d} (${t(L, '扉を開ける', 'open door')})`); continue; }
-    if (x.passable_dirs.includes(d)) out.push(onLine && !chargeLines.has(i) ? `move ${d} (${t(L, '突進の直線から外れる', 'step off the charge line')})` : `move ${d}`);
+    if (x.passable_dirs.includes(d)) out.push(onLine && !chargeLines.has(i) ? `move ${d} (${t(L, '突進の直線から外れる', 'step off the charge line')})`
+      : onSwing && !swingCells.has(i) ? `move ${d} (${t(L, '大振りの的から外れる', 'step out of the heavy swing')})` : `move ${d}`);
   }
   out.push('wait');
   const hunting = x.hostiles.some((m) => m.awareness === 'hunting' && !m.fleeing && !(isStationary(catalog, view.entities.find((e) => e.id === m.id) ?? { kind: null }) && m.dist > 1));

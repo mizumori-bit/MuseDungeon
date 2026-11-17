@@ -46,7 +46,7 @@
   },
   {
     "id": "core:orc_brute", "size": "medium", "glyph": "O", "name": { "ja": "オークの荒くれ", "en": "orc brute" }, "tags": ["humanoid", "halls"],
-    "depth": { "min": 4, "peak": 8, "max": 18 }, "rarity": 2,
+    "depth": { "min": 4, "peak": 8, "max": 14 }, "rarity": 2,
     "stats": { "hp": "4d6+6", "acc": 4, "eva": 1, "might": 2, "armor": 2, "sight": 7 },
     "speed": 100, "attack": { "dice": "1d10" },
     "ai": { "archetype": "melee_chaser" }, "xp": 14,
@@ -88,5 +88,29 @@
     "stats": { "hp": "5d6+8", "acc": 3, "eva": 0, "might": 1, "armor": 6, "sight": 5 },
     "speed": 70, "attack": { "dice": "1d8" },
     "ai": { "archetype": "melee_chaser" }, "xp": 15, "sleepPct": 50, "abilities": ["slow"]
+  },
+  {
+    "id": "core:bone_archer", "size": "medium", "glyph": "k", "name": { "ja": "骨の射手", "en": "bone archer" }, "tags": ["undead", "ranged", "halls", "ruins"],
+    "depth": { "min": 9, "peak": 12, "max": 18 }, "rarity": 2,
+    "stats": { "hp": "2d8+4", "acc": 5, "eva": 2, "might": 0, "armor": 1, "sight": 9 },
+    "speed": 100, "attack": { "dice": "1d4" }, "ranged": { "dice": "1d8", "range": 7, "acc": 3 },
+    "ai": { "archetype": "ranged_stand" }, "xp": 18, "group": { "min": 2, "max": 2 },
+    "drops": [{ "table": "core:common_loot", "chancePct": 30 }], "sleepPct": 40, "abilities": ["ranged"]
+  },
+  {
+    "id": "core:blood_bat", "size": "small", "glyph": "v", "name": { "ja": "血吸い蝙蝠", "en": "blood bat" }, "tags": ["animal", "pack", "cave", "drain"],
+    "depth": { "min": 10, "peak": 13, "max": 18 }, "rarity": 2,
+    "stats": { "hp": "2d6+2", "acc": 5, "eva": 4, "might": 0, "armor": 0, "sight": 8 },
+    "speed": 140, "attack": { "dice": "1d4" },
+    "ai": { "archetype": "pack" }, "xp": 9, "group": { "min": 3, "max": 4 },
+    "drops": [], "sleepPct": 50, "abilities": ["fast", "drain"]
+  },
+  {
+    "id": "core:ogre", "size": "large", "glyph": "G", "name": { "ja": "大鬼", "en": "ogre" }, "tags": ["giant", "halls", "cave", "heavy_swing"],
+    "depth": { "min": 11, "peak": 14 }, "rarity": 3,
+    "stats": { "hp": "8d8+16", "acc": 6, "eva": 0, "might": 0, "armor": 2, "sight": 7 },
+    "speed": 100, "attack": { "dice": "2d8+3" },
+    "ai": { "archetype": "melee_chaser", "swingEvery": 3, "swingMult": 2 }, "xp": 60,
+    "drops": [{ "table": "core:vault_loot", "chancePct": 60 }], "sleepPct": 50, "abilities": ["heavy_swing"]
   }
 ]
