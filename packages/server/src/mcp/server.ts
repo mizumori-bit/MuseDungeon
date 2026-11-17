@@ -2,7 +2,7 @@
 // 1 MCP 接続 = 1 プレイヤー（接続に束縛）。ステートレスなクライアント向けに全ツールが player_token も受け付ける。
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { ActionError, Command, Controller, ObjectiveChoice, TurnBlock } from '@muse/shared';
+import type { ActionError, Command, Controller, GoalType, ObjectiveChoice, TurnBlock } from '@muse/shared';
 import { actionError, CommandSchema, t } from '@muse/shared';
 import type { PlayerPort, ActionPayload } from '../session/PlayerPort';
 import type { SessionManager } from '../session/SessionManager';
@@ -82,7 +82,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
   const noSession = () => errOut(actionError('no_session', 'このMCP接続にはプレイヤーが束縛されていない / no player bound to this connection', 'new_run で始めるか、resume_run(player_token) で再開する / call new_run or resume_run'));
 
   const record = (port: PlayerPort, tool: string, args: Record<string, unknown>, text: string) => {
-    const { player_token: _t, ...safe } = args;
+    const { player_token: _t, profile_token: _p, ...safe } = args;
     manager.recordActivity(port.runId, { playerId: port.playerId, seq: port.view().seq, tool, args: safe, text, wall: Date.now() });
   };
 
@@ -141,16 +141,20 @@ export function createMcpServer(ctx: McpContext): McpServer {
     port.setOptions({ map, inventory: args.inventory as 'on_change' | 'always' | undefined, status_line: args.status_line as 'short' | 'long' | undefined });
   };
 
-  const joinedOut = async (port: PlayerPort, token: string, runId: string, tool: string, args: Record<string, unknown>, reason: 'run_started' | 'resumed') => {
+  const joinedOut = async (port: PlayerPort, token: string, runId: string, tool: string, args: Record<string, unknown>, reason: 'run_started' | 'resumed', profile?: { id: string; token?: string }) => {
     ctx.boundToken = token;
     applyOptions(port, args);
     // キャンプの候補は観測の文に入るので重ねない
     const briefing = port.briefing(reason === 'resumed' ? 'resume' : 'start', { camp: false });
     const o = port.observeWithTurn(reason, { detail: 'full', consume: true });
-    const head = `run_id: ${runId}\nplayer_token: ${token}\n(このトークンで resume_run できる / keep this token to resume)\n\n`;
+    // プロフィール（V3-7 §16.3）: 新しく作ったときだけトークンを返す。次の new_run に渡すと記録と継承が引き継がれる
+    const prof = profile?.token
+      ? `profile_id: ${profile.id}\nprofile_token: ${profile.token}\n(このトークンを保存し、次の new_run の profile_token に渡すと記録・図鑑・継承が引き継がれる / save it and pass it to the next new_run as profile_token to keep records and legacy)\n`
+      : profile ? `profile_id: ${profile.id}\n` : '';
+    const head = `run_id: ${runId}\nplayer_token: ${token}\n(このトークンで resume_run できる / keep this token to resume)\n${prof}\n`;
     const text = head + (briefing.length ? briefing.join('\n') + '\n\n' : '') + o.text;
     record(port, tool, args, text);
-    return out(text, { run_id: runId, player_token: token, player_id: port.playerId, briefing, observation: o.observation, turn: o.turn });
+    return out(text, { run_id: runId, player_token: token, player_id: port.playerId, ...(profile ? { profile_id: profile.id, ...(profile.token ? { profile_token: profile.token } : {}) } : {}), briefing, observation: o.observation, turn: o.turn });
   };
 
   server.registerTool('new_run', {
@@ -163,6 +167,8 @@ export function createMcpServer(ctx: McpContext): McpServer {
       seed: z.string().max(64).optional(),
       locale: z.enum(['ja', 'en']).optional(),
       objective: z.enum(['auto', 'reach_depth', 'slay_guardian', 'retrieve_relic', 'endless']).optional().describe('最初の遠征の目的（既定 auto = 最初の候補。endless は目的なし）'),
+      profile_token: z.string().optional().describe('前のランで受け取った profile_token。記録・図鑑・実績が積まれ、図鑑の知識の一部を引き継ぐ（省くと新しいプロフィールを作り、応答で返す）'),
+      legacy: z.boolean().optional().describe('false で図鑑の知識を引き継がない（既定 true）'),
       ...optionArgs,
       brief_map: z.boolean().optional().describe('旧引数。false は map: never と同じ'),
     },
@@ -175,20 +181,23 @@ export function createMcpServer(ctx: McpContext): McpServer {
     }
     const r = await manager.createRun({
       name: args.character_name, classId, mode: args.mode, seed: args.seed, locale: args.locale, controller,
-      objective: args.objective as ObjectiveChoice | undefined,
+      objective: args.objective as ObjectiveChoice | undefined, profileToken: args.profile_token, legacy: args.legacy,
     });
     if ('error' in r) return errOut(r.error);
-    return joinedOut(r.port, r.token, r.session.runId, 'new_run', { ...args, seed: undefined }, 'run_started');
+    return joinedOut(r.port, r.token, r.session.runId, 'new_run', { ...args, seed: undefined }, 'run_started', r.profile);
   });
 
   server.registerTool('join_run', {
     title: 'ランに参加',
     description: '進行中の COOP ランに参加する。Join a coop run.',
-    inputSchema: { run_id: z.string(), character_name: z.string().min(1).max(32), class: z.string().optional(), locale: z.enum(['ja', 'en']).optional() },
+    inputSchema: {
+      run_id: z.string(), character_name: z.string().min(1).max(32), class: z.string().optional(), locale: z.enum(['ja', 'en']).optional(),
+      profile_token: z.string().optional().describe('前のランで受け取った profile_token（省くと新しいプロフィールを作る）'), legacy: z.boolean().optional().describe('false で図鑑の知識を引き継がない'),
+    },
   }, async (args) => {
-    const r = await manager.joinRun(args.run_id, { name: args.character_name, classId: normClass(args.class), locale: args.locale, controller: { kind: 'agent', label: ctx.clientLabel } });
+    const r = await manager.joinRun(args.run_id, { name: args.character_name, classId: normClass(args.class), locale: args.locale, controller: { kind: 'agent', label: ctx.clientLabel }, profileToken: args.profile_token, legacy: args.legacy });
     if ('error' in r) return errOut(r.error);
-    return joinedOut(r.port, r.token, r.session.runId, 'join_run', args, 'run_started');
+    return joinedOut(r.port, r.token, r.session.runId, 'join_run', args, 'run_started', r.profile);
   });
 
   server.registerTool('resume_run', {
@@ -205,6 +214,42 @@ export function createMcpServer(ctx: McpContext): McpServer {
     const text = (briefing.length ? briefing.join('\n') + '\n\n' : '') + o.text;
     record(port, 'resume_run', {}, text);
     return out(text, { run_id: port.runId, player_id: port.playerId, briefing, observation: o.observation, turn: o.turn });
+  });
+
+  // ---------------- プロフィール（V3-7 §7） ----------------
+  /** profile_token があればそのプロフィール、無ければこの接続のプレイヤーのプロフィール */
+  const profileOf = (token?: string, playerToken?: string) => {
+    if (token) return manager.profilePortForToken(token);
+    const tok = playerToken ?? ctx.boundToken;
+    const r = tok ? manager.resolveToken(tok) : null;
+    const id = r ? r.session.profileOf(r.playerId) : null;
+    return id ? manager.profilePort(id) : null;
+  };
+  const noProfile = () => errOut(actionError('no_session', 'プロフィールが見つからない / no profile', 'profile_token を渡すか、ランに束縛してから呼ぶ / pass profile_token or bind a run first'));
+  server.registerTool('records', {
+    title: '記録と図鑑',
+    description: 'プロフィールの記録（ランの数・確定点の最高と平均・最深・達成した遠征・倒した大守護者・死因・直近のラン）、図鑑（種族・鑑定した品・納めた遺物・守護者の型と弱点・断章・特殊部屋。完成度は「見つけた/全部」）、実績、次の節目。ランをまたいで残る。手番を消費しない。profile_token を省くと、この接続のプレイヤーのプロフィール。Records, codex and feats of your profile.',
+    inputSchema: { ...common, profile_token: z.string().optional(), locale: z.enum(['ja', 'en']).optional() },
+  }, async (args) => {
+    const pp = profileOf(args.profile_token, args.player_token);
+    if (!pp) return noProfile();
+    const port = portOf(args.player_token);
+    const r = pp.records(args.locale ?? port?.locale() ?? 'ja');
+    if (!r) return noProfile();
+    return port && !args.profile_token ? withTurn(port, r.text, { records: r.data }) : out(r.text, { records: r.data });
+  });
+  server.registerTool('profile', {
+    title: 'プロフィール',
+    description: 'プロフィールの表示名・記録の要約・進行中のラン（run_id だけ）。name で表示名を変える。ランに束縛されていなくても呼べる。手番を消費しない。Your profile (name, summary, runs in progress).',
+    inputSchema: { profile_token: z.string().optional(), name: z.string().min(1).max(32).optional(), locale: z.enum(['ja', 'en']).optional() },
+  }, async (args) => {
+    const pp = profileOf(args.profile_token);
+    if (!pp) return noProfile();
+    if (args.name && !args.profile_token) return errOut(actionError('bad_request', '表示名を変えるには profile_token が要る / renaming needs profile_token', ''));
+    if (args.name) pp.rename(args.name);
+    const r = pp.info(args.locale ?? 'ja');
+    if (!r) return noProfile();
+    return out(r.text, r.data as unknown as Record<string, unknown>);
   });
 
   server.registerTool('retire', {
@@ -229,13 +274,13 @@ export function createMcpServer(ctx: McpContext): McpServer {
   });
   server.registerTool('declare_goal', {
     title: '目標を宣言する',
-    description: 'キャンプで、次の遠征からの目標を 1 つ宣言する（任意。点・経験値・戦利品には影響しない）。型は depth（最深到達を地下 N 階に。期限 1〜3 回の遠征）・banked（1 回の遠征で確定 X 点以上。次の遠征）・milestone（次の節目の大守護者を倒す。期限 1〜3 回）・margin（達成した遠征で、最も下がった HP を最大の N% 以上に保つ。次の遠征）。option に 1〜3 を渡すと候補（自己最高に並ぶ／少し超える／大きく超える）の値を使う。value で好きな値も宣言できる。type: none で取り下げ。宣言し直すと前の目標は取り下げになる。候補はキャンプの観測と expedition に出る。手番を消費しない。Declare an optional goal at camp (no effect on points).',
+    description: 'キャンプで、次の遠征からの目標を 1 つ宣言する（任意。点・経験値・戦利品には影響しない）。型は depth（最深到達を地下 N 階に。期限 1〜3 回の遠征）・banked（1 回の遠征で確定 X 点以上。次の遠征）・milestone（次の節目の大守護者を倒す。期限 1〜3 回）・margin（達成した遠征で、最も下がった HP を最大の N% 以上に保つ。次の遠征）・codex（図鑑を N にする。期限 1〜3 回）・feats（実績を N にする。期限 1〜3 回）。自己最高はプロフィールの前のランまでの記録も含む。option に 1〜3 を渡すと候補（自己最高に並ぶ／少し超える／大きく超える）の値を使う。value で好きな値も宣言できる。type: none で取り下げ。宣言し直すと前の目標は取り下げになる。候補はキャンプの観測と expedition に出る。手番を消費しない。Declare an optional goal at camp (no effect on points).',
     inputSchema: {
       ...common,
-      type: z.enum(['depth', 'banked', 'milestone', 'margin', 'none']).optional().describe('目標の型（none で取り下げ。省くと候補と記録を返す）'),
+      type: z.enum(['depth', 'banked', 'milestone', 'margin', 'codex', 'feats', 'none']).optional().describe('目標の型（none で取り下げ。省くと候補と記録を返す）'),
       option: z.number().int().min(1).max(3).optional().describe('候補の番号（1: 自己最高に並ぶ・2: 少し超える・3: 大きく超える。節目は 1: 3 回以内・2: 2 回以内・3: 次の遠征）'),
       value: z.number().int().min(1).optional().describe('値（深さ・確定点・HP の %。節目は次の節目の深さ）'),
-      within: z.number().int().min(1).max(3).optional().describe('期限の遠征の数（depth・milestone だけ。既定 1、候補を使えば候補の値）'),
+      within: z.number().int().min(1).max(3).optional().describe('期限の遠征の数（depth・milestone・codex・feats だけ。既定 1、候補を使えば候補の値）'),
     },
   }, async (args) => {
     const port = portOf(args.player_token);
@@ -244,7 +289,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
     // 引数なし: 候補と記録を返す（V3-3c §44.5: キャンプの観測は 1 行になった）
     if (args.type === undefined) { const info = port.goalInfo(); return withTurn(port, (info.full ?? info.lines).join('\n'), { info } as Record<string, unknown>); }
     if (args.type === 'none') { const r = port.declareGoal(null); return withTurn(port, r.text, (r.data ?? {}) as Record<string, unknown>); }
-    let decl: { type: 'depth' | 'banked' | 'milestone' | 'margin'; value: number; within: number } | null = null;
+    let decl: { type: GoalType; value: number; within: number } | null = null;
     const gtype = args.type;
     if (args.option !== undefined) {
       const c = port.goalInfo().candidates.filter((x) => x.type === gtype)[args.option - 1];

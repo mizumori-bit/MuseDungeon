@@ -18,3 +18,4 @@ export * from './expeditionStats';
 export * from './goals';
 export * from './turn';
 export * from './protocol';
+export * from './profile';

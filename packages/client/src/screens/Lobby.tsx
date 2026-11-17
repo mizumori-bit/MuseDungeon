@@ -1,5 +1,5 @@
 // ロビー: 進行中のラン（観戦・参加・再開）、終了したラン（リプレイ）、リーダーボード、新規ラン。
-import type { LeaderboardEntry, Locale, RunListing } from '@muse/shared';
+import type { LeaderboardEntry, Locale, ProfileRecords, RunListing } from '@muse/shared';
 import { endReasonText, kindName, nameOf, objectiveText } from '@muse/shared';
 import { useEffect, useState } from 'preact/hooks';
 import { api, errorText } from '../api';
@@ -25,7 +25,17 @@ export function Lobby() {
   // 旧版の pref（'objective'。既定 auto で保存されている）は読まない: 既定は「キャンプで選ぶ」
   const [objective, setObjective] = useState<FirstExpeditionChoice>(firstChoice(getPref('firstExpedition', 'camp')));
   const [busy, setBusy] = useState(false);
+  // プロフィール（V3-7 §7.1）: トークンはこのブラウザに残し、次のランに渡す（記録・図鑑・継承）
+  const [profileToken, setProfileToken] = useState(getPref('profileToken', ''));
+  const [legacy, setLegacy] = useState(getPref('legacy', 'on') !== 'off');
+  const [records, setRecords] = useState<{ text: string; records: ProfileRecords } | null>(null);
+  const [showRecords, setShowRecords] = useState(false);
   const L = getLocale();
+  useEffect(() => {
+    if (!profileToken) { setRecords(null); return; }
+    api.records(profileToken, L).then(setRecords).catch(() => setRecords(null));
+  }, [profileToken, L]);
+  const keepProfile = (tok?: string) => { if (tok) { setPref('profileToken', tok); setProfileToken(tok); } };
 
   const refresh = () => {
     api.runs().then((r) => { setRuns(r); setError(null); }).catch((e) => setError(errorText(e)));
@@ -44,7 +54,9 @@ export function Lobby() {
       setPref('class', classId);
       setPref('firstExpedition', objective);
       // camp: objective を省くとキャンプから始まる（候補 3 つから最初の遠征を選ぶ）
-      const r = await api.newRun({ name, classId, mode, seed: seed || undefined, locale, controller: { kind: 'human', label: 'browser' }, ...(objective === 'camp' ? {} : { objective }) });
+      setPref('legacy', legacy ? 'on' : 'off');
+      const r = await api.newRun({ name, classId, mode, seed: seed || undefined, locale, controller: { kind: 'human', label: 'browser' }, ...(objective === 'camp' ? {} : { objective }), ...(profileToken ? { profileToken } : {}), legacy });
+      keepProfile(r.profileToken);
       saveToken(r.runId, { token: r.token, playerId: r.playerId, name });
       navigate(`#/play/${r.runId}`);
     } catch (e) {
@@ -57,7 +69,8 @@ export function Lobby() {
   const join = async (runId: string) => {
     setBusy(true);
     try {
-      const r = await api.joinRun(runId, { name, classId, locale, controller: { kind: 'human', label: 'browser' } });
+      const r = await api.joinRun(runId, { name, classId, locale, controller: { kind: 'human', label: 'browser' }, ...(profileToken ? { profileToken } : {}), legacy });
+      keepProfile(r.profileToken);
       saveToken(r.runId, { token: r.token, playerId: r.playerId, name });
       navigate(`#/play/${r.runId}`);
     } catch (e) {
@@ -78,8 +91,10 @@ export function Lobby() {
   }).join(', ');
 
   // スコアの版ごとに別の表（版 2: 確定点 → 達成した遠征の数 → 最深。版 1 は旧スコア）
-  const boardV2 = board.filter((b) => b.scoreVersion === 2)
-    .sort((a, b) => b.score - a.score || (b.expeditions ?? 0) - (a.expeditions ?? 0) || b.deepest - a.deepest);
+  // 継承したラン（V3-7 §7.3）は別の表
+  const byScore = (a: LeaderboardEntry, b: LeaderboardEntry) => b.score - a.score || (b.expeditions ?? 0) - (a.expeditions ?? 0) || b.deepest - a.deepest;
+  const boardV2 = board.filter((b) => b.scoreVersion === 2 && !b.legacy).sort(byScore);
+  const boardV2Legacy = board.filter((b) => b.scoreVersion === 2 && b.legacy).sort(byScore);
   const boardV1 = board.filter((b) => b.scoreVersion !== 2); // 旧表はサーバーの並び順のまま
 
   const boardRow = (b: LeaderboardEntry, i: number, v2: boolean) => (
@@ -145,8 +160,26 @@ export function Lobby() {
                 <option value="ja">日本語</option><option value="en">English</option>
               </select>
             </label>
+            <label class="check"><input type="checkbox" checked={legacy} onChange={(e) => setLegacy((e.target as HTMLInputElement).checked)} />{tr('図鑑の知識を引き継ぐ（継承）', 'Inherit codex knowledge (legacy)')}</label>
             <button class="primary" disabled={busy || !name.trim()} onClick={start}>{tr('冒険を始める', 'Start')}</button>
           </div>
+        </section>
+
+        <section class="panel">
+          <h3>{tr('記録と図鑑', 'Records and codex')}</h3>
+          {!profileToken && <p class="muted">{tr('最初のランを始めるとプロフィールが作られ、このブラウザに残る。次のランから記録・図鑑・実績が積まれる。', 'Your first run creates a profile kept in this browser; records, codex and feats stack from then on.')}</p>}
+          {profileToken && !records && <div class="muted">{tr('読み込み中…', 'Loading…')}</div>}
+          {records && (
+            <div>
+              <p>{records.records.profile.name} <small class="muted">{records.records.profile.id}</small></p>
+              <p class="sub">{tr(`ラン ${records.records.runs.total}・確定の最高 ${records.records.banked.best}・最深 地下${records.records.deepest}階・図鑑 ${records.records.next.codex}・実績 ${records.records.next.feats}`, `${records.records.runs.total} runs, best banked ${records.records.banked.best}, deepest ${records.records.deepest}, codex ${records.records.next.codex}, feats ${records.records.next.feats}`)}</p>
+              <div class="row">
+                <button class="small" onClick={() => setShowRecords(!showRecords)}>{showRecords ? tr('閉じる', 'Hide') : tr('すべて見る', 'Show all')}</button>
+                <button class="small" onClick={() => { if (confirm(tr('このブラウザのプロフィールを外す（記録はサーバーに残る）。次のランは新しいプロフィールになる。', 'Forget this profile in this browser (records stay on the server). Your next run starts a new profile.'))) { setPref('profileToken', ''); setProfileToken(''); } }}>{tr('新しいプロフィールにする', 'Start a new profile')}</button>
+              </div>
+              {showRecords && <pre class="records">{records.text}</pre>}
+            </div>
+          )}
         </section>
 
         <section class="panel">
@@ -205,6 +238,19 @@ export function Lobby() {
                   </tr></thead>
                   <tbody>{boardV2.slice(0, 20).map((b, i) => boardRow(b, i, true))}</tbody>
                 </table>
+              )}
+              {boardV2Legacy.length > 0 && (
+                <details class="board-old" open>
+                  <summary>{tr(`継承ありのラン ${boardV2Legacy.length} 件`, `Runs with legacy: ${boardV2Legacy.length}`)}</summary>
+                  <p class="muted small">{tr('前のランの図鑑の知識を引き継いだラン。継承なしの表とは分ける。', 'Runs that inherited codex knowledge; kept apart from the table above.')}</p>
+                  <table class="board">
+                    <thead><tr>
+                      <th>#</th><th>{tr('名前', 'Name')}</th><th>{tr('確定点', 'Banked')}</th><th title={tr('達成した遠征の数', 'Completed expeditions')}>{tr('遠征', 'Exp.')}</th>
+                      <th>{tr('到達', 'Depth')}</th><th>Lv</th><th>{tr('撃破', 'Kills')}</th><th></th>
+                    </tr></thead>
+                    <tbody>{boardV2Legacy.slice(0, 20).map((b, i) => boardRow(b, i, true))}</tbody>
+                  </table>
+                </details>
               )}
               {boardV1.length > 0 && (
                 <details class="board-old">

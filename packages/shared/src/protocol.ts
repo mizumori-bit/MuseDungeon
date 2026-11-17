@@ -111,6 +111,8 @@ export interface LeaderboardEntry {
   ongoing: boolean;
   /** 1: 旧スコア（深度×1000 ほか）、2: 確定点。版ごとに別の表として扱う */
   scoreVersion: 1 | 2;
+  /** 継承したラン（V3-7 §7.3: 表を分ける） */
+  legacy?: boolean;
 }
 
 export type ObjectiveChoice = 'auto' | ObjectiveType;
@@ -124,6 +126,10 @@ export interface NewRunRequest {
   controller?: Controller;
   /** 最初の遠征の目的（既定 auto = 最初の候補） */
   objective?: ObjectiveChoice;
+  /** プロフィール（V3-7 §7.1）。省くと新しく作り、応答に profileToken を返す */
+  profileToken?: string;
+  /** false で継承しない（V3-7 §7.3。比較用。サーバーの legacyPolicy が off なら常に継承しない） */
+  legacy?: boolean;
 }
 
 // ---- ターンフィード（GET /api/player/feed、SSE） ----
@@ -135,8 +141,9 @@ export type FeedEvent =
   | { type: 'idle'; runId: string; playerId: PlayerId; seq: number; seconds: number; turn: TurnBlock }
   /** 遠征またはランが終わった（scope で区別） */
   | { type: 'ended'; runId: string; playerId: PlayerId; seq: number; scope: 'expedition' | 'run'; turn: TurnBlock; text: string; summary: RunSummary | null };
-export interface JoinRunRequest { name: string; classId?: string; locale?: Locale; controller?: Controller }
-export interface JoinedResponse { runId: string; playerId: PlayerId; token: string }
+export interface JoinRunRequest { name: string; classId?: string; locale?: Locale; controller?: Controller; profileToken?: string; legacy?: boolean }
+/** profileToken は新しく作ったときだけ（渡したトークンは返さない） */
+export interface JoinedResponse { runId: string; playerId: PlayerId; token: string; profileId?: string; profileToken?: string }
 
 /** /api/runs/:id/commands の 1 行 */
 export type CommandLine = CommandRecord;

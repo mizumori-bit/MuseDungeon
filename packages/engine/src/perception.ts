@@ -176,6 +176,8 @@ export function updateKnowledge(ctx: Ctx, key: FloorKey): void {
       updateMemory(ctx, pr.id, m, (mm) => {
         mm.encounters += 1;
         mm.abilities.push(...visibleAbilities(ctx, m));
+        // 守護者の型（図鑑。V3-7 §7.2）
+        if (m.guardian?.types.length) mm.types = [...new Set([...(mm.types ?? []), ...m.guardian.types])].sort();
       });
     }
     // 休んでいた守護者が見えた: 過ぎた手番の分だけ回復する（V3-3b §40.5。見えたときにまとめて）

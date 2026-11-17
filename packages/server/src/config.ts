@@ -1,5 +1,5 @@
 // サーバー設定。環境変数で上書き可能。既定は 127.0.0.1:7777 にのみバインド。
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { SpectatorPolicy } from '@muse/shared';
 
@@ -20,6 +20,10 @@ export interface ServerConfig {
   waitOthersMs: number;
   /** ターンフィードの idle 通知の間隔（手番のまま入力が無いとき） */
   idleNoticeMs: number;
+  /** プロフィールの置き場所（V3-7 §7.1）。null ならメモリだけ。既定は runsDir/profiles（runsDir が null なら null） */
+  profilesDir: string | null;
+  /** 継承（V3-7 §7.3）: off なら new_run {legacy: true} でも継承しない */
+  legacyPolicy: 'on' | 'off';
 }
 
 export function loadConfig(overrides: Partial<ServerConfig> = {}): ServerConfig {
@@ -35,6 +39,13 @@ export function loadConfig(overrides: Partial<ServerConfig> = {}): ServerConfig 
     keyframeEvery: 500,
     waitOthersMs: 20000,
     idleNoticeMs: env.MUSE_IDLE_NOTICE_MS ? parseInt(env.MUSE_IDLE_NOTICE_MS, 10) : 60000,
+    legacyPolicy: env.MUSE_LEGACY_POLICY === 'off' ? 'off' : 'on',
     ...overrides,
+    profilesDir: overrides.profilesDir !== undefined ? overrides.profilesDir : env.MUSE_PROFILES_DIR ?? (runsDirOf(overrides, env) ? join(runsDirOf(overrides, env)!, 'profiles') : null),
   };
+}
+
+function runsDirOf(overrides: Partial<ServerConfig>, env: NodeJS.ProcessEnv): string | null {
+  if (overrides.runsDir !== undefined) return overrides.runsDir;
+  return env.MUSE_RUNS_DIR ?? resolve(REPO_ROOT, 'runs');
 }

@@ -139,7 +139,7 @@ ${traitsLines(r, true)}
     actions: `# 行動
 手番を消費する: move{dir} / attack{target} / wait{turns?} / rest{until_hp?,max_turns?} / explore{mode?,hp_floor?,pickup?} / travel_to{to,mode?,hp_floor?,pickup?} / collect{what?,mode?} / fight{target,with?,hp_floor?,abilities?} / use_ability{id,target?,slot?} / pickup{item?} / drop{slot,qty?} / equip{slot} / unequip{slot} / use_item{slot,target?,target_slot?} / throw_item{slot,target} / interact{dir?} / use_stairs / extract{confirm?}
 キャンプで: start_expedition{offer} / retire
-手番を消費しない: choose_perk{option} / observe / wait_for_turn / expedition / review / declare_goal / look / get_map / inventory / recall / get_messages / notes / say / set_options / get_rules
+手番を消費しない: choose_perk{option} / observe / wait_for_turn / expedition / review / declare_goal / records / profile / look / get_map / inventory / recall / get_messages / notes / say / set_options / get_rules
 - 方向は n ne e se s sw w nw。座標は左上原点、x は東、y は南へ増える。
 - move: 敵がいれば近接攻撃（バンプ攻撃）、閉じた扉なら開ける（その手番は移動しない）、味方なら位置交換。
 - attack{target}: 近接攻撃。隣の敵か、長柄の武器（槍）なら縦・横・斜めの直線で 2 マス先の敵（間のマスが通れて誰もいないこと）。fight も長柄なら 2 マス先から突く。
@@ -223,7 +223,10 @@ ${traitsLines(r, true)}
 - map: 自分中心の 21×15 ASCII（フロア外は出さない）。上の 2 行が x 座標の 10 の位と 1 の位、行頭が y 座標。英字=モンスター（種族ごとに固定の 1 文字。凡例を参照） @=自分 #=壁 .=床 +=閉じた扉 '=開いた扉 >=下り階段 <=上り階段 ~=水 ,=草 %=背の高い草(視界を遮る) !=薬 ?=巻物 )=武器 [=防具 /=投擲 $=遺物 {=泉 _=祭壇 ^=罠 &=味方 (空白)=未知。凡例は地図と一緒に付く。
 - valid_actions: 今できる行動の例。テキストは structuredContent の要約で、テキストにしか無い情報は無い。
 - get_map で記憶している階全体の地図、look で対象の詳細（モンスターは「思い出」に基づく既知情報）、recall で種族ごとの思い出を引ける。
-- 目標の宣言: キャンプで declare_goal { type, option | value, within? } を使うと、次の遠征からの目標を 1 つ宣言できる（任意。点・経験値・戦利品には影響しない）。型は depth（最深到達）・banked（1 回の遠征の確定点）・milestone（次の節目の大守護者）・margin（達成した遠征で、最も下がった HP の %）。候補は自己最高に並ぶ／少し超える／大きく超えるの 3 つ（記録が無ければ初期値）。遠征中は observe と expedition に目標といまの値の差（「いま帰ると 6200。あと 3500」）、extract の候補にも確定点との差が出る。結果（達成・未達・取り下げ）は遠征のレポートとキャンプの記録に残る。
+- 目標の宣言: キャンプで declare_goal { type, option | value, within? } を使うと、次の遠征からの目標を 1 つ宣言できる（任意。点・経験値・戦利品には影響しない）。型は depth（最深到達）・banked（1 回の遠征の確定点）・milestone（次の節目の大守護者）・margin（達成した遠征で、最も下がった HP の %）・codex（図鑑の数。期限 1〜3 回）・feats（実績の数。期限 1〜3 回）。候補は自己最高（プロフィールの前のランまでを含む）に並ぶ／少し超える／大きく超えるの 3 つ（記録が無ければ初期値）。遠征中は observe と expedition に目標といまの値の差（「いま帰ると 6200。あと 3500」）、extract の候補にも確定点との差が出る。結果（達成・未達・取り下げ）は遠征のレポートとキャンプの記録に残る。
+- プロフィール: new_run の応答の profile_token を保存し、次の new_run（join_run）の profile_token に渡すと、ランをまたいで記録が積まれる（省くと新しいプロフィールになる）。records で記録（ランの数・確定点の最高と平均・最深・倒した大守護者・死因・直近のラン）・図鑑（種族・鑑定した品・納めた遺物・守護者の型と弱点・断章・特殊部屋。「見つけた/全部」）・実績・次の節目が読める（キャンプの観測にも 1 行）。profile で表示名と進行中のラン。
+- 継承: 図鑑で ${r.legacyMinKills ?? 5} 体以上倒した種族の知識（能力・体力の記録・受けた最大ダメージ・射程）は、次のランの開始時に「前の潜る者の覚え書き」として引き継がれる（recall・look に「覚え書きより」）。体力の推定と見込みに効く。引き継ぐのは種族の知識だけ（未鑑定の外見・守護者の弱点・地図・能力値・装備・加護は毎回ゼロから）。new_run { legacy: false } で継承しない。
+- 実績: 遠征とランの終わりに、遠征のレポートと記録の値で判定し、プロフィールに残る（強さには影響しない）。名前はすべて見え、条件を伏せたものは取ると分かる。取った遠征の後のキャンプに「新しい実績」が出る。
 - 振り返り: 遠征が終わった応答に、その遠征のレポート（戦闘・道具・進み・場面。12 行以内、JSON の report は全項目）が付く。集計するのは自分が見た出来事だけ。expedition は進行中なら途中経過（戦闘と進み）、キャンプなら直前の遠征のレポートを返す。review {expedition?} で終わった遠征のレポートを読み直せる（このランの前の遠征との比較と、全部の場面）。キャンプの観測には、直前の遠征の比較が 2 行まで出る。助言はしない（事実だけ）。`,
   };
 }
@@ -307,7 +310,7 @@ ${traitsLines(r, false)}
     actions: `# Actions
 Turn-consuming: move{dir} / attack{target} / wait{turns?} / rest{until_hp?,max_turns?} / explore{mode?,hp_floor?,pickup?} / travel_to{to,mode?,hp_floor?,pickup?} / collect{what?,mode?} / fight{target,with?,hp_floor?,abilities?} / use_ability{id,target?,slot?} / pickup{item?} / drop{slot,qty?} / equip{slot} / unequip{slot} / use_item{slot,target?,target_slot?} / throw_item{slot,target} / interact{dir?} / use_stairs / extract{confirm?}
 At camp: start_expedition{offer} / retire
-Free: choose_perk{option} / observe / wait_for_turn / expedition / review / declare_goal / look / get_map / inventory / recall / get_messages / notes / say / set_options / get_rules
+Free: choose_perk{option} / observe / wait_for_turn / expedition / review / declare_goal / records / profile / look / get_map / inventory / recall / get_messages / notes / say / set_options / get_rules
 - Directions: n ne e se s sw w nw. Origin is top-left; x grows east, y grows south.
 - move attacks a hostile in that cell, opens a closed door (without moving), or swaps with an ally.
 - attack{target}: melee an adjacent enemy, or with a reach weapon (spear) one 2 cells away in a straight line (the cell between must be open and empty). fight also strikes from 2 cells with a reach weapon.
@@ -389,7 +392,10 @@ Free: choose_perk{option} / observe / wait_for_turn / expedition / review / decl
 - navigation: here, passable_dirs, frontiers (nearest first), known_stairs (with reachability and path_len).
 - map: 21x15 ASCII centered on you (clipped to the floor). Top rows give x tens/ones, each row starts with y. Letters = monsters (one fixed letter per species; see legend). @ you, # wall, . floor, + closed door, ' open door, > down, < up, ~ water, , grass, % tall grass (blocks sight), ! potion, ? scroll, ) weapon, [ armor, / throwing, $ relic, { fountain, _ altar, ^ trap, & ally, blank = unknown. The legend comes with the map.
 - valid_actions: example actions available now. Text output summarizes structuredContent; nothing exists only in text.
-- Goals: at camp, declare_goal { type, option | value, within? } sets one optional goal for the coming expeditions (no effect on points, XP or loot). Types: depth (deepest reached), banked (banked in one expedition), milestone (the next warden), margin (lowest HP % on a completed expedition). Options match / beat / beat big your best in this run (start values without records). During an expedition, observe and expedition show the goal and how far you are ("extract now: 6200, 3500 to go"), and extract shows the gap too. Results (achieved / missed / withdrawn) go into the expedition report and the camp record.
+- Goals: at camp, declare_goal { type, option | value, within? } sets one optional goal for the coming expeditions (no effect on points, XP or loot). Types: depth (deepest reached), banked (banked in one expedition), milestone (the next warden), margin (lowest HP % on a completed expedition). Options match / beat / beat big your best in this run (start values without records). During an expedition, observe and expedition show the goal and how far you are ("extract now: 6200, 3500 to go"), and extract shows the gap too. Results (achieved / missed / withdrawn) go into the expedition report and the camp record. Types also include codex (codex entries, within 1-3 expeditions) and feats (feats earned, within 1-3); bests include your profile's earlier runs.
+- Profile: keep the profile_token from new_run and pass it to the next new_run (or join_run) as profile_token to stack records across runs (omit it for a new profile). records shows records (runs, best and average banked, deepest, wardens slain, deaths, recent runs), the codex (species, identified items, delivered relics, guardian types and weaknesses, fragments, special rooms; found/total), feats and the next milestones (one line also at camp). profile shows the name and runs in progress.
+- Legacy: species you have slain ${r.legacyMinKills ?? 5}+ times in the codex carry over to the next run as "a previous delver's notes" (abilities, HP record, worst hit, range; recall and look say "from the notes"). They feed HP estimates and threat. Only species knowledge carries over (unidentified looks, guardian weaknesses, maps, stats, gear and boons start from zero). new_run { legacy: false } turns it off.
+- Feats: judged at the end of each expedition and run from report and record values, kept in the profile (no effect on strength). All names are visible; hidden conditions show once earned. The camp after an expedition lists "New feats".
 - Review: the response that ends an expedition carries its report (combat, items, tempo, moments; 12 lines of text, the full report in JSON). Only events you perceived are counted. expedition returns progress so far (combat and tempo) during an expedition and the last report at camp. review {expedition?} re-reads an ended expedition's report (with the comparison to your earlier expeditions in this run and every moment). At camp, the observation shows up to 2 lines comparing your last expedition. Facts only, no advice.`,
   };
 }

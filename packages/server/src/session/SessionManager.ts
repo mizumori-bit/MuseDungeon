@@ -14,18 +14,22 @@ import { SessionPlayerPort } from './PlayerPort';
 import type { PlayerPort } from './PlayerPort';
 import { RunSession } from './RunSession';
 import type { SessionDeps } from './RunSession';
+import { ProfilePort, ProfileService, ProfileStore } from './profiles';
 
-export interface Joined { session: RunSession; playerId: PlayerId; token: string; port: PlayerPort }
+/** profile: そのプレイヤーのプロフィール（token は新しく作ったときだけ） */
+export interface Joined { session: RunSession; playerId: PlayerId; token: string; port: PlayerPort; profile: { id: string; token?: string } }
 
 export class SessionManager {
   readonly sessions = new Map<string, RunSession>();
   readonly deps: SessionDeps;
   readonly store: RunStore | null;
   readonly catalog: Catalog;
+  readonly profiles: ProfileService;
 
   constructor(content: Content, readonly config: ServerConfig) {
     this.catalog = buildCatalog(content);
-    this.deps = { content, catalog: this.catalog, config };
+    this.profiles = new ProfileService(content, this.catalog, new ProfileStore(config.profilesDir));
+    this.deps = { content, catalog: this.catalog, config, profiles: this.profiles };
     this.store = config.runsDir ? new RunStore(config.runsDir) : null;
   }
 
@@ -57,7 +61,7 @@ export class SessionManager {
     this.sessions.set(session.runId, session);
     // objective を省くとキャンプから始まる（最初の遠征も候補 3 つから選ぶ。V3-2R §14.4）
     const atCamp = req.objective === undefined;
-    const joined = await this.joinSession(session, { name: req.name, classId: req.classId, locale: req.locale, controller: req.controller, atCamp }, req.controller.kind === 'agent' ? 'mcp' : 'ws');
+    const joined = await this.joinSession(session, { name: req.name, classId: req.classId, locale: req.locale, controller: req.controller, atCamp, profileToken: req.profileToken, legacy: req.legacy }, req.controller.kind === 'agent' ? 'mcp' : 'ws');
     if ('error' in joined) return joined;
     if (atCamp) return joined;
     const offer = firstOffer(joined.port.view().camp?.offers ?? [], req.objective ?? 'auto');
@@ -68,17 +72,44 @@ export class SessionManager {
     return joined;
   }
 
-  async joinRun(runId: string, req: { name: string; classId?: string; locale?: Locale; controller: Controller }): Promise<Joined | { error: ActionError }> {
+  async joinRun(runId: string, req: { name: string; classId?: string; locale?: Locale; controller: Controller; profileToken?: string; legacy?: boolean }): Promise<Joined | { error: ActionError }> {
     const session = this.sessions.get(runId);
     if (!session) return { error: actionError('no_session', `run ${runId} is not active`, 'list_runs で参加可能なランを確認する / check list_runs') };
     return this.joinSession(session, req, req.controller.kind === 'agent' ? 'mcp' : 'ws');
   }
 
-  private async joinSession(session: RunSession, req: { name: string; classId?: string; locale?: Locale; controller: Controller; atCamp?: boolean }, source: 'mcp' | 'ws'): Promise<Joined | { error: ActionError }> {
-    const join: JoinCommand = { type: 'join', name: req.name.slice(0, 32) || 'Muse', classId: req.classId, controller: req.controller, locale: req.locale ?? 'ja', ...(req.atCamp ? { atCamp: true } : {}) };
+  private async joinSession(session: RunSession, req: { name: string; classId?: string; locale?: Locale; controller: Controller; atCamp?: boolean; profileToken?: string; legacy?: boolean }, source: 'mcp' | 'ws'): Promise<Joined | { error: ActionError }> {
+    // プロフィール（V3-7 §7.1）: トークンが無ければ新しく作る。知らないトークンは拒否（黙って別のプロフィールに積まない）
+    let profile: { id: string; token?: string };
+    if (req.profileToken) {
+      const p = this.profiles.store.resolve(req.profileToken);
+      if (!p) return { error: actionError('no_session', 'そのプロフィールのトークンは見つからない / unknown profile_token', 'profile_token を省くと新しいプロフィールを作る / omit profile_token to create a new profile') };
+      profile = { id: p.id };
+    } else {
+      const c = this.profiles.store.create(req.name, Date.now());
+      profile = { id: c.profile.id, token: c.token };
+    }
+    // 継承（V3-7 §7.3）: 既定であり。サーバーの legacyPolicy が off か、legacy: false なら無し。中身は参加コマンドに入り commands.jsonl に残る
+    const useLegacy = this.config.legacyPolicy === 'on' && req.legacy !== false;
+    const monsters = useLegacy ? this.profiles.legacyFor(profile.id, session.runId) : [];
+    const join: JoinCommand = {
+      type: 'join', name: req.name.slice(0, 32) || 'Muse', classId: req.classId, controller: req.controller, locale: req.locale ?? 'ja', ...(req.atCamp ? { atCamp: true } : {}),
+      profile: profile.id, ...(monsters.length ? { legacy: { monsters } } : {}),
+    };
     const r = await session.join(join, source);
     if (!r.ok) return { error: r.error };
-    return { session, playerId: r.playerId, token: r.token, port: new SessionPlayerPort(session, r.playerId) };
+    return { session, playerId: r.playerId, token: r.token, port: new SessionPlayerPort(session, r.playerId), profile };
+  }
+
+  /** プロフィールのトークン → 読み取り口（V3-7） */
+  profilePortForToken(token: string): ProfilePort | null {
+    const p = this.profiles.store.resolve(token);
+    return p ? this.profilePort(p.id) : null;
+  }
+
+  profilePort(id: string): ProfilePort | null {
+    if (!this.profiles.store.get(id)) return null;
+    return new ProfilePort(this.profiles, id, (runId) => this.sessions.get(runId)?.world.status === 'active');
   }
 
   /** トークン → (セッション, プレイヤー) */

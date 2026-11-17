@@ -75,6 +75,22 @@ export const FREE_COMMANDS: ReadonlySet<CommandType> = new Set<CommandType>(['sa
 /** キャンプでのみ有効（手番に関係しない） */
 export const CAMP_COMMANDS: ReadonlySet<CommandType> = new Set<CommandType>(['start_expedition']);
 
+/**
+ * 継承する種族の知識（V3-7 §7.3）: サーバーがプロフィールの図鑑から作り、参加コマンドに添える。
+ * commands.jsonl に残るので、再実行もリプレイもプロフィールのファイルを読まない
+ */
+export const LegacyMonsterSchema = z.object({
+  kind: z.string().max(64),
+  /** 前のランまでに倒した数（minKills 以上だけが入る） */
+  kills: z.number().int().nonnegative(),
+  abilities: z.array(z.string().max(32)).max(16),
+  hpSeen: z.object({ min: z.number().int().nonnegative(), max: z.number().int().nonnegative(), samples: z.number().int().nonnegative() }).optional(),
+  /** その種族から一撃で受けた最大のダメージ */
+  maxHit: z.number().int().nonnegative().optional(),
+  rangeMax: z.number().int().nonnegative().optional(),
+});
+export type LegacyMonster = z.infer<typeof LegacyMonsterSchema>;
+
 /** システムコマンド（参加・離脱）。commands.jsonl に記録し、決定論的再実行で流す */
 export const JoinSchema = z.object({
   type: z.literal('join'),
@@ -84,6 +100,10 @@ export const JoinSchema = z.object({
   locale: z.enum(['ja', 'en']).default('ja'),
   /** 参加したらキャンプに入る（最初の遠征を候補から選ぶ。V3-2R §14.4） */
   atCamp: z.boolean().optional(),
+  /** プロフィールの ID（V3-7 §7.1。トークンではない。記録をどのプロフィールに積むか） */
+  profile: z.string().max(64).optional(),
+  /** 継承（V3-7 §7.3）。省くと継承なし */
+  legacy: z.object({ monsters: z.array(LegacyMonsterSchema).max(200) }).optional(),
 });
 export type JoinCommand = z.infer<typeof JoinSchema>;
 

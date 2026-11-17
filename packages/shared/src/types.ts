@@ -206,6 +206,10 @@ export interface MonsterMemory {
   hitsByYou?: { melee?: [number, number]; thrown?: [number, number] };
   /** この種族から自分への攻撃の [命中, 回数] */
   hitsOnYou?: [number, number];
+  /** 前の潜る者の覚え書き（継承。V3-7 §7.3）: 前のランまでに倒した数。能力・体力の記録・最大の一撃は、この記録に最初から入っている */
+  legacy?: { kills: number };
+  /** 守護者の記録だけ: 見た型（図鑑。V3-7 §7.2） */
+  types?: string[];
 }
 
 export interface RememberedEntity {
@@ -296,6 +300,8 @@ export interface PlayerRecord {
   joinedSeq: number;
   stats: PlayerStats;
   knowledge: Knowledge;
+  /** 継承したこと（V3-7 §7.3）: 覚え書きの種族の数。継承なしのランには無い */
+  legacy?: { kinds: number };
   /** 最後に extract した地点（次の遠征の再開地点） */
   extractPos?: FloorPos | null;
 }
@@ -516,6 +522,8 @@ export interface RunSummaryPlayer {
   expeditions?: number;
   /** スコア版 2 の確定点 */
   banked?: number;
+  /** 継承したラン（V3-7 §7.3） */
+  legacy?: boolean;
 }
 
 export interface ExpeditionBrief {

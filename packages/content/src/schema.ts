@@ -1,6 +1,7 @@
 // コンテンツ定義の zod スキーマ。packages/content/data/<pack>/*.json を起動時に検証する。
 // 見た目（グリフ・色・スプライト）はここに書かない（client のテーマが持つ）。
 import { z } from 'zod';
+import type { FeatCond } from '@muse/shared';
 
 export const IdSchema = z.string().regex(/^[a-z0-9_]+:[a-z0-9_]+$/, 'ID は pack:name 形式');
 export const NamesSchema = z.object({ ja: z.string().min(1), en: z.string().min(1) });
@@ -358,6 +359,22 @@ export const FloorEventSchema = z.object({
   weight: z.number().int().min(1).default(1),
 });
 
+/** 実績の条件（V3-7 §7.4）: 遠征レポートと要約の値（FeatContext のパス）に対する比較式 */
+const FeatCondSchema: z.ZodType<FeatCond> = z.lazy(() => z.union([
+  z.object({ all: z.array(FeatCondSchema).min(1) }),
+  z.object({ any: z.array(FeatCondSchema).min(1) }),
+  z.object({ path: z.string().regex(/^(report|expedition|run|profile)\.[a-z_.]+$/), op: z.enum(['==', '!=', '>=', '<=', '>', '<']), value: z.union([z.number(), z.string(), z.boolean()]) }),
+]));
+
+/** 実績（V3-7 §7.4）。強さには影響しない（記録だけ）。hidden: 取るまで条件を伏せる */
+export const FeatSchema = z.object({
+  id: IdSchema,
+  name: NamesSchema,
+  desc: NamesSchema,
+  hidden: z.boolean().default(false),
+  cond: FeatCondSchema,
+});
+
 /** 守護者の名前の音節（V3-3 §3.1。シードで 2〜3 個つなぐ） */
 export const GuardianNamesSchema = z.object({
   id: IdSchema,
@@ -385,6 +402,8 @@ export const BalanceSchema = z.object({
     .default({ chancePct: 0, minDepth: 3, affixes: 2, bountyBase: 150, bountyPerDepth: 30 }),
   /** 未鑑定の品の手がかり（V3-5 §5.4）: この手番だけ持てば分かる（斥候は拾った時点で） */
   clueTurns: Int.min(0).default(30),
+  /** 継承（V3-7 §7.3）: 図鑑でこの数以上倒した種族の知識を、次のランの開始時に引き継ぐ */
+  legacy: z.object({ minKills: Int.min(1) }).default({ minKills: 5 }),
   regen: z.object({
     /** 自然回復の間隔（手番）= max(minInterval, baseInterval - floor(Lv / levelDiv)) */
     baseInterval: Int.min(1), levelDiv: Int.min(1), minInterval: Int.min(1),
@@ -543,6 +562,7 @@ export type GuardianNamesDef = z.infer<typeof GuardianNamesSchema>;
 export type BoonDef = z.infer<typeof BoonSchema>;
 export type LoreDef = z.infer<typeof LoreSchema>;
 export type FloorEventDef = z.infer<typeof FloorEventSchema>;
+export type FeatDef = z.infer<typeof FeatSchema>;
 
 /** ファイル名 → スキーマ。新しい定義ファイル種別はここに 1 行足す */
 export const FILE_SCHEMAS = {
@@ -570,6 +590,7 @@ export const FILE_SCHEMAS = {
   boons: BoonSchema,
   lore: LoreSchema,
   floorEvents: FloorEventSchema,
+  feats: FeatSchema,
 } as const;
 
 export type FileKind = keyof typeof FILE_SCHEMAS;

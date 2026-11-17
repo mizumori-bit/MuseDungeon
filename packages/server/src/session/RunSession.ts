@@ -5,7 +5,7 @@ import type { Catalog } from '@muse/shared';
 import type { Content } from '@muse/content';
 import { createRun, ENGINE_VERSION, isPlayersTurn, joinPlayer, step } from '@muse/engine';
 import type {
-  ActionError, AgentActivity, Command, CommandRecord, CommandSource, Expedition, ExpeditionReport, GameEvent, GoalDecl, GoalRecord, JoinCommand, MacroStop,
+  ActionError, AgentActivity, Command, CommandRecord, CommandSource, Expedition, ExpeditionReport, GameEvent, GoalDecl, GoalProfile, GoalRecord, JoinCommand, LegacyMonster, MacroStop, ProjectedEvent,
   PerceivedEvent, PlayerId, PlayerView, ReportCall, RunMetaFile, RunSummary, TurnSnapshot, World,
 } from '@muse/shared';
 import {
@@ -17,6 +17,7 @@ import { LogWriter } from '../log/LogWriter';
 import type { KeyframeFile } from '../log/LogWriter';
 import { readJsonl } from '../log/RunStore';
 import { summaryMarkdown } from './summary';
+import type { ProfileHooks } from './profiles';
 import { join } from 'node:path';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 
@@ -24,6 +25,8 @@ export interface SessionDeps {
   content: Content;
   catalog: Catalog;
   config: ServerConfig;
+  /** プロフィール（V3-7）。遠征とランが終わるたびに記録を書き直す */
+  profiles?: ProfileHooks;
 }
 
 export interface SessionListener {
@@ -103,6 +106,8 @@ export class RunSession {
   private readonly reports = new Map<string, ExpeditionReport>();
   /** 目標の宣言（V3-7a。World の外。goals.jsonl に残す） */
   private readonly goals = new Map<PlayerId, GoalRecord[]>();
+  /** 参加コマンドのプロフィールの ID と継承した知識（V3-7。参加コマンドから。復元時も作り直す） */
+  private readonly joinInfo = new Map<PlayerId, { profile?: string; legacy?: LegacyMonster[] }>();
   private goalSeq = 0;
   private readonly log: LogWriter | null;
   private lastKeyframeSeq = 0;
@@ -196,6 +201,7 @@ export class RunSession {
     const cmd = rec.command;
     if (cmd.type === 'join') {
       const r = joinPlayer(this.world, this.deps.content, cmd, { cseq: rec.cseq, wall: rec.wall });
+      if (r.ok) this.joinInfo.set(r.playerId, { ...(cmd.profile ? { profile: cmd.profile } : {}), ...(cmd.legacy ? { legacy: cmd.legacy.monsters } : {}) });
       return r.events;
     }
     const r = step(this.world, this.deps.content, rec.player!, cmd, { cseq: rec.cseq, wall: rec.wall, thought: rec.thought });
@@ -256,6 +262,8 @@ export class RunSession {
       const xe = [...events].reverse().find((e) => e.type === 'expedition_ended') as Extract<GameEvent, { type: 'expedition_ended' }> | undefined;
       if (xe) this.log?.writeSummary(xe.summary, summaryMarkdown(xe.summary, this.history, this.deps.catalog));
     }
+    // プロフィール（V3-7）: 参加・遠征の終わり・ランの終わりで記録を書き直す（図鑑・実績の目標の判定より先に）
+    if (events.length) this.deps.profiles?.onCommit(this, events);
     // 目標の判定（V3-7a）: 遠征が終わるたびに、参加者の宣言中の目標を判定する
     for (const e of events) if (e.type === 'expedition_ended') this.judgeGoals(e.no);
     if (events.length) for (const l of this.listeners) l.onEvents?.(events);
@@ -296,7 +304,7 @@ export class RunSession {
     let rec: GoalRecord | null = null;
     if (decl) {
       const ms = view.camp.milestone && !(view.milestonesCleared ?? []).includes(view.camp.milestone.depth) ? { depth: view.camp.milestone.depth } : null;
-      const r = makeGoal(decl, { id: this.goalSeq + 1, player: pid, fromNo, reports: this.endedReports(pid), nextMilestone: ms });
+      const r = makeGoal(decl, { id: this.goalSeq + 1, player: pid, fromNo, reports: this.endedReports(pid), nextMilestone: ms, profile: this.goalProfile(pid) });
       if ('error' in r) return { ok: false, error: r.error };
       rec = r;
     }
@@ -316,7 +324,7 @@ export class RunSession {
       const g = this.activeGoal(pid);
       if (!g || g.fromNo > no) continue;
       const reports = this.endedReports(pid).filter((r) => r.no >= g.fromNo);
-      const status = judgeGoal(g, reports, this.world.milestones?.cleared ?? []);
+      const status = judgeGoal(g, reports, this.world.milestones?.cleared ?? [], this.goalProfile(pid));
       const next = status === 'active' ? g : { ...g, status, endedNo: no };
       if (next !== g) this.putGoal(next);
       const rep = this.expeditionReport(pid, no);
@@ -368,6 +376,7 @@ export class RunSession {
       const r = joinPlayer(this.world, this.deps.content, req, { cseq, wall });
       if (!r.ok) { this.cseq--; return { ok: false as const, error: r.error }; }
       const token = newToken();
+      this.joinInfo.set(r.playerId, { ...(req.profile ? { profile: req.profile } : {}), ...(req.legacy ? { legacy: req.legacy.monsters } : {}) });
       this.tokens.set(token, r.playerId);
       this.log?.writeTokens(Object.fromEntries(this.tokens));
       this.messageLogs.set(r.playerId, []);
@@ -375,6 +384,30 @@ export class RunSession {
       this.lastResultSeq.set(r.playerId, 0);
       return { ok: true as const, playerId: r.playerId, token };
     });
+  }
+
+  /** 目標の比べる相手（V3-7: プロフィールの前のランまでの自己最高）と、図鑑・実績の数 */
+  goalProfile(pid: PlayerId): GoalProfile | undefined {
+    const id = this.profileOf(pid);
+    return id && this.deps.profiles ? this.deps.profiles.goalProfile(id, this.runId) : undefined;
+  }
+
+  /** そのプレイヤーのプロフィールの ID（V3-7） */
+  profileOf(pid: PlayerId): string | null {
+    return this.joinInfo.get(pid)?.profile ?? null;
+  }
+
+  /** 参加のときに継承した種族の知識（V3-7 §7.3） */
+  legacyOf(pid: PlayerId): readonly LegacyMonster[] | null {
+    return this.joinInfo.get(pid)?.legacy ?? null;
+  }
+
+  /** その遠征の間に、そのプレイヤーが知覚した出来事（実績の判定。V3-7） */
+  expeditionEvents(pid: PlayerId, no: number): ProjectedEvent[] {
+    const x = (this.world.expeditions ?? []).find((y) => y.no === no);
+    if (!x) return [];
+    const slice = this.history.slice(this.indexOfSeq(x.startSeq), this.indexOfSeq((x.endSeq ?? this.world.seq) + 1));
+    return filterEventsForPlayer(slice, pid, this.view(pid));
   }
 
   playerForToken(token: string): PlayerId | null {
@@ -551,8 +584,9 @@ export class RunSession {
     const r = step(this.world, this.deps.content, pid, cmd, { cseq, wall, thought });
     if (!r.ok && !r.events.length) return { ok: false, error: r.error };
     this.cseq = cseq;
-    this.commit({ cseq, player: pid, command: cmd, source, wall, thought, parent }, r.events);
+    // 呼び出しの記録は確定の前に（確定の中で遠征レポートが作られ、残る。V3-7 のプロフィールの更新）
     if (source !== 'timeout' && source !== 'system' && r.events.length) this.pushCall(pid, { seq: r.events[0].seq, kind: parent ? 'macro_step' : 'call', type: cmd.type, ...(parent ? { macro: this.macroKinds.get(parent) } : {}) });
+    this.commit({ cseq, player: pid, command: cmd, source, wall, thought, parent }, r.events);
     if (!r.ok) return { ok: false, error: r.error };
     return { ok: true, events: r.events, startSeq };
   }

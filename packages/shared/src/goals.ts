@@ -4,8 +4,18 @@ import type { ExpeditionReport } from './expeditionStats';
 import type { Locale, PlayerId } from './types';
 import { t } from './util';
 
-export type GoalType = 'depth' | 'banked' | 'milestone' | 'margin';
-export const GOAL_TYPES: readonly GoalType[] = ['depth', 'banked', 'milestone', 'margin'];
+export type GoalType = 'depth' | 'banked' | 'milestone' | 'margin' | 'codex' | 'feats';
+export const GOAL_TYPES: readonly GoalType[] = ['depth', 'banked', 'milestone', 'margin', 'codex', 'feats'];
+
+/**
+ * プロフィールの値（V3-7。§40.8 の「比べる相手をプロフィールの自己最高に替える」）: 前のランまでの遠征 1 回の自己最高と、
+ * いまの図鑑・実績の数（図鑑と実績の型の候補と判定に使う）
+ */
+export interface GoalProfile {
+  prior?: { depth: number | null; banked: number | null; margin: number | null };
+  codex?: { found: number; total: number };
+  feats?: { earned: number; total: number };
+}
 
 /** 宣言の中身。within: 期限（遠征の数。深さと節目は 1〜3、確定点と余力は 1） */
 export interface GoalDecl { type: GoalType; value: number; within: number }
@@ -38,11 +48,18 @@ export interface GoalInfo {
   full?: string[];
 }
 
-const START: Record<GoalType, [number, number, number]> = { depth: [2, 3, 4], banked: [1500, 2500, 4000], margin: [30, 40, 50], milestone: [3, 2, 1] };
+const START: Record<Exclude<GoalType, 'codex' | 'feats'>, [number, number, number]> = { depth: [2, 3, 4], banked: [1500, 2500, 4000], margin: [30, 40, 50], milestone: [3, 2, 1] };
 const LEVELS = ['match', 'beat', 'beat_big'] as const;
 
-/** 自己最高（遠征レポートから）。余力は達成した遠征の「最も下がった HP」の最大 */
-export function goalBest(type: GoalType, reports: readonly ExpeditionReport[]): number | null {
+/** 自己最高（このランの遠征レポートと、プロフィールの前のランまでの記録）。余力は達成した遠征の「最も下がった HP」の最大 */
+export function goalBest(type: GoalType, reports: readonly ExpeditionReport[], prior?: GoalProfile['prior']): number | null {
+  const here = runBest(type, reports);
+  const before = type === 'depth' || type === 'banked' || type === 'margin' ? prior?.[type] ?? null : null;
+  if (here === null) return before;
+  return before === null ? here : Math.max(here, before);
+}
+
+function runBest(type: GoalType, reports: readonly ExpeditionReport[]): number | null {
   const ended = reports.filter((r) => r.status === 'ended');
   if (type === 'depth') return ended.length ? Math.max(...ended.map((r) => r.tempo.deepest)) : null;
   if (type === 'banked') { const v = ended.map((r) => r.payout?.banked ?? 0); return v.length && Math.max(...v) > 0 ? Math.max(...v) : null; }
@@ -52,8 +69,8 @@ export function goalBest(type: GoalType, reports: readonly ExpeditionReport[]): 
 
 const roundUp = (v: number, step: number) => Math.ceil(v / step) * step;
 
-/** 候補を作る。milestone: 次の節目（未踏破）があるときだけ */
-export function goalCandidates(L: Locale, reports: readonly ExpeditionReport[], nextMilestone: { depth: number; name: string } | null): GoalCandidate[] {
+/** 候補を作る。milestone: 次の節目（未踏破）があるときだけ。図鑑・実績: プロフィールがあり、埋まっていないときだけ */
+export function goalCandidates(L: Locale, reports: readonly ExpeditionReport[], nextMilestone: { depth: number; name: string } | null, profile?: GoalProfile): GoalCandidate[] {
   const out: GoalCandidate[] = [];
   for (const type of GOAL_TYPES) {
     if (type === 'milestone') {
@@ -61,7 +78,14 @@ export function goalCandidates(L: Locale, reports: readonly ExpeditionReport[], 
       START.milestone.forEach((within, i) => out.push({ type, value: nextMilestone.depth, within, level: LEVELS[i], text: goalText(L, { type, value: nextMilestone.depth, within }) }));
       continue;
     }
-    const best = goalBest(type, reports);
+    if (type === 'codex' || type === 'feats') {
+      const cur = type === 'codex' ? profile?.codex && { now: profile.codex.found, total: profile.codex.total } : profile?.feats && { now: profile.feats.earned, total: profile.feats.total };
+      if (!cur || cur.now >= cur.total) continue;
+      const steps = type === 'codex' ? [2, 4, 6] : [1, 2, 3];
+      steps.forEach((s, i) => { const value = Math.min(cur.total, cur.now + s); const within = i + 1; out.push({ type, value, within, level: LEVELS[i], text: goalText(L, { type, value, within }) }); });
+      continue;
+    }
+    const best = goalBest(type, reports, profile?.prior);
     const values = best === null || best <= 0
       ? START[type]
       : type === 'depth' ? [best, best + 1, best + 2]
@@ -82,20 +106,29 @@ export function goalText(L: Locale, g: GoalDecl): string {
     case 'banked': return t(L, `1 回の遠征で確定 ${g.value}`, `bank ${g.value} in one expedition`);
     case 'milestone': return g.within > 1 ? t(L, `${g.within} 回の遠征のうちに地下${g.value}階の大守護者を倒す`, `slay the depth-${g.value} warden within ${g.within} expeditions`) : t(L, `次の遠征で地下${g.value}階の大守護者を倒す`, `slay the depth-${g.value} warden next expedition`);
     case 'margin': return t(L, `最も下がった HP を最大の ${g.value}% 以上に保って達成する`, `complete an expedition without dropping below ${g.value}% HP`);
+    case 'codex': return g.within > 1 ? t(L, `${g.within} 回の遠征のうちに図鑑を ${g.value} にする`, `fill the codex to ${g.value} within ${g.within} expeditions`) : t(L, `次の遠征で図鑑を ${g.value} にする`, `fill the codex to ${g.value} next expedition`);
+    case 'feats': return g.within > 1 ? t(L, `${g.within} 回の遠征のうちに実績を ${g.value} にする`, `reach ${g.value} feats within ${g.within} expeditions`) : t(L, `次の遠征で実績を ${g.value} にする`, `reach ${g.value} feats next expedition`);
   }
 }
 
 const sign = (n: number) => (n > 0 ? `+${n}` : `${n}`);
 
 /** 宣言を確かめて、記録を作る（キャンプで。範囲の外は理由を返す） */
-export function makeGoal(decl: GoalDecl, ctx: { id: number; player: PlayerId; fromNo: number; reports: readonly ExpeditionReport[]; nextMilestone: { depth: number } | null }): GoalRecord | { error: string } {
+export function makeGoal(decl: GoalDecl, ctx: { id: number; player: PlayerId; fromNo: number; reports: readonly ExpeditionReport[]; nextMilestone: { depth: number } | null; profile?: GoalProfile }): GoalRecord | { error: string } {
   if (!GOAL_TYPES.includes(decl.type)) return { error: 'unknown goal type' };
   if (!Number.isInteger(decl.value) || decl.value <= 0) return { error: 'value must be a positive integer' };
-  const within = decl.type === 'depth' || decl.type === 'milestone' ? decl.within : 1;
+  const within = decl.type === 'depth' || decl.type === 'milestone' || decl.type === 'codex' || decl.type === 'feats' ? decl.within : 1;
   if (!Number.isInteger(within) || within < 1 || within > 3) return { error: 'within must be 1..3' };
   if (decl.type === 'milestone' && (!ctx.nextMilestone || decl.value !== ctx.nextMilestone.depth)) return { error: 'the milestone goal is the next uncleared milestone' };
   if (decl.type === 'margin' && decl.value > 100) return { error: 'margin is a percentage (1..100)' };
-  const best = goalBest(decl.type, ctx.reports);
+  if (decl.type === 'codex' || decl.type === 'feats') {
+    const cur = decl.type === 'codex' ? ctx.profile?.codex && { now: ctx.profile.codex.found, total: ctx.profile.codex.total } : ctx.profile?.feats && { now: ctx.profile.feats.earned, total: ctx.profile.feats.total };
+    if (!cur) return { error: 'no profile' };
+    if (decl.value <= cur.now || decl.value > cur.total) return { error: `value must be more than now (${cur.now}) and at most ${cur.total}` };
+    // 図鑑・実績の best は「宣言したときの数」（差の文は「いま N」）
+    return { id: ctx.id, player: ctx.player, type: decl.type, value: decl.value, within, fromNo: ctx.fromNo, best: cur.now, status: 'active' };
+  }
+  const best = goalBest(decl.type, ctx.reports, ctx.profile?.prior);
   return { id: ctx.id, player: ctx.player, type: decl.type, value: decl.value, within, fromNo: ctx.fromNo, best, status: 'active' };
 }
 
@@ -103,7 +136,7 @@ export function makeGoal(decl: GoalDecl, ctx: { id: number; player: PlayerId; fr
  * 終わった遠征 1 回ごとに判定する（V3-7a）。reports: 宣言の後に終わった、この目標の範囲の遠征（古い順）。
  * milestonesCleared: いまの踏破済みの節目
  */
-export function judgeGoal(g: GoalRecord, reports: readonly ExpeditionReport[], milestonesCleared: readonly number[]): GoalStatus {
+export function judgeGoal(g: GoalRecord, reports: readonly ExpeditionReport[], milestonesCleared: readonly number[], profile?: GoalProfile): GoalStatus {
   if (g.status !== 'active') return g.status;
   const inRange = reports.filter((r) => r.status === 'ended' && r.no >= g.fromNo);
   if (!inRange.length) return 'active';
@@ -112,6 +145,8 @@ export function judgeGoal(g: GoalRecord, reports: readonly ExpeditionReport[], m
   if (g.type === 'depth') ok = inRange.some((r) => r.tempo.deepest >= g.value);
   else if (g.type === 'banked') ok = (last.payout?.banked ?? 0) >= g.value;
   else if (g.type === 'margin') ok = last.reason === 'completed' && (last.combat.min_hp_pct ?? 0) >= g.value;
+  else if (g.type === 'codex') ok = (profile?.codex?.found ?? 0) >= g.value;
+  else if (g.type === 'feats') ok = (profile?.feats?.earned ?? 0) >= g.value;
   else ok = milestonesCleared.includes(g.value);
   if (ok) return 'achieved';
   return inRange.length >= g.within ? 'missed' : 'active';
@@ -120,6 +155,7 @@ export function judgeGoal(g: GoalRecord, reports: readonly ExpeditionReport[], m
 /** 自己最高との差（記録の文に添える） */
 export function goalDiffText(L: Locale, g: GoalRecord): string {
   if (g.type === 'milestone' || g.best === null) return '';
+  if (g.type === 'codex' || g.type === 'feats') return t(L, `いま ${g.best} ${sign(g.value - g.best)}`, `now ${g.best} ${sign(g.value - g.best)}`);
   return t(L, `自己最高 ${g.best} ${sign(g.value - g.best)}`, `best ${g.best} ${sign(g.value - g.best)}`);
 }
 
@@ -145,6 +181,9 @@ export function goalCampLines(L: Locale, info: Omit<GoalInfo, 'lines' | 'full'>,
   if (b.length) parts.push(t(L, `確定 ${b.map((c) => c.value).join('／')}${tag(b)}`, `banked ${b.map((c) => c.value).join('/')}${tag(b)}`));
   if (m.length) parts.push(t(L, `余力 HP ${m.map((c) => c.value).join('／')}%${tag(m)}`, `margin ${m.map((c) => c.value).join('/')}% HP${tag(m)}`));
   if (ms.length) parts.push(t(L, `節目 地下${ms[0].value}階を ${ms.map((c) => c.within).join('／')} 回以内`, `milestone depth ${ms[0].value} within ${ms.map((c) => c.within).join('/')}`));
+  const cx = by('codex'), ft = by('feats');
+  if (cx.length) parts.push(t(L, `図鑑 ${cx.map((c) => `${c.value}（${c.within} 回）`).join('／')}`, `codex ${cx.map((c) => `${c.value} (${c.within})`).join('/')}`));
+  if (ft.length) parts.push(t(L, `実績 ${ft.map((c) => `${c.value}（${c.within} 回）`).join('／')}`, `feats ${ft.map((c) => `${c.value} (${c.within})`).join('/')}`));
   if (parts.length) lines.push(t(L, `目標の候補: ${parts.join('・')}`, `Goal options: ${parts.join('; ')}`));
   if (info.record.declared > 0) lines.push(t(L, `目標の記録: 宣言 ${info.record.declared}・達成 ${info.record.achieved}`, `Goals: declared ${info.record.declared}, achieved ${info.record.achieved}`));
   return lines.slice(0, 3);

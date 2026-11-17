@@ -194,11 +194,24 @@ export class SessionPlayerPort implements PlayerPort {
   observe(opts: { detail?: 'brief' | 'full'; map?: boolean; consume?: boolean } = {}): { observation: Observation; text: string } {
     const view = this.view();
     const recent = opts.consume ? this.session.consumeFor(this.playerId) : this.pending();
-    const observation = buildObservation(view, this.catalog, { detail: opts.detail ?? 'brief', map: opts.map ?? true, recent: recent.slice(-10), campCompare: this.campCompare(view), goal: this.goalOpt(view), offerNotes: this.offerNotes(view) });
+    const observation = buildObservation(view, this.catalog, { detail: opts.detail ?? 'brief', map: opts.map ?? true, recent: recent.slice(-10), campCompare: this.campCompare(view), goal: this.goalOpt(view), offerNotes: this.offerNotes(view), records: this.campRecords(view) });
     return { observation, text: formatObservationText(observation, view.locale) };
   }
 
   /** 観測に渡す目標（V3-7a §40.8）: キャンプでは候補と記録、遠征中は宣言中の目標といまの値 */
+  /** キャンプの記録の 1 行と、直前の遠征で取った実績（V3-7。プロフィールは World の外） */
+  private campRecords(view: PlayerView): ObservationOptions['records'] {
+    if (view.status !== 'at_camp') return undefined;
+    const prof = this.session.deps.profiles;
+    const id = this.session.profileOf(this.playerId);
+    if (!prof || !id) return undefined;
+    const line = prof.campLine(id, view.locale);
+    if (!line) return undefined;
+    const last = this.session.endedReports(this.playerId).pop();
+    const featsNew = last ? prof.featsOf(id, this.session.runId, last.no, view.locale) : [];
+    return { line, ...(featsNew.length ? { featsNew } : {}) };
+  }
+
   private goalOpt(view: PlayerView): ObservationOptions['goal'] {
     if (view.status === 'at_camp') return { info: this.goalInfo() };
     const active = this.session.activeGoal(this.playerId);
@@ -262,7 +275,7 @@ export class SessionPlayerPort implements PlayerPort {
     const ms = msInfo && !(view.milestonesCleared ?? []).includes(msInfo.depth) ? { depth: msInfo.depth, name: guardianDisplayName(L, msInfo) } : null;
     const all = this.session.goalsOf(this.playerId);
     const active = this.session.activeGoal(this.playerId);
-    const base = { active, candidates: goalCandidates(L, reports, ms), record: { declared: all.length, achieved: all.filter((g) => g.status === 'achieved').length } };
+    const base = { active, candidates: goalCandidates(L, reports, ms, this.session.goalProfile(this.playerId)), record: { declared: all.length, achieved: all.filter((g) => g.status === 'achieved').length } };
     // 期限の残り（その目標で数え終えた遠征の数を引く）
     const done = active ? reports.filter((r) => r.no >= active.fromNo).length : 0;
     const left = active ? Math.max(1, active.within - done) : undefined;
@@ -322,7 +335,7 @@ export class SessionPlayerPort implements PlayerPort {
     const lifelineShort = xNo !== undefined && prev?.lifeNo === xNo;
     // 加護の説明も遠征ごとに最初の 1 回だけ（V3-3c §44.6: 応答の長さ）
     const boonsShort = xNo !== undefined && prev?.boonNo === xNo;
-    const observation = buildObservation(view, this.catalog, { detail: p.detail ?? 'brief', map: true, recent: p.recent.slice(-10), lifelineShort, boonsShort, campCompare: this.campCompare(view), goal: this.goalOpt(view), offerNotes: this.offerNotes(view) });
+    const observation = buildObservation(view, this.catalog, { detail: p.detail ?? 'brief', map: true, recent: p.recent.slice(-10), lifelineShort, boonsShort, campCompare: this.campCompare(view), goal: this.goalOpt(view), offerNotes: this.offerNotes(view), records: this.campRecords(view) });
     const state = turnStateOf(view, p.expeditionEndedNow ?? false).state;
     const cur = turnSnapshot(view, observation, state);
     const longLife = observation.valid_actions.some((a) => a.includes('次の遠征はこの遠征を始めた階段から') || a.includes('the next expedition starts from where this one began'));

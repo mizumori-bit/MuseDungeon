@@ -187,29 +187,39 @@ async function main() {
     }
     case 'drive': {
       // 参照ドライバ: npm run drive -- --token <player_token> [--agent dummy|--agent-cmd "<command>"|--agent-url <url>] [--base http://127.0.0.1:7777]
+      // プロフィール（V3-7 §16.3）: --new-run <name> --profile-token <tok> で同じプロフィールに積む。--continue でランが終わったら同じプロフィールで次のランを始める（--max-runs 既定 10）
       const base = flag('base', `http://127.0.0.1:${process.env.MUSE_PORT ?? 7777}`)!;
       let token = flag('token');
-      if (!token && flag('new-run')) {
+      let profileToken = flag('profile-token');
+      const newRun = async (name: string) => {
         const r = await fetch(new URL('/api/runs', base), {
           method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ name: flag('new-run'), classId: flag('class') ? `core:${flag('class')}` : undefined, objective: flag('objective'), controller: { kind: 'agent', label: 'drive' } }),
+          body: JSON.stringify({ name, classId: flag('class') ? `core:${flag('class')}` : undefined, objective: flag('objective'), controller: { kind: 'agent', label: 'drive' }, ...(profileToken ? { profileToken } : {}), ...(has('no-legacy') ? { legacy: false } : {}) }),
         });
-        const j = await r.json() as { runId?: string; token?: string; error?: { message: string } };
+        const j = await r.json() as { runId?: string; token?: string; profileId?: string; profileToken?: string; error?: { message: string } };
         if (!j.token) throw new Error(`new run failed: ${j.error?.message ?? r.status}`);
-        token = j.token;
-        console.log(`new run ${j.runId} player_token=${token}`);
-      }
-      if (!token) throw new Error('usage: drive --token <player_token> | --new-run <name>  [--agent dummy | --agent-cmd "<cmd>" | --agent-url <url>]');
+        if (j.profileToken) { profileToken = j.profileToken; console.log(`new profile ${j.profileId} profile_token=${profileToken}（次の drive の --profile-token に渡すと記録が引き継がれる）`); }
+        console.log(`new run ${j.runId} player_token=${j.token}`);
+        return j.token;
+      };
+      if (!token && flag('new-run')) token = await newRun(flag('new-run')!);
+      if (!token) throw new Error('usage: drive --token <player_token> | --new-run <name> [--profile-token <tok>] [--continue] [--agent dummy | --agent-cmd "<cmd>" | --agent-url <url>]');
       const invoker = flag('agent-cmd') ? commandInvoker(flag('agent-cmd')!) : flag('agent-url') ? httpInvoker(flag('agent-url')!) : dummyInvoker();
       console.log(`driving with ${invoker.name}`);
-      const r = await drive({
-        baseUrl: base, token, invoker,
-        maxTurns: Number(flag('max-turns', '5000')), maxMs: Number(flag('max-minutes', '360')) * 60000, maxErrors: Number(flag('max-errors', '5')),
-        log: (m) => console.log(m),
-      });
-      console.log(`drive: ${r.outcome} (${r.reason}) after ${r.invocations} agent calls`);
-      if (r.text) console.log(r.text);
-      if (r.outcome === 'interrupted') console.log('遠征は進行中のまま。もう一度 drive を実行すると続きから進む。');
+      const maxRuns = Number(flag('max-runs', '10'));
+      for (let run = 1; ; run++) {
+        const r = await drive({
+          baseUrl: base, token, invoker,
+          maxTurns: Number(flag('max-turns', '5000')), maxMs: Number(flag('max-minutes', '360')) * 60000, maxErrors: Number(flag('max-errors', '5')),
+          log: (m) => console.log(m),
+        });
+        console.log(`drive: ${r.outcome} (${r.reason}) after ${r.invocations} agent calls`);
+        if (r.text) console.log(r.text);
+        if (r.outcome === 'interrupted') console.log('遠征は進行中のまま。もう一度 drive を実行すると続きから進む。');
+        // --continue: ランが終わったら、同じプロフィールで次のランを始める
+        if (!has('continue') || r.reason !== 'run_ended' || !profileToken || run >= maxRuns) break;
+        token = await newRun(flag('new-run') ?? 'Muse');
+      }
       break;
     }
     default:

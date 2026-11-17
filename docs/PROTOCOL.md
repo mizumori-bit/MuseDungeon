@@ -472,6 +472,17 @@ V3-7a の後の AI 評価の修正で足した項目（後方互換。同じシ�
 - 観測・所持品: 鑑定済みの品に種類 ID（`ObsInvItem.kind`・`self.attack.throws[].kind`。`javelin` のように `core:` を省く）。観測の所持品の行では投げられる物に `{with:javelin}`、`inventory` の行に「（種類 javelin）」。fight の `with` に渡せる
 - 文: 投げた物が見えない所に落ちたら「届かず、見えない所に落ちた。」（前は「消えた」）
 
+V3-7 で足した項目（プロフィール・記録と図鑑・継承・実績。後方互換。参加と思い出が変わったので `engineVersion` は 0.22.0。出来事の種類は増やしていないので `eventVersion` は 16 のまま。DESIGN.md §34）:
+
+- MCP: `new_run`・`join_run` に任意の `profile_token`（前のランで受け取ったもの）と `legacy`（false で継承しない）。応答に `profile_id`、新しく作ったときだけ `profile_token`（文にも「profile_token: …」。保存して次の `new_run` に渡す）。知らないトークンは `no_session`。新しいツール `records { profile_token?, locale? }`（記録・図鑑・実績・次の節目。省くとこの接続のプレイヤーのプロフィール。手番を消費しない）・`profile { profile_token?, name?, locale? }`（表示名・記録の要約・進行中のラン（`run_id` だけ）。`name` で表示名を変える（トークンが要る））。`declare_goal` の `type` に `codex`・`feats`
+- HTTP: `POST /api/runs`・`/api/runs/:id/join` の本文に `profileToken`・`legacy`、応答に `profileId`・`profileToken`（新しく作ったときだけ）。`GET /api/profile`・`POST /api/profile { name }`・`GET /api/profile/records`（`Authorization: Bearer <profile_token>`、`?locale=en`）。`records` の中身は MCP の `structuredContent.records` と同じ
+- 参加コマンド（commands.jsonl）: `profile`（プロフィールの ID。トークンではない）・`legacy { monsters: { kind, kills, abilities, hpSeen?, maxHit?, rangeMax? }[] }`
+- World State: `PlayerRecord.legacy { kinds }`（継承した種族の数）・`MonsterMemory.legacy { kills }`（覚え書き）・守護者の思い出の `types`（見た型）。ランの要約の `players[].legacy`、リーダーボードの `legacy`
+- コンテンツ: `feats.json`（`FeatSchema { id, name, desc, hidden, cond }`、32 個）・`balance.legacy.minKills`（5）。公開カタログの `rules.legacyMinKills`
+- 観測: キャンプに `camp.records { line, feats_new? }`（文は「新しい実績: …」と「記録: ラン N・確定の最高・最深。次の節目: 地下5階の大守護者（未踏破）／図鑑 32/62／実績 7/32」）。recall・look の思い出の文は、継承した種族では「（覚え書きより: …）」で始まる。目標の候補に図鑑・実績
+- 規則: 図鑑で `minKills` 体以上倒した種族の知識（能力・体力の記録・受けた最大ダメージ・射程）を次のランの開始時に引き継ぐ。外見・守護者の弱点・地図・能力値・装備・加護は引き継がない。サーバー設定 `legacyPolicy`（環境変数 `MUSE_LEGACY_POLICY=off`）・`profilesDir`（`MUSE_PROFILES_DIR`。既定 `runs/profiles`）
+- ホスト駆動: `drive --profile-token <tok>`・`--continue`・`--max-runs`・`--no-legacy`
+
 V3-7a で足した項目（目標の宣言。後方互換。World と engine は変えていない。DESIGN.md §28）:
 
 - 目標（`shared/goals`）: `GoalDecl { type, value, within }`・`GoalRecord { id, player, type, value, within, fromNo, best, status: 'active'|'achieved'|'missed'|'withdrawn', endedNo? }`・`GoalCandidate { type, value, within, level: 'match'|'beat'|'beat_big'|'start', text }`・`GoalInfo { active, candidates, record: { declared, achieved }, lines }`。型は depth（最深到達。期限 1〜3 回）・banked（1 回の遠征の確定点。次の遠征）・milestone（次の未踏破の節目の大守護者。1〜3 回）・margin（達成した遠征で、最も下がった HP の %。次の遠征）

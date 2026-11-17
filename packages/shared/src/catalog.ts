@@ -133,6 +133,8 @@ export interface CatalogRules {
   floorEventPct?: number;
   elite?: { chancePct: number; minDepth: number; affixes: number };
   clueTurns?: number;
+  /** 継承（V3-7 §7.3）: 図鑑でこの数以上倒した種族の知識を引き継ぐ */
+  legacyMinKills?: number;
   /** 守護者が、相手が階を離れている間に手番 1 つにつき回復する最大体力の %（V3-3a §35.1） */
   guardianAwayHealPct?: number;
   /** 節目の大守護者の階（V3-3 §3.2）: 深度 every の倍数（min 以上）。levelBonus: 節目に挑む候補の推奨レベルの上乗せ */

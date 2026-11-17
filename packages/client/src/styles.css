@@ -390,3 +390,7 @@ button.ability .astate { margin-left: 2px; }
 .goalbox h3 { margin: 0 0 4px; font-size: 0.95em; }
 .goalbox .goal-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 4px 0; }
 .goalbox .goal-type { min-width: 4.5em; font-weight: bold; }
+
+/* 記録と図鑑（V3-7） */
+pre.records { white-space: pre-wrap; max-height: 24rem; overflow: auto; font-size: 0.8rem; background: rgba(255, 255, 255, 0.03); padding: 0.5rem; border-radius: 4px; }
+label.check { display: flex; gap: 0.4rem; align-items: center; }

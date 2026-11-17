@@ -25,6 +25,7 @@
     "floorEvent": { "chancePct": 25 },
     "elite": { "chancePct": 3, "minDepth": 3, "affixes": 2, "bountyBase": 150, "bountyPerDepth": 30 },
     "clueTurns": 30,
+    "legacy": { "minKills": 5 },
     "guardian": {
       "ranks": [
         { "hpPct": 50, "minHpBase": 6, "minHpPerDepth": 2, "tableDepth": 0, "types": 1 },

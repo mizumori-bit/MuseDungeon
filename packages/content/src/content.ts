@@ -3,7 +3,7 @@ import { canonicalHash } from '@muse/shared';
 import type {
   AbilityDef, AffixDef, AppearanceDef, BalanceDef, BiomeDef, ClassDef, ExpeditionTraitDef, FeatureDef, FileKind, FloorTypeDef, ItemDef,
   LootTableDef, MonsterDef, PerkDef, PrefabDef, SpawnTableDef, StatusDef, TerrainDef, WeaponTraitDef,
-  GuardianTypeDef, GuardianWeaknessDef, GuardianNamesDef, BoonDef, LoreDef, FloorEventDef,
+  GuardianTypeDef, GuardianWeaknessDef, GuardianNamesDef, BoonDef, LoreDef, FloorEventDef, FeatDef,
 } from './schema';
 import { FILE_SCHEMAS } from './schema';
 
@@ -42,12 +42,13 @@ export interface Content {
   lore: Record<string, LoreDef>;
   /** 階の異変（V3-5 §5.3） */
   floorEvents: Record<string, FloorEventDef>;
+  feats: Record<string, FeatDef>;
   /** 各表の ID 昇順リスト（決定的な走査用） */
   lists: {
     monsters: MonsterDef[]; items: ItemDef[]; appearances: AppearanceDef[]; affixes: AffixDef[];
     biomes: BiomeDef[]; floorTypes: FloorTypeDef[]; prefabs: PrefabDef[]; classes: ClassDef[]; features: FeatureDef[];
     expeditionTraits: ExpeditionTraitDef[]; perks: PerkDef[]; abilities: AbilityDef[]; weaponTraits: WeaponTraitDef[];
-    guardianTypes: GuardianTypeDef[]; guardianWeaknesses: GuardianWeaknessDef[]; boons: BoonDef[]; lore: LoreDef[]; floorEvents: FloorEventDef[];
+    guardianTypes: GuardianTypeDef[]; guardianWeaknesses: GuardianWeaknessDef[]; boons: BoonDef[]; lore: LoreDef[]; floorEvents: FloorEventDef[]; feats: FeatDef[];
     /** 加護を持つ遺物（category: relic で boon のある品） */
     relics: ItemDef[];
   };
@@ -127,6 +128,7 @@ export function buildContent(packs: RawPack[]): Content {
     boons: table(list('boons') as BoonDef[], 'boons'),
     lore: table(list('lore') as LoreDef[], 'lore'),
     floorEvents: table(list('floorEvents') as FloorEventDef[], 'floorEvents'),
+    feats: table(list('feats') as FeatDef[], 'feats'),
     lists: {
       monsters: list('monsters') as MonsterDef[], items: list('items') as ItemDef[], appearances: list('appearances') as AppearanceDef[],
       affixes: list('affixes') as AffixDef[], biomes: list('biomes') as BiomeDef[], floorTypes: list('floorTypes') as FloorTypeDef[],
@@ -137,6 +139,7 @@ export function buildContent(packs: RawPack[]): Content {
       boons: list('boons') as BoonDef[],
       lore: list('lore') as LoreDef[],
       floorEvents: list('floorEvents') as FloorEventDef[],
+      feats: list('feats') as FeatDef[],
       relics: (list('items') as ItemDef[]).filter((it) => it.category === 'relic' && !!it.boon),
     },
     deepestDefined: 1,

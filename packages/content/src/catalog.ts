@@ -119,7 +119,7 @@ export function buildCatalog(c: Content): Catalog {
       restMaxTurns: c.balance.rest.maxTurns,
       restCapPct: c.balance.rest.capPct,
       // 階の異変・名前付きの強敵・未鑑定の手がかり（V3-5 §5.3・§5.4）
-      floorEventPct: c.balance.floorEvent.chancePct, elite: { chancePct: c.balance.elite.chancePct, minDepth: c.balance.elite.minDepth, affixes: c.balance.elite.affixes }, clueTurns: c.balance.clueTurns,
+      floorEventPct: c.balance.floorEvent.chancePct, elite: { chancePct: c.balance.elite.chancePct, minDepth: c.balance.elite.minDepth, affixes: c.balance.elite.affixes }, clueTurns: c.balance.clueTurns, legacyMinKills: c.balance.legacy.minKills,
       guardianAwayHealPct: c.balance.guardian.awayHealPct,
       ...((): { milestone?: { every: number; min: number; boonOptions: number; levelBonus: number; hpRule: { hpPct: number; minHpBase: number; minHpPerDepth: number; maxHpBase: number; maxHpPerDepth: number }; minSpeed: number } } => {
         const f = c.lists.floorTypes.find((x) => x.rules.warden && x.every > 0);

@@ -2,7 +2,7 @@
 // 決定論: 同じシード＋同じコマンド列（wall を含む）→ 同じイベント列。
 import type { Content } from '@muse/content';
 import type {
-  ActionError, Command, Entity, GameEvent, JoinCommand, PlayerId, PlayerRecord, RunMeta, RunOptions, World, WorldSecret,
+  ActionError, Command, Entity, GameEvent, JoinCommand, LegacyMonster, MonsterMemory, PlayerId, PlayerRecord, RunMeta, RunOptions, World, WorldSecret,
 } from '@muse/shared';
 import { actionError, CAMP_COMMANDS, emptyWorld, EVENT_VERSION, FREE_COMMANDS, MACRO_COMMANDS, Rng, t } from '@muse/shared';
 import { actions, freeCommand } from './actions';
@@ -17,7 +17,7 @@ import { updateKnowledge } from './perception';
 import { advance, endTurn } from './scheduler';
 import { recomputeStats } from './stats';
 
-export const ENGINE_VERSION = '0.21.0';
+export const ENGINE_VERSION = '0.22.0';
 
 export interface CreateRunParams {
   runId: string;
@@ -123,8 +123,11 @@ export function joinPlayer(world: World, content: Content, join: JoinCommand, me
     id: pid, name: join.name, classId, locale: loc, controller: { ...join.controller }, entityId: eid, state: 'alive',
     joinedSeq: world.seq + 1,
     stats: { kills: 0, deepest: 1, turns: 0, deathCause: null, endedSeq: null },
-    knowledge: { floors: {}, visible: [], identified: [], monsterMemory: {}, notes: [], met: [] },
+    knowledge: { floors: {}, visible: [], identified: [], monsterMemory: legacyMemory(content, join.legacy?.monsters ?? []), notes: [], met: [] },
   };
+  // 継承（V3-7 §7.3）: 前の潜る者の覚え書き。種族の知識だけ（外見・弱点・地図・強さは引き継がない）
+  const inherited = Object.keys(record.knowledge.monsterMemory).length;
+  if (inherited) record.legacy = { kinds: inherited };
   ctx.emit({ type: 'player_joined', player: record, entity, seenBy: 'all', floor: key });
   recomputeStats(ctx, world.entities[eid], 'join');
   // 初期所持の未鑑定品は正体を知っている
@@ -145,6 +148,22 @@ export function joinPlayer(world: World, content: Content, join: JoinCommand, me
   updateKnowledge(ctx, key);
   advance(ctx, key);
   return { ok: true, playerId: pid, events: ctx.finish() };
+}
+
+/**
+ * 継承した種族の知識を思い出の形にする（V3-7 §7.3）。遭遇・撃破の数はこのランの分なので 0 から。
+ * 知らない種族・守護者の記録は入れない（参加コマンドの中身はサーバーが作るが、ここでも確かめる）
+ */
+function legacyMemory(content: Content, list: readonly LegacyMonster[]): Record<string, MonsterMemory> {
+  const out: Record<string, MonsterMemory> = {};
+  for (const l of [...list].sort((a, b) => (a.kind < b.kind ? -1 : a.kind > b.kind ? 1 : 0))) {
+    if (!content.monsters[l.kind] || out[l.kind]) continue;
+    const m: MonsterMemory = { kind: l.kind, encounters: 0, kills: 0, maxDamageToYou: l.maxHit ?? 0, maxDamageByYou: 0, abilities: [...new Set(l.abilities)].sort(), legacy: { kills: l.kills } };
+    if (l.hpSeen && l.hpSeen.samples > 0 && l.hpSeen.max >= l.hpSeen.min) m.hpSeen = { ...l.hpSeen };
+    if (l.rangeMax) m.rangeMax = l.rangeMax;
+    out[l.kind] = m;
+  }
+  return out;
 }
 
 export function step(world: World, content: Content, playerId: PlayerId, cmd: Command, meta: { cseq: number | null; wall: number; thought?: string }): StepResult {

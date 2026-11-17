@@ -1,7 +1,7 @@
 // HTTP API（docs/PROTOCOL.md §8）。失敗は ApiError で投げ、画面側でバナー表示する。
 import type {
   ActionError, Catalog, CommandRecord, GameEvent, JoinedResponse, JoinRunRequest, LeaderboardEntry,
-  NewRunRequest, RunIndex, RunListing, RunMetaFile, SpectatorPolicy, World,
+  NewRunRequest, ProfileRecords, RunIndex, RunListing, RunMetaFile, SpectatorPolicy, World,
 } from '@muse/shared';
 
 export class ApiError extends Error {
@@ -55,6 +55,7 @@ async function getJSONL<T>(path: string): Promise<T[]> {
 }
 
 const enc = encodeURIComponent;
+const bearer = (token: string): RequestInit => ({ headers: { authorization: `Bearer ${token}` } });
 
 export const api = {
   runs: () => getJSON<{ runs: RunListing[] }>('/api/runs').then((r) => r.runs ?? []),
@@ -68,6 +69,8 @@ export const api = {
   commands: (runId: string) => getJSONL<CommandRecord>(`/api/runs/${enc(runId)}/commands`),
   leaderboard: () => getJSON<{ entries: LeaderboardEntry[] }>('/api/leaderboard').then((r) => r.entries ?? []),
   config: () => getJSON<{ spectatorPolicy: SpectatorPolicy }>('/api/config'),
+  /** プロフィールの記録（V3-7 §7.2。MCP の records と同じ中身） */
+  records: async (profileToken: string, locale: string) => (await (await request(`/api/profile/records?locale=${enc(locale)}`, bearer(profileToken))).json()) as { text: string; records: ProfileRecords },
 };
 
 let catalogPromise: Promise<Catalog> | null = null;

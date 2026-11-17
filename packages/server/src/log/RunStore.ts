@@ -184,7 +184,7 @@ export class RunStore {
         out.push({
           runId: id, playerId: p.id, name: p.name, classId: p.classId, controller: p.controller, deepest: p.deepest,
           kills: p.kills, level: p.level, turns: p.turns, score: p.score, deathCause: p.deathCause, endedAt,
-          expeditions: p.expeditions ?? 0, ongoing, scoreVersion: s.scoreVersion ?? 1,
+          expeditions: p.expeditions ?? 0, ongoing, scoreVersion: s.scoreVersion ?? 1, ...(p.legacy ? { legacy: true } : {}),
         });
       }
     }

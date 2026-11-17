@@ -93,7 +93,21 @@ export function createApp(manager: SessionManager, config: ServerConfig): App {
       const controller: Controller = body.controller ?? { kind: 'human', label: 'browser' };
       const r = await manager.createRun({ ...body, controller });
       if ('error' in r) return fail(res, 400, r.error);
-      return json(res, 200, { runId: r.session.runId, playerId: r.playerId, token: r.token });
+      return json(res, 200, { runId: r.session.runId, playerId: r.playerId, token: r.token, profileId: r.profile.id, ...(r.profile.token ? { profileToken: r.profile.token } : {}) });
+    }
+    // プロフィール（V3-7 §7.1）: Authorization: Bearer <profile_token>。MCP の profile・records と同じ中身
+    if (p === '/api/profile' || p === '/api/profile/records') {
+      const tok = feedToken(req, url);
+      const pp = tok ? manager.profilePortForToken(tok) : null;
+      if (!pp) return fail(res, 401, actionError('no_session', 'unknown or missing profile token', 'Authorization: Bearer <profile_token>'));
+      const L = url.searchParams.get('locale') === 'en' ? 'en' : 'ja';
+      if (p === '/api/profile' && m === 'POST') {
+        const body = (await readBody(req).catch(() => null)) as { name?: string } | null;
+        if (!body?.name || !pp.rename(body.name)) return fail(res, 400, actionError('bad_request', 'name is required', '{ name }'));
+      }
+      if (p === '/api/profile') { const r = pp.info(L); return r ? json(res, 200, { text: r.text, ...r.data }) : fail(res, 404, actionError('no_session', 'no profile', '')); }
+      const r = pp.records(L);
+      return r ? json(res, 200, { text: r.text, records: r.data }) : fail(res, 404, actionError('no_session', 'no profile', ''));
     }
     const mm = /^\/api\/runs\/(run_[0-9a-z]+)(\/.*)?$/.exec(p);
     if (mm) {
@@ -102,9 +116,9 @@ export function createApp(manager: SessionManager, config: ServerConfig): App {
       if (sub === '/join' && m === 'POST') {
         const body = (await readBody(req).catch(() => null)) as JoinRunRequest | null;
         if (!body?.name) return fail(res, 400, actionError('bad_request', 'name is required', ''));
-        const r = await manager.joinRun(runId, { name: body.name, classId: body.classId, locale: body.locale, controller: body.controller ?? { kind: 'human', label: 'browser' } });
+        const r = await manager.joinRun(runId, { name: body.name, classId: body.classId, locale: body.locale, controller: body.controller ?? { kind: 'human', label: 'browser' }, profileToken: body.profileToken, legacy: body.legacy });
         if ('error' in r) return fail(res, 400, r.error);
-        return json(res, 200, { runId, playerId: r.playerId, token: r.token });
+        return json(res, 200, { runId, playerId: r.playerId, token: r.token, profileId: r.profile.id, ...(r.profile.token ? { profileToken: r.profile.token } : {}) });
       }
       const live = manager.get(runId);
       if (!live && !store?.exists(runId)) return fail(res, 404, actionError('no_session', `unknown run ${runId}`, ''));

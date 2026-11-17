@@ -72,6 +72,7 @@ npm run server     # http://127.0.0.1:7777
 7. 任意引数 `thought` に判断理由を書くと、観戦画面とリプレイに吹き出しで表示される（裁定には使われない）
 8. `expect_seq` を渡すと、前提にした観測より状態が進んでいた場合に二重実行せず `stale_turn` を返す
 9. 応答テキストが長ければ `set_options { map, inventory, status_line }` で減らせる（既定は変化があったときだけ地図と所持品を出す）
+10. **プロフィール**: 最初の `new_run` の応答に `profile_token` が出る。**これを保存し、次の `new_run { profile_token }` に渡す**と、ランをまたいで記録・図鑑・実績が積まれ、図鑑で 5 体以上倒した種族の知識（能力・体力の記録・最大の一撃）を「前の潜る者の覚え書き」として引き継ぐ（`legacy: false` で引き継がない）。`records` で記録と図鑑、`profile` で表示名と進行中のラン。`profile_token` は `player_token` と同じく秘密にする
 
 ### ホスト駆動（AI を外から回す）
 
@@ -83,6 +84,7 @@ MCP は「AI が呼んだら返す」方式なので、ゲーム側から AI を
   - `--agent-url <url>`: JSON を POST
   - 省略時: 内蔵ダミー（MCP で 1 手打って切断する）
 - 例（PowerShell）: `npm.cmd run drive -- --new-run Bot` / `npm.cmd run drive -- --token <player_token> --agent-cmd "node my-agent.mjs"`
+- プロフィール: `--new-run <name> --profile-token <profile_token>` で同じプロフィールに積む（省くと新しく作り、トークンを表示する）。`--continue` を付けると、ランが終わったら同じプロフィールで次のランを始める（`--max-runs` 既定 10。`--no-legacy` で継承しない）
 - 上限（`--max-turns` など）で止めても遠征は終わらない。もう一度実行すると続きから進む
 
 観測の例（テキスト。同じ内容が `structuredContent` に JSON で入る）:

@@ -164,6 +164,8 @@ export interface ObsCamp {
   compare?: { no: number; lines: string[] } & ReportCompare;
   /** 目標（V3-7a §40.8）: 宣言中の目標・候補（自己最高に並ぶ／少し超える／大きく超える）・記録・文（3 行以内） */
   goal?: GoalInfo;
+  /** プロフィールの記録の要約と次の節目（1 行。V3-7 §7.2）・直前の遠征で取った実績 */
+  records?: { line: string; feats_new?: string[] };
 }
 
 /** 節目の大守護者（V3-3 §3.2）。弱点と種族は伏せる */
@@ -264,6 +266,8 @@ export interface ObservationOptions {
   goal?: { info?: GoalInfo; active?: GoalRecord; live?: { minHpPct?: number; leftExpeditions?: number } };
   /** キャンプ: 候補に添える注記（候補の番号 → 文。再挑戦の前回の戦い。V3-3c §44.1） */
   offerNotes?: Record<number, string>;
+  /** キャンプ: プロフィールの記録の 1 行と、直前の遠征で取った実績（V3-7 §7.2・§7.4） */
+  records?: { line: string; featsNew?: string[] };
 }
 
 const DIR_JA: Record<Dir, string> = { n: '北', ne: '北東', e: '東', se: '南東', s: '南', sw: '南西', w: '西', nw: '北西' };
@@ -454,7 +458,9 @@ export function memoryCombatText(locale: Locale, mem: MonsterMemory): string {
   const few = !!mem.hpSeen && mem.hpSeen.samples < HP_RECORD_SURE;
   const hp = mem.hpSeen ? t(L, `${mem.hpSeen.min === mem.hpSeen.max ? mem.hpSeen.min : `${mem.hpSeen.min}〜${mem.hpSeen.max}`}（${mem.hpSeen.samples} 体${few ? '。個体差あり' : ''}）`, `${mem.hpSeen.min === mem.hpSeen.max ? mem.hpSeen.min : `${mem.hpSeen.min}-${mem.hpSeen.max}`} (${mem.hpSeen.samples} seen${few ? '; individuals vary' : ''})`) : t(L, '記録なし', 'none');
   const ab = mem.abilities.filter((a) => a !== 'fast' && a !== 'slow' && a !== 'ranged').map((a) => abilityName(L, a));
-  return t(L,
+  // 継承（V3-7 §7.3・§16.2）: 前の潜る者の覚え書きを含む（自分で確かめた記録と区別する）
+  const legacy = mem.legacy ? t(L, `（覚え書きより: 前の潜る者が ${mem.legacy.kills} 体倒した記録を含む。能力・体力・受けた最大ダメージ）`, ` (from the notes: includes a previous delver's record of ${mem.legacy.kills} slain — abilities, HP, worst hit)`) : '';
+  return legacy + t(L,
     `遭遇${mem.encounters}回・撃破${mem.kills}回・速さ:${speed}・遠隔攻撃:${ranged}・受けた最大ダメージ${mem.maxDamageToYou}・与えた最大ダメージ${mem.maxDamageByYou}・体力の記録:${hp}${ab.length ? '・その他の能力:' + ab.join('、') : ''}`,
     `met ${mem.encounters}, killed ${mem.kills}, speed: ${speed}, ranged: ${ranged}, max dmg to you ${mem.maxDamageToYou}, max dmg by you ${mem.maxDamageByYou}, HP record: ${hp}${ab.length ? ', other: ' + ab.join(', ') : ''}`);
 }
@@ -1190,6 +1196,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       ...(view.camp.milestone ? { milestone: milestoneObs(L, catalog, view.camp.milestone, view.milestonesCleared ?? [], view.wardenIntel?.[String(view.camp.milestone.depth)], view) } : {}),
       ...(opts.campCompare && view.status === 'at_camp' ? { compare: { no: opts.campCompare.no, lines: opts.campCompare.lines.slice(0, 2), ...(opts.campCompare.compare ?? {}) } } : {}),
       ...(opts.goal?.info && view.status === 'at_camp' ? { goal: opts.goal.info } : {}),
+      ...(opts.records && view.status === 'at_camp' ? { records: { line: opts.records.line, ...(opts.records.featsNew?.length ? { feats_new: [...opts.records.featsNew] } : {}) } } : {}),
       // 記録庫に納めた欠片の数（V3-3a §35.7）
       archive: { delivered: view.archive?.length ?? 0, total: Object.values(catalog.items).filter((it) => it.category === 'relic' && it.boon).length },
       next_no: view.camp.nextNo,
@@ -1688,6 +1695,9 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
     lines.push(boonsText(L, s.boons ?? []));
     if (obs.camp?.milestone) lines.push(obs.camp.milestone.text);
     if (obs.camp?.archive) lines.push(t(L, `記録庫: 欠片 ${obs.camp.archive.delivered}/${obs.camp.archive.total}`, `Archive: shards ${obs.camp.archive.delivered}/${obs.camp.archive.total}`));
+    // プロフィール（V3-7 §7.2・§7.4）: 記録の要約と次の節目、直前の遠征で取った実績
+    if (obs.camp?.records?.feats_new?.length) lines.push(t(L, `新しい実績: ${obs.camp.records.feats_new.join('・')}`, `New feats: ${obs.camp.records.feats_new.join(', ')}`));
+    if (obs.camp?.records) lines.push(obs.camp.records.line);
     if (obs.alerts.length) lines.push('!! ' + obs.alerts.map((a) => a.text).join(' / '));
     if (obs.camp) {
       lines.push(t(L, `次の遠征の候補（遠征 ${obs.camp.next_no}）。start_expedition { offer } で始める:`, `Offers for expedition ${obs.camp.next_no} (start with start_expedition { offer }):`));

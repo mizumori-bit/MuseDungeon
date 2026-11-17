@@ -421,6 +421,8 @@ export function buildSummary(ctx: Ctx, reason: string, hideSeed = false): RunSum
       score: pr.stats.banked ?? 0,
       expeditions: pr.stats.expeditions ?? 0,
       banked: pr.stats.banked ?? 0,
+      // 継承したラン（V3-7 §7.3: 記録の表を分ける）
+      ...(pr.legacy ? { legacy: true } : {}),
     };
   });
   const expeditions = (ctx.world.expeditions ?? []).map((x) => ({

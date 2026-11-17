@@ -424,7 +424,7 @@ function OfferCard({ o, rules, level, onStart }: { o: ExpeditionOffer; rules: Ca
 
 /** 目標の宣言（V3-7a §40.8。AI の declare_goal と同じ候補・同じ口）。任意で、点には影響しない */
 function GoalBox({ goal, onGoal }: { goal: GoalInfo; onGoal: (d: GoalDecl | null) => void }) {
-  const typeName: Record<GoalType, string> = { depth: tr('深さ', 'Depth'), banked: tr('確定点', 'Banked'), milestone: tr('節目', 'Milestone'), margin: tr('余力', 'Margin') };
+  const typeName: Record<GoalType, string> = { depth: tr('深さ', 'Depth'), banked: tr('確定点', 'Banked'), milestone: tr('節目', 'Milestone'), margin: tr('余力', 'Margin'), codex: tr('図鑑', 'Codex'), feats: tr('実績', 'Feats') };
   const levelName = { match: tr('自己最高に並ぶ', 'match your best'), beat: tr('少し超える', 'beat it'), beat_big: tr('大きく超える', 'beat it big'), start: tr('初期値', 'start') };
   const types = [...new Set(goal.candidates.map((c) => c.type))];
   return (
