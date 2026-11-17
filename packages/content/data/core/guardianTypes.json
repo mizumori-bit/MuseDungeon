@@ -12,7 +12,7 @@
     "desc": { "ja": "体力が 50% 以下になると、1 手の予兆の後に怒り、速さ +30・威力 +2 になる", "en": "At 50% HP or less it signals for a turn, then rages: speed +30, might +2" },
     "params": { "belowPct": 50, "speed": 30, "might": 2 } },
   { "id": "core:stalker", "name": { "ja": "潜む者", "en": "the Stalker" }, "handler": "stalker", "strongVs": "thrown",
-    "desc": { "ja": "眠らない。見られている間は近づかず、相手の視界の外を通って寄る（一度気づいた相手は、見失っても 12 マス以内なら居場所を追い続ける）。視界の外から隣に来た最初の一撃は会心", "en": "Never sleeps. While you can see it, it will not approach; it closes in out of your sight (once it has noticed you, it keeps track of you within 12 cells even out of sight), and its first blow from out of sight is a critical hit" },
+    "desc": { "ja": "眠らない。見られている間は近づかず、相手の視界の外を通って寄る（見られて隠れた手番が 4 を超えると、見えたまま寄ってくる。一度気づいた相手は、見失っても 12 マス以内なら居場所を追い続ける）。視界の外から隣に来た最初の一撃は会心", "en": "Never sleeps. While you can see it, it will not approach; it closes in out of your sight (after more than 4 turns spent hiding from your gaze, it comes on in plain sight; once it has noticed you, it keeps track of you within 12 cells even out of sight), and its first blow from out of sight is a critical hit" },
     "params": { "sense": 12 } },
   { "id": "core:deflector", "name": { "ja": "弾く者", "en": "the Deflector" }, "handler": "deflector", "strongVs": "thrown",
     "desc": { "ja": "2 マス以上離れた相手からの投擲のダメージを半分にする（隣からは通常）", "en": "Halves thrown damage from 2 or more cells away (from adjacent cells it takes full damage)" },

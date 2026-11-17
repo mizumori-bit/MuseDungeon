@@ -5,7 +5,7 @@ import type {
 } from '@muse/shared';
 import {
   actionError, briefingLines, briefingShort, buildObservation, buildTurnBlock, campLines, changesLine, describeInventory, describeTarget, diffChanges,
-  formatObservationText, kindName, MACRO_COMPLETED_STOPS, mapTextLines, memoryCombatText, memoryKey, mineCount, nameOf, pickableItems, progressText, renderAsciiMap, resultText, t,
+  formatObservationText, guardianDisplayName, kindName, MACRO_COMPLETED_STOPS, mapTextLines, memoryCombatText, memoryKey, mineCount, nameOf, pickableItems, progressText, renderAsciiMap, resultText, t,
   turnLine, turnSnapshot, turnStateOf,
 } from '@muse/shared';
 import type { PlayerOptions } from './RunSession';
@@ -100,7 +100,9 @@ const STOP_TEXT: Record<string, [string, string]> = {
   out_of_ammo: ['投げる物が尽きた', 'nothing left to throw'],
   not_throwable: ['そのスロットの品は投げられない', 'that slot holds nothing throwable'],
   no_line_of_sight: ['射線が 3 手番続けて通らなかった', 'no clear line for 3 turns'],
-  target_not_approaching: ['相手が近づいてこない（待つ上限）', 'the target is not coming (wait limit)'],
+  target_not_approaching: ['相手が近づいてこない（3 手番続けて近づかない・待つ上限）', 'the target is not coming (3 turns without closing in, or the wait limit)'],
+  no_progress: ['同じ 2 マスを往復して進めない（行き先か道を変える）', 'stuck going back and forth between two cells (pick another destination or route)'],
+  hit_and_run: ['待つ間に標的に殴られたが、標的は隣にいない（当てては離れる相手。寄って殴る・通路で受ける・投げる）', 'the target hit you while you waited but is not adjacent (it strikes and backs off: close in, hold a corridor, or throw)'],
   target_not_hunting: ['相手はあなたを追っていない', 'the target is not hunting you'],
   damaged: ['ダメージを受けた', 'you took damage'],
   item_seen: ['新しいアイテムを見つけた', 'you spotted a new item'],
@@ -319,7 +321,15 @@ export class SessionPlayerPort implements PlayerPort {
         if (e.type === 'damaged' && e.source === view.self.id && isTarget(e.target)) dealt += e.dealt ?? e.amount;
       }
       if (clear) {
-        const killed = r.events.filter((e) => e.type === 'died' && e.killer === view.self.id && e.id !== view.self.id).map((e) => (e.type === 'died' ? nameOf(this.catalog.monsters[e.kind ?? '']?.name, L, e.kind ?? '?') : ''));
+        // 接辞付きの名前・守護者の呼び名で（V3-3 後の AI 評価: 「毒牙の小悪魔」が「小悪魔」、守護者ネガが「ジャッカル」と出た）
+        const killed = r.events.filter((e) => e.type === 'died' && e.killer === view.self.id && e.id !== view.self.id).map((e) => {
+          if (e.type !== 'died') return '';
+          const g = view.entities.find((x) => x.id === e.id)?.guardian;
+          if (g) return guardianDisplayName(L, g);
+          const base = nameOf(this.catalog.monsters[e.kind ?? '']?.name, L, e.kind ?? '?');
+          const af = (e.affixes ?? []).map((a) => nameOf(this.catalog.affixes?.[a]?.name, L, '')).filter(Boolean);
+          return af.length ? (L === 'en' ? `${af.join(' ')} ${base}` : `${af.join('')}${base}`) : base;
+        });
         if (killed.length) outcome += ' ' + t(L, `倒した: ${killed.length} 体（${killed.join('・')}）。`, `Killed ${killed.length} (${killed.join(', ')}).`);
       }
       // 載せた能動技を使った回数（V3-4a §25.3）

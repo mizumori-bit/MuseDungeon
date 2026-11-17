@@ -93,7 +93,7 @@ export interface Catalog {
   classes: Record<string, CatalogClass>;
   items: Record<string, CatalogItem>;
   appearances: Record<string, { name: Names; category: string }>;
-  features: Record<string, { name: Names; category: 'feature' | 'trap'; states: string[]; interactable: boolean; passable: boolean }>;
+  features: Record<string, { name: Names; category: 'feature' | 'trap'; states: string[]; interactable: boolean; passable: boolean; afterInteract?: string }>;
   /** speedPct: 速度を変える状態異常の倍率（%）。公開ルール（加速 x2 など） */
   statuses: Record<string, { name: Names; speedPct?: number }>;
   /** itemMods: 品物の接辞の効果（自分の持ち物の性能表示に使う。敵の接辞の値は出さない） */
@@ -238,8 +238,11 @@ export function offerGap(rules: Pick<CatalogRules, 'recommendedLevel' | 'traits'
  * 次の候補の下限（V3-2R3 §20.2）: 目標として達成した最深の階（campDepth）+ 堅実の幅。最初の候補の深さより浅くはならない。
  * 踏破で先まで降りても深くならない
  */
-export function nextCampOf(rules: Pick<CatalogRules, 'recommendedLevel' | 'slots' | 'expedition'>, campDepth: number): { minTargetDepth: number; recommendedLevel: number } {
-  const min = Math.max(rules.expedition.firstTargetDepth?.safe ?? 1, campDepth + rules.slots.safe.aheadMin);
+export function nextCampOf(rules: Pick<CatalogRules, 'recommendedLevel' | 'slots' | 'expedition'> & Partial<Pick<CatalogRules, 'milestone'>>, campDepth: number): { minTargetDepth: number; recommendedLevel: number } {
+  let min = Math.max(rules.expedition.firstTargetDepth?.safe ?? 1, campDepth + rules.slots.safe.aheadMin);
+  // 節目の階（大守護者の間）は目標にならない（V3-3 §3.2）
+  const ms = rules.milestone;
+  while (ms && min >= ms.min && min % ms.every === 0) min++;
   return { minTargetDepth: min, recommendedLevel: recommendedLevel(rules, min) };
 }
 

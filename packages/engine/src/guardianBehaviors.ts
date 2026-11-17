@@ -57,6 +57,7 @@ function summonMinions(ctx: Ctx, m: Entity, count: number, target: Entity | null
 
 // ---- 突き進む者: 直線上に相手がいると 1 手構え、次の手番にその直線を突進する ----
 guardianTypeHandlers.register('charger', {
+  order: 1,
   turn(ctx, m, { target, params }) {
     const ai = m.actor!.ai!;
     const range = params.range ?? 6;
@@ -158,6 +159,7 @@ function keepTrail(ctx: Ctx, m: Entity, pos: Pos): void {
 
 guardianTypeHandlers.register('stalker', {
   sleepless: true,
+  order: 2,
   turn(ctx, m, { target: seenTarget, params }) {
     const st = m.actor!.ai!.state;
     let target = seenTarget;

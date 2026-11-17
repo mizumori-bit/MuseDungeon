@@ -119,6 +119,10 @@ export function makeOffers(ctx: Ctx, no: number): ExpeditionOffer[] {
   const traitIds = ctx.content.lists.expeditionTraits.map((x) => x.id);
   // 参加者がもう持っている加護（遺物の候補はまだ持っていない加護から引く。V3-3 §3.3）
   const owned = ownedBoons(ctx);
+  // 下り階段に立ったことのある最も深い階（到達・踏破。V3-3 後の AI 評価: 踏破した階の到達型が、開始と同時に達成された）
+  const crossedMax = Math.max(0, ...(ctx.world.expeditions ?? []).map((x) => Math.max(x.progress.crossedDepth ?? 0, x.progress.reached && x.objective.targetDepth !== null ? x.objective.targetDepth : 0)));
+  // 途中で越える節目の大守護者（候補の文に出す）
+  const ms = nextMilestone(ctx);
   // 目的の種類は 3 枠で別にする（最初の遠征は 到達・守護者・遺物 の順）
   const types = no === 1 ? [...OFFER_TYPES] : rng.shuffle([...OFFER_TYPES]);
   let prevTarget = 0, prevBumped = false;
@@ -135,15 +139,24 @@ export function makeOffers(ctx: Ctx, no: number): ExpeditionOffer[] {
     prevBumped = target !== raw;
     prevTarget = target;
     // その階の下り階段にすでに立った（下の階が生成済み）なら、踏破型は出さず別の種類に替える
-    if (type === 'reach_depth' && target < deepest) type = rng.chance(50) ? 'slay_guardian' : 'retrieve_relic';
+    if (type === 'reach_depth' && (target < deepest || target <= crossedMax)) type = rng.chance(50) ? 'slay_guardian' : 'retrieve_relic';
     const n = rng.range(s.traitsMin, s.traitsMax);
-    const traits = rng.shuffle([...traitIds]).slice(0, n).sort();
+    const traits: string[] = [];
+    for (const id of rng.shuffle([...traitIds])) {
+      if (traits.length >= n) break;
+      const ex = ctx.content.expeditionTraits[id]?.excludes ?? [];
+      if (traits.some((x) => ex.includes(x) || (ctx.content.expeditionTraits[x]?.excludes ?? []).includes(id))) continue;
+      traits.push(id);
+    }
+    traits.sort();
     const multiplierPct = traits.reduce((m, id) => Math.trunc((m * ctx.content.expeditionTraits[id].multiplierPct) / 100), 100);
     // 堅実の遺物は無防備（守護者付きは標準・野心だけ）
     const relicGuarded = type === 'retrieve_relic' && rng.chance(b.relicGuardianPct) && slot !== 'safe';
     // 点 = 枠の基礎点 × 種類の係数 × 深さの係数（V3-2R2 §18.3）
     const points = offerPoints({ expedition: b, slots: b.slots as Record<OfferSlot, typeof s> }, slot, type, relicGuarded, target);
     const offer: ExpeditionOffer = { index: i + 1, objective: { type, targetDepth: target }, points, relicGuarded, slot, traits, multiplierPct };
+    // 目標が次の節目より深い: 途中で大守護者を倒す必要がある
+    if (ms && target > ms.depth) offer.passesWarden = structuredClone(ms);
     // 遺物（V3-3 §3.3）: 候補の時点で名前と加護を出す
     if (type === 'retrieve_relic') {
       const ri = pickRelic(ctx.content, ctx.world.secret.seed, no, i, owned);
@@ -711,9 +724,13 @@ function settleFloor(ctx: Ctx, at: FloorPos, rng: Rng): void {
       ctx.emit({ type: 'ai_state_changed', id: m.id, ai: { ...ai, state: 'unaware', targetPos: null, lostTurns: 0 }, dormant: !!m.actor!.dormant, nextActAt: m.actor!.nextActAt, seenBy: [], floor: key });
     }
     m = ctx.world.entities[m.id];
+    // 全快し、見ていた与ダメの累計も戻す（V3-3 後の AI 評価: 前の遠征の累計が残って、体力を読み違えた）
     if (m.stats && m.stats.hp < m.stats.maxHp) {
-      ctx.emit({ type: 'healed', target: m.id, targetKind: m.kind, amount: m.stats.maxHp - m.stats.hp, hpAfter: m.stats.maxHp, via: 'camp', seenBy: [], floor: key });
+      ctx.emit({ type: 'healed', target: m.id, targetKind: m.kind, amount: m.stats.maxHp - m.stats.hp, hpAfter: m.stats.maxHp, via: 'camp', resetSeen: true, seenBy: [], floor: key });
     }
+    // 状態異常も消す（V3-3 後の AI 評価: 前の遠征の毒が残って、全快した大守護者を削っていた）
+    m = ctx.world.entities[m.id];
+    if (m.statuses?.length) ctx.emit({ type: 'status_ticked', target: m.id, statusesAfter: [], seenBy: [], floor: key });
     m = ctx.world.entities[m.id];
     // 守護者は離れた場所ではなく持ち場へ戻す（V3-2R3b §23.2）。持ち場がふさがっていれば範囲の中の近い空きマス
     if (m.home) {

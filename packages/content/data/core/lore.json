@@ -7,7 +7,7 @@
   { "id": "core:lore_brief_reach_2", "kind": "briefing", "when": { "objective": "reach_depth" },
     "text": { "ja": "地下{depth}階の下り階段の場所は、まだ誰の記録にも無い。", "en": "No record yet tells where the stairs down from depth {depth} lie." } },
   { "id": "core:lore_brief_slay", "kind": "briefing", "when": { "objective": "slay_guardian" },
-    "text": { "ja": "地下{depth}階の書架の奥で、番人{guardian}が目を覚ました。", "en": "Deep in the stacks of depth {depth}, the keeper {guardian} has woken." } },
+    "text": { "ja": "地下{depth}階の書架の奥で、{guardian}が目を覚ました。", "en": "Deep in the stacks of depth {depth}, {guardian} has woken." } },
   { "id": "core:lore_brief_slay_summoner", "kind": "briefing", "when": { "objective": "slay_guardian", "guardianType": "core:summoner" },
     "text": { "ja": "地下{depth}階で、{guardian}が配下を呼び集めている。", "en": "On depth {depth}, {guardian} gathers its servants." } },
   { "id": "core:lore_brief_slay_charger", "kind": "briefing", "when": { "objective": "slay_guardian", "guardianType": "core:charger" },
@@ -23,7 +23,7 @@
   { "id": "core:lore_brief_relic", "kind": "briefing", "when": { "objective": "retrieve_relic", "guarded": false },
     "text": { "ja": "地下{depth}階のどこかに、{relic}が眠っている。", "en": "Somewhere on depth {depth}, the {relic} lies waiting." } },
   { "id": "core:lore_brief_relic_guarded", "kind": "briefing", "when": { "objective": "retrieve_relic", "guarded": true },
-    "text": { "ja": "地下{depth}階で、番人{guardian}が{relic}を守っている。", "en": "On depth {depth}, the keeper {guardian} guards the {relic}." } },
+    "text": { "ja": "地下{depth}階で、{guardian}が{relic}を守っている。", "en": "On depth {depth}, {guardian} guards the {relic}." } },
   { "id": "core:lore_brief_endless", "kind": "briefing", "when": { "objective": "endless" },
     "text": { "ja": "目的は無い。層の続く限り、潜る。", "en": "No objective. Dive as far as the layers go." } },
 
@@ -32,7 +32,7 @@
   { "id": "core:lore_slain_2", "kind": "guardian_slain",
     "text": { "ja": "{guardian}が倒れ、記録庫の一頁がふたたび読めるようになった。", "en": "{guardian} falls, and a page of the archive can be read again." } },
   { "id": "core:lore_warden", "kind": "warden_slain",
-    "text": { "ja": "節目の番人{guardian}が倒れ、閉ざされていた層への道が開いた。", "en": "The milestone keeper {guardian} falls, and the way to the sealed layers opens." } },
+    "text": { "ja": "節目の番人、{guardian}が倒れ、閉ざされていた層への道が開いた。", "en": "The milestone keeper, {guardian}, falls, and the way to the sealed layers opens." } },
   { "id": "core:lore_relic", "kind": "relic_delivered",
     "text": { "ja": "{relic}を記録庫に納めた。{origin}", "en": "You return the {relic} to the archive. {origin}" } }
 ]

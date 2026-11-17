@@ -425,6 +425,8 @@ export const ExpeditionTraitSchema = z.object({
     noWander: z.boolean().optional(),
     noFountain: z.boolean().optional(),
   }).default({}),
+  /** 同じ候補に付けない条件（V3-3 後の AI 評価: 静か＝徘徊なし と 騒がしい＝徘徊が早い が同時に付いた） */
+  excludes: z.array(IdSchema).default([]),
 });
 
 export const FeatureSchema = z.object({

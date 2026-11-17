@@ -166,6 +166,8 @@ export function applyEvent(world: World, ev: GameEvent): void {
       break;
     case 'healed':
       ent(world, ev.target).stats!.hp = ev.hpAfter;
+      // キャンプにいる間に落ち着いた（全快した）敵は、見ていた与ダメの累計も戻す（resetSeen の無い古いログは今までどおり）
+      if (ev.resetSeen) for (const pr of Object.values(world.players)) if (pr.knowledge.damageSeen) delete pr.knowledge.damageSeen[ev.target];
       break;
     case 'max_hp_changed': {
       const s = ent(world, ev.target).stats!;

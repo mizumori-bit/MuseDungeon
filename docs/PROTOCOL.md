@@ -412,6 +412,13 @@ V3-2R で足した項目（同じく後方互換。会心と経験値のルー�
 - `player_state.reason: 'joined'`（キャンプから始まる参加）。参加コマンドの `atCamp`
 - プレイヤー向けの射影で、見えていた個体が視界の外へ動いた `entity_moved` に `dirOut`（向きだけ。行き先は伏せたまま）
 
+V3-3 の後の AI 評価の修正で足した項目（後方互換。`engineVersion` は 0.13.1。DESIGN.md §23.1）:
+
+- マクロの停止理由: `hit_and_run`（fight: 待つ間に標的に殴られたが、標的は隣にいない）・`no_progress`（移動マクロが同じ 2 マスを往復した）。`target_not_approaching` は 3 手番続けて近づかないときにも出る
+- World State: `Offer.passesWarden`（途中で倒す節目の大守護者。公開）・`healed.resetSeen`（キャンプで落ち着いた敵の、見ていた与ダメの累計を戻す）
+- 観測: `self.floor.floor_type_id`・`camp.offers[].text` の「途中の地下N階で大守護者…」・身をかわすの `use_ability slip <dir|dir>`・届かない階段の「不可」の行。守護者には `hp_left_est` を出さない
+- コンテンツ: 条件の `excludes`。公開カタログの地物の `afterInteract`
+
 V3-3 の 4 段目で足した項目（物語の文。同じく後方互換。新しいイベントがあるので `engineVersion` は 0.13.0、`eventVersion` は 8。DESIGN.md §23）:
 
 - World State: `Expedition.story`（ブリーフィングの物語の 1 文。公開）。PlayerView: `ExpeditionView.story`

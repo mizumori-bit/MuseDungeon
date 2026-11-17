@@ -18,6 +18,9 @@ export interface GuardianTypeHandler {
   armor?(ctx: Ctx, m: Entity, params: Record<string, number>): number;
   /** 生成時に眠らない */
   sleepless?: boolean;
+  /** 手番の順（小さいほど先）。予兆と変化の型（呼び集める・荒ぶる）は 0、突進は 1、毎手番動きを決める潜む者は 2。
+   * 型が 2 つのとき、先の型が手番を使うと後の型は動かない（V3-3 後の AI 評価: 潜む者＋荒ぶる者で怒りが一度も起きなかった） */
+  order?: number;
 }
 
 export interface WeaknessHandler {
@@ -97,7 +100,7 @@ function typesOf(ctx: Ctx, m: Entity | null | undefined): { id: string; h: Guard
   return m.guardian.types.flatMap((id) => {
     const def = ctx.content.guardianTypes[id];
     return def ? [{ id, h: guardianTypeHandlers.get(def.handler), params: def.params }] : [];
-  });
+  }).sort((a, b) => (a.h.order ?? 0) - (b.h.order ?? 0));
 }
 
 function weaknessOf(ctx: Ctx, m: Entity | null | undefined): { id: string; h: WeaknessHandler; params: Record<string, number> } | null {

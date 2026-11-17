@@ -78,7 +78,8 @@ export function buildCatalog(c: Content): Catalog {
     items,
     appearances: Object.fromEntries(c.lists.appearances.map((a) => [a.id, { name: a.name, category: a.category }])),
     features: Object.fromEntries(c.lists.features.map((f) => [f.id, {
-      name: f.name, category: f.category, states: f.states, interactable: f.onInteract.length > 0, passable: f.passable,
+      name: f.name, category: f.category, states: f.states, interactable: f.onInteract.length > 0 || !!f.afterInteract, passable: f.passable,
+      ...(f.afterInteract ? { afterInteract: f.afterInteract } : {}),
     }])),
     statuses: Object.fromEntries(Object.values(c.statuses).map((s) => [s.id, s.handler === 'speed_pct' ? { name: s.name, speedPct: s.params.pct ?? 100 } : { name: s.name }])),
     affixes: Object.fromEntries(c.lists.affixes.map((a) => [a.id, {

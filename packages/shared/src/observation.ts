@@ -174,7 +174,7 @@ export interface Observation {
     name: string; class: string; level: number; xp: number; xp_next: number;
     hp: number; max_hp: number; statuses: { id: string; name: string; turns_left: number }[];
     /** draft: 下り階段が未発見のときの方角（下への風）。explored: 見た割合の 4 段階（1 約 1/4 … 4 ほぼ全て。V3-2R2 §18.4） */
-    pos: Pos | null; floor: { depth: number; biome_name: string; floor_type: string; time: number; draft?: Dir; explored?: 1 | 2 | 3 | 4; hint_text?: string } | null;
+    pos: Pos | null; floor: { depth: number; biome_name: string; floor_type: string; floor_type_id?: string; time: number; draft?: Dir; explored?: 1 | 2 | 3 | 4; hint_text?: string } | null;
     /** throws: 投げられる持ち物（命中は自分の命中値込み） */
     attack: { acc: number; dmg: string; throws?: { slot: string; name: string; dmg: string | null; acc: number; range: number }[] }; defense: { eva: number; armor: number };
     equipment: { weapon?: string; armor?: string; accessory?: string };
@@ -723,7 +723,9 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       };
       if (cm?.size === 'small' || cm?.size === 'large') m.size = cm.size;
       // 本当に初めて見た種族: 撃破が無く、遭遇した個体の数がいま見えている数以下
-      if (!mem || (mem.kills === 0 && mem.encounters <= (visibleOfKind.get(e.kind ?? '') ?? 0))) m.first_seen = true;
+      // 守護者は記録を分けるが、同じ種族の通常の個体を見たことがあれば初見ではない（V3-3 後の AI 評価）
+      const baseMem = e.role === 'guardian' && e.kind ? view.monsterMemory[e.kind] : undefined;
+      if ((!mem || (mem.kills === 0 && mem.encounters <= (visibleOfKind.get(e.kind ?? '') ?? 0))) && !(baseMem && (baseMem.kills > 0 || baseMem.encounters > 0))) m.first_seen = true;
       if (mem?.dmgByYou?.melee || mem?.dmgByYou?.thrown) {
         m.dealt = {
           ...(mem.dmgByYou?.melee ? { melee: [...mem.dmgByYou.melee] as [number, number] } : {}),
@@ -753,7 +755,8 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       }
       if (e.intent) m.intent = intentOf(L, e, pos);
       // 推定残り HP（守護者は守護者の体力の記録から）
-      const est = hpLeftEstimate(mem, m.hp_state, e.damageSeen ?? 0, catalog.rules?.estimateMinSamples ?? 5);
+      // 守護者は出さない（格で体力の上乗せが違い、別の守護者の記録では読み違える。V3-3 後の AI 評価）
+      const est = e.role === 'guardian' ? undefined : hpLeftEstimate(mem, m.hp_state, e.damageSeen ?? 0, catalog.rules?.estimateMinSamples ?? 5);
       if (est) m.hp_left_est = est;
       monsters.push(m);
     } else if (e.cat === 'item') {
@@ -1009,7 +1012,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
     // 次の節目（V3-3 §3.2）: 戦利品の行の近くに常に出す
     if (xv.milestone) {
       expedition.milestone = milestoneObs(L, catalog, xv.milestone, view.milestonesCleared ?? []);
-      if (active) expedition.text += ` | ${expedition.milestone.text}`;
+      if (active) expedition.text += ` | ${expedition.milestone.cleared ? t(L, `節目: 地下${expedition.milestone.depth}階 踏破済み`, `milestone: depth ${expedition.milestone.depth} cleared`) : t(L, `次の節目: 地下${expedition.milestone.depth}階の大守護者「${expedition.milestone.name}」（未踏破）`, `next milestone: warden "${expedition.milestone.name}" on depth ${expedition.milestone.depth} (not cleared)`)}`;
     }
     if (xv.result) expedition.result = { ...xv.result, text: resultText(L, xv, catalog.rules) };
     if (xv.slot) expedition.slot = xv.slot;
@@ -1044,7 +1047,11 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
         const draft = here && !down ? view.floorHint?.draft ?? undefined : undefined;
         next = { depth: nx.depth, points: nx.points, at: 'stairs_down', path_len: down ? down.path_len : null, ...(draft ? { dir: draft } : {}) };
         const where = here ? (down ? t(L, `（経路 ${down.path_len}）`, ` (path ${down.path_len})`) : draft ? t(L, `（未発見・下への風は${DIR_JA[draft]}）`, ` (not found yet; the draft blows ${draft})`) : t(L, '（未発見）', ' (not found yet)')) : '';
-        nextText = t(L, ` / 地下${nx.depth}階の下り階段に着けば +${nx.points}${where}`, ` / reach the down stairs of depth ${nx.depth} for +${nx.points}${where}`);
+        // 節目の階で大守護者が生きていれば、下り階段は封じられている（V3-3 後の AI 評価）
+        const ms = catalog.rules?.milestone;
+        const sealedNx = !!ms && nx.depth >= ms.min && nx.depth % ms.every === 0 && !(view.milestonesCleared ?? []).includes(nx.depth);
+        const sealNote = sealedNx ? t(L, '（大守護者を倒すまで封じられている）', ' (sealed until the warden falls)') : '';
+        nextText = t(L, ` / 地下${nx.depth}階の下り階段に着けば +${nx.points}${where}${sealNote}`, ` / reach the down stairs of depth ${nx.depth} for +${nx.points}${where}${sealNote}`);
       }
       // 次の候補の下限は「目標として達成した最深の階」から（踏破しても深くならない。V3-2R3 §20.2）
       const reachedCamp = expedition.extract_outcome === 'complete' && xv.objective.targetDepth !== null ? Math.max(view.campDepth, xv.objective.targetDepth) : view.campDepth;
@@ -1169,7 +1176,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       hp: me.stats.hp, max_hp: me.stats.maxHp,
       statuses: me.statuses.map((s) => ({ id: s.id, name: nameOf(catalog.statuses[s.id]?.name, L, s.id), turns_left: s.turnsLeft })),
       pos, floor: f ? {
-        depth: f.depth, biome_name: biomeName, floor_type: nameOf(catalog.floorTypes[f.floorType]?.name, L, f.floorType), time: f.time,
+        depth: f.depth, biome_name: biomeName, floor_type: nameOf(catalog.floorTypes[f.floorType]?.name, L, f.floorType), floor_type_id: f.floorType, time: f.time,
         ...(view.floorHint?.draft ? { draft: view.floorHint.draft } : {}),
         ...(view.floorHint ? { explored: view.floorHint.explored } : {}),
         ...(view.floorHint ? {
@@ -1357,8 +1364,9 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
       // 身をかわす: 隣に起きている敵がいるときだけ、離れる向きを例に出す
       const near = adjFoes.find((m) => m.awareness !== 'asleep');
       if (near) {
-        const away = x.passable_dirs.filter((d) => { const v = DIR_VEC[d]; return cheb({ x: pos.x + v[0], y: pos.y + v[1] }, near.pos) > 1; }).slice(0, 2);
-        for (const d of away) out.push(`use_ability ${a.id} ${d} (${a.name}: ${desc})`);
+        // 離れる向きはすべて 1 行に（V3-3 後の AI 評価: 2 つだけ出していたので、ほかの向きは使えないと読めた）
+        const away = x.passable_dirs.filter((d) => { const v = DIR_VEC[d]; return cheb({ x: pos.x + v[0], y: pos.y + v[1] }, near.pos) > 1; });
+        if (away.length) out.push(`use_ability ${a.id} <${away.join('|')}> (${a.name}: ${desc})`);
       }
     } else if (def && a.target === 'none') {
       if (def.handler === 'cleave') { if (adjFoes.length) out.push(`use_ability ${a.id} (${t(L, `${a.name}: 隣の ${adjFoes.length} 体`, `${a.name}: ${adjFoes.length} adjacent`)})`); }
@@ -1380,8 +1388,11 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
     // 遺物・守護者の気配の方角の未探索を優先する（V3-4b §28.7）
     if (x.frontiers > 0 && view.sense) out.push(`explore toward:sense (${t(L, `${view.sense.what === 'relic' ? '遺物' : '守護者'}の気配の${DIR_JA[view.sense.dir]}を優先`, `prefer the ${view.sense.what} you sense (${view.sense.dir})`)})`);
   }
-  if (x.known_stairs.some((s) => s.type === 'down' && !(x.onStairs === 'down'))) out.push(stairsLine('down'));
-  if (x.known_stairs.some((s) => s.type === 'up' && !(x.onStairs === 'up'))) out.push(stairsLine('up'));
+  // 既知の経路で届かない階段は「不可」と書く（V3-3 後の AI 評価: 出ていた travel_to が unreachable で断られた）
+  const reachable = (type: 'down' | 'up') => x.known_stairs.some((s) => s.type === type && s.path_len !== null);
+  const stairsOrNote = (type: 'down' | 'up') => (reachable(type) ? stairsLine(type) : `travel_to stairs_${type} (${t(L, '不可: 既知の経路では届かない。explore で道を探す', 'unavailable: no known path; explore to find one')})`);
+  if (x.known_stairs.some((s) => s.type === 'down' && !(x.onStairs === 'down'))) out.push(stairsOrNote('down'));
+  if (x.known_stairs.some((s) => s.type === 'up' && !(x.onStairs === 'up'))) out.push(stairsOrNote('up'));
   // 節目の階の下り階段は、大守護者を倒すまで封じられている（V3-3 §3.2）
   const ms = catalog.rules?.milestone;
   const depthNow = view.floor?.depth ?? 0;
@@ -1456,7 +1467,7 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
     for (const e of view.entities) {
       if (e.cat !== 'feature' || e.pos.x !== nx || e.pos.y !== ny) continue;
       const fd = e.kind ? catalog.features[e.kind] : undefined;
-      if (fd?.interactable && e.state !== 'used') out.push(`interact${d ? ' ' + d : ''} (${kindName(catalog, L, e.kind)})`);
+      if (fd?.interactable && e.state !== 'used' && (!fd.afterInteract || e.state !== fd.afterInteract)) out.push(`interact${d ? ' ' + d : ''} (${kindName(catalog, L, e.kind)})`);
     }
   }
   // 一番近い階段でも、追われたままなら最悪の被害が今の HP 以上: 綱の候補を階段より前に並べる（V3-2R3b §23.1）。
@@ -1511,7 +1522,9 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
     lines.push(t(L, 'できること: ', 'Actions: ') + obs.valid_actions.join(' / '));
     return lines.join('\n');
   }
-  const floorText = s.floor ? t(L, `地下${s.floor.depth}階 ${s.floor.biome_name}`, `Depth ${s.floor.depth} ${s.floor.biome_name}`) : '-';
+  // 通常の階でなければ階の種類も（聖域・大守護者の間など。V3-3 後の AI 評価: 敵のいない階が聖域と分からなかった）
+  const ftText = s.floor?.floor_type_id && s.floor.floor_type_id !== 'core:standard' ? t(L, `（${s.floor.floor_type}）`, ` (${s.floor.floor_type})`) : '';
+  const floorText = s.floor ? t(L, `地下${s.floor.depth}階 ${s.floor.biome_name}${ftText}`, `Depth ${s.floor.depth} ${s.floor.biome_name}${ftText}`) : '-';
   const posText = s.pos ? t(L, `位置(${s.pos.x},${s.pos.y})`, `pos(${s.pos.x},${s.pos.y})`) : '';
   lines.push(`[seq ${obs.seq} | ${floorText} | HP ${s.hp}/${s.max_hp} | Lv${s.level} | ${posText ? posText + ' | ' : ''}${statusText[obs.status][L === 'en' ? 1 : 0]}]`);
   // 遠征は 1 行（目的・進捗・extract の可否 | 戦利品 | 気配）
@@ -1672,7 +1685,7 @@ export function describeTarget(view: PlayerView, catalog: Catalog, target: Pos |
         ? t(L, '・守護者（通常の個体より大幅に頑丈）', ', guardian (far sturdier than a normal one)')
         : (e.affixes?.length || e.tier) ? t(L, '・接辞や深層強化があるので記録より頑丈なことがある', ', affixes/tier may make it sturdier than your records') : '';
       const ds = e.damageSeen ? t(L, `・この個体への与ダメ累計 ${e.damageSeen}`, `, damage you saw it take ${e.damageSeen}`) : '';
-      const est = hpLeftEstimate(mem, e.hp ?? 'healthy', e.damageSeen ?? 0, catalog.rules?.estimateMinSamples ?? HP_RECORD_SURE);
+      const est = e.role === 'guardian' ? undefined : hpLeftEstimate(mem, e.hp ?? 'healthy', e.damageSeen ?? 0, catalog.rules?.estimateMinSamples ?? HP_RECORD_SURE);
       const estText = est ? t(L, `・推定残りHP ${hpEstimateText(L, est)}`, `, estimated HP left ${hpEstimateText(L, est)}`) : '';
       const shotText = e.shot === false ? t(L, '・射線: 通らない', ', shot: blocked') : '';
       // 守護者の呼び名・型の説明・分かった弱点（V3-3）。弱点は試して分かるまで「不明」

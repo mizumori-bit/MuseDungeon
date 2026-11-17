@@ -114,13 +114,15 @@ export function guardianDisplayName(L: Locale, g: { name: Names; title?: Names }
   return `${g.title?.ja ?? ''}${g.name.ja}`;
 }
 
-export function guardianForecastText(L: Locale, g: { rank: number; traits: string[]; name?: Names; title?: Names } | undefined): string {
+export function guardianForecastText(L: Locale, g: { rank: number; traits: string[]; name?: Names; title?: Names; types?: string[] } | undefined): string {
   if (!g) return '';
   // 名前と称号（型）は公開。種族は会うまで出さない（V3-3）
   const who = g.name ? t(L, `「${guardianDisplayName(L, { name: g.name, title: g.title })}」`, ` "${guardianDisplayName(L, { name: g.name, title: g.title })}"`) : '';
   // 速さは必ず書く（速い・遅いが無ければ「普通の速さ」）
   const speed = g.traits.includes('fast') || g.traits.includes('slow') ? [] : [t(L, '普通の速さ', 'normal speed')];
-  const tr = [...g.traits.map((x) => (L === 'en' ? x : GUARD_TRAIT_JA[x] ?? x)), ...speed];
+  // 型の無い守護者（格 1）は「型なし」と書く（見落としと区別できるように）
+  const noType = g.name && g.types && !g.types.length ? [t(L, '型なし', 'no type')] : [];
+  const tr = [...noType, ...g.traits.map((x) => (L === 'en' ? x : GUARD_TRAIT_JA[x] ?? x)), ...speed];
   return t(L, `守護者${who}: 格 ${g.rank}・${tr.join('・')}`, `guardian${who}: rank ${g.rank}, ${tr.join(', ')}`);
 }
 
@@ -146,7 +148,8 @@ export function offerText(L: Locale, o: ExpeditionOffer, ctx?: { rules: Pick<Cat
     const td = g.traitDanger ? t(L, `／条件 ${g.traitDanger > 0 ? '+' : ''}${g.traitDanger}`, ` / traits ${g.traitDanger > 0 ? '+' : ''}${g.traitDanger}`) : '';
     danger = t(L, ` / 推奨 Lv${g.recommendedLevel}・あなた Lv${ctx.level}（差 ${gap}）${td}`, ` / recommended Lv${g.recommendedLevel}, you Lv${ctx.level} (gap ${gap})${td}`);
   }
-  const gf = (o.guardian ? ` / ${guardianForecastText(L, o.guardian)}` : '') + (o.relic ? ` / ${relicText(L, o.relic)}` : '');
+  const gf = (o.guardian ? ` / ${guardianForecastText(L, o.guardian)}` : '') + (o.relic ? ` / ${relicText(L, o.relic)}` : '')
+    + (o.passesWarden ? t(L, ` / 途中の地下${o.passesWarden.depth}階で大守護者「${guardianDisplayName(L, o.passesWarden)}」を倒す必要がある（倒すまで下り階段が封じられている）`, ` / you must slay the warden "${guardianDisplayName(L, o.passesWarden)}" on depth ${o.passesWarden.depth} on the way (its stairs down are sealed until then)`) : '');
   return t(L, `${head} — 基礎 +${o.points} / 倍率 ${multText(mult)}${traits ? `（${traits}）` : ''}${danger}${gf}`,
     `${head} — base +${o.points} / multiplier ${multText(mult)}${traits ? ` (${traits})` : ''}${danger}${gf}`);
 }

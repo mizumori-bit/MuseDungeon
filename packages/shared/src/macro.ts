@@ -43,7 +43,11 @@ export type MacroStop =
   // fight（V3-4b §28.4）: 標的が逃げて見えなくなった / 待つ間に標的以外の射撃で被弾した / until: 'clear' で届く追跡中の敵がいなくなった
   | 'target_fled' | 'shot_while_waiting' | 'cleared'
   // 見えている敵が新しく予備動作を見せた（突進の構え・手下を呼ぶ構え・怒りの予兆。V3-3 §3.1）
-  | 'intent';
+  | 'intent'
+  // fight: 待つ間に標的に殴られたが、標的は隣にいない（当てて離れる速い相手。V3-3 後の AI 評価）
+  | 'hit_and_run'
+  // 移動マクロが同じ 2 マスを往復している（見えるものが変わるたびに最短の道が入れ替わった。V3-3 後の bot の計測）
+  | 'no_progress';
 
 /** fight に載せられる能動技の振る舞い（V3-4a §25.3）。立て直し・身をかわすは、いつ使うかが判断そのものなので載せない */
 export const FIGHT_ABILITY_HANDLERS: readonly string[] = ['strike', 'cleave', 'aimed_throw'];
@@ -79,6 +83,8 @@ export function reachMidOpen(view: PlayerView, catalog: Catalog, from: Pos, to: 
 
 /** fight が相手を待つ最大の手番（近づいてくるまで・射程に入るまで） */
 export const FIGHT_WAIT_MAX = 10;
+/** 迎え撃つ fight が、標的が近づかないまま待つ回数の上限（V3-3 後の AI 評価: 寄ってこない相手を 8 手番待って加速が切れた） */
+export const FIGHT_NO_CLOSER_MAX = 3;
 /** 当てて逃げる相手を待つ手番（隣から離れても 2 マス以内で追跡中なら） */
 const FIGHT_APART_MAX = 2;
 /** 射線が続けて通らなければ止まる手番 */
@@ -108,6 +114,11 @@ export interface MacroState {
   waits?: number;
   apart?: number;
   blocked?: number;
+  /** fight の迎え撃ち: 直前の手番の標的との距離と、近づかなかった待ちの回数（V3-3 後の AI 評価） */
+  lastDist?: number;
+  noCloser?: number;
+  /** 移動マクロ: 直近の位置（往復の検出） */
+  trail?: number[];
   floorKey: string;
   lastHp: number;
   knownHostiles: string[];
@@ -303,6 +314,8 @@ function retarget(state: MacroState, next: EntityView): void {
   state.blocked = 0;
   state.lostTurns = 0;
   state.targetFleeing = !!next.fleeing;
+  delete state.lastDist;
+  state.noCloser = 0;
 }
 
 /** 動かない種族（公開のタグ） */
@@ -445,6 +458,11 @@ export function macroNext(state: MacroState, view: PlayerView, catalog: Catalog,
       if (status) return { stop: 'status_changed' };
       // 待つ手番に、標的以外の射撃で被弾した: 1 回で止まる（撃たれ続けない。V3-4b §28.4）
       if (state.waited && ev('damaged', (e) => e.target === me.id && (e.via === 'ranged' || e.via === 'thrown') && e.source !== state.fightTarget)) return { stop: 'shot_while_waiting' };
+      // 待つ手番に標的に殴られたのに、標的が隣にいない（当てて離れる速い相手）: 待ち続けずに止まる（V3-3 後の AI 評価: 10 手番待つ間に 9 回殴られた）
+      if (state.waited && ev('attack', (e) => e.attacker === state.fightTarget && e.target === me.id)) {
+        const t0 = view.entities.find((h) => h.id === state.fightTarget);
+        if (!t0 || cheb(t0.pos, pos) > 1) return { stop: 'hit_and_run' };
+      }
       // 被弾の記録が無い種族から初めて被弾した: 数字を見てから続けるかを決められるよう一度止まる（V3-2R3 §20.4）
       const firstHit = events.find((e) => {
         const x = e as unknown as Record<string, unknown>;
@@ -608,14 +626,26 @@ export function macroNext(state: MacroState, view: PlayerView, catalog: Catalog,
       if (hunting && !tg.fleeing && d <= 2 && (state.apart ?? 0) < FIGHT_APART_MAX) { state.apart = (state.apart ?? 0) + 1; return wait(); }
       return { stop: 'target_moved' };
     }
-    // 迎え撃つ: 追跡中の相手が隣に来るまで待つ（最大 FIGHT_WAIT_MAX 手番）
+    // 迎え撃つ: 追跡中の相手が隣に来るまで待つ（最大 FIGHT_WAIT_MAX 手番。3 回続けて近づかなければ止まる）
     if (!hunting) return { stop: 'target_not_hunting' };
     if (tg.fleeing) return { stop: 'target_moved' };
     if ((state.waits ?? 0) >= FIGHT_WAIT_MAX || isStationary(catalog, tg)) return { stop: 'target_not_approaching' };
+    state.noCloser = state.lastDist !== undefined && d >= state.lastDist ? (state.noCloser ?? 0) + 1 : 0;
+    state.lastDist = d;
+    if (state.noCloser >= FIGHT_NO_CLOSER_MAX) return { stop: 'target_not_approaching' };
     state.waits = (state.waits ?? 0) + 1;
     return wait();
   }
 
+  // 同じ 2 マスを往復している（A→B→A→B→A）: 止まる（V3-3 後の bot の計測: travel が 200 手往復し、1 回で約 1 万件のイベントを出した）
+  if (kind === 'travel' || kind === 'explore' || kind === 'collect') {
+    const tr = state.trail ?? [];
+    tr.push(pos.y * 100000 + pos.x);
+    if (tr.length > 6) tr.shift();
+    state.trail = tr;
+    const n = tr.length;
+    if (n >= 5 && tr[n - 1] !== tr[n - 2] && tr[n - 1] === tr[n - 3] && tr[n - 3] === tr[n - 5] && tr[n - 2] === tr[n - 4]) return { stop: 'no_progress' };
+  }
   // 隣の敵: careful は起きている敵（逃走中を除く）、steady は追跡中の敵がいれば動かない。flee は動く
   if (kind !== 'rest') {
     if (mode === 'careful' && hostiles.some((h) => cheb(h.pos, pos) <= 1 && h.awareness !== 'asleep' && !h.fleeing)) return { stop: 'hostile_adjacent' };

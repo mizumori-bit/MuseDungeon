@@ -73,7 +73,7 @@ export type GameEvent =
       /** 攻撃元が見えていない被害者にだけ残す、攻撃が来た方向 */
       fromDir?: Dir | null;
     }>
-  | E<'healed', { target: EntityId; targetKind: string; amount: number; hpAfter: number; via: string }>
+  | E<'healed', { target: EntityId; targetKind: string; amount: number; hpAfter: number; via: string; resetSeen?: boolean }>
   | E<'max_hp_changed', { target: EntityId; targetKind: string; maxHpAfter: number; hpAfter: number }>
   | E<'died', { id: EntityId; kind: string; killer: EntityId | null; killerKind: string | null; via: DamageVia; pos: Pos; maxHp?: number | null; bounty?: number; affixes?: string[] }>
   | E<'status_applied', { target: EntityId; targetKind: string; status: StatusInst; statusesAfter: StatusInst[]; targetAffixes?: string[] | null }>

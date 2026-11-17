@@ -305,6 +305,8 @@ export interface ExpeditionOffer {
   guardianWeakness?: string | null;
   /** 遺物（retrieve_relic。名前と加護は公開。V3-3 §3.3） */
   relic?: RelicInfo;
+  /** 目標へ行く途中で倒す必要がある節目の大守護者（V3-3 後の AI 評価） */
+  passesWarden?: MilestoneInfo;
 }
 
 /** 遠征の戦利品のうち、参加者で共有する部分（目的・深追い・宝は別に計算する） */
