@@ -28,7 +28,7 @@ export function narrateWorld(events: readonly GameEvent[], world: World, catalog
   const out: LogLine[] = [];
   if (follow && world.players[follow]) {
     const view = projectPlayerView(world, follow);
-    const ctx = { locale, catalog, selfId: view.self.id, playerNames: names, selfPos: view.self.pos };
+    const ctx = { locale, catalog, selfId: view.self.id, selfPlayerId: view.playerId, playerNames: names, selfPos: view.self.pos };
     for (const ev of filterEventsForPlayer(events, follow, view)) {
       const text = narrate(ev, ctx);
       if (text) out.push({ seq: ev.seq, text, kind: ev.type === 'chat' ? 'chat' : undefined });

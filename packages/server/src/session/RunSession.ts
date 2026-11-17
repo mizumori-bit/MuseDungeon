@@ -356,7 +356,7 @@ export class RunSession {
   narrateCtx(view: PlayerView) {
     const playerNames: Record<string, string> = {};
     for (const m of view.party) { playerNames[m.entityId] = m.name; playerNames[m.playerId] = m.name; }
-    return { locale: view.locale, catalog: this.deps.catalog, selfId: view.self.id, playerNames, selfPos: view.self.pos };
+    return { locale: view.locale, catalog: this.deps.catalog, selfId: view.self.id, selfPlayerId: view.playerId, playerNames, selfPos: view.self.pos };
   }
 
   // ---------- 直列化 ----------

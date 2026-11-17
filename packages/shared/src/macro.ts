@@ -416,7 +416,8 @@ export function macroStart(view: PlayerView, cmd: Command, catalog: Catalog): Ma
     floorKey: view.floor?.key ?? '',
     lastHp: view.self.stats.hp,
     knownHostiles: hostileIds(view),
-    knownKinds: [...new Set([...Object.keys(view.monsterMemory), ...view.entities.filter((e) => e.cat === 'monster' && e.kind).map((e) => e.kind!)])],
+    // 守護者として見た種族も見た種族（思い出のキーは guardian|種族。V3-7 の評価: 大守護者が見えるたびに steady が止まった）
+    knownKinds: [...new Set([...Object.values(view.monsterMemory).map((m) => m.kind), ...view.entities.filter((e) => e.cat === 'monster' && e.kind).map((e) => e.kind!)])],
     knownItems: itemIds(view),
     knownStairs: stairsCount(view, catalog),
     steps: 0,

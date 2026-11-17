@@ -83,7 +83,7 @@ describe('V3-6 expedition report (§6.1)', () => {
     expect(lines.length).toBeLessThanOrEqual(12);
     expect(lines[0]).toBe('振り返り（遠征 1・帰還・達成）:');
     expect(lines[1]).toBe('確定 +1200（目的1000・宝40・発見50・撃破20、倍率 ×1.1）');
-    expect(lines).toContain('戦闘: 与ダメージ 13・被ダメージ 24・命中 1/2・撃破 2（近接 2・投擲 0）・能動技 0 回');
+    expect(lines.some((l) => l.startsWith('戦闘: 与ダメージ 13・被ダメージ 24・命中 1/2・撃破 2（近接 2・投擲 0）・能動技 0 回・最も下がった HP '))).toBe(true);
   });
 
   it('small dips are not moments; an unnamed guardian is written by its species; a warden takes the milestone name', () => {

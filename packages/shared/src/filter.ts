@@ -10,7 +10,7 @@ import type { PlayerView } from './view';
 const PLAYER_VISIBLE: ReadonlySet<EventType> = new Set<EventType>([
   'player_joined', 'player_state', 'run_ended',
   'tile_changed', 'entity_moved', 'entity_changed_floor',
-  'attack', 'damaged', 'healed', 'max_hp_changed', 'died',
+  'attack', 'damaged', 'healed', 'max_hp_changed', 'stats_changed', 'died',
   'status_applied', 'status_expired',
   'xp_gained', 'level_up', 'perk_offered', 'perk_chosen', 'perk_triggered', 'monster_woke', 'guardian_intel', 'guardian_acted', 'boon_granted', 'boon_triggered', 'boon_offered', 'warden_slain', 'story', 'guardian_rested', 'guardian_departed', 'monster_acted', 'room_found', 'inscription_read', 'gamble_rolled', 'item_altered', 'clue_noted', 'clue_learned', 'archive_recalled', 'ability_used', 'curse_revealed', 'item_inspected', 'curse_lifted',
   'item_picked_up', 'item_dropped', 'item_equipped', 'item_unequipped', 'item_used', 'item_thrown',
@@ -24,6 +24,8 @@ const PLAYER_VISIBLE: ReadonlySet<EventType> = new Set<EventType>([
 const SELF_ONLY: Partial<Record<EventType, (ev: any, playerId: PlayerId, selfId: string) => boolean>> = {
   xp_gained: (ev, _p, self) => ev.target === self,
   level_up: (ev, _p, self) => ev.target === self,
+  // 自分の能力値（特技・加護・装備で最大 HP が変わる）。遠征レポートの最大 HP に使う（V3-7 の評価）
+  stats_changed: (ev, _p, self) => ev.target === self,
   perk_offered: (ev, _p, self) => ev.target === self,
   perk_chosen: (ev, _p, self) => ev.target === self,
   perk_triggered: (ev, _p, self) => ev.actor === self,

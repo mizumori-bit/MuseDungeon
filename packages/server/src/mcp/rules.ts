@@ -127,7 +127,7 @@ function ja(r: CatalogRules): Record<Topic, string> {
   - 標準: +${sl.standard.aheadMin}〜${sl.standard.aheadMax} 階、条件 ${sl.standard.traitsMin}〜${sl.standard.traitsMax} 個、枠の基礎点 ${sl.standard.base}
   - 野心: +${sl.ambitious.aheadMin}〜${sl.ambitious.aheadMax} 階、条件 ${sl.ambitious.traitsMin}〜${sl.ambitious.traitsMax} 個、枠の基礎点 ${sl.ambitious.base}
 - 候補の基礎点 = 枠の基礎点 × 種類の係数（到達 ${x.typePct.reach_depth ?? 100}%・守護者 ${x.typePct.slay_guardian ?? 100}%・遺物 ${x.typePct.retrieve_relic ?? 100}%・守護者付きの遺物 ${x.typePct.retrieve_relic_guarded ?? 100}%）× 深さの係数（${x.depthPct.base} + ${x.depthPct.perDepth}×目標深度 %）。どの組み合わせでも 堅実 < 標準 < 野心。
-- 条件は、その遠征で目標階までの全階に効く公開の修飾。倍率は帰還時の戦利品に掛かる（複数なら掛け合わせ）:
+- 条件は、その遠征で目標階までのまだ生成していない階（初めて降りる階）に効く公開の修飾（前の遠征で行った階は、敵・宝・泉もそのまま残る）。倍率は帰還時の戦利品に掛かる（複数なら掛け合わせ）:
 ${traitsLines(r, true)}
 - 候補には推奨レベルと自分との差（level_gap = 推奨 − 自分。正なら推奨より低い）、条件の危険度の合計（trait_danger）が出る。推奨レベルは深度ごとの公開の表（地下1〜${r.recommendedLevel.byDepth.length}階: ${r.recommendedLevel.byDepth.join(', ')}。より深い階は直近 4 階の傾きで伸ばす）。隠し情報は使わない。
 - new_run で objective を省くとキャンプから始まり、最初の遠征も 3 候補から選ぶ。
@@ -299,7 +299,7 @@ function en(r: CatalogRules): Record<Topic, string> {
   - standard: +${sl.standard.aheadMin}-${sl.standard.aheadMax}, ${sl.standard.traitsMin}-${sl.standard.traitsMax} traits, slot base ${sl.standard.base}
   - ambitious: +${sl.ambitious.aheadMin}-${sl.ambitious.aheadMax}, ${sl.ambitious.traitsMin}-${sl.ambitious.traitsMax} traits, slot base ${sl.ambitious.base}
 - Offer points = slot base x type factor (reach ${x.typePct.reach_depth ?? 100}%, guardian ${x.typePct.slay_guardian ?? 100}%, relic ${x.typePct.retrieve_relic ?? 100}%, guarded relic ${x.typePct.retrieve_relic_guarded ?? 100}%) x depth factor (${x.depthPct.base} + ${x.depthPct.perDepth}*target depth %). Always safe < standard < ambitious.
-- Traits are public modifiers on every floor down to the target for that expedition. Their multipliers apply to the haul on completion (multiplied together):
+- Traits are public modifiers on the floors down to the target that have not been generated yet (floors you visited on earlier expeditions keep their monsters, loot and fountains). Their multipliers apply to the haul on completion (multiplied together):
 ${traitsLines(r, false)}
 - Offers show the recommended level, your gap to it (level_gap = recommended - yours) and the sum of trait dangers (trait_danger). Recommended levels come from a public table (depth 1-${r.recommendedLevel.byDepth.length}: ${r.recommendedLevel.byDepth.join(', ')}; deeper depths extend the last 4-depth slope). No hidden information is used.
 - new_run without objective starts at camp, so you choose the first expedition from 3 offers too.

@@ -433,13 +433,21 @@ export class SessionPlayerPort implements PlayerPort {
       } else {
         const tm = m?.timeElapsed !== null && m?.timeElapsed !== undefined ? t(L, `（${m.distance} 歩、時間 ${m.timeElapsed}）`, ` (${m.distance} moves, time ${m.timeElapsed})`) : '';
         outcome = t(L, `${cmd.type}: ${r.steps} 手進んだ${tm}。${stop ? `停止: ${stop[0]}。` : ''}`, `${cmd.type}: ${r.steps} steps${tm}.${stop ? ` Stopped: ${stop[1]}.` : ''}`);
+        // 止まったマスに品がある: 拾う前に止まったことを言う（V3-7 の評価: 薬の上で止まり、拾っていないと気づかなかった）
+        if (r.interruptedBy && (cmd.type === 'travel' || cmd.type === 'collect' || cmd.type === 'explore')) {
+          const me = view.self.pos;
+          const here = me ? view.entities.filter((e) => e.cat === 'item' && e.pos.x === me.x && e.pos.y === me.y) : [];
+          if (here.length) outcome += ' ' + t(L, `足元の${here.map((e) => kindName(this.catalog, L, e.kind, e.appearanceId)).join('・')}はまだ拾っていない（pickup）。`, `You have not picked up the ${here.map((e) => kindName(this.catalog, L, e.kind, e.appearanceId)).join(', ')} under you yet (pickup).`);
+        }
         // hp_risk: 何にすれば、あと 1 回の最悪の被害まで続けられるか（V3-3a §35.6）
         if (r.interruptedBy === 'hp_risk' && cmd.type === 'fight') {
           const after = this.view();
           const obsNow = buildObservation(after, this.catalog, { detail: 'brief', map: false });
           const inc = obsNow.visible.monsters.filter((x) => x.awareness === 'hunting' && !x.fleeing && (x.dist <= 1 || x.traits.includes('ranged'))).reduce((a, x) => a + (x.worst_turn ?? 0), 0);
-          const nf = Math.max(0, after.self.stats.hp - inc);
-          if (inc > 0) outcome += t(L, ` hp_floor を ${nf} にすれば、あと 1 回の最悪の被害（${inc}）まで続けられる。`, ` With hp_floor ${nf} you can take one more worst turn (${inc}).`);
+          const nf = after.self.stats.hp - inc;
+          // 最悪の 1 手を受けても 1 以上残るときだけ、続けられる値を出す（V3-7 の評価: HP 8 で「0 にすれば 22 まで」と出た）
+          if (inc > 0 && nf >= 1) outcome += t(L, ` hp_floor を ${nf} にすれば、あと 1 回の最悪の被害（${inc}）まで続けられる。`, ` With hp_floor ${nf} you can take one more worst turn (${inc}).`);
+          else if (inc > 0) outcome += t(L, ` いまの HP ${after.self.stats.hp} では、次の最悪の被害（${inc}）で倒れうる。`, ` At HP ${after.self.stats.hp}, the next worst turn (${inc}) could kill you.`);
           // 囲まれている: この hp_floor では毎手番止まる。何にすれば何手番続くか（V3-3c §44.6）
           const adj = obsNow.visible.monsters.filter((x) => x.awareness === 'hunting' && !x.fleeing && x.dist <= 1).length;
           const hpNow = after.self.stats.hp;
@@ -478,7 +486,10 @@ export class SessionPlayerPort implements PlayerPort {
         && !(cmd.type === 'collect' && x.type === 'item_picked_up')).slice(-2).map((x) => x.text);
       if (notable.length) outcome += ' ' + notable.join(' ');
     } else {
-      const texts = mine.filter((x) => !(x.type === 'damaged' && (x.event as Record<string, unknown>).target === view.self.id)).map((x) => x.text).slice(0, 3);
+      const shown = mine.filter((x) => !(x.type === 'damaged' && (x.event as Record<string, unknown>).target === view.self.id));
+      // 最初の 3 件に、倒した文は必ず足す（V3-7 の評価: 薙ぐで倒した 2 体目の「倒した」が無かった）
+      const first = shown.slice(0, 3);
+      const texts = [...first, ...shown.slice(3).filter((x) => x.type === 'died')].map((x) => x.text);
       outcome = texts.length ? texts.join(' ') : defaultOutcome(cmd, L);
     }
     // 行動から次の自分の手番までに受けた被害の合計（必ず書く）
@@ -521,6 +532,11 @@ export class SessionPlayerPort implements PlayerPort {
     if (lifelined) {
       const pay = view.expedition?.result?.payout?.players.find((x) => x.player === this.playerId);
       outcome = t(L, `帰還の綱でキャンプへ戻った${pay ? `。確定 +${pay.banked}` : ''}。`, `The lifeline pulled you back to camp${pay ? `. Banked +${pay.banked}` : ''}.`) + ' ' + outcome;
+    }
+    // 引退: ランの確定点の合計（V3-7 の評価: 引退の応答にランのスコアが無かった）
+    if (cmd.type === 'retire') {
+      const rec = view.record;
+      outcome += ' ' + t(L, `ランの確定点の合計 ${rec.banked}・達成した遠征 ${rec.expeditions}${rec.lost ? `・失った戦利品 ${rec.lost}` : ''}。`, `Run total banked ${rec.banked}, expeditions completed ${rec.expeditions}${rec.lost ? `, haul lost ${rec.lost}` : ''}.`);
     }
     const harm = harmSummary(r.events, view.self.id);
     // 攻撃によるダメージと、毒・罠などのダメージを分けて書く

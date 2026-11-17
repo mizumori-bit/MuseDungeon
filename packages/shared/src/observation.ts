@@ -442,6 +442,20 @@ export function itemStatsText(L: Locale, s: ItemStats | undefined, catalog?: Cat
   return parts.join(' / ');
 }
 
+/**
+ * 未鑑定の手がかりの文。同じ手がかりの 2 種のうち 1 種を鑑定済みなら、残りの 1 種に絞る（V3-7 の評価: 片方が分かっても 2 択のままだった）。
+ * 手がかりの組は公開カタログ、鑑定済みは本人の知識だけから
+ */
+export function clueText(L: Locale, catalog: Catalog, view: Pick<PlayerView, 'identified'>, clue: Names): string {
+  const base = nameOf(clue, L, '');
+  const cands = Object.entries(catalog.items).filter(([, it]) => it.clue?.ja === clue.ja).map(([id]) => id);
+  const known = cands.filter((id) => view.identified.includes(id));
+  const left = cands.filter((id) => !view.identified.includes(id));
+  if (cands.length < 2 || !known.length || left.length !== 1) return base;
+  const nm = (id: string) => nameOf(catalog.items[id].name, L, id);
+  return t(L, `${base}。${known.map(nm).join('・')}は判明済みなので、${nm(left[0])}のはず`, `${base}; ${known.map(nm).join(', ')} is known, so this should be ${nm(left[0])}`);
+}
+
 /** 能力タグの表示名 */
 export function abilityName(locale: Locale, a: string): string {
   const ja: Record<string, string> = { flees: '手負いで逃げる', ranged: '遠隔攻撃', fast: '速い', slow: '遅い', poison: '毒', stationary: '動かない', pack: '群れる', armored: '重装', rusting: '錆びさせる', pierce: '装甲を抜く', evasive: '回避が高い', drain: '血を吸う', heavy_swing: '大振り' };
@@ -587,7 +601,9 @@ export function milestoneObs(L: Locale, catalog: Catalog, m: { depth: number; na
   const name = guardianDisplayName(L, m);
   const types = m.types.map((id) => ({ id, name: nameOf(catalog.guardianTypes[id]?.name, L, id) }));
   const done = cleared.includes(m.depth);
-  const opts = catalog.rules?.milestone?.boonOptions ?? 3;
+  // 候補の数は、まだ持っていない加護の数まで（V3-7 の評価: 「3 つの候補」と出て 2 つだった）
+  const unowned = Object.keys(catalog.boons ?? {}).filter((id) => !(view?.self.boons ?? []).includes(id)).length;
+  const opts = Math.min(catalog.rules?.milestone?.boonOptions ?? 3, Math.max(1, unowned || (catalog.rules?.milestone?.boonOptions ?? 3)));
   // 記録庫が返した記憶（V3-3a §35.7）
   const mem = [
     intel?.weakness ? t(L, `弱点 ${nameOf(catalog.guardianWeaknesses[intel.weakness]?.name, L, intel.weakness)}${intel.weakness === 'core:weak_sleep' ? '（キャンプの後は眠りに戻る）' : ''}`, `weakness: ${nameOf(catalog.guardianWeaknesses[intel.weakness]?.name, L, intel.weakness)}${intel.weakness === 'core:weak_sleep' ? ' (back asleep after camp)' : ''}`) : '',
@@ -1026,7 +1042,9 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
   if (huntingReach.length && !onStairs && view.status !== 'dead') {
     const st = known_stairs.filter((s) => s.path_len !== null).sort((a, b) => a.path_len! - b.path_len! || (a.type === 'up' ? -1 : 1))[0];
     if (st) {
-      const faster = huntingReach.filter((m) => m.speed === 'fast').length;
+      // いまの自分の速さ（加速を含む）と比べる（V3-7 の評価: 加速中なのに「あなたより速い」と出た）
+      const eff = selfSpeed(view, catalog);
+      const faster = huntingReach.filter((m) => (m.speed_ratio ?? 1) * view.self.speed > eff).length;
       alerts.push({
         code: 'escape',
         text: t(L, `${st.type === 'up' ? '上り' : '下り'}階段まで ${st.path_len} 歩。${faster ? `追ってくる敵のうち ${faster} 体はあなたより速い` : '追ってくる敵にあなたより速いものはいない'}（階段の上なら extract できる・階を移れば敵は追ってこない）${st.occupied_by ? `。ただし階段の上に ${(hostiles.find((m) => m.id === st.occupied_by)?.name ?? st.occupied_by)} がいて、ふさがれている` : ''}`,
@@ -1053,7 +1071,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       slot: it.slot, name: itemDisplayName(catalog, L, it.kind, it.appearanceId, it.affixes), qty: it.qty,
       category: itemCategory(catalog, it.kind, it.appearanceId), identified: it.kind !== null, equipped: it.equipped !== null,
       ...(it.kind ? { kind: shortId(it.kind) } : {}),
-      ...(!it.kind && it.appearanceId && view.clues?.[it.appearanceId] ? { clue: nameOf(view.clues[it.appearanceId], L, '') } : {}),
+      ...(!it.kind && it.appearanceId && view.clues?.[it.appearanceId] ? { clue: clueText(L, catalog, view, view.clues[it.appearanceId]) } : {}),
       ...(it.value !== undefined ? { value: it.value } : {}),
       ...(st ? { stats: st } : {}),
       ...(curse ? { curse } : {}),
@@ -1911,6 +1929,17 @@ export function describeTarget(view: PlayerView, catalog: Catalog, target: Pos |
       list.push({ id: e.id, name, state: e.state });
     }
   }
+  // 見えていないマス: 覚えている地物・アイテム（V3-7 の評価: 離れた賭けの祭壇を look すると「床（記憶）」だけだった）
+  if (!visible) {
+    for (const r of view.memory.remembered.filter((x) => x.pos.x === p!.x && x.pos.y === p!.y)) {
+      const name = kindName(catalog, L, r.kind, r.appearanceId);
+      const fd = r.cat === 'feature' && r.kind ? catalog.features[r.kind] : undefined;
+      const fdesc = fd?.desc ? `: ${nameOf(fd.desc, L, '')}` : '';
+      const table = fd?.gamble ? t(L, `。表: ${fd.gamble.map((g) => `${nameOf(g.name, L, '')} ${g.pct}%`).join('・')}`, `. Table: ${fd.gamble.map((g) => `${nameOf(g.name, L, '')} ${g.pct}%`).join(', ')}`) : '';
+      parts.push(name + (r.state && r.state !== 'idle' ? ` [${r.state}]` : '') + (r.qty > 1 ? ` x${r.qty}` : '') + t(L, '（記憶）', ' (remembered)') + fdesc + table);
+      list.push({ id: r.id, name, state: r.state, remembered: true });
+    }
+  }
   data.entities = list;
   return { text: parts.join(' / '), data };
 }
@@ -1942,7 +1971,7 @@ export function describeInventory(view: PlayerView, catalog: Catalog): { text: s
         if (!ci) {
           // 未鑑定の手がかり（V3-5 §5.4）
           const clue = it.appearanceId ? view.clues?.[it.appearanceId] : undefined;
-          return clue ? t(L, `未鑑定。手がかり: ${nameOf(clue, L, '')}`, `Unidentified. Clue: ${nameOf(clue, L, '')}`) : t(L, '未鑑定。使うか鑑定するまで正体は分からない（拾ってしばらく持つと手がかりに気づく）。', 'Unidentified. Use or identify it to learn what it is (carry it a while and you notice a clue).');
+          return clue ? t(L, `未鑑定。手がかり: ${clueText(L, catalog, view, clue)}`, `Unidentified. Clue: ${clueText(L, catalog, view, clue)}`) : t(L, '未鑑定。使うか鑑定するまで正体は分からない（拾ってしばらく持つと手がかりに気づく）。', 'Unidentified. Use or identify it to learn what it is (carry it a while and you notice a clue).');
         }
         return [stText, stText ? (ci.note ? nameOf(ci.note, L, '') : '') : nameOf(ci.desc, L, '')].filter(Boolean).join(' — ');
       })(),

@@ -11,6 +11,8 @@ export interface NarrateCtx {
   locale: Locale;
   catalog: Catalog;
   selfId: string | null;
+  /** 自分のプレイヤー ID（出来事の player はプレイヤー ID。entityId の selfId と比べない） */
+  selfPlayerId?: string | null;
   /** entityId → プレイヤー名 */
   playerNames: Record<string, string>;
   selfPos?: Pos | null;
@@ -79,6 +81,8 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
       if (amt <= 0 && ev.amount <= 0) return null;
       if (ev.via === 'poison') return ja ? `${tg}は毒で ${amt} ダメージを受けた。` : `${cap(tg)} take${ev.target === self ? '' : 's'} ${amt} poison damage.`;
       if (ev.via === 'trap') return ja ? `${tg}は罠で ${amt} ダメージを受けた。` : `${cap(tg)} take${ev.target === self ? '' : 's'} ${amt} damage from a trap.`;
+      // 誰のものでもない効果（崩れた天井の落石など。原因は直前の文に出る）
+      if (ev.via === 'effect' && !src) return ja ? `${tg}は ${amt} ダメージを受けた。` : `${cap(tg)} take${ev.target === self ? '' : 's'} ${amt} damage.`;
       // とどめ: 与えるはずだった値（会心の値）を出し、残り HP で切られたことを添える（Muse の実プレイ、V3-4b §28.11）
       if (ev.source === self && ev.amount > amt) return ja ? `あなたは${tg}に ${ev.amount} ダメージを与えた（とどめ。残りは ${amt} だった）。` : `You hit ${tg} for ${ev.amount} (the finishing blow; it had ${amt} left).`;
       if (ev.source === self) return ja ? `あなたは${tg}に ${amt} ダメージを与えた。` : `You hit ${tg} for ${amt}.`;
@@ -285,6 +289,9 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
     case 'feature_state':
       // 護りの火が消えた（V3-3）
       if (ev.kind === 'core:ward_fire' && ev.state === 'out') return ja ? '護りの火が消えた。' : 'A ward fire goes out.';
+      // バイオームの仕掛け（V3-5 §5.2。V3-7 の評価: 天井が崩れても文が無かった）
+      if (ev.kind === 'core:brittle_ceiling' && ev.state === 'fallen') return ja ? '脆い天井が崩れ落ちた（真下と周り 1 マスに落石）。' : 'A brittle ceiling comes down (falling rock on and around it).';
+      if (ev.kind === 'core:spore_pod' && ev.state === 'burst') return ja ? '胞子嚢が弾け、毒の胞子が広がった。' : 'A spore pod bursts in a cloud of poison.';
       return null;
     case 'guardian_acted': {
       const nm = nameOf(ev.guardianName, L, '?');
@@ -329,8 +336,10 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
       const app = kindName(ctx.catalog, L, null, ev.appearanceId);
       return ja ? `${app}の手がかりに気づいた: ${nameOf(ev.clue, L, '')}。` : `You notice something about the ${app}: ${nameOf(ev.clue, L, '')}.`;
     }
-    case 'room_found':
-      return ja ? `${ev.player === self ? '' : '仲間が'}「${nameOf(ev.name, L, ev.room)}」を見つけた（発見）。` : `${ev.player === self ? 'Found' : 'An ally found'}: ${nameOf(ev.name, L, ev.room)} (discovery).`;
+    case 'room_found': {
+      const mine = ev.player === self || (!!ctx.selfPlayerId && ev.player === ctx.selfPlayerId);
+      return ja ? `${mine ? '' : '仲間が'}「${nameOf(ev.name, L, ev.room)}」を見つけた（発見）。` : `${mine ? 'Found' : 'An ally found'}: ${nameOf(ev.name, L, ev.room)} (discovery).`;
+    }
     case 'inscription_read': {
       const what = ev.note ? (ja ? '書き置き' : 'the note') : (ja ? '碑文' : 'the inscription');
       const body = ev.lore ? (ja ? `${nameOf(ev.lore, L, '')}` : ` ${nameOf(ev.lore, L, '')}`) : '';

@@ -206,6 +206,10 @@ export function buildExpeditionReport(inp: ReportInput): ExpeditionReport {
         maxHp = e.maxHpAfter ?? maxHp;
         hp = e.hpAfter ?? hp;
         break;
+      case 'stats_changed':
+        if (e.target !== self) break;
+        if (e.statsAfter) { maxHp = e.statsAfter.maxHp ?? maxHp; hp = e.statsAfter.hp ?? hp; }
+        break;
       case 'level_up':
         if (e.target !== self) break;
         if (e.statsAfter) { maxHp = e.statsAfter.maxHp ?? maxHp; hp = e.statsAfter.hp ?? hp; }
@@ -419,8 +423,8 @@ export function compareLines(L: Locale, r: ExpeditionReport): string[] {
 function combatLine(L: Locale, r: ExpeditionReport): string {
   const c = r.combat;
   return t(L,
-    `戦闘: 与ダメージ ${c.dealt}・被ダメージ ${c.taken}・命中 ${c.hits}/${c.hits + c.misses}${c.crits ? `（会心 ${c.crits}）` : ''}・撃破 ${c.kills}（近接 ${c.melee_kills}・投擲 ${c.thrown_kills}）・能動技 ${c.ability_uses} 回`,
-    `Combat: dealt ${c.dealt}, took ${c.taken}, hit ${c.hits}/${c.hits + c.misses}${c.crits ? ` (${c.crits} crits)` : ''}, kills ${c.kills} (melee ${c.melee_kills}, thrown ${c.thrown_kills}), abilities ${c.ability_uses}`);
+    `戦闘: 与ダメージ ${c.dealt}・被ダメージ ${c.taken}・命中 ${c.hits}/${c.hits + c.misses}${c.crits ? `（会心 ${c.crits}）` : ''}・撃破 ${c.kills}（近接 ${c.melee_kills}・投擲 ${c.thrown_kills}）・能動技 ${c.ability_uses} 回${c.min_hp_pct !== undefined ? `・最も下がった HP ${c.min_hp_pct}%` : ''}`,
+    `Combat: dealt ${c.dealt}, took ${c.taken}, hit ${c.hits}/${c.hits + c.misses}${c.crits ? ` (${c.crits} crits)` : ''}, kills ${c.kills} (melee ${c.melee_kills}, thrown ${c.thrown_kills}), abilities ${c.ability_uses}${c.min_hp_pct !== undefined ? `, lowest HP ${c.min_hp_pct}%` : ''}`);
 }
 
 function tempoLine(L: Locale, r: ExpeditionReport): string {

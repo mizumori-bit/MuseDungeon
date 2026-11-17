@@ -94,8 +94,12 @@ const OBVIOUS_ABILITIES = ['fast', 'slow', 'stationary', 'pack'];
 
 function visibleAbilities(ctx: Ctx, m: Entity): string[] {
   const def = ctx.content.monsters[m.kind];
-  const out = (def?.abilities ?? []).filter((a) => OBVIOUS_ABILITIES.includes(a));
-  for (const a of m.scale?.affixes ?? []) for (const ab of ctx.content.affixes[a]?.abilities ?? []) if (OBVIOUS_ABILITIES.includes(ab)) out.push(ab);
+  // 速さはその個体の速さから（大守護者は速さの下限で遅くない・俊敏な個体は速い。V3-7 の評価: 大守護者が「遅い」と出た）
+  const out = (def?.abilities ?? []).filter((a) => OBVIOUS_ABILITIES.includes(a) && a !== 'fast' && a !== 'slow');
+  for (const a of m.scale?.affixes ?? []) for (const ab of ctx.content.affixes[a]?.abilities ?? []) if (OBVIOUS_ABILITIES.includes(ab) && ab !== 'fast' && ab !== 'slow') out.push(ab);
+  const speed = m.actor?.speed ?? def?.speed ?? 100;
+  if (speed > 100) out.push('fast');
+  else if (speed < 100) out.push('slow');
   return out;
 }
 

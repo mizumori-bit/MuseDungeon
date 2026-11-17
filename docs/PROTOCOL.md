@@ -472,6 +472,13 @@ V3-7a の後の AI 評価の修正で足した項目（後方互換。同じシ�
 - 観測・所持品: 鑑定済みの品に種類 ID（`ObsInvItem.kind`・`self.attack.throws[].kind`。`javelin` のように `core:` を省く）。観測の所持品の行では投げられる物に `{with:javelin}`、`inventory` の行に「（種類 javelin）」。fight の `with` に渡せる
 - 文: 投げた物が見えない所に落ちたら「届かず、見えない所に落ちた。」（前は「消えた」）
 
+最後の AI 評価で直した項目（後方互換。生成と思い出が変わったので `engineVersion` は 0.22.1、自分の `stats_changed` を渡すようにしたので `eventVersion` は 17。DESIGN.md §34.1）:
+
+- イベント: プレイヤーへの射影に `stats_changed`（自分のものだけ。特技・加護・装備で能力値が変わった）
+- 生成: 鍵のかかった格子扉は到着地点から歩いて隣に立てる（検査 `vaults_reachable`）。部屋の縁の扉・格子は外へ通じる
+- 観測と文: look は見えていないマスの覚えている地物・アイテムも返す（`data.entities[].remembered`）。引退の応答にランの確定点の合計。振り返りの戦闘の行に最も下がった HP。手がかりの組の片方を鑑定済みなら「…のはず」。脆い天井の崩落・胞子嚢の破裂の文。マクロが品のマスで止まったら「足元の X はまだ拾っていない」。階の異変の到着の文を言い換えた
+- 規則の文: 遠征の条件は、目標階までのまだ生成していない階に効く
+
 V3-7 で足した項目（プロフィール・記録と図鑑・継承・実績。後方互換。参加と思い出が変わったので `engineVersion` は 0.22.0。出来事の種類は増やしていないので `eventVersion` は 16 のまま。DESIGN.md §34）:
 
 - MCP: `new_run`・`join_run` に任意の `profile_token`（前のランで受け取ったもの）と `legacy`（false で継承しない）。応答に `profile_id`、新しく作ったときだけ `profile_token`（文にも「profile_token: …」。保存して次の `new_run` に渡す）。知らないトークンは `no_session`。新しいツール `records { profile_token?, locale? }`（記録・図鑑・実績・次の節目。省くとこの接続のプレイヤーのプロフィール。手番を消費しない）・`profile { profile_token?, name?, locale? }`（表示名・記録の要約・進行中のラン（`run_id` だけ）。`name` で表示名を変える（トークンが要る））。`declare_goal` の `type` に `codex`・`feats`

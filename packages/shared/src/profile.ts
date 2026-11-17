@@ -286,7 +286,11 @@ export function buildRecords(L: Locale, data: ProfileData, idx: CodexIndex, feat
       const parts = [t(L, `遭遇 ${s.met}・撃破 ${s.kills}`, `met ${s.met}, slain ${s.kills}`)];
       if (s.hpSeen) parts.push(t(L, `体力 ${s.hpSeen.min === s.hpSeen.max ? s.hpSeen.min : `${s.hpSeen.min}〜${s.hpSeen.max}`}`, `HP ${s.hpSeen.min === s.hpSeen.max ? s.hpSeen.min : `${s.hpSeen.min}-${s.hpSeen.max}`}`));
       if (s.maxHit) parts.push(t(L, `最大の一撃 ${s.maxHit}`, `worst hit ${s.maxHit}`));
-      if (s.abilities.length) parts.push(s.abilities.map((a) => opts.abilityName?.(a) ?? a).join('・'));
+      // 速い個体（接辞）と遅い種族が並ぶときは 1 つにまとめる（V3-7 の評価: 「速い・遅い」）
+      const both = s.abilities.includes('fast') && s.abilities.includes('slow');
+      const abs = both ? s.abilities.filter((a) => a !== 'fast' && a !== 'slow') : s.abilities;
+      const abText = [...(both ? [t(L, '速さは個体で違う', 'speed varies')] : []), ...abs.map((a) => opts.abilityName?.(a) ?? a)];
+      if (abText.length) parts.push(abText.join('・'));
       return { id: e.id, name: nm(e.name), detail: parts.join(t(L, '・', ', ')) };
     }),
   }));

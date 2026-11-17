@@ -243,11 +243,37 @@ function tryPlacePrefab(s: GenState, pf: PrefabDef, rng: Rng): boolean {
       let clash = false;
       for (let y = y0 - 1; y <= y0 + ph && !clash; y++) for (let x = x0 - 1; x <= x0 + pw; x++) if (g.protect[g.idx(x, y)]) { clash = true; break; }
       if (clash) continue;
+      if (!entrancesOk(g, pf, map, x0, y0)) continue;
       stampPrefab(s, pf, map, x0, y0);
       placed = true;
     }
     return placed;
   }
+}
+
+/**
+ * 部屋の入口が外へ通じるか（V3-7 の評価: 施錠された宝物庫の格子扉が外周の壁を向いて入れなかった）。
+ * 縁の扉・格子はどれも、外側の隣が通れるマスでなければならない。縁の床（草なども）と合わせて、外へ通じる入口が 1 つ以上要る
+ */
+function entrancesOk(g: GenState['grid'], pf: PrefabDef, map: string[], x0: number, y0: number): boolean {
+  const ph = map.length, pw = map[0].length;
+  let open = 0;
+  for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
+    if (y !== 0 && y !== ph - 1 && x !== 0 && x !== pw - 1) continue;
+    const ch = map[y][x];
+    if (ch === ' ') continue;
+    const t = pf.legend[ch]?.terrain ?? '$floor';
+    if (t === '$wall') continue;
+    const out: [number, number][] = [];
+    if (y === 0) out.push([x0 + x, y0 - 1]);
+    if (y === ph - 1) out.push([x0 + x, y0 + ph]);
+    if (x === 0) out.push([x0 - 1, y0 + y]);
+    if (x === pw - 1) out.push([x0 + pw, y0 + y]);
+    const ok = out.some(([ox, oy]) => g.inside(ox, oy) && (g.cells[g.idx(ox, oy)] === FLOOR || g.cells[g.idx(ox, oy)] === DOOR));
+    if (ok) open++;
+    else if (t === '$door' || /door|grate/.test(t)) return false;
+  }
+  return open > 0;
 }
 
 // ---------------- 階の異変（V3-5 §5.3） ----------------
@@ -854,6 +880,23 @@ validators.register('stairs_path', (s) => {
   });
 });
 
+/**
+ * 鍵のかかった格子扉は、到着地点から歩いて隣に立てる（V3-7 の評価: 宝物庫に入れなかった。部屋の置き方と、後から置く瓦礫などで道が切れていた）。
+ * すべての階に暗黙に適用する
+ */
+validators.register('vaults_reachable', (s) => {
+  const g = s.grid;
+  let dist: Int32Array | number[] | null = null;
+  for (const [i, t] of g.override) {
+    if (t !== 'core:grate_locked') continue;
+    dist ??= bfsDist(g, g.idx(s.entry.x, s.entry.y), s.passable);
+    const x = i % g.w, y = Math.trunc(i / g.w);
+    const near = ([[1, 0], [-1, 0], [0, 1], [0, -1]] as const).some(([dx, dy]) => g.inside(x + dx, y + dy) && dist![g.idx(x + dx, y + dy)] >= 0);
+    if (!near) return false;
+  }
+  return true;
+});
+
 export const MAX_ATTEMPTS = 8;
 
 export function generateFloor(content: Content, seed: string, branch: string, depth: number, terrainTable: string[], objective?: ObjectiveSpec, mods?: GenMods): GeneratedFloor {
@@ -894,7 +937,7 @@ export function generateFloor(content: Content, seed: string, branch: string, de
     if (objective && !placeObjective(s, objective) && !fallback) continue;
     // 条件「泉が無い」
     if (mods?.noFountain) s.spawns = s.spawns.filter((sp) => !(sp.type === 'feature' && sp.kind.includes('fountain')));
-    const vs = fallback ? ['stairs_connected'] : [...floorType.validators, 'stairs_path'];
+    const vs = fallback ? ['stairs_connected'] : [...floorType.validators, 'stairs_path', 'vaults_reachable'];
     if (!fallback && !vs.every((v) => validators.get(v)(s))) continue;
     // 地形 index へ変換
     const tIdx = (id: string) => {
