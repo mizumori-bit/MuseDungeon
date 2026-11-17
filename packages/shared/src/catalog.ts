@@ -66,6 +66,8 @@ export interface CatalogPerk {
   hooks: string[];
   /** 投擲で無視する装甲（1 ランクあたり。急所狙い。V3-3b §40.1） */
   thrownPierce?: number;
+  /** 投擲のダメージの上乗せ（強肩。V3-3c §44.4） */
+  thrownDmg?: number;
 }
 
 /** 能動技（V3-4 §4.2） */
@@ -128,7 +130,8 @@ export interface CatalogRules {
   /** 守護者が、相手が階を離れている間に手番 1 つにつき回復する最大体力の %（V3-3a §35.1） */
   guardianAwayHealPct?: number;
   /** 節目の大守護者の階（V3-3 §3.2）: 深度 every の倍数（min 以上）。levelBonus: 節目に挑む候補の推奨レベルの上乗せ */
-  milestone?: { every: number; min: number; boonOptions: number; levelBonus?: number };
+  /** hp: 大守護者の体力の式（V3-3c §44.2: 種族の体力 × (100 + hpPct)% を下限 minHpBase + minHpPerDepth × 深さ、上限 maxHpBase + maxHpPerDepth × 深さに収める）。minSpeed: 速さの下限 */
+  milestone?: { every: number; min: number; boonOptions: number; levelBonus?: number; hpRule?: { hpPct: number; minHpBase: number; minHpPerDepth: number; maxHpBase: number; maxHpPerDepth: number }; minSpeed?: number };
   macroStepLimit: number;
   /** fight の標的（追跡中・逃げていない）が見えなくなったときに待つ手番（V3-4b §28.4） */
   fightLostWait?: number;
@@ -162,7 +165,7 @@ export interface CatalogRules {
   /** 転移の巻物の着地点の最短距離 */
   teleport: { minDistance: number };
   /** 守護者の格ごとの体力の上乗せ（%。V3-2R3 §20.1） */
-  guardianRanks?: { hpPct: number }[];
+  guardianRanks?: { hpPct: number; minHpBase?: number; minHpPerDepth?: number }[];
   /** 特技の候補の数・生成された装備が呪われる確率（V3-4） */
   perkOptions?: number;
   curseChancePct?: number;

@@ -50,6 +50,8 @@ export interface TurnSnapshot {
   seq: number;
   /** 帰還の綱の長い説明を出した遠征の通番（V3-3a §35.8） */
   lifeNo?: number;
+  /** 加護の説明を出した遠征（2 回目からは名前だけ。V3-3c §44.6） */
+  boonNo?: number;
   state: TurnState | null;
   /** 既知のセル数（地図の変化の判定用） */
   knownCells: number;
@@ -220,7 +222,7 @@ export function diffChanges(prev: TurnSnapshot | null, cur: TurnSnapshot, view: 
   // 得た加護・効いた加護（V3-3 §3.3）
   for (const e of events) if (e.seq > prev.seq && (e.type === 'boon_granted' || e.type === 'boon_triggered' || e.type === 'boon_offered' || e.type === 'warden_slain' || e.type === 'archive_recalled') && e.text) out.push({ code: 'boon', text: e.text.replace(/。$/, '') });
   // 守護者のしたこと・分かった弱点（V3-3）
-  for (const e of events) if (e.seq > prev.seq && (e.type === 'guardian_acted' || e.type === 'guardian_intel' || e.type === 'guardian_rested') && e.text) out.push({ code: e.type === 'guardian_intel' ? 'intel' : 'guardian', text: e.text.replace(/。$/, '') });
+  for (const e of events) if (e.seq > prev.seq && (e.type === 'guardian_acted' || e.type === 'guardian_intel' || e.type === 'guardian_rested' || e.type === 'guardian_departed') && e.text) out.push({ code: e.type === 'guardian_intel' ? 'intel' : 'guardian', text: e.text.replace(/。$/, '') });
   // 敵が目を覚ました理由（V3-4b §28.8）: 同じ文は ×N にまとめる
   const wokeCount = new Map<string, number>();
   for (const e of events) if (e.seq > prev.seq && e.type === 'monster_woke' && e.text) { const s = e.text.replace(/。$/, ''); wokeCount.set(s, (wokeCount.get(s) ?? 0) + 1); }

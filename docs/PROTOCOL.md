@@ -414,6 +414,18 @@ V3-2R で足した項目（同じく後方互換。会心と経験値のルー�
 - `player_state.reason: 'joined'`（キャンプから始まる参加）。参加コマンドの `atCamp`
 - プレイヤー向けの射影で、見えていた個体が視界の外へ動いた `entity_moved` に `dirOut`（向きだけ。行き先は伏せたまま）
 
+V3-3c で足した項目（見直し 7。後方互換。規則と候補の作り方が変わったので `engineVersion` は 0.17.0、出来事が増えたので `eventVersion` は 13。DESIGN.md §29）:
+
+- イベント: `guardian_departed { id, guardianName, depth, player, forget }`（目的でなくなった守護者が階を去った。その守護者に会ったことのある参加者に。forget は記憶から消す棲み処の地物）
+- World State: `Entity.lairOf`（棲み処の地物の持ち主の守護者）・`Expedition.rechallengeOf`（再挑戦の守護者。プレイヤーには渡さない）。生成の `SpawnSpec` に `minSpeed`（大守護者）・地物の `lair`
+- 候補: `ExpeditionOffer.rechallenge { no, guardian }`（再挑戦。目標の階に残っている守護者をもう一度目的にする。繰り返しの減点なし）。`guardian.hp`（格 1〜3 の体力の目安）・`guardian.hpRange { min, max }`（大守護者の体力の幅）。候補の出来事（`expedition_offered`）から `guardianWeakness` を除く（前は残っていた）
+- 観測: 候補の文に「体力はおよそ N」「体力 50〜90」「再挑戦: …」と、キャンプでは本人の遠征レポートから「前回（遠征 N）は与 X・被 Y」。`camp.offers[].rechallenge`。記録庫の記憶の「通る目安」に「（およそ N 回の命中）」。`visible.features[].lair`（護りの火の持ち主）・`expedition.ward_fires[] { guardian, dir, range, text }`（同じ守護者の火を 1 基見ていれば、まだ見ていない灯っている火の方角と遠さ）。`self.boons_brief`（加護の行は遠征ごとに 2 回目から名前だけ）。投擲の欄の威力に強肩の上乗せ
+- 目標: `GoalInfo.lines` は 1 行（未宣言なら「目標: 未宣言（declare_goal で候補が出る…）」）、`GoalInfo.full` に候補と記録。MCP の `declare_goal` は引数なしで候補と記録を返す
+- コマンド: `fight.alsoWith`（MCP では `with` に配列。前の品が尽きて拾い直せる物も無ければ次の品）・`fight.collectAfter`（MCP の `collect_after`。決着の後、追跡中の敵が見えていなければ自分の投擲物を拾う。拾い終えたら決着の理由で止まる）。座標を狙った `throw` も、射程外か経路が通らなければ拒否する（`out_of_range`・`no_line_of_sight`。手番を使わない）
+- 遠征レポート: `combat.guardian_fights[] { id, dealt, taken, outcome }`・`economy.potions_detail`（飲んだ薬の内訳）
+- コンテンツ: 守護者の型の `excludesWeaknesses`。「投擲に弱い」は `params.pct`（150。端数は切り上げ）。`balance.guardian.warden.minSpeed`。特技 `core:perk_armor_drill`（鎧さばき。不屈・ランク 2・装甲 +1・戦士に Lv4 までに）・`core:perk_strong_arm`（強肩。射手・ランク 3・フック `thrown_dmg`）・`core:perk_heavy_blow`（重い一撃。前衛・ランク 3・フック `melee_crit_dmg`）。公開カタログ: `perks[id].thrownDmg`・`rules.milestone.hpRule`・`rules.milestone.minSpeed`・`rules.guardianRanks[].minHpBase / minHpPerDepth`
+- 規則: 遠征を始めるとき、その遠征の目的ではない未討伐の守護者（大守護者を除く）は、呼んだ手下・棲み処の地物と一緒に階を去る。護られし者の装甲は自分の棲み処の火だけで決まる。大守護者の速さは 100 を下回らない。特技の候補の 1 つは、特技を持っている職業の系統か共通の系統のランクが残っている物
+
 V3-7a の後の AI 評価の修正で足した項目（後方互換。同じシードの候補が変わるので `engineVersion` は 0.16.1、`eventVersion` は 12 のまま。DESIGN.md §28.1）:
 
 - World State: `ExpeditionOffer.guardianAffixes`・`Expedition.guardianAffixes`（候補の時点で引いた守護者の接辞。プレイヤーには渡さない）。目標階に置く守護者はこの接辞を持つ。候補の `guardian.traits`（速い・回避が高い・`poison`）と `guardian.maxHit` は接辞込み

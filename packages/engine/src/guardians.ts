@@ -48,20 +48,26 @@ export function rollGuardianInfo(content: Content, seed: string, no: number, slo
   const rng = Rng.fromSeed(`${seed}|expedition|${no}|guardian|${slotIndex}`);
   const ranks = content.balance.guardian.ranks;
   const count = typeCount ?? ranks[Math.min(ranks.length, rank) - 1]?.types ?? 0;
-  const ws = content.lists.guardianWeaknesses;
   const name = makeName(content, rng);
   const types = pickTypes(content, count, rng);
+  const ws = allowedWeaknesses(content, types);
   const weakness = ws.length ? ws[rng.int(ws.length)].id : null;
   const title = types.length ? content.guardianTypes[types[0]]?.name : undefined;
   return { name, ...(title ? { title: { ...title } } : {}), types, weakness };
 }
 
+/** 型が打ち消さない弱点（V3-3c §44.2: 弾く者に「投擲に弱い」、潜む者に「眠りが深い」を付けない） */
+function allowedWeaknesses(content: Content, types: readonly string[]) {
+  const ex = new Set(types.flatMap((id) => content.guardianTypes[id]?.excludesWeaknesses ?? []));
+  return content.lists.guardianWeaknesses.filter((w) => !ex.has(w.id));
+}
+
 /** 節目の大守護者の名前・型・弱点（V3-3 §3.2。seed|warden|深さ から。状態を持たない）。型は 2 つ */
 export function rollWardenInfo(content: Content, seed: string, depth: number): GuardianInfo {
   const rng = Rng.fromSeed(`${seed}|warden|${depth}`);
-  const ws = content.lists.guardianWeaknesses;
   const name = makeName(content, rng);
   const types = pickTypes(content, content.balance.guardian.warden.types, rng);
+  const ws = allowedWeaknesses(content, types);
   const weakness = ws.length ? ws[rng.int(ws.length)].id : null;
   const title = types.length ? content.guardianTypes[types[0]]?.name : undefined;
   return { name, ...(title ? { title: { ...title } } : {}), types, weakness, warden: true };
@@ -211,6 +217,31 @@ export function settleGuardian(ctx: Ctx, m0: Entity): { healed: number; disperse
   if (body.home && !(body.pos!.x === body.home.x && body.pos!.y === body.home.y) && !ctx.actorAt(key, body.home.x, body.home.y)) body.pos = { floor: key, x: body.home.x, y: body.home.y };
   ctx.emit({ type: 'guardian_state', id: m.id, put: [body], seenBy: [], floor: key });
   return { healed, dispersed: minions.length };
+}
+
+/**
+ * 目的でなくなった守護者は階を去る（V3-3c §44.1）: 遠征を始めるとき、その遠征の目的ではない未討伐の守護者（大守護者を除く）。
+ * 呼んだ手下と棲み処の地物（護りの火）も消える。その守護者に会ったことのある参加者に知らせ、記憶から火を消す
+ */
+export function departGuardians(ctx: Ctx, keep: string | null, participants: readonly string[]): void {
+  const gone = Object.values(ctx.world.entities)
+    .filter((e) => e.role === 'guardian' && e.guardian && !e.guardian.warden && e.pos && (e.stats?.hp ?? 0) > 0 && e.id !== keep)
+    .sort((a, b) => a.sid - b.sid);
+  for (const m of gone) {
+    const key = m.pos!.floor;
+    const depth = ctx.world.floors[key]?.depth ?? 0;
+    const on = ctx.entitiesOn(key);
+    const minions = on.filter((e) => e.minionOf === m.id && (e.stats?.hp ?? 0) > 0);
+    // 持ち主の無い古い火は、持ち場から 4 マス以内のものをこの守護者の火とみなす
+    const lair = on.filter((e) => e.feature && (e.lairOf === m.id || (!e.lairOf && e.kind === 'core:ward_fire' && !!m.home && cheb(e.pos!, m.home) <= 4)));
+    for (const e of [...minions, ...lair]) ctx.emit({ type: 'entity_removed', id: e.id, kind: e.kind, reason: 'departed', seenBy: [], floor: key });
+    ctx.emit({ type: 'entity_removed', id: m.id, kind: m.kind, reason: 'departed', seenBy: [], floor: key });
+    for (const pid of participants) {
+      const pr = ctx.world.players[pid];
+      if (!pr?.knowledge.met.includes(m.id)) continue;
+      ctx.emit({ type: 'guardian_departed', id: m.id, guardianName: { ...m.guardian!.name }, depth, player: pid, forget: lair.map((e) => e.id), seenBy: [pid], floor: key });
+    }
+  }
 }
 
 /** 休み始めを記録する（追跡をやめた。V3-3b §40.5）。もう記録があれば残す */

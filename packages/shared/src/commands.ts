@@ -45,7 +45,9 @@ export const CommandSchema = z.discriminatedUnion('type', [
   // lostOk: 標的が直前の応答では見えていて逃げていなかった（今見えなくても待つ。PlayerPort が付ける。V3-4b §28.4）
   // with: スロット文字か、品の種類（'throwing_knife'・'core:javelin'。V3-3b §40.1）。retrieve: 投げる物が尽きたら自分の投擲物を拾いに行く（既定 true）
   z.object({ type: z.literal('fight'), target: EntityRefSchema, with: z.union([SlotSchema, z.string().regex(/^(core:)?[a-z][a-z0-9_]+$/)]).optional(), hpFloor: HpFloorSchema.optional(), abilities: z.array(z.string().min(1)).max(4).optional(),
-    until: z.enum(['target', 'clear']).optional(), adjacent: z.enum(['throw', 'melee', 'stop']).optional(), lostOk: z.boolean().optional(), retrieve: z.boolean().optional() }),
+    until: z.enum(['target', 'clear']).optional(), adjacent: z.enum(['throw', 'melee', 'stop']).optional(), lostOk: z.boolean().optional(), retrieve: z.boolean().optional(),
+    /** alsoWith: with の品が尽きて拾い直せる物も無くなったら、次に投げる品（V3-3c §44.6）。collectAfter: 決着の後に自分の投擲物を拾う */
+    alsoWith: z.array(z.union([SlotSchema, z.string().regex(/^(core:)?[a-z][a-z0-9_]+$/)])).max(3).optional(), collectAfter: z.boolean().optional() }),
   /** 近接攻撃（V3-4）。隣の敵か、長柄の武器なら直線で 2 マス先の敵（間のマスが通れて誰もいない） */
   z.object({ type: z.literal('attack'), target: EntityRefSchema }),
   /** 能動技（V3-4 §4.2）。target: 隣の敵・投擲の対象なら ID、身をかわすなら方向。slot: 狙い撃ちで投げる品（省略時は投擲用の品の最初のスロット） */

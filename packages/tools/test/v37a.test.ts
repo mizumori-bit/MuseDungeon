@@ -79,8 +79,9 @@ describe('V3-7a goals in the session (§40.8)', () => {
     await t.toDown();
     expect((await t.act({ type: 'extract' })).ok).toBe(true);
     const camp = t.r.port.observe({ map: false });
-    expect(camp.observation.camp?.goal?.lines[0]).toBe('目標: 未宣言（declare_goal で 1 つ選べる。点には影響しない）');
-    expect(camp.text).toContain('目標の候補: 深さ 地下');
+    // キャンプの観測は 1 行（V3-3c §44.5）。候補と記録は full（declare_goal を引数なしで呼ぶと出る）
+    expect(camp.observation.camp?.goal?.lines).toEqual(['目標: 未宣言（declare_goal で候補が出る。点には影響しない）']);
+    expect(camp.observation.camp?.goal?.full?.some((l) => l.startsWith('目標の候補: 深さ 地下'))).toBe(true);
     // 自己最高（1 回目の確定）に並ぶ候補を宣言
     const best = t.r.port.goalInfo().candidates.find((c) => c.type === 'banked' && c.level === 'match')!;
     const d = t.r.port.declareGoal({ type: 'banked', value: best.value + 1, within: 1 });
@@ -104,7 +105,7 @@ describe('V3-7a goals in the session (§40.8)', () => {
     const info = t.r.port.goalInfo();
     expect(info.active).toBeNull();
     expect(info.record.declared).toBe(1);
-    expect(info.lines.some((l) => l.startsWith('目標の記録: 宣言 1・達成 '))).toBe(true);
+    expect(info.full?.some((l) => l.startsWith('目標の記録: 宣言 1・達成 '))).toBe(true);
     // 宣言し直しは取り下げ。復元しても同じ
     expect(t.r.port.declareGoal({ type: 'depth', value: 4, within: 2 }).text).toContain('目標を宣言した: 2 回の遠征のうちに地下4階に着く');
     expect(t.r.port.declareGoal({ type: 'depth', value: 5, within: 1 }).text).toContain('目標を宣言した: 次の遠征で地下5階に着く');

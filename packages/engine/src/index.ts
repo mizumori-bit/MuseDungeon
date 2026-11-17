@@ -20,7 +20,8 @@ export { shotLine } from './perception';
 export { pickRelic, relicInfo } from './boons';
 export { isMilestoneDepth } from './gen/generate';
 export { guardianTraits } from './expedition';
-export { rollWardenInfo } from './guardians';
+export { rollGuardianInfo, rollWardenInfo, weaknessHandlers } from './guardians';
+export { wardenHpRange } from './warden';
 export { actions, archetypes, effects, validators, layoutGenerators, statusHandlers, abilityHandlers, weaponTraits };
 
 /** コンテンツが参照するハンドラ ID が全てレジストリに登録されているか検証する */

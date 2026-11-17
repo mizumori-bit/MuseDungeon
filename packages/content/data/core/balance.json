@@ -29,7 +29,7 @@
       ],
       "leash": 3,
       "awayHealPct": 2,
-      "warden": { "hpPct": 250, "minHpBase": 20, "minHpPerDepth": 6, "bountyPct": 300, "types": 2, "boonOptions": 3, "maxHpBase": 40, "maxHpPerDepth": 10, "levelBonus": 2 }
+      "warden": { "hpPct": 250, "minHpBase": 20, "minHpPerDepth": 6, "bountyPct": 300, "types": 2, "boonOptions": 3, "minSpeed": 100, "maxHpBase": 40, "maxHpPerDepth": 10, "levelBonus": 2 }
     },
     "expedition": {
       "firstTargetDepth": { "safe": 2, "standard": 3, "ambitious": 3 },

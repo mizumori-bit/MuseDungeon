@@ -12,7 +12,7 @@ const PLAYER_VISIBLE: ReadonlySet<EventType> = new Set<EventType>([
   'tile_changed', 'entity_moved', 'entity_changed_floor',
   'attack', 'damaged', 'healed', 'max_hp_changed', 'died',
   'status_applied', 'status_expired',
-  'xp_gained', 'level_up', 'perk_offered', 'perk_chosen', 'perk_triggered', 'monster_woke', 'guardian_intel', 'guardian_acted', 'boon_granted', 'boon_triggered', 'boon_offered', 'warden_slain', 'story', 'guardian_rested', 'archive_recalled', 'ability_used', 'curse_revealed', 'item_inspected', 'curse_lifted',
+  'xp_gained', 'level_up', 'perk_offered', 'perk_chosen', 'perk_triggered', 'monster_woke', 'guardian_intel', 'guardian_acted', 'boon_granted', 'boon_triggered', 'boon_offered', 'warden_slain', 'story', 'guardian_rested', 'guardian_departed', 'archive_recalled', 'ability_used', 'curse_revealed', 'item_inspected', 'curse_lifted',
   'item_picked_up', 'item_dropped', 'item_equipped', 'item_unequipped', 'item_used', 'item_thrown',
   'item_identified', 'item_issued', 'feature_state', 'trap_revealed', 'trap_triggered',
   'noise', 'thought', 'chat', 'entity_removed',
@@ -35,6 +35,7 @@ const SELF_ONLY: Partial<Record<EventType, (ev: any, playerId: PlayerId, selfId:
   boon_granted: (ev, _p, self) => ev.target === self,
   boon_offered: (ev, _p, self) => ev.target === self,
   guardian_rested: (ev, p) => ev.player === p,
+  guardian_departed: (ev, p) => ev.player === p,
   archive_recalled: (ev, p) => ev.player === p,
   boon_triggered: (ev, _p, self) => ev.actor === self,
   thought: (ev, p) => ev.player === p,
@@ -94,8 +95,9 @@ export function filterEventsForPlayer(events: readonly GameEvent[], playerId: Pl
         break;
       case 'expedition_offered': {
         // 候補の守護者の種族は会うまで渡さない（特徴だけ）
-        const camp = pe.camp as { offers?: { guardianKind?: string; guardianAffixes?: string[] }[] } | undefined;
-        for (const o of camp?.offers ?? []) { delete o.guardianKind; delete o.guardianAffixes; }
+        // 弱点も渡さない（V3-3c: 候補の出来事から弱点が読めた）
+        const camp = pe.camp as { offers?: { guardianKind?: string; guardianAffixes?: string[]; guardianWeakness?: string | null }[] } | undefined;
+        for (const o of camp?.offers ?? []) { delete o.guardianKind; delete o.guardianAffixes; delete o.guardianWeakness; }
         break;
       }
       case 'expedition_started': {

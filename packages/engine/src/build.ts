@@ -195,14 +195,31 @@ export function rollPerkOptions(ctx: Ctx, pr: PlayerRecord, level: number, owned
     if (missing) out[out.length - 1] = missing;
   }
   // offerByLevel: このレベルまでに一度も候補に出ていない特技（その職業の系統）は、このレベルの候補に入れる（V3-3b §40.1: 斥候の急所狙いは Lv4 までに）
+  const forced = new Set<string>();
   for (const id of cands) {
     const pk = ctx.content.perks[id];
     if (!pk?.offerByLevel || pk.offerByLevel !== level || !classLineages.has(pk.lineage) || offered.includes(id) || out.includes(id)) continue;
     // 入れ替えるのは、同じ規則で入れた枠でない最初の枠（末尾から）
-    const slot = [...out.keys()].reverse().find((i) => !ctx.content.perks[out[i]]?.offerByLevel);
-    if (slot !== undefined) out[slot] = id;
+    const slot = [...out.keys()].reverse().find((i) => !forced.has(out[i]));
+    if (slot !== undefined) { out[slot] = id; forced.add(id); }
+  }
+  // 候補の 1 つは、自分が特技を持っている職業の系統か、共通の系統の、ランクが残っている特技（V3-3c §44.4: 後半の候補が使えない系統だけになった）。
+  // 3 つとも当てはまらないときだけ、上の規則で入れていない枠（末尾から）を替える
+  const invested = new Set(owned.map((id) => ctx.content.perks[id]?.lineage).filter((l): l is string => !!l && classLineages.has(l)));
+  const useful = (id: string) => { const l = ctx.content.perks[id]?.lineage; return l === 'common' || (!!l && invested.has(l)); };
+  if (out.length && !out.some(useful)) {
+    const pool = cands.filter((id) => useful(id) && !out.includes(id));
+    const slot = [...out.keys()].reverse().find((i) => !forced.has(out[i]) && !(level === 6 && ctx.content.perks[out[i]]?.ability));
+    if (pool.length && slot !== undefined) out[slot] = pool[Rng.fromSeed(`${ctx.world.secret.seed}|perk|${pr.id}|${level}|useful`).int(pool.length)];
   }
   return out;
+}
+
+/** 特技のフックの値の合計（ランクの数だけ足す。V3-3c §44.4: 強肩・重い一撃） */
+export function perkHookSum(ctx: Ctx, e: Entity | null | undefined, hook: string, field: string): number {
+  let n = 0;
+  for (const id of e?.build?.perks ?? []) for (const h of ctx.content.perks[id]?.hooks ?? []) if (h.hook === hook) n += Number((h as Record<string, unknown>)[field]) || 0;
+  return n;
 }
 
 /** 投擲で無視する装甲（急所狙いのランクの合計。V3-3b §40.1） */

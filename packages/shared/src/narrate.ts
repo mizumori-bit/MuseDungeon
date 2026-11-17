@@ -322,6 +322,10 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
       return (ev.full ? (ja ? `守護者「${nm}」は傷を癒やしていた（体力が戻っている）。` : `The guardian "${nm}" has healed its wounds (back to full).`)
         : (ja ? `守護者「${nm}」の傷が少し癒えている（追われていない間に回復した）。` : `The guardian "${nm}" has healed a little while it was not chasing you.`)) + gone;
     }
+    case 'guardian_departed': {
+      const nm = nameOf(ev.guardianName as Names, L, '?');
+      return ja ? `地下${ev.depth}階の守護者「${nm}」は棲み処を去っていた（目的ではなくなった）。` : `The guardian "${nm}" of depth ${ev.depth} has left its lair (no longer an objective).`;
+    }
     case 'warden_slain': {
       const nm = nameOf(ev.guardianName, L, '?');
       return ja ? `節目の大守護者${nm}が倒れた（地下${ev.depth}階）。下り階段の封印が解けた。` : `The warden ${nm} falls (depth ${ev.depth}). The stairs down are unsealed.`;

@@ -287,6 +287,8 @@ export const GuardianTypeSchema = z.object({
   desc: NamesSchema,
   handler: z.string().min(1),
   strongVs: z.enum(['melee', 'thrown']),
+  /** この型が打ち消す弱点（V3-3c §44.2: 弾く者に「投擲に弱い」、潜む者に「眠りが深い」を付けない） */
+  excludesWeaknesses: z.array(IdSchema).default([]),
   params: z.record(z.number()).default({}),
 });
 
@@ -396,7 +398,9 @@ export const BalanceSchema = z.object({
       maxHpBase: Int.min(1).default(40), maxHpPerDepth: Int.min(0).default(10),
       /** 節目に挑む候補の推奨レベルの上乗せ（V3-3a §35.2） */
       levelBonus: Int.min(0).default(2),
-    }).default({ hpPct: 250, minHpBase: 20, minHpPerDepth: 6, bountyPct: 300, types: 2, boonOptions: 3, maxHpBase: 40, maxHpPerDepth: 10, levelBonus: 2 }),
+      /** 大守護者の速さの下限（V3-3c §44.2: 遅い種族の大守護者は、離れて投げるだけで近づかれなかった） */
+      minSpeed: Int.min(0).default(100),
+    }).default({ hpPct: 250, minHpBase: 20, minHpPerDepth: 6, bountyPct: 300, types: 2, boonOptions: 3, maxHpBase: 40, maxHpPerDepth: 10, levelBonus: 2, minSpeed: 100 }),
   }),
   /** 特技の候補の数（V3-4 §4.1） */
   perks: z.object({ options: Int.min(1) }).default({ options: 3 }),

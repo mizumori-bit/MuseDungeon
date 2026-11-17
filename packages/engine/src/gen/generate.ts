@@ -11,9 +11,9 @@ import { DOOR, FLOOR, GenGrid, WALL } from './grid';
 import { layoutGenerators } from './layouts';
 
 export type SpawnSpec =
-  | { type: 'monster'; kind: string; x: number; y: number; hp: number; affixes: string[]; tier: number; asleep: boolean; delay: number; role?: EntityRole; bounty?: number; minHp?: number; /** 体力の上限（大守護者。V3-3a §35.2） */ maxHp?: number; hpBonusPct?: number; guardian?: GuardianInfo }
+  | { type: 'monster'; kind: string; x: number; y: number; hp: number; affixes: string[]; tier: number; asleep: boolean; delay: number; role?: EntityRole; bounty?: number; minHp?: number; /** 体力の上限（大守護者。V3-3a §35.2） */ maxHp?: number; hpBonusPct?: number; guardian?: GuardianInfo; /** 速さの下限（大守護者。V3-3c §44.2） */ minSpeed?: number }
   | { type: 'item'; kind: string; x: number; y: number; qty: number; affixes: string[]; role?: EntityRole; value?: number; hidden?: string[] }
-  | { type: 'feature'; kind: string; x: number; y: number };
+  | { type: 'feature'; kind: string; x: number; y: number; /** 棲み処の地物（直前に置いた守護者のもの。V3-3c §44.6） */ lair?: boolean };
 
 /** 遠征の目標階に置くもの */
 /** rank: 守護者の格（堅実 1・標準 2・野心 3）。guardianKind: 候補で決めた種族（無ければ生成時に格で選ぶ） */
@@ -546,7 +546,7 @@ function placeLair(s: GenState, cx: number, cy: number, info: GuardianInfo, rng:
       if (!cands.length) break;
       const at = cands[rng.int(cands.length)];
       occupied.add(at);
-      s.spawns.push({ type: 'feature', kind: f.kind, x: at % g.w, y: Math.trunc(at / g.w) });
+      s.spawns.push({ type: 'feature', kind: f.kind, x: at % g.w, y: Math.trunc(at / g.w), lair: true });
     }
   }
   for (const t of plan.terrain) {
@@ -607,6 +607,8 @@ export function wardenSpec(content: Content, depth: number, kind: string, x: num
     // 体力の上限（V3-3a §35.2: 種族で 52〜122 と開いた難しさをそろえる）
     spec.maxHp = wb.maxHpBase + wb.maxHpPerDepth * depth;
     spec.bounty = Math.trunc(((spec.bounty ?? 0) * wb.bountyPct) / 100);
+    // 大守護者は「遅い」にならない（V3-3c §44.2）
+    if (wb.minSpeed) spec.minSpeed = wb.minSpeed;
   }
   return spec;
 }

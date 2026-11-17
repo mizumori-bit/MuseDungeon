@@ -132,13 +132,11 @@ describe('V3-1 throwing (report 1, 2, 11)', () => {
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error.code).toBe('no_line_of_sight');
     expect(sc.world.seq).toBe(seq);
-    // 座標を狙えば壁に当たって落ちる（結果は文章になる）
+    // 座標を狙っても、経路が通らなければ同じく拒否する（V3-3c §44.6: 護りの火を狙って「届かず」が続いた）
     const r2 = act(sc, { type: 'throw', slot: knifeSlot(sc), target: { x: m.x, y: m.y } });
-    expect(r2.ok).toBe(true);
-    const ev = lastThrow(r2.events);
-    expect(ev.outcome).toBe('blocked');
-    expect(ev.blockedBy).toBe('terrain');
-    expect(say(sc, r2.events)).toMatch(/壁に当たり、\(\d+,\d+\) に落ちた/);
+    expect(r2.ok).toBe(false);
+    if (!r2.ok) expect(r2.error.code).toBe('no_line_of_sight');
+    expect(sc.world.seq).toBe(seq);
   });
 
   it('every throw outcome is narrated with the landing spot (hit/missed, blocked by actor, fell short, no target)', () => {
@@ -148,12 +146,10 @@ describe('V3-1 throwing (report 1, 2, 11)', () => {
     // 遮る者: 1 マス先に A、2 マス先に B。B の座標を狙うと A に遮られる
     inject(sc, { put: [goblin('e_tsta01', p.x + dx, p.y + dy), goblin('e_tstb01', p.x + 2 * dx, p.y + 2 * dy)] });
     act(sc, { type: 'wait' });
+    // 座標を狙っても、途中の者に遮られるなら拒否する（V3-3c §44.6）
     const blocked = act(sc, { type: 'throw', slot: knifeSlot(sc), target: { x: p.x + 2 * dx, y: p.y + 2 * dy } });
-    const bev = lastThrow(blocked.events);
-    expect(bev.outcome).toBe('blocked');
-    expect(bev.blockedBy).toBe('actor');
-    expect(bev.reached).toBe('e_tsta01');
-    expect(say(sc, blocked.events)).toMatch(/途中のゴブリン/);
+    expect(blocked.ok).toBe(false);
+    if (!blocked.ok) expect(blocked.error.code).toBe('no_line_of_sight');
     // A を ID で狙う: 命中か外れのどちらか（どちらも文章と落下地点）
     const direct = act(sc, { type: 'throw', slot: knifeSlot(sc), target: 'e_tsta01' });
     const dev = lastThrow(direct.events);
@@ -165,9 +161,10 @@ describe('V3-1 throwing (report 1, 2, 11)', () => {
     const empty = act(sc, { type: 'throw', slot: knifeSlot(sc), target: { x: p.x + 3 * dx, y: p.y + 3 * dy } });
     expect(lastThrow(empty.events).outcome).toBe('no_target');
     expect(say(sc, empty.events)).toMatch(/\(\d+,\d+\) に落ちた/);
+    // 射程の外の座標は拒否する（V3-3c §44.6）
     const far = act(sc, { type: 'throw', slot: knifeSlot(sc), target: { x: p.x + 9 * dx, y: p.y + 9 * dy } });
-    expect(lastThrow(far.events).outcome).toBe('fell_short');
-    expect(say(sc, far.events)).toMatch(/届かず、\(\d+,\d+\) に落ちた/);
+    expect(far.ok).toBe(false);
+    if (!far.ok) expect(far.error.code).toBe('out_of_range');
   });
 
   it('throw candidates are clear shots in range, attackers first (report 11); harmful potions are thrown, not drunk', () => {

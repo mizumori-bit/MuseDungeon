@@ -15,7 +15,7 @@ import type { NavGrid } from './nav';
 import { buildNavGrid, distanceField, findFrontiers } from './nav';
 import type { Dir, EntityRole, Expedition, HaulParts, Locale, MonsterMemory, Names, ObjectiveType, OfferSlot, Pos } from './types';
 import { DIRS, DIR_VEC } from './types';
-import { cheb, ceilDiv, compassDir, damageRangeVs, dirTo, floorDiv, formatDice, parseDice, t } from './util';
+import { addDiceBonus, cheb, ceilDiv, compassDir, damageRangeVs, dirTo, floorDiv, formatDice, parseDice, t } from './util';
 import type { EntityView, HpState, ItemView, PlayerView, ViewStatus } from './view';
 import { hpState, xpForLevel } from './view';
 
@@ -117,6 +117,8 @@ export interface ObsExpedition {
   goal?: { type: string; value: number; within: number; text: string };
   /** 目標の気配（目標階にいる間。方角と 10 マス以内かどうか。V3-2R §14.2） */
   sense?: { what: 'guardian' | 'relic'; dir: Dir; range: 'far' | 'near'; text: string };
+  /** 護りの火の手がかり（V3-3c §44.6）: 同じ守護者の火を 1 基見ていれば、まだ見ていない灯っている火の方角と遠さ */
+  ward_fires?: { guardian: string; dir: Dir; range: 'far' | 'near'; text: string }[];
   /** 未確定の戦利品（v3）。今 extract した場合の確定点と、次に踏破の点が入る階 */
   haul?: {
     total: number; multiplier_pct: number; parts: HaulParts;
@@ -140,6 +142,8 @@ export interface ObsCamp {
   offers: {
     index: number; type: ObjectiveType; target_depth: number | null; points: number; text: string;
     slot?: OfferSlot; traits?: string[]; multiplier_pct: number;
+    /** 再挑戦（V3-3c §44.1）: その守護者を目的にした遠征の番号 */
+    rechallenge?: { no: number | null };
     /** 推奨レベルと、自分のレベルとの差（正なら推奨より低い）。条件の危険度の合計は別に出す（V3-2R §14.4） */
     recommended_level: number | null; level_gap: number | null; trait_danger: number;
     /** 守護者の見込み（格と見れば分かる特徴。種族名は会うまで出さない。V3-2R3 §20.1） */
@@ -163,7 +167,8 @@ export interface ObsMilestone { depth: number; name: string; types: { id: string
 /** 加護の一覧（V3-3 §3.3）。used: 遠征に 1 回の加護をこの遠征で使った */
 export interface ObsBoon { id: string; name: string; desc: string; used?: boolean }
 export interface ObsPlayer { id: string; name: string; pos: Pos; dir: Dir | null; dist: number; hp_state: HpState }
-export interface ObsFeature { type: string; name: string; pos: Pos; dir: Dir | null; dist: number; state?: string }
+/** lair: 棲み処の地物（護りの火）の持ち主の守護者の呼び名（V3-3c §44.6） */
+export interface ObsFeature { type: string; name: string; pos: Pos; dir: Dir | null; dist: number; state?: string; lair?: string }
 /**
  * 自分の持ち物の性能（鑑定済みのみ。接辞込み）。weapon.traits は武器の特性（V3-4）、armor の move_cost / wake_pct は重い鎧、
  * mods は装飾品の修正と、接辞による追加の修正（最大 HP・視界など）
@@ -211,6 +216,8 @@ export interface Observation {
     perk_choice?: { level: number; options: { option: number; id: string; name: string; desc: string; lineage: string }[]; more: number };
     /** 加護（V3-3 §3.3）: 持ち帰った遺物から。ランの終わりまで残る */
     boons: ObsBoon[];
+    /** 文の加護の行は名前だけ（説明はこの遠征で出した） */
+    boons_brief?: boolean;
     /** 選べる加護の候補（大守護者を倒した。choose_boon { option }。V3-3 §3.2） */
     boon_choice?: { depth: number; options: { option: number; id: string; name: string; desc: string }[] };
   };
@@ -243,10 +250,14 @@ export interface ObservationOptions {
   recent?: PerceivedEvent[];
   /** 帰還の綱の長い説明はこの遠征で出した（以降は短い行。V3-3a §35.8） */
   lifelineShort?: boolean;
+  /** 加護の行は名前だけ（この遠征で説明を出した。V3-3c §44.6） */
+  boonsShort?: boolean;
   /** キャンプ: 直前の遠征の比較（遠征レポートから。V3-6 §35.9） */
   campCompare?: { no: number; lines: string[]; compare?: ReportCompare };
   /** 目標（V3-7a §40.8）: キャンプでは info、遠征中は宣言中の目標といまの値（最も下がった HP・期限の残り） */
   goal?: { info?: GoalInfo; active?: GoalRecord; live?: { minHpPct?: number; leftExpeditions?: number } };
+  /** キャンプ: 候補に添える注記（候補の番号 → 文。再挑戦の前回の戦い。V3-3c §44.1） */
+  offerNotes?: Record<number, string>;
 }
 
 const DIR_JA: Record<Dir, string> = { n: '北', ne: '北東', e: '東', se: '南東', s: '南', sw: '南西', w: '西', nw: '北西' };
@@ -537,22 +548,25 @@ export function chaseEstimate(view: PlayerView, catalog: Catalog, hunters: reado
 
 /** 節目の文（「次の節目: 地下5階の大守護者「呼び集める者ヴォルン」（型: 呼び集める者・突き進む者。未踏破）」） */
 /** いまの持ち物で、その装甲に 1 回に通るダメージの目安（近接の武器と、持っている投擲物。急所狙いの分を引く。V3-3b §40.1） */
-export function gearVsArmorText(L: Locale, catalog: Catalog, view: PlayerView, armor: number): string {
+export function gearVsArmorText(L: Locale, catalog: Catalog, view: PlayerView, armor: number, hp?: number): string {
   const parts: string[] = [];
   const me = view.self;
+  // 体力が分かっていれば、倒すのに要る命中の数（平均で。V3-3c §44.2）
+  const hits = (r: { min: number; max: number }) => (hp !== undefined && r.max > 0 ? t(L, `（およそ ${Math.trunc((hp * 2 + Math.max(1, r.min + r.max) - 1) / Math.max(1, r.min + r.max))} 回の命中）`, ` (~${Math.trunc((hp * 2 + Math.max(1, r.min + r.max) - 1) / Math.max(1, r.min + r.max))} hits)`) : '');
   const melee = damageRangeVs(me.stats.dmg, me.stats.might, armor);
   const wid = view.inventory.find((i) => i.equipped === 'weapon');
   const wname = wid ? itemDisplayName(catalog, L, wid.kind, wid.appearanceId, wid.affixes) : t(L, '素手', 'bare hands');
-  parts.push(`${wname} ${melee.min}〜${melee.max}`);
+  parts.push(`${wname} ${melee.min}〜${melee.max}${hits(melee)}`);
   let pierce = 0;
-  for (const id of me.build.perks) pierce += catalog.perks[id]?.thrownPierce ?? 0;
+  let arm = 0;
+  for (const id of me.build.perks) { pierce += catalog.perks[id]?.thrownPierce ?? 0; arm += catalog.perks[id]?.thrownDmg ?? 0; }
   const seen = new Set<string>();
   for (const it of view.inventory) {
     const ci = it.kind ? catalog.items[it.kind] : undefined;
     if (!ci || ci.category !== 'throwing' || !ci.throwStats?.dmg || seen.has(it.kind!)) continue;
     seen.add(it.kind!);
-    const r = damageRangeVs(ci.throwStats.dmg, 0, Math.max(0, armor - pierce));
-    parts.push(`${nameOf(ci.name, L, it.kind!)} ${r.min}〜${r.max}`);
+    const r = damageRangeVs(ci.throwStats.dmg, arm, Math.max(0, armor - pierce));
+    parts.push(`${nameOf(ci.name, L, it.kind!)} ${r.min}〜${r.max}${hits(r)}`);
   }
   return t(L, `いまの持ち物で 1 回に通る目安: ${parts.join('・')}（会心・型の効果を除く）`, `per hit with your gear: ${parts.join(', ')} (before crits and type effects)`);
 }
@@ -569,7 +583,7 @@ export function milestoneObs(L: Locale, catalog: Catalog, m: { depth: number; na
     intel?.armor !== undefined ? t(L, `装甲 ${intel.armor}`, `armor ${intel.armor}`) : '',
   ].filter(Boolean);
   // 装甲が分かっていれば、いまの持ち物で通る目安（V3-3b §40.1）
-  const gear = intel?.armor !== undefined && view && !cleared.includes(m.depth) ? t(L, `。${gearVsArmorText(L, catalog, view, intel.armor)}`, `; ${gearVsArmorText(L, catalog, view, intel.armor)}`) : '';
+  const gear = intel?.armor !== undefined && view && !cleared.includes(m.depth) ? t(L, `。${gearVsArmorText(L, catalog, view, intel.armor, intel.hp)}`, `; ${gearVsArmorText(L, catalog, view, intel.armor, intel.hp)}`) : '';
   const memText = mem.length ? t(L, `。記録庫の記憶: ${mem.join('・')}${gear}`, `; the archive remembers: ${mem.join(', ')}${gear}`) : '';
   return {
     depth: m.depth, name, types, cleared: done,
@@ -590,8 +604,9 @@ export function boonsOf(view: PlayerView, catalog: Catalog, L: Locale): ObsBoon[
 }
 
 /** 加護の 1 行（「加護: 息吹（自然回復の間隔 −2）・鋼（装甲 +1）」） */
-export function boonsText(L: Locale, boons: readonly ObsBoon[]): string {
+export function boonsText(L: Locale, boons: readonly ObsBoon[], brief = false): string {
   if (!boons.length) return t(L, '加護: なし（遺物を階段の上で持ち帰ると付く）', 'Boons: none (carry a relic out on stairs to gain one)');
+  if (brief) return t(L, `加護: ${boons.map((b) => `${b.name}${b.used ? '（使った）' : ''}`).join('・')}`, `Boons: ${boons.map((b) => `${b.name}${b.used ? ' (used)' : ''}`).join(', ')}`);
   return t(L, `加護: ${boons.map((b) => `${b.name}（${b.desc}${b.used ? '。この遠征では使った' : ''}）`).join('・')}`,
     `Boons: ${boons.map((b) => `${b.name} (${b.desc}${b.used ? '; used this expedition' : ''})`).join(', ')}`);
 }
@@ -743,11 +758,13 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
   const pathDist = (p: Pos): number => (dist && f ? dist[p.y * f.width + p.x] : -1);
 
   // 投げられる持ち物（射程が分かるもの。装備中は除く）
+  // 強肩: 投擲のダメージの上乗せ（V3-3c §44.4）
+  const armBonus = me.build.perks.reduce((a, id) => a + (catalog.perks[id]?.thrownDmg ?? 0), 0);
   const throwables = view.inventory
     .filter((it) => !it.equipped)
     .map((it) => ({ slot: it.slot, item: it, stats: itemStats(catalog, it.kind, it.affixes) }))
     .filter((x) => !!x.stats?.throw)
-    .map((x) => ({ slot: x.slot, item: x.item, range: x.stats!.throw!.range, dmg: x.stats!.throw!.dmg, acc: x.stats!.throw!.acc }));
+    .map((x) => ({ slot: x.slot, item: x.item, range: x.stats!.throw!.range, dmg: x.stats!.throw!.dmg && armBonus ? addDiceBonus(x.stats!.throw!.dmg, armBonus) : x.stats!.throw!.dmg, acc: x.stats!.throw!.acc }));
   const monsters: ObsMonster[] = [];
   const items: ObsItem[] = [];
   const players: ObsPlayer[] = [];
@@ -832,7 +849,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
     } else if (e.cat === 'player') {
       players.push({ id: e.id, name: e.name ?? '?', pos: e.pos, ...rel(e.pos), hp_state: e.hp ?? 'healthy' });
     } else {
-      features.push({ type: e.kind ?? 'feature', name: kindName(catalog, L, e.kind), pos: e.pos, ...rel(e.pos), state: e.state });
+      features.push({ type: e.kind ?? 'feature', name: kindName(catalog, L, e.kind), pos: e.pos, ...rel(e.pos), state: e.state, ...(e.lair ? { lair: guardianDisplayName(L, e.lair) } : {}) });
     }
   }
   monsters.sort((a, b) => a.dist - b.dist || (a.id < b.id ? -1 : 1));
@@ -849,7 +866,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       if (r.value !== undefined) it.value = r.value;
       rememberedItems.push(it);
     }
-    if (r.cat !== 'item') features.push({ type: r.kind ?? 'feature', name: kindName(catalog, L, r.kind), pos: r.pos, ...rel(r.pos), state: r.state });
+    if (r.cat !== 'item') features.push({ type: r.kind ?? 'feature', name: kindName(catalog, L, r.kind), pos: r.pos, ...rel(r.pos), state: r.state, ...(r.lair ? { lair: guardianDisplayName(L, r.lair) } : {}) });
   }
   // 記憶の中のアイテムは近い順に 3 件まで（遺物は常に出す）。戦闘中（追跡中の敵が見えている間）は出さない。残りは件数だけ（V3-2R §14.2）
   rememberedItems.sort((a, b) => a.dist - b.dist || (a.id < b.id ? -1 : 1));
@@ -1086,6 +1103,13 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
     if (xv.result) expedition.result = { ...xv.result, text: resultText(L, xv, catalog.rules) };
     if (xv.slot) expedition.slot = xv.slot;
     if (xv.traits.length) expedition.traits = [...xv.traits];
+    // 護りの火の手がかり（V3-3c §44.6）
+    if (view.wardHints?.length && active) {
+      expedition.ward_fires = view.wardHints.map((h) => {
+        const nm = guardianDisplayName(L, h.guardian);
+        return { guardian: nm, dir: h.dir, range: h.range, text: t(L, `まだ見ていない護りの火（${nm}）: ${DIR_JA[h.dir]}・${h.range === 'near' ? '近い（10 マス以内）' : '遠い'}`, `unseen ward fire (${nm}): ${h.dir}, ${h.range === 'near' ? 'near (within 10)' : 'far'}`) };
+      });
+    }
     if (view.sense && active) {
       const sv = view.sense;
       const who = sv.what === 'relic' ? t(L, '遺物', 'The relic') : t(L, '守護者', 'The guardian');
@@ -1157,7 +1181,8 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       next_no: view.camp.nextNo,
       offers: view.camp.offers.map((o) => ({
         index: o.index, type: o.objective.type, target_depth: o.objective.targetDepth, points: o.points,
-        text: offerText(L, o, rules ? { rules, level: me.level } : undefined) + ((): string => {
+        ...(o.rechallenge ? { rechallenge: { no: o.rechallenge.no } } : {}),
+        text: offerText(L, o, rules ? { rules, level: me.level } : undefined) + (opts.offerNotes?.[o.index] ? ` / ${opts.offerNotes[o.index]}` : '') + ((): string => {
           // 遺物を納めると、記録庫が次の節目の番人の記憶を 1 つ返す（V3-3a §35.7）
           const msd = view.camp?.milestone?.depth;
           if (!o.relic || msd === undefined) return '';
@@ -1289,6 +1314,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       abilities: abilitiesList,
       ...(perkChoiceObs ? { perk_choice: perkChoiceObs } : {}),
       boons: boonsOf(view, catalog, L),
+      ...(opts.boonsShort ? { boons_brief: true } : {}),
       ...(boonChoiceObs ? { boon_choice: boonChoiceObs } : {}),
     },
     visible: { monsters, items, players, features, ...(itemsOmitted ? { items_omitted: itemsOmitted } : {}) },
@@ -1575,7 +1601,10 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
     if (!far) continue;
     const withKind = view.inventory.find((i) => i.slot === g.slots[0])?.kind;
     const aimed = x.abilities.find((a) => abilityHandlerOf(catalog, a.id) === 'aimed_throw' && a.uses_left !== 0);
-    out.push(`fight ${far.id} with:${withKind ? shortId(withKind) : g.slots[0]}${aimed ? ` abilities:${aimed.id}` : ''} (${t(L, `投擲で決着まで・${stopText}`, `throw until it falls, ${stopText}`)}${aimed ? t(L, `・${aimed.name}を使える手番に使う`, `, uses ${aimed.name} when ready`) : ''})`);
+    // 投げられる種類がほかにもあれば並べる（前の品が尽きたら次へ。V3-3c §44.6）
+    const kinds = [...new Set([withKind, ...view.inventory.filter((i) => !i.equipped && i.kind && catalog.items[i.kind]?.category === 'throwing').map((i) => i.kind)].filter((k): k is string => !!k))].map(shortId);
+    const withArg = withKind && kinds.length > 1 ? `[${kinds.join(',')}]` : withKind ? shortId(withKind) : g.slots[0];
+    out.push(`fight ${far.id} with:${withArg}${aimed ? ` abilities:${aimed.id}` : ''} (${t(L, `投擲で決着まで・${stopText}`, `throw until it falls, ${stopText}`)}${kinds.length > 1 ? t(L, '・前の品が尽きたら次の品', ', next item when one runs out') : ''}${aimed ? t(L, `・${aimed.name}を使える手番に使う`, `, uses ${aimed.name} when ready`) : ''})`);
     break;
   }
   // 隣接する扉・地物
@@ -1658,7 +1687,7 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
     const head = fmt.expedition === 'short'
       ? t(L, `【遠征${x.no}】${x.can_extract ? 'この場で extract できる' : 'extract は階段の上で'}`, `[Expedition ${x.no}] ${x.can_extract ? 'you can extract here' : 'extract on stairs'}`)
       : x.text;
-    lines.push([head, x.haul?.text, x.sense?.text].filter(Boolean).join(' | '));
+    lines.push([head, x.haul?.text, x.sense?.text, ...(x.ward_fires ?? []).map((w) => w.text)].filter(Boolean).join(' | '));
     if (x.goal) lines.push(x.goal.text);
   }
   if (obs.alerts.length) lines.push('!! ' + obs.alerts.map((a) => a.text).join(' / '));
@@ -1671,7 +1700,7 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
     const pk = s.perks.map((x) => `${x.name}${x.ranks > 1 ? `×${x.ranks}` : ''}`).join(t(L, '・', ', '));
     lines.push(t(L, `能動技: ${ab || 'なし'} | 特技: ${pk || 'なし'}`, `Abilities: ${ab || 'none'} | Perks: ${pk || 'none'}`));
   }
-  if (s.boons?.length) lines.push(boonsText(L, s.boons));
+  if (s.boons?.length) lines.push(boonsText(L, s.boons, !!s.boons_brief));
   const re = s.rest_estimate;
   const alive = obs.status !== 'dead' && obs.status !== 'ended';
   if (re && alive) {
@@ -1721,7 +1750,7 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
       lines.push(`- ${it.name}${qtyText}${tags} ${it.id} (${it.pos.x},${it.pos.y}) ${relLabel(L, from, it.pos)}${it.remembered ? t(L, ' (記憶)', ' (remembered)') : ''}`);
     }
     if (vis.items_omitted) lines.push(`- ${t(L, `ほかに記憶しているアイテム ${vis.items_omitted} 件（get_map の注目点）`, `${vis.items_omitted} more remembered items (see get_map)`)}`);
-    for (const ft of vis.features) lines.push(`- ${ft.name} (${ft.pos.x},${ft.pos.y}) ${relLabel(L, from, ft.pos)}${ft.state && ft.state !== 'idle' ? ` [${featureStateText(L, ft.state)}]` : ''}`);
+    for (const ft of vis.features) lines.push(`- ${ft.name}${ft.lair ? t(L, `（${ft.lair}の棲み処）`, ` (${ft.lair}'s lair)`) : ''} (${ft.pos.x},${ft.pos.y}) ${relLabel(L, from, ft.pos)}${ft.state && ft.state !== 'idle' ? ` [${featureStateText(L, ft.state)}]` : ''}`);
     for (const st2 of stairsLines) {
       const name = st2.type === 'down' ? t(L, '下り階段', 'stairs down') : t(L, '上り階段', 'stairs up');
       lines.push(`- ${name} (${st2.pos.x},${st2.pos.y}) ${t(L, '距離', 'dist')}${st2.dist} ${st2.reachable ? t(L, '到達可', 'reachable') : t(L, '到達不明', 'unknown path')}`);

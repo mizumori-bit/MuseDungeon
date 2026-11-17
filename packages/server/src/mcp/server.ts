@@ -232,7 +232,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
     description: 'キャンプで、次の遠征からの目標を 1 つ宣言する（任意。点・経験値・戦利品には影響しない）。型は depth（最深到達を地下 N 階に。期限 1〜3 回の遠征）・banked（1 回の遠征で確定 X 点以上。次の遠征）・milestone（次の節目の大守護者を倒す。期限 1〜3 回）・margin（達成した遠征で、最も下がった HP を最大の N% 以上に保つ。次の遠征）。option に 1〜3 を渡すと候補（自己最高に並ぶ／少し超える／大きく超える）の値を使う。value で好きな値も宣言できる。type: none で取り下げ。宣言し直すと前の目標は取り下げになる。候補はキャンプの観測と expedition に出る。手番を消費しない。Declare an optional goal at camp (no effect on points).',
     inputSchema: {
       ...common,
-      type: z.enum(['depth', 'banked', 'milestone', 'margin', 'none']).describe('目標の型（none で取り下げ）'),
+      type: z.enum(['depth', 'banked', 'milestone', 'margin', 'none']).optional().describe('目標の型（none で取り下げ。省くと候補と記録を返す）'),
       option: z.number().int().min(1).max(3).optional().describe('候補の番号（1: 自己最高に並ぶ・2: 少し超える・3: 大きく超える。節目は 1: 3 回以内・2: 2 回以内・3: 次の遠征）'),
       value: z.number().int().min(1).optional().describe('値（深さ・確定点・HP の %。節目は次の節目の深さ）'),
       within: z.number().int().min(1).max(3).optional().describe('期限の遠征の数（depth・milestone だけ。既定 1、候補を使えば候補の値）'),
@@ -241,12 +241,15 @@ export function createMcpServer(ctx: McpContext): McpServer {
     const port = portOf(args.player_token);
     if (!port) return noSession();
     const L = port.view().locale;
+    // 引数なし: 候補と記録を返す（V3-3c §44.5: キャンプの観測は 1 行になった）
+    if (args.type === undefined) { const info = port.goalInfo(); return withTurn(port, (info.full ?? info.lines).join('\n'), { info } as Record<string, unknown>); }
     if (args.type === 'none') { const r = port.declareGoal(null); return withTurn(port, r.text, (r.data ?? {}) as Record<string, unknown>); }
     let decl: { type: 'depth' | 'banked' | 'milestone' | 'margin'; value: number; within: number } | null = null;
+    const gtype = args.type;
     if (args.option !== undefined) {
-      const c = port.goalInfo().candidates.filter((x) => x.type === args.type)[args.option - 1];
+      const c = port.goalInfo().candidates.filter((x) => x.type === gtype)[args.option - 1];
       if (c) decl = { type: c.type, value: args.value ?? c.value, within: args.within ?? c.within };
-    } else if (args.value !== undefined) decl = { type: args.type, value: args.value, within: args.within ?? 1 };
+    } else if (args.value !== undefined) decl = { type: gtype, value: args.value, within: args.within ?? 1 };
     if (!decl) return withTurn(port, t(L, 'value か option を渡す（候補はキャンプの観測の「目標の候補」）。', 'Pass value or option (see the goal options at camp).'), { error: 'no_value' });
     const r = port.declareGoal(decl);
     return withTurn(port, r.text, (r.data ?? {}) as Record<string, unknown>);
@@ -417,13 +420,16 @@ export function createMcpServer(ctx: McpContext): McpServer {
   server.registerTool('fight', {
     title: '戦う', description: 'マクロ: その相手と決着を付ける。with なしは近接（追跡中の相手が隣に来るまで待つ。最大 10 手番）、with にスロットか品の種類を渡すとその品を投げて戦う（射程と射線が通るまで待つ。品が尽きたら、追跡中の敵の隣を通らずに届く自分の投擲物を拾いに行って続ける。retrieve: false で切れる）。相手が倒れた・離れた・逃げて見えなくなった、（with）隣に来た・品が尽きた、HP が hp_floor（既定 50%）を下回った、被弾の記録の無い種族の追跡中の敵が現れた、待つ間に別の敵に撃たれた、状態異常を受けたら止まる（記録のある種族が新しく見えても止まらない）。物陰に入った相手は数手番待つ。眠っている・気付いていない相手は待たない。until: clear なら、標的を倒した後も届く追跡中の敵（隣の敵、いなければ最も近い敵）へ続ける。adjacent は with の相手が隣に来たとき（stop: 止まる・既定 / throw: 投げ続ける / melee: 近接に切り替える）。abilities に能動技（強打・なぎ払い・狙い撃ち）を並べると、使える手番ごとに使う（強打は標的が隣、なぎ払いは起きている敵が隣に 2 体以上、狙い撃ちは with の品で射程と射線が通るとき。それ以外の手番は通常の攻撃）。結果に与えた・受けた攻撃の回数と合計、使った能動技の回数。',
     inputSchema: {
-      ...actionCommon, target: z.string().regex(/^e_[0-9a-z]{6}$/), with: z.string().regex(/^([a-z]|(core:)?[a-z][a-z0-9_]+)$/).optional().describe('投げて戦う品の所持品スロット（self.attack.throws）か品の種類（throwing_knife など。拾ってスロットが変わっても同じ種類を投げる）'), hp_floor: z.number().int().min(0).optional(),
+      ...actionCommon, target: z.string().regex(/^e_[0-9a-z]{6}$/),
+      with: z.union([z.string().regex(/^([a-z]|(core:)?[a-z][a-z0-9_]+)$/), z.array(z.string().regex(/^([a-z]|(core:)?[a-z][a-z0-9_]+)$/)).min(1).max(4)]).optional().describe('投げて戦う品の所持品スロット（self.attack.throws）か品の種類（javelin・throwing_knife など。拾ってスロットが変わっても同じ種類を投げる）。配列なら前の品が尽きて拾い直せる物も無くなったら次の品へ（["javelin", "throwing_knife"]）'),
+      collect_after: z.boolean().optional().describe('決着の後（倒した・until: clear で片付いた）、追跡中の敵が見えていなければ自分の投擲物を拾う（collect と同じ止まり方）'),
+      hp_floor: z.number().int().min(0).optional(),
       retrieve: z.boolean().optional().describe('with の品が尽きたら、追跡中の敵の隣を通らずに届く自分の投擲物を拾いに行く（既定 true）'),
       until: z.enum(['target', 'clear']).optional().describe('clear: 標的を倒した後も、届く追跡中の敵へ続ける（既定 target: 標的 1 体）'),
       adjacent: z.enum(['throw', 'melee', 'stop']).optional().describe('with の相手が隣に来たとき（既定 stop）'),
       abilities: z.array(z.string().min(1)).max(4).optional().describe('使える手番ごとに使う能動技（bash・cleave・aimed_throw。aimed_throw は with と一緒に。second_wind・slip は載せられない）'),
     },
-  }, async (a) => act('fight', a, { type: 'fight', target: a.target, ...(a.with ? { with: a.with } : {}), hpFloor: a.hp_floor, ...(a.abilities?.length ? { abilities: a.abilities } : {}), ...(a.until ? { until: a.until } : {}), ...(a.adjacent ? { adjacent: a.adjacent } : {}), ...(a.retrieve === false ? { retrieve: false } : {}) }));
+  }, async (a) => act('fight', a, { type: 'fight', target: a.target, ...(a.with ? (Array.isArray(a.with) ? { with: a.with[0], ...(a.with.length > 1 ? { alsoWith: a.with.slice(1) } : {}) } : { with: a.with }) : {}), ...(a.collect_after ? { collectAfter: true } : {}), hpFloor: a.hp_floor, ...(a.abilities?.length ? { abilities: a.abilities } : {}), ...(a.until ? { until: a.until } : {}), ...(a.adjacent ? { adjacent: a.adjacent } : {}), ...(a.retrieve === false ? { retrieve: false } : {}) }));
   server.registerTool('attack', {
     title: '攻撃', description: '近接攻撃。隣の敵か、長柄の武器（槍）なら縦・横・斜めの直線で 2 マス先の敵（間のマスが通れて誰もいないこと）。隣の敵なら move でも攻撃できる。',
     inputSchema: { ...actionCommon, target: z.string().regex(/^e_[0-9a-z]{6}$/) },
@@ -453,7 +459,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
     inputSchema: { ...actionCommon, slot: z.string().describe(SlotZ.description ?? ''), target: z.any().optional().describe(TargetZ.description ?? ''), target_slot: z.string().optional().describe('鑑定の巻物などの対象の所持品スロット') },
   }, async (a) => act('use_item', a, { type: 'use', slot: a.slot, target: a.target as never, targetSlot: a.target_slot }));
   server.registerTool('throw_item', {
-    title: '投げる', description: '対象（エンティティ ID・座標・方向）へ投げる。ID 指定で経路が通らなければ no_line_of_sight、射程外なら out_of_range（どちらも手番を使わない）。座標を狙えば遮られた位置・射程の端に落ちる。',
+    title: '投げる', description: '対象（エンティティ ID・座標・方向）へ投げる。ID・座標の指定で経路が通らなければ no_line_of_sight、射程外なら out_of_range（どちらも手番を使わない）。方向を狙えば遮られた位置・射程の端に落ちる。',
     inputSchema: { ...actionCommon, slot: z.string().describe(SlotZ.description ?? ''), target: z.any().describe(TargetZ.description ?? '') },
   }, async (a) => act('throw_item', a, { type: 'throw', slot: a.slot, target: a.target as never }));
   server.registerTool('interact', { title: '操作', description: '扉の開閉、泉・祭壇などの操作。dir 省略時は足元。', inputSchema: { ...actionCommon, dir: DirZ.optional() } },

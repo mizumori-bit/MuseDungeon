@@ -60,8 +60,15 @@ describe('V3-6 expedition report (§6.1)', () => {
     expect(r.status).toBe('ended');
     expect(r.reason).toBe('completed');
     // min_hp_pct: 最も下がった HP（6/30 = 20%。V3-7a の余力の目標）
-    expect(r.combat).toEqual({ dealt: 13, taken: 24, hits: 1, misses: 1, crits: 0, kills: 2, melee_kills: 2, thrown_kills: 0, ability_uses: 0, min_hp_pct: 20 });
-    expect(r.economy).toEqual({ potions_used: 1, scrolls_read: 0, items_left_unidentified: 1, treasure_banked: 40 });
+    const { guardian_fights: gfights, ...combat } = r.combat;
+    expect(combat).toEqual({ dealt: 13, taken: 24, hits: 1, misses: 1, crits: 0, kills: 2, melee_kills: 2, thrown_kills: 0, ability_uses: 0, min_hp_pct: 20 });
+    // 守護者ごとの戦い（V3-3c §44.1: 再挑戦の候補の「前回は与 N・被 M」）
+    expect(gfights?.length).toBe(1);
+    expect(gfights?.[0].outcome).toBe('slain');
+    // 薬の内訳（V3-3c §44.6）
+    const { potions_detail: pd, ...economy } = r.economy;
+    expect(economy).toEqual({ potions_used: 1, scrolls_read: 0, items_left_unidentified: 1, treasure_banked: 40 });
+    expect(pd).toMatch(/ 1$/);
     // 手番は開始時点（10）から最後の記録（16）まで。呼び出しはマクロの 1 手を除く 6 件、手は 8 件のうちマクロが 4
     expect(r.tempo).toMatchObject({ turns: 6, turns_resting: 2, tool_calls: 6, macro_share_pct: 50, deepest: 3 });
     expect(r.payout).toEqual({ parts: { objective: 1000, overreach: 0, treasure: 40, bounty: 0, discovery: 50, kills: 20 }, multiplier_pct: 110, banked: 1200, lost: 0 });
@@ -183,7 +190,8 @@ describe('V3-6 reports in the session (§6.1・§6.2・§35.9)', () => {
     expect(text).toContain('振り返り（遠征 1・帰還・達成）:');
     // キャンプの観測: 比較の行は目標の文に吸収された（V3-7a §40.8）。比較のデータは残る
     expect(text).toContain('目標: 未宣言');
-    expect(text).toContain('目標の候補: 深さ 地下');
+    // キャンプの目標の行は 1 行（V3-3c §44.5。候補は declare_goal を引数なしで）
+    expect(text).toContain('目標: 未宣言（declare_goal で候補が出る');
     const obs1 = t.r.port.observe({ map: false }).observation;
     expect(obs1.camp?.compare?.lines).toHaveLength(1);
     // キャンプの expedition: 直前の遠征のレポート

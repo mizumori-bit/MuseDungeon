@@ -107,7 +107,8 @@ function clearLine(ctx: Ctx, key: string, from: Pos, dir: keyof typeof DIR_VEC, 
 guardianTypeHandlers.register('warded', {
   armor(ctx, m, params) {
     if (!m.pos) return 0;
-    const lit = ctx.entitiesOn(m.pos.floor).some((e) => e.kind === 'core:ward_fire' && e.feature?.state === 'lit');
+    // 自分の棲み処の火だけ（V3-3c §44.6。持ち主の無い古い火は、今までどおり階のどの守護者のものとも数える）
+    const lit = ctx.entitiesOn(m.pos.floor).some((e) => e.kind === 'core:ward_fire' && e.feature?.state === 'lit' && (!e.lairOf || e.lairOf === m.id));
     return lit ? params.armor ?? 4 : 0;
   },
 });
@@ -225,7 +226,8 @@ guardianTypeHandlers.register('deflector', {
 
 // ---- 弱点 ----
 weaknessHandlers.register('poison', { dotMult: (p) => p.mult ?? 2 });
-weaknessHandlers.register('thrown', { incoming: (dmg, via, p) => (via === 'thrown' ? dmg * (p.mult ?? 2) : dmg) });
+// 投擲に弱い: pct %（端数は切り上げ。V3-3c §44.2 で 2 倍から 1.5 倍へ）。古いデータの mult も読む
+weaknessHandlers.register('thrown', { incoming: (dmg, via, p) => (via !== 'thrown' ? dmg : p.pct !== undefined ? floorDiv(dmg * p.pct + 99, 100) : dmg * (p.mult ?? 2)) });
 weaknessHandlers.register('deep_sleep', { critIfUnaware: true, asleep: true });
 weaknessHandlers.register('water_slow', {
   lairTerrain: 'core:shallow_water',

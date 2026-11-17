@@ -33,10 +33,11 @@ export function nextMilestone(ctx: Ctx): MilestoneInfo | null {
  * 大守護者の下見（V3-3a §35.2・§35.7）: その深さの階を生成したときの大守護者の種族・体力・最大の一撃。
  * 生成は決定的なので、階を作らずに同じ値が分かる（階が既にあればその個体の値）
  */
-export function wardenPreview(ctx: Ctx, depth: number): { kind: string; hp: number; maxHit: number; armor: number } | null {
+export function wardenPreview(ctx: Ctx, depth: number): { kind: string; hp: number; maxHit: number; armor: number; affixes: string[] } | null {
   const key = `main:${depth}`;
   const live = ctx.world.floors[key] ? ctx.entitiesOn(key).find((e) => e.guardian?.warden) : undefined;
-  if (live?.stats) return { kind: live.kind, hp: live.stats.maxHp, maxHit: diceMax(live.stats.dmg) + live.stats.might, armor: live.stats.armor };
+  const plain = (a: readonly string[]) => a.filter((x) => ctx.content.affixes[x]?.target !== 'guardian');
+  if (live?.stats) return { kind: live.kind, hp: live.stats.maxHp, maxHit: diceMax(live.stats.dmg) + live.stats.might, armor: live.stats.armor, affixes: plain(live.scale?.affixes ?? []) };
   const g = generateFloor(ctx.content, ctx.world.secret.seed, 'main', depth, ctx.world.meta.terrainTable);
   const sp = g.spawns.find((x) => x.type === 'monster' && x.guardian?.warden);
   if (!sp || sp.type !== 'monster') return null;
@@ -48,7 +49,13 @@ export function wardenPreview(ctx: Ctx, depth: number): { kind: string; hp: numb
   const might = (def?.stats.might ?? 0) + sp.tier + mods.might;
   // 装甲も makeMonster と同じ式（spawn.ts: 種族 + 深層強化の半分 + 接辞）
   const armor = (def?.stats.armor ?? 0) + floorDiv(sp.tier, 2) + mods.armor;
-  return { kind: sp.kind, hp, maxHit: diceMax(addDiceBonus(def?.attack.dice ?? '1d2', mods.dmgBonus)) + might, armor };
+  return { kind: sp.kind, hp, maxHit: diceMax(addDiceBonus(def?.attack.dice ?? '1d2', mods.dmgBonus)) + might, armor, affixes: plain(sp.affixes) };
+}
+
+/** 大守護者の体力の幅（V3-3c §44.2: 式の下限と上限。種族によらない） */
+export function wardenHpRange(content: Content, depth: number): { min: number; max: number } {
+  const wb = content.balance.guardian.warden;
+  return { min: wb.minHpBase + wb.minHpPerDepth * depth, max: wb.maxHpBase + wb.maxHpPerDepth * depth };
 }
 
 /** その階で生きている大守護者（いれば下り階段は封じられている） */

@@ -194,7 +194,7 @@ export class SessionPlayerPort implements PlayerPort {
   observe(opts: { detail?: 'brief' | 'full'; map?: boolean; consume?: boolean } = {}): { observation: Observation; text: string } {
     const view = this.view();
     const recent = opts.consume ? this.session.consumeFor(this.playerId) : this.pending();
-    const observation = buildObservation(view, this.catalog, { detail: opts.detail ?? 'brief', map: opts.map ?? true, recent: recent.slice(-10), campCompare: this.campCompare(view), goal: this.goalOpt(view) });
+    const observation = buildObservation(view, this.catalog, { detail: opts.detail ?? 'brief', map: opts.map ?? true, recent: recent.slice(-10), campCompare: this.campCompare(view), goal: this.goalOpt(view), offerNotes: this.offerNotes(view) });
     return { observation, text: formatObservationText(observation, view.locale) };
   }
 
@@ -207,6 +207,25 @@ export class SessionPlayerPort implements PlayerPort {
     const minHpPct = active.type === 'margin' ? this.session.expeditionReport(this.playerId)?.combat.min_hp_pct : undefined;
     const done = this.session.endedReports(this.playerId).filter((r) => r.no >= active.fromNo).length;
     return { active, live: { ...(minHpPct !== undefined ? { minHpPct } : {}), leftExpeditions: Math.max(1, active.within - done) } };
+  }
+
+  /** 候補に添える注記（V3-3c §44.1）: 再挑戦の守護者と前回戦ったときの与えた・受けた被害（本人の遠征レポートから） */
+  private offerNotes(view: PlayerView): Record<number, string> | undefined {
+    if (view.status !== 'at_camp' || !view.camp) return undefined;
+    const L = view.locale;
+    const out: Record<number, string> = {};
+    for (const o of view.camp.offers) {
+      if (!o.rechallenge) continue;
+      // その守護者と戦った最後の遠征
+      let last: { no: number; dealt: number; taken: number } | null = null;
+      for (const r of this.session.endedReports(this.playerId)) {
+        const f = r.combat.guardian_fights?.find((x) => x.id === o.rechallenge!.guardian);
+        if (f) last = { no: r.no, dealt: f.dealt, taken: f.taken };
+      }
+      out[o.index] = last ? t(L, `前回（遠征 ${last.no}）は与 ${last.dealt}・被 ${last.taken}`, `last time (expedition ${last.no}): dealt ${last.dealt}, took ${last.taken}`)
+        : t(L, 'この守護者とはまだ戦っていない', 'you have not fought this guardian yet');
+    }
+    return Object.keys(out).length ? out : undefined;
   }
 
   /** キャンプの観測に出す、直前の遠征の比較（2 行以内。V3-6 §35.9） */
@@ -223,7 +242,7 @@ export class SessionPlayerPort implements PlayerPort {
     const L = view.locale;
     const r = this.session.expeditionReport(this.playerId);
     // キャンプ: 目標の候補と記録（V3-7a §40.8）
-    const goalLines = view.status === 'at_camp' ? this.goalInfo().lines : [];
+    const goalLines = view.status === 'at_camp' ? (this.goalInfo().full ?? []) : [];
     if (!r) return { lines: goalLines };
     if (r.status === 'in_progress') {
       // 宣言中の目標（V3-7a §40.8）
@@ -246,7 +265,8 @@ export class SessionPlayerPort implements PlayerPort {
     const base = { active, candidates: goalCandidates(L, reports, ms), record: { declared: all.length, achieved: all.filter((g) => g.status === 'achieved').length } };
     // 期限の残り（その目標で数え終えた遠征の数を引く）
     const done = active ? reports.filter((r) => r.no >= active.fromNo).length : 0;
-    return { ...base, lines: goalCampLines(L, base, active ? Math.max(1, active.within - done) : undefined) };
+    const left = active ? Math.max(1, active.within - done) : undefined;
+    return { ...base, lines: goalCampLines(L, base, left, { compact: true }), full: goalCampLines(L, base, left) };
   }
 
   declareGoal(decl: GoalDecl | null): InfoResult {
@@ -262,7 +282,7 @@ export class SessionPlayerPort implements PlayerPort {
     const info = this.goalInfo();
     const head = r.goal ? t(L, `目標を宣言した: ${goalText(L, r.goal)}${goalDiffText(L, r.goal) ? `（${goalDiffText(L, r.goal)}）` : ''}。点には影響しない。`, `Goal declared: ${goalText(L, r.goal)}${goalDiffText(L, r.goal) ? ` (${goalDiffText(L, r.goal)})` : ''}. It does not affect points.`)
       : t(L, '目標を取り下げた。', 'Goal withdrawn.');
-    return { text: [head, ...info.lines].join(NL), data: { goal: r.goal, info } };
+    return { text: [head, ...(info.full ?? info.lines)].join(NL), data: { goal: r.goal, info } };
   }
 
   /** 遠征レポート（no を省くと最後の遠征。進行中なら途中経過） */
@@ -300,11 +320,14 @@ export class SessionPlayerPort implements PlayerPort {
     // 帰還の綱の長い説明は遠征ごとに最初の 1 回だけ（V3-3a §35.8）
     const xNo = view.expedition && view.expedition.status !== 'ended' ? view.expedition.no : undefined;
     const lifelineShort = xNo !== undefined && prev?.lifeNo === xNo;
-    const observation = buildObservation(view, this.catalog, { detail: p.detail ?? 'brief', map: true, recent: p.recent.slice(-10), lifelineShort, campCompare: this.campCompare(view), goal: this.goalOpt(view) });
+    // 加護の説明も遠征ごとに最初の 1 回だけ（V3-3c §44.6: 応答の長さ）
+    const boonsShort = xNo !== undefined && prev?.boonNo === xNo;
+    const observation = buildObservation(view, this.catalog, { detail: p.detail ?? 'brief', map: true, recent: p.recent.slice(-10), lifelineShort, boonsShort, campCompare: this.campCompare(view), goal: this.goalOpt(view), offerNotes: this.offerNotes(view) });
     const state = turnStateOf(view, p.expeditionEndedNow ?? false).state;
     const cur = turnSnapshot(view, observation, state);
     const longLife = observation.valid_actions.some((a) => a.includes('次の遠征はこの遠征を始めた階段から') || a.includes('the next expedition starts from where this one began'));
     cur.lifeNo = lifelineShort ? prev?.lifeNo : longLife ? xNo : prev?.lifeNo;
+    cur.boonNo = xNo !== undefined && (view.self.boons?.length ?? 0) > 0 ? xNo : prev?.boonNo;
     let changes: TurnBlock['changes'] = [];
     if (p.changes) {
       const events = prev ? this.session.messages(this.playerId).filter((m) => m.seq > prev.seq) : [];
@@ -404,6 +427,11 @@ export class SessionPlayerPort implements PlayerPort {
           const inc = obsNow.visible.monsters.filter((x) => x.awareness === 'hunting' && !x.fleeing && (x.dist <= 1 || x.traits.includes('ranged'))).reduce((a, x) => a + (x.worst_turn ?? 0), 0);
           const nf = Math.max(0, after.self.stats.hp - inc);
           if (inc > 0) outcome += t(L, ` hp_floor を ${nf} にすれば、あと 1 回の最悪の被害（${inc}）まで続けられる。`, ` With hp_floor ${nf} you can take one more worst turn (${inc}).`);
+          // 囲まれている: この hp_floor では毎手番止まる。何にすれば何手番続くか（V3-3c §44.6）
+          const adj = obsNow.visible.monsters.filter((x) => x.awareness === 'hunting' && !x.fleeing && x.dist <= 1).length;
+          const hpNow = after.self.stats.hp;
+          const k = inc > 0 ? Math.min(3, Math.trunc((hpNow - 1) / inc)) : 0;
+          if (adj >= 2 && k >= 2) outcome += t(L, ` 隣に ${adj} 体いるので、この hp_floor では毎手番止まる。hp_floor を ${hpNow - k * inc} にすれば ${k} 手番続く。`, ` ${adj} enemies are adjacent, so this hp_floor stops every turn; hp_floor ${hpNow - k * inc} keeps going for ${k} turns.`);
         }
         // 初被弾（記録の無い種族から。止まらずに続けた小さい被弾も）: 名前と値（V3-3a §35.6）
         if (cmd.type === 'fight') {
@@ -416,6 +444,11 @@ export class SessionPlayerPort implements PlayerPort {
             firsts.set(key, e.amount);
           }
           if (firsts.size) outcome += ' ' + t(L, `初被弾: ${[...firsts].map(([k, a]) => `${nameOf(this.catalog.monsters[k.replace('guardian|', '')]?.name, L, k)} ${a}`).join('・')}。`, `First hits: ${[...firsts].map(([k, a]) => `${nameOf(this.catalog.monsters[k.replace('guardian|', '')]?.name, L, k)} ${a}`).join(', ')}.`);
+        }
+        // 決着の後に拾った（collect_after。V3-3c §44.6）
+        if (cmd.type === 'fight' && cmd.collectAfter) {
+          const picked = r.events.filter((e) => e.type === 'item_picked_up' && e.actor === view.self.id).length;
+          if (picked) outcome += t(L, ` 投擲物を ${picked} 回拾った（残り ${mineCount(view)} 個）。`, ` Picked up your throws ${picked} times (${mineCount(view)} left).`);
         }
         if (cmd.type === 'collect') {
           // 実際に拾った数（イベントから）と、まだ拾える数

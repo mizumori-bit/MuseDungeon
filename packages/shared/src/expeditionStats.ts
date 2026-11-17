@@ -33,8 +33,11 @@ export interface ExpeditionReport {
   payout?: { parts: HaulParts; multiplier_pct: number; banked: number; lost: number };
   compare?: ReportCompare;
   /** min_hp_pct: この遠征で最も下がった HP（最大 HP に対する %。目標の「余力」。V3-7a） */
-  combat: { dealt: number; taken: number; hits: number; misses: number; crits: number; kills: number; melee_kills: number; thrown_kills: number; ability_uses: number; min_hp_pct?: number };
-  economy: { potions_used: number; scrolls_read: number; items_left_unidentified: number; treasure_banked: number };
+  /** guardian_fights: 守護者ごとの戦い（与えた・受けた・結末。再挑戦の候補の「前回は与 3・被 22」に使う。V3-3c §44.1） */
+  combat: { dealt: number; taken: number; hits: number; misses: number; crits: number; kills: number; melee_kills: number; thrown_kills: number; ability_uses: number; min_hp_pct?: number;
+    guardian_fights?: { id: string; dealt: number; taken: number; outcome: 'slain' | 'slain_by_other' | 'left' | 'died' | 'ongoing' }[] };
+  /** potions_detail: 飲んだ薬の内訳（「回復の薬 2・加速の薬 1」。V3-3c §44.6） */
+  economy: { potions_used: number; scrolls_read: number; items_left_unidentified: number; treasure_banked: number; potions_detail?: string };
   tempo: { turns: number; turns_resting: number; floors: number; turns_per_floor: number; deepest: number; tool_calls: number; macro_share_pct: number };
   /** 場面（最大 8 件、seq 順。seq でリプレイのその場面へ飛べる） */
   moments: ReportMoment[];
@@ -98,7 +101,8 @@ export function buildExpeditionReport(inp: ReportInput): ExpeditionReport {
   const name = (kind: string | null | undefined) => (kind ? kindName(cat, L, kind) : t(L, '見えない何か', 'something unseen'));
   const combat: ExpeditionReport['combat'] = { dealt: 0, taken: 0, hits: 0, misses: 0, crits: 0, kills: 0, melee_kills: 0, thrown_kills: 0, ability_uses: 0 };
   let minPct = 100;
-  const economy = { potions_used: 0, scrolls_read: 0, items_left_unidentified: 0, treasure_banked: 0 };
+  const economy: ExpeditionReport['economy'] = { potions_used: 0, scrolls_read: 0, items_left_unidentified: 0, treasure_banked: 0 };
+  const potionKinds = new Map<string, number>();
   let objective: ExpeditionReport['objective'] = { type: 'unknown', target_depth: null };
   let reason: ExpeditionEndReason | null = null;
   let payout: ExpeditionReport['payout'];
@@ -233,7 +237,7 @@ export function buildExpeditionReport(inp: ReportInput): ExpeditionReport {
         break;
       case 'item_used':
         if (e.actor !== self) break;
-        if (e.category === 'potion') economy.potions_used++;
+        if (e.category === 'potion') { economy.potions_used++; const k = e.kind ? kindName(cat, L, e.kind) : t(L, '未鑑定の薬', 'unidentified potion'); potionKinds.set(k, (potionKinds.get(k) ?? 0) + 1); }
         else if (e.category === 'scroll') economy.scrolls_read++;
         break;
       case 'item_picked_up':
@@ -348,6 +352,9 @@ export function buildExpeditionReport(inp: ReportInput): ExpeditionReport {
   const moments = cand.sort((a, b) => a.pri - b.pri || a.seq - b.seq).slice(0, 8).sort((a, b) => a.seq - b.seq).map(({ pri: _p, ...m }) => m);
 
   combat.min_hp_pct = minPct;
+  const gf = [...fights.values()].filter((f) => f.dealt || f.taken).sort((a, b) => a.first - b.first).map((f) => ({ id: f.id, dealt: f.dealt, taken: f.taken, outcome: f.outcome }));
+  if (gf.length) (combat as ExpeditionReport['combat']).guardian_fights = gf;
+  if (potionKinds.size) economy.potions_detail = [...potionKinds].map(([k, n]) => `${k} ${n}`).join(t(L, '・', ', '));
   const report: ExpeditionReport = {
     no: inp.no, objective, status: reason === null ? 'in_progress' : 'ended', reason,
     ...(payout ? { payout } : {}),
@@ -439,8 +446,9 @@ export function reportLines(L: Locale, r: ExpeditionReport, opts: { payout?: boo
   }
   lines.push(combatLine(L, r));
   const e = r.economy;
-  lines.push(t(L, `道具: 薬 ${e.potions_used}・巻物 ${e.scrolls_read}・未鑑定のまま ${e.items_left_unidentified} 種／宝の確定 ${e.treasure_banked}`,
-    `Items: potions ${e.potions_used}, scrolls ${e.scrolls_read}, still unidentified ${e.items_left_unidentified} kinds; treasure banked ${e.treasure_banked}`));
+  const pd = e.potions_detail ? t(L, `（${e.potions_detail}）`, ` (${e.potions_detail})`) : '';
+  lines.push(t(L, `道具: 薬 ${e.potions_used}${pd}・巻物 ${e.scrolls_read}・未鑑定のまま ${e.items_left_unidentified} 種／宝の確定 ${e.treasure_banked}`,
+    `Items: potions ${e.potions_used}${pd}, scrolls ${e.scrolls_read}, still unidentified ${e.items_left_unidentified} kinds; treasure banked ${e.treasure_banked}`));
   lines.push(tempoLine(L, r));
   if (opts.compare !== false && r.compare) {
     const parts = [r.compare.personal_best?.join(t(L, '・', ', ')), r.compare.vs_previous ? t(L, `前回（遠征 ${r.compare.vs_previous.no}）より ${vsText(L, r.compare.vs_previous)}`, `vs expedition ${r.compare.vs_previous.no}: ${vsText(L, r.compare.vs_previous)}`) : ''].filter(Boolean);

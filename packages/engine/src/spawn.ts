@@ -36,7 +36,7 @@ export function makeMonster(ctx: Ctx, floor: FloorKey, spec: Extract<SpawnSpec, 
     id, kind: def.id, sid,
     pos: { floor, x: spec.x, y: spec.y },
     actor: {
-      speed: def.speed + mods.speed,
+      speed: Math.max(def.speed + mods.speed, spec.minSpeed ?? 0),
       nextActAt: (f?.time ?? 0) + spec.delay,
       faction: 'monster',
       turns: 0,
@@ -75,7 +75,7 @@ export function makeFeature(ctx: Ctx, floor: FloorKey, kind: string, x: number, 
 }
 
 /** 生成仕様からエンティティを作り entity_spawned を発行する */
-export function spawnFromSpec(ctx: Ctx, floor: FloorKey, spec: SpawnSpec, reason: string): Entity {
+export function spawnFromSpec(ctx: Ctx, floor: FloorKey, spec: SpawnSpec, reason: string, opts: { lairOf?: string } = {}): Entity {
   const id = ctx.newEntityId();
   const sid = ctx.nextSid();
   let e: Entity;
@@ -84,6 +84,8 @@ export function spawnFromSpec(ctx: Ctx, floor: FloorKey, spec: SpawnSpec, reason
     e = makeItem(floor, spec.kind, spec.x, spec.y, spec.qty, spec.affixes, id, sid, spec.value, spec.hidden);
     if (spec.role) e.role = spec.role;
   } else e = makeFeature(ctx, floor, spec.kind, spec.x, spec.y, id, sid);
+  // 棲み処の地物の持ち主（V3-3c §44.6）
+  if (opts.lairOf) e.lairOf = opts.lairOf;
   const seen = ctx.perceive(floor, [{ field: 'entity', pos: e.pos }]);
   ctx.emit({ type: 'entity_spawned', entity: e, reason, floor, seenBy: seen.seenBy });
   return ctx.world.entities[id];

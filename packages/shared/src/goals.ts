@@ -32,8 +32,10 @@ export interface GoalInfo {
   active: GoalRecord | null;
   candidates: GoalCandidate[];
   record: { declared: number; achieved: number };
-  /** キャンプに出す文（3 行以内） */
+  /** キャンプの観測に出す文（1 行。V3-3c §44.5） */
   lines: string[];
+  /** 候補と記録を含む文（3 行以内。declare_goal を引数なしで呼ぶと出る・expedition・人間の画面） */
+  full?: string[];
 }
 
 const START: Record<GoalType, [number, number, number]> = { depth: [2, 3, 4], banked: [1500, 2500, 4000], margin: [30, 40, 50], milestone: [3, 2, 1] };
@@ -122,13 +124,16 @@ export function goalDiffText(L: Locale, g: GoalRecord): string {
 }
 
 /** キャンプの文（3 行以内）。比較の行（§35.9）はこの候補に吸収する */
-export function goalCampLines(L: Locale, info: Omit<GoalInfo, 'lines'>, expeditionsLeft?: number): string[] {
+export function goalCampLines(L: Locale, info: Omit<GoalInfo, 'lines' | 'full'>, expeditionsLeft?: number, opts: { compact?: boolean } = {}): string[] {
   const lines: string[] = [];
   const a = info.active;
+  // キャンプの観測は 1 行（V3-3c §44.5: 応答の長さ）。候補は declare_goal を引数なしで呼ぶと出る
+  if (opts.compact && !a) return [t(L, '目標: 未宣言（declare_goal で候補が出る。点には影響しない）', 'Goal: none (call declare_goal for options; it does not affect points)')];
   if (a) {
     const diff = goalDiffText(L, a);
     lines.push(t(L, `目標: ${goalText(L, a)}${diff ? `（${diff}）` : ''}${expeditionsLeft !== undefined && a.within > 1 ? `・あと ${expeditionsLeft} 回の遠征` : ''}。宣言し直すと取り下げになる`,
       `Goal: ${goalText(L, a)}${diff ? ` (${diff})` : ''}${expeditionsLeft !== undefined && a.within > 1 ? `, ${expeditionsLeft} expeditions left` : ''}; declaring again withdraws it`));
+    if (opts.compact) return lines;
   } else {
     lines.push(t(L, '目標: 未宣言（declare_goal で 1 つ選べる。点には影響しない）', 'Goal: none (declare_goal picks one; it does not affect points)'));
   }

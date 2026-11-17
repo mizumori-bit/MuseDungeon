@@ -11,7 +11,7 @@ import { roll } from './registry';
 import { makeItem } from './spawn';
 import { effectiveStats } from './stats';
 import { hasStatus, removeStatus } from './statuses';
-import { meleeAccOf, notePerk, offerPerk, perkHook, perkWithHook, sweeps, weaponOnHit } from './build';
+import { meleeAccOf, notePerk, offerPerk, perkHook, perkHookSum, perkWithHook, sweeps, weaponOnHit } from './build';
 import { armorOf, guardianCritIfUnaware, guardianIncoming, noteTrial } from './guardians';
 import { boonHook } from './boons';
 import { wardenSlain } from './warden';
@@ -144,8 +144,9 @@ export function melee(ctx: Ctx, attacker: Entity, target: Entity, opts: MeleeOpt
     const ls = lastStandMight(ctx, attacker);
     const might = attacker.stats!.might + ls;
     const brace = bracedArmor(target);
+    // 重い一撃: 近接の会心のダメージの上乗せ（V3-3c §44.4）
     const base = o.crit
-      ? Math.max(1, diceMax(attacker.stats!.dmg) + might)
+      ? Math.max(1, diceMax(attacker.stats!.dmg) + might + perkHookSum(ctx, attacker, 'melee_crit_dmg', 'dmg'))
       : Math.max(1, roll(ctx.rng('runtime'), attacker.stats!.dmg) + might - armorOf(ctx, target) - brace);
     // 突進の倍率と、守護者の受けるダメージの修正（V3-3）
     const mult = base * (opts.dmgMult ?? 1);

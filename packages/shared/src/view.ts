@@ -4,6 +4,8 @@ import type {
   CampState, Controller, Entity, EntityId, EntityRole, EquipSlot, Expedition, ExpeditionEndReason, ExpeditionResult, FloorKey,
   Locale, MonsterMemory, Objective, OfferSlot, PlayerBuild, PlayerId, PlayerState, Pos, RememberedEntity, Stats, StatusInst, World, Sense, FloorHint, Names, Intent, RelicInfo, MilestoneInfo,
 } from './types';
+import type { Dir } from './types';
+import { cheb, compassDir } from './util';
 
 export type HpState = 'healthy' | 'wounded' | 'badly_wounded' | 'near_death';
 export type Awareness = 'asleep' | 'unaware' | 'hunting';
@@ -64,6 +66,8 @@ export interface EntityView {
   guardian?: { name: Names; title?: Names; types: string[]; weakness?: string; warden?: boolean; notWeak?: string[] };
   /** 予備動作（見えていれば公開。V3-3 §3.1） */
   intent?: Intent;
+  /** 棲み処の地物（護りの火）の持ち主の守護者の呼び名（V3-3c §44.6） */
+  lair?: { name: Names; title?: Names };
 }
 
 export interface RememberedView {
@@ -79,7 +83,12 @@ export interface RememberedView {
   /** 自分が投げた物 */
   mine?: boolean;
   value?: number;
+  /** 棲み処の地物の持ち主の守護者（V3-3c §44.6） */
+  lair?: { name: Names; title?: Names };
 }
+
+/** 護りの火の手がかり（V3-3c §44.6）: 同じ守護者の火を 1 基でも見ていれば、まだ見ていない灯っている火の方角と遠さ（気配と同じ形） */
+export interface WardHint { guardian: { name: Names; title?: Names }; dir: Dir; range: 'far' | 'near' }
 
 export interface SelfView {
   id: EntityId;
@@ -168,6 +177,8 @@ export interface PlayerView {
   memory: { terrain: number[]; remembered: RememberedView[]; unsighted?: number[] };
   /** 目標の気配（遠征の目標階にいる間） */
   sense: Sense | null;
+  /** 護りの火の手がかり（V3-3c §44.6） */
+  wardHints?: WardHint[];
   /** 今いる階の手がかり（下への風・探索の進み具合）。今いる階のものだけ */
   floorHint: FloorHint | null;
   identified: string[];
@@ -367,7 +378,10 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
         }
         entities.push(v);
       } else {
-        entities.push({ id: e.id, cat, kind: e.kind, appearanceId: null, pos, state: e.feature?.state });
+        const fv: EntityView = { id: e.id, cat, kind: e.kind, appearanceId: null, pos, state: e.feature?.state };
+        const lg = e.lairOf ? world.entities[e.lairOf]?.guardian : undefined;
+        if (lg) fv.lair = { name: { ...lg.name }, ...(lg.title ? { title: { ...lg.title } } : {}) };
+        entities.push(fv);
       }
     }
   }
@@ -381,8 +395,24 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
     if (we?.role) rv.role = we.role;
     if (r.cat === 'item' && we?.item?.thrownBy === playerId && !we.item.heldBy) rv.mine = true;
     if (r.cat === 'item' && we?.item?.value !== undefined) rv.value = we.item.value;
+    const lg = we?.lairOf ? world.entities[we.lairOf]?.guardian : undefined;
+    if (lg) rv.lair = { name: { ...lg.name }, ...(lg.title ? { title: { ...lg.title } } : {}) };
     return rv;
   });
+  // 護りの火の手がかり（V3-3c §44.6）: 同じ守護者の火を見た（見えている・覚えている）なら、まだ見ていない灯っている火の方角と遠さ
+  const wardHints: WardHint[] = [];
+  if (floor && floorKey && me.pos) {
+    const known = new Set<string>([...entities.filter((e) => e.cat === 'feature').map((e) => e.id), ...remembered.map((r) => r.id)]);
+    const lairFeatures = Object.values(world.entities).filter((e) => e.pos?.floor === floorKey && e.feature && e.lairOf);
+    const owners = new Set(lairFeatures.filter((e) => known.has(e.id)).map((e) => e.lairOf!));
+    for (const e of lairFeatures.sort((a, b) => a.sid - b.sid)) {
+      if (!owners.has(e.lairOf!) || known.has(e.id) || e.feature!.state !== 'lit') continue;
+      const lg = world.entities[e.lairOf!]?.guardian;
+      const d = compassDir(me.pos, e.pos!);
+      if (!lg || !d) continue;
+      wardHints.push({ guardian: { name: { ...lg.name }, ...(lg.title ? { title: { ...lg.title } } : {}) }, dir: d, range: cheb(me.pos, e.pos!) <= 10 ? 'near' : 'far' });
+    }
+  }
 
   let status: ViewStatus;
   if (world.status === 'ended') status = 'ended';
@@ -452,6 +482,7 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
     entities,
     memory: { terrain: fk ? [...fk.seen] : [], remembered, ...(fk?.mapped?.length ? { unsighted: [...fk.mapped] } : {}) },
     sense: k.sense ? { ...k.sense } : null,
+    ...(wardHints.length ? { wardHints } : {}),
     floorHint: k.floorHint && k.floorHint.floor === floorKey ? { ...k.floorHint } : null,
     identified: [...k.identified],
     monsterMemory: structuredClone(k.monsterMemory),

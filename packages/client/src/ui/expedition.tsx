@@ -430,7 +430,7 @@ function GoalBox({ goal, onGoal }: { goal: GoalInfo; onGoal: (d: GoalDecl | null
   return (
     <div class="goalbox">
       <h3>{tr('目標（任意・点には影響しない）', 'Goal (optional, no effect on points)')}</h3>
-      {goal.lines.map((l) => <p class="muted">{l}</p>)}
+      {(goal.full ?? goal.lines).map((l) => <p class="muted">{l}</p>)}
       {types.map((ty) => (
         <div class="row goal-row">
           <span class="goal-type">{typeName[ty]}</span>

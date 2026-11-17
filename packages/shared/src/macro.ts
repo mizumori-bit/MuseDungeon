@@ -19,7 +19,7 @@ import type { Dir, Pos } from './types';
 import { DIRS, DIR_VEC } from './types';
 import { cheb, compassDir, t } from './util';
 import type { Locale } from './types';
-import type { EntityView, PlayerView } from './view';
+import type { EntityView, ItemView, PlayerView } from './view';
 
 /** 既定値（実際の上限は catalog.rules.macroStepLimit / restMaxTurns） */
 export const MACRO_STEP_LIMIT = 200;
@@ -106,6 +106,11 @@ export interface MacroState {
   /** fight: 投げる品のスロットと、開始時のその品の種類（尽きたら止まる） */
   fightWith?: string;
   fightKind?: string | null;
+  /** fight: 投げる品の並び（前の品が尽きて拾い直せる物も無ければ次へ。V3-3c §44.6） */
+  fightWithList?: { with: string; kind: string | null }[];
+  /** fight: 決着の後に自分の投擲物を拾う（V3-3c §44.6）。fightDone: 拾い始めたときの決着（拾い終えたらこの理由で止まる） */
+  collectAfter?: boolean;
+  fightDone?: MacroStop;
   /** 投げる物が尽きたら拾いに行く（V3-3b §40.1。既定 true） */
   fightRetrieve?: boolean;
   /** 拾いに行った手の数 */
@@ -368,8 +373,12 @@ export function macroStart(view: PlayerView, cmd: Command, catalog: Catalog): Ma
   const kind = cmd.type as MacroState['kind'];
   const withSlot = cmd.type === 'fight' ? cmd.with : undefined;
   // with は品の種類でもよい（V3-3b §40.1）。種類なら所持品の先頭の同じ種類、無ければ（全部投げた）種類だけ覚える
-  const withKindArg = withSlot && withSlot.length > 1 ? (withSlot.startsWith('core:') ? withSlot : `core:${withSlot}`) : undefined;
-  const withItem = withSlot ? (withKindArg ? view.inventory.find((i) => i.kind === withKindArg) : view.inventory.find((i) => i.slot === withSlot)) : undefined;
+  const withEntry = (w: string): { with: string; kind: string | null } => {
+    const ka = w.length > 1 ? (w.startsWith('core:') ? w : `core:${w}`) : undefined;
+    const it = ka ? view.inventory.find((i) => i.kind === ka) : view.inventory.find((i) => i.slot === w);
+    return { with: w, kind: it ? (it.kind ?? it.appearanceId) : (ka ?? null) };
+  };
+  const withList = withSlot ? [withSlot, ...(cmd.type === 'fight' ? cmd.alsoWith ?? [] : [])].map(withEntry) : [];
   const mode: MacroMode = (cmd.type === 'explore' || cmd.type === 'travel' || cmd.type === 'collect') ? (cmd.mode ?? 'careful') : 'careful';
   const floorPct = kind === 'fight' ? HP_FLOOR_PCT.fight : HP_FLOOR_PCT[mode];
   const explicitFloor = 'hpFloor' in cmd ? cmd.hpFloor : undefined;
@@ -393,7 +402,8 @@ export function macroStart(view: PlayerView, cmd: Command, catalog: Catalog): Ma
       ...(cmd.lostOk ? { lostOk: true } : {}),
       ...(() => { const tg = view.entities.find((e) => e.id === cmd.target); return tg ? { targetFleeing: !!tg.fleeing } : {}; })(),
     } : {}),
-    ...(withSlot ? { fightWith: withSlot, fightKind: withItem ? (withItem.kind ?? withItem.appearanceId) : (withKindArg ?? null), fightRetrieve: cmd.type === 'fight' ? cmd.retrieve !== false : true } : {}),
+    ...(withSlot ? { fightWith: withSlot, fightKind: withList[0].kind, fightRetrieve: cmd.type === 'fight' ? cmd.retrieve !== false : true, ...(withList.length > 1 ? { fightWithList: withList } : {}) } : {}),
+    ...(cmd.type === 'fight' && cmd.collectAfter ? { collectAfter: true } : {}),
     ...(cmd.type === 'fight' && cmd.abilities?.length ? (() => {
       const r = resolveFightAbilities(view, catalog, cmd.abilities, withSlot);
       return { fightAbilities: r.ids, ...(r.error ? { fightAbilityError: r.error } : {}) };
@@ -478,6 +488,23 @@ export function macroNext(state: MacroState, view: PlayerView, catalog: Catalog,
   const mode = state.mode;
   const kind = state.kind;
   const ev = (type: string, f: (e: Record<string, unknown>) => boolean) => events.some((e) => e.type === type && f(e as unknown as Record<string, unknown>));
+  // 決着（V3-3c §44.6）: collect_after なら、追跡中の敵（逃走中を除く）が見えていなければ自分の投擲物を拾う（collect と同じ止まり方）。
+  // 拾い終えたら決着の理由で止まる。拾い始められなければ（隣に敵・拾う物が無い）そのまま決着で止まる
+  const finishFight = (stop: MacroStop): MacroDecision => {
+    if (!state.collectAfter || view.entities.some((h) => h.cat === 'monster' && h.awareness === 'hunting' && !h.fleeing)) return { stop };
+    state.kind = 'collect';
+    state.collectWhat = 'thrown';
+    state.mode = 'careful';
+    state.hpFloor = 0;
+    state.pickup = false;
+    state.fightDone = stop;
+    state.knownHostiles = hostileIds(view);
+    state.aware = Object.fromEntries(view.entities.filter((e) => e.cat === 'monster').map((e) => [e.id, e.awareness ?? 'unaware']));
+    state.trail = [];
+    delete state.goal;
+    const d = macroNext(state, view, catalog, []);
+    return 'stop' in d ? { stop } : d;
+  };
 
   // 中断条件（最初の 1 手の前は判定しない項目もある）
   if (state.steps > 0) {
@@ -501,10 +528,10 @@ export function macroNext(state: MacroState, view: PlayerView, catalog: Catalog,
       if (status) return { stop: 'status_changed' };
     } else if (kind === 'fight') {
       if (ev('died', (e) => e.id === state.fightTarget)) {
-        if (state.fightUntil !== 'clear') return { stop: 'target_down' };
+        if (state.fightUntil !== 'clear') return finishFight('target_down');
         state.cleared = (state.cleared ?? 0) + 1;
         const next = nextFightTarget(view, catalog, pos, state.fightTarget);
-        if (!next) return { stop: 'cleared' };
+        if (!next) return finishFight('cleared');
         retarget(state, next);
       }
       if (status) return { stop: 'status_changed' };
@@ -637,14 +664,17 @@ export function macroNext(state: MacroState, view: PlayerView, catalog: Catalog,
     // with の相手が隣に来た: adjacent に従う（stop: 止まる / throw: 隣でも投げる / melee: 近接に切り替える）
     const throwing = !!state.fightWith && !(d <= 1 && state.fightAdjacent === 'melee');
     if (throwing && state.fightWith) {
-      // 投げる品: 同じ種類の品（拾ってスロットが変わっても続ける。V3-3b §40.1）。種類が分からなければスロット
-      const it = state.fightKind ? view.inventory.find((i) => (i.kind ?? i.appearanceId) === state.fightKind) : view.inventory.find((i) => i.slot === state.fightWith);
-      if (!it) {
-        // 尽きた: 追跡中の敵の隣を通らずに届く自分の投擲物（同じ種類）を拾いに行く（踏めば拾う）
-        const step = state.fightRetrieve !== false && state.fightKind ? retrieveStep(view, catalog, pos, hostiles, state.fightKind) : null;
+      // 投げる品: 同じ種類の品（拾ってスロットが変わっても続ける。V3-3b §40.1）。種類が分からなければスロット。
+      // 並びがあれば前から順に: 尽きたら、追跡中の敵の隣を通らずに届く自分の投擲物（同じ種類）を拾いに行き（踏めば拾う）、それも無ければ次の品（V3-3c §44.6）
+      const list = state.fightWithList ?? [{ with: state.fightWith, kind: state.fightKind ?? null }];
+      let it: ItemView | undefined;
+      for (const w of list) {
+        const found = w.kind ? view.inventory.find((i) => (i.kind ?? i.appearanceId) === w.kind) : view.inventory.find((i) => i.slot === w.with);
+        if (found) { it = found; state.fightWith = w.with; state.fightKind = w.kind; break; }
+        const step = state.fightRetrieve !== false && w.kind ? retrieveStep(view, catalog, pos, hostiles, w.kind) : null;
         if (step) { state.steps += 1; state.retrieved = (state.retrieved ?? 0) + 1; return { command: { type: 'move', dir: step } }; }
-        return { stop: 'out_of_ammo' };
       }
+      if (!it) return { stop: 'out_of_ammo' };
       const slot = it.slot;
       const range = throwRangeOf(view, catalog, slot);
       if (range === null) return { stop: 'not_throwable' };
@@ -892,7 +922,8 @@ export function macroNext(state: MacroState, view: PlayerView, catalog: Catalog,
     if (path === null || path.length === 0) return { stop: findPath(grid, pos, targets.filter((i) => i !== here), 'none') ? 'blocked' : 'explored' };
   } else if (kind === 'collect') {
     const goals = (state.collectWhat === 'items' ? pickableItems(view, catalog, state.skipItems, state.pickUseful !== false).map((x) => x.cell) : mineCells(view)).filter((i) => i !== here);
-    if (!goals.length) return { stop: 'collected' };
+    // 決着の後に拾っていた（fight の collect_after）: 拾い終えたら決着の理由で止まる
+    if (!goals.length) return { stop: state.fightDone ?? 'collected' };
     // 敵が乗っている品は後回し（経路探しは行き先のマスの敵を通すので、いちばん近い品が敵の足元だと 1 歩目でふさがれた。V3-5a 後の AI 評価）
     const free = goals.filter((i) => !grid.occupied[i]);
     path = route(free.length ? free : goals);

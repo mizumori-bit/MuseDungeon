@@ -29,7 +29,13 @@ export function ensureFloor(ctx: Ctx, key: FloorKey): Floor {
   ctx.now = 0;
   ctx.emit({ type: 'floor_generated', floorData, terrainRle: rleEncode(terrain), seenBy: [], floor: key, ft: 0 });
   const spawned: Entity[] = [];
-  for (const spec of gen.spawns) spawned.push(spawnFromSpec(ctx, key, spec, 'generated'));
+  // 棲み処の地物は、直前に置いた守護者のもの（V3-3c §44.6）
+  let lastGuardian: string | null = null;
+  for (const spec of gen.spawns) {
+    const e = spawnFromSpec(ctx, key, spec, 'generated', spec.type === 'feature' && spec.lair && lastGuardian ? { lairOf: lastGuardian } : {});
+    if (e.role === 'guardian') lastGuardian = e.id;
+    spawned.push(e);
+  }
   if (objective) recordTargets(ctx, spawned);
   ctx.curFloor = prevFloor;
   ctx.now = prevNow;

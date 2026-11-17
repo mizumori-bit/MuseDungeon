@@ -117,7 +117,7 @@ export function guardianDisplayName(L: Locale, g: { name: Names; title?: Names }
   return `${g.title?.ja ?? ''}${g.name.ja}`;
 }
 
-export function guardianForecastText(L: Locale, g: { rank: number; traits: string[]; name?: Names; title?: Names; types?: string[]; maxHit?: number } | undefined): string {
+export function guardianForecastText(L: Locale, g: { rank: number; traits: string[]; name?: Names; title?: Names; types?: string[]; maxHit?: number; hp?: number; hpRange?: { min: number; max: number } } | undefined): string {
   if (!g) return '';
   // 名前と称号（型）は公開。種族は会うまで出さない（V3-3）
   const who = g.name ? t(L, `「${guardianDisplayName(L, { name: g.name, title: g.title })}」`, ` "${guardianDisplayName(L, { name: g.name, title: g.title })}"`) : '';
@@ -128,6 +128,9 @@ export function guardianForecastText(L: Locale, g: { rank: number; traits: strin
   const tr = [...noType, ...g.traits.map((x) => (L === 'en' ? x : GUARD_TRAIT_JA[x] ?? x)), ...speed];
   // 一撃の目安（V3-3b §40.6。装甲で減る前）
   const hit = g.maxHit ? [t(L, `一撃は最大 ${g.maxHit} まで（装甲で減る前）`, `hits up to ${g.maxHit} (before armor)`)] : [];
+  // 体力の目安（V3-3c §44.2）: 格 1〜3 はおよその値、大守護者は式の幅
+  if (g.hpRange) hit.unshift(t(L, `体力 ${g.hpRange.min}〜${g.hpRange.max}`, `HP ${g.hpRange.min}-${g.hpRange.max}`));
+  else if (g.hp) hit.unshift(t(L, `体力はおよそ ${g.hp}`, `about ${g.hp} HP`));
   return t(L, `守護者${who}: 格 ${g.rank}・${[...tr, ...hit].join('・')}`, `guardian${who}: rank ${g.rank}, ${[...tr, ...hit].join(', ')}`);
 }
 
@@ -156,7 +159,9 @@ export function offerText(L: Locale, o: ExpeditionOffer, ctx?: { rules: Pick<Cat
   // 節目に挑む: 大守護者の名前と型（V3-3a §35.2）。同じ階の繰り返しは基礎点が減る
   const wd = o.warden ? t(L, ` / 大守護者「${guardianDisplayName(L, o.warden)}」（型: ${o.warden.types.length}）`, ` / warden "${guardianDisplayName(L, o.warden)}" (${o.warden.types.length} types)`) : '';
   const rep = (o.repeatNo ?? 1) > 1 ? t(L, ` / この階は ${o.repeatNo} 回目: 基礎点が減っている`, ` / attempt ${o.repeatNo} at this depth: reduced base`) : '';
-  const gf = wd + rep + (o.guardian ? ` / ${guardianForecastText(L, o.guardian)}` : '') + (o.relic ? ` / ${relicText(L, o.relic)}` : '')
+  // 再挑戦（V3-3c §44.1）: 階に残っている守護者をもう一度目的にする（同じ名前・型・弱点。繰り返しの減点なし）
+  const rc = o.rechallenge ? t(L, ` / 再挑戦: ${o.rechallenge.no ? `遠征 ${o.rechallenge.no} で倒せなかった` : '階に残っている'}守護者（同じ名前・型・弱点。繰り返しの減点なし）`, ` / rematch: the guardian ${o.rechallenge.no ? `left standing in expedition ${o.rechallenge.no}` : 'still on that floor'} (same name, type and weakness; no repeat reduction)`) : '';
+  const gf = wd + rep + rc + (o.guardian ? ` / ${guardianForecastText(L, o.guardian)}` : '') + (o.relic ? ` / ${relicText(L, o.relic)}` : '')
     + (o.passesWarden ? t(L, ` / 途中の地下${o.passesWarden.depth}階で大守護者「${guardianDisplayName(L, o.passesWarden)}」を倒す必要がある（倒すまで下り階段が封じられている）`, ` / you must slay the warden "${guardianDisplayName(L, o.passesWarden)}" on depth ${o.passesWarden.depth} on the way (its stairs down are sealed until then)`) : '');
   return t(L, `${head} — 基礎 +${o.points} / 倍率 ${multText(mult)}${traits ? `（${traits}）` : ''}${danger}${gf}`,
     `${head} — base +${o.points} / multiplier ${multText(mult)}${traits ? ` (${traits})` : ''}${danger}${gf}`);

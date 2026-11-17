@@ -93,6 +93,7 @@ export function buildCatalog(c: Content): Catalog {
       mods: { maxHp: pk.mods.maxHp ?? 0, acc: pk.mods.acc ?? 0, eva: pk.mods.eva ?? 0, might: pk.mods.might ?? 0, armor: pk.mods.armor ?? 0, capacity: pk.mods.capacity ?? 0, stealthPct: pk.mods.stealthPct ?? 0 },
       ...(pk.ability ? { ability: pk.ability } : {}), hooks: pk.hooks.map((h) => h.hook),
       // 投擲で無視する装甲（急所狙い。V3-3b §40.1）
+      ...(pk.hooks.some((h) => h.hook === 'thrown_dmg') ? { thrownDmg: pk.hooks.filter((h) => h.hook === 'thrown_dmg').reduce((a, h) => a + (Number((h as Record<string, unknown>).dmg) || 0), 0) } : {}),
       ...(pk.hooks.some((h) => h.hook === 'thrown_pierce') ? { thrownPierce: pk.hooks.filter((h) => h.hook === 'thrown_pierce').reduce((a, h) => a + (Number((h as Record<string, unknown>).armor) || 0), 0) } : {}),
     }])),
     abilities: Object.fromEntries(c.lists.abilities.map((ab) => [ab.id, {
@@ -113,9 +114,11 @@ export function buildCatalog(c: Content): Catalog {
       restMaxTurns: c.balance.rest.maxTurns,
       restCapPct: c.balance.rest.capPct,
       guardianAwayHealPct: c.balance.guardian.awayHealPct,
-      ...((): { milestone?: { every: number; min: number; boonOptions: number; levelBonus: number } } => {
+      ...((): { milestone?: { every: number; min: number; boonOptions: number; levelBonus: number; hpRule: { hpPct: number; minHpBase: number; minHpPerDepth: number; maxHpBase: number; maxHpPerDepth: number }; minSpeed: number } } => {
         const f = c.lists.floorTypes.find((x) => x.rules.warden && x.every > 0);
-        return f ? { milestone: { every: f.every, min: f.depth.min, boonOptions: c.balance.guardian.warden.boonOptions, levelBonus: c.balance.guardian.warden.levelBonus } } : {};
+        const wb = c.balance.guardian.warden;
+        return f ? { milestone: { every: f.every, min: f.depth.min, boonOptions: wb.boonOptions, levelBonus: wb.levelBonus,
+          hpRule: { hpPct: wb.hpPct, minHpBase: wb.minHpBase, minHpPerDepth: wb.minHpPerDepth, maxHpBase: wb.maxHpBase, maxHpPerDepth: wb.maxHpPerDepth }, minSpeed: wb.minSpeed } } : {};
       })(),
       macroStepLimit: c.balance.macro.stepLimit,
       fightLostWait: c.balance.fight.lostWait,
@@ -140,7 +143,7 @@ export function buildCatalog(c: Content): Catalog {
       xp: { ...c.balance.xp },
       lifeline: { ...c.balance.lifeline },
       teleport: { ...c.balance.teleport },
-      guardianRanks: c.balance.guardian.ranks.map((r) => ({ hpPct: r.hpPct })),
+      guardianRanks: c.balance.guardian.ranks.map((r) => ({ hpPct: r.hpPct, minHpBase: r.minHpBase, minHpPerDepth: r.minHpPerDepth })),
       perkOptions: c.balance.perks.options,
       curseChancePct: c.balance.curse.chancePct,
       traits: Object.fromEntries(c.lists.expeditionTraits.map((t) => [t.id, { name: t.name, desc: t.desc, multiplierPct: t.multiplierPct, danger: t.danger }])),

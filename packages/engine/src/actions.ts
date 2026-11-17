@@ -5,7 +5,7 @@ import { actionError, cheb, currentExpedition, diceMax, DIR_VEC, DIRS, EQUIP_SLO
 import { endRun, grantXp, isHelpless, isUnaware, melee, recordHit, rollToHit, applyDamage, checkRunEnd } from './combat';
 import {
   abilityHandlers, abilityReadyError, abilityState, attackCostOf, choosePerk, cursedSlot, gearOf, inspectItem, isCursed, markAbilityUsed,
-  notePerk, perkHook, perkWithHook, reachLine, reachOf, resolveAbilityId, thrownAccOf, thrownPierceOf,
+  notePerk, perkHook, perkHookSum, perkWithHook, reachLine, reachOf, resolveAbilityId, thrownAccOf, thrownPierceOf,
 } from './build';
 import { armorOf, guardianCritIfUnaware, guardianIncoming, markGuardiansAway, noteTrial, restGuardians } from './guardians';
 import { boonHook } from './boons';
@@ -372,16 +372,23 @@ function resolveTarget(ctx: Ctx, e: Entity, pr: PlayerRecord, target: unknown, r
     // 射程外の対象（ID 指定）は拒否する。手番も品物も失わない（座標を狙えば手前に落ちる）
     if (line(e.pos!, te.pos).length > range) {
       return actionError('out_of_range', t(pr.locale, `射程（${range}）の外だ。`, `Out of range (${range}).`),
-        t(pr.locale, '近づくか、visible.monsters の shots が clear の相手を選ぶ。座標を狙えば射程の端に落ちる。', 'Move closer or pick a target whose shots entry is clear. Targeting a position lands at the end of the range.'));
+        t(pr.locale, '近づくか、visible.monsters の shots が clear の相手を選ぶ。', 'Move closer or pick a target whose shots entry is clear.'));
     }
     if (!shotClear(ctx, key, e.pos!, te.pos)) {
       return actionError('no_line_of_sight', t(pr.locale, 'そこまで投擲の経路が通っていない（壁か他の者に遮られる）。', 'No clear throwing line to that target (blocked by a wall or someone).'),
-        t(pr.locale, 'visible.monsters の shot が clear の相手を選ぶか、位置を変える。座標を狙えば遮られた位置に落ちる。', 'Pick a monster whose shot is clear, or move. Targeting a position lands where it is blocked.'));
+        t(pr.locale, 'visible.monsters の shot が clear の相手を選ぶか、位置を変える。', 'Pick a monster whose shot is clear, or move.'));
     }
     return { x: te.pos.x, y: te.pos.y };
   }
   const p = target as Pos;
   if (p.x < 0 || p.y < 0 || p.x >= f.width || p.y >= f.height) return actionError('out_of_range', t(pr.locale, '範囲外の座標だ。', 'Out of bounds.'), t(pr.locale, 'フロア内の座標を指定する。', 'Pick a position on this floor.'));
+  // 座標を狙った投擲も、届かないときは先に拒否する（V3-3c §44.6: 護りの火を狙って「届かず」が続いた）
+  if (line(e.pos!, p).length > range) {
+    return actionError('out_of_range', t(pr.locale, `(${p.x},${p.y}) は射程（${range}）の外だ。`, `(${p.x},${p.y}) is out of range (${range}).`), t(pr.locale, '近づいてから投げる。', 'Move closer first.'));
+  }
+  if (!shotClear(ctx, key, e.pos!, p)) {
+    return actionError('no_line_of_sight', t(pr.locale, `(${p.x},${p.y}) まで投擲の経路が通っていない（壁か他の者に遮られる）。`, `No clear throwing line to (${p.x},${p.y}) (blocked by a wall or someone).`), t(pr.locale, '位置を変えてから投げる。', 'Move to get a clear line first.'));
+  }
   return { x: p.x, y: p.y };
 }
 
@@ -490,7 +497,9 @@ export function prepareThrow(ctx: Ctx, e: Entity, pr: PlayerRecord, slot: string
         const dmgDice = def?.throw?.dmg ?? '1d2';
         // 急所狙い: 相手の装甲を無視する分（V3-3b §40.1）。弾く者の半減はこの後に掛かる
         const armorLeft = Math.max(0, armorOf(ctx, hit) - thrownPierceOf(ctx, me));
-        const base = crit ? Math.max(1, diceMax(dmgDice)) : Math.max(1, roll(ctx.rng('runtime'), dmgDice) - armorLeft);
+        // 強肩: 投擲のダメージの上乗せ（会心にも乗る。V3-3c §44.4）
+        const arm = perkHookSum(ctx, me, 'thrown_dmg', 'dmg');
+        const base = crit ? Math.max(1, diceMax(dmgDice) + arm) : Math.max(1, roll(ctx.rng('runtime'), dmgDice) + arm - armorLeft);
         // 守護者の受けるダメージの修正（弾く者・投擲に弱い。V3-3）
         const dmg = hit.guardian ? guardianIncoming(ctx, hit, base, 'thrown', ctx.world.entities[me.id] ?? me) : base;
         applyDamage(ctx, hit, dmg, ctx.world.entities[me.id], 'thrown');

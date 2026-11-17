@@ -103,6 +103,8 @@ export interface Entity {
   bounty?: number;
   /** 呼んだ守護者（呼び集める者の手下。守護者が落ち着くと去る。V3-3b §40.3）。プレイヤーには渡さない */
   minionOf?: EntityId;
+  /** 棲み処の地物（護りの火）の持ち主の守護者（V3-3c §44.6。守護者が去ると一緒に消える） */
+  lairOf?: EntityId;
   /** 持ち場（守護者が置かれたマス。V3-2R3b §23.2）。気づいていない間はここから guardian.leash マス以内だけを動く。プレイヤーには渡さない */
   home?: { x: number; y: number };
   /** ビルド（プレイヤー。V3-4 §4.1・§4.2） */
@@ -312,7 +314,8 @@ export interface ExpeditionOffer {
   multiplierPct?: number;
   /** 守護者の見込み（守護者を倒す・守護者付きの遺物。V3-2R3 §20.1）。種族名は会うまで出さない。name・types（V3-3）は公開 */
   /** maxHit: 一撃の目安（装甲で減る前。V3-3b §40.6） */
-  guardian?: { rank: 1 | 2 | 3; traits: string[]; name?: Names; title?: Names; types?: string[]; maxHit?: number };
+  /** hp: 体力の目安（格 1〜3。種族の体力の平均から。V3-3c §44.2）、hpRange: 大守護者の体力の幅（式の下限と上限） */
+  guardian?: { rank: 1 | 2 | 3; traits: string[]; name?: Names; title?: Names; types?: string[]; maxHit?: number; hp?: number; hpRange?: { min: number; max: number } };
   /** 守護者の種族（候補を作った時点で決める。プレイヤーには渡さない） */
   guardianKind?: string;
   /** 守護者の接辞（候補の時点で決める。見込みの特徴と一撃の目安に入る。プレイヤーには渡さない。V3-5a 後の評価 2） */
@@ -327,6 +330,8 @@ export interface ExpeditionOffer {
   warden?: MilestoneInfo;
   /** 同じ階を目標にした何回目の達成か（2 以上で基礎点に repeatPct が掛かる。V3-3a §35.2） */
   repeatNo?: number;
+  /** 再挑戦（V3-3c §44.1）: 目標の階に残っている守護者をもう一度目的にする。no はその守護者を目的にした遠征、guardian はその守護者 */
+  rechallenge?: { no: number | null; guardian: EntityId };
 }
 
 /** 遠征の戦利品のうち、参加者で共有する部分（目的・深追い・宝は別に計算する） */
@@ -408,6 +413,8 @@ export interface Expedition {
   haul?: ExpeditionHaul;
   /** 守護者の種族と格（候補から引き継ぐ。プレイヤーには渡さない。V3-2R3 §20.1） */
   guardianKind?: string;
+  /** 再挑戦の守護者（V3-3c §44.1。新しく置かず、この守護者を目的にする） */
+  rechallengeOf?: EntityId;
   /** 守護者の接辞（候補の時点で決める。見込みの特徴と一撃の目安に入る。プレイヤーには渡さない。V3-5a 後の評価 2） */
   guardianAffixes?: string[];
   guardianRank?: 1 | 2 | 3;

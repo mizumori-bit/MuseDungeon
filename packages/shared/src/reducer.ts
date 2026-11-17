@@ -93,6 +93,15 @@ export function applyEvent(world: World, ev: GameEvent): void {
     case 'entity_removed':
       delete world.entities[ev.id];
       break;
+    case 'guardian_departed': {
+      // 去った守護者の棲み処の地物を記憶から消す（V3-3c §44.1）
+      const fk = ev.floor ? world.players[ev.player]?.knowledge.floors[ev.floor] : undefined;
+      if (fk && ev.forget.length) {
+        const del = new Set(ev.forget);
+        fk.remembered = fk.remembered.filter((r) => !del.has(r.id));
+      }
+      break;
+    }
     case 'entity_moved': {
       const e = ent(world, ev.id);
       e.pos = { floor: e.pos!.floor, x: ev.to.x, y: ev.to.y };
