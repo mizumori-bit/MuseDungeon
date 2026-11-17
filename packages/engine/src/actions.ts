@@ -132,7 +132,7 @@ actions.register('wait', (ctx, e, pr) => ({
   run: () => {
     // 盾の構え: 追跡中の敵が見えているときの待機は、次の自分の手番までに受ける最初の一撃の装甲を上げる（V3-4 §4.1）
     const h = perkHook(ctx, e, 'brace');
-    if (h && huntingInView(ctx, pr)) addStatus(ctx, ctx.world.entities[e.id], 'core:braced', 1, h.armor ?? 2);
+    if (h && huntingInView(ctx, pr)) addStatus(ctx, ctx.world.entities[e.id], 'core:braced', 1, h.armor ?? 2, e.id);
     return { cost: 100 };
   },
 }));
@@ -573,6 +573,7 @@ actions.register('ability', (ctx, e, pr, cmd: Extract<Command, { type: 'ability'
     const after = abilityState(ctx, body, id);
     ctx.emit({
       type: 'ability_used', actor: e.id, actorKind: e.kind, ability: id, target: target?.id ?? null, targetKind: target?.kind ?? null,
+      ...(target?.scale?.affixes?.length ? { targetAffixes: [...target.scale.affixes] } : {}),
       cooldownLeft: Math.max(0, after.cooldownLeft - 1), put: [body], ...selfSeen(ctx, ctx.world.entities[e.id]), floor: e.pos!.floor,
     });
   };

@@ -215,6 +215,12 @@ export function buildExpeditionReport(inp: ReportInput): ExpeditionReport {
       case 'ability_used':
         if (e.actor === self) combat.ability_uses++;
         break;
+      case 'item_thrown':
+        // 投擲の当たり外れも命中に数える（V3-5a 後の AI 評価: 斥候の命中が近接だけで 1/8 と出た）
+        if (e.actor !== self) break;
+        if (e.outcome === 'hit') combat.hits++;
+        else if (e.outcome === 'missed') combat.misses++;
+        break;
       case 'objective_completed':
         if (e.no === inp.no && lastGuardianDeath && (objective.type === 'slay_guardian' || objective.type === 'retrieve_relic')) objectiveGuardian = lastGuardianDeath;
         break;
@@ -367,9 +373,10 @@ export function compareReports(L: Locale, cur: ExpeditionReport, prevs: readonly
   const done = ended.filter((r) => r.reason === 'completed');
   if (cur.reason === 'completed' && done.length) {
     const minOf = (f: (r: ExpeditionReport) => number) => Math.min(...done.map(f));
-    if (cur.combat.taken < minOf((r) => r.combat.taken)) best.push(t(L, `被ダメージが最少（${cur.combat.taken}）`, `least damage taken (${cur.combat.taken})`));
-    if (cur.tempo.turns < minOf((r) => r.tempo.turns)) best.push(t(L, `手番が最短（${cur.tempo.turns}）`, `fewest turns (${cur.tempo.turns})`));
-    if (cur.tempo.tool_calls < minOf((r) => r.tempo.tool_calls)) best.push(t(L, `呼び出しが最少（${cur.tempo.tool_calls}）`, `fewest calls (${cur.tempo.tool_calls})`));
+    // 最少・最短は達成した遠征どうしで比べた（文にもそう書く。V3-5a 後の AI 評価）
+    if (cur.combat.taken < minOf((r) => r.combat.taken)) best.push(t(L, `被ダメージが達成した遠征で最少（${cur.combat.taken}）`, `least damage taken among completed expeditions (${cur.combat.taken})`));
+    if (cur.tempo.turns < minOf((r) => r.tempo.turns)) best.push(t(L, `手番が達成した遠征で最短（${cur.tempo.turns}）`, `fewest turns among completed expeditions (${cur.tempo.turns})`));
+    if (cur.tempo.tool_calls < minOf((r) => r.tempo.tool_calls)) best.push(t(L, `呼び出しが達成した遠征で最少（${cur.tempo.tool_calls}）`, `fewest calls among completed expeditions (${cur.tempo.tool_calls})`));
   }
   if (best.length) out.personal_best = best;
   return out;

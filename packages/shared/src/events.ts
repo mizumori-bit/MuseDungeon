@@ -7,7 +7,7 @@ import type {
 } from './types';
 
 /** 2: 遠征・実ダメージ・回復の蓄積値（IMPROVEMENTS_V2）。3: ビルド（特技・能動技・呪い。V3-4）。古いログもそのまま畳み込める */
-export const EVENT_VERSION = 10;
+export const EVENT_VERSION = 11;
 
 export interface EventBase {
   seq: number;
@@ -77,7 +77,7 @@ export type GameEvent =
   | E<'max_hp_changed', { target: EntityId; targetKind: string; maxHpAfter: number; hpAfter: number }>
   | E<'died', { id: EntityId; kind: string; killer: EntityId | null; killerKind: string | null; via: DamageVia; pos: Pos; maxHp?: number | null; bounty?: number; affixes?: string[] }>
   | E<'status_applied', { target: EntityId; targetKind: string; status: StatusInst; statusesAfter: StatusInst[]; targetAffixes?: string[] | null }>
-  | E<'status_expired', { target: EntityId; targetKind: string; statusId: string; statusesAfter: StatusInst[] }>
+  | E<'status_expired', { target: EntityId; targetKind: string; statusId: string; statusesAfter: StatusInst[]; targetAffixes?: string[] }>
   | E<'status_ticked', { target: EntityId; statusesAfter: StatusInst[] }>
   | E<'stats_changed', { target: EntityId; statsAfter: Stats; baseAfter: BaseStats | null; speedAfter: number | null; reason: string }>
   | E<'xp_gained', { target: EntityId; amount: number; xpAfter: number }>
@@ -112,7 +112,7 @@ export type GameEvent =
   /** 条件付きの特技が効いた（V3-4b §28.6）。effect: not_woken（忍び足）/ crit（不意打ち）/ picked（回収の手）/ braced（盾の構え）/ might（踏みとどまる）/ poison_halved（鉄の胃）/ cowed（威圧） */
   | E<'perk_triggered', { actor: EntityId; perk: string; effect: 'not_woken' | 'crit' | 'picked' | 'braced' | 'might' | 'poison_halved' | 'cowed'; subject?: EntityId | null; subjectKind?: string | null; amount?: number }>
   /** 能動技を使った。cooldownLeft はこの手番の後の残り手番 */
-  | E<'ability_used', { actor: EntityId; actorKind: string; ability: string; target: EntityId | null; targetKind: string | null; cooldownLeft: number }>
+  | E<'ability_used', { actor: EntityId; actorKind: string; ability: string; target: EntityId | null; targetKind: string | null; cooldownLeft: number; targetAffixes?: string[] }>
   /** 呪いが分かった（装備した・鑑定した）。affixes は見えるようになった呪いの接辞 */
   | E<'curse_revealed', { actor: EntityId; item: EntityId; kind: string | null; appearanceId: string | null; affixes: string[]; via: 'equip' | 'identify' }>
   /** 呪いの有無を確かめた（呪いは無かった） */

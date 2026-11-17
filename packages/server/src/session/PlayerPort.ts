@@ -118,6 +118,7 @@ const STOP_TEXT: Record<string, [string, string]> = {
   item_seen: ['新しいアイテムを見つけた', 'you spotted a new item'],
   stairs_seen: ['階段を見つけた', 'you found stairs'],
   arrived: ['到着した', 'arrived'],
+  sense_found: ['気配の元（遺物・守護者）が見えた（travel_to でその場所へ）', 'the source of the sense (relic or guardian) is in view (travel_to it)'],
   explored: ['この階で辿り着ける場所は探索し尽くした', 'nothing reachable left to explore'],
   unreachable: ['既知の経路では到達できない', 'unreachable via known map'],
   unknown_destination: ['行き先が既知の地図に無い', 'destination is not on your known map'],
@@ -383,14 +384,14 @@ export class SessionPlayerPort implements PlayerPort {
     }
     // 行動から次の自分の手番までに受けた被害の合計（必ず書く）
     if (cmd.type === 'fight') {
-      let swings = 0, hits = 0, dealt = 0;
+      let swings = 0, hits = 0, dealt = 0, melee = 0, throws = 0;
       // until: 'clear' は標的が替わるので、自分の攻撃をすべて数える
       const clear = cmd.until === 'clear';
       const isTarget = (id: string | null | undefined) => clear ? !!id && id !== view.self.id : id === cmd.target;
       for (const e of r.events) {
-        if (e.type === 'attack' && e.attacker === view.self.id && isTarget(e.target)) { swings++; if (e.hit) hits++; }
+        if (e.type === 'attack' && e.attacker === view.self.id && isTarget(e.target)) { swings++; melee++; if (e.hit) hits++; }
         // 投擲で戦った（with）: 投げた数と当たった数
-        if (e.type === 'item_thrown' && e.actor === view.self.id) { swings++; if (e.hit && isTarget(e.hit)) hits++; }
+        if (e.type === 'item_thrown' && e.actor === view.self.id) { swings++; throws++; if (e.hit && isTarget(e.hit)) hits++; }
         if (e.type === 'damaged' && e.source === view.self.id && isTarget(e.target)) dealt += e.dealt ?? e.amount;
       }
       if (clear) {
@@ -409,10 +410,12 @@ export class SessionPlayerPort implements PlayerPort {
       const used = new Map<string, number>();
       for (const e of r.events) if (e.type === 'ability_used' && e.actor === view.self.id) used.set(e.ability, (used.get(e.ability) ?? 0) + 1);
       const waits = Math.max(0, (r.steps ?? 0) - swings);
-      const verb = cmd.with ? t(L, '投げ', 'threw') : t(L, '攻撃し', 'swung');
       const abText = [...used].map(([id, n]) => `${nameOf(this.catalog.abilities[id]?.name, L, id)} ${n} ${t(L, '回', '')}`.trim()).join(t(L, '・', ', '));
-      outcome += ' ' + t(L, `${swings} 回${verb} ${hits} 回命中・合計 ${dealt} ダメージを与えた${abText ? `（能動技: ${abText}）` : ''}${waits ? `（待った手番 ${waits}）` : ''}。`,
-        `${cmd.with ? 'Threw' : 'Swung'} ${swings} times, ${hits} hit for ${dealt} total${abText ? ` (abilities: ${abText})` : ''}${waits ? ` (waited ${waits} turns)` : ''}.`);
+      // 近接と投擲を分けて書く（V3-5a 後の AI 評価: adjacent: 'melee' に切り替えた後の近接も「投げ」と数えた）
+      const how = melee && throws ? t(L, `近接 ${melee} 回・投擲 ${throws} 回、`, `${melee} melee and ${throws} throws, `)
+        : throws ? t(L, `${throws} 回投げ `, `Threw ${throws} times, `) : t(L, `${melee} 回攻撃し `, `Swung ${melee} times, `);
+      outcome += ' ' + t(L, `${how}${hits} 回命中・合計 ${dealt} ダメージを与えた${abText ? `（能動技: ${abText}）` : ''}${waits ? `（待った手番 ${waits}）` : ''}。`,
+        `${how}${hits} hit for ${dealt} total${abText ? ` (abilities: ${abText})` : ''}${waits ? ` (waited ${waits} turns)` : ''}.`);
     }
     // 帰還の綱で戻った: 確定点
     const lifelined = r.events.some((e) => e.type === 'player_state' && e.player === this.playerId && e.reason === 'lifeline');

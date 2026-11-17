@@ -909,8 +909,8 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       entity: adjacent[0].id,
     });
   }
-  // 自分に届く追跡中の敵（逃走中を除く。動かない敵は隣にいるときだけ）
-  const huntingReach = hostiles.filter((m) => m.awareness === 'hunting' && !m.fleeing && !(m.traits.includes('stationary') && m.dist > 1));
+  // 自分に届く追跡中の敵（逃走中は隣にいるときだけ: 追い詰められると殴る。動かない敵は隣にいるときだけ）
+  const huntingReach = hostiles.filter((m) => m.awareness === 'hunting' && (!m.fleeing || m.dist === 1) && !(m.traits.includes('stationary') && m.dist > 1));
   // 階段まで steps 歩く間の最悪の被害（V3-4b §28.5）: 敵ごとに「攻撃できる回数 × 受けた最大の一撃」。記録の無い敵がいれば null
   const chaseOf = (steps: number) => chaseEstimate(view, catalog, huntingReach, steps);
   // 1 手番あたりの最悪の被害（worst_hit × 行動の回数。V3-2R3 §20.4）で群れの見込みと致死を計算する
@@ -1326,8 +1326,13 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
     if (view.self.stats.hp >= capHp && !poisoned) out.push(`rest (${t(L, `不可: これ以上は休憩では戻らない（HP ${capPct}% まで）`, `unavailable: rest does not heal past ${capPct}% HP`)})`);
     else out.push(hunting ? `rest (${t(L, '不可: 追跡中の敵が見えている', 'unavailable: a hunting enemy is in view')})` : x.restTurns !== null ? `rest (${t(L, `休憩（HP ${capPct}% の ${capHp} まで）約${x.restTurns}手`, `rest to ${capHp} (${capPct}% HP) in ~${x.restTurns} turns`)})` : 'rest');
   }
-  // 帰還する階段: 次の遠征はこの階段から始まる（V3-2R3 §20.6）
-  const fromHere = t(L, '・次の遠征はこの階段から始まる。階の敵は追跡をやめて全快する', '; the next expedition starts from these stairs, where monsters stop hunting and heal fully');
+  // 帰還する階段: 次の遠征はこの階段から始まる（V3-2R3 §20.6）。封じられた下り階段なら、次もこの大守護者の間から（V3-5a 後の AI 評価）
+  const msX = catalog.rules?.milestone;
+  const dX = view.floor?.depth ?? 0;
+  const sealedHere = x.onStairs === 'down' && !!msX && dX >= msX.min && dX % msX.every === 0 && !(view.milestonesCleared ?? []).includes(dX);
+  const fromHere = sealedHere
+    ? t(L, '・次の遠征はこの階段（封じられた下り階段。大守護者の間）から始まる。上り階段へは広間を通る。階の敵は追跡をやめて全快する', '; the next expedition starts from these sealed stairs down in the warden\'s hall (reaching the stairs up means crossing the hall); monsters stop hunting and heal fully')
+    : t(L, '・次の遠征はこの階段から始まる。階の敵は追跡をやめて全快する', '; the next expedition starts from these stairs, where monsters stop hunting and heal fully');
   if (x.canExtract) out.push(x.objectiveComplete ? `extract (${t(L, '帰還: 遠征達成', 'complete the expedition')}${fromHere})` : `extract confirm:true (${t(L, '撤退: 未達成のまま終える', 'withdraw without the reward')}${fromHere})`);
   // 移動マクロはその場で進める mode だけを出す（V3-2R §14.2）。隣に起きている敵がいれば careful では動かないので flee を出す
   const adjAwake = x.hostiles.filter((m) => m.dist <= 1 && m.awareness !== 'asleep' && !m.fleeing);

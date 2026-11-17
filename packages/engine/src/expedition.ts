@@ -525,6 +525,8 @@ export function doExtract(ctx: Ctx, e: Entity, pr: PlayerRecord, completed: bool
   body.actor = { ...body.actor!, dormant: true, regen: 0 };
   body.stats = { ...body.stats!, hp: body.stats!.maxHp };
   body.statuses = [];
+  // 能動技の再使用待ちもキャンプで戻る（V3-5a 後の AI 評価: 遠征をまたいで「あと 6」が残った）。遠征に 1 回の能動技は usedNo で別に数える
+  if (body.build?.abilities?.length) body.build = { ...body.build, abilities: body.build.abilities.map((a) => ({ ...a, readyAt: 0 })) };
   ctx.emit({ type: 'player_state', player: pr.id, state: 'at_camp', reason: lifeline ? 'lifeline' : completed ? 'extracted' : 'withdrew', extractPos, ...(relicLost ? { relicLost: true } : {}), put: [body], ...(treasureIds.length ? { del: treasureIds } : {}), seenBy: 'all', floor: key });
   maybeEndExpedition(ctx);
 }

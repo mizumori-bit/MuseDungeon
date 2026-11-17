@@ -74,7 +74,7 @@ export function addStatus(ctx: Ctx, e: Entity, id: string, turns: number, power:
 export function removeStatus(ctx: Ctx, e: Entity, id: string): boolean {
   if (!(e.statuses ?? []).some((s) => s.id === id)) return false;
   const after = (e.statuses ?? []).filter((s) => s.id !== id).map((s) => ({ ...s }));
-  ctx.emit({ type: 'status_expired', target: e.id, targetKind: e.kind, statusId: id, statusesAfter: after, ...statusSeen(ctx, e) });
+  ctx.emit({ type: 'status_expired', target: e.id, targetKind: e.kind, statusId: id, statusesAfter: after, ...(e.scale?.affixes?.length ? { targetAffixes: [...e.scale.affixes] } : {}), ...statusSeen(ctx, e) });
   return true;
 }
 
@@ -99,7 +99,7 @@ export function tickStatuses(ctx: Ctx, e: Entity): boolean {
   let state = after;
   for (const ex of expired) {
     state = state.filter((s) => s.id !== ex.id);
-    ctx.emit({ type: 'status_expired', target: e.id, targetKind: e.kind, statusId: ex.id, statusesAfter: state.map((s) => ({ ...s })), ...statusSeen(ctx, e) });
+    ctx.emit({ type: 'status_expired', target: e.id, targetKind: e.kind, statusId: ex.id, statusesAfter: state.map((s) => ({ ...s })), ...(e.scale?.affixes?.length ? { targetAffixes: [...e.scale.affixes] } : {}), ...statusSeen(ctx, e) });
     const def = ctx.content.statuses[ex.id];
     const h = def ? statusHandlers.get(def.handler) : undefined;
     if (h?.expire && ctx.world.entities[e.id]?.pos) h.expire(ctx, ctx.world.entities[e.id], ex);

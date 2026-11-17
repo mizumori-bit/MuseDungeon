@@ -413,6 +413,14 @@ V3-2R で足した項目（同じく後方互換。会心と経験値のルー�
 - `player_state.reason: 'joined'`（キャンプから始まる参加）。参加コマンドの `atCamp`
 - プレイヤー向けの射影で、見えていた個体が視界の外へ動いた `entity_moved` に `dirOut`（向きだけ。行き先は伏せたまま）
 
+V3-5a の後の AI 評価の修正で足した項目（後方互換。`engineVersion` は 0.15.1、`eventVersion` は 11。DESIGN.md §26.1）:
+
+- イベント: `status_expired.targetAffixes`・`ability_used.targetAffixes`（守護者の印を文に出す）
+- マクロ: 停止理由 `sense_found`（explore toward:sense で遺物・守護者が見えた・覚えている。最初の判断なら拒否で、travel_to を勧める）。flee の既定の hp_floor は、始める時点ですでにそれ以下なら 0。状態異常で止まるのは、その呼び出しの中で初めて掛かったときだけ（自分が付けた状態と、効き目の無い装甲の修正では止まらない）。fight の hp_risk と観測の「1 手の最悪の被害」に、隣にいる逃走中の敵も入る。collect は敵が乗っている品を後回しにする。足元に拾う品があれば、隣の敵で止まる前に拾う。マクロは、投げて使える有害品（毒薬など）を拾う
+- キャンプへ戻ると、能動技の再使用待ちも戻る（`AbilityState.readyAt` を 0 に）
+- fight の結果の文は、近接と投擲を分けて数える。遠征レポートの命中は投擲の当たり外れを含む。比較の「最少・最短」は「達成した遠征で」と書く
+- 封じられた下り階段の上の extract の文に「次の遠征はこの階段（大守護者の間）から始まる」
+
 V3-5a で足した項目（中層の敵。後方互換。種族と規則が増えたので `engineVersion` は 0.15.0。DESIGN.md §26）:
 
 - 種族: 洞窟狼（`core:cave_wolf`）・錆の粘体（`core:rust_slime`）・呪い火の術者（`core:hexfire_caster`）・石皮の甲虫（`core:stoneskin_beetle`）。大ネズミ・ジャッカル・ゴブリン・ゴブリンの投石兵に深さの上限（4・6・7・9）

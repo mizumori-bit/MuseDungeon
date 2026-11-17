@@ -114,7 +114,7 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
       return ja ? `${tg}は${st}状態になった。` : `${cap(tg)} ${ev.target === self ? 'are' : 'is'} now ${st}.`;
     }
     case 'status_expired': {
-      const tg = who(ctx, ev.target, ev.targetKind);
+      const tg = who(ctx, ev.target, ev.targetKind, ev.targetAffixes);
       const st = nameOf(ctx.catalog.statuses[ev.statusId]?.name, L, ev.statusId);
       return ja ? `${tg}の${st}状態が解けた。` : `${cap(tg)} ${ev.target === self ? 'are' : 'is'} no longer ${st}.`;
     }
@@ -172,7 +172,7 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
     }
     case 'ability_used': {
       const ab = nameOf(ctx.catalog.abilities[ev.ability]?.name, L, ev.ability);
-      const tg = ev.target ? who(ctx, ev.target, ev.targetKind) : null;
+      const tg = ev.target ? who(ctx, ev.target, ev.targetKind, ev.targetAffixes) : null;
       const cd = ev.actor === self && ev.cooldownLeft > 0 ? (ja ? `（再使用まで ${ev.cooldownLeft} 手番）` : ` (ready again in ${ev.cooldownLeft} turns)`) : '';
       if (ev.actor === self) return ja ? `${ab}を使った${tg ? `（${tg}へ）` : ''}。${cd}` : `You use ${ab}${tg ? ` on ${tg}` : ''}.${cd}`;
       return ja ? `${who(ctx, ev.actor, ev.actorKind)}は${ab}を使った。` : `${cap(who(ctx, ev.actor, ev.actorKind))} uses ${ab}.`;
@@ -287,7 +287,10 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
     case 'guardian_acted': {
       const nm = nameOf(ev.guardianName, L, '?');
       switch (ev.act) {
-        case 'summoned': return ja ? `${nm}が手下を ${ev.count ?? 0} 体呼んだ。` : `${nm} calls ${ev.count ?? 0} minions.`;
+        // 呼べる場所が無ければ 0 体（V3-5a 後の AI 評価: 「0 体呼んだ」が奇妙だった）
+        case 'summoned': return (ev.count ?? 0) > 0
+          ? (ja ? `${nm}が手下を ${ev.count} 体呼んだ。` : `${nm} calls ${ev.count} minions.`)
+          : (ja ? `${nm}は手下を呼ぼうとしたが、呼べる場所が無かった。` : `${nm} tries to call minions, but there is no room for them.`);
         case 'charged': return ja ? `${nm}が直線を突進した。` : `${nm} charges down the line.`;
         case 'missed': return ja ? `${nm}の突進が外れ、体勢を崩した（1 手無防備）。` : `${nm}'s charge misses and it staggers (helpless for a turn).`;
         case 'enraged': return ja ? `${nm}が怒った（速さ・威力が上がった）。` : `${nm} rages (faster and stronger).`;
