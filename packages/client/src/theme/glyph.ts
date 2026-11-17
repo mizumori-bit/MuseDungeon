@@ -21,6 +21,9 @@ const TERRAIN: Record<string, GlyphDrawable> = {
   'core:grass': { kind: 'glyph', ch: ',', fg: '#6fbf4a', bg: '#152015' },
   'core:tall_grass': { kind: 'glyph', ch: '"', fg: '#58a83a', bg: '#122012' },
   'core:rubble': { kind: 'glyph', ch: ':', fg: '#9a8f80', bg: FLOOR_BG },
+  'core:grate_locked': { kind: 'glyph', ch: '#', fg: '#c0a040', bg: FLOOR_BG, bold: true },
+  'core:grate_open': { kind: 'glyph', ch: "'", fg: '#c0a040', bg: FLOOR_BG },
+  'core:bookshelf': { kind: 'glyph', ch: '&', fg: '#a07850', bg: '#2a2018' },
   'core:pillar': { kind: 'glyph', ch: 'O', fg: '#c8c0b0', bg: '#2e2a25', bold: true },
 };
 
@@ -46,8 +49,8 @@ const ACTOR: Record<string, GlyphDrawable> = {
 
 // relic: 遠征の遺物（core:relic）。目印の光と星はレンダラーが役割（role）から重ねる
 // lifeline: 帰還の綱（core:lifeline。手放せないので床には落ちないが、所持品や投擲の演出で引かれたときの代替）
-const ITEM_CH: Record<string, string> = { potion: '!', scroll: '?', weapon: ')', armor: '[', throwing: '/', accessory: '"', relic: '¤', lifeline: '§' };
-const ITEM_FG: Record<string, string> = { potion: '#e070e0', scroll: '#e8dcb0', weapon: '#c8d0dc', armor: '#c09050', throwing: '#d8d8d8', accessory: '#f0d060', relic: '#ffd54f', lifeline: '#d7b47a' };
+const ITEM_CH: Record<string, string> = { potion: '!', scroll: '?', weapon: ')', armor: '[', throwing: '/', accessory: '"', relic: '¤', lifeline: '§', key: '-' };
+const ITEM_FG: Record<string, string> = { potion: '#e070e0', scroll: '#e8dcb0', weapon: '#c8d0dc', armor: '#c09050', throwing: '#d8d8d8', accessory: '#f0d060', relic: '#ffd54f', lifeline: '#d7b47a', key: '#ffd54f' };
 
 const APPEARANCE_FG: Record<string, string> = {
   'core:potion_look_01': '#ff5050',
@@ -66,6 +69,9 @@ const APPEARANCE_FG: Record<string, string> = {
 const FEATURE: Record<string, GlyphDrawable> = {
   'core:fountain': { kind: 'glyph', ch: '{', fg: '#60d0ff', bold: true },
   'core:altar': { kind: 'glyph', ch: '_', fg: '#f0d060', bold: true },
+  'core:inscription': { kind: 'glyph', ch: '|', fg: '#d0d0e8', bold: true },
+  'core:old_note': { kind: 'glyph', ch: '~', fg: '#e8dcb0' },
+  'core:gamble_altar': { kind: 'glyph', ch: '_', fg: '#e05090', bold: true },
 };
 
 const STATUS: Record<string, GlyphDrawable> = {

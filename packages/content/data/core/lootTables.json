@@ -34,5 +34,6 @@
       { "category": "treasure", "weight": 1 }
     ],
     "depthBonus": 1, "affixChancePct": 0
-  }
+  },
+  { "id": "core:scroll_loot", "entries": [{ "category": "scroll", "weight": 1 }], "depthBonus": 0, "affixChancePct": 0 }
 ]

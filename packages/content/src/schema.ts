@@ -196,6 +196,8 @@ export const PrefabCellSchema = z.object({
 
 export const PrefabSchema = z.object({
   id: IdSchema,
+  /** 特殊部屋の名前（V3-5 §5.1。tags に room を持つ部屋は、見つけると発見の点が入る） */
+  name: NamesSchema.optional(),
   tags: z.array(z.string()).default([]),
   depth: DepthSchema,
   weight: z.number().int().min(0),
@@ -322,7 +324,7 @@ export const BoonSchema = z.object({
  */
 export const LoreSchema = z.object({
   id: IdSchema,
-  kind: z.enum(['frame', 'briefing', 'guardian_slain', 'warden_slain', 'relic_delivered']),
+  kind: z.enum(['frame', 'briefing', 'guardian_slain', 'warden_slain', 'relic_delivered', 'inscription', 'note']),
   when: z.object({ objective: z.string().optional(), guarded: z.boolean().optional(), guardianType: IdSchema.optional() }).default({}),
   weight: z.number().int().min(1).default(1),
   text: NamesSchema,
@@ -468,6 +470,10 @@ export const FeatureSchema = z.object({
   onEnter: z.array(EffectSchema).default([]),
   depth: DepthSchema.default({ min: 1 }),
   rarity: z.number().int().min(1).default(1),
+  /** 説明（look で読める。V3-5 §5.1） */
+  desc: NamesSchema.optional(),
+  /** 賭けの祭壇（V3-5 §5.1）: 操作すると重みで 1 つ選び、その効果が起きる（表と確率は公開） */
+  gamble: z.array(z.object({ weight: z.number().int().min(1), name: NamesSchema, effects: z.array(EffectSchema).min(1) })).optional(),
 });
 
 export type TerrainDef = z.infer<typeof TerrainSchema>;

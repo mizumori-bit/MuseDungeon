@@ -10,6 +10,11 @@ import { Registry, roll } from './registry';
 import { lifelineReturn } from './expedition';
 import { addStatus, removeStatus } from './statuses';
 import { inspectItem, liftCurses } from './build';
+import { pickLore } from './story';
+import { recomputeStats } from './stats';
+import { pickMonster } from './gen/generate';
+import { spawnFromSpec } from './spawn';
+import { wakeMonster } from './perception';
 
 export interface EffectCtx {
   /** 効果の使い手（薬を飲んだ者、攻撃者、罠なら null） */
@@ -23,6 +28,8 @@ export interface EffectCtx {
   itemSlot?: string;
   /** 使った品の種類（鑑定の既定の対象から除く） */
   usedKind?: string;
+  /** 操作した地物（碑文。V3-5 §5.1） */
+  feature?: Entity;
 }
 
 export type EffectHandler = (ctx: Ctx, params: EffectDef, ec: EffectCtx) => void;
@@ -49,7 +56,15 @@ effects.register('status', (ctx, p, ec) => {
   }
 });
 
-effects.register('damage', (ctx, p, ec) => applyDamage(ctx, ec.target, Math.max(1, dice(ctx, p.amount, '1d4')), ec.source, ec.via === 'trap' ? 'trap' : 'effect'));
+// pct: 今の HP の pct %（切り捨て。0 なら何もしない。賭けの祭壇の「HP が半分」。V3-5 §5.1）
+effects.register('damage', (ctx, p, ec) => {
+  if (typeof p.pct === 'number') {
+    const n = Math.trunc(((ctx.world.entities[ec.target.id]?.stats?.hp ?? 0) * p.pct) / 100);
+    if (n > 0) applyDamage(ctx, ec.target, n, ec.source, 'effect');
+    return;
+  }
+  applyDamage(ctx, ec.target, Math.max(1, dice(ctx, p.amount, '1d4')), ec.source, ec.via === 'trap' ? 'trap' : 'effect');
+});
 
 effects.register('max_hp', (ctx, p, ec) => {
   const t = ctx.world.entities[ec.target.id];
@@ -181,6 +196,117 @@ effects.register('map', (ctx, _p, ec) => {
     type: 'knowledge_updated', player: pr.id, floorKey: key, visible: null, newlySeen: newly, rememberedSet: [], rememberedDel: [], metAdd: [],
     ...(mappedAdd.length ? { mappedAdd } : {}), seenBy: [pr.id], floor: key,
   });
+});
+
+/**
+ * 碑文・書き置き（V3-5 §5.1）: 記録の断章と、手がかり 1 つ（clue: 1 のときだけ）。手がかりは、この階の守護者の弱点（まだ知らない）→
+ * この階の鍵のかかった宝物庫の場所（地図に記す）→ 未鑑定の品 1 種の正体（持っている物を先に）の順に、当てはまる最初のもの
+ */
+effects.register('inscription', (ctx, p, ec) => {
+  const user = ec.user ?? ec.target;
+  if (!user.player || !user.pos) return;
+  const pr = ctx.world.players[user.player];
+  const key = user.pos.floor;
+  const note = num(p.clue, 1) === 0;
+  const fid = ec.feature?.id ?? '';
+  const lore = pickLore(ctx.content, ctx.world.secret.seed, `${note ? 'note' : 'inscription'}|${key}|${ec.pos.x},${ec.pos.y}`, note ? 'note' : 'inscription', {}, {});
+  let clue: 'weakness' | 'vault' | 'identify' | 'none' = 'none';
+  let clueText: { ja: string; en: string } | undefined;
+  if (!note) {
+    const g = ctx.entitiesOn(key).find((m) => m.guardian?.weakness && (m.stats?.hp ?? 0) > 0 && !pr.knowledge.guardianIntel?.[m.id]);
+    const f = ctx.world.floors[key];
+    const fk = pr.knowledge.floors[key];
+    const vault = f.regions.find((r) => r.kind === 'prefab' && r.tags.includes('vault_locked') && !r.found);
+    if (g) {
+      clue = 'weakness';
+      ctx.emit({ type: 'guardian_intel', player: pr.id, guardian: g.id, guardianName: { ...g.guardian!.name }, weakness: g.guardian!.weakness!, seenBy: [pr.id], floor: key });
+    } else if (vault) {
+      clue = 'vault';
+      const newly: number[] = [];
+      for (let y = vault.y - 1; y <= vault.y + vault.h; y++) for (let x = vault.x - 1; x <= vault.x + vault.w; x++) {
+        if (x < 0 || y < 0 || x >= f.width || y >= f.height) continue;
+        const i = y * f.width + x;
+        if ((fk?.seen[i] ?? 0) !== f.terrain[i]) newly.push(i, f.terrain[i]);
+      }
+      const vis = new Set(pr.knowledge.visible);
+      const mappedAdd = newly.filter((_, j) => j % 2 === 0).filter((i) => !vis.has(i) && (fk?.seen[i] ?? 0) === 0);
+      ctx.emit({ type: 'knowledge_updated', player: pr.id, floorKey: key, visible: null, newlySeen: newly, rememberedSet: [], rememberedDel: [], metAdd: [], ...(mappedAdd.length ? { mappedAdd } : {}), seenBy: [pr.id], floor: key });
+      const cx = vault.x + Math.trunc(vault.w / 2), cy = vault.y + Math.trunc(vault.h / 2);
+      clueText = { ja: `この階の施錠された宝物庫は (${cx},${cy}) のあたり（地図に記した。鍵はこの階の敵が持っている）`, en: `this floor's locked vault is around (${cx},${cy}) (marked on your map; a monster on this floor carries the key)` };
+    } else {
+      const known = new Set(pr.knowledge.identified);
+      const held = (user.inv?.items ?? []).map((id) => ctx.world.entities[id]?.kind).filter((k): k is string => !!k && !!ctx.world.secret.appearances[k] && !known.has(k));
+      const any = Object.keys(ctx.world.secret.appearances).filter((k) => !known.has(k)).sort();
+      const pick = held[0] ?? (any.length ? any[ctx.rng('runtime').int(any.length)] : undefined);
+      if (pick) {
+        clue = 'identify';
+        ctx.emit({ type: 'item_identified', player: pr.id, kind: pick, appearanceId: ctx.world.secret.appearances[pick] ?? null, seenBy: [pr.id] });
+      }
+    }
+  }
+  ctx.emit({ type: 'inscription_read', player: pr.id, feature: fid, note, lore, clue, ...(clueText ? { clueText } : {}), seenBy: [pr.id], floor: key });
+});
+
+/** 賭けの祭壇: 持ち物の装備 1 つ（装備中を先に）に、まだ付いていない良い接辞を 1 つ（V3-5 §5.1） */
+effects.register('affix_item', (ctx, _p, ec) => {
+  const user = ec.user ?? ec.target;
+  if (!user.player) return;
+  const rng = ctx.rng('runtime');
+  const equipped = new Set(Object.values(user.equip ?? {}).filter(Boolean) as string[]);
+  const items = (user.inv?.items ?? []).map((id) => ctx.world.entities[id]).filter((it): it is Entity => !!it?.item && !!ctx.content.items[it.kind]?.equip)
+    .sort((a, b) => Number(equipped.has(b.id)) - Number(equipped.has(a.id)) || (a.item!.slot ?? '').localeCompare(b.item!.slot ?? ''));
+  for (const it of items) {
+    const cat = ctx.content.items[it.kind].category;
+    const cands = ctx.content.lists.affixes.filter((a) => a.target === 'item' && !a.cursed && (a.categories ?? []).includes(cat) && !it.item!.affixes.includes(a.id));
+    if (!cands.length) continue;
+    const a = cands[rng.int(cands.length)];
+    const body = structuredClone(it);
+    body.item!.affixes = [...body.item!.affixes, a.id];
+    ctx.emit({ type: 'item_altered', actor: user.id, item: it.id, kind: it.kind, affix: a.id, cursed: false, put: [body], seenBy: [user.player], floor: user.pos?.floor ?? null });
+    if (equipped.has(it.id)) recomputeStats(ctx, ctx.world.entities[user.id], 'affix');
+    return;
+  }
+});
+
+/** 賭けの祭壇: 装備している品 1 つが呪われる（呪いの接辞が付き、外せなくなる。すぐ分かる。V3-5 §5.1） */
+effects.register('curse_item', (ctx, _p, ec) => {
+  const user = ec.user ?? ec.target;
+  if (!user.player) return;
+  const rng = ctx.rng('runtime');
+  const worn = Object.values(user.equip ?? {}).filter(Boolean).map((id) => ctx.world.entities[id as string]).filter((it): it is Entity => !!it?.item);
+  if (!worn.length) return;
+  const it = worn[rng.int(worn.length)];
+  const cat = ctx.content.items[it.kind]?.category;
+  const cands = ctx.content.lists.affixes.filter((a) => a.target === 'item' && a.cursed && (a.categories ?? []).includes(cat) && !it.item!.affixes.includes(a.id));
+  if (!cands.length) return;
+  const a = cands[rng.int(cands.length)];
+  const body = structuredClone(it);
+  body.item!.affixes = [...body.item!.affixes, a.id];
+  body.item!.inspected = true;
+  ctx.emit({ type: 'item_altered', actor: user.id, item: it.id, kind: it.kind, affix: a.id, cursed: true, put: [body], seenBy: [user.player], floor: user.pos?.floor ?? null });
+  recomputeStats(ctx, ctx.world.entities[user.id], 'curse');
+});
+
+/** 賭けの祭壇: その階の種族から count 体を隣に呼ぶ（起きていて、呼んだ相手を追う。V3-5 §5.1） */
+effects.register('summon', (ctx, p, ec) => {
+  const t = ec.target;
+  if (!t.pos) return;
+  const key = t.pos.floor;
+  const f = ctx.world.floors[key];
+  const biome = ctx.content.biomes[f.biome];
+  const floorType = ctx.content.floorTypes[f.floorType];
+  if (!biome || !floorType) return;
+  const rng = ctx.rng('runtime');
+  let n = 0;
+  for (let dy = -1; dy <= 1 && n < num(p.count, 1); dy++) for (let dx = -1; dx <= 1 && n < num(p.count, 1); dx++) {
+    const x = t.pos.x + dx, y = t.pos.y + dy;
+    if ((!dx && !dy) || x < 0 || y < 0 || x >= f.width || y >= f.height || !ctx.terrainAt(key, x, y).passable || ctx.actorAt(key, x, y)) continue;
+    const pick = pickMonster({ content: ctx.content, depth: f.depth, biome, floorType }, rng);
+    if (!pick || pick.def.ai.archetype === 'stationary') continue;
+    const s = spawnFromSpec(ctx, key, { type: 'monster', kind: pick.def.id, x, y, hp: Math.max(1, roll(rng, pick.def.stats.hp)), affixes: [], tier: pick.tier, asleep: false, delay: 0 }, 'summoned');
+    if (s) wakeMonster(ctx, ctx.world.entities[s.id] ?? s, { x: t.pos.x, y: t.pos.y });
+    n++;
+  }
 });
 
 effects.register('noise', (ctx, p, ec) => {

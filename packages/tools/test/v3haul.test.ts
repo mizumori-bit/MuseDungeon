@@ -166,7 +166,11 @@ describe('V3-2 offers, treasure, haul', () => {
     // 参加時に職業の知識で判明する分（遠征の開始前）は数えない
     const identified = r.session.history.filter((e) => e.type === 'item_identified' && e.player === pid && e.seq >= x.startSeq).length;
     expect(Object.values(w.players[pid].knowledge.monsterMemory).some((m) => m.kills >= 2)).toBe(true);
-    expect(x.haul!.discovery).toBe(species * content.balance.haul.discovery.species + identified * content.balance.haul.discovery.identify);
+    // 特殊部屋を見つけた・碑文を読んだ分も入る（V3-5 §5.1）
+    const rooms = r.session.history.filter((e) => e.type === 'room_found' && e.player === pid && e.seq >= x.startSeq).length;
+    const inscriptions = r.session.history.filter((e) => e.type === 'inscription_read' && e.player === pid && !e.note && e.seq >= x.startSeq).length;
+    const dh = content.balance.haul.discovery;
+    expect(x.haul!.discovery).toBe(species * dh.species + identified * dh.identify + rooms * dh.room + inscriptions * dh.inscription);
     const obs = r.port.observe({ map: false }).observation;
     if (r.port.view().status === 'your_turn') expect(obs.expedition!.haul!.parts.kills).toBe(x.haul!.kills);
     manager.closeAll();
@@ -195,9 +199,15 @@ describe('V3-2 offers, treasure, haul', () => {
   });
 
   it('picking up the relic wakes the floor (public rule)', () => {
-    const { world } = createRun(content, { runId: 'run_relic', seed: 'v3-relic-1', wall: 1 });
-    const j = joinPlayer(world, content, { type: 'join', name: 'R', classId: 'core:warrior', controller: { kind: 'agent', label: 't' }, locale: 'ja' }, { cseq: 1, wall: 2 });
-    if (!j.ok) throw new Error('join');
+    // 地下 1 階に眠っている敵がいるシードを使う（生成が変わってもよいように探す）
+    let found: { world: World; j: Extract<ReturnType<typeof joinPlayer>, { ok: true }> } | null = null;
+    for (let k = 1; k < 20 && !found; k++) {
+      const w0 = createRun(content, { runId: 'run_relic', seed: `v3-relic-${k}`, wall: 1 }).world;
+      const j0 = joinPlayer(w0, content, { type: 'join', name: 'R', classId: 'core:warrior', controller: { kind: 'agent', label: 't' }, locale: 'ja' }, { cseq: 1, wall: 2 });
+      if (j0.ok && Object.values(w0.entities).some((e) => e.actor?.dormant && !e.player && e.pos?.floor === 'main:1')) found = { world: w0, j: j0 };
+    }
+    if (!found) throw new Error('no seed with a sleeper');
+    const { world, j } = found;
     const me = world.entities[world.players[j.playerId].entityId];
     const sleeper = Object.values(world.entities).find((e) => e.actor?.dormant && !e.player && e.pos?.floor === 'main:1');
     expect(sleeper).toBeTruthy();

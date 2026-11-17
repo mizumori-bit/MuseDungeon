@@ -490,6 +490,13 @@ export function accrueHaul(ctx: Ctx): void {
     } else if (ev.type === 'item_identified' && x.participants.includes(ev.player)) {
       gains.discovery += h.discovery.identify;
       reasons.push(`identify:${ev.kind}`);
+    } else if (ev.type === 'room_found' && x.participants.includes(ev.player)) {
+      // 特殊部屋を見つけた・碑文を読んだ（V3-5 §5.1）
+      gains.discovery += h.discovery.room;
+      reasons.push(`room:${ev.room}`);
+    } else if (ev.type === 'inscription_read' && x.participants.includes(ev.player) && !ev.note) {
+      gains.discovery += h.discovery.inscription;
+      reasons.push('inscription');
     }
   }
   for (const { pid, kind, n } of killsNow.values()) {
@@ -507,6 +514,35 @@ export function accrueHaul(ctx: Ctx): void {
   if (gains.discovery) g.discovery = gains.discovery;
   if (gains.kills) g.kills = gains.kills;
   ctx.emit({ type: 'haul_changed', no: x.no, haulAfter: after, gains: g, reasons, seenBy: [...x.participants].sort(), floor: null });
+}
+
+/**
+ * 特殊部屋を見つけた（V3-5 §5.1）: 参加者の視界に、まだ誰も見つけていない特殊部屋（tags に room）の中が入った。
+ * 発見の点は 1 部屋 1 回（room_found の後、accrueHaul が数える）
+ */
+export function noteRooms(ctx: Ctx): void {
+  const x = currentExpedition(ctx.world);
+  if (!x) return;
+  for (const pid of x.participants) {
+    const pr = ctx.world.players[pid];
+    const e = pr?.state === 'alive' ? ctx.world.entities[pr.entityId] : undefined;
+    if (!e?.pos) continue;
+    const f = ctx.world.floors[e.pos.floor];
+    const rooms = f?.regions.filter((r) => r.kind === 'prefab' && r.tags.includes('room') && !r.found) ?? [];
+    if (!rooms.length) continue;
+    const vis = ctx.visibleSet(pid);
+    for (const r of rooms) {
+      let seen = false;
+      for (let y = r.y; y < r.y + r.h && !seen; y++) for (let xx = r.x; xx < r.x + r.w; xx++) {
+        if (!vis.has(y * f.width + xx)) continue;
+        const tr = ctx.terrainAt(f.key, xx, y);
+        if (tr.passable || tr.tags.includes('grate')) { seen = true; break; }
+      }
+      if (!seen) continue;
+      const def = ctx.content.lists.prefabs.find((pf) => pf.id === r.tags[0]);
+      ctx.emit({ type: 'room_found', player: pid, floorKey: f.key, region: r.id, room: r.tags[0], name: def?.name ? { ...def.name } : { ja: r.tags[0], en: r.tags[0] }, seenBy: [...x.participants].sort(), floor: f.key });
+    }
+  }
 }
 
 /**

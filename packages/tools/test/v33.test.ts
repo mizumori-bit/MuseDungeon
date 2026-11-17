@@ -288,7 +288,8 @@ describe('V3-3 lairs (§3.1)', () => {
     }
     expect(n).toBeGreaterThan(5);
     expect(fires).toBeGreaterThanOrEqual(n * 2 - 2);
-    expect(pillars).toBeGreaterThanOrEqual(n * 2);
+    // 柱は 8 近傍がすべて床のマスにだけ置くので、狭い棲み処では 3 本に届かないことがある（特殊部屋が増えた V3-5 で 1〜2 本減った）
+    expect(pillars).toBeGreaterThanOrEqual(n * 2 - 4);
     expect(pools).toBeGreaterThanOrEqual(n * 4);
   });
 

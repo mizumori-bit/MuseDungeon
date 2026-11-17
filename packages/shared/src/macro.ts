@@ -23,6 +23,8 @@ import type { EntityView, ItemView, PlayerView } from './view';
 
 /** 既定値（実際の上限は catalog.rules.macroStepLimit / restMaxTurns） */
 export const MACRO_STEP_LIMIT = 200;
+/** travel: 目的地までの道のりがこの手数のあいだ縮まなければ止まる */
+const TRAVEL_NO_PROGRESS = 20;
 
 export type MacroStop =
   | 'hostile_in_view' | 'damaged' | 'item_seen' | 'stairs_seen' | 'arrived' | 'explored'
@@ -128,6 +130,9 @@ export interface MacroState {
   noCloser?: number;
   /** 移動マクロ: 直近の位置（往復の検出） */
   trail?: number[];
+  /** travel: 目的地までの道のりの最短と、それから縮まないまま進んだ手（V3-5c の bot の計測: 経路が変わり続けて 200 手さまよった） */
+  bestLen?: number;
+  sinceBest?: number;
   floorKey: string;
   lastHp: number;
   knownHostiles: string[];
@@ -945,6 +950,9 @@ export function macroNext(state: MacroState, view: PlayerView, catalog: Catalog,
     }
     if (path.length === 0) return { stop: 'arrived' };
     if (goal.adjacentOk && path.length === 1) return { stop: 'arrived' };
+    // 目的地までの道のりが TRAVEL_NO_PROGRESS 手のあいだ一度も縮まなければ止まる（2 マスの往復でない行き来も止める）
+    if (state.bestLen === undefined || path.length < state.bestLen) { state.bestLen = path.length; state.sinceBest = 0; }
+    else if ((state.sinceBest = (state.sinceBest ?? 0) + 1) >= TRAVEL_NO_PROGRESS) return { stop: 'no_progress' };
   }
   // マクロは発見済みの罠を踏まない: ほかに道が無く、次のマスが罠なら止まる（踏むなら move で）
   if (trapCells.has(path[0].y * grid.width + path[0].x)) return { stop: 'trap_ahead', dir: dirBetween(pos, path[0]) ?? undefined };

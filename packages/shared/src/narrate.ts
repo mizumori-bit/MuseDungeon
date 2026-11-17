@@ -265,6 +265,7 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
       const t = ctx.catalog.terrain[ev.terrainId as string];
       if (ev.reason === 'door_open') return ev.by === self ? (ja ? '扉を開けた。' : 'You open the door.') : (ja ? '扉が開いた。' : 'A door opens.');
       if (ev.reason === 'door_close') return ev.by === self ? (ja ? '扉を閉めた。' : 'You close the door.') : (ja ? '扉が閉まった。' : 'A door closes.');
+      if (ev.reason === 'unlock') return ev.by === self ? (ja ? '鍵で格子扉を開けた（鍵は無くなった）。' : 'You unlock the grate (the key is used up).') : (ja ? '格子扉が開いた。' : 'A grate opens.');
       return t ? null : null;
     }
     case 'entity_moved':
@@ -321,6 +322,21 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
       const gone = ev.dispersed ? (ja ? `${nm}の手下は散っていた。` : ` Its minions have scattered.`) : '';
       return (ev.full ? (ja ? `守護者「${nm}」は傷を癒やしていた（体力が戻っている）。` : `The guardian "${nm}" has healed its wounds (back to full).`)
         : (ja ? `守護者「${nm}」の傷が少し癒えている（追われていない間に回復した）。` : `The guardian "${nm}" has healed a little while it was not chasing you.`)) + gone;
+    }
+    case 'room_found':
+      return ja ? `${ev.player === self ? '' : '仲間が'}「${nameOf(ev.name, L, ev.room)}」を見つけた（発見）。` : `${ev.player === self ? 'Found' : 'An ally found'}: ${nameOf(ev.name, L, ev.room)} (discovery).`;
+    case 'inscription_read': {
+      const what = ev.note ? (ja ? '書き置き' : 'the note') : (ja ? '碑文' : 'the inscription');
+      const body = ev.lore ? (ja ? `${nameOf(ev.lore, L, '')}` : ` ${nameOf(ev.lore, L, '')}`) : '';
+      const clue = ev.clueText ? (ja ? ` 手がかり: ${nameOf(ev.clueText, L, '')}` : ` Clue: ${nameOf(ev.clueText, L, '')}`) : '';
+      return ja ? `${what}を読んだ: ${body}${clue}` : `You read ${what}:${body}${clue}`;
+    }
+    case 'gamble_rolled':
+      return ja ? `祭壇に祈った。起きたこと: ${nameOf(ev.outcome, L, '?')}（${ev.pct}%）。` : `You pray at the altar. Result: ${nameOf(ev.outcome, L, '?')} (${ev.pct}%).`;
+    case 'item_altered': {
+      const n = kindName(ctx.catalog, L, ev.kind);
+      const af = nameOf(ctx.catalog.affixes[ev.affix]?.name, L, ev.affix);
+      return ev.cursed ? (ja ? `${n}が呪われた（${af}）。外せない。` : `Your ${n} is cursed (${af}). It cannot be removed.`) : (ja ? `${n}に「${af}」が付いた。` : `Your ${n} gains "${af}".`);
     }
     case 'monster_acted': {
       const nm = who(ctx, ev.id, ev.kind);

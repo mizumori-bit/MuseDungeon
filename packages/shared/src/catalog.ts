@@ -97,7 +97,7 @@ export interface Catalog {
   classes: Record<string, CatalogClass>;
   items: Record<string, CatalogItem>;
   appearances: Record<string, { name: Names; category: string }>;
-  features: Record<string, { name: Names; category: 'feature' | 'trap'; states: string[]; interactable: boolean; passable: boolean; afterInteract?: string }>;
+  features: Record<string, { name: Names; category: 'feature' | 'trap'; states: string[]; interactable: boolean; passable: boolean; afterInteract?: string; desc?: Names; gamble?: { name: Names; pct: number }[] }>;
   /** speedPct: 速度を変える状態異常の倍率（%）。公開ルール（加速 x2 など） */
   /** armor: 装甲の修正（錆。V3-5a） */
   statuses: Record<string, { name: Names; speedPct?: number; armor?: number }>;

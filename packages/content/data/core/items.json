@@ -105,5 +105,7 @@
   { "id": "core:gem_necklace", "name": { "ja": "宝石の首飾り", "en": "jeweled necklace" }, "category": "treasure", "depth": { "min": 4 }, "rarity": 3,
     "value": { "dice": "4d6", "mult": 10 }, "desc": { "ja": "持ち帰れば点になる宝。使い道は無い", "en": "Treasure worth points when carried out. No other use" } },
   { "id": "core:crown_shard", "name": { "ja": "王冠の欠片", "en": "shard of a crown" }, "category": "treasure", "depth": { "min": 6 }, "rarity": 3,
-    "value": { "dice": "5d6", "mult": 12 }, "desc": { "ja": "持ち帰れば点になる宝。使い道は無い", "en": "Treasure worth points when carried out. No other use" } }
+    "value": { "dice": "5d6", "mult": 12 }, "desc": { "ja": "持ち帰れば点になる宝。使い道は無い", "en": "Treasure worth points when carried out. No other use" } },
+  { "id": "core:vault_key", "name": { "ja": "宝物庫の鍵", "en": "vault key" }, "category": "key", "depth": { "min": 1 }, "rarity": 1,
+    "desc": { "ja": "その階の鍵のかかった格子扉を開ける（隣で interact。開けると鍵は無くなる）", "en": "Opens a locked grate on this floor (interact next to it; the key is used up)" } }
 ]

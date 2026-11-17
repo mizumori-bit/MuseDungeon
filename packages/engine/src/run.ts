@@ -10,13 +10,13 @@ import './abilities';
 import './guardianBehaviors';
 import { initialBuild } from './build';
 import { Ctx } from './ctx';
-import { accrueHaul, checkObjective, huntingInView, offerExpeditions, startExpedition } from './expedition';
+import { accrueHaul, noteRooms, checkObjective, huntingInView, offerExpeditions, startExpedition } from './expedition';
 import { ensureFloor, findFreeCell } from './floors';
 import { updateKnowledge } from './perception';
 import { advance, endTurn } from './scheduler';
 import { recomputeStats } from './stats';
 
-export const ENGINE_VERSION = '0.18.0';
+export const ENGINE_VERSION = '0.19.0';
 
 export interface CreateRunParams {
   runId: string;
@@ -196,6 +196,7 @@ export function step(world: World, content: Content, playerId: PlayerId, cmd: Co
     checkObjective(ctx);
     for (const k of touched) advance(ctx, k);
     checkObjective(ctx);
+    noteRooms(ctx);
     accrueHaul(ctx);
     return { ok: true, events: ctx.finish() };
   } catch (err) {

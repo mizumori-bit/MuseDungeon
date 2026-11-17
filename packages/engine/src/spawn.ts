@@ -55,6 +55,8 @@ export function makeMonster(ctx: Ctx, floor: FloorKey, spec: Extract<SpawnSpec, 
   if (spec.role === 'guardian') e.home = { x: spec.x, y: spec.y };
   // 守護者の型・名前・弱点（V3-3）
   if (spec.guardian) e.guardian = structuredClone(spec.guardian);
+  // 持たせる品（宝物庫の鍵。V3-5 §5.1）
+  if (spec.carries) e.carries = spec.carries;
   return e;
 }
 

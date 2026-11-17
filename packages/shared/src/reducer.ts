@@ -93,6 +93,11 @@ export function applyEvent(world: World, ev: GameEvent): void {
     case 'entity_removed':
       delete world.entities[ev.id];
       break;
+    case 'room_found': {
+      const r = world.floors[ev.floorKey]?.regions.find((x) => x.id === ev.region);
+      if (r) r.found = true;
+      break;
+    }
     case 'guardian_departed': {
       // 去った守護者の棲み処の地物を記憶から消す（V3-3c §44.1）
       const fk = ev.floor ? world.players[ev.player]?.knowledge.floors[ev.floor] : undefined;
@@ -152,6 +157,9 @@ export function applyEvent(world: World, ev: GameEvent): void {
     case 'story':
     case 'guardian_rested':
     case 'monster_acted':
+    case 'inscription_read':
+    case 'gamble_rolled':
+    case 'item_altered':
     case 'ability_used':
     case 'curse_revealed':
     case 'item_inspected':

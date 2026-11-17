@@ -209,16 +209,24 @@ describe('V3-3 evaluation fixes: camp, summaries and valid actions', () => {
   });
 
   it('fight until:clear names affixed kills and guardians; slip lists every way out; unreachable stairs are marked; the floor type shows in the header', async () => {
-    const t = await newRun('v33e-misc-1', { classId: 'core:scout', objective: 'reach_depth' });
-    t.clearMonsters();
-    const p = t.me().pos!;
-    const f = t.world.floors[p.floor];
-    const pass = (x: number, y: number) => !!content.terrain[content.terrainIndex[t.world.meta.terrainTable[f.terrain[y * f.width + x]]]]?.passable;
-    const cell = [[1, 0], [-1, 0], [0, 1], [0, -1]].map(([dx, dy]) => ({ x: p.x + dx, y: p.y + dy })).find((c) => pass(c.x, c.y))!;
+    // 身をかわす先がある位置から始まる階（生成が変わってもよいようにシードを探す）
+    let t!: Awaited<ReturnType<typeof newRun>>;
+    let slipLine: string | undefined;
     const af = content.lists.affixes.find((x) => x.target === 'monster')!;
-    t.inject({ put: [monster('e_af0001', p.floor, cell.x, cell.y, { hp: 1, affixes: [af.id], nextActAt: f.time + 1000 })] });
-    t.edit((e) => { e.stats!.acc = 99; e.build = { ...(e.build ?? { perks: [], pending: [], abilities: [] }), abilities: [...(e.build?.abilities ?? []), { id: 'core:slip', readyAt: 0 }] }; });
-    const slipLine = t.obs().valid_actions.find((x) => x.startsWith('use_ability slip'));
+    let p!: { floor: string; x: number; y: number };
+    let f!: (typeof t)['world']['floors'][string];
+    for (let k = 1; k < 12 && !slipLine; k++) {
+      t = await newRun(`v33e-misc-${k}`, { classId: 'core:scout', objective: 'reach_depth' });
+      t.clearMonsters();
+      p = t.me().pos!;
+      f = t.world.floors[p.floor];
+      const pass = (x: number, y: number) => !!content.terrain[content.terrainIndex[t.world.meta.terrainTable[f.terrain[y * f.width + x]]]]?.passable;
+      const cell = [[1, 0], [-1, 0], [0, 1], [0, -1]].map(([dx, dy]) => ({ x: p.x + dx, y: p.y + dy })).find((c) => pass(c.x, c.y))!;
+      t.inject({ put: [monster('e_af0001', p.floor, cell.x, cell.y, { hp: 1, affixes: [af.id], nextActAt: f.time + 1000 })] });
+      t.edit((e) => { e.stats!.acc = 99; e.build = { ...(e.build ?? { perks: [], pending: [], abilities: [] }), abilities: [...(e.build?.abilities ?? []), { id: 'core:slip', readyAt: 0 }] }; });
+      slipLine = t.obs().valid_actions.find((x) => x.startsWith('use_ability slip'));
+      if (!slipLine) t.manager.closeAll();
+    }
     expect(slipLine).toMatch(/<[a-z|]+>/);
     const res = await t.act({ type: 'fight', target: 'e_af0001', until: 'clear', hpFloor: 0 });
     expect(res.ok).toBe(true);

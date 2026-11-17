@@ -414,6 +414,16 @@ V3-2R で足した項目（同じく後方互換。会心と経験値のルー�
 - `player_state.reason: 'joined'`（キャンプから始まる参加）。参加コマンドの `atCamp`
 - プレイヤー向けの射影で、見えていた個体が視界の外へ動いた `entity_moved` に `dirOut`（向きだけ。行き先は伏せたまま）
 
+V3-5c で足した項目（特殊部屋。後方互換。生成と規則が変わったので `engineVersion` は 0.19.0、出来事が増えたので `eventVersion` は 15。DESIGN.md §31）:
+
+- コンテンツ: 地形 `core:grate_locked`（通れないが見通せる）・`core:grate_open`・`core:bookshelf`（通れず見通せない）。アイテム `core:vault_key`（区分 `key`）。地物 `core:inscription`（碑文）・`core:old_note`（書き置き）・`core:gamble_altar`（賭けの祭壇。`gamble` に重みと効果の表）。地物の `desc`。部屋（prefab）の `name` とタグ `room`（見つけると発見の点）・`vault_locked`。戦利品の表 `core:scroll_loot`。物語の文の種類 `inscription`・`note`。効果 `inscription`（`clue` 1 で手がかり）・`affix_item`・`curse_item`・`summon`（`count`）・`damage` の `pct`（今の HP の %）
+- 部屋: 施錠された宝物庫（`core:locked_vault`）・碑文の間（`core:inscription_hall`）・賭けの祭壇（`core:gamble_shrine`）・番兵の詰所（`core:guard_post`）・先行者の野営跡（`core:camp_remains`。地下 9 階まで）・崩れた書庫（`core:fallen_library`）。標準の階の部屋の数は 0〜3（前は 0〜2）
+- イベント: `room_found { player, floorKey, region, room, name }`（参加者全員に）・`inscription_read { player, feature, note, lore, clue, clueText? }`（本人だけ）・`gamble_rolled { player, feature, outcome, pct }`・`item_altered { actor, item, kind, affix, cursed }`。`tile_changed.reason` に `unlock`
+- World State: `Entity.carries`（持っている品。倒すと落とす）・`Region.found`。生成の `SpawnSpec` に `carries`・地物の `lair`
+- 観測: `visible.monsters[].carries`・`carries_name`（「宝物庫の鍵を持っている」）。valid_actions に `interact <dir>`（格子扉を鍵で開ける／不可: 鍵が要る）。look の地物に説明と、賭けの祭壇の表（「表: 最大 HP +3 20%・…」）。公開カタログの `features[id].desc`・`features[id].gamble { name, pct }[]`
+- マクロ: travel_to は、目的地までの道のりが 20 手のあいだ一度も縮まなければ `no_progress` で止まる（2 マスの往復でない行き来も止める）
+- 規則: 鍵のかかった格子扉は、宝物庫の鍵を持って隣で interact すると開き、鍵は無くなる（鍵が無ければ手番を使わずに拒否）。宝物庫の鍵は、その階の宝物庫の外の通常の敵 1 体が持つ（敵がいなければ床）。碑文の手がかりは、この階の守護者の弱点（知らないもの）→ 鍵のかかった宝物庫の場所（地図に記す）→ 未鑑定の品 1 種の正体の順。特殊部屋を初めて見つけると発見 +100、碑文を読むと +50（書き置きは点なし）
+
 V3-5b で足した項目（深層の敵。後方互換。種族と規則が増えたので `engineVersion` は 0.18.0、出来事が増えたので `eventVersion` は 14。DESIGN.md §30）:
 
 - 種族: 骨の射手（`core:bone_archer`。2 体組・射程 7 の 1d8・その場で撃つ）・血吸い蝙蝠（`core:blood_bat`。3〜4 体の群れ・速さ 140・血を吸う）・大鬼（`core:ogre`。大柄・大振り）。オークの荒くれの深さの上限は 14

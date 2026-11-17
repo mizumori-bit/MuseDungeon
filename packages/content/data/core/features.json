@@ -31,5 +31,34 @@
     "id": "core:trap_alarm", "name": { "ja": "警報の罠", "en": "alarm trap" }, "category": "trap",
     "passable": true, "depth": { "min": 1 }, "rarity": 2,
     "onEnter": [{ "effect": "noise", "loudness": 18 }]
+  },
+  {
+    "id": "core:inscription", "name": { "ja": "碑文", "en": "inscription" }, "category": "feature",
+    "states": ["unread", "read"], "initialState": "unread", "passable": false,
+    "desc": { "ja": "古い文字が刻まれている。読むと（隣で interact）記録の断章と、手がかりを 1 つ得る（この階の守護者の弱点・鍵のかかった宝物庫の場所・未鑑定の品の正体のどれか）", "en": "Old script is carved here. Reading it (interact next to it) gives a fragment of the record and one clue (a guardian's weakness on this floor, where a locked vault is, or what an unidentified item is)" },
+    "onInteract": [{ "effect": "inscription", "clue": 1 }],
+    "afterInteract": "read"
+  },
+  {
+    "id": "core:old_note", "name": { "ja": "書き置き", "en": "note" }, "category": "feature",
+    "states": ["unread", "read"], "initialState": "unread", "passable": true,
+    "desc": { "ja": "先に潜った誰かの書き置き。読むと（足元か隣で interact）記録の断章が分かる", "en": "A note left by someone who came before. Reading it (interact on or next to it) gives a fragment of the record" },
+    "onInteract": [{ "effect": "inscription", "clue": 0 }],
+    "afterInteract": "read"
+  },
+  {
+    "id": "core:gamble_altar", "name": { "ja": "賭けの祭壇", "en": "altar of chance" }, "category": "feature",
+    "states": ["idle", "used"], "initialState": "idle", "passable": false,
+    "desc": { "ja": "祈ると（隣で interact。1 回だけ）、表から 1 つが起きる", "en": "Praying here (interact next to it; once) makes one thing from the table happen" },
+    "onInteract": [],
+    "gamble": [
+      { "weight": 20, "name": { "ja": "最大 HP +3", "en": "max HP +3" }, "effects": [{ "effect": "max_hp", "amount": 3 }] },
+      { "weight": 20, "name": { "ja": "持ち物の装備 1 つに良い接辞", "en": "a good affix on one of your gear" }, "effects": [{ "effect": "affix_item" }] },
+      { "weight": 20, "name": { "ja": "持ち物を全部鑑定", "en": "identify everything you carry" }, "effects": [{ "effect": "identify", "count": 99 }] },
+      { "weight": 15, "name": { "ja": "装備している品 1 つが呪われる", "en": "one item you wear is cursed" }, "effects": [{ "effect": "curse_item" }] },
+      { "weight": 15, "name": { "ja": "敵を 2 体呼ぶ", "en": "two monsters are called" }, "effects": [{ "effect": "summon", "count": 2 }] },
+      { "weight": 10, "name": { "ja": "HP が半分になる", "en": "your HP is halved" }, "effects": [{ "effect": "damage", "pct": 50 }] }
+    ],
+    "afterInteract": "used"
   }
 ]

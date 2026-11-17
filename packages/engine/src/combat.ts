@@ -351,6 +351,11 @@ export function kill(ctx: Ctx, victim: Entity, killer: Entity | null, via: Damag
     const it = makeItem(key, l.kind, pos.x, pos.y, l.qty, l.affixes, ctx.newEntityId(), ctx.nextSid(), l.value, l.hidden);
     ctx.emit({ type: 'entity_spawned', entity: it, reason: 'drop', floor: key, seenBy: ctx.seersOf(key, pos) });
   }
+  // 持っていた品（宝物庫の鍵。V3-5 §5.1）
+  if (victim.carries) {
+    const it = makeItem(key, victim.carries, pos.x, pos.y, 1, [], ctx.newEntityId(), ctx.nextSid());
+    ctx.emit({ type: 'entity_spawned', entity: it, reason: 'drop', floor: key, seenBy: ctx.seersOf(key, pos) });
+  }
   ctx.emit({ type: 'entity_removed', id: victim.id, kind: victim.kind, reason: 'died', seenBy: ctx.seersOf(key, pos), floor: key });
   // 節目の大守護者（V3-3 §3.2）: 節目を記録し、加護の候補を出す
   if (victim.guardian?.warden) wardenSlain(ctx, victim, killer, key);

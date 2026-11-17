@@ -94,12 +94,17 @@ describe('V3-2R3b guardians keep their post (§23.2)', () => {
   });
 
   it('an unaware guardian walks back to its post and stays within the leash; a hunting one chases past it', async () => {
-    const t = await newRun('v32r3b-leash-1');
-    t.clearMonsters();
+    // 自分から十分離れた直線がある階（生成が変わってもよいようにシードを探す）
+    let t!: Awaited<ReturnType<typeof newRun>>;
+    let ln: ReturnType<typeof openLine> | null = null;
+    for (let k = 1; k < 12 && !ln; k++) {
+      t = await newRun(`v32r3b-leash-${k}`);
+      t.clearMonsters();
+      try { ln = openLine(t.world, t.me().pos!.floor, 6, { ...t.me().pos! }, 16); } catch { ln = null; }
+    }
+    if (!ln) throw new Error('no open line');
     const key = t.me().pos!.floor;
-    const meAt = { ...t.me().pos! };
-    // 自分から十分離れた直線: 先頭が持ち場、6 マス先に気づいていない守護者
-    const ln = openLine(t.world, key, 6, meAt, 16);
+    // 先頭が持ち場、6 マス先に気づいていない守護者
     const home = { x: ln.p.x, y: ln.p.y };
     t.inject({ put: [monster('e_r3bg01', 'core:goblin', key, ln.p.x + ln.dx * 6, ln.p.y + ln.dy * 6, { state: 'unaware', home })] });
     let back = -1;
@@ -226,9 +231,12 @@ describe('V3-2R3b stairs travel shows the risk of being chased (§23.1)', () => 
   });
 
   it('with an unrecorded enemy the worst damage is “unknown”', async () => {
-    const t = await chased('v32r3b-risk-3', null);
-    const o = t.obs();
-    const line = o.valid_actions.find((a) => a.startsWith('travel_to stairs_'));
+    // 階段が見える位置に置けた階（生成が変わってもよいようにシードを探す）
+    let line: string | undefined;
+    for (let k = 3; k < 12 && !line; k++) {
+      const t = await chased(`v32r3b-risk-${k}`, null);
+      line = t.obs().valid_actions.find((a) => a.startsWith('travel_to stairs_'));
+    }
     expect(line).toContain('追われたままなら最悪の被害は不明');
   });
 });

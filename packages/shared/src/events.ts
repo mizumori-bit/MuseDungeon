@@ -7,7 +7,7 @@ import type {
 } from './types';
 
 /** 2: 遠征・実ダメージ・回復の蓄積値（IMPROVEMENTS_V2）。3: ビルド（特技・能動技・呪い。V3-4）。古いログもそのまま畳み込める */
-export const EVENT_VERSION = 14;
+export const EVENT_VERSION = 15;
 
 export interface EventBase {
   seq: number;
@@ -27,7 +27,7 @@ export interface EventBase {
   del?: EntityId[];
 }
 
-export type TerrainChangeReason = 'door_open' | 'door_close' | 'effect' | 'other';
+export type TerrainChangeReason = 'door_open' | 'door_close' | 'effect' | 'other' | 'unlock';
 export type MoveMode = 'walk' | 'teleport' | 'swap' | 'knockback';
 export type DamageVia = 'melee' | 'ranged' | 'thrown' | 'poison' | 'trap' | 'effect' | 'other';
 
@@ -93,6 +93,14 @@ export type GameEvent =
   | E<'guardian_acted', { id: EntityId; kind: string; guardianName: Names; act: 'summoned' | 'charged' | 'missed' | 'enraged'; count?: number }>
   /** 守護者が、相手が階を離れている間に回復した（V3-3a §35.1。戻ってきた本人に）。full: 全快して落ち着いた */
   | E<'guardian_rested', { id: EntityId; guardianName: Names; full: boolean; player: PlayerId; /** 落ち着いて去った手下の数（V3-3b §40.3） */ dispersed?: number }>
+  /** 特殊部屋を見つけた（V3-5 §5.1。発見の点）。region はその階の regions の番号 */
+  | E<'room_found', { player: PlayerId; floorKey: FloorKey; region: number; room: string; name: Names }>
+  /** 碑文・書き置きを読んだ（V3-5 §5.1）。clue: 手がかりの種類、clueText: 手がかりの文（宝物庫の場所など。弱点と正体は別の出来事で出る） */
+  | E<'inscription_read', { player: PlayerId; feature: EntityId; note: boolean; lore: Names | null; clue: 'weakness' | 'vault' | 'identify' | 'none'; clueText?: Names }>
+  /** 賭けの祭壇（V3-5 §5.1）: 表から起きたこと */
+  | E<'gamble_rolled', { player: PlayerId; feature: EntityId; outcome: Names; pct: number }>
+  /** 品の接辞が変わった（賭けの祭壇: 良い接辞・呪い。V3-5 §5.1） */
+  | E<'item_altered', { actor: EntityId; item: EntityId; kind: string; affix: string; cursed: boolean }>
   /** 通常の敵の大きな行動の結果（V3-5b §44.7: 大振りが当たった・空を切った） */
   | E<'monster_acted', { id: EntityId; kind: string; act: 'swing_hit' | 'swing_missed' }>
   /** 目的でなくなった守護者が階を去った（V3-3c §44.1）。その守護者に会ったことのある参加者に。forget: 記憶から消す地物（棲み処の火） */

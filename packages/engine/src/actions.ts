@@ -618,16 +618,40 @@ actions.register('interact', (ctx, e, pr, cmd: Extract<Command, { type: 'interac
     };
   }
   if (cmd.dir && tr.door === 'closed') return { run: () => { openDoor(ctx, e, p); return { cost: 100 }; } };
+  // 鍵のかかった格子扉（V3-5 §5.1）: 宝物庫の鍵で開ける（鍵は無くなる）
+  if (cmd.dir && tr.tags.includes('locked')) {
+    const keyItem = (e.inv?.items ?? []).map((id) => ctx.world.entities[id]).find((it) => !!it?.item && ctx.content.items[it.kind]?.category === 'key');
+    if (!keyItem) return fail(pr, 'cannot_use', '鍵がかかっている。宝物庫の鍵が要る（その階の敵が持っている）。', 'It is locked. You need the vault key (a monster on this floor carries it).', '鍵を持つ敵（visible.monsters の carries）を倒して鍵を拾う。', 'Defeat the monster carrying the key (carries in visible.monsters) and pick it up.');
+    return {
+      run: () => {
+        const me = ctx.world.entities[e.id];
+        const actor = structuredClone(me);
+        actor.inv!.items = actor.inv!.items.filter((x) => x !== keyItem.id);
+        ctx.emit({ type: 'item_used', actor: e.id, item: keyItem.id, kind: keyItem.kind, appearanceId: null, category: 'key', qtyAfter: 0, put: [actor], del: [keyItem.id], ...selfSeen(ctx, me), floor: key });
+        const open = ctx.world.meta.terrainTable.indexOf('core:grate_open');
+        ctx.emit({ type: 'tile_changed', x: p.x, y: p.y, terrain: open, reason: 'unlock', by: e.id, ...ctx.tileSeen(key, p, e), floor: key });
+        makeNoise(ctx, key, p, 3, e);
+        return { cost: 100 };
+      },
+    };
+  }
   const feat = ctx.featureAt(key, p.x, p.y);
   if (feat?.feature) {
     const def = ctx.content.features[feat.kind];
     // 効果は無くても、状態が変わる地物（護りの火を消す。V3-3）は操作できる
-    if (!def?.onInteract.length && !def?.afterInteract) return fail(pr, 'cannot_use', 'それは操作できない。', 'Nothing happens.', '別の対象を選ぶ。', 'Try something else.');
+    if (!def?.onInteract.length && !def?.afterInteract && !def?.gamble) return fail(pr, 'cannot_use', 'それは操作できない。', 'Nothing happens.', '別の対象を選ぶ。', 'Try something else.');
     if (def.afterInteract && feat.feature.state === def.afterInteract) return fail(pr, 'cannot_use', 'もう力を失っている。', 'It has already been used.', '他の地物を探す。', 'Look for another feature.');
     return {
       run: () => {
         if (def.afterInteract) ctx.emit({ type: 'feature_state', id: feat.id, kind: feat.kind, state: def.afterInteract, ...ctx.perceive(key, [{ field: 'id', pos: p }], [pr.id]), floor: key });
-        applyEffects(ctx, def.onInteract, { user: ctx.world.entities[e.id], target: ctx.world.entities[e.id], pos: p, source: null, via: 'feature' });
+        // 賭けの祭壇（V3-5 §5.1）: 公開の表から重みで 1 つ
+        if (def.gamble?.length) {
+          const total = def.gamble.reduce((a, g) => a + g.weight, 0);
+          const g = ctx.rng('runtime').weighted(def.gamble, (x) => x.weight) ?? def.gamble[0];
+          ctx.emit({ type: 'gamble_rolled', player: pr.id, feature: feat.id, outcome: { ...g.name }, pct: Math.trunc((g.weight * 100) / total), ...ctx.perceive(key, [{ field: 'feature', pos: p }], [pr.id]), floor: key });
+          applyEffects(ctx, g.effects, { user: ctx.world.entities[e.id], target: ctx.world.entities[e.id], pos: p, source: null, via: 'feature' });
+        }
+        applyEffects(ctx, def.onInteract, { user: ctx.world.entities[e.id], target: ctx.world.entities[e.id], pos: p, source: null, via: 'feature', feature: feat });
         updateKnowledge(ctx, key);
         return { cost: 100 };
       },

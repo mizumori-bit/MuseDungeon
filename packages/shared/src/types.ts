@@ -107,6 +107,8 @@ export interface Entity {
   minionOf?: EntityId;
   /** 棲み処の地物（護りの火）の持ち主の守護者（V3-3c §44.6。守護者が去ると一緒に消える） */
   lairOf?: EntityId;
+  /** 持っている品（倒すと落とす。宝物庫の鍵。V3-5 §5.1。見れば分かる） */
+  carries?: string;
   /** 持ち場（守護者が置かれたマス。V3-2R3b §23.2）。気づいていない間はここから guardian.leash マス以内だけを動く。プレイヤーには渡さない */
   home?: { x: number; y: number };
   /** ビルド（プレイヤー。V3-4 §4.1・§4.2） */
@@ -147,6 +149,8 @@ export interface Region {
   kind: 'room' | 'cave' | 'corridor' | 'prefab';
   x: number; y: number; w: number; h: number;
   tags: string[];
+  /** 特殊部屋を見つけた（発見の点は 1 回だけ。V3-5 §5.1） */
+  found?: boolean;
 }
 
 export interface Floor {

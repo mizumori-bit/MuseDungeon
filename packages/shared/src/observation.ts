@@ -29,6 +29,8 @@ const OBVIOUS_TRAITS: readonly MonsterTrait[] = ['pack', 'ranged', 'stationary',
 
 export interface ObsMonster {
   id: string; name: string; pos: Pos; dir: Dir | null; dist: number;
+  /** 持っている品（倒すと落とす。宝物庫の鍵。V3-5 §5.1）と、その名前 */
+  carries?: string; carries_name?: string;
   hp_state: HpState; awareness: string;
   /** 脅威。その種族から攻撃を受けた記録が無ければ null（不明・初見。V3-2R §14.3） */
   threat: 1 | 2 | 3 | 4 | 5 | null;
@@ -799,6 +801,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
         shots: throwables.map((tw) => ({ slot: tw.slot, state: !e.shot ? 'blocked' as const : pos && cheb(pos, e.pos) > tw.range ? 'out_of_range' as const : 'clear' as const })),
       };
       if (cm?.size === 'small' || cm?.size === 'large') m.size = cm.size;
+      if (e.carries) { m.carries = e.carries; m.carries_name = kindName(catalog, L, e.carries); }
       // 本当に初めて見た種族: 撃破が無く、遭遇した個体の数がいま見えている数以下
       // 守護者は記録を分けるが、同じ種族の通常の個体を見たことがあれば初見ではない（V3-3 後の AI 評価）
       const baseMem = e.role === 'guardian' && e.kind ? view.monsterMemory[e.kind] : undefined;
@@ -1625,6 +1628,11 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
     const i = ny * f.width + nx;
     const tr = catalog.terrain[view.terrainTable[view.memory.terrain[i]]];
     if (d && tr?.door === 'open' && !byPos.has(i)) out.push(`interact ${d} (${t(L, '扉を閉める', 'close door')})`);
+    // 鍵のかかった格子扉（V3-5 §5.1）
+    if (d && tr?.tags.includes('locked')) {
+      const hasKey = view.inventory.some((it) => it.kind && catalog.items[it.kind]?.category === 'key');
+      out.push(`interact ${d} (${hasKey ? t(L, '格子扉を鍵で開ける', 'unlock the grate') : t(L, '不可: 鍵が要る（その階の敵が持っている）', 'unavailable: needs the key (a monster on this floor has it)')})`);
+    }
     for (const e of view.entities) {
       if (e.cat !== 'feature' || e.pos.x !== nx || e.pos.y !== ny) continue;
       const fd = e.kind ? catalog.features[e.kind] : undefined;
@@ -1748,9 +1756,11 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
         ? ` "${m.guardian.name}"${m.guardian.types.length ? ` type:${m.guardian.types.map((x) => x.name).join('/')}` : ''}${m.guardian.weakness ? ` weakness:${m.guardian.weakness.name}` : ''}`
         : `  「${m.guardian.name}」${m.guardian.types.length ? `  型:${m.guardian.types.map((x) => x.name).join('・')}` : ''}${m.guardian.weakness ? `  弱点:${m.guardian.weakness.name}` : m.guardian.not_weak?.length ? `  弱点:不明（${m.guardian.not_weak.map((x) => x.name).join('ではない・')}ではない）` : ''}`) : '';
       const itext = m.intent ? (L === 'en' ? ` INTENT:${m.intent.text}` : `  予備動作:${m.intent.text}`) : '';
+      // 持っている品（宝物庫の鍵。V3-5 §5.1）
+      const carry = m.carries ? t(L, ` [${m.carries_name ?? m.carries}を持っている]`, ` [carries the ${m.carries_name ?? m.carries}]`) : '';
       lines.push(L === 'en'
-        ? `- ${m.name}${role}${gtext} ${m.id} (${m.pos.x},${m.pos.y}) ${relLabel(L, from, m.pos)} hp:${m.hp_state} ${m.awareness}${m.fleeing ? '(fleeing)' : ''}${looksText} threat:${threat}${worst}${hits}${dmg}${est}${shot}${m.statuses.length ? ' ' + m.statuses.join(',') : ''}${itext}`
-        : `- ${m.name}${role}${gtext} ${m.id} (${m.pos.x},${m.pos.y}) ${relLabel(L, from, m.pos)}  負傷:${HP_JA[m.hp_state]}  状態:${AW_JA[m.awareness] ?? m.awareness}${m.fleeing ? '(逃走中)' : ''}${looksText}  脅威:${threat}${worst}${hits}${dmg}${est}${shot}${m.statuses.length ? '  ' + m.statuses.join(',') : ''}${itext}`);
+        ? `- ${m.name}${role}${carry}${gtext} ${m.id} (${m.pos.x},${m.pos.y}) ${relLabel(L, from, m.pos)} hp:${m.hp_state} ${m.awareness}${m.fleeing ? '(fleeing)' : ''}${looksText} threat:${threat}${worst}${hits}${dmg}${est}${shot}${m.statuses.length ? ' ' + m.statuses.join(',') : ''}${itext}`
+        : `- ${m.name}${role}${carry}${gtext} ${m.id} (${m.pos.x},${m.pos.y}) ${relLabel(L, from, m.pos)}  負傷:${HP_JA[m.hp_state]}  状態:${AW_JA[m.awareness] ?? m.awareness}${m.fleeing ? '(逃走中)' : ''}${looksText}  脅威:${threat}${worst}${hits}${dmg}${est}${shot}${m.statuses.length ? '  ' + m.statuses.join(',') : ''}${itext}`);
     }
     for (const p of vis.players) lines.push(`- ${t(L, '味方', 'ally')} ${p.name} (${p.pos.x},${p.pos.y}) ${relLabel(L, from, p.pos)} ${L === 'en' ? p.hp_state : HP_JA[p.hp_state]}`);
     for (const it of vis.items) {
@@ -1874,7 +1884,11 @@ export function describeTarget(view: PlayerView, catalog: Catalog, target: Pos |
       list.push({ id: e.id, name, qty: e.qty, desc });
     } else {
       const name = e.cat === 'player' ? (e.name ?? '?') : kindName(catalog, L, e.kind);
-      parts.push(name + (e.state && e.state !== 'idle' ? ` [${e.state}]` : ''));
+      // 地物の説明と、賭けの祭壇の表（V3-5 §5.1）
+      const fd = e.cat === 'feature' && e.kind ? catalog.features[e.kind] : undefined;
+      const fdesc = fd?.desc ? `: ${nameOf(fd.desc, L, '')}` : '';
+      const table = fd?.gamble ? t(L, `。表: ${fd.gamble.map((g) => `${nameOf(g.name, L, '')} ${g.pct}%`).join('・')}`, `. Table: ${fd.gamble.map((g) => `${nameOf(g.name, L, '')} ${g.pct}%`).join(', ')}`) : '';
+      parts.push(name + (e.state && e.state !== 'idle' ? ` [${e.state}]` : '') + fdesc + table);
       list.push({ id: e.id, name, state: e.state });
     }
   }

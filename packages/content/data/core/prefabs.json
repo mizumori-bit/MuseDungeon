@@ -79,5 +79,85 @@
       "!": { "terrain": "$floor", "item": "$loot", "loot": "core:common_loot" },
       "^": { "terrain": "$floor", "feature": "core:trap_dart" }
     }
+  },
+  {
+    "id": "core:locked_vault", "name": { "ja": "施錠された宝物庫", "en": "locked vault" }, "tags": ["treasure", "room", "vault_locked"], "depth": { "min": 3 }, "weight": 3,
+    "map": [
+      "#######",
+      "#!.!.!#",
+      "#.....#",
+      "###=###"
+    ],
+    "legend": {
+      "#": { "terrain": "$wall" }, ".": { "terrain": "$floor" }, "=": { "terrain": "core:grate_locked" },
+      "!": { "terrain": "$floor", "item": "$loot", "loot": "core:vault_loot" }
+    }
+  },
+  {
+    "id": "core:inscription_hall", "name": { "ja": "碑文の間", "en": "hall of inscriptions" }, "tags": ["shrine", "room"], "depth": { "min": 2 }, "weight": 3,
+    "map": [
+      ".......",
+      ".P.I.P.",
+      ".......",
+      ".P.I.P.",
+      "......."
+    ],
+    "legend": { ".": { "terrain": "$floor" }, "P": { "terrain": "core:pillar" }, "I": { "terrain": "$floor", "feature": "core:inscription" } }
+  },
+  {
+    "id": "core:gamble_shrine", "name": { "ja": "賭けの祭壇", "en": "shrine of chance" }, "tags": ["shrine", "room"], "depth": { "min": 2 }, "weight": 2,
+    "map": [
+      ".....",
+      ".P.P.",
+      "..A..",
+      ".P.P.",
+      "....."
+    ],
+    "legend": { ".": { "terrain": "$floor" }, "P": { "terrain": "core:pillar" }, "A": { "terrain": "$floor", "feature": "core:gamble_altar" } }
+  },
+  {
+    "id": "core:guard_post", "name": { "ja": "番兵の詰所", "en": "guard post" }, "tags": ["den", "room"], "depth": { "min": 3 }, "weight": 3,
+    "map": [
+      "#########",
+      "#M.....M#",
+      "#...!...#",
+      "#M.....M#",
+      "####+####"
+    ],
+    "legend": {
+      "#": { "terrain": "$wall" }, ".": { "terrain": "$floor" }, "+": { "terrain": "$door" },
+      "M": { "terrain": "$floor", "monster": "$spawn", "asleep": true },
+      "!": { "terrain": "$floor", "item": "$loot", "loot": "core:vault_loot" }
+    }
+  },
+  {
+    "id": "core:camp_remains", "name": { "ja": "先行者の野営跡", "en": "abandoned camp" }, "tags": ["treasure", "room"], "depth": { "min": 1, "max": 9 }, "weight": 4,
+    "map": [
+      ".....",
+      ".!N!.",
+      "..!..",
+      "....."
+    ],
+    "legend": {
+      ".": { "terrain": "$floor" },
+      "!": { "terrain": "$floor", "item": "$loot", "loot": "core:common_loot" },
+      "N": { "terrain": "$floor", "feature": "core:old_note" }
+    }
+  },
+  {
+    "id": "core:fallen_library", "name": { "ja": "崩れた書庫", "en": "fallen library" }, "tags": ["hall", "room"], "depth": { "min": 3 }, "weight": 3,
+    "map": [
+      "#########",
+      "#.S.S.S.#",
+      "#.S?S.S.#",
+      "#...M..?#",
+      "#.S.S?S.#",
+      "####+####"
+    ],
+    "legend": {
+      "#": { "terrain": "$wall" }, ".": { "terrain": "$floor" }, "+": { "terrain": "$door" }, "S": { "terrain": "core:bookshelf" },
+      "?": { "terrain": "$floor", "item": "$loot", "loot": "core:scroll_loot" },
+      "M": { "terrain": "$floor", "monster": "$spawn", "asleep": false }
+    }
   }
 ]

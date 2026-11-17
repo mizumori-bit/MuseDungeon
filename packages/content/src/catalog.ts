@@ -78,8 +78,11 @@ export function buildCatalog(c: Content): Catalog {
     items,
     appearances: Object.fromEntries(c.lists.appearances.map((a) => [a.id, { name: a.name, category: a.category }])),
     features: Object.fromEntries(c.lists.features.map((f) => [f.id, {
-      name: f.name, category: f.category, states: f.states, interactable: f.onInteract.length > 0 || !!f.afterInteract, passable: f.passable,
+      name: f.name, category: f.category, states: f.states, interactable: f.onInteract.length > 0 || !!f.afterInteract || !!f.gamble, passable: f.passable,
       ...(f.afterInteract ? { afterInteract: f.afterInteract } : {}),
+      ...(f.desc ? { desc: f.desc } : {}),
+      // 賭けの祭壇の表（確率は % に直して公開。V3-5 §5.1）
+      ...(f.gamble ? { gamble: f.gamble.map((g) => ({ name: g.name, pct: Math.trunc((g.weight * 100) / f.gamble!.reduce((a, x) => a + x.weight, 0)) })) } : {}),
     }])),
     statuses: Object.fromEntries(Object.values(c.statuses).map((s) => [s.id, s.handler === 'speed_pct' ? { name: s.name, speedPct: s.params.pct ?? 100 }
       : s.handler === 'stat_mod' ? { name: s.name, ...(s.params.armor ? { armor: s.params.armor } : {}) } : { name: s.name }])),

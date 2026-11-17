@@ -68,6 +68,8 @@ export interface EntityView {
   intent?: Intent;
   /** 棲み処の地物（護りの火）の持ち主の守護者の呼び名（V3-3c §44.6） */
   lair?: { name: Names; title?: Names };
+  /** 持っている品（倒すと落とす。宝物庫の鍵。V3-5 §5.1） */
+  carries?: string;
 }
 
 export interface RememberedView {
@@ -369,6 +371,8 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
             v.guardian = { name: { ...e.guardian.name }, ...(e.guardian.title ? { title: { ...e.guardian.title } } : {}), types: [...e.guardian.types], ...(known ? { weakness: known } : {}), ...(e.guardian.warden ? { warden: true } : {}), ...(!known && tried?.length ? { notWeak: [...tried] } : {}) };
           }
           if (e.actor?.ai?.intent) v.intent = { ...e.actor.ai.intent };
+          // 持っている品（宝物庫の鍵。見れば分かる。V3-5 §5.1）
+          if (e.carries) v.carries = e.carries;
           const met = k.metAt?.[e.id];
           if (met !== undefined) v.firstSeenSeq = met;
         } else {

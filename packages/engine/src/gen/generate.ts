@@ -11,7 +11,7 @@ import { DOOR, FLOOR, GenGrid, WALL } from './grid';
 import { layoutGenerators } from './layouts';
 
 export type SpawnSpec =
-  | { type: 'monster'; kind: string; x: number; y: number; hp: number; affixes: string[]; tier: number; asleep: boolean; delay: number; role?: EntityRole; bounty?: number; minHp?: number; /** 体力の上限（大守護者。V3-3a §35.2） */ maxHp?: number; hpBonusPct?: number; guardian?: GuardianInfo; /** 速さの下限（大守護者。V3-3c §44.2） */ minSpeed?: number }
+  | { type: 'monster'; kind: string; x: number; y: number; hp: number; affixes: string[]; tier: number; asleep: boolean; delay: number; role?: EntityRole; bounty?: number; minHp?: number; /** 体力の上限（大守護者。V3-3a §35.2） */ maxHp?: number; hpBonusPct?: number; guardian?: GuardianInfo; /** 速さの下限（大守護者。V3-3c §44.2） */ minSpeed?: number; /** 持たせる品（宝物庫の鍵。V3-5 §5.1） */ carries?: string }
   | { type: 'item'; kind: string; x: number; y: number; qty: number; affixes: string[]; role?: EntityRole; value?: number; hidden?: string[] }
   | { type: 'feature'; kind: string; x: number; y: number; /** 棲み処の地物（直前に置いた守護者のもの。V3-3c §44.6） */ lair?: boolean };
 
@@ -277,6 +277,29 @@ function stampPrefab(s: GenState, pf: PrefabDef, map: string[], x0: number, y0: 
   }
   g.regions.push({ id: g.regions.length, kind: 'prefab', x: x0, y: y0, w: map[0].length, h: map.length, tags: [pf.id, ...pf.tags] });
   void rng;
+}
+
+/**
+ * 施錠された宝物庫（V3-5 §5.1）: 鍵は、その階の宝物庫の外にいる通常の敵 1 体が持つ（倒すと落とす）。乱数は keys ストリーム。
+ * 敵がいなければ、宝物庫の外の床に置く
+ */
+function assignVaultKeys(s: GenState): void {
+  const vaults = s.grid.regions.filter((r) => r.kind === 'prefab' && r.tags.includes('vault_locked'));
+  if (!vaults.length) return;
+  const rng = s.stream('keys');
+  const inside = (x: number, y: number) => vaults.some((r) => x >= r.x && y >= r.y && x < r.x + r.w && y < r.y + r.h);
+  for (const v of vaults) {
+    void v;
+    const mons = s.spawns.filter((sp): sp is Extract<SpawnSpec, { type: 'monster' }> => sp.type === 'monster' && !sp.guardian && !sp.carries && !inside(sp.x, sp.y)
+      && s.content.monsters[sp.kind]?.ai.archetype !== 'stationary');
+    if (mons.length) { mons[rng.int(mons.length)].carries = 'core:vault_key'; continue; }
+    const cells: number[] = [];
+    for (let i = 0; i < s.grid.cells.length; i++) {
+      const x = i % s.grid.w, y = Math.trunc(i / s.grid.w);
+      if (s.passable(i) && !inside(x, y) && !s.spawns.some((sp) => 'x' in sp && sp.x === x && sp.y === y)) cells.push(i);
+    }
+    if (cells.length) { const c = cells[rng.int(cells.length)]; s.spawns.push({ type: 'item', kind: 'core:vault_key', x: c % s.grid.w, y: Math.trunc(c / s.grid.w), qty: 1, affixes: [] }); }
+  }
 }
 
 function monsterSpec(s: Pick<GenState, 'content' | 'depth'>, def: MonsterDef, tier: number, x: number, y: number, asleep: boolean, rng: Rng): SpawnSpec {
@@ -725,6 +748,7 @@ export function generateFloor(content: Content, seed: string, branch: string, de
     if (!fallback) applyBiomeExtras(s);
     placeStairs(s);
     populate(s);
+    assignVaultKeys(s);
     // 節目の大守護者（V3-3 §3.2）
     if (floorType.rules.warden && !fallback) placeWarden(s);
     if (objective && !placeObjective(s, objective) && !fallback) continue;
