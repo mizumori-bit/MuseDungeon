@@ -173,7 +173,9 @@ export function pickLoot(content: Content, tableId: string, depth: number, rng: 
     if (!kind) continue;
     const def = content.items[kind];
     let qty = 1;
-    if (def.stack) qty = def.category === 'throwing' ? rng.range(2, 6) : rng.chance(20) ? 2 : 1;
+    // 投擲用の品の 1 山（V3-4b §28.6 で 2〜6 → 1〜4）
+    const ts = content.balance.loot;
+    if (def.stack) qty = def.category === 'throwing' ? rng.range(ts.throwStackMin, Math.max(ts.throwStackMin, ts.throwStackMax)) : rng.chance(20) ? 2 : 1;
     const affixes: string[] = [];
     const good = () => rng.weighted(content.lists.affixes.filter((x) => x.target === 'item' && !x.cursed && x.categories.includes(def.category) && d >= x.depth.min), (x) => floorDiv(100, x.rarity));
     if (def.equip && rng.chance(table.affixChancePct)) {
@@ -457,7 +459,10 @@ const GUARDIAN_EXCLUDED_ARCHETYPES = new Set(['stationary', 'skittish']);
  * 格 1 は経験値の下位半分（射撃して距離を取る型も除く）、格 2・3 は上位半分（切り上げ）
  */
 export function guardianCandidates(content: Content, floorType: FloorTypeDef, biome: BiomeDef, depth: number, rank: 1 | 2 | 3): MonsterDef[] {
-  const effective = Math.min(depth, content.deepestDefined);
+  // 格で引く表の深さを変える（格 1 は目標の深度の下位半分、格 2 は +1、格 3 は +2 の表の上位半分。V3-4b §28.2）
+  const ranks = content.balance.guardian.ranks;
+  const tableDepth = ranks[Math.min(ranks.length, rank) - 1]?.tableDepth ?? 0;
+  const effective = Math.min(depth + tableDepth, content.deepestDefined);
   const table = content.spawnTables[floorType.monsters.table];
   let cands = content.lists.monsters
     .filter((m) => (!table?.tagsAny.length || m.tags.some((t) => table.tagsAny.includes(t))) && !(table?.tagsNone ?? []).some((t) => m.tags.includes(t)))

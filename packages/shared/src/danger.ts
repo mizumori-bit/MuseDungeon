@@ -39,6 +39,30 @@ export function attacksPerTurn(view: PlayerView, catalog: Catalog, e: Pick<Entit
   return Math.max(1, ceilDiv(sp, selfSpeed(view, catalog)));
 }
 
+/** 歩く手番のコスト（重い鎧。装備中の品の最大。100 が普通） */
+export function selfMoveCost(view: PlayerView, catalog: Catalog): number {
+  let cost = 100;
+  for (const it of view.inventory) {
+    if (!it.equipped || !it.kind) continue;
+    const mc = catalog.items[it.kind]?.equipStats?.moveCost;
+    if (mc !== undefined && mc > cost) cost = mc;
+  }
+  return cost;
+}
+
+/**
+ * 階段まで歩く間にその相手が攻撃できる回数（V3-4b §28.5）。射撃する敵は歩数（射程と視線は続くと見る）。
+ * 近接の敵は 切り上げ(歩数 × max(0, 敵の速さ ÷ 自分の歩く速さ − 1)) で、今隣にいれば +1。自分の歩く速さは重い鎧の手番コストを入れる
+ */
+export function chaseAttacks(view: PlayerView, catalog: Catalog, e: Pick<EntityView, 'speed' | 'statuses'>, steps: number, o: { ranged: boolean; adjacent: boolean }): number {
+  if (o.ranged) return steps;
+  const sp = monsterSpeedOf(catalog, e) ?? 100;
+  // 敵の速さ ÷ 自分の歩く速さ − 1 = (sp × moveCost − self × 100) ÷ (self × 100)（整数で切り上げ）
+  const self = selfSpeed(view, catalog);
+  const num = sp * selfMoveCost(view, catalog) - self * 100;
+  return (num > 0 ? ceilDiv(steps * num, self * 100) : 0) + (o.adjacent ? 1 : 0);
+}
+
 /** 1 手番あたりの最悪の被害 = 受けた最大の一撃 × 行動の回数（記録が無ければ null） */
 export function worstTurnOf(view: PlayerView, catalog: Catalog, e: Pick<EntityView, 'kind' | 'role' | 'speed' | 'statuses'>): number | null {
   const mem = memoryOf(view, e);

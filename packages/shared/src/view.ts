@@ -194,13 +194,13 @@ export function latestExpedition(world: World): Expedition | null {
 }
 
 /**
- * 目標として達成した最深の階（V3-2R3 §20.2）: 目的を達成して戻った（帰還の綱を含む）遠征の目標深度の最大。無ければ 0。
+ * 目標として達成した最深の階（V3-2R3 §20.2）: 階段の上で目的を達成して帰った遠征の目標深度の最大（綱では上がらない。V3-4b §28.1）。無ければ 0。
  * 次の候補の深さはここから数える（踏破で先まで降りても深くならない）
  */
 export function campDepthOf(world: World): number {
   let d = 0;
   for (const x of world.expeditions ?? []) {
-    if (x.objective.targetDepth !== null && x.extracted.some((r) => r.completed)) d = Math.max(d, x.objective.targetDepth);
+    if (x.objective.targetDepth !== null && x.extracted.some((r) => r.completed && !r.lifeline)) d = Math.max(d, x.objective.targetDepth);
   }
   return d;
 }

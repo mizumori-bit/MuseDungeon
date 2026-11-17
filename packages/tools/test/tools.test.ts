@@ -282,7 +282,8 @@ describe('rest and enemy durability (V2-4)', () => {
         const est = o.self.rest_estimate;
         if (est && !est.blocked_by && !o.visible.monsters.length && est.turns <= content.balance.rest.maxTurns) {
           const out = await r.port.act({ type: 'rest' }, { source: 'bot' });
-          if (out.ok && out.interrupted_by === 'full_hp') {
+          // 休憩は最大 HP の rest.capPct % まで（V3-4b §28.3）
+          if (out.ok && (out.interrupted_by === 'full_hp' || out.interrupted_by === 'rest_cap')) {
             expect(out.rest?.turns).toBe(est.turns);
             expect(out.rest?.hp_gained).toBe(est.hp_to_full);
             expect(out.rest?.time_elapsed).toBe(est.time);
@@ -311,8 +312,9 @@ describe('rest and enemy durability (V2-4)', () => {
         if (ev.type !== 'damaged' || ev.hpAfter !== 0 || ev.dealt === undefined || ev.dealt >= ev.amount || ev.source !== view.self.id) continue;
         const pe = filterEventsForPlayer([ev], pid, view)[0];
         const text = narrate(pe, { locale: 'ja', catalog, selfId: view.self.id, playerNames: {} })!;
-        expect(text).toContain(`${ev.dealt} ダメージ`);
-        expect(text).not.toContain(`${ev.amount} ダメージ`);
+        // とどめは与えるはずだった値を出し、残りの HP を添える（会心のとどめが残り HP で切られて見えた。V3-4b §28.11）
+        expect(text).toContain(`${ev.amount} ダメージ`);
+        expect(text).toContain(`残りは ${ev.dealt}`);
         overkillChecked = true;
       }
       if (Object.values(view.monsterMemory).some((m) => m.hpSeen && m.hpSeen.samples > 0)) hpSeen = true;

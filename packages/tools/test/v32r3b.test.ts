@@ -28,12 +28,12 @@ async function newRun(seed: string, opts: { objective?: 'auto' | 'reach_depth' |
 }
 
 let sid = 995000;
-function monster(id: string, kind: string, floor: string, x: number, y: number, o: { state?: 'hunting' | 'unaware'; home?: { x: number; y: number }; hp?: number } = {}): Entity {
+function monster(id: string, kind: string, floor: string, x: number, y: number, o: { state?: 'hunting' | 'unaware'; home?: { x: number; y: number }; hp?: number; speed?: number } = {}): Entity {
   sid++;
   const hp = o.hp ?? 30;
   return {
     id, kind, sid, pos: { floor, x, y },
-    actor: { speed: 100, nextActAt: 0, faction: 'monster', turns: 0, ai: { archetype: 'melee_chaser', state: o.state ?? 'hunting', targetPos: null, lostTurns: 0, params: {} } },
+    actor: { speed: o.speed ?? 100, nextActAt: 0, faction: 'monster', turns: 0, ai: { archetype: 'melee_chaser', state: o.state ?? 'hunting', targetPos: null, lostTurns: 0, params: {} } },
     stats: { hp, maxHp: hp, acc: 0, eva: 0, might: 0, armor: 0, sight: 7, dmg: '1d2' },
     base: { maxHp: hp, acc: 0, eva: 0, might: 0, armor: 0, sight: 7, dmg: '1d2' },
     statuses: [],
@@ -155,7 +155,7 @@ describe('V3-2R3b guardians keep their post (§23.2)', () => {
 
 describe('V3-2R3b stairs travel shows the risk of being chased (§23.1)', () => {
   /** 下り階段から 2〜4 マスのマスに立ち（階段は視界に入る）、追跡中の敵を視界に入れる */
-  async function chased(seed: string, mem: number | null) {
+  async function chased(seed: string, mem: number | null, speed = 100) {
     const t = await newRun(seed);
     t.clearMonsters();
     const key = t.me().pos!.floor;
@@ -174,13 +174,14 @@ describe('V3-2R3b stairs travel shows the risk of being chased (§23.1)', () => 
     }
     expect(at).toBeTruthy();
     t.place(at!.x, at!.y);
-    t.inject({ put: [monster('e_r3bc01', 'core:goblin', key, foe!.x, foe!.y, { state: 'hunting' })] });
+    t.inject({ put: [monster('e_r3bc01', 'core:goblin', key, foe!.x, foe!.y, { state: 'hunting', speed })] });
     await t.act({ type: 'wait' }); // 視界を更新する
     if (mem !== null) setMemory(t, 'core:goblin', { maxDamageToYou: mem });
     return t;
   }
 
-  it('the stairs candidate says how many steps and the worst damage if they keep chasing you (steps × worst_turn sum)', async () => {
+  it('the stairs candidate says how many steps and the worst damage if they keep chasing you (attacks while you walk × worst hit; V3-4b §28.5)', async () => {
+    // 同じ速さの近接の敵は、歩く間に追いついて殴れない（隣にいれば 1 回だけ）
     const t = await chased('v32r3b-risk-1', 3);
     t.setHp(t.me().stats!.maxHp);
     const o = t.obs();
@@ -190,7 +191,17 @@ describe('V3-2R3b stairs travel shows the risk of being chased (§23.1)', () => 
     expect(st).toBeTruthy();
     const line = o.valid_actions.find((a) => a.startsWith(`travel_to stairs_${st.type}`));
     const n = Math.min(...o.navigation.known_stairs.filter((s) => s.type === st.type && s.path_len !== null).map((s) => s.path_len!));
-    expect(line).toContain(`階段まで ${n} 歩。追われたままなら最悪 ${n * m!.worst_turn!} の被害（HP ${t.me().stats!.hp}）`);
+    const sameSpeed = (m!.dist <= 1 ? 1 : 0) * 3;
+    expect(line).toContain(`階段まで ${n} 歩。追われたままなら最悪 ${sameSpeed} の被害（追いつけるのは 0 体・射撃 0 体。HP ${t.me().stats!.hp}）`);
+    // 倍の速さの敵は、1 歩ごとに 1 回追加で殴れる
+    const f = await chased('v32r3b-risk-1', 3, 200);
+    f.setHp(f.me().stats!.maxHp);
+    const of = f.obs();
+    const mf = of.visible.monsters.find((x) => x.id === 'e_r3bc01')!;
+    const stf = of.navigation.known_stairs.filter((s) => s.path_len !== null).sort((a, b) => a.path_len! - b.path_len!)[0];
+    const nf = Math.min(...of.navigation.known_stairs.filter((s) => s.type === stf.type && s.path_len !== null).map((s) => s.path_len!));
+    const lf = of.valid_actions.find((a) => a.startsWith(`travel_to stairs_${stf.type}`));
+    expect(lf).toContain(`階段まで ${nf} 歩。追われたままなら最悪 ${(nf + (mf.dist <= 1 ? 1 : 0)) * 3} の被害（追いつけるのは 1 体・射撃 0 体`);
     // HP に余裕があれば綱は階段の後
     const iStairs = o.valid_actions.findIndex((a) => a.startsWith('travel_to stairs_'));
     const iLife = o.valid_actions.findIndex((a) => a.startsWith('use_item') && a.includes('綱'));
@@ -198,11 +209,12 @@ describe('V3-2R3b stairs travel shows the risk of being chased (§23.1)', () => 
   });
 
   it('when even the nearest stairs could cost all your HP and you hold the lifeline, the lifeline comes first', async () => {
-    const t = await chased('v32r3b-risk-2', 4);
+    // 倍の速さの敵（歩く 1 歩ごとに 1 回殴れる）
+    const t = await chased('v32r3b-risk-2', 4, 200);
     const o0 = t.obs();
     const st = o0.navigation.known_stairs.filter((s) => s.path_len !== null).sort((a, b) => a.path_len! - b.path_len!)[0];
     expect(st).toBeTruthy();
-    // 最悪の被害（歩数 × 4）が HP 以上になるように
+    // 最悪の被害（歩数 × 4 以上）が HP 以上になるように
     t.setHp(Math.max(1, st.path_len! * 4));
     const view = projectPlayerView(t.world, t.pid);
     const o = buildObservation(view, catalog, { detail: 'brief', map: false });

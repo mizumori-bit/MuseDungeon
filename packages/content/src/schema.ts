@@ -288,8 +288,11 @@ export const BalanceSchema = z.object({
     /** 休息中（追跡中の敵が見えない wait）の回復の速さ（倍） */
     restMultiplier: Int.min(1),
   }),
-  rest: z.object({ maxTurns: Int.min(1) }),
+  /** capPct: 休憩と自然回復で戻る上限（最大 HP の %。V3-4b §28.3）。100 で上限なし */
+  rest: z.object({ maxTurns: Int.min(1), capPct: Int.min(1).max(100).default(100) }),
   macro: z.object({ stepLimit: Int.min(1) }),
+  /** fight（V3-4b §28.4）: 追跡中で逃げていない標的が見えなくなったときに待つ手番 */
+  fight: z.object({ lostWait: Int.min(0) }).default({ lostWait: 5 }),
   wander: z.object({ firstAt: Int.min(0), intervalMin: Int.min(1), intervalMax: Int.min(1), maxAwake: Int.min(0), minDistance: Int.min(0) }),
   score: z.object({ perDepth: Int, perKill: Int, perLevel: Int }),
   /** 推定残り HP: 記録がこの数未満の間は上限を出さない */
@@ -315,7 +318,8 @@ export const BalanceSchema = z.object({
   teleport: z.object({ minDistance: Int.min(0) }).default({ minDistance: 0 }),
   /** 守護者の格（V3-2R3 §20.1。堅実 1・標準 2・野心 3）ごとの体力の上乗せ（%）と下限（minHpBase + minHpPerDepth × 深度） */
   guardian: z.object({
-    ranks: z.array(z.object({ hpPct: Int.min(0), minHpBase: Int.min(0), minHpPerDepth: Int.min(0) })).min(1),
+    /** tableDepth: 候補の種族を引く表の深さの上乗せ（格 2 は +1、格 3 は +2 の表の上位半分。V3-4b §28.2） */
+    ranks: z.array(z.object({ hpPct: Int.min(0), minHpBase: Int.min(0), minHpPerDepth: Int.min(0), tableDepth: Int.min(0).default(0) })).min(1),
     /** 持ち場の範囲（V3-2R3b §23.2）: 気づいていない守護者は持ち場からこのマス数（チェビシェフ）以内だけを動く */
     leash: Int.min(0).default(3),
   }),
@@ -323,6 +327,8 @@ export const BalanceSchema = z.object({
   perks: z.object({ options: Int.min(1) }).default({ options: 3 }),
   /** 呪い（V3-4 §4.4）: 武器・防具・装飾品が生成されるときに呪われる確率（%）。呪われた品は必ず良い接辞も持つ */
   curse: z.object({ chancePct: Int.min(0).max(100) }).default({ chancePct: 0 }),
+  /** 床に落ちている投擲用の品の 1 山の数（V3-4b §28.6: 投げナイフの供給を絞る） */
+  loot: z.object({ throwStackMin: Int.min(1), throwStackMax: Int.min(1) }).default({ throwStackMin: 2, throwStackMax: 6 }),
   expedition: z.object({
     /** 最初の遠征の目標深度（枠ごと） */
     firstTargetDepth: z.object({ safe: Int.min(2), standard: Int.min(2), ambitious: Int.min(2) }),

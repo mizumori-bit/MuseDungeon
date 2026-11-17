@@ -234,7 +234,7 @@ describe('V3-2R numbers you need (§14.3, §14.7)', () => {
     expect(t.world.seq).toBe(seq0);
     expect(t.r.port.view().inventory.find((i) => i.kind === 'core:throwing_knife')!.qty).toBe(knife.qty);
     // 自分の武器と投擲物の性能は所持品に出る
-    expect(obs.self.inventory_brief).toContain('投擲1d6+1・射程7・命中+1');
+    expect(obs.self.inventory_brief).toContain('投擲1d4+1・射程7・命中+1');
     t.manager.closeAll();
   });
 

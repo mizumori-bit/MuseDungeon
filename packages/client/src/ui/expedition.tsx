@@ -145,8 +145,8 @@ export function lifelineNowText(h: Pick<HaulInfo, 'ifLifelineNow' | 'lifelinePct
   const pct = h.lifelinePct ?? 50;
   const turns = h.lifelineTurns ?? 0;
   return turns > 0
-    ? tr(`帰還の綱なら +${h.ifLifelineNow}（戦利品の ${pct}%・${turns} 手番動けない）`, `Lifeline now: +${h.ifLifelineNow} (${pct}% of the haul, ${turns} turns helpless)`)
-    : tr(`帰還の綱なら +${h.ifLifelineNow}（戦利品の ${pct}%・その場でキャンプへ）`, `Lifeline now: +${h.ifLifelineNow} (${pct}% of the haul, back to camp at once)`);
+    ? tr(`帰還の綱なら +${h.ifLifelineNow}（目的を除く戦利品の ${pct}%・${turns} 手番動けない）`, `Lifeline now: +${h.ifLifelineNow} (${pct}% of the haul without the objective, ${turns} turns helpless)`)
+    : tr(`帰還の綱なら +${h.ifLifelineNow}（目的を除く戦利品の ${pct}%・その場でキャンプへ）`, `Lifeline now: +${h.ifLifelineNow} (${pct}% of the haul without the objective, back to camp at once)`);
 }
 
 export function HaulBlock({ h }: { h: HaulInfo }) {
@@ -385,8 +385,8 @@ export function RestEstimateLine({ est }: { est: RestEstimate }) {
     : est.blocked_by === 'poisoned' ? tr('（毒が抜けるまで休憩は続く）', ' (rest continues until the poison wears off)') : '';
   return (
     <div class={`restest ${est.blocked_by ? 'blocked' : ''}`}>
-      {tr(`休憩の見積もり: 全快まで ${est.turns} 手（HP +${est.hp_to_full}・時間 ${est.time}・その間の徘徊の目安 ${est.wander_expected} 体）`,
-        `Rest estimate: ${est.turns} turns to full (HP +${est.hp_to_full}, time ${est.time}, wanderers expected ${est.wander_expected})`)}
+      {tr(`休憩の見積もり: HP ${est.cap_hp} まで ${est.turns} 手（HP +${est.hp_to_full}・時間 ${est.time}・その間の徘徊の目安 ${est.wander_expected} 体。休憩で戻るのはここまで）`,
+        `Rest estimate: ${est.turns} turns to ${est.cap_hp} HP (HP +${est.hp_to_full}, time ${est.time}, wanderers expected ${est.wander_expected}; rest heals no further)`)}
       {block}
     </div>
   );

@@ -5,7 +5,7 @@ import { applyDamage } from './combat';
 import type { Ctx } from './ctx';
 import { lifelineReturn } from './expedition';
 import { Registry } from './registry';
-import { perkHook } from './build';
+import { notePerk, perkHook, perkWithHook } from './build';
 
 export interface StatusHandler {
   /** 手番開始時の処理（毒ダメージなど） */
@@ -43,7 +43,10 @@ export function addStatus(ctx: Ctx, e: Entity, id: string, turns: number, power:
   // 鉄の胃: 毒の手番が短くなる（V3-4 §4.1）
   if (id === 'core:poison') {
     const h = perkHook(ctx, e, 'poison_resist');
-    if (h) turns = Math.max(1, Math.ceil((turns * (h.pct ?? 50)) / 100));
+    if (h) {
+      turns = Math.max(1, Math.ceil((turns * (h.pct ?? 50)) / 100));
+      notePerk(ctx, e, perkWithHook(ctx, e, 'poison_resist'), 'poison_halved');
+    }
   }
   const cur = (e.statuses ?? []).map((s) => ({ ...s }));
   const existing = cur.find((s) => s.id === id);

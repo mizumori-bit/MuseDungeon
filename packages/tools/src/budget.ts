@@ -21,6 +21,9 @@ export interface BudgetReport {
     /** 最初の遠征を帰還まで終えた呼び出しの中央値（達成したランのみ） */
     firstExpeditionCallsMedian: number | null;
     firstExpeditionCompleted: number;
+    /** 直行の方針だけの最初の遠征の呼び出し（即帰還と分けて出す。V3-4b §28.10） */
+    firstExpeditionCallsDirect: number | null;
+    firstExpeditionCompletedDirect: number;
     /** 遠征の終わり（帰還・死亡）に残っていた回復の薬の数の中央値 */
     healingLeftMedian: number;
     /** 敵へ近づく travel（含めない。参考に回数と 5 歩未満の割合） */
@@ -269,8 +272,9 @@ export async function budgetReport(manager: SessionManager, opts: { runs: number
   }
   const all = (f: (t: Tracker) => number) => trackers.reduce((a, t) => a + f(t), 0);
   const picked = trackers.reduce((a, t) => a + ((t as Tracker & { picked?: number }).picked ?? 0), 0);
-  // 最初の遠征の呼び出しは即帰還の方針だけで数える
-  const firsts = trackers.filter((t) => t.policy === 0).map((t) => t.firstExpCalls).filter((x): x is number => x !== null);
+  // 最初の遠征の呼び出しは、即帰還の方針（全部と戦う）と直行の方針を分けて数える（V3-4b §28.10）
+  const firsts = trackers.filter((t) => t.policy === 0 && !t.direct).map((t) => t.firstExpCalls).filter((x): x is number => x !== null);
+  const firstsDirect = trackers.filter((t) => t.policy === 0 && t.direct).map((t) => t.firstExpCalls).filter((x): x is number => x !== null);
   const crossing: BudgetReport['crossing'] = [];
   for (const k of [1, 2, 3]) {
     const cs = trackers.flatMap((t) => t.crossing.filter((c) => c.floor === k));
@@ -319,6 +323,8 @@ export async function budgetReport(manager: SessionManager, opts: { runs: number
       callsPerPickup: Math.round((all((t) => t.pickupCalls) * 100) / Math.max(1, picked)) / 100,
       firstExpeditionCallsMedian: firsts.length ? median(firsts) : null,
       firstExpeditionCompleted: firsts.length,
+      firstExpeditionCallsDirect: firstsDirect.length ? median(firstsDirect) : null,
+      firstExpeditionCompletedDirect: firstsDirect.length,
       healingLeftMedian: median(healingLeft),
       shortBreakdown: trackers.reduce((acc, t) => { for (const [k, n] of Object.entries(t.shortBy)) acc[k] = (acc[k] ?? 0) + n; return acc; }, {} as Record<string, number>),
       pickupBreakdown: trackers.reduce((acc, t) => { for (const [k, n] of Object.entries(t.pickupBy)) acc[k] = (acc[k] ?? 0) + n; return acc; }, {} as Record<string, number>),
@@ -385,7 +391,8 @@ export function formatBudget(r: BudgetReport): string {
     `| （参考）敵へ近づく travel | ${c.approachCalls} 回、5 歩未満 ${c.approachShortPct}% | - |`,
     `| 敵 1 体を倒すのに使った呼び出しの中央値 | ${c.callsPerKillMedian} | 3 以下: ${ok(c.callsPerKillMedian <= 3)} |`,
     `| アイテム 1 個を拾うのに使った呼び出し | ${c.callsPerPickup} | 0.5 以下: ${ok(c.callsPerPickup <= 0.5)} |`,
-    `| 最初の遠征を帰還まで終える呼び出しの中央値（choose_perk を除く） | ${c.firstExpeditionCallsMedian ?? '-'}（達成 ${c.firstExpeditionCompleted} ラン） | 60 以下: ${ok((c.firstExpeditionCallsMedian ?? 999) <= 60)} |`,
+    `| 最初の遠征を帰還まで終える呼び出しの中央値（choose_perk を除く。即帰還・全部と戦う方針） | ${c.firstExpeditionCallsMedian ?? '-'}（達成 ${c.firstExpeditionCompleted} ラン） | 60 以下: ${ok((c.firstExpeditionCallsMedian ?? 999) <= 60)} |`,
+    `| （参考）同じ・直行の方針 | ${c.firstExpeditionCallsDirect ?? '-'}（達成 ${c.firstExpeditionCompletedDirect} ラン） | - |`,
     `| 遠征の終わりに残った回復の薬（中央値） | ${c.healingLeftMedian} | 参考 |`,
     `| 斥候の bot の呼び出しに投擲が占める割合 | ${r.scoutThrows.pct}%（${r.scoutThrows.throws}/${r.scoutThrows.calls}） | 30% 以下: ${ok(r.scoutThrows.pct <= 30)} |`,
     '',

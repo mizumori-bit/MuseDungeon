@@ -21,7 +21,9 @@ export type ChangeCode =
   | 'new_hostile' | 'reappeared' | 'hostile_gone' | 'killed' | 'died_seen' | 'hp_dropped' | 'hp_low' | 'status_gained' | 'status_lost' | 'level_up'
   | 'item_found' | 'stairs_found' | 'floor_changed' | 'objective_progress' | 'objective_complete' | 'can_extract' | 'next_camp'
   /** 守護者が倒れた（ほかの変化と別の行で先頭に出す。V3-2R2 §18.6） */
-  | 'guardian_slain';
+  | 'guardian_slain'
+  /** 条件付きの特技が効いた（V3-4b §28.6）・敵が目を覚ました理由（§28.8） */
+  | 'perk' | 'woke';
 
 export interface Change { code: ChangeCode; text: string; entity?: string }
 
@@ -60,6 +62,10 @@ export interface TurnSnapshot {
   reported?: string[];
   /** 見えていた敵の位置（消えたときに「最後に見た位置」を添える） */
   hostilePos?: Record<string, { x: number; y: number }>;
+  /** 【遠征】の見出し（前の応答と同じなら短くする。V3-4b §28.8） */
+  expHead?: string;
+  /** 見えていた敵のうち逃走中だったもの（fight の標的が見えなくなったとき「逃げた」と「物陰に入った」を分ける。V3-4b §28.4） */
+  hostileFleeing?: string[];
   items: Record<string, string>;
   /** これまでの応答で報告したアイテム（同じ階。記憶の一覧に出入りしても「見つけた」を繰り返さない） */
   reportedItems?: string[];
@@ -94,6 +100,8 @@ export function turnSnapshot(view: PlayerView, obs: Observation, state: TurnStat
     statusNames: Object.fromEntries(obs.self.statuses.map((s) => [s.id, s.name])),
     hostiles: Object.fromEntries(obs.visible.monsters.map((m) => [m.id, m.name])),
     hostilePos: Object.fromEntries(obs.visible.monsters.map((m) => [m.id, { x: m.pos.x, y: m.pos.y }])),
+    hostileFleeing: obs.visible.monsters.filter((m) => m.fleeing).map((m) => m.id),
+    ...(obs.expedition ? { expHead: obs.expedition.text } : {}),
     items: Object.fromEntries(obs.visible.items.flatMap((i) => (i.ids ?? [i.id]).map((id) => [id, i.name]))),
     stairs: obs.navigation.known_stairs.map((s) => `${s.type}@${s.pos.x},${s.pos.y}`).sort(),
     expNo: x?.no ?? null,
@@ -109,7 +117,7 @@ export function turnSnapshot(view: PlayerView, obs: Observation, state: TurnStat
 
 const PRIORITY: ChangeCode[] = [
   'guardian_slain', 'floor_changed', 'objective_complete', 'objective_progress', 'next_camp', 'can_extract', 'hp_low', 'killed', 'died_seen', 'hp_dropped', 'new_hostile',
-  'level_up', 'status_gained', 'status_lost', 'item_found', 'stairs_found', 'reappeared', 'hostile_gone',
+  'level_up', 'status_gained', 'status_lost', 'woke', 'perk', 'item_found', 'stairs_found', 'reappeared', 'hostile_gone',
 ];
 
 /**
@@ -201,6 +209,15 @@ export function diffChanges(prev: TurnSnapshot | null, cur: TurnSnapshot, view: 
     if (cur.stairs.some((s) => !prev.stairs.includes(s))) out.push({ code: 'stairs_found', text: t(L, '階段を見つけた', 'Found stairs') });
   }
   if (cur.level > prev.level) out.push({ code: 'level_up', text: t(L, `レベル ${cur.level} になった`, `Reached level ${cur.level}`) });
+  // 敵が目を覚ました理由（V3-4b §28.8）: 同じ文は ×N にまとめる
+  const wokeCount = new Map<string, number>();
+  for (const e of events) if (e.seq > prev.seq && e.type === 'monster_woke' && e.text) { const s = e.text.replace(/。$/, ''); wokeCount.set(s, (wokeCount.get(s) ?? 0) + 1); }
+  for (const [s, n] of wokeCount) out.push({ code: 'woke', text: n > 1 ? `${s} ×${n}` : s });
+  // 効いた特技（V3-4b §28.6）: 同じ文は ×N にまとめる
+  const perkTexts = events.filter((e) => e.seq > prev.seq && e.type === 'perk_triggered' && e.text).map((e) => e.text.replace(/。$/, ''));
+  const perkCount = new Map<string, number>();
+  for (const s of perkTexts) perkCount.set(s, (perkCount.get(s) ?? 0) + 1);
+  for (const [s, n] of perkCount) out.push({ code: 'perk', text: n > 1 ? `${s} ×${n}` : s });
   for (const s of cur.statuses) if (!prev.statuses.includes(s)) out.push({ code: 'status_gained', text: t(L, `状態異常: ${statusName(obs, s)}`, `Status: ${statusName(obs, s)}`) });
   for (const s of prev.statuses) if (!cur.statuses.includes(s)) out.push({ code: 'status_lost', text: t(L, `状態異常が解けた: ${prev.statusNames?.[s] ?? s.split(':')[1] ?? s}`, `Status ended: ${prev.statusNames?.[s] ?? s.split(':')[1] ?? s}`) });
   out.sort((a, b) => PRIORITY.indexOf(a.code) - PRIORITY.indexOf(b.code));

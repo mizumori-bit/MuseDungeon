@@ -17,6 +17,31 @@ export function perkRanks(e: Entity, id: string): number {
   return (e.build?.perks ?? []).filter((p) => p === id).length;
 }
 
+/** その hook を持つ特技の ID（持っていなければ null） */
+export function perkWithHook(ctx: Ctx, e: Entity | null | undefined, hook: string): string | null {
+  if (!e?.build) return null;
+  for (const id of e.build.perks) if ((ctx.content.perks[id]?.hooks ?? []).some((h) => h.hook === hook)) return id;
+  return null;
+}
+
+export type PerkEffect = 'not_woken' | 'crit' | 'picked' | 'braced' | 'might' | 'poison_halved' | 'cowed';
+
+/**
+ * 条件付きの特技が効いた（V3-4b §28.6）。本人にだけ知らせる。相手が見えていなければ種族を伏せる
+ */
+export function notePerk(ctx: Ctx, actor: Entity, perk: string | null, effect: PerkEffect, o: { subject?: Entity | null; amount?: number } = {}): void {
+  if (!perk || !actor.player) return;
+  const pr = ctx.world.players[actor.player];
+  if (!pr) return;
+  const sub = o.subject ?? null;
+  const f = sub?.pos ? ctx.world.floors[sub.pos.floor] : undefined;
+  const seen = !!sub?.pos && !!f && sub.pos.floor === actor.pos?.floor && ctx.visibleSet(pr.id).has(sub.pos.y * f.width + sub.pos.x);
+  ctx.emit({
+    type: 'perk_triggered', actor: actor.id, perk, effect, subject: sub?.id ?? null, subjectKind: seen ? sub!.kind : null,
+    ...(o.amount !== undefined ? { amount: o.amount } : {}), seenBy: [pr.id], floor: actor.pos?.floor ?? null,
+  });
+}
+
 /** その特技の hook の引数（持っていなければ null。同じ hook は最初の 1 つ） */
 export function perkHook(ctx: Ctx, e: Entity | null | undefined, hook: string): Record<string, number> | null {
   if (!e?.build) return null;
@@ -24,6 +49,21 @@ export function perkHook(ctx: Ctx, e: Entity | null | undefined, hook: string): 
     for (const h of ctx.content.perks[id]?.hooks ?? []) if (h.hook === hook) return h as unknown as Record<string, number>;
   }
   return null;
+}
+
+/** 自分の音で眠りが必ず覚める装備（静寂の指輪）の種類 */
+export function noiseRingOf(ctx: Ctx, e: Entity): string | null {
+  for (const slot of EQUIP_SLOTS) {
+    const id = e.equip?.[slot];
+    const it = id ? ctx.world.entities[id] : undefined;
+    if (it && ctx.content.items[it.kind]?.equip?.noiseWakes) return it.kind;
+  }
+  return null;
+}
+
+/** 起こしにくさを上げる特技（忍び足）の ID */
+export function firstStealthPerk(ctx: Ctx, e: Entity): string | null {
+  return (e.build?.perks ?? []).find((id) => (ctx.content.perks[id]?.mods.stealthPct ?? 0) > 0) ?? null;
 }
 
 /** 特技の起こしにくさの合計（忍び足） */

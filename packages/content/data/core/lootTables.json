@@ -6,7 +6,7 @@
       { "category": "scroll", "weight": 22 },
       { "category": "weapon", "weight": 10 },
       { "category": "armor", "weight": 8 },
-      { "category": "throwing", "weight": 12 },
+      { "category": "throwing", "weight": 6 },
       { "category": "ring", "weight": 3 },
       { "category": "amulet", "weight": 3 },
       { "category": "treasure", "weight": 6 }

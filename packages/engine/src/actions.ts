@@ -5,7 +5,7 @@ import { actionError, cheb, currentExpedition, diceMax, DIR_VEC, DIRS, EQUIP_SLO
 import { endRun, grantXp, isUnaware, melee, recordHit, rollToHit, applyDamage, checkRunEnd } from './combat';
 import {
   abilityHandlers, abilityReadyError, abilityState, attackCostOf, choosePerk, cursedSlot, gearOf, inspectItem, isCursed, markAbilityUsed,
-  perkHook, reachLine, reachOf, resolveAbilityId, thrownAccOf,
+  notePerk, perkHook, perkWithHook, reachLine, reachOf, resolveAbilityId, thrownAccOf,
 } from './build';
 import { huntingInView } from './expedition';
 import { addStatus } from './statuses';
@@ -114,7 +114,10 @@ actions.register('move', (ctx, e, pr, cmd: Extract<Command, { type: 'move' }>) =
       if (me?.pos && ctx.world.players[pr.id].state === 'alive') {
         const cells = perkHook(ctx, me, 'collect_adjacent') ? [null, ...DIRS] : [null];
         const mine = cells.flatMap((d) => ctx.itemsAt(key, me.pos!.x + (d ? DIR_VEC[d][0] : 0), me.pos!.y + (d ? DIR_VEC[d][1] : 0))).filter((it) => it.item?.thrownBy === pr.id);
+        // 隣のマスから拾った分（回収の手が効いた。V3-4b §28.6）
+        const fromNext = mine.filter((it) => it.pos && (it.pos.x !== me.pos!.x || it.pos.y !== me.pos!.y)).reduce((a, it) => a + (it.item?.qty ?? 1), 0);
         if (mine.length) { pickUpItems(ctx, me, mine, true); updateKnowledge(ctx, key); }
+        if (fromNext > 0) notePerk(ctx, ctx.world.entities[me.id] ?? me, perkWithHook(ctx, me, 'collect_adjacent'), 'picked', { amount: fromNext });
       }
       // 重い鎧は歩く手番のコストが増える（V3-4 §14.5）
       return { cost: gearOf(ctx, ctx.world.entities[e.id] ?? e).moveCost };

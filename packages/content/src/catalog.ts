@@ -97,7 +97,9 @@ export function buildCatalog(c: Content): Catalog {
     rules: {
       regen: { ...c.balance.regen },
       restMaxTurns: c.balance.rest.maxTurns,
+      restCapPct: c.balance.rest.capPct,
       macroStepLimit: c.balance.macro.stepLimit,
+      fightLostWait: c.balance.fight.lostWait,
       wander: { intervalMin: c.balance.wander.intervalMin, intervalMax: c.balance.wander.intervalMax },
       score: { ...c.balance.score },
       estimateMinSamples: c.balance.estimate.minSamples,

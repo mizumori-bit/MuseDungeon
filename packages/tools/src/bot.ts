@@ -198,7 +198,9 @@ export function greedyDecide(port: PlayerPort, rng: Rng, memo: BotMemo): Command
   // 隣の敵: 余力があれば fight（1 回の呼び出しで殴り続ける）、無ければ 1 発ずつ
   if (adj && (adj.awareness !== 'asleep' || hp > 50)) {
     const floor = Math.trunc((v.self.stats.maxHp * 35) / 100);
-    return v.self.stats.hp > floor ? { type: 'fight', target: adj.id, hpFloor: floor, ...withAb(meleeAbilities) } : { type: 'move', dir: dirTo(pos, adj.pos)! };
+    // 追跡中の敵が 2 体以上なら、倒したら次の相手へ続ける（V3-4b §28.4）
+    const pack = hostiles.filter((h) => h.awareness === 'hunting' && !h.fleeing).length >= 2;
+    return v.self.stats.hp > floor ? { type: 'fight', target: adj.id, hpFloor: floor, ...(pack ? { until: 'clear' as const } : {}), ...withAb(meleeAbilities) } : { type: 'move', dir: dirTo(pos, adj.pos)! };
   }
   const hunting = hostiles.filter((h) => h.awareness === 'hunting');
   // 投擲が得意な職業（習熟が正）は 2 マス先の相手にも投げる（それ以外は近接に任せる）
@@ -451,6 +453,18 @@ export async function playWithPort(port: PlayerPort, opts: BotOptions): Promise<
         if (s.ok) { explored = false; memo.descend = false; }
         else if (port.view().status === 'your_turn') await port.act({ type: 'wait' }, { source: 'bot' });
       }
+    } else if (opts.kind === 'greedy' && cmd.type === 'travel' && out.error.code === 'blocked' && !/move \{ dir: '([a-z]+)' \}/.test(out.error.hint)) {
+      // 既知の道を敵がふさいでいる（マクロは攻撃しない）: 最寄りの見えている敵へ寄って殴る（断られて待つのを繰り返さない）
+      const nv = port.view();
+      const me = nv.self.pos;
+      const foe = me ? nv.entities.filter((e) => e.cat === 'monster').sort((a, b) => cheb(a.pos, me) - cheb(b.pos, me))[0] : undefined;
+      if (foe && me && nv.status === 'your_turn') {
+        if (cheb(foe.pos, me) <= 1) await port.act({ type: 'move', dir: dirTo(me, foe.pos)! }, { source: 'bot' });
+        else {
+          const tr = await port.act({ type: 'travel', to: foe.id, mode: 'steady' }, { source: 'bot' });
+          if (!tr.ok && port.view().status === 'your_turn') await port.act({ type: 'wait' }, { source: 'bot' });
+        }
+      } else if (nv.status === 'your_turn') await port.act({ type: 'wait' }, { source: 'bot' });
     } else if (opts.kind === 'greedy' && /move \{ dir: '([a-z]+)' \}/.test(out.error.hint)) {
       // 残りの道が発見済みの罠を通る（マクロは罠を踏まない）: 自分で 1 歩踏む
       const dir = /move \{ dir: '([a-z]+)' \}/.exec(out.error.hint)![1] as Dir;

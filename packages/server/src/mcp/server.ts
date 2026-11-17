@@ -355,7 +355,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
   }, async (a) => act('wait', a, { type: 'wait', ...(a.turns ? { turns: a.turns } : {}) }));
   server.registerTool('rest', {
     title: '休憩',
-    description: 'マクロ: 全快（または until_hp / max_turns）まで休む。休息中は回復が速い。追跡中の敵が見えると止まる。観測の self.rest_estimate に事前の見積もり、結果に実績（hp_gained・turns・time_elapsed）。',
+    description: 'マクロ: 休憩で戻る上限（最大 HP の一定の割合。get_rules）まで（または until_hp / max_turns まで）休む。それより上は回復の薬・立て直し・泉・キャンプで戻る。休息中は回復が速い。追跡中の敵が見えると止まる。観測の self.rest_estimate に事前の見積もり、結果に実績（hp_gained・turns・time_elapsed）。',
     inputSchema: { ...actionCommon, until_hp: z.number().int().positive().optional().describe('この HP に達したら止まる'), max_turns: z.number().int().positive().optional().describe('この手数で止まる') },
   }, async (a) => act('rest', a, { type: 'rest', untilHp: a.until_hp, maxTurns: a.max_turns }));
   const moveArgs = {
@@ -364,27 +364,29 @@ export function createMcpServer(ctx: McpContext): McpServer {
   };
   server.registerTool('explore', {
     title: '自動探索',
-    description: 'マクロ: 未見の区画へ進む（最大 200 手）。pickup（既定 true）なら通り道と見えているアイテムも拾う。止まる条件は mode で選ぶ。1 歩も進めないなら手番を使わずに理由付きで拒否する。',
+    description: 'マクロ: 未見の区画へ進む（最大 200 手）。pickup（既定 useful）なら通り道と見えているアイテムのうち使える物を拾う。toward: draft は下への風、sense は遺物・守護者の気配の方角を優先する。止まる条件は mode で選ぶ。1 歩も進めないなら手番を使わずに理由付きで拒否する。',
     inputSchema: {
-      ...actionCommon, ...moveArgs, pickup: z.boolean().optional().describe('通り道と見えている・記憶したアイテムを拾う（既定 true。遺物・鑑定済みの有害品・同じか劣る装備は拾わない）'),
-      toward: z.enum(['draft']).optional().describe("'draft': 下への風の方角の未探索を優先する（下り階段を探すとき）"),
+      ...actionCommon, ...moveArgs, pickup: z.union([z.boolean(), z.literal('useful')]).optional().describe("通り道と見えている・記憶したアイテムを拾う。'useful'（既定）: 使える物だけ（鑑定済みで接辞の無い武器・防具は、装備中の品より数字が上のときだけ）。true: 全部（遺物・鑑定済みの有害品・同じ種類の同じか劣る装備は除く）。false: 拾わない"),
+      toward: z.enum(['draft', 'sense']).optional().describe("'draft': 下への風の方角の未探索を優先する（下り階段を探すとき）。'sense': 遺物・守護者の気配の方角の未探索を優先する"),
     },
   }, async (a) => act('explore', a, { type: 'explore', mode: a.mode, hpFloor: a.hp_floor, pickup: a.pickup, ...(a.toward ? { toward: a.toward } : {}) }));
   server.registerTool('travel_to', {
     title: '移動（目的地）', description: "マクロ: 既知地図上の経路で座標・階段・記憶した対象へ移動。目的地がアイテムなら着いて拾う。隣に敵がいても退くなら mode: 'flee'。",
-    inputSchema: { ...actionCommon, to: z.union([PosZ, z.enum(['stairs_down', 'stairs_up']), z.string().regex(/^e_[0-9a-z]{6}$/)]), ...moveArgs, pickup: z.boolean().optional().describe('通り道のアイテムも拾う（既定: 目的地がアイテムのとき true）') },
+    inputSchema: { ...actionCommon, to: z.union([PosZ, z.enum(['stairs_down', 'stairs_up']), z.string().regex(/^e_[0-9a-z]{6}$/)]), ...moveArgs, pickup: z.union([z.boolean(), z.literal('useful')]).optional().describe("通り道のアイテムも拾う（既定: 目的地がアイテムのとき true。'useful' は使える物だけ）") },
   }, async (a) => act('travel_to', a, { type: 'travel', to: a.to, mode: a.mode, hpFloor: a.hp_floor, pickup: a.pickup }));
   server.registerTool('collect', {
     title: '回収', description: "マクロ: what: 'thrown'（既定）は既知の自分が投げた物を、'items' は見えている・記憶したアイテム（遺物と鑑定済みの有害品を除く）を近い順に回って拾う。結果に回収数と残り。",
     inputSchema: { ...actionCommon, what: z.enum(['thrown', 'items']).optional(), ...moveArgs },
   }, async (a) => act('collect', a, { type: 'collect', what: a.what, mode: a.mode, hpFloor: a.hp_floor }));
   server.registerTool('fight', {
-    title: '戦う', description: 'マクロ: その相手と決着を付ける。with なしは近接（追跡中の相手が隣に来るまで待つ。最大 10 手番）、with にスロットを渡すとその品を投げて戦う（射程と射線が通るまで待つ）。相手が倒れた・離れた、（with）隣に来た・品が尽きた、HP が hp_floor（既定 50%）を下回った、追跡中の別の敵が現れた、状態異常を受けたら止まる。眠っている・気付いていない相手は待たない。abilities に能動技（強打・なぎ払い・狙い撃ち）を並べると、使える手番ごとに使う（強打は標的が隣、なぎ払いは起きている敵が隣に 2 体以上、狙い撃ちは with の品で射程と射線が通るとき。それ以外の手番は通常の攻撃）。結果に与えた・受けた攻撃の回数と合計、使った能動技の回数。',
+    title: '戦う', description: 'マクロ: その相手と決着を付ける。with なしは近接（追跡中の相手が隣に来るまで待つ。最大 10 手番）、with にスロットを渡すとその品を投げて戦う（射程と射線が通るまで待つ）。相手が倒れた・離れた・逃げて見えなくなった、（with）隣に来た・品が尽きた、HP が hp_floor（既定 50%）を下回った、被弾の記録の無い種族の追跡中の敵が現れた、待つ間に別の敵に撃たれた、状態異常を受けたら止まる（記録のある種族が新しく見えても止まらない）。物陰に入った相手は数手番待つ。眠っている・気付いていない相手は待たない。until: clear なら、標的を倒した後も届く追跡中の敵（隣の敵、いなければ最も近い敵）へ続ける。adjacent は with の相手が隣に来たとき（stop: 止まる・既定 / throw: 投げ続ける / melee: 近接に切り替える）。abilities に能動技（強打・なぎ払い・狙い撃ち）を並べると、使える手番ごとに使う（強打は標的が隣、なぎ払いは起きている敵が隣に 2 体以上、狙い撃ちは with の品で射程と射線が通るとき。それ以外の手番は通常の攻撃）。結果に与えた・受けた攻撃の回数と合計、使った能動技の回数。',
     inputSchema: {
       ...actionCommon, target: z.string().regex(/^e_[0-9a-z]{6}$/), with: z.string().regex(/^[a-z]$/).optional().describe('投げて戦う品の所持品スロット（self.attack.throws）'), hp_floor: z.number().int().min(0).optional(),
+      until: z.enum(['target', 'clear']).optional().describe('clear: 標的を倒した後も、届く追跡中の敵へ続ける（既定 target: 標的 1 体）'),
+      adjacent: z.enum(['throw', 'melee', 'stop']).optional().describe('with の相手が隣に来たとき（既定 stop）'),
       abilities: z.array(z.string().min(1)).max(4).optional().describe('使える手番ごとに使う能動技（bash・cleave・aimed_throw。aimed_throw は with と一緒に。second_wind・slip は載せられない）'),
     },
-  }, async (a) => act('fight', a, { type: 'fight', target: a.target, ...(a.with ? { with: a.with } : {}), hpFloor: a.hp_floor, ...(a.abilities?.length ? { abilities: a.abilities } : {}) }));
+  }, async (a) => act('fight', a, { type: 'fight', target: a.target, ...(a.with ? { with: a.with } : {}), hpFloor: a.hp_floor, ...(a.abilities?.length ? { abilities: a.abilities } : {}), ...(a.until ? { until: a.until } : {}), ...(a.adjacent ? { adjacent: a.adjacent } : {}) }));
   server.registerTool('attack', {
     title: '攻撃', description: '近接攻撃。隣の敵か、長柄の武器（槍）なら縦・横・斜めの直線で 2 マス先の敵（間のマスが通れて誰もいないこと）。隣の敵なら move でも攻撃できる。',
     inputSchema: { ...actionCommon, target: z.string().regex(/^e_[0-9a-z]{6}$/) },
@@ -406,7 +408,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
   server.registerTool('unequip', { title: '装備解除', description: '装備を外す（スロット文字か weapon/armor/accessory）。', inputSchema: { ...actionCommon, slot: z.union([SlotZ, z.enum(['weapon', 'armor', 'accessory'])]) } },
     async (a) => act('unequip', a, { type: 'unequip', slot: a.slot }));
   server.registerTool('use_item', {
-    title: '使う', description: '薬を飲む・巻物を読む・帰還の綱を使う（その場でキャンプへ。戦利品の半分が確定）。鑑定の巻物は target_slot で対象を選べる（省略時はスロット順で最初の未鑑定品か、呪いの有無を確かめていない装備品）。',
+    title: '使う', description: '薬を飲む・巻物を読む・帰還の綱を使う（その場でキャンプへ。目的を除く戦利品の半分が確定。遺物は運べない）。鑑定の巻物は target_slot で対象を選べる（省略時はスロット順で最初の未鑑定品か、呪いの有無を確かめていない装備品）。',
     inputSchema: { ...actionCommon, slot: z.string().describe(SlotZ.description ?? ''), target: z.any().optional().describe(TargetZ.description ?? ''), target_slot: z.string().optional().describe('鑑定の巻物などの対象の所持品スロット') },
   }, async (a) => act('use_item', a, { type: 'use', slot: a.slot, target: a.target as never, targetSlot: a.target_slot }));
   server.registerTool('throw_item', {

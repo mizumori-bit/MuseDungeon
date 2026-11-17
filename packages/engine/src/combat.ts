@@ -11,7 +11,7 @@ import { roll } from './registry';
 import { makeItem } from './spawn';
 import { effectiveStats } from './stats';
 import { hasStatus, removeStatus } from './statuses';
-import { meleeAccOf, offerPerk, perkHook, sweeps, weaponOnHit } from './build';
+import { meleeAccOf, notePerk, offerPerk, perkHook, perkWithHook, sweeps, weaponOnHit } from './build';
 
 export interface AttackOutcome { hit: boolean; crit: boolean; roll: number }
 
@@ -114,18 +114,23 @@ export function melee(ctx: Ctx, attacker: Entity, target: Entity, opts: MeleeOpt
   const tpos = { x: target.pos!.x, y: target.pos!.y };
   const unaware = isUnaware(target);
   let o = rollToHit(ctx, attacker, target, (opts.accBonus ?? 0) + meleeAccOf(ctx, attacker));
-  if (attacker.player && unaware && perkHook(ctx, attacker, 'ambush')) o = { hit: true, crit: true, roll: o.roll };
+  const ambush = attacker.player && unaware && perkHook(ctx, attacker, 'ambush');
+  if (ambush) o = { hit: true, crit: true, roll: o.roll };
   // 身をかわした相手には近接が当たらない（次のその者の手番まで）
   if (hasStatus(target, 'core:evasive')) o = { hit: false, crit: false, roll: o.roll };
+  if (ambush && o.crit) notePerk(ctx, attacker, perkWithHook(ctx, attacker, 'ambush'), 'crit', { subject: target });
   emitAttack(ctx, attacker, target, o, false);
   recordHit(ctx, attacker, target, o.hit, 'melee');
   makeNoise(ctx, attacker.pos!.floor, target.pos!, 5, attacker);
   if (o.hit) {
-    const might = attacker.stats!.might + lastStandMight(ctx, attacker);
+    const ls = lastStandMight(ctx, attacker);
+    const might = attacker.stats!.might + ls;
     const brace = bracedArmor(target);
     const dmg = o.crit
       ? Math.max(1, diceMax(attacker.stats!.dmg) + might)
       : Math.max(1, roll(ctx.rng('runtime'), attacker.stats!.dmg) + might - (target.stats?.armor ?? 0) - brace);
+    if (ls > 0) notePerk(ctx, attacker, perkWithHook(ctx, attacker, 'last_stand'), 'might', { amount: ls });
+    if (brace && !o.crit) notePerk(ctx, target, perkWithHook(ctx, target, 'brace'), 'braced', { amount: brace });
     if (brace) removeStatus(ctx, target, 'core:braced');
     applyDamage(ctx, ctx.world.entities[target.id], dmg, attacker, 'melee');
     if ((ctx.world.entities[target.id]?.stats?.hp ?? 0) > 0) onHitEffects(ctx, attacker, ctx.world.entities[target.id]);
@@ -157,6 +162,7 @@ export function rangedAttack(ctx: Ctx, attacker: Entity, target: Entity, dice: s
   if (o.hit) {
     const brace = bracedArmor(target);
     const dmg = o.crit ? Math.max(1, diceMax(dice)) : Math.max(1, roll(ctx.rng('runtime'), dice) - (target.stats?.armor ?? 0) - brace);
+    if (brace && !o.crit) notePerk(ctx, target, perkWithHook(ctx, target, 'brace'), 'braced', { amount: brace });
     if (brace) removeStatus(ctx, target, 'core:braced');
     applyDamage(ctx, ctx.world.entities[target.id], dmg, attacker, 'ranged');
   } else provoke(ctx, target, attacker);
@@ -273,7 +279,8 @@ export function kill(ctx: Ctx, victim: Entity, killer: Entity | null, via: Damag
     ...(victim.bounty ? { bounty: victim.bounty } : {}), ...(victim.scale?.affixes?.length ? { affixes: [...victim.scale.affixes] } : {}),
     seenBy: seen.seenBy, ...(Object.keys(masks).length ? { masks } : {}),
   });
-  if (maxHp !== null) {
+  // 接辞付きの個体は種族の体力の記録に混ぜない（守護者は守護者の記録に残る。V3-4b §28.8）
+  if (maxHp !== null && !((victim.scale?.affixes?.length ?? 0) > 0 && victim.role !== 'guardian')) {
     for (const pid of seen.seenBy) {
       if (masks[pid]?.includes('id')) continue;
       // 守護者は守護者の記録に残る（種族の体力の記録とは分ける）

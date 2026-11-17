@@ -2,7 +2,7 @@
 // プレイヤーがいるフロアごとに nextActAt 最小（同値は挿入順）のアクターを次の行動者にする。
 // モンスターは AI が即決、プレイヤーならコマンドを待つ。プレイヤーがいないフロアは凍結。
 import type { Entity, FloorKey } from '@muse/shared';
-import { cheb, floorDiv, regenInterval, regenStep } from '@muse/shared';
+import { cheb, floorDiv, regenInterval, regenStep, restCapHp } from '@muse/shared';
 import { wanderPct } from './expedition';
 import { monsterTurn } from './ai';
 import { heal } from './combat';
@@ -22,7 +22,9 @@ export function regenTick(ctx: Ctx, e: Entity, restful: boolean): number | undef
   const cur = ctx.world.entities[e.id];
   if (!cur?.player || !cur.stats || !cur.actor) return undefined;
   const rules = ctx.content.balance.regen;
-  const r = regenStep(cur.actor.regen ?? 0, cur.stats.hp, cur.stats.maxHp, restful ? rules.restMultiplier : 1, regenInterval(ctx.content.balance, cur.level?.level ?? 1));
+  // 休憩と自然回復は最大 HP の rest.capPct % まで（それより上は薬・立て直し・泉・レベルアップ・キャンプで。V3-4b §28.3）
+  const limit = restCapHp({ restCapPct: ctx.content.balance.rest.capPct }, cur.stats.maxHp);
+  const r = regenStep(cur.actor.regen ?? 0, cur.stats.hp, limit, restful ? rules.restMultiplier : 1, regenInterval(ctx.content.balance, cur.level?.level ?? 1));
   if (r.heal > 0) heal(ctx, cur, r.heal, restful ? 'rest' : 'regen');
   return r.acc;
 }

@@ -2,10 +2,10 @@
 // 派生情報は PlayerView（とカタログ）だけから計算する。仕様: docs/PROTOCOL.md §3
 import type { Catalog, CatalogEquipStats } from './catalog';
 import { abilityStatus, accBonuses, curseUnknown, isCursedItem, perkChoice, shortId, weaponReach } from './build';
-import { haulTotal, nameOf, nextCampOf, nextOverreach, offerGap, overreachPoints, payoutOf, regenInterval, regenStep } from './catalog';
+import { haulTotal, nameOf, nextCampOf, nextOverreach, offerGap, overreachPoints, payoutOf, regenInterval, regenStep, restCapHp } from './catalog';
 import { multText, objectiveText, offerText, partsText, progressText, resultText } from './expedition';
-import { isStationary, pickableItems, sameOrWorseEquip } from './macro';
-import { attacksPerTurn, memoryOf, monsterSpeedOf, selfSpeed } from './danger';
+import { isStationary, pickableItems, sameOrWorseEquip, worseEquip } from './macro';
+import { attacksPerTurn, chaseAttacks, memoryOf, monsterSpeedOf, selfSpeed } from './danger';
 import type { PerceivedEvent } from './filter';
 import { kindName } from './narrate';
 import type { NavGrid } from './nav';
@@ -67,7 +67,10 @@ export interface ObsMonster {
 export interface ObsItem { id: string; ids?: string[]; name: string; pos: Pos; dir: Dir | null; dist: number; qty: number; remembered?: boolean; role?: EntityRole; mine?: boolean; value?: number; /** まとめた「自分が投げた物」の、最寄りのマスの本数 */ near_qty?: number }
 
 export interface RestEstimate {
+  /** 休憩で戻る HP（上限 cap_hp まで。V3-4b §28.3） */
   hp_to_full: number;
+  /** 休憩と自然回復で戻る上限の HP（最大 HP × rest.capPct %） */
+  cap_hp: number;
   /** 全快までの手番数（追跡中の敵が見えず毒も無いまま休み続けた場合） */
   turns: number;
   /** 経過するフロア時間 */
@@ -267,6 +270,9 @@ export function hpLeftEstimate(mem: MonsterMemory | undefined, band: HpState, da
   if (!hs) return undefined;
   const record = { min: hs.min, max: hs.max };
   const lo = Math.max(hs.min, damageSeen + 1);
+  // まだ誰からも傷を負わされていない（見えている範囲で与ダメ 0・無傷の帯）なら、残り HP は最大 HP そのもの: 記録の範囲を出す
+  // （「無傷の帯」の下限まで広げると、1 発も当てていない相手に「残り 3 以上」と出た。Muse の実プレイ、V3-4b §28.11）
+  if (damageSeen <= 0 && band === 'healthy') return { min: hs.min, max: hs.samples >= minSamples ? hs.max : null, samples: hs.samples, record };
   if (hs.samples < minSamples) {
     // 記録が少ない間は最大値を上限として使わない: 最大 HP が lo 以上のどれかとして、下限だけを出す
     for (let m = lo; m <= lo * 4 + 10; m++) {
@@ -413,11 +419,13 @@ function effectiveSpeed(view: PlayerView, catalog: Catalog): number {
   return selfSpeed(view, catalog);
 }
 
-/** 全快まで休んだ場合の見積もり（engine の回復処理と同じ式・同じ蓄積値で数える） */
+/** 休憩の上限（最大 HP の rest.capPct %）まで休んだ場合の見積もり（engine の回復処理と同じ式・同じ蓄積値で数える） */
 export function restEstimate(view: PlayerView, catalog: Catalog, huntingVisible: boolean): RestEstimate | undefined {
   const me = view.self;
-  if (me.stats.hp >= me.stats.maxHp) return undefined;
   const rules = catalog.rules;
+  const limit = restCapHp(rules, me.stats.maxHp);
+  const poisoned = me.statuses.some((s) => s.id === 'core:poison');
+  if (me.stats.hp >= limit && !poisoned) return undefined;
   const interval = regenInterval(rules, me.level);
   const mult = rules.regen.restMultiplier;
   let acc = me.regen;
@@ -429,10 +437,10 @@ export function restEstimate(view: PlayerView, catalog: Catalog, huntingVisible:
   let poisonLeft = poison?.turnsLeft ?? 0;
   const poisonPower = Math.max(1, poison?.power ?? 1);
   let lowest = hp;
-  while ((hp < me.stats.maxHp || poisonLeft > 0) && turns < cap) {
+  while ((hp < limit || poisonLeft > 0) && turns < cap) {
     if (poisonLeft > 0) { hp -= poisonPower; poisonLeft--; lowest = Math.min(lowest, hp); }
     if (hp <= 0) break;
-    const r = regenStep(acc, hp, me.stats.maxHp, mult, interval);
+    const r = regenStep(acc, hp, limit, mult, interval);
     acc = r.acc;
     hp += r.heal;
     turns++;
@@ -445,10 +453,36 @@ export function restEstimate(view: PlayerView, catalog: Catalog, huntingVisible:
     const hi = ceilDiv(time, rules.wander.intervalMin);
     wander = lo === hi ? `${lo}` : `${lo}〜${hi}`;
   }
-  const est: RestEstimate = { hp_to_full: me.stats.maxHp - me.stats.hp, turns, time, wander_expected: wander, ...(poison ? { lowest_hp: lowest } : {}) };
+  const est: RestEstimate = { hp_to_full: Math.max(0, limit - me.stats.hp), cap_hp: limit, turns, time, wander_expected: wander, ...(poison ? { lowest_hp: lowest } : {}) };
   if (huntingVisible) est.blocked_by = 'hostile_hunting';
   else if (me.statuses.some((s) => s.id === 'core:poison')) est.blocked_by = 'poisoned';
   return est;
+}
+
+export interface ChaseEstimate {
+  /** 記録のある敵だけの最悪の被害（記録の無い敵がいても下限として使える） */
+  recordedWorst: number;
+  worst: number;
+  /** 自分の歩く速さより速い近接の敵の数 */
+  catchers: number;
+  shooters: number;
+}
+
+/** 階段まで steps 歩く間の最悪の被害（V3-4b §28.5）: 敵ごとに「歩く間の攻撃回数 × 受けた最大の一撃」の合計 */
+export function chaseEstimate(view: PlayerView, catalog: Catalog, hunters: readonly ObsMonster[], steps: number): ChaseEstimate {
+  let worst = 0, catchers = 0, shooters = 0;
+  for (const m of hunters) {
+    const e = view.entities.find((x) => x.id === m.id);
+    if (!e) continue;
+    const ranged = m.traits.includes('ranged');
+    if (ranged) shooters++;
+    const extra = chaseAttacks(view, catalog, e, steps, { ranged, adjacent: false });
+    if (!ranged && extra > 0) catchers++;
+    const hits = chaseAttacks(view, catalog, e, steps, { ranged, adjacent: m.dist <= 1 });
+    const mem = memoryOf(view, e);
+    if (mem && mem.maxDamageToYou > 0) worst += hits * mem.maxDamageToYou;
+  }
+  return { recordedWorst: worst, worst, catchers, shooters };
 }
 
 export function threatOf(view: PlayerView, e: EntityView): 1 | 2 | 3 | 4 | 5 | null {
@@ -774,6 +808,8 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
   }
   // 自分に届く追跡中の敵（逃走中を除く。動かない敵は隣にいるときだけ）
   const huntingReach = hostiles.filter((m) => m.awareness === 'hunting' && !m.fleeing && !(m.traits.includes('stationary') && m.dist > 1));
+  // 階段まで steps 歩く間の最悪の被害（V3-4b §28.5）: 敵ごとに「攻撃できる回数 × 受けた最大の一撃」。記録の無い敵がいれば null
+  const chaseOf = (steps: number) => chaseEstimate(view, catalog, huntingReach, steps);
   // 1 手番あたりの最悪の被害（worst_hit × 行動の回数。V3-2R3 §20.4）で群れの見込みと致死を計算する
   const recorded = huntingReach.filter((m) => m.worst_turn !== null);
   const worstSum = recorded.reduce((a, m) => a + m.worst_turn!, 0);
@@ -811,8 +847,8 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
         code: 'escape',
         text: t(L, `${st.type === 'up' ? '上り' : '下り'}階段まで ${st.path_len} 歩。${faster ? `追ってくる敵のうち ${faster} 体はあなたより速い` : '追ってくる敵にあなたより速いものはいない'}（階段の上なら extract できる・階を移れば敵は追ってこない）`,
           `${st.path_len} steps to the stairs ${st.type}. ${faster ? `${faster} of your pursuers are faster than you` : 'none of your pursuers is faster than you'} (on stairs you can extract; enemies do not follow you between floors)`),
-        // worst_if_chased: 追われたままなら最悪の被害（歩数 × worst_turn の合計。記録の無い敵がいれば null。V3-2R3b §23.1）
-        data: { stairs: st.type, path_len: st.path_len, faster, worst_if_chased: unrecorded ? null : st.path_len! * worstSum, hp: me.stats.hp },
+        // worst_if_chased: 追われたままなら最悪の被害（敵ごとに歩く間の攻撃回数 × 受けた最大の一撃。記録の無い敵がいれば null。V3-4b §28.5）
+        data: { stairs: st.type, path_len: st.path_len, faster, worst_if_chased: unrecorded ? null : chaseOf(st.path_len!).worst, hp: me.stats.hp },
       });
     }
   }
@@ -893,7 +929,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       };
       const total = haulTotal(parts);
       const ifNow = payoutOf(catalog.rules, parts, expedition.extract_outcome === 'complete', xv.multiplierPct);
-      // 帰還の綱を持っていれば、今使った場合の確定点（戦利品全体の lifeline.pct %。目的は達成済みのときだけ）
+      // 帰還の綱を持っていれば、今使った場合の確定点（目的を除く戦利品の lifeline.pct %。V3-4b §28.1）
       const hasLifeline = view.inventory.some((i) => !!i.kind && !!catalog.items[i.kind]?.bound);
       const ifLifeline = hasLifeline ? payoutOf(catalog.rules, parts, expedition.extract_outcome === 'complete', xv.multiplierPct, true) : undefined;
       const nx = nextOverreach(catalog.rules, xv.objective.targetDepth, xv.crossedDepth, xv.points);
@@ -912,7 +948,9 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       const reachedCamp = expedition.extract_outcome === 'complete' && xv.objective.targetDepth !== null ? Math.max(view.campDepth, xv.objective.targetDepth) : view.campDepth;
       const nc = catalog.rules.recommendedLevel ? nextCampOf(catalog.rules, reachedCamp) : null;
       const campText = nc ? t(L, ` / 帰ると次の候補は地下${nc.minTargetDepth}階以上（推奨 Lv${nc.recommendedLevel}）`, ` / next offers from depth ${nc.minTargetDepth} (recommended Lv${nc.recommendedLevel})`) : '';
-      const lifeText = ifLifeline !== undefined ? t(L, `・綱なら +${ifLifeline}`, `, lifeline +${ifLifeline}`) : '';
+      // 綱は目的の点を運ばない。遺物を持っていれば失う（V3-4b §28.1）
+      const relicNote = xv.objective.type === 'retrieve_relic' && xv.progress.relicHeldByYou ? t(L, '（遺物は失う）', ' (the relic is lost)') : '';
+      const lifeText = ifLifeline !== undefined ? t(L, `・綱なら +${ifLifeline}${relicNote}`, `, lifeline +${ifLifeline}${relicNote}`) : '';
       expedition.haul = {
         total, multiplier_pct: xv.multiplierPct, parts, if_extract_now: ifNow, ...(ifLifeline !== undefined ? { if_lifeline_now: ifLifeline } : {}), next_overreach: next,
         next_camp: nc ? { min_target_depth: nc.minTargetDepth, recommended_level: nc.recommendedLevel } : null,
@@ -984,7 +1022,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
   const valid_actions = buildValidActions(view, catalog, {
     passable_dirs, onStairs, itemsHere: itemsHere.length > 0, hostiles, frontiers: frontiers.length, known_stairs, grid,
     canExtract: expedition?.can_extract ?? false, objectiveComplete: expedition?.extract_outcome === 'complete', restTurns: rest && !rest.blocked_by ? rest.turns : null,
-    attackers, mineCount, pickables, huntingReach, worstSum, unrecorded,
+    attackers, mineCount, pickables, huntingReach, worstSum, unrecorded, chaseOf,
     draft: view.floorHint?.draft ?? null,
     ifLifeline: expedition?.haul?.if_lifeline_now,
     perkChoice: perkChoiceObs, abilities: abilitiesList, bonuses,
@@ -1066,6 +1104,8 @@ interface VAInput {
   mineCount: number;
   /** 自分に届く追跡中の敵と、記録の最大被害の合計・記録の無い数 */
   huntingReach: ObsMonster[]; worstSum: number; unrecorded: number;
+  /** 階段まで steps 歩く間の最悪の被害（V3-4b §28.5） */
+  chaseOf: (steps: number) => ChaseEstimate;
   /** 帰還の綱を今使った場合の確定点 */
   ifLifeline?: number;
   /** 下への風（今いる階の下り階段が未発見のとき） */
@@ -1115,7 +1155,12 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
   out.push('wait');
   const hunting = x.hostiles.some((m) => m.awareness === 'hunting' && !m.fleeing && !(isStationary(catalog, view.entities.find((e) => e.id === m.id) ?? { kind: null }) && m.dist > 1));
   if (view.self.stats.hp < view.self.stats.maxHp) {
-    out.push(hunting ? `rest (${t(L, '不可: 追跡中の敵が見えている', 'unavailable: a hunting enemy is in view')})` : x.restTurns !== null ? `rest (${t(L, `全快まで約${x.restTurns}手`, `~${x.restTurns} turns to full`)})` : 'rest');
+    // 休憩で戻るのは最大 HP の rest.capPct % まで（V3-4b §28.3）
+    const capPct = catalog.rules.restCapPct ?? 100;
+    const capHp = restCapHp(catalog.rules, view.self.stats.maxHp);
+    const poisoned = view.self.statuses.some((s) => s.id === 'core:poison');
+    if (view.self.stats.hp >= capHp && !poisoned) out.push(`rest (${t(L, `不可: これ以上は休憩では戻らない（HP ${capPct}% まで）`, `unavailable: rest does not heal past ${capPct}% HP`)})`);
+    else out.push(hunting ? `rest (${t(L, '不可: 追跡中の敵が見えている', 'unavailable: a hunting enemy is in view')})` : x.restTurns !== null ? `rest (${t(L, `休憩（HP ${capPct}% の ${capHp} まで）約${x.restTurns}手`, `rest to ${capHp} (${capPct}% HP) in ~${x.restTurns} turns`)})` : 'rest');
   }
   // 帰還する階段: 次の遠征はこの階段から始まる（V3-2R3 §20.6）
   const fromHere = t(L, '・次の遠征はこの階段から始まる。階の敵は追跡をやめて全快する', '; the next expedition starts from these stairs, where monsters stop hunting and heal fully');
@@ -1135,7 +1180,11 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
     const n = st.path_len!;
     return x.unrecorded
       ? t(L, `階段まで ${n} 歩。追われたままなら最悪の被害は不明（記録のない敵がいる。HP ${hpNow}）`, `${n} steps to the stairs. If they keep chasing you, worst damage unknown (an enemy has no record; HP ${hpNow})`)
-      : t(L, `階段まで ${n} 歩。追われたままなら最悪 ${n * x.worstSum} の被害（HP ${hpNow}）`, `${n} steps to the stairs. If they keep chasing you, worst ${n * x.worstSum} damage (HP ${hpNow})`);
+      : (() => {
+        const c = x.chaseOf(n);
+        return t(L, `階段まで ${n} 歩。追われたままなら最悪 ${c.worst} の被害（追いつけるのは ${c.catchers} 体・射撃 ${c.shooters} 体。HP ${hpNow}）`,
+          `${n} steps to the stairs. If they keep chasing you, worst ${c.worst} damage (${c.catchers} can catch you, ${c.shooters} shooting; HP ${hpNow})`);
+      })();
   };
   const stairsLine = (type: 'down' | 'up'): string => {
     const risk = stairsRisk(type);
@@ -1149,6 +1198,9 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
   const abArg = meleeAb.length ? ` abilities:${meleeAb.map((a) => a.id).join(',')}` : '';
   const abNote = meleeAb.length ? t(L, `・${meleeAb.map((a) => `${a.name}${a.cooldown_left ? `(あと${a.cooldown_left})` : ''}`).join('・')}を使える手番に使う`, `, uses ${meleeAb.map((a) => `${a.name}${a.cooldown_left ? ` (in ${a.cooldown_left})` : ''}`).join(', ')} when ready`) : '';
   for (const m of x.hostiles.filter((h) => h.dist <= 1)) out.push(`fight ${m.id}${abArg} (${m.name}・${stopText}${abNote})`);
+  // 群れ: 追跡中の敵が 2 体以上なら、倒したら次の相手へ続ける形（V3-4b §28.4）
+  const pack = x.hostiles.filter((h) => h.awareness === 'hunting' && !h.fleeing).sort((a, b) => a.dist - b.dist);
+  if (pack.length >= 2) out.push(`fight ${pack[0].id} until:clear${abArg} (${t(L, `追跡中の ${pack.length} 体と決着まで: 倒したら次の相手へ・${stopText}`, `settle all ${pack.length} hunters: next one after each kill, ${stopText}`)}${abNote})`);
   out.unshift(...perkLines);
   // 長柄: 直線で 2 マス先の敵を突ける（間のマスが通れて誰もいない。V3-4 §4.4）
   if (weaponReach(view, catalog) >= 2) {
@@ -1199,13 +1251,15 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
     else out.push(`explore (${t(L, '不可: 探索済み・拾う物なし', 'unavailable: explored, nothing to pick up')})`);
     // 下への風の方角の未探索を優先する（V3-2R3 §20.5）
     if (x.frontiers > 0 && x.draft) out.push(`explore toward:draft (${t(L, `下への風の${DIR_JA[x.draft]}を優先`, `prefer the draft (${x.draft})`)})`);
+    // 遺物・守護者の気配の方角の未探索を優先する（V3-4b §28.7）
+    if (x.frontiers > 0 && view.sense) out.push(`explore toward:sense (${t(L, `${view.sense.what === 'relic' ? '遺物' : '守護者'}の気配の${DIR_JA[view.sense.dir]}を優先`, `prefer the ${view.sense.what} you sense (${view.sense.dir})`)})`);
   }
   if (x.known_stairs.some((s) => s.type === 'down' && !(x.onStairs === 'down'))) out.push(stairsLine('down'));
   if (x.known_stairs.some((s) => s.type === 'up' && !(x.onStairs === 'up'))) out.push(stairsLine('up'));
   if (x.onStairs) out.push(`use_stairs (${x.onStairs === 'down' ? t(L, '降りる', 'descend') : t(L, '上る', 'ascend')})`);
   if (x.itemsHere) out.push('pickup');
   if (x.mineCount > 0 && !adjAwake.length) out.push(`collect (${t(L, `自分が投げた物 ${x.mineCount} 個を回収`, `pick up ${x.mineCount} thrown items`)})`);
-  if (x.pickables > 0 && !adjAwake.length) out.push(`collect what:items (${t(L, `見えている・記憶したアイテム ${x.pickables} 個を拾って回る`, `pick up ${x.pickables} known items`)})`);
+  if (x.pickables > 0 && !adjAwake.length) out.push(`collect what:items (${t(L, `見えている・記憶したアイテム ${x.pickables} 個を拾って回る（遺物は除く）`, `pick up ${x.pickables} known items (not the relic)`)})`);
   const throwGroups: { key: string; slots: string[]; targets: ObsMonster[] }[] = [];
   const lifelineLines: string[] = [];
   for (const it of view.inventory) {
@@ -1222,7 +1276,7 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
       const turns = catalog.rules?.lifeline?.turns ?? 0;
       const risk = x.huntingReach.length
         ? t(L, `・追跡中 ${x.huntingReach.length} 体の 1 手の最悪の被害 ${x.worstSum}${x.unrecorded ? `＋記録なし ${x.unrecorded} 体` : ''}`, `, ${x.huntingReach.length} hunting: worst ${x.worstSum}/turn${x.unrecorded ? ` + ${x.unrecorded} unrecorded` : ''}`) : '';
-      const how = (turns > 0 ? t(L, `${turns} 手番動けずにキャンプへ戻る`, `${turns} turns helpless, then back to camp`) : t(L, 'その場でキャンプへ戻る（達成した遠征には数えない）', 'back to camp at once (not counted as a completed expedition)'))
+      const how = (turns > 0 ? t(L, `${turns} 手番動けずにキャンプへ戻る`, `${turns} turns helpless, then back to camp`) : t(L, 'その場でキャンプへ戻る（命と、目的を除く戦利品の半分を持ち帰る）', 'back to camp at once (you keep your life and half the haul without the objective)'))
         + t(L, '・次の遠征はこの遠征を始めた階段から', '; the next expedition starts from where this one began');
       const line = `use_item ${it.slot} (${t(L, `${name}: ${how}${x.ifLifeline !== undefined ? `・+${x.ifLifeline} 確定` : ''}${risk}`, `${name}: ${how}${x.ifLifeline !== undefined ? `, banks +${x.ifLifeline}` : ''}${risk}`)})`;
       out.push(line);
@@ -1234,7 +1288,7 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
     if ((cat === 'potion' || cat === 'scroll' || ci?.usable) && !harmful) out.push(`use_item ${it.slot} (${name}${exposed})`);
     // 同じか劣る装備は勧めない（V3-2R3 §20.6）。未鑑定の品は外見の種類から装備の枠を引く（未鑑定の指輪・首飾り）
     const eqSlot = ci?.slot ?? (!it.kind && cat ? Object.values(catalog.items).find((c) => c.category === cat && c.slot)?.slot : undefined);
-    if (eqSlot && !it.equipped && !sameOrWorseEquip(view, catalog, it)) out.push(`equip ${it.slot} (${name})`);
+    if (eqSlot && !it.equipped && !sameOrWorseEquip(view, catalog, it) && !worseEquip(view, catalog, it)) out.push(`equip ${it.slot} (${name})`);
     // 投擲: 射程内で経路の通る相手だけ（自分を攻撃している相手を先に、近い順に最大 3）。対象が同じ品目はまとめる
     if ((cat === 'throwing' || harmful) && ci?.throwRange != null && !it.equipped) {
       const targets = x.hostiles
@@ -1276,7 +1330,7 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
   // 一番近い階段でも、追われたままなら最悪の被害が今の HP 以上: 綱の候補を階段より前に並べる（V3-2R3b §23.1）。
   // 記録の無い敵がいるときは、記録のある分だけの見込み（下限）で判断する
   const near = x.huntingReach.length ? nearestStairs() : undefined;
-  if (near && lifelineLines.length && near.path_len! * x.worstSum >= hpNow) {
+  if (near && lifelineLines.length && x.chaseOf(near.path_len!).recordedWorst >= hpNow) {
     const first = out.findIndex((s) => s.startsWith('travel_to stairs_'));
     if (first >= 0) {
       const rest = out.filter((s) => !lifelineLines.includes(s));
@@ -1291,6 +1345,8 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
 export interface TextFormat {
   /** false: 所持品の行を出さない */
   inventory?: boolean;
+  /** 'short': 【遠征】の見出しが前の応答から変わっていない（戦利品と extract の可否だけ出す。V3-4b §28.8） */
+  expedition?: 'full' | 'short';
   /** 'unchanged': 地図の代わりに「地図: 変化なし」の 1 行 */
   map?: 'show' | 'unchanged';
 }
@@ -1325,7 +1381,13 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
   const posText = s.pos ? t(L, `位置(${s.pos.x},${s.pos.y})`, `pos(${s.pos.x},${s.pos.y})`) : '';
   lines.push(`[seq ${obs.seq} | ${floorText} | HP ${s.hp}/${s.max_hp} | Lv${s.level} | ${posText ? posText + ' | ' : ''}${statusText[obs.status][L === 'en' ? 1 : 0]}]`);
   // 遠征は 1 行（目的・進捗・extract の可否 | 戦利品 | 気配）
-  if (obs.expedition) lines.push([obs.expedition.text, obs.expedition.haul?.text, obs.expedition.sense?.text].filter(Boolean).join(' | '));
+  if (obs.expedition) {
+    const x = obs.expedition;
+    const head = fmt.expedition === 'short'
+      ? t(L, `【遠征${x.no}】${x.can_extract ? 'この場で extract できる' : 'extract は階段の上で'}`, `[Expedition ${x.no}] ${x.can_extract ? 'you can extract here' : 'extract on stairs'}`)
+      : x.text;
+    lines.push([head, x.haul?.text, x.sense?.text].filter(Boolean).join(' | '));
+  }
   if (obs.alerts.length) lines.push('!! ' + obs.alerts.map((a) => a.text).join(' / '));
   const st = s.statuses.length ? s.statuses.map((x) => `${x.name}(${x.turns_left})`).join(' ') : t(L, 'なし', 'none');
   lines.push(t(L,
@@ -1342,8 +1404,8 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
     const block = re.blocked_by === 'hostile_hunting' ? t(L, '（今は追跡中の敵が見えるので休めない）', ' (blocked: a hunting enemy is in view)')
       : re.blocked_by === 'poisoned' ? t(L, `（毒が抜けるまで休憩は続く。その間の最低 HP ${re.lowest_hp ?? '?'}）`, ` (rest continues until the poison wears off; lowest HP ${re.lowest_hp ?? '?'})`) : '';
     lines.push(t(L,
-      `休憩の見積もり: 全快まで ${re.turns} 手（HP +${re.hp_to_full}、時間 ${re.time}、その間の徘徊の目安 ${re.wander_expected} 体）${block}`,
-      `Rest estimate: ${re.turns} turns to full (HP +${re.hp_to_full}, time ${re.time}, wanderers expected ${re.wander_expected})${block}`));
+      `休憩の見積もり: HP ${re.cap_hp} まで ${re.turns} 手（HP +${re.hp_to_full}、時間 ${re.time}、その間の徘徊の目安 ${re.wander_expected} 体。休憩で戻るのはここまで）${block}`,
+      `Rest estimate: ${re.turns} turns to ${re.cap_hp} HP (HP +${re.hp_to_full}, time ${re.time}, wanderers expected ${re.wander_expected}; rest heals no further)${block}`));
   }
   if (obs.expedition?.result) lines.push(obs.expedition.result.text);
   const vis = obs.visible;
@@ -1356,8 +1418,10 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
       const role = m.role === 'guardian' ? t(L, ` [守護者・賞金 ${m.bounty ?? 0}]`, ` [guardian, bounty ${m.bounty ?? 0}]`) : m.bounty ? t(L, ` [賞金 ${m.bounty}]`, ` [bounty ${m.bounty}]`) : '';
       const dmg = m.damage_seen ? t(L, `  与ダメ累計:${m.damage_seen}`, ` dmg_seen:${m.damage_seen}`) : '';
       const est = m.hp_left_est ? t(L, `  推定残りHP:${hpEstimateText(L, m.hp_left_est)}`, ` hp_left_est:${hpEstimateText(L, m.hp_left_est)}`) : '';
+      // 眠っている敵と 8 マスより遠い敵は、名前・位置・脅威・体力の目安だけ（命中と通りの記録・射線は省く。V3-4b §28.8）
+      const brief = m.awareness === 'asleep' || m.dist > 8;
       const outOf = m.shots.filter((x) => x.state === 'out_of_range').map((x) => x.slot);
-      const shot = m.shot === 'blocked' ? t(L, '  射線:通らない', ' shot:blocked') : outOf.length && outOf.length === m.shots.length ? t(L, '  射程外', ' out of range') : outOf.length ? t(L, `  射程外:${outOf.join(',')}`, ` out of range:${outOf.join(',')}`) : '';
+      const shot = brief ? '' : m.shot === 'blocked' ? t(L, '  射線:通らない', ' shot:blocked') : outOf.length && outOf.length === m.shots.length ? t(L, '  射程外', ' out of range') : outOf.length ? t(L, `  射程外:${outOf.join(',')}`, ` out of range:${outOf.join(',')}`) : '';
       const threat = m.threat === null ? (m.first_seen ? t(L, '不明（初見）', 'unknown (first sighting)') : t(L, '不明（被弾の記録なし）', 'unknown (never hit by it)')) : String(m.threat);
       const perTurn = m.worst_turn !== null && m.worst_turn !== m.worst_hit ? t(L, `（1 手に最悪 ${m.worst_turn}）`, ` (worst ${m.worst_turn}/turn)`) : '';
       const worst = m.worst_hit !== null ? t(L, `  最大の一撃:${m.worst_hit}${perTurn}`, ` worst_hit:${m.worst_hit}${perTurn}`) : '';
@@ -1365,7 +1429,7 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
       const looks = [m.size === 'large' ? t(L, '大柄', 'large') : m.size === 'small' ? t(L, '小柄', 'small') : '', m.speed === 'fast' ? t(L, '速い', 'fast') : m.speed === 'slow' ? t(L, '遅い', 'slow') : '', ...m.traits.map((tr) => abilityName(L, tr))].filter(Boolean);
       const looksText = looks.length ? (L === 'en' ? ` [${looks.join(', ')}]` : `  [${looks.join('・')}]`) : '';
       const hitLine = [hitsText(L, m.hits), dealtText(L, m.dealt)].filter(Boolean).join(L === 'en' ? ', ' : '・');
-      const hits = hitLine ? (L === 'en' ? ` ${hitLine}` : `  ${hitLine}`) : '';
+      const hits = hitLine && !brief ? (L === 'en' ? ` ${hitLine}` : `  ${hitLine}`) : '';
       lines.push(L === 'en'
         ? `- ${m.name}${role} ${m.id} (${m.pos.x},${m.pos.y}) ${relLabel(L, from, m.pos)} hp:${m.hp_state} ${m.awareness}${m.fleeing ? '(fleeing)' : ''}${looksText} threat:${threat}${worst}${hits}${dmg}${est}${shot}${m.statuses.length ? ' ' + m.statuses.join(',') : ''}`
         : `- ${m.name}${role} ${m.id} (${m.pos.x},${m.pos.y}) ${relLabel(L, from, m.pos)}  負傷:${HP_JA[m.hp_state]}  状態:${AW_JA[m.awareness] ?? m.awareness}${m.fleeing ? '(逃走中)' : ''}${looksText}  脅威:${threat}${worst}${hits}${dmg}${est}${shot}${m.statuses.length ? '  ' + m.statuses.join(',') : ''}`);

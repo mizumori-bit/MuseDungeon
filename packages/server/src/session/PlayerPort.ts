@@ -4,7 +4,7 @@ import type {
   ActionError, Catalog, Command, GameEvent, Locale, Observation, PerceivedEvent, PlayerId, PlayerView, Pos, RunSummary, TurnBlock, TurnReason,
 } from '@muse/shared';
 import {
-  briefingLines, briefingShort, buildObservation, buildTurnBlock, campLines, changesLine, describeInventory, describeTarget, diffChanges,
+  actionError, briefingLines, briefingShort, buildObservation, buildTurnBlock, campLines, changesLine, describeInventory, describeTarget, diffChanges,
   formatObservationText, kindName, MACRO_COMPLETED_STOPS, mapTextLines, memoryCombatText, memoryKey, mineCount, nameOf, pickableItems, progressText, renderAsciiMap, resultText, t,
   turnLine, turnSnapshot, turnStateOf,
 } from '@muse/shared';
@@ -90,7 +90,10 @@ const STOP_TEXT: Record<string, [string, string]> = {
   hostile_alerted: ['見えている敵が追跡に変わった', 'a visible enemy started hunting you'],
   hp_threshold: ['HP が 50%・25% の線をまたいだ', 'HP crossed the 50% / 25% line'],
   target_down: ['相手が倒れた', 'the target fell'],
-  target_gone: ['相手が見えなくなった', 'the target is out of sight'],
+  target_gone: ['相手が見えなくなった（物陰に入ったまま、待っても現れない）', 'the target is out of sight (it took cover and did not come out)'],
+  target_fled: ['相手が逃げて見えなくなった', 'the target fled out of sight'],
+  shot_while_waiting: ['待っている間に、標的ではない敵に撃たれた（射撃する敵へ近づく／視線を切る）', 'another enemy shot you while you waited (close in on the shooter or break line of sight)'],
+  cleared: ['届く追跡中の敵がいなくなった', 'no hunting enemy left in reach'],
   target_moved: ['相手が離れた（逃げた・射程を出た）', 'the target moved away (fled or left range)'],
   target_adjacent: ['相手が隣に来た（近接で続けるなら fight { target }）', 'the target is adjacent (continue in melee with fight { target })'],
   out_of_ammo: ['投げる物が尽きた', 'nothing left to throw'],
@@ -107,6 +110,7 @@ const STOP_TEXT: Record<string, [string, string]> = {
   unknown_destination: ['行き先が既知の地図に無い', 'destination is not on your known map'],
   step_limit: ['1 回の手数の上限に達した', 'reached the step limit'],
   full_hp: ['HP が全快した', 'HP is full'],
+  rest_cap: ['休憩で戻る上限に達した（それより上は薬・立て直し・泉・キャンプで）', 'reached the rest cap (heal further with potions, second wind, fountains or camp)'],
   target_hp: ['指定した HP に達した', 'reached the requested HP'],
   max_turns: ['指定した手数に達した', 'reached the requested turns'],
   status_changed: ['状態異常が変化した', 'a status effect changed'],
@@ -208,8 +212,10 @@ export class SessionPlayerPort implements PlayerPort {
     if (mapMode !== 'show') delete observation.map;
     const invShow = opts.inventory === 'always' || !prev || prev.inv !== cur.inv;
     const long = opts.status_line === 'long' || !prev || prev.state !== cur.state || LONG_REASONS.has(reason);
+    // 【遠征】の見出しが前の応答と同じなら、戦利品と extract の可否だけ（V3-4b §28.8）
+    const expShort = !long && !!prev?.expHead && prev.expHead === cur.expHead;
     const body = view.status === 'at_camp' || !observation.self.pos ? formatObservationText(observation, L)
-      : formatObservationText(observation, L, { inventory: invShow, map: mapMode === 'unchanged' ? 'unchanged' : 'show' });
+      : formatObservationText(observation, L, { inventory: invShow, map: mapMode === 'unchanged' ? 'unchanged' : 'show', expedition: expShort ? 'short' : 'full' });
     const text = [body, changesLine(L, turn.changes), turnLine(view, turn, !long)].filter(Boolean).join('\n');
     return { observation, text, turn };
   }
@@ -235,8 +241,26 @@ export class SessionPlayerPort implements PlayerPort {
     return this.session.addListener({ onEvents: () => cb() });
   }
 
-  async act(cmd: Command, opts: SubmitOpts & { waitTurnMs?: number; map?: boolean }): Promise<ActionPayload> {
+  async act(cmd0: Command, opts: SubmitOpts & { waitTurnMs?: number; map?: boolean }): Promise<ActionPayload> {
     const before = this.view();
+    let cmd = cmd0;
+    // fight の標的が今は見えない（V3-4b §28.4）: 直前の応答で逃げていたなら「逃げて見えなくなった」で断り、
+    // 逃げていなかったなら（物陰に入った）出てくるまで待つ
+    if (cmd.type === 'fight' && !before.entities.some((e) => e.id === (cmd as { target: string }).target)) {
+      const prev = this.session.turnSnapshot(this.playerId);
+      const id = cmd.target;
+      if (prev?.hostiles[id] !== undefined) {
+        if (prev.hostileFleeing?.includes(id)) {
+          const at = prev.hostilePos?.[id];
+          const L0 = before.locale;
+          const error = actionError('no_target', t(L0, `${prev.hostiles[id]}は逃げて見えなくなった${at ? `（最後に見た位置 (${at.x},${at.y})）` : ''}。`, `${prev.hostiles[id]} fled out of sight${at ? ` (last seen at (${at.x},${at.y}))` : ''}.`),
+            t(L0, '追うなら travel_to で最後に見た位置へ。ほかの相手なら visible.monsters の id を指定する。', 'To chase it, travel_to where you last saw it; otherwise give an id from visible.monsters.'));
+          const res = this.render(before, 'action_rejected', { recent: [], changes: true });
+          return { ok: false, error, valid_actions: res.observation.valid_actions, turn: res.turn };
+        }
+        cmd = { ...cmd, lostOk: true };
+      }
+    }
     const r = await this.session.submit(this.playerId, cmd, opts);
     // 次に自分の手番が来るかランが終わるまで待つ（COOP で長引けば waiting_others のまま返す）
     if (r.ok && opts.waitTurnMs && this.view().status === 'waiting_others') await this.session.waitForTurn(this.playerId, opts.waitTurnMs);
@@ -269,6 +293,9 @@ export class SessionPlayerPort implements PlayerPort {
           const remaining = (cmd.what ?? 'thrown') === 'items' ? pickableItems(view, this.catalog).length : mineCount(view);
           collected = { picked, remaining };
           outcome += t(L, ` 回収 ${collected.picked} 個、残り ${remaining} 個。`, ` Recovered ${collected.picked}, ${remaining} left.`);
+          // 遺物は拾わない（拾うと階の敵が目を覚ます判断なので、マクロに任せない）。知っている遺物が床にあれば、拾い方を添える
+          const relic = view.entities.find((e) => e.cat === 'item' && e.role === 'relic') ?? view.memory.remembered.find((r) => r.cat === 'item' && r.kind === 'core:relic');
+          if ((cmd.what ?? 'thrown') === 'items' && relic) outcome += t(L, ` 遺物は数えていない（拾うと階の敵が目を覚ます）。拾うなら travel_to ${relic.id}。`, ` The relic is not counted (picking it up wakes the floor); to take it, travel_to ${relic.id}.`);
         }
       }
       const notable = mine.filter((x) => x.type !== 'entity_moved' && x.type !== 'damaged' && x.type !== 'attack'
@@ -281,11 +308,18 @@ export class SessionPlayerPort implements PlayerPort {
     // 行動から次の自分の手番までに受けた被害の合計（必ず書く）
     if (cmd.type === 'fight') {
       let swings = 0, hits = 0, dealt = 0;
+      // until: 'clear' は標的が替わるので、自分の攻撃をすべて数える
+      const clear = cmd.until === 'clear';
+      const isTarget = (id: string | null | undefined) => clear ? !!id && id !== view.self.id : id === cmd.target;
       for (const e of r.events) {
-        if (e.type === 'attack' && e.attacker === view.self.id && e.target === cmd.target) { swings++; if (e.hit) hits++; }
+        if (e.type === 'attack' && e.attacker === view.self.id && isTarget(e.target)) { swings++; if (e.hit) hits++; }
         // 投擲で戦った（with）: 投げた数と当たった数
-        if (e.type === 'item_thrown' && e.actor === view.self.id) { swings++; if (e.hit === cmd.target) hits++; }
-        if (e.type === 'damaged' && e.source === view.self.id && e.target === cmd.target) dealt += e.dealt ?? e.amount;
+        if (e.type === 'item_thrown' && e.actor === view.self.id) { swings++; if (e.hit && isTarget(e.hit)) hits++; }
+        if (e.type === 'damaged' && e.source === view.self.id && isTarget(e.target)) dealt += e.dealt ?? e.amount;
+      }
+      if (clear) {
+        const killed = r.events.filter((e) => e.type === 'died' && e.killer === view.self.id && e.id !== view.self.id).map((e) => (e.type === 'died' ? nameOf(this.catalog.monsters[e.kind ?? '']?.name, L, e.kind ?? '?') : ''));
+        if (killed.length) outcome += ' ' + t(L, `倒した: ${killed.length} 体（${killed.join('・')}）。`, `Killed ${killed.length} (${killed.join(', ')}).`);
       }
       // 載せた能動技を使った回数（V3-4a §25.3）
       const used = new Map<string, number>();

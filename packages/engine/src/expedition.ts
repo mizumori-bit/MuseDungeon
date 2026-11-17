@@ -406,9 +406,11 @@ export function doExtract(ctx: Ctx, e: Entity, pr: PlayerRecord, completed: bool
   // 持ち帰った宝は換金する（所持品から外す）
   const cur0 = ctx.world.entities[e.id];
   const treasure = treasureHeld(ctx, cur0);
-  // 宝と、達成して持ち帰った遺物は所持品から外す（遺物は納める）
+  // 宝と、達成して持ち帰った遺物は所持品から外す（遺物は納める）。綱で戻ると、持っていた遺物は失う（運べない。V3-4b §28.1）
+  const relicIds = (cur0.inv?.items ?? []).filter((id) => ctx.world.entities[id]?.kind === 'core:relic');
+  const relicLost = lifeline && relicIds.length > 0;
   const treasureIds = (cur0.inv?.items ?? []).filter((id) => ctx.content.items[ctx.world.entities[id]?.kind ?? '']?.category === 'treasure'
-    || (completed && ctx.world.entities[id]?.kind === 'core:relic'));
+    || ((completed || lifeline) && relicIds.includes(id)));
   ctx.emit({
     type: 'objective_progress', no: x.no, progressAfter: { ...x.progress }, statusAfter: x.status,
     extractedAfter: [...x.extracted, { player: pr.id, completed, treasure, ...(lifeline ? { lifeline: true } : {}) }], seenBy: [], floor: key,
@@ -423,11 +425,11 @@ export function doExtract(ctx: Ctx, e: Entity, pr: PlayerRecord, completed: bool
   body.actor = { ...body.actor!, dormant: true, regen: 0 };
   body.stats = { ...body.stats!, hp: body.stats!.maxHp };
   body.statuses = [];
-  ctx.emit({ type: 'player_state', player: pr.id, state: 'at_camp', reason: lifeline ? 'lifeline' : completed ? 'extracted' : 'withdrew', extractPos, put: [body], ...(treasureIds.length ? { del: treasureIds } : {}), seenBy: 'all', floor: key });
+  ctx.emit({ type: 'player_state', player: pr.id, state: 'at_camp', reason: lifeline ? 'lifeline' : completed ? 'extracted' : 'withdrew', extractPos, ...(relicLost ? { relicLost: true } : {}), put: [body], ...(treasureIds.length ? { del: treasureIds } : {}), seenBy: 'all', floor: key });
   maybeEndExpedition(ctx);
 }
 
-/** 帰還の綱の効果が終わった: その場からキャンプへ（目的を達成済みなら達成扱い。確定は lifeline.pct %） */
+/** 帰還の綱の効果が終わった: その場からキャンプへ（確定は目的を除く戦利品の lifeline.pct %。遺物は失う。V3-4b §28.1） */
 export function lifelineReturn(ctx: Ctx, e: Entity): void {
   const me = ctx.world.entities[e.id];
   const pr = me?.player ? ctx.world.players[me.player] : undefined;

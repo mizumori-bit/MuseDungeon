@@ -133,6 +133,8 @@ export function applyEvent(world: World, ev: GameEvent): void {
     case 'item_thrown':
     case 'perk_offered':
     case 'perk_chosen':
+    case 'perk_triggered':
+    case 'monster_woke':
     case 'ability_used':
     case 'curse_revealed':
     case 'item_inspected':

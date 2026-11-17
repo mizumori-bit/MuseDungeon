@@ -103,7 +103,11 @@ export interface Catalog {
 export interface CatalogRules {
   regen: { baseInterval: number; levelDiv: number; minInterval: number; restMultiplier: number };
   restMaxTurns: number;
+  /** 休憩と自然回復で戻る上限（最大 HP の %。V3-4b §28.3） */
+  restCapPct?: number;
   macroStepLimit: number;
+  /** fight の標的（追跡中・逃げていない）が見えなくなったときに待つ手番（V3-4b §28.4） */
+  fightLostWait?: number;
   wander: { intervalMin: number; intervalMax: number };
   score: { perDepth: number; perKill: number; perLevel: number };
   /** 候補の点 = 枠の基礎点 × typePct % × (depthPct.base + depthPct.perDepth × 目標深度) %（V3-2R2 §18.3） */
@@ -175,10 +179,10 @@ export function haulTotal(p: HaulParts): number {
 
 /**
  * 払い戻し: 帰還は全部 × 倍率、撤退は目的を除いて × withdrawPct（倍率は掛けない）。
- * 帰還の綱（V3-2R2 §18.1）は戦利品全体 × lifeline.pct（倍率は掛けない。目的は達成済みのときだけ含む）
+ * 帰還の綱は、目的を除いた戦利品 × lifeline.pct（倍率は掛けない。目的を達成済みでも目的の点は運ばない。V3-4b §28.1）
  */
 export function payoutOf(rules: Pick<CatalogRules, 'haul'> & Partial<Pick<CatalogRules, 'lifeline'>>, p: HaulParts, completed: boolean, multiplierPct: number, lifeline = false): number {
-  if (lifeline) return Math.trunc(((haulTotal(p) - (completed ? 0 : p.objective)) * (rules.lifeline?.pct ?? 50)) / 100);
+  if (lifeline) return Math.trunc(((haulTotal(p) - p.objective) * (rules.lifeline?.pct ?? 50)) / 100);
   if (completed) return Math.trunc((haulTotal(p) * multiplierPct) / 100);
   return Math.trunc(((haulTotal(p) - p.objective) * rules.haul.withdrawPct) / 100);
 }
@@ -242,16 +246,22 @@ export function regenInterval(rules: Pick<CatalogRules, 'regen'>, level: number)
   return Math.max(r.minInterval, r.baseInterval - Math.trunc(level / r.levelDiv));
 }
 
+/** 休憩と自然回復で戻る上限の HP（最大 HP × restCapPct %。V3-4b §28.3）。engine と観測で同じ式を使う */
+export function restCapHp(rules: Pick<CatalogRules, 'restCapPct'>, maxHp: number): number {
+  const pct = rules.restCapPct ?? 100;
+  return pct >= 100 ? maxHp : Math.max(1, Math.trunc((maxHp * pct) / 100));
+}
+
 /**
  * 回復の蓄積を 1 手番進める（engine の実処理と観測の見積もりで共用）。
- * 満タンなら蓄積は 0。gain を足し、間隔に達するごとに 1 HP。
+ * limit（休憩・自然回復の上限）に達していれば蓄積は 0。gain を足し、間隔に達するごとに 1 HP。
  */
-export function regenStep(acc: number, hp: number, maxHp: number, gain: number, interval: number): { acc: number; heal: number } {
-  if (hp >= maxHp) return { acc: 0, heal: 0 };
+export function regenStep(acc: number, hp: number, limit: number, gain: number, interval: number): { acc: number; heal: number } {
+  if (hp >= limit) return { acc: 0, heal: 0 };
   let a = acc + gain;
   let heal = 0;
-  while (a >= interval && hp + heal < maxHp) { a -= interval; heal++; }
-  if (hp + heal >= maxHp) a = 0;
+  while (a >= interval && hp + heal < limit) { a -= interval; heal++; }
+  if (hp + heal >= limit) a = 0;
   return { acc: a, heal };
 }
 

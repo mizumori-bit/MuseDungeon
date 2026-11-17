@@ -30,8 +30,9 @@ export const CommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('stairs') }),
   // マクロ（サーバーで基本行動へ展開）
   /** toward: 'draft' は下への風の方角の未探索を優先する（V3-2R3 §20.5） */
-  z.object({ type: z.literal('explore'), mode: MacroModeSchema.optional(), hpFloor: HpFloorSchema.optional(), pickup: z.boolean().optional(), toward: z.enum(['draft']).optional() }),
-  z.object({ type: z.literal('travel'), to: TravelTargetSchema, mode: MacroModeSchema.optional(), hpFloor: HpFloorSchema.optional(), pickup: z.boolean().optional() }),
+  // pickup: 'useful'（explore の既定）は劣る装備を拾わない、true は全部、false は拾わない。toward: draft（下への風）/ sense（遺物・守護者の気配。V3-4b §28.7）
+  z.object({ type: z.literal('explore'), mode: MacroModeSchema.optional(), hpFloor: HpFloorSchema.optional(), pickup: z.union([z.boolean(), z.literal('useful')]).optional(), toward: z.enum(['draft', 'sense']).optional() }),
+  z.object({ type: z.literal('travel'), to: TravelTargetSchema, mode: MacroModeSchema.optional(), hpFloor: HpFloorSchema.optional(), pickup: z.union([z.boolean(), z.literal('useful')]).optional() }),
   z.object({ type: z.literal('rest'), untilHp: z.number().int().positive().optional(), maxTurns: z.number().int().positive().optional() }),
   /** 既知の「自分が投げた物」（what: 'thrown'、既定）か、見えている・記憶したアイテム（'items'）を近い順に拾う */
   z.object({ type: z.literal('collect'), what: z.enum(['thrown', 'items']).optional(), mode: MacroModeSchema.optional(), hpFloor: HpFloorSchema.optional() }),
@@ -40,7 +41,10 @@ export const CommandSchema = z.discriminatedUnion('type', [
    * 倒れた・離れた・HP が hpFloor を下回った・別の追跡中の敵・状態異常で止まる
    */
   /** abilities: 使える手番ごとに使う能動技（強打・なぎ払い・狙い撃ち。V3-4a §25.3） */
-  z.object({ type: z.literal('fight'), target: EntityRefSchema, with: SlotSchema.optional(), hpFloor: HpFloorSchema.optional(), abilities: z.array(z.string().min(1)).max(4).optional() }),
+  // until: 'clear' は標的を倒した後も、届く追跡中の敵へ続ける。adjacent: with で投げて戦う相手が隣に来たとき（既定 stop）。
+  // lostOk: 標的が直前の応答では見えていて逃げていなかった（今見えなくても待つ。PlayerPort が付ける。V3-4b §28.4）
+  z.object({ type: z.literal('fight'), target: EntityRefSchema, with: SlotSchema.optional(), hpFloor: HpFloorSchema.optional(), abilities: z.array(z.string().min(1)).max(4).optional(),
+    until: z.enum(['target', 'clear']).optional(), adjacent: z.enum(['throw', 'melee', 'stop']).optional(), lostOk: z.boolean().optional() }),
   /** 近接攻撃（V3-4）。隣の敵か、長柄の武器なら直線で 2 マス先の敵（間のマスが通れて誰もいない） */
   z.object({ type: z.literal('attack'), target: EntityRefSchema }),
   /** 能動技（V3-4 §4.2）。target: 隣の敵・投擲の対象なら ID、身をかわすなら方向。slot: 狙い撃ちで投げる品（省略時は投擲用の品の最初のスロット） */

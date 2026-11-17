@@ -183,7 +183,8 @@ describe('V3-2R2 retreat (§18.1)', () => {
     t.inject({ put: [monster('e_r2lf01', 'core:goblin', key, ln.p.x + ln.dx, ln.p.y + ln.dy)] });
     const o = t.obs();
     const expected = o.expedition!.haul!.if_lifeline_now!;
-    expect(expected).toBe(Math.trunc((o.expedition!.haul!.total * catalog.rules.lifeline.pct) / 100));
+    // 綱は目的の点を運ばない（目的を達成済みでも、目的を除いた戦利品の半分。V3-4b §28.1）
+    expect(expected).toBe(Math.trunc(((o.expedition!.haul!.total - o.expedition!.haul!.parts.objective) * catalog.rules.lifeline.pct) / 100));
     const slot = t.r.port.view().inventory.find((i) => i.kind === 'core:lifeline')!.slot;
     const banked0 = t.r.port.view().record.banked;
     const res = await t.act({ type: 'use', slot });

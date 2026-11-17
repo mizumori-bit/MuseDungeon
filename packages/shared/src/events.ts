@@ -7,7 +7,7 @@ import type {
 } from './types';
 
 /** 2: 遠征・実ダメージ・回復の蓄積値（IMPROVEMENTS_V2）。3: ビルド（特技・能動技・呪い。V3-4）。古いログもそのまま畳み込める */
-export const EVENT_VERSION = 3;
+export const EVENT_VERSION = 4;
 
 export interface EventBase {
   seq: number;
@@ -37,7 +37,7 @@ export type GameEvent =
   // ラン
   | E<'run_started', { meta: RunMeta; secret: WorldSecret | null }>
   | E<'player_joined', { player: PlayerRecord; entity: Entity }>
-  | E<'player_state', { player: PlayerId; state: PlayerRecord['state']; reason: string; extractPos?: FloorPos | null }>
+  | E<'player_state', { player: PlayerId; state: PlayerRecord['state']; reason: string; extractPos?: FloorPos | null; /** 綱で戻り、持っていた遺物を失った（V3-4b §28.1） */ relicLost?: boolean }>
   | E<'player_stats', { player: PlayerId; stats: PlayerStats }>
   | E<'run_ended', { reason: string; summary: RunSummary }>
   // フロア
@@ -87,6 +87,10 @@ export type GameEvent =
   | E<'perk_offered', { target: EntityId; level: number; options: string[] }>
   /** 特技を取った。ability は覚えた能動技 */
   | E<'perk_chosen', { target: EntityId; perk: string; level: number; ability?: string | null }>
+  /** 敵が目を覚ました・気づいた理由（V3-4b §28.8）。見えている者にだけ。reason: noise（音。by が音を立てた者、ring は欠点が効いた指輪）/ sight（姿）/ pack（仲間の声） */
+  | E<'monster_woke', { id: EntityId; kind: string; reason: 'noise' | 'sight' | 'pack'; by: EntityId | null; ring: string | null; wasAsleep: boolean }>
+  /** 条件付きの特技が効いた（V3-4b §28.6）。effect: not_woken（忍び足）/ crit（不意打ち）/ picked（回収の手）/ braced（盾の構え）/ might（踏みとどまる）/ poison_halved（鉄の胃）/ cowed（威圧） */
+  | E<'perk_triggered', { actor: EntityId; perk: string; effect: 'not_woken' | 'crit' | 'picked' | 'braced' | 'might' | 'poison_halved' | 'cowed'; subject?: EntityId | null; subjectKind?: string | null; amount?: number }>
   /** 能動技を使った。cooldownLeft はこの手番の後の残り手番 */
   | E<'ability_used', { actor: EntityId; actorKind: string; ability: string; target: EntityId | null; targetKind: string | null; cooldownLeft: number }>
   /** 呪いが分かった（装備した・鑑定した）。affixes は見えるようになった呪いの接辞 */

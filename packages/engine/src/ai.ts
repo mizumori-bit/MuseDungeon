@@ -8,7 +8,7 @@ import type { Ctx } from './ctx';
 import { hasLos } from './geom';
 import { isOpaqueFn, makeNoise, monsterSees, shotLine, updateMemory, wakeMonster } from './perception';
 import { Registry } from './registry';
-import { perkHook } from './build';
+import { notePerk, perkHook, perkWithHook } from './build';
 import { addStatus } from './statuses';
 
 export interface AiInput { target: Entity | null; ai: AiState; def: MonsterDef }
@@ -229,6 +229,7 @@ export function monsterTurn(ctx: Ctx, m: Entity): number {
     const h = perkHook(ctx, pe, 'intimidate');
     if (h && pe.pos && cheb(pe.pos, m.pos!) === 1 && !(m.statuses ?? []).some((s) => s.id === 'core:cowed')) {
       addStatus(ctx, ctx.world.entities[m.id], 'core:cowed', h.turns ?? 3, h.fleePct ?? 25, pe.id);
+      notePerk(ctx, pe, perkWithHook(ctx, pe, 'intimidate'), 'cowed', { subject: ctx.world.entities[m.id] ?? m });
       break;
     }
   }
@@ -241,7 +242,7 @@ export function monsterTurn(ctx: Ctx, m: Entity): number {
       const radius = ai.params.alertRadius ?? 6;
       for (const ally of ctx.entitiesOn(key)) {
         if (ally.id === m.id || ally.kind !== m.kind || !ally.actor?.ai || !ally.pos) continue;
-        if (cheb(ally.pos, m.pos!) <= radius) wakeMonster(ctx, ally, next.targetPos);
+        if (cheb(ally.pos, m.pos!) <= radius) wakeMonster(ctx, ally, next.targetPos, { cause: 'pack' });
       }
     }
   } else if (ai.state === 'hunting') {

@@ -79,6 +79,8 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
       if (amt <= 0 && ev.amount <= 0) return null;
       if (ev.via === 'poison') return ja ? `${tg}は毒で ${amt} ダメージを受けた。` : `${cap(tg)} take${ev.target === self ? '' : 's'} ${amt} poison damage.`;
       if (ev.via === 'trap') return ja ? `${tg}は罠で ${amt} ダメージを受けた。` : `${cap(tg)} take${ev.target === self ? '' : 's'} ${amt} damage from a trap.`;
+      // とどめ: 与えるはずだった値（会心の値）を出し、残り HP で切られたことを添える（Muse の実プレイ、V3-4b §28.11）
+      if (ev.source === self && ev.amount > amt) return ja ? `あなたは${tg}に ${ev.amount} ダメージを与えた（とどめ。残りは ${amt} だった）。` : `You hit ${tg} for ${ev.amount} (the finishing blow; it had ${amt} left).`;
       if (ev.source === self) return ja ? `あなたは${tg}に ${amt} ダメージを与えた。` : `You hit ${tg} for ${amt}.`;
       const verb = ev.via === 'ranged' ? (ja ? '射撃' : 'shot') : (ja ? '攻撃' : 'attack');
       if (ev.target === self) {
@@ -138,6 +140,35 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
       const pk = nameOf(ctx.catalog.perks[ev.perk]?.name, L, ev.perk);
       const ab = ev.ability ? nameOf(ctx.catalog.abilities[ev.ability]?.name, L, ev.ability) : null;
       return ja ? `特技「${pk}」を取った。${ab ? `能動技「${ab}」を覚えた（use_ability）。` : ''}` : `You take the perk ${pk}.${ab ? ` You learn ${ab} (use_ability).` : ''}`;
+    }
+    case 'monster_woke': {
+      // 目を覚ました理由（V3-4b §28.8）
+      const m = who(ctx, ev.id, ev.kind);
+      const verb = ev.wasAsleep ? (ja ? '目を覚ました' : 'wakes up') : (ja ? '気づいた' : 'notices');
+      if (ev.reason === 'noise' && ev.by === self) {
+        const ring = ev.ring ? nameOf(ctx.catalog.items[ev.ring]?.name, L, ev.ring) : null;
+        const note = ring ? (ja ? `（${ring}の欠点: 自分の立てた音では眠っている敵が必ず起きる）` : ` (${ring}'s drawback: your own noise always wakes sleepers)`) : '';
+        return ja ? `あなたの立てた音で${m}が${verb}。${note}` : `Your noise: ${m} ${verb}.${note}`;
+      }
+      if (ev.reason === 'noise') return ja ? `物音で${m}が${verb}。` : `A noise: ${m} ${verb}.`;
+      if (ev.reason === 'pack') return ja ? `仲間の声で${m}が${verb}。` : `Its pack's call: ${m} ${verb}.`;
+      return ja ? `${m}が${verb}（あなたの気配で）。` : `${cap(m)} ${verb} (it sensed you).`;
+    }
+    case 'perk_triggered': {
+      // 条件付きの特技が効いた（V3-4b §28.6）
+      if (ev.actor !== self) return null;
+      const pk = nameOf(ctx.catalog.perks[ev.perk]?.name, L, ev.perk);
+      const sub = ev.subject ? who(ctx, ev.subject, ev.subjectKind ?? null) : (ja ? '何か' : 'something');
+      switch (ev.effect) {
+        case 'not_woken': return ja ? `${pk}: ${sub}は目を覚まさなかった。` : `${pk}: ${sub} did not wake.`;
+        case 'crit': return ja ? `${pk}: ${sub}に会心。` : `${pk}: a critical hit on ${sub}.`;
+        case 'picked': return ja ? `${pk}: 隣のマスから ${ev.amount ?? 1} 本拾った。` : `${pk}: picked up ${ev.amount ?? 1} from the next cells.`;
+        case 'braced': return ja ? `${pk}: 装甲 +${ev.amount ?? 0} で受けた。` : `${pk}: took the hit with armor +${ev.amount ?? 0}.`;
+        case 'might': return ja ? `${pk}: 威力 +${ev.amount ?? 0}。` : `${pk}: might +${ev.amount ?? 0}.`;
+        case 'poison_halved': return ja ? `${pk}: 毒の手番が半分になった。` : `${pk}: the poison lasts half as long.`;
+        case 'cowed': return ja ? `${pk}: ${sub}が怯えた。` : `${pk}: ${sub} is cowed.`;
+        default: return null;
+      }
     }
     case 'ability_used': {
       const ab = nameOf(ctx.catalog.abilities[ev.ability]?.name, L, ev.ability);
@@ -275,7 +306,10 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
       if (ev.state === 'dead') return ja ? `${ctx.playerNames[ev.player] ?? '仲間'} は倒れた。` : `${ctx.playerNames[ev.player] ?? 'An ally'} has fallen.`;
       if (ev.state === 'left') return ja ? 'プレイヤーが離脱した。' : 'A player left.';
       if (ev.state === 'at_camp' && ev.reason === 'joined') return ja ? `${ctx.playerNames[ev.player] ?? 'プレイヤー'} はキャンプにいる。最初の遠征を選ぶ。` : `${ctx.playerNames[ev.player] ?? 'A player'} is at camp, choosing the first expedition.`;
-      if (ev.state === 'at_camp' && ev.reason === 'lifeline') return ja ? `${ctx.playerNames[ev.player] ?? 'プレイヤー'} は帰還の綱でキャンプに戻った（全回復）。` : `${ctx.playerNames[ev.player] ?? 'A player'} is pulled back to camp by the lifeline (fully healed).`;
+      if (ev.state === 'at_camp' && ev.reason === 'lifeline') {
+        const lost = ev.relicLost ? (ja ? '遺物は持ち帰れず、失われた。' : ' The relic could not come along and is lost.') : '';
+        return ja ? `${ctx.playerNames[ev.player] ?? 'プレイヤー'} は帰還の綱でキャンプに戻った（全回復）。${lost}` : `${ctx.playerNames[ev.player] ?? 'A player'} is pulled back to camp by the lifeline (fully healed).${lost}`;
+      }
       if (ev.state === 'at_camp') return ja ? `${ctx.playerNames[ev.player] ?? 'プレイヤー'} はキャンプに戻った（全回復）。` : `${ctx.playerNames[ev.player] ?? 'A player'} returns to camp (fully healed).`;
       return null;
     case 'expedition_started':

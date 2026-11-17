@@ -3,7 +3,7 @@ import type { Entity, FloorHint, FloorKey, MonsterMemory, PlayerId, PlayerRecord
 import { cheb, compassDir, currentExpedition, indicesToRanges, memoryKey } from '@muse/shared';
 import type { Ctx } from './ctx';
 import { computeFov, hasLos, inCircle, line } from './geom';
-import { gearOf, stealthOf } from './build';
+import { firstStealthPerk, gearOf, noiseRingOf, notePerk, perkStealth, stealthOf } from './build';
 
 /**
  * 投げ物・射撃の経路（始点を含まず終点を含む）。from→to の直線か、to→from の直線を逆にたどったもののうち、
@@ -248,7 +248,10 @@ export function monsterSees(ctx: Ctx, m: Entity, target: Entity): boolean {
 }
 
 /** 睡眠中（休眠）のモンスターを起こす */
-export function wakeMonster(ctx: Ctx, m: Entity, targetPos: Pos | null): void {
+/** 起きた理由（V3-4b §28.8。見えている者に monster_woke で知らせる。無ければ知らせない） */
+export interface WakeWhy { cause: 'noise' | 'sight' | 'pack'; by?: Entity | null; ring?: string | null }
+
+export function wakeMonster(ctx: Ctx, m: Entity, targetPos: Pos | null, why?: WakeWhy): void {
   const ai = m.actor?.ai;
   if (!ai) return;
   if (!m.actor!.dormant && ai.state !== 'asleep' && ai.state !== 'unaware') {
@@ -258,12 +261,20 @@ export function wakeMonster(ctx: Ctx, m: Entity, targetPos: Pos | null): void {
     return;
   }
   const f = ctx.world.floors[m.pos!.floor];
+  const wasAsleep = !!m.actor!.dormant || ai.state === 'asleep';
   const nextActAt = m.actor!.dormant ? Math.max(m.actor!.nextActAt, f.time + ctx.rng('runtime').int(60)) : m.actor!.nextActAt;
   ctx.emit({
     type: 'ai_state_changed', id: m.id,
     ai: { ...ai, state: targetPos ? 'searching' : 'unaware', targetPos: targetPos ? { ...targetPos } : null, lostTurns: 0 },
     dormant: false, nextActAt, seenBy: [], floor: m.pos!.floor,
   });
+  // 起きた理由を、その敵が見えている者に知らせる（V3-4b §28.8）
+  if (why && m.pos) {
+    const seen = ctx.perceive(m.pos.floor, [{ field: 'id', pos: m.pos, entity: m.id }], []);
+    if (seen.seenBy.length) {
+      ctx.emit({ type: 'monster_woke', id: m.id, kind: m.kind, reason: why.cause, by: why.by?.id ?? null, ring: why.ring ?? null, wasAsleep, ...seen, floor: m.pos.floor });
+    }
+  }
 }
 
 /** 騒音: 聞こえたプレイヤーへのイベントと、周囲のモンスターの起床 */
@@ -276,13 +287,15 @@ export function makeNoise(ctx: Ctx, key: FloorKey, pos: Pos, loudness: number, s
   const rng = ctx.rng('runtime');
   // 静寂の指輪の欠点: 自分の立てた音では、眠っている敵が必ず起きる（V3-4）
   const always = !!source?.player && gearOf(ctx, source).noiseWakes;
+  const ring = always && source ? noiseRingOf(ctx, source) : null;
   for (const m of ctx.entitiesOn(key)) {
     if (!m.actor || m.player || m.id === source?.id || !m.pos) continue;
     const ai = m.actor.ai;
     if (!ai || (ai.state !== 'asleep' && ai.state !== 'unaware')) continue;
     if (!inCircle(m.pos, pos, loudness)) continue;
     if (ai.state === 'asleep' && !always && !rng.chance(50)) continue;
-    wakeMonster(ctx, m, pos);
+    // 欠点が効いたのは、眠っていた敵が「必ず起きる」で起きたときだけ
+    wakeMonster(ctx, m, pos, { cause: 'noise', by: source, ring: ai.state === 'asleep' ? ring : null });
   }
 }
 
@@ -299,11 +312,16 @@ export function wakeChecks(ctx: Ctx, key: FloorKey): void {
       if (!monsterSees(ctx, m, pe)) continue;
       // 起こしにくさ = 職業 + 特技（忍び足）+ 装備。重い鎧は起きる確率を足す（V3-4）
       const stealth = stealthOf(ctx, pr);
-      const pct = Math.max(3, 20 - Math.trunc((20 * stealth) / 100)) + gearOf(ctx, pe).wakePct;
-      if (rng.chance(pct)) {
-        wakeMonster(ctx, m, { x: pe.pos.x, y: pe.pos.y });
+      const wakePct = (s: number) => Math.max(3, 20 - Math.trunc((20 * s) / 100)) + gearOf(ctx, pe).wakePct;
+      const pct = wakePct(stealth);
+      // rng.chance(pct) と同じ引き方（1 回引いて比べる）。特技が無ければ起きていた目なら、忍び足が効いたと知らせる（V3-4b §28.6）
+      const roll = pct >= 100 ? -1 : rng.int(100);
+      if (roll < pct) {
+        wakeMonster(ctx, m, { x: pe.pos.x, y: pe.pos.y }, { cause: 'sight', by: pe });
         break;
       }
+      const perkS = perkStealth(ctx, pe);
+      if (perkS > 0 && roll < wakePct(Math.max(0, stealth - perkS))) notePerk(ctx, pe, firstStealthPerk(ctx, pe), 'not_woken', { subject: m });
     }
   }
 }

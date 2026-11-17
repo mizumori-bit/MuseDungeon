@@ -11,7 +11,7 @@ import './abilities';
 
 export { createRun, joinPlayer, step, isPlayersTurn, ENGINE_VERSION } from './run';
 export type { CreateRunParams, StepResult } from './run';
-export { generateFloor, selectBiome, selectFloorType } from './gen/generate';
+export { generateFloor, guardianCandidates, selectBiome, selectFloorType } from './gen/generate';
 export type { GeneratedFloor, SpawnSpec } from './gen/generate';
 export { computeFov, hasLos, line } from './geom';
 export { shotLine } from './perception';

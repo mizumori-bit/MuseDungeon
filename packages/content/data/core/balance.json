@@ -2,7 +2,8 @@
   {
     "id": "core:balance",
     "regen": { "baseInterval": 9, "levelDiv": 2, "minInterval": 3, "restMultiplier": 3 },
-    "rest": { "maxTurns": 400 },
+    "rest": { "maxTurns": 400, "capPct": 75 },
+    "fight": { "lostWait": 5 },
     "macro": { "stepLimit": 200 },
     "wander": { "firstAt": 5000, "intervalMin": 4000, "intervalMax": 6000, "maxAwake": 30, "minDistance": 12 },
     "score": { "perDepth": 1000, "perKill": 10, "perLevel": 25 },
@@ -19,11 +20,12 @@
     "teleport": { "minDistance": 12 },
     "perks": { "options": 3 },
     "curse": { "chancePct": 6 },
+    "loot": { "throwStackMin": 1, "throwStackMax": 4 },
     "guardian": {
       "ranks": [
-        { "hpPct": 50, "minHpBase": 6, "minHpPerDepth": 2 },
-        { "hpPct": 100, "minHpBase": 10, "minHpPerDepth": 3 },
-        { "hpPct": 150, "minHpBase": 10, "minHpPerDepth": 3 }
+        { "hpPct": 50, "minHpBase": 6, "minHpPerDepth": 2, "tableDepth": 0 },
+        { "hpPct": 100, "minHpBase": 10, "minHpPerDepth": 3, "tableDepth": 1 },
+        { "hpPct": 150, "minHpBase": 10, "minHpPerDepth": 3, "tableDepth": 2 }
       ],
       "leash": 3
     },
