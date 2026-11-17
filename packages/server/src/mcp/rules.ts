@@ -111,6 +111,7 @@ function ja(r: CatalogRules): Record<Topic, string> {
 ## 目的を達成した後の圧力
 - slay_guardian と retrieve_relic は、達成した瞬間からその遠征の間、徘徊の湧き間隔が ${r.afterObjectiveWanderPct}% になる（changes に「坑が騒がしくなった」と出る）。reach_depth には付かない。
 - 遺物を拾うと、その階の眠っている・気づいていない敵が目を覚まし、遺物の場所へ向かう（足元の遺物の pickup には「階が目覚める」と出る）。
+- 節目の大守護者: 深度 ${r.milestone?.every ?? 5} の倍数の階は「大守護者の間」（前室と広間だけの小さな階）で、大守護者（型 2 つ・弱点 1 つ）がいる。倒すまでその階の下り階段は封じられている（踏破にもならない）。倒すと大きな賞金と、加護を ${r.milestone?.boonOptions ?? 3} つの候補から 1 つ選べる（choose_boon。手番は使わない。alerts の boon_pending）。次の節目はキャンプと expedition に常に出る。遠征の目標は節目の階にならない。
 - 遺物と加護: 遺物はそれぞれ名前と加護を持ち、候補の時点で分かる（参加者がまだ持っていない加護の遺物から選ばれる）。達成して階段の上で持ち帰ると、遺物は加護になり、そのキャラクターにランの終わりまで付く（帰還の綱では持ち帰れない）。加護は self.boons。一覧は get_rules topic=classes の「加護」。
 - 気配: 目標階にいる間、守護者（未討伐）か遺物（未入手）の方角（8 方向）と、10 マス以内かどうかが expedition.sense に出る。正確な位置は見るまで分からない。
 ## 遠征の候補（キャンプ）
@@ -268,6 +269,7 @@ function en(r: CatalogRules): Record<Topic, string> {
 ## Pressure after the objective
 - For slay_guardian and retrieve_relic, from the moment the objective is done until the expedition ends, the wanderer spawn interval becomes ${r.afterObjectiveWanderPct}% (changes says the pit grows restless). reach_depth has no such pressure.
 - Picking up the relic wakes sleeping/unaware monsters on that floor and sends them toward it (pickup on a relic says the floor wakes).
+- Milestone wardens: every depth that is a multiple of ${r.milestone?.every ?? 5} is a warden's hall (a small floor: an antechamber and a hall) with a warden (two types, one weakness). Its stairs down stay sealed until it falls (standing on them is no crossing). Slaying it gives a large bounty and a choice of 1 of ${r.milestone?.boonOptions ?? 3} boons (choose_boon; takes no turn; alerts: boon_pending). The next milestone is always shown at camp and in expedition. Expedition targets are never milestone floors.
 - Relics and boons: each relic has a name and a boon, shown in the offer (drawn from boons the party does not have yet). Complete the expedition and carry the relic out on stairs and it becomes a boon on that character for the rest of the run (not by lifeline). Boons are in self.boons; the list is under "Boons" in get_rules topic=classes.
 - Sense: on the target floor, expedition.sense gives the direction (8-way) to the unslain guardian or untaken relic and whether it is within 10 cells. The exact position is not given until you see it.
 ## Offers at camp

@@ -125,6 +125,7 @@ turn: {
 | `interact` | `dir?` | 扉の開閉、地物の操作。省略時は足元 |
 | `use_stairs` | – | 足元の階段 |
 | `say` | `text` | COOP 用チャット。手番を消費しない |
+| `choose_boon` | `option: 1..n | boon_id` | 加護を選ぶ（V3-3 §3.2: 節目の大守護者を倒したときの候補 `self.boon_choice`）。**手番を消費しない**。キャンプでも呼べる。候補が無ければ `nothing_to_do` |
 | `choose_perk` | `option: 1..n | perk_id` | 特技を選ぶ（V3-4 §4.1）。**手番を消費しない**。自分の手番でなくても、キャンプでも呼べる。選ぶまで進行は止まらない（保留できる）。候補は `self.perk_choice`。保留が重なれば古い順で、次の候補はその後に引く。候補が無ければ `nothing_to_do` |
 
 行動結果:
@@ -410,6 +411,15 @@ V3-2R で足した項目（同じく後方互換。会心と経験値のルー�
 - `StatusInst.source`（状態異常を与えた者。毒で倒したときの撃破者になる）、`status_applied.targetAffixes`
 - `player_state.reason: 'joined'`（キャンプから始まる参加）。参加コマンドの `atCamp`
 - プレイヤー向けの射影で、見えていた個体が視界の外へ動いた `entity_moved` に `dirOut`（向きだけ。行き先は伏せたまま）
+
+V3-3 の 3 段目で足した項目（節目の大守護者。同じく後方互換。生成と下り階段の規則が変わったので `engineVersion` は 0.12.0、新しいイベントとコマンドがあるので `eventVersion` は 7。DESIGN.md §22）:
+
+- コマンド: `choose_boon { option }`（手番を消費しない。`FREE_COMMANDS`）。MCP ツール `choose_boon`。行動のエラーコード `sealed`（封じられた下り階段）
+- World State: `World.milestones { cleared: number[] }`・`CampState.milestone`・`Expedition.milestone`（`MilestoneInfo { depth, name, title?, types }`。公開）・`GuardianInfo.warden`・`Entity.boonChoice { options, source, depth }`
+- PlayerView: `milestonesCleared`・`self.boonChoice`・`ExpeditionView.milestone`・`EntityView.guardian.warden`
+- イベント: `warden_slain { depth, id, guardianName, by }`（全員）・`boon_offered { target, options, source, depth }`（本人だけ。候補は put の boonChoice）
+- 観測: `camp.milestone`・`expedition.milestone { depth, name, types, cleared, text }`・`self.boon_choice { depth, options: { option, id, name, desc }[] }`・alerts の `boon_pending`・valid_actions の `choose_boon N (…)` と封じられた use_stairs の「不可: …」・敵の行の「[大守護者・賞金 N]」・キャンプの文と【遠征】の行の「次の節目: …」
+- コンテンツ: floorType の `priority`・`rules.warden`、レイアウト `core:warden_hall`、`balance.guardian.warden { hpPct, minHpBase, minHpPerDepth, bountyPct, types, boonOptions }`。公開カタログ: `rules.milestone { every, min, boonOptions }`
 
 V3-3 の 2 段目で足した項目（遺物と加護。同じく後方互換。遺物の種類と加護が入ったので `engineVersion` は 0.11.0、新しいイベントがあるので `eventVersion` は 6。DESIGN.md §21）:
 

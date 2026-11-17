@@ -131,6 +131,31 @@ layoutGenerators.register('core:cellular_cave', ({ w, h, rng }) => {
 });
 
 /** 必ず成功する単純レイアウト（validate に 8 回失敗したとき） */
+/**
+ * 大守護者の間（V3-3 §3.2）: 左に前室（上り階段）、短い通路、右に広間（大守護者と、その奥の下り階段）。
+ * 前室から下り階段へは広間を通るしかない
+ */
+layoutGenerators.register('core:warden_hall', ({ w, h, rng }) => {
+  const g = new GenGrid(w, h);
+  const cy = Math.trunc(h / 2);
+  const ante = { x: 2, y: cy - 3, w: 7, h: 7 };
+  const hallX = ante.x + ante.w + 4;
+  const hall = { x: hallX, y: 2, w: w - hallX - 2, h: h - 4 };
+  carveRoom(g, ante);
+  carveRoom(g, hall);
+  for (let x = ante.x + ante.w; x < hall.x; x++) g.set(x, cy, FLOOR);
+  g.set(hall.x - 1, cy, DOOR);
+  g.regions.push({ id: 0, kind: 'room', ...ante, tags: ['antechamber'] });
+  g.regions.push({ id: 1, kind: 'room', ...hall, tags: ['warden_hall'] });
+  const downY = hall.y + 1 + rng.int(hall.h - 2);
+  g.anchors = {
+    up: g.idx(ante.x + 1, cy),
+    warden: g.idx(hall.x + Math.trunc(hall.w / 2), cy),
+    down: g.idx(hall.x + hall.w - 2, downY),
+  };
+  return g;
+});
+
 layoutGenerators.register('core:fallback', ({ w, h }) => {
   const g = new GenGrid(w, h);
   const cols = 3, rows = 2;

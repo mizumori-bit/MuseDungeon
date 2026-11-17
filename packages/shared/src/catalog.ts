@@ -120,6 +120,8 @@ export interface CatalogRules {
   restMaxTurns: number;
   /** 休憩と自然回復で戻る上限（最大 HP の %。V3-4b §28.3） */
   restCapPct?: number;
+  /** 節目の大守護者の階（V3-3 §3.2）: 深度 every の倍数（min 以上） */
+  milestone?: { every: number; min: number; boonOptions: number };
   macroStepLimit: number;
   /** fight の標的（追跡中・逃げていない）が見えなくなったときに待つ手番（V3-4b §28.4） */
   fightLostWait?: number;

@@ -399,6 +399,10 @@ export function createMcpServer(ctx: McpContext): McpServer {
     title: '特技を選ぶ', description: 'レベルアップの特技の候補から 1 つ選ぶ（self.perk_choice。手番を消費しない。選ぶまで進行は止まらない）。option は候補の番号（1 から）か特技の ID。',
     inputSchema: { ...common, option: z.union([z.number().int().min(1).max(9), z.string().min(1)]) },
   }, async (a) => act('choose_perk', a, { type: 'choose_perk', option: a.option }));
+  server.registerTool('choose_boon', {
+    title: '加護を選ぶ', description: '節目の大守護者を倒したときの加護の候補から 1 つ選ぶ（self.boon_choice。手番を消費しない）。option は候補の番号（1 から）か加護の ID。',
+    inputSchema: { ...common, option: z.union([z.number().int().min(1).max(9), z.string().min(1)]) },
+  }, async (a) => act('choose_boon', a, { type: 'choose_boon', option: a.option }));
   server.registerTool('pickup', { title: '拾う', description: '足元のアイテムを拾う（省略時は全て）。', inputSchema: { ...actionCommon, item: z.string().regex(/^e_[0-9a-z]{6}$/).optional() } },
     async (a) => act('pickup', a, { type: 'pickup', item: a.item }));
   server.registerTool('drop', { title: '置く', description: '所持品を足元に置く。', inputSchema: { ...actionCommon, slot: SlotZ, qty: z.number().int().positive().optional() } },

@@ -39,6 +39,8 @@ export interface GuardianInfo {
   name: Names; title?: Names; types: string[]; weakness: string | null; summoned?: number; enraged?: boolean;
   /** 潜む者: unseen = 相手の視界の外から隣へ寄った（次の一撃が会心）、lurk = 見られたまま隠れていた手番、struck = 会心の一撃の後（退いて隠れ直す） */
   unseen?: boolean; lurk?: number; struck?: boolean;
+  /** 節目の大守護者（V3-3 §3.2）。倒すまでその階の下り階段は封じられる */
+  warden?: boolean;
 }
 
 /** source: 状態異常を与えた者（毒で倒したときの撃破者。V3-2R 評価の修正） */
@@ -105,6 +107,8 @@ export interface Entity {
   guardian?: GuardianInfo;
   /** 加護（プレイヤー。V3-3 §3.3）: 持ち帰った遺物・倒した大守護者から。ランの終わりまで残る */
   boons?: string[];
+  /** 選べる加護の候補（大守護者を倒した。V3-3 §3.2）。choose_boon で 1 つ選ぶ */
+  boonChoice?: { options: string[]; source: string; depth: number };
   /** 遠征に 1 回の加護を使った遠征の通番（加護 ID → 通番。執念） */
   boonUsed?: Record<string, number>;
 }
@@ -324,7 +328,12 @@ export interface CampState {
   /** 次の遠征の通番 */
   nextNo: number;
   offers: ExpeditionOffer[];
+  /** 次の節目（V3-3 §3.2）: まだ倒していない最も浅い大守護者の階 */
+  milestone?: MilestoneInfo;
 }
+
+/** 節目の大守護者の公開情報（V3-3 §3.2）。弱点と種族は伏せる */
+export interface MilestoneInfo { depth: number; name: Names; title?: Names; types: string[] }
 
 export interface ObjectiveProgress {
   /** 目標深度に誰かが到達した */
@@ -384,6 +393,8 @@ export interface Expedition {
   guardianWeakness?: string | null;
   /** 遺物（候補から引き継ぐ。公開。V3-3 §3.3） */
   relic?: RelicInfo;
+  /** 開始時点の次の節目（V3-3 §3.2） */
+  milestone?: MilestoneInfo;
 }
 
 export type RngState = [number, number, number, number];
@@ -429,6 +440,8 @@ export interface World {
   expeditions?: Expedition[];
   /** キャンプの候補（遠征と遠征の間） */
   camp?: CampState | null;
+  /** 倒した節目の大守護者の深さ（V3-3 §3.2） */
+  milestones?: { cleared: number[] };
 }
 
 export interface RunSummaryPlayer {

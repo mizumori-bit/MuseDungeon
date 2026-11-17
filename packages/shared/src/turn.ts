@@ -214,7 +214,7 @@ export function diffChanges(prev: TurnSnapshot | null, cur: TurnSnapshot, view: 
   }
   if (cur.level > prev.level) out.push({ code: 'level_up', text: t(L, `レベル ${cur.level} になった`, `Reached level ${cur.level}`) });
   // 得た加護・効いた加護（V3-3 §3.3）
-  for (const e of events) if (e.seq > prev.seq && (e.type === 'boon_granted' || e.type === 'boon_triggered') && e.text) out.push({ code: 'boon', text: e.text.replace(/。$/, '') });
+  for (const e of events) if (e.seq > prev.seq && (e.type === 'boon_granted' || e.type === 'boon_triggered' || e.type === 'boon_offered' || e.type === 'warden_slain') && e.text) out.push({ code: 'boon', text: e.text.replace(/。$/, '') });
   // 守護者のしたこと・分かった弱点（V3-3）
   for (const e of events) if (e.seq > prev.seq && (e.type === 'guardian_acted' || e.type === 'guardian_intel') && e.text) out.push({ code: e.type === 'guardian_intel' ? 'intel' : 'guardian', text: e.text.replace(/。$/, '') });
   // 敵が目を覚ました理由（V3-4b §28.8）: 同じ文は ×N にまとめる

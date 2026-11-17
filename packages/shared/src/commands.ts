@@ -58,6 +58,8 @@ export const CommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('retire') }),
   /** 特技を選ぶ（手番を消費しない。V3-4 §4.1）。option は候補の番号（1 から）か特技の ID */
   z.object({ type: z.literal('choose_perk'), option: z.union([z.number().int().min(1).max(9), z.string().min(1)]) }),
+  // 大守護者を倒したときの加護の選択（V3-3 §3.2。手番を消費しない）
+  z.object({ type: z.literal('choose_boon'), option: z.union([z.number().int().min(1).max(9), z.string().min(1)]) }),
 ]);
 
 export type Command = z.infer<typeof CommandSchema>;
@@ -66,7 +68,7 @@ export type Target = z.infer<typeof TargetSchema>;
 export type TravelTarget = z.infer<typeof TravelTargetSchema>;
 
 export const MACRO_COMMANDS: ReadonlySet<CommandType> = new Set<CommandType>(['explore', 'travel', 'rest', 'collect', 'fight']);
-export const FREE_COMMANDS: ReadonlySet<CommandType> = new Set<CommandType>(['say', 'note', 'retire', 'choose_perk']);
+export const FREE_COMMANDS: ReadonlySet<CommandType> = new Set<CommandType>(['say', 'note', 'retire', 'choose_perk', 'choose_boon']);
 /** キャンプでのみ有効（手番に関係しない） */
 export const CAMP_COMMANDS: ReadonlySet<CommandType> = new Set<CommandType>(['start_expedition']);
 
@@ -103,6 +105,8 @@ export interface CommandRecord {
 export type ActionErrorCode =
   | 'invalid_direction' | 'blocked' | 'no_target' | 'out_of_range' | 'no_line_of_sight'
   | 'no_such_item' | 'cannot_use' | 'inventory_full' | 'nothing_here' | 'unknown_destination'
+  /** 下り階段が封じられている（節目の大守護者が生きている。V3-3 §3.2） */
+  | 'sealed'
   | 'unreachable' | 'not_your_turn' | 'stale_turn' | 'dead' | 'run_ended' | 'no_session' | 'bad_request'
   | 'confirm_required' | 'cannot_extract' | 'not_at_camp' | 'at_camp'
   // マクロが 1 歩も進めないと分かったとき（手番を使わない。V3-2R §14.2）

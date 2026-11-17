@@ -14,6 +14,8 @@ export class GenGrid {
   /** プレハブ等で確定したセル（後段で掘らない・上書きしない） */
   readonly protect = new Uint8Array(0);
   readonly regions: Region[] = [];
+  /** レイアウトが決めた場所（大守護者の間: 上り階段・下り階段・大守護者。V3-3 §3.2） */
+  anchors: { up?: number; down?: number; warden?: number } = {};
 
   constructor(readonly w: number, readonly h: number) {
     this.cells = new Uint8Array(w * h);

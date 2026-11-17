@@ -53,6 +53,17 @@ export function rollGuardianInfo(content: Content, seed: string, no: number, slo
   return { name, ...(title ? { title: { ...title } } : {}), types, weakness };
 }
 
+/** 節目の大守護者の名前・型・弱点（V3-3 §3.2。seed|warden|深さ から。状態を持たない）。型は 2 つ */
+export function rollWardenInfo(content: Content, seed: string, depth: number): GuardianInfo {
+  const rng = Rng.fromSeed(`${seed}|warden|${depth}`);
+  const ws = content.lists.guardianWeaknesses;
+  const name = makeName(content, rng);
+  const types = pickTypes(content, content.balance.guardian.warden.types, rng);
+  const weakness = ws.length ? ws[rng.int(ws.length)].id : null;
+  const title = types.length ? content.guardianTypes[types[0]]?.name : undefined;
+  return { name, ...(title ? { title: { ...title } } : {}), types, weakness, warden: true };
+}
+
 /** 近接に強い型・投擲に強い型を半々に引く（2 つなら両方から 1 つずつ。§28.9） */
 function pickTypes(content: Content, count: number, rng: Rng): string[] {
   const all = content.lists.guardianTypes;

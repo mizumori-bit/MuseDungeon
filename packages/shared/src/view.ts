@@ -2,7 +2,7 @@
 // projectPlayerView はルール無しの純粋なフィルタ。仕様: docs/PROTOCOL.md §4
 import type {
   CampState, Controller, Entity, EntityId, EntityRole, EquipSlot, Expedition, ExpeditionEndReason, ExpeditionResult, FloorKey,
-  Locale, MonsterMemory, Objective, OfferSlot, PlayerBuild, PlayerId, PlayerState, Pos, RememberedEntity, Stats, StatusInst, World, Sense, FloorHint, Names, Intent, RelicInfo,
+  Locale, MonsterMemory, Objective, OfferSlot, PlayerBuild, PlayerId, PlayerState, Pos, RememberedEntity, Stats, StatusInst, World, Sense, FloorHint, Names, Intent, RelicInfo, MilestoneInfo,
 } from './types';
 
 export type HpState = 'healthy' | 'wounded' | 'badly_wounded' | 'near_death';
@@ -61,7 +61,7 @@ export interface EntityView {
   /** 速さ（モンスター。状態異常を除く素の値。見れば分かる性質。観測では自分との比較の 3 段階にする。V3-2R2 §18.2） */
   speed?: number;
   /** 守護者の名前と型（公開）。weakness は試して分かったときだけ（V3-3 §3.1） */
-  guardian?: { name: Names; title?: Names; types: string[]; weakness?: string };
+  guardian?: { name: Names; title?: Names; types: string[]; weakness?: string; warden?: boolean };
   /** 予備動作（見えていれば公開。V3-3 §3.1） */
   intent?: Intent;
 }
@@ -104,6 +104,8 @@ export interface SelfView {
   /** 加護（V3-3 §3.3）と、遠征に 1 回の加護を使った遠征の通番 */
   boons: string[];
   boonUsed: Record<string, number>;
+  /** 選べる加護の候補（大守護者を倒した。V3-3 §3.2） */
+  boonChoice?: { options: string[]; source: string; depth: number };
 }
 
 export interface PartyMemberView {
@@ -144,6 +146,8 @@ export interface ExpeditionView {
   guardian?: { rank: 1 | 2 | 3; name: Names; title?: Names; types: string[]; weakness?: string };
   /** 遺物の名前と加護（V3-3 §3.3。公開） */
   relic?: RelicInfo;
+  /** 開始時点の次の節目（V3-3 §3.2） */
+  milestone?: MilestoneInfo;
 }
 
 export interface PlayerView {
@@ -179,6 +183,8 @@ export interface PlayerView {
   deepestDepth: number;
   /** 目標として達成した最深の階（次の候補の基準。V3-2R3 §20.2） */
   campDepth: number;
+  /** 倒した節目の大守護者の深さ（V3-3 §3.2） */
+  milestonesCleared: number[];
   /** 自分の成績（スコア版 2 の確定点・失った戦利品・達成した遠征の数） */
   record: { banked: number; lost: number; expeditions: number };
 }
@@ -342,7 +348,7 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
           // 守護者の名前と型は公開。弱点は試して分かったものだけ（V3-3 §3.1）
           if (e.guardian) {
             const known = k.guardianIntel?.[e.id];
-            v.guardian = { name: { ...e.guardian.name }, ...(e.guardian.title ? { title: { ...e.guardian.title } } : {}), types: [...e.guardian.types], ...(known ? { weakness: known } : {}) };
+            v.guardian = { name: { ...e.guardian.name }, ...(e.guardian.title ? { title: { ...e.guardian.title } } : {}), types: [...e.guardian.types], ...(known ? { weakness: known } : {}), ...(e.guardian.warden ? { warden: true } : {}) };
           }
           if (e.actor?.ai?.intent) v.intent = { ...e.actor.ai.intent };
           const met = k.metAt?.[e.id];
@@ -396,6 +402,7 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
         ...(latest.targets.guardian && k.guardianIntel?.[latest.targets.guardian] ? { weakness: k.guardianIntel[latest.targets.guardian] } : {}),
       } } : {}),
       ...(latest.relic ? { relic: structuredClone(latest.relic) } : {}),
+      ...(latest.milestone ? { milestone: structuredClone(latest.milestone) } : {}),
     };
   }
 
@@ -426,6 +433,7 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
       build: me.build ? structuredClone(me.build) : { perks: [], pending: [], abilities: [] },
       boons: [...(me.boons ?? [])],
       boonUsed: { ...(me.boonUsed ?? {}) },
+      ...(me.boonChoice ? { boonChoice: structuredClone(me.boonChoice) } : {}),
     },
     inventory,
     floor: floor ? {
@@ -448,6 +456,7 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
     camp: !currentExpedition(world) && world.camp ? stripCamp(world.camp) : null,
     deepestDepth: deepestGenerated(world),
     campDepth: campDepthOf(world),
+    milestonesCleared: [...(world.milestones?.cleared ?? [])],
     record: { banked: rec.stats.banked ?? 0, lost: rec.stats.lost ?? 0, expeditions: rec.stats.expeditions ?? 0 },
   };
 }

@@ -1,5 +1,17 @@
 [
   {
+    "id": "core:warden_hall", "name": { "ja": "大守護者の間", "en": "warden's hall" },
+    "depth": { "min": 5 }, "weight": 0, "every": 5, "priority": 10,
+    "layouts": { "core:warden_hall": 100 },
+    "monsters": { "per1000": 0, "table": "core:default" },
+    "items": { "per1000": 0, "table": "core:common_loot" },
+    "traps": { "per1000": 0 },
+    "prefabs": { "tags": [], "min": 0, "max": 0 },
+    "rules": { "noWander": true, "warden": true },
+    "validators": ["stairs_connected", "min_floor_area"],
+    "pacing": [{ "depth": { "min": 1 }, "size": { "w": 36, "h": 17 } }]
+  },
+  {
     "id": "core:standard", "name": { "ja": "通常階", "en": "standard floor" },
     "depth": { "min": 1 }, "weight": 70,
     "monsters": { "per1000": 7, "table": "core:default" },

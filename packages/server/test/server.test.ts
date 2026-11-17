@@ -30,7 +30,7 @@ async function mcpClient(manager: SessionManager) {
 
 const ALL_TOOLS = ['get_rules', 'list_runs', 'new_run', 'join_run', 'resume_run', 'retire', 'observe', 'wait_for_turn', 'look', 'get_map', 'inventory', 'recall',
   'get_messages', 'notes', 'move', 'wait', 'rest', 'explore', 'travel_to', 'pickup', 'drop', 'equip', 'unequip', 'use_item', 'throw_item',
-  'interact', 'use_stairs', 'say', 'expedition', 'start_expedition', 'extract', 'collect', 'set_options', 'fight', 'attack', 'use_ability', 'choose_perk'];
+  'interact', 'use_stairs', 'say', 'expedition', 'start_expedition', 'extract', 'collect', 'set_options', 'fight', 'attack', 'use_ability', 'choose_perk', 'choose_boon'];
 
 /** turn ブロックの形と、テキスト末尾の状態行 */
 function expectTurn(r: any): any {

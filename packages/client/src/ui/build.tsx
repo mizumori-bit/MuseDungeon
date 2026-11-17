@@ -26,6 +26,30 @@ export function lineageDisplayName(catalog: Catalog | null | undefined, classId:
   return l ? nameOf(l.name, getLocale(), fallback) : fallback;
 }
 
+/** 加護の候補（大守護者を倒した。choose_boon。手番を使わない。V3-3 §3.2） */
+export function BoonChoicePanel({ choice, catalog, onChoose }: {
+  choice: { options: string[]; depth: number }; catalog: Catalog | null | undefined; onChoose: (option: number) => void;
+}) {
+  const L = getLocale();
+  return (
+    <div class="perkbox focused">
+      <div class="phead"><b>{tr(`加護を 1 つ選ぶ（地下${choice.depth}階の大守護者）`, `Choose a boon (warden of depth ${choice.depth})`)}</b></div>
+      <ul class="perkopts">
+        {choice.options.map((id, i) => {
+          const b = catalog?.boons?.[id];
+          return (
+            <li key={id}>
+              <div class="pname"><span class="pidx">{i + 1}</span><b>{nameOf(b?.name, L, id)}</b></div>
+              <div class="pdesc">{nameOf(b?.desc, L, '')}</div>
+              <button class="small" onClick={() => onChoose(i + 1)}>{tr('選ぶ', 'Choose')} ({i + 1})</button>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
 /**
  * 特技の候補（choose_perk。手番を使わない。キャンプでも選べる）。
  * focused: キーボードで番号を受け付けている（p）。sent: 選んで返事を待っている間は押せない。

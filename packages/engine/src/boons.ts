@@ -15,11 +15,12 @@ export function boonHook(ctx: Ctx, e: Entity | null | undefined, hook: string): 
 }
 
 /** 加護を付ける（素の能力値の修正を足し、加護の一覧に入れる）。同じ加護をもう持っていれば何もしない */
-export function grantBoon(ctx: Ctx, e: Entity, boonId: string, source: string): boolean {
+export function grantBoon(ctx: Ctx, e: Entity, boonId: string, source: string, edit?: (body: Entity) => void): boolean {
   const def = ctx.content.boons[boonId];
   const cur = ctx.world.entities[e.id];
   if (!def || !cur || (cur.boons ?? []).includes(boonId)) return false;
   const body = structuredClone(cur);
+  edit?.(body);
   body.boons = [...(body.boons ?? []), boonId];
   const m = def.mods;
   if (body.base) {

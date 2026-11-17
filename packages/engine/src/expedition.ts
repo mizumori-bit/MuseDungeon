@@ -13,6 +13,8 @@ import { isOpaqueFn } from './perception';
 import { guardianSpec, pickGuardianKind } from './gen/generate';
 import { lairPlan, rollGuardianInfo } from './guardians';
 import { grantBoon, ownedBoons, pickRelic } from './boons';
+import { livingWarden, nextMilestone } from './warden';
+import { isMilestoneDepth } from './gen/generate';
 import { spawnFromSpec } from './spawn';
 import { recomputeStats } from './stats';
 
@@ -113,11 +115,19 @@ export function makeOffers(ctx: Ctx, no: number): ExpeditionOffer[] {
   const owned = ownedBoons(ctx);
   // 目的の種類は 3 枠で別にする（最初の遠征は 到達・守護者・遺物 の順）
   const types = no === 1 ? [...OFFER_TYPES] : rng.shuffle([...OFFER_TYPES]);
+  let prevTarget = 0, prevBumped = false;
   return SLOTS.map((slot, i) => {
     const s = b.slots[slot];
     let type = types[i % types.length];
     // 目標の深さは枠ごとに重ならない（堅実 +1・標準 +2・野心 +3）。最初の候補の深さより浅くしない
-    const target = Math.max(b.firstTargetDepth[slot], campDepth + rng.range(s.aheadMin, s.aheadMax));
+    let target = Math.max(b.firstTargetDepth[slot], campDepth + rng.range(s.aheadMin, s.aheadMax));
+    // 節目の階（大守護者の間）は目標にしない: 1 つ深くする。ずらした枠の次の枠は、それより深くする（V3-3 §3.2）
+    const bump = () => { while (isMilestoneDepth(ctx.content, target)) target++; };
+    const raw = target;
+    bump();
+    if (prevBumped && target <= prevTarget) { target = prevTarget + 1; bump(); }
+    prevBumped = target !== raw;
+    prevTarget = target;
     // その階の下り階段にすでに立った（下の階が生成済み）なら、踏破型は出さず別の種類に替える
     if (type === 'reach_depth' && target < deepest) type = rng.chance(50) ? 'slay_guardian' : 'retrieve_relic';
     const n = rng.range(s.traitsMin, s.traitsMax);
@@ -151,7 +161,8 @@ export function makeOffers(ctx: Ctx, no: number): ExpeditionOffer[] {
 
 export function offerExpeditions(ctx: Ctx): void {
   const no = (ctx.world.expeditions?.length ?? 0) + 1;
-  ctx.emit({ type: 'expedition_offered', camp: { nextNo: no, offers: makeOffers(ctx, no) }, seenBy: 'all', floor: null });
+  const ms = nextMilestone(ctx);
+  ctx.emit({ type: 'expedition_offered', camp: { nextNo: no, offers: makeOffers(ctx, no), ...(ms ? { milestone: ms } : {}) }, seenBy: 'all', floor: null });
 }
 
 /** 目標階の生成で置くもの（目標階でなければ null） */
@@ -279,7 +290,7 @@ export function computeProgress(ctx: Ctx, x: Expedition): ObjectiveProgress {
       const pr = w.players[pid];
       if (pr.state !== 'alive') continue;
       const e = w.entities[pr.entityId];
-      if (e?.pos && (w.floors[e.pos.floor]?.depth ?? 0) >= x.objective.targetDepth && ctx.terrainAt(e.pos.floor, e.pos.x, e.pos.y).stairs === 'down') reached = true;
+      if (e?.pos && (w.floors[e.pos.floor]?.depth ?? 0) >= x.objective.targetDepth && ctx.terrainAt(e.pos.floor, e.pos.x, e.pos.y).stairs === 'down' && !livingWarden(ctx, e.pos.floor)) reached = true;
     }
   }
   let maxDepth = x.progress.maxDepth ?? 0;
@@ -291,7 +302,8 @@ export function computeProgress(ctx: Ctx, x: Expedition): ObjectiveProgress {
     const depth = w.floors[e.pos.floor]?.depth ?? 0;
     maxDepth = Math.max(maxDepth, depth);
     // 踏破: 目標より深い階の下り階段に立った（その階を横切り終えた）
-    if (x.objective.targetDepth !== null && depth > x.objective.targetDepth && ctx.terrainAt(e.pos.floor, e.pos.x, e.pos.y).stairs === 'down') {
+    // 封じられた下り階段（大守護者が生きている）に立っても踏破にならない（V3-3 §3.2）
+    if (x.objective.targetDepth !== null && depth > x.objective.targetDepth && ctx.terrainAt(e.pos.floor, e.pos.x, e.pos.y).stairs === 'down' && !livingWarden(ctx, e.pos.floor)) {
       crossedDepth = Math.max(crossedDepth, depth);
     }
   }
@@ -627,6 +639,7 @@ export function startExpedition(ctx: Ctx, pr: PlayerRecord, offer: number | 'end
     ...(guardianKind ? { guardianKind } : {}), guardianRank: guardianRankOf(slot),
     ...(guardianInfo.name ? { guardianName: guardianInfo.name, ...(guardianInfo.title ? { guardianTitle: guardianInfo.title } : {}), guardianTypes: guardianInfo.types ?? [], guardianWeakness: guardianInfo.weakness ?? null } : {}),
     ...(relic ? { relic } : {}),
+    ...(camp.milestone ? { milestone: structuredClone(camp.milestone) } : {}),
   };
   ctx.emit({ type: 'expedition_started', expedition: exp, seenBy: 'all', floor: null });
   // キャンプにいる間に、再開する階は落ち着く（V3-2R3a §22.1）: 追跡をやめて全快し、再開するマスが見える敵は離れた場所へ

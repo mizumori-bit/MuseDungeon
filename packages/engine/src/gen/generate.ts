@@ -6,7 +6,7 @@ import type { BiomeDef, Content, FloorTypeDef, MonsterDef, PrefabDef } from '@mu
 import type { EntityRole, Floor, GuardianInfo, Pos, Region } from '@muse/shared';
 import { cheb, DIRS, DIR_VEC, floorDiv, floorKey, Rng } from '@muse/shared';
 import { Registry, roll } from '../registry';
-import { guardianAsleep, lairPlan } from '../guardians';
+import { guardianAsleep, lairPlan, rollWardenInfo } from '../guardians';
 import { DOOR, FLOOR, GenGrid, WALL } from './grid';
 import { layoutGenerators } from './layouts';
 
@@ -87,7 +87,9 @@ const streamFor = (seed: string, branch: string, depth: number, attempt: number)
 const depthOk = (d: { min: number; max?: number }, depth: number) => depth >= d.min && (d.max === undefined || depth <= d.max);
 
 export function selectFloorType(content: Content, seed: string, branch: string, depth: number): FloorTypeDef {
-  const forced = content.lists.floorTypes.find((f) => f.every > 0 && depth >= f.depth.min && depth % f.every === 0);
+  // 強制の階が重なったら priority の大きい方（節目の大守護者の間は聖域より優先。V3-3 §3.2）
+  const forced = content.lists.floorTypes.filter((f) => f.every > 0 && depth >= f.depth.min && depth % f.every === 0)
+    .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0))[0];
   if (forced) return forced;
   if (depth === 1) return content.floorTypes['core:standard'] ?? content.lists.floorTypes[0];
   const rng = Rng.fromSeed(`${seed}|${branch}|${depth}|select|floorType`);
@@ -321,6 +323,15 @@ function placeStairs(s: GenState): void {
   const rng = s.stream('layout');
   const cand = g.floorCells().filter((i) => !g.protect[i] && !g.override.has(i));
   if (!cand.length) return;
+  // レイアウトが階段の場所を決めていれば使う（大守護者の間）
+  if (g.anchors.up !== undefined && g.anchors.down !== undefined) {
+    const e0 = g.anchors.up, d0 = g.anchors.down;
+    s.entry = { x: e0 % g.w, y: Math.trunc(e0 / g.w) };
+    if (s.depth > 1) { s.up = { ...s.entry }; g.override.set(e0, 'core:stairs_up'); }
+    s.down = [{ x: d0 % g.w, y: Math.trunc(d0 / g.w) }];
+    g.override.set(d0, 'core:stairs_down');
+    return;
+  }
   const e = cand[rng.int(cand.length)];
   s.entry = { x: e % g.w, y: Math.trunc(e / g.w) };
   if (s.depth > 1) {
@@ -551,6 +562,55 @@ function placeLair(s: GenState, cx: number, cy: number, info: GuardianInfo, rng:
  * 遠征の目標階の専用段: 守護者・遺物を入口から離れた到達可能なセルに置く。
  * 乱数は 'objective' ストリームだけを使う（他の段の結果は変わらない）。
  */
+/** 節目の大守護者を、レイアウトの目印（無ければ下り階段に近い床）に置き、棲み処を整える */
+function placeWarden(s: GenState): void {
+  const g = s.grid;
+  const rng = s.stream('objective');
+  let at = g.anchors.warden;
+  if (at === undefined && s.down[0]) at = g.idx(s.down[0].x, s.down[0].y);
+  if (at === undefined) return;
+  // 目印のマスがバイオームの地形で通れなくなっていたら、近い順に通れる床を探す
+  const free = (i: number) => s.passable(i) && !g.override.get(i)?.startsWith('core:stairs');
+  if (!free(at)) {
+    const ax = at % g.w, ay = Math.trunc(at / g.w);
+    let found: number | undefined;
+    for (let r = 1; r <= 6 && found === undefined; r++) for (let dy = -r; dy <= r && found === undefined; dy++) for (let dx = -r; dx <= r; dx++) {
+      if (Math.max(Math.abs(dx), Math.abs(dy)) !== r || !g.inside(ax + dx, ay + dy)) continue;
+      const i = g.idx(ax + dx, ay + dy);
+      if (free(i)) { found = i; break; }
+    }
+    if (found === undefined) return;
+    at = found;
+  }
+  const x = at % g.w, y = Math.trunc(at / g.w);
+  const info = rollWardenInfo(s.content, s.seed, s.depth);
+  const kind = pickGuardianKind(s.content, s.seed, s.branch, s.depth, 3, rng);
+  if (!kind) return;
+  const spec = wardenSpec(s.content, s.depth, kind, x, y, rng, info);
+  s.spawns.push(spec);
+  const occupied = new Set<number>([at, ...s.spawns.filter((sp) => 'x' in sp).map((sp) => g.idx((sp as { x: number }).x, (sp as { y: number }).y))]);
+  if (s.up) occupied.add(g.idx(s.up.x, s.up.y));
+  for (const d of s.down) occupied.add(g.idx(d.x, d.y));
+  placeLair(s, x, y, info, rng, occupied);
+}
+
+/** 大守護者の生成仕様（格 3 の守護者に、大守護者の体力・下限・賞金を上書きする） */
+export function wardenSpec(content: Content, depth: number, kind: string, x: number, y: number, rng: Rng, info: GuardianInfo): SpawnSpec {
+  const spec = guardianSpec(content, depth, kind, 3, x, y, rng, info);
+  if (spec.type === 'monster') {
+    const wb = content.balance.guardian.warden;
+    spec.hpBonusPct = wb.hpPct;
+    spec.minHp = wb.minHpBase + wb.minHpPerDepth * depth;
+    spec.bounty = Math.trunc(((spec.bounty ?? 0) * wb.bountyPct) / 100);
+  }
+  return spec;
+}
+
+/** 節目の階か（大守護者の間が強制される深さ） */
+export function isMilestoneDepth(content: Content, depth: number): boolean {
+  return content.lists.floorTypes.some((f) => f.rules.warden && f.every > 0 && depth >= f.depth.min && depth % f.every === 0);
+}
+
 function placeObjective(s: GenState, obj: ObjectiveSpec): boolean {
   const g = s.grid;
   const rng = s.stream('objective');
@@ -657,6 +717,8 @@ export function generateFloor(content: Content, seed: string, branch: string, de
     if (!fallback) applyBiomeExtras(s);
     placeStairs(s);
     populate(s);
+    // 節目の大守護者（V3-3 §3.2）
+    if (floorType.rules.warden && !fallback) placeWarden(s);
     if (objective && !placeObjective(s, objective) && !fallback) continue;
     // 条件「泉が無い」
     if (mods?.noFountain) s.spawns = s.spawns.filter((sp) => !(sp.type === 'feature' && sp.kind.includes('fountain')));

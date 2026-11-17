@@ -7,7 +7,7 @@ import type {
 } from './types';
 
 /** 2: 遠征・実ダメージ・回復の蓄積値（IMPROVEMENTS_V2）。3: ビルド（特技・能動技・呪い。V3-4）。古いログもそのまま畳み込める */
-export const EVENT_VERSION = 6;
+export const EVENT_VERSION = 7;
 
 export interface EventBase {
   seq: number;
@@ -91,6 +91,10 @@ export type GameEvent =
   | E<'guardian_state', { id: EntityId }>
   /** 守護者のしたこと（手下を呼んだ・突進した・突進が外れた・怒った。見えている者に） */
   | E<'guardian_acted', { id: EntityId; kind: string; guardianName: Names; act: 'summoned' | 'charged' | 'missed' | 'enraged'; count?: number }>
+  /** 節目の大守護者が倒れた（V3-3 §3.2。全員に） */
+  | E<'warden_slain', { depth: number; id: EntityId; guardianName: Names; by: EntityId | null }>
+  /** 加護の候補が出た（大守護者を倒した。本人だけ。候補は put の boonChoice） */
+  | E<'boon_offered', { target: EntityId; options: string[]; source: string; depth: number }>
   /** 加護を得た（V3-3 §3.3。本人だけ）。source: 持ち帰った遺物の種類（大守護者なら 'warden'） */
   | E<'boon_granted', { target: EntityId; boon: string; source: string }>
   /** 加護が効いた（本人だけ）。effect: last_stand（致死を HP 1 で耐えた）/ returned（投げた物が戻った）/ haste（階段の後の加速） */

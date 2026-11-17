@@ -102,6 +102,10 @@ export function buildCatalog(c: Content): Catalog {
       regen: { ...c.balance.regen },
       restMaxTurns: c.balance.rest.maxTurns,
       restCapPct: c.balance.rest.capPct,
+      ...((): { milestone?: { every: number; min: number; boonOptions: number } } => {
+        const f = c.lists.floorTypes.find((x) => x.rules.warden && x.every > 0);
+        return f ? { milestone: { every: f.every, min: f.depth.min, boonOptions: c.balance.guardian.warden.boonOptions } } : {};
+      })(),
       macroStepLimit: c.balance.macro.stepLimit,
       fightLostWait: c.balance.fight.lostWait,
       wander: { intervalMin: c.balance.wander.intervalMin, intervalMax: c.balance.wander.intervalMax },

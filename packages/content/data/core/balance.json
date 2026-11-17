@@ -27,7 +27,8 @@
         { "hpPct": 100, "minHpBase": 10, "minHpPerDepth": 3, "tableDepth": 1, "types": 1 },
         { "hpPct": 150, "minHpBase": 10, "minHpPerDepth": 3, "tableDepth": 2, "types": 1 }
       ],
-      "leash": 3
+      "leash": 3,
+      "warden": { "hpPct": 250, "minHpBase": 20, "minHpPerDepth": 6, "bountyPct": 300, "types": 2, "boonOptions": 3 }
     },
     "expedition": {
       "firstTargetDepth": { "safe": 2, "standard": 3, "ambitious": 3 },

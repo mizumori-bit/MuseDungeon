@@ -17,7 +17,7 @@ import {
 } from '../ui/panels';
 import { ErrorBanner, Header, MapView, ThemePicker, useCatalog, useLocaleRefresh, useTheme } from '../ui/common';
 import { BriefingCard, CampPanel, completesOnExtract, ExpeditionPanel, extractConfirmText, lifelineConfirmText, RestEstimateLine, rulesOf, TurnBar } from '../ui/expedition';
-import { abilityDisplayName, AbilityBar, DirPad, PerkChoicePanel } from '../ui/build';
+import { abilityDisplayName, AbilityBar, BoonChoicePanel, DirPad, PerkChoicePanel } from '../ui/build';
 import {
   abilityModeHint, abilityNoTargetText, abilityNotReadyText, abilityPickHint, abilityReady, cursedRemoveText, DIR_ARROW, extractBlockLabel, lifelineEffectText, perkModeHint, reachAttackLabel,
   reachAttackTitle, viewStatusLabel,
@@ -48,7 +48,7 @@ interface AbPick { id: string; name: string; target: 'adjacent' | 'throw' | 'dir
 type MoveMode = 'careful' | 'steady';
 
 /** 手番を消費しないコマンド（いつでも送れる。特技の選択はキャンプでも・手番でなくても） */
-const FREE: ReadonlySet<Command['type']> = new Set<Command['type']>(['say', 'note', 'retire', 'choose_perk']);
+const FREE: ReadonlySet<Command['type']> = new Set<Command['type']>(['say', 'note', 'retire', 'choose_perk', 'choose_boon']);
 
 /** 地図の上の注意に出さないエラー（手番のずれ等の雑音、確認ダイアログやバナーで扱うもの） */
 const QUIET_ERRORS: ReadonlySet<ActionErrorCode> = new Set<ActionErrorCode>(['not_your_turn', 'stale_turn', 'confirm_required', 'no_session', 'bad_request', 'dead', 'run_ended']);
@@ -1043,6 +1043,9 @@ export function Play({ runId }: { runId: string }) {
             <PerkChoicePanel choice={perkChoice} catalog={catalog} classId={view.self.classId} focused={mode === 'perk'} sent={perkSent === perkK}
               collapsed={perkHidden === perkK} onChoose={choosePerk}
               onCollapse={() => { setPerkHidden(perkK); if (mode === 'perk') setMode('normal'); }} onExpand={() => setPerkHidden(null)} />
+          )}
+          {view?.self.boonChoice && (
+            <BoonChoicePanel choice={view.self.boonChoice} catalog={catalog} onChoose={(option) => send({ type: 'choose_boon', option })} />
           )}
           <TurnBar line={turnText} changes={changes} />
           <MapView

@@ -9,6 +9,7 @@ import {
 } from './build';
 import { armorOf, guardianCritIfUnaware, guardianIncoming } from './guardians';
 import { boonHook } from './boons';
+import { chooseBoon, livingWarden } from './warden';
 import { huntingInView } from './expedition';
 import { addStatus } from './statuses';
 import type { Ctx } from './ctx';
@@ -629,6 +630,9 @@ actions.register('stairs', (ctx, e, pr) => {
   if (!tr.stairs) return fail(pr, 'nothing_here', '足元に階段は無い。', 'There are no stairs here.', 'travel_to stairs_down で階段へ移動する。', 'Use travel_to stairs_down to reach the stairs.');
   const depth = tr.stairs === 'down' ? f.depth + 1 : f.depth - 1;
   if (depth < 1) return fail(pr, 'cannot_use', '地上への道は閉ざされている。', 'The way to the surface is sealed.', '下り階段を探す。', 'Find the stairs down.');
+  // 節目の大守護者が生きている間は、下り階段は封じられている（V3-3 §3.2）
+  const warden = tr.stairs === 'down' ? livingWarden(ctx, key) : null;
+  if (warden) return fail(pr, 'sealed', '下り階段は封じられている。この階の大守護者を倒すまで降りられない。', 'The stairs down are sealed until this floor\'s warden falls.', 'extract で帰るか、大守護者を倒す。', 'Extract to go home, or slay the warden.');
   return {
     run: () => {
       const regenAfter = regenTick(ctx, e, false);
@@ -688,6 +692,7 @@ export function freeCommand(ctx: Ctx, pr: PlayerRecord, cmd: Command): ActionErr
     return null;
   }
   if (cmd.type === 'choose_perk') return choosePerk(ctx, pr, cmd.option);
+  if (cmd.type === 'choose_boon') return chooseBoon(ctx, pr, cmd.option);
   if (cmd.type === 'retire') {
     if (pr.state !== 'alive' && pr.state !== 'at_camp') return actionError('dead', t(pr.locale, '既にランから外れている。', 'You are no longer in the run.'), '');
     const me = ctx.world.entities[pr.entityId];

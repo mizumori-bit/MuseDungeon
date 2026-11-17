@@ -164,8 +164,9 @@ export const FloorTypeSchema = z.object({
   name: NamesSchema,
   depth: DepthSchema,
   weight: z.number().int().min(0),
-  /** depth % every === 0 のとき強制（0 は無効） */
+  /** depth % every === 0 のとき強制（0 は無効）。重なったら priority の大きい方（V3-3 §3.2: 節目の階は聖域より優先） */
   every: z.number().int().min(0).default(0),
+  priority: z.number().int().default(0),
   size: z.object({ w: z.number().int().min(20), h: z.number().int().min(15) }).default({ w: 64, h: 40 }),
   layouts: z.record(z.number().int().min(0)).optional(),
   monsters: z.object({ per1000: z.number().int().min(0), table: IdSchema }),
@@ -173,7 +174,8 @@ export const FloorTypeSchema = z.object({
   traps: z.object({ per1000: z.number().int().min(0) }).default({ per1000: 0 }),
   prefabs: z.object({ tags: z.array(z.string()).default([]), min: z.number().int().min(0).default(0), max: z.number().int().min(0).default(1) }).default({}),
   guaranteedFeatures: z.array(IdSchema).default([]),
-  rules: z.object({ noWander: z.boolean().default(false) }).default({}),
+  /** warden: 節目の大守護者の階（V3-3 §3.2）。レイアウトの目印の場所に大守護者を置き、倒すまで下り階段を封じる */
+  rules: z.object({ noWander: z.boolean().default(false), warden: z.boolean().default(false) }).default({}),
   validators: z.array(z.string()).default(['stairs_connected', 'start_safe', 'min_floor_area']),
   /** 深度帯ごとの寸法・階段距離・密度（size / per1000 を上書き） */
   pacing: z.array(PacingSchema).default([]),
@@ -364,6 +366,9 @@ export const BalanceSchema = z.object({
       types: Int.min(0).default(0) })).min(1),
     /** 持ち場の範囲（V3-2R3b §23.2）: 気づいていない守護者は持ち場からこのマス数（チェビシェフ）以内だけを動く */
     leash: Int.min(0).default(3),
+    /** 節目の大守護者（V3-3 §3.2）: 体力の上乗せと下限、賞金の倍率（%）、型の数、倒したときに選べる加護の数 */
+    warden: z.object({ hpPct: Int.min(0), minHpBase: Int.min(0), minHpPerDepth: Int.min(0), bountyPct: Int.min(0), types: Int.min(0), boonOptions: Int.min(1) })
+      .default({ hpPct: 250, minHpBase: 20, minHpPerDepth: 6, bountyPct: 300, types: 2, boonOptions: 3 }),
   }),
   /** 特技の候補の数（V3-4 §4.1） */
   perks: z.object({ options: Int.min(1) }).default({ options: 3 }),

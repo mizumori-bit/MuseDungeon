@@ -300,6 +300,15 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
       const from = ev.source === 'warden' ? (ja ? '大守護者を倒し、' : 'The warden falls; ') : ctx.catalog.items[ev.source] ? (ja ? `${nameOf(ctx.catalog.items[ev.source].name, L, ev.source)}を納め、` : `You deliver the ${nameOf(ctx.catalog.items[ev.source].name, L, ev.source)}; `) : '';
       return ja ? `${from}加護「${nameOf(b?.name, L, ev.boon)}」を得た（${nameOf(b?.desc, L, '')}）。` : `${from}you gain the boon ${nameOf(b?.name, L, ev.boon)} (${nameOf(b?.desc, L, '')}).`;
     }
+    case 'warden_slain': {
+      const nm = nameOf(ev.guardianName, L, '?');
+      return ja ? `節目の大守護者${nm}が倒れた（地下${ev.depth}階）。下り階段の封印が解けた。` : `The warden ${nm} falls (depth ${ev.depth}). The stairs down are unsealed.`;
+    }
+    case 'boon_offered': {
+      if (ev.target !== self) return null;
+      const names = (ev.options as string[]).map((id: string, i: number) => `${i + 1}) ${nameOf(ctx.catalog.boons?.[id]?.name, L, id)}`).join(ja ? '・' : ', ');
+      return ja ? `加護を 1 つ選べる（choose_boon）: ${names}。` : `Choose one boon (choose_boon): ${names}.`;
+    }
     case 'boon_triggered': {
       if (ev.actor !== self) return null;
       const bn = nameOf(ctx.catalog.boons?.[ev.boon]?.name, L, ev.boon);

@@ -139,6 +139,7 @@ export function applyEvent(world: World, ev: GameEvent): void {
     case 'guardian_acted':
     case 'boon_granted':
     case 'boon_triggered':
+    case 'boon_offered':
     case 'ability_used':
     case 'curse_revealed':
     case 'item_inspected':
@@ -251,6 +252,12 @@ export function applyEvent(world: World, ev: GameEvent): void {
     case 'expedition_offered':
       world.camp = clone(ev.camp);
       break;
+    case 'warden_slain': {
+      const cleared = new Set(world.milestones?.cleared ?? []);
+      cleared.add(ev.depth);
+      world.milestones = { cleared: [...cleared].sort((a, b) => a - b) };
+      break;
+    }
     case 'expedition_started':
       world.expeditions = [...(world.expeditions ?? []), clone(ev.expedition)];
       world.camp = null;

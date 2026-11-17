@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
 import { buildCatalog, loadContent } from '@muse/content';
-import { generateFloor } from '@muse/engine';
+import { generateFloor, isMilestoneDepth } from '@muse/engine';
 import type { GameEvent } from '@muse/shared';
 import {
   buildObservation, canonicalHash, DIRS, DIR_VEC, filterEventsForPlayer, formatObservationText, hpLeftEstimate, narrate, rangesToIndices, Rng,
@@ -225,6 +225,8 @@ describe('expeditions (V2-2)', () => {
     const bad: string[] = [];
     for (let s = 0; s < (FULL ? 300 : 40); s++) {
       for (let d = 3; d <= 12; d++) {
+        // 節目の階（大守護者の間）は遠征の目標にならない（V3-3 §3.2）
+        if (isMilestoneDepth(content, d)) continue;
         for (const obj of [{ guardian: true, relic: false }, { guardian: false, relic: true }, { guardian: true, relic: true }]) {
           const g = generateFloor(content, `obj-${s}`, 'main', d, table, obj);
           const f = g.floor;

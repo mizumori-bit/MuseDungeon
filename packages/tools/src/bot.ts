@@ -172,6 +172,8 @@ export function greedyDecide(port: PlayerPort, rng: Rng, memo: BotMemo): Command
   // 特技は手番を使わずに選べるので、候補が出たらすぐ選ぶ（V3-4）
   const perk = pickPerk(v, port.catalog, memo.perkLineage);
   if (perk !== null) return { type: 'choose_perk', option: perk };
+  // 大守護者の加護の候補（V3-3 §3.2）: 最初の候補を取る
+  if (v.self.boonChoice?.options.length) return { type: 'choose_boon', option: 1 };
   if (v.status === 'at_camp') {
     let o = (memo.offerSlot ? v.camp?.offers.find((x) => x.slot === memo.offerSlot) : undefined) ?? v.camp?.offers[0];
     // 推奨レベルに届いていなければ堅実で育つ（公開の表と自分のレベルだけで判断）
@@ -248,6 +250,9 @@ export function greedyDecide(port: PlayerPort, rng: Rng, memo: BotMemo): Command
     return { type: 'fight', target: hunting[0].id, with: throwable.slot, hpFloor: Math.trunc((v.self.stats.maxHp * 35) / 100), ...withAb(aimedKnown ? ['core:aimed_throw'] : []) };
   }
   // 射撃して距離を取る敵: 投げる物が無ければ HP によらず近づく（寄られると下がり、下がる間は撃たない。V3-2R3a §22.2）
+  // 節目の大守護者（V3-3 §3.2）: 見えていて余力があれば挑む（倒すまで下り階段は封じられている）
+  const warden = hostiles.find((h) => h.guardian?.warden && !memo.avoid.has(h.id));
+  if (warden && hp >= 60 && !done) return { type: 'travel', to: warden.id, mode: 'steady' };
   const shooter = hunting.find((h) => !h.fleeing && !!h.kind && !!port.catalog.monsters[h.kind]?.tags.includes('ranged') && cheb(h.pos, pos) <= 8 && !memo.avoid.has(h.id));
   if (shooter && (!throwable || memo.direct)) return { type: 'travel', to: shooter.id, mode: 'steady', hpFloor: 0 };
   if (!memo.direct && hunting.length && hp < 60 && cheb(hunting[0].pos, pos) <= 8 && !memo.avoid.has(hunting[0].id)) return { type: 'travel', to: hunting[0].id };
@@ -473,6 +478,8 @@ export async function playWithPort(port: PlayerPort, opts: BotOptions): Promise<
         else {
           const s = await port.act({ type: 'stairs' }, { source: 'bot' });
           if (s.ok) { explored = false; memo.descend = false; }
+          // 封じられた下り階段（大守護者が生きている）: 降りるのをやめて探す（見えたら挑む）
+          else if (s.error.code === 'sealed') { explored = false; memo.descend = false; }
         }
       }
       if (cmd.type === 'travel' && cmd.to === 'stairs_down' && (out.interrupted_by === 'unknown_destination' || out.interrupted_by === 'unreachable' || out.interrupted_by === 'blocked')) { explored = false; memo.descend = false; }

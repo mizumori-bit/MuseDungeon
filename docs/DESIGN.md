@@ -983,3 +983,34 @@ bot の計測（`bot --runs 10`・`npm run budget -- --runs 20`）は IMPROVEMEN
 - `self.boons: { id, name, desc, used? }[]`（used: 遠征に 1 回の加護をこの遠征で使った）。盤面の文に「加護: …」（持っているときだけ）、キャンプの文に「加護: …／なし（遺物を階段の上で持ち帰ると付く）」。
 - 候補の `camp.offers[].relic { kind, name, boon, boon_name, boon_desc, owned? }`。get_rules topic=classes に加護の一覧（遺物の名前付き）。
 - クライアントの自分の欄に加護（使った執念は「使用済み」）。
+
+## 22. 節目の大守護者 V3-3 の 3 段目（IMPROVEMENTS_V3 §3.2・§28.9）
+
+設計は IMPROVEMENTS_V3 §3.2・§28.9、実装メモは同書 §32。生成と下り階段の規則が変わり、新しいイベントとコマンドがあるので `engineVersion` は 0.12.0、`eventVersion` は 7。
+
+### 22.1 大守護者の間（階）
+- 深度 5 の倍数は floorType `core:warden_hall`（`every: 5`、`priority: 10`。強制の階が重なったら priority の大きい方: 深度 30 は聖域より大守護者の間）。`rules.warden: true`・`noWander: true`。ほかの敵・アイテム・罠・プレハブは置かない。
+- レイアウト `core:warden_hall`（36×17）: 左に前室（上り階段）、扉のある短い通路、右に広間（中央に大守護者、奥に下り階段）。前室から下り階段へは広間を通るしかない。階段と大守護者の場所はレイアウトの目印（`GenGrid.anchors`）で決め、目印のマスがバイオームの地形で通れなければ近い床へずらす。
+- 深度 5・10・15・30 の 30 シードで、大守護者は 1 体・型 2 つ、入口から下り階段と大守護者へ歩いて届くことを確かめる（`v33warden.test.ts`）。
+
+### 22.2 大守護者
+- 名前・型・弱点は `rollWardenInfo`（`Rng.fromSeed(seed|warden|深さ)`。状態を持たない）。型は `balance.guardian.warden.types`（2）で、近接に強い組と投擲に強い組から 1 つずつ。`GuardianInfo.warden: true`。
+- 種族は格 3 の表（2 つ深い階の候補の上位半分）。体力は `warden.hpPct`（+250%）・下限 `minHpBase + minHpPerDepth × 深さ`（20 + 6×深さ）、賞金は守護者の賞金 × `bountyPct`（300%）。棲み処（§20.4）は型と弱点に合わせて置く。
+- 観測の敵の行は「[大守護者・賞金 N]」、`visible.monsters[].guardian.warden`。弱点は守護者と同じく、効くまで出ない。
+
+### 22.3 封じられた下り階段
+- その階に生きている大守護者がいる間、下り階段の `stairs` は手番を使わずに `sealed` で断る（「下り階段は封じられている。この階の大守護者を倒すまで降りられない」）。valid_actions の use_stairs は「不可: …」。
+- 封じられた下り階段に立っても、到達（reach_depth）・踏破にならない。extract（帰還・撤退）は今までどおりできる。
+
+### 22.4 倒したとき
+- `warden_slain { depth, id, guardianName, by }`（全員）。World の `milestones.cleared` に深さが入る。文は「節目の大守護者…が倒れた（地下5階）。下り階段の封印が解けた。」
+- その階にいる生きているプレイヤーそれぞれに、加護の候補（持っていない加護から `boonOptions` 個。`Rng.fromSeed(seed|warden|深さ|boon|プレイヤー)`）を `boon_offered`（本人だけ）で出し、`Entity.boonChoice` に置く。
+- `choose_boon { option }`（手番を消費しない。MCP ツール `choose_boon`）: 番号か加護の ID で 1 つ選ぶと加護が付く（`boon_granted`、source `warden`）。観測は `self.boon_choice`・alerts の `boon_pending`・valid_actions の `choose_boon N (名前: 説明)`。選ぶまで残る（キャンプでも選べる）。
+
+### 22.5 次の節目
+- キャンプの候補を作るとき、まだ倒していない最も浅い節目を `CampState.milestone { depth, name, title?, types }` に入れ、遠征の開始時に `Expedition.milestone` へ写す。観測は `camp.milestone`・`expedition.milestone { depth, name, types, cleared, text }`。キャンプの文と、遠征中の【遠征】の行に「次の節目: 地下5階の大守護者「…」（型: …。未踏破。倒すまでその階の下り階段は封じられている。倒すと加護を 3 つの候補から 1 つ選べる）」。
+- 遠征の目標は節目の階にしない（その枠の目標を 1 つ深くし、ずらした枠の次の枠はさらに深くする）。目標が節目より深ければ、その階を通る（下り階段が封じられているので、倒さずには降りられない）。
+
+### 22.6 bot とクライアント
+- 貪欲 bot: 大守護者が見えていて HP 60% 以上なら挑む。封じられた下り階段で断られたら、降りるのをやめて探す。加護の候補は最初のものを取る。
+- クライアント: 加護の候補の欄（選ぶボタン）、`choose_boon` は手番を使わないコマンドとして送る。

@@ -92,10 +92,10 @@ describe('V3-2R3 objectives and offers (§20.1, §20.2)', () => {
     const ex = await t.act({ type: 'extract' });
     expect(ex.ok).toBe(true);
     const offers = t.world.camp!.offers;
-    // 堅実 +1・標準 +2・野心 +3（達成した目標の地下2階から）
+    // 堅実 +1・標準 +2・野心 +3（達成した目標の地下2階から）。地下5階は節目の大守護者の階なので、野心は 1 つ深い 6 階（V3-3 §3.2）
     expect(offers.find((o) => o.slot === 'safe')!.objective.targetDepth).toBe(3);
     expect(offers.find((o) => o.slot === 'standard')!.objective.targetDepth).toBe(4);
-    expect(offers.find((o) => o.slot === 'ambitious')!.objective.targetDepth).toBe(5);
+    expect(offers.find((o) => o.slot === 'ambitious')!.objective.targetDepth).toBe(6);
     // 下り階段にすでに立った階（地下3・4階）には踏破型を出さない
     for (const o of offers) if (o.objective.type === 'reach_depth') expect(o.objective.targetDepth!).toBeGreaterThanOrEqual(deepestGenerated(t.world));
   });
