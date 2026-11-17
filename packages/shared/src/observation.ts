@@ -37,6 +37,8 @@ export interface ObsMonster {
   worst_hit: number | null;
   /** 速さ: 自分の今の速さとの比較（見れば分かる。V3-2R2 §18.2） */
   speed: 'slow' | 'normal' | 'fast';
+  /** 自分の速さに対する倍率（速い・遅いときだけ。0.8 なら、あなたの 1 手に 0.8 手。V3-7a 後の評価） */
+  speed_ratio?: number;
   /** 見れば分かる特徴（群れる・飛び道具・動かない・重装＝素の装甲 3 以上） */
   traits: MonsterTrait[];
   /** 体格（小柄・大柄。並は出さない。V3-2R3 §20.4） */
@@ -173,7 +175,8 @@ export interface ItemStats {
   mods?: CatalogEquipStats;
 }
 /** curse: 'unknown' は呪いの有無をまだ確かめていない装備品、'cursed' は呪われている（外せない。V3-4） */
-export interface ObsInvItem { slot: string; name: string; qty: number; category: string; identified: boolean; equipped: boolean; value?: number; stats?: ItemStats; curse?: 'unknown' | 'cursed' }
+/** kind: 鑑定済みの品の種類 ID（fight の with に渡せる。スロット文字は拾い物で変わる。V3-7a 後の評価） */
+export interface ObsInvItem { slot: string; name: string; qty: number; category: string; identified: boolean; equipped: boolean; kind?: string; value?: number; stats?: ItemStats; curse?: 'unknown' | 'cursed' }
 /** 推定残り HP。record は記録した個体の体力の範囲（標本であって種族の範囲ではない） */
 export interface HpEstimate { min: number; max: number | null; samples: number; record: { min: number; max: number } }
 
@@ -188,7 +191,7 @@ export interface Observation {
     /** draft: 下り階段が未発見のときの方角（下への風）。explored: 見た割合の 4 段階（1 約 1/4 … 4 ほぼ全て。V3-2R2 §18.4） */
     pos: Pos | null; floor: { depth: number; biome_name: string; floor_type: string; floor_type_id?: string; time: number; draft?: Dir; explored?: 1 | 2 | 3 | 4; hint_text?: string } | null;
     /** throws: 投げられる持ち物（命中は自分の命中値込み） */
-    attack: { acc: number; dmg: string; throws?: { slot: string; name: string; dmg: string | null; acc: number; range: number }[] }; defense: { eva: number; armor: number };
+    attack: { acc: number; dmg: string; throws?: { slot: string; kind?: string; name: string; dmg: string | null; acc: number; range: number }[] }; defense: { eva: number; armor: number };
     equipment: { weapon?: string; armor?: string; accessory?: string };
     inventory_count: number; inventory_capacity: number;
     inventory_brief?: string;
@@ -218,7 +221,8 @@ export interface Observation {
     passable_dirs: Dir[];
     frontiers: { pos: Pos; dir: Dir | null; dist: number }[];
     /** path_len: 既知地図上の経路長（不明なら null） */
-    known_stairs: { type: 'down' | 'up'; pos: Pos; dist: number; reachable: boolean; path_len: number | null }[];
+    /** occupied_by: 階段の上に見えている敵の ID（travel_to はふさがれて止まる。V3-7a 後の評価） */
+    known_stairs: { type: 'down' | 'up'; pos: Pos; dist: number; reachable: boolean; path_len: number | null; occupied_by?: string }[];
     /** 地形は判明しているが、まだ見ていないセルの数（地図の巻物の後。explore はそこへ向かう） */
     unsighted?: number;
   };
@@ -767,6 +771,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
         worst_hit: mem && mem.maxDamageToYou > 0 ? mem.maxDamageToYou : null,
         worst_turn: mem && mem.maxDamageToYou > 0 ? mem.maxDamageToYou * attacksPerTurn(view, catalog, e) : null,
         speed: sp === null || sp === mySpeed ? 'normal' : sp > mySpeed ? 'fast' : 'slow',
+        ...(sp !== null && sp !== mySpeed && mySpeed > 0 ? { speed_ratio: Math.round((sp * 10) / mySpeed) / 10 } : {}),
         traits: [...OBVIOUS_TRAITS.filter((tr) => tags.includes(tr)), ...(cm?.armored ? ['armored' as const] : []), ...(cm?.evasive ? ['evasive' as const] : [])],
         shot: e.shot ? 'clear' : 'blocked',
         shots: throwables.map((tw) => ({ slot: tw.slot, state: !e.shot ? 'blocked' as const : pos && cheb(pos, e.pos) > tw.range ? 'out_of_range' as const : 'clear' as const })),
@@ -909,7 +914,8 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       if (!st) continue;
       const p = { x: i % f.width, y: Math.trunc(i / f.width) };
       const dd = pathDist(p);
-      known_stairs.push({ type: st, pos: p, dist: dd >= 0 ? dd : cheb(pos, p), reachable: dd >= 0, path_len: dd >= 0 ? dd : null });
+      const occ = view.entities.find((e) => e.cat === 'monster' && e.pos.x === p.x && e.pos.y === p.y && e.id !== view.self.id);
+      known_stairs.push({ type: st, pos: p, dist: dd >= 0 ? dd : cheb(pos, p), reachable: dd >= 0, path_len: dd >= 0 ? dd : null, ...(occ ? { occupied_by: occ.id } : {}) });
     }
     known_stairs.sort((a, b) => a.dist - b.dist);
     const fr = findFrontiers(grid)
@@ -942,6 +948,12 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
     });
   }
   // 自分に届く追跡中の敵（逃走中は隣にいるときだけ: 追い詰められると殴る。動かない敵は隣にいるときだけ）
+  // 致死の警告に添える回復の手段（V3-7a 後の評価: 薬と立て直しを残したまま綱や瀕死になった）
+  const potionN = view.inventory.filter((i) => i.kind === 'core:potion_healing').reduce((a, i) => a + (i.qty ?? 1), 0);
+  const healAbility = view.self.build.abilities.map((a) => ({ a, def: catalog.abilities[a.id] })).find((x) => x.def?.handler === 'heal_pct');
+  const healReady = healAbility ? abilityStatus(view, catalog, healAbility.a.id) : null;
+  const heals = [potionN ? t(L, `回復の薬 ${potionN}`, `${potionN} healing potions`) : '', healAbility && healReady && healReady.cooldownLeft === 0 && healReady.usesLeft !== 0 ? t(L, `${nameOf(healAbility.def!.name, L, healAbility.a.id)} 使える`, `${nameOf(healAbility.def!.name, L, healAbility.a.id)} ready`) : ''].filter(Boolean);
+  const healNote = heals.length ? t(L, `（${heals.join('・')}）`, ` (${heals.join(', ')})`) : '';
   const huntingReach = hostiles.filter((m) => m.awareness === 'hunting' && (!m.fleeing || m.dist === 1) && !(m.traits.includes('stationary') && m.dist > 1));
   // 階段まで steps 歩く間の最悪の被害（V3-4b §28.5）: 敵ごとに「攻撃できる回数 × 受けた最大の一撃」。記録の無い敵がいれば null
   const chaseOf = (steps: number) => chaseEstimate(view, catalog, huntingReach, steps);
@@ -961,9 +973,9 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
   // 1 手で倒されうる: 1 体の worst_turn、または合計が今の HP 以上。2 手で倒されうる: 合計の 2 倍が HP 以上
   const lethal = huntingReach.filter((m) => m.worst_turn !== null && m.worst_turn >= me.stats.hp);
   if (lethal.length && view.status !== 'dead') {
-    alerts.push({ code: 'lethal_range', text: t(L, `1 手で倒されうる: ${lethal.map((m) => `${m.name}(最悪 ${m.worst_turn})`).join(', ')}`, `One turn could kill you: ${lethal.map((m) => `${m.name} (worst ${m.worst_turn})`).join(', ')}`), entity: lethal[0].id });
+    alerts.push({ code: 'lethal_range', text: t(L, `1 手で倒されうる: ${lethal.map((m) => `${m.name}(最悪 ${m.worst_turn})`).join(', ')}${healNote}`, `One turn could kill you: ${lethal.map((m) => `${m.name} (worst ${m.worst_turn})`).join(', ')}${healNote}`), entity: lethal[0].id });
   } else if (recorded.length >= 2 && worstSum >= me.stats.hp && view.status !== 'dead') {
-    alerts.push({ code: 'lethal_range', text: t(L, `1 手で倒されうる: 追跡中の敵の 1 手の最悪の被害の合計 ${worstSum} ≥ HP ${me.stats.hp}`, `One turn could kill you: worst damage per turn of hunting enemies sums to ${worstSum} >= HP ${me.stats.hp}`), entity: recorded[0].id });
+    alerts.push({ code: 'lethal_range', text: t(L, `1 手で倒されうる: 追跡中の敵の 1 手の最悪の被害の合計 ${worstSum} ≥ HP ${me.stats.hp}${healNote}`, `One turn could kill you: worst damage per turn of hunting enemies sums to ${worstSum} >= HP ${me.stats.hp}${healNote}`), entity: recorded[0].id });
   } else if (recorded.length && worstSum * 2 >= me.stats.hp && view.status !== 'dead') {
     alerts.push({ code: 'lethal_2turns', text: t(L, `2 手で倒されうる: 1 手の最悪の被害 ${worstSum} × 2 ≥ HP ${me.stats.hp}`, `Two turns could kill you: worst damage per turn ${worstSum} x 2 >= HP ${me.stats.hp}`), entity: recorded[0].id });
   }
@@ -982,8 +994,8 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       const faster = huntingReach.filter((m) => m.speed === 'fast').length;
       alerts.push({
         code: 'escape',
-        text: t(L, `${st.type === 'up' ? '上り' : '下り'}階段まで ${st.path_len} 歩。${faster ? `追ってくる敵のうち ${faster} 体はあなたより速い` : '追ってくる敵にあなたより速いものはいない'}（階段の上なら extract できる・階を移れば敵は追ってこない）`,
-          `${st.path_len} steps to the stairs ${st.type}. ${faster ? `${faster} of your pursuers are faster than you` : 'none of your pursuers is faster than you'} (on stairs you can extract; enemies do not follow you between floors)`),
+        text: t(L, `${st.type === 'up' ? '上り' : '下り'}階段まで ${st.path_len} 歩。${faster ? `追ってくる敵のうち ${faster} 体はあなたより速い` : '追ってくる敵にあなたより速いものはいない'}（階段の上なら extract できる・階を移れば敵は追ってこない）${st.occupied_by ? `。ただし階段の上に ${(hostiles.find((m) => m.id === st.occupied_by)?.name ?? st.occupied_by)} がいて、ふさがれている` : ''}`,
+          `${st.path_len} steps to the stairs ${st.type}. ${faster ? `${faster} of your pursuers are faster than you` : 'none of your pursuers is faster than you'} (on stairs you can extract; enemies do not follow you between floors)${st.occupied_by ? `. But ${(hostiles.find((m) => m.id === st.occupied_by)?.name ?? st.occupied_by)} stands on the stairs and blocks them` : ''}`),
         // worst_if_chased: 追われたままなら最悪の被害（敵ごとに歩く間の攻撃回数 × 受けた最大の一撃。記録の無い敵がいれば null。V3-4b §28.5）
         data: { stairs: st.type, path_len: st.path_len, faster, worst_if_chased: unrecorded ? null : chaseOf(st.path_len!).worst, hp: me.stats.hp },
       });
@@ -1005,6 +1017,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
     return {
       slot: it.slot, name: itemDisplayName(catalog, L, it.kind, it.appearanceId, it.affixes), qty: it.qty,
       category: itemCategory(catalog, it.kind, it.appearanceId), identified: it.kind !== null, equipped: it.equipped !== null,
+      ...(it.kind ? { kind: shortId(it.kind) } : {}),
       ...(it.value !== undefined ? { value: it.value } : {}),
       ...(st ? { stats: st } : {}),
       ...(curse ? { curse } : {}),
@@ -1013,7 +1026,9 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
   const invBrief = invItems.map((i) => {
     const st = itemStatsText(L, i.stats, catalog);
     const cu = i.curse === 'cursed' ? t(L, '{呪い:外せない}', '{cursed}') : i.curse === 'unknown' ? t(L, '{呪い?}', '{curse?}') : '';
-    return `${i.slot})${i.name}${i.qty > 1 ? `x${i.qty}` : ''}${i.equipped ? '*' : ''}${i.value !== undefined ? `(${i.value})` : ''}${st ? `[${st}]` : ''}${cu}`;
+    // 投げられる物には種類 ID（fight の with に使う）
+    const kd = i.stats?.throw && i.kind && !i.equipped ? `{with:${i.kind}}` : '';
+    return `${i.slot})${i.name}${i.qty > 1 ? `x${i.qty}` : ''}${i.equipped ? '*' : ''}${i.value !== undefined ? `(${i.value})` : ''}${st ? `[${st}]` : ''}${kd}${cu}`;
   }).join(' ');
 
   const biomeName = f ? nameOf(catalog.biomes[f.biome]?.name, L, f.biome) : '';
@@ -1056,7 +1071,10 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
         ...(w ? { weakness: { id: w, name: nameOf(catalog.guardianWeaknesses[w]?.name, L, w) } } : {}),
       };
       if (active && !xv.progress.guardianSlain) {
-        const wt = expedition.guardian.weakness ? expedition.guardian.weakness.name : t(L, '不明', 'unknown');
+        // 節目に挑む遠征: 試して分かる前でも、記録庫の記憶で分かっていればそれを出す（V3-7a 後の評価: 状況行だけ「不明」だった）
+        const mem = xv.objective.type === 'slay_warden' && xv.objective.targetDepth !== null ? view.wardenIntel?.[String(xv.objective.targetDepth)]?.weakness : undefined;
+        const wt = expedition.guardian.weakness ? expedition.guardian.weakness.name
+          : mem ? t(L, `${nameOf(catalog.guardianWeaknesses[mem]?.name, L, mem)}（記録庫の記憶）`, `${nameOf(catalog.guardianWeaknesses[mem]?.name, L, mem)} (archive memory)`) : t(L, '不明', 'unknown');
         expedition.text += t(L, ` | 守護者「${expedition.guardian.name}」（弱点: ${wt}）`, ` | guardian "${expedition.guardian.name}" (weakness: ${wt})`);
       }
     }
@@ -1258,7 +1276,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       } : null,
       attack: {
         acc: me.stats.acc + bonuses.melee, dmg: `${me.stats.dmg}${me.stats.might ? (me.stats.might > 0 ? `+${me.stats.might}` : `${me.stats.might}`) : ''}`,
-        ...(throwables.length ? { throws: throwables.map((tw) => ({ slot: tw.slot, name: itemDisplayName(catalog, L, tw.item.kind, tw.item.appearanceId, tw.item.affixes), dmg: tw.dmg, acc: me.stats.acc + tw.acc + bonuses.thrown, range: tw.range })) } : {}),
+        ...(throwables.length ? { throws: throwables.map((tw) => ({ slot: tw.slot, ...(tw.item.kind ? { kind: shortId(tw.item.kind) } : {}), name: itemDisplayName(catalog, L, tw.item.kind, tw.item.appearanceId, tw.item.affixes), dmg: tw.dmg, acc: me.stats.acc + tw.acc + bonuses.thrown, range: tw.range })) } : {}),
       },
       // 装甲は状態異常（錆）の修正込み（V3-5a）
       defense: { eva: me.stats.eva, armor: armorWithStatuses(catalog.statuses, me.statuses, me.stats.armor) },
@@ -1413,6 +1431,12 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
       })();
   };
   const stairsLine = (type: 'down' | 'up'): string => {
+    // 最寄りの階段の上に敵がいる: travel_to はふさがれて止まる（V3-7a 後の評価: 「階段まで 1 歩」と勧めて blocked になった）
+    const near = nearestStairs(type);
+    if (near?.occupied_by) {
+      const who = x.hostiles.find((h) => h.id === near.occupied_by)?.name ?? near.occupied_by;
+      return `travel_to stairs_${type} (${t(L, `不可: 階段の上に ${who} がいる（倒すか、どくのを待つ）`, `unavailable: ${who} stands on the stairs (defeat it or wait for it to move)`)})`;
+    }
     const risk = stairsRisk(type);
     const sep = t(L, '・', '; ');
     if (adjAwake.length) return `travel_to stairs_${type} mode:flee${risk ? ` (${risk})` : ''}`;
@@ -1676,7 +1700,7 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
       const perTurn = m.worst_turn !== null && m.worst_turn !== m.worst_hit ? t(L, `（1 手に最悪 ${m.worst_turn}）`, ` (worst ${m.worst_turn}/turn)`) : '';
       const worst = m.worst_hit !== null ? t(L, `  最大の一撃:${m.worst_hit}${perTurn}`, ` worst_hit:${m.worst_hit}${perTurn}`) : '';
       // 見れば分かる特徴（速さは自分との比較）と命中の記録
-      const looks = [m.size === 'large' ? t(L, '大柄', 'large') : m.size === 'small' ? t(L, '小柄', 'small') : '', m.speed === 'fast' ? t(L, '速い', 'fast') : m.speed === 'slow' ? t(L, '遅い', 'slow') : '', ...m.traits.map((tr) => abilityName(L, tr))].filter(Boolean);
+      const looks = [m.size === 'large' ? t(L, '大柄', 'large') : m.size === 'small' ? t(L, '小柄', 'small') : '', m.speed === 'fast' ? t(L, `速い×${m.speed_ratio ?? ''}`, `fast x${m.speed_ratio ?? ''}`) : m.speed === 'slow' ? t(L, `遅い×${m.speed_ratio ?? ''}`, `slow x${m.speed_ratio ?? ''}`) : '', ...m.traits.map((tr) => abilityName(L, tr))].filter(Boolean);
       const looksText = looks.length ? (L === 'en' ? ` [${looks.join(', ')}]` : `  [${looks.join('・')}]`) : '';
       const hitLine = [hitsText(L, m.hits), dealtText(L, m.dealt)].filter(Boolean).join(L === 'en' ? ', ' : '・');
       const hits = hitLine && !brief ? (L === 'en' ? ` ${hitLine}` : `  ${hitLine}`) : '';
@@ -1839,6 +1863,7 @@ export function describeInventory(view: PlayerView, catalog: Catalog): { text: s
     return {
       id: it.id, slot: it.slot, name: itemDisplayName(catalog, L, it.kind, it.appearanceId, it.affixes), qty: it.qty,
       category: itemCategory(catalog, it.kind, it.appearanceId), identified: it.kind !== null, equipped: it.equipped !== null,
+      ...(it.kind ? { kind: shortId(it.kind) } : {}),
       desc: (() => {
         const st = itemStats(catalog, it.kind, it.affixes);
         const stText = st ? itemStatsText(L, st, catalog) : '';
@@ -1849,7 +1874,7 @@ export function describeInventory(view: PlayerView, catalog: Catalog): { text: s
   });
   const text = [
     t(L, `所持品 ${view.inventory.filter((i) => !(i.kind && catalog.items[i.kind]?.bound)).length}/${view.self.capacity}`, `Inventory ${view.inventory.filter((i) => !(i.kind && catalog.items[i.kind]?.bound)).length}/${view.self.capacity}`),
-    ...items.map((i) => `${i.slot}) ${i.name}${i.qty > 1 ? ` x${i.qty}` : ''}${i.equipped ? t(L, ' [装備中]', ' [equipped]') : ''} — ${i.desc}`),
+    ...items.map((i) => `${i.slot}) ${i.name}${i.qty > 1 ? ` x${i.qty}` : ''}${i.equipped ? t(L, ' [装備中]', ' [equipped]') : ''}${i.kind ? t(L, `（種類 ${i.kind}）`, ` (kind ${i.kind})`) : ''} — ${i.desc}`),
   ].join('\n');
   return { text, items };
 }

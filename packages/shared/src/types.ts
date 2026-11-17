@@ -315,6 +315,8 @@ export interface ExpeditionOffer {
   guardian?: { rank: 1 | 2 | 3; traits: string[]; name?: Names; title?: Names; types?: string[]; maxHit?: number };
   /** 守護者の種族（候補を作った時点で決める。プレイヤーには渡さない） */
   guardianKind?: string;
+  /** 守護者の接辞（候補の時点で決める。見込みの特徴と一撃の目安に入る。プレイヤーには渡さない。V3-5a 後の評価 2） */
+  guardianAffixes?: string[];
   /** 守護者の弱点（候補を作った時点で決める。プレイヤーには渡さない。V3-3） */
   guardianWeakness?: string | null;
   /** 遺物（retrieve_relic。名前と加護は公開。V3-3 §3.3） */
@@ -406,6 +408,8 @@ export interface Expedition {
   haul?: ExpeditionHaul;
   /** 守護者の種族と格（候補から引き継ぐ。プレイヤーには渡さない。V3-2R3 §20.1） */
   guardianKind?: string;
+  /** 守護者の接辞（候補の時点で決める。見込みの特徴と一撃の目安に入る。プレイヤーには渡さない。V3-5a 後の評価 2） */
+  guardianAffixes?: string[];
   guardianRank?: 1 | 2 | 3;
   /** 守護者の名前と型（公開）・弱点（プレイヤーには渡さない）。V3-3 */
   guardianName?: Names;

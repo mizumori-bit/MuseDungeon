@@ -18,7 +18,7 @@ export type SpawnSpec =
 /** 遠征の目標階に置くもの */
 /** rank: 守護者の格（堅実 1・標準 2・野心 3）。guardianKind: 候補で決めた種族（無ければ生成時に格で選ぶ） */
 /** info: 守護者の型・名前・弱点（V3-3。候補で決めたもの） */
-export interface ObjectiveSpec { guardian: boolean; relic: boolean; rank?: 1 | 2 | 3; guardianKind?: string; info?: GuardianInfo; relicKind?: string }
+export interface ObjectiveSpec { guardian: boolean; relic: boolean; rank?: 1 | 2 | 3; guardianKind?: string; guardianAffixes?: string[]; info?: GuardianInfo; relicKind?: string }
 
 /** 遠征の条件による生成の修飾（目標階までの新しい階に効く） */
 export interface GenMods { monstersPct: number; itemsPct: number; treasurePct: number; noFountain: boolean }
@@ -497,11 +497,13 @@ export function pickGuardianKind(content: Content, seed: string, branch: string,
 }
 
 /** 守護者の生成仕様（生成時と、生成済みの階に遠征の開始時に置くときで共用）。格で体力の上乗せと下限が決まる */
-export function guardianSpec(content: Content, depth: number, kind: string, rank: 1 | 2 | 3, x: number, y: number, rng: Rng, info?: GuardianInfo): SpawnSpec {
+export function guardianSpec(content: Content, depth: number, kind: string, rank: 1 | 2 | 3, x: number, y: number, rng: Rng, info?: GuardianInfo, affixes?: string[]): SpawnSpec {
   const def = content.monsters[kind];
   const tier = depth > content.deepestDefined ? floorDiv(depth - content.deepestDefined, 5) + 1 : 0;
   const spec = monsterSpec({ content, depth }, def, tier, x, y, false, rng);
   if (spec.type === 'monster') {
+    // 候補で決めた接辞があればそれ（乱数は今までどおり引いてから替える。V3-5a 後の評価 2: 見込みが接辞を反映していなかった）
+    if (affixes) spec.affixes = [...affixes];
     const guardAffix = content.lists.affixes.find((a) => a.target === 'guardian');
     spec.affixes = [...(guardAffix ? [guardAffix.id] : []), ...spec.affixes];
     spec.role = 'guardian';
@@ -657,7 +659,7 @@ function placeObjective(s: GenState, obj: ObjectiveSpec): boolean {
         return c.length ? c[rng.int(c.length)].id : pickGuardianKind(s.content, s.seed, s.branch, s.depth, rank, rng);
       })();
     if (!kind) return false;
-    s.spawns.push(guardianSpec(s.content, s.depth, kind, rank, gx, gy, rng, obj.info));
+    s.spawns.push(guardianSpec(s.content, s.depth, kind, rank, gx, gy, rng, obj.info, obj.guardianKind === kind ? obj.guardianAffixes : undefined));
     occupied.add(g.idx(gx, gy));
     if (obj.info) placeLair(s, gx, gy, obj.info, rng, occupied);
   }

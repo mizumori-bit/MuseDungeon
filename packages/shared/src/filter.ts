@@ -94,8 +94,8 @@ export function filterEventsForPlayer(events: readonly GameEvent[], playerId: Pl
         break;
       case 'expedition_offered': {
         // 候補の守護者の種族は会うまで渡さない（特徴だけ）
-        const camp = pe.camp as { offers?: { guardianKind?: string }[] } | undefined;
-        for (const o of camp?.offers ?? []) delete o.guardianKind;
+        const camp = pe.camp as { offers?: { guardianKind?: string; guardianAffixes?: string[] }[] } | undefined;
+        for (const o of camp?.offers ?? []) { delete o.guardianKind; delete o.guardianAffixes; }
         break;
       }
       case 'expedition_started': {

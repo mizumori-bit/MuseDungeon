@@ -64,13 +64,13 @@ describe('V3-5a evaluation fixes: fight (macro)', () => {
     a.manager.closeAll();
   });
 
-  it('rust that lowers your armor still stops the fight once', async () => {
+  it('rust does not stop the fight even when it lowers your armor (V3-7a evaluation: it stopped at every rust)', async () => {
     const { a, view } = await scene('v35e-rust', { armor: 4 });
     const v = view();
     const st = macroStart(v, { type: 'fight', target: a.gId, hpFloor: 1 }, catalog);
     macroNext(st, v, catalog, []);
     const ev = { type: 'status_applied', seq: 1, cause: null, floor: null, ft: 0, wall: 0, target: v.self.id, targetKind: 'core:warrior', status: { id: 'core:rust', turnsLeft: 10, power: 1, source: a.gId }, statusesAfter: [] } as unknown as ProjectedEvent;
-    expect(macroNext(st, v, catalog, [ev])).toEqual({ stop: 'status_changed' });
+    expect((macroNext(st, v, catalog, [ev]) as { stop?: string }).stop).not.toBe('status_changed');
     a.manager.closeAll();
   });
 

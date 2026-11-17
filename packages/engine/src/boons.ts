@@ -53,12 +53,14 @@ export function relicInfo(content: Content, kind: string, owned: ReadonlySet<str
  * 遺物の候補を引く（状態を持たない: seed|expedition|通番|relic|枠）。参加者のまだ持っていない加護の遺物から引き、
  * すべて持っていれば全体から引く（そのときの遺物は owned になり、持ち帰っても新しい加護は付かない）
  */
-export function pickRelic(content: Content, seed: string, no: number, slotIndex: number, owned: ReadonlySet<string>): RelicInfo | null {
+export function pickRelic(content: Content, seed: string, no: number, slotIndex: number, owned: ReadonlySet<string>, avoid: ReadonlySet<string> = new Set()): RelicInfo | null {
   const all = content.lists.relics;
   if (!all.length) return null;
   const rng = Rng.fromSeed(`${seed}|expedition|${no}|relic|${slotIndex}`);
+  // 同じキャンプのほかの候補に出た遺物は避ける（V3-7a 後の評価: 同じ欠片が 2 枠に同時に出た）
   const fresh = all.filter((it) => !owned.has(it.boon!));
-  const pool = fresh.length ? fresh : all;
+  const freshNew = fresh.filter((it) => !avoid.has(it.id));
+  const pool = freshNew.length ? freshNew : fresh.length ? fresh : all;
   return relicInfo(content, pool[rng.int(pool.length)].id, owned);
 }
 

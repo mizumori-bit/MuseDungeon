@@ -227,7 +227,8 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
       const hit = ev.hit ? who(ctx, ev.hit, ev.hitKind, ev.reachedAffixes) : null;
       const reached = ev.reached ? who(ctx, ev.reached, ev.reachedKind, ev.reachedAffixes) : (ja ? '何か' : 'something');
       const at = ev.landed ? `(${ev.landed.x},${ev.landed.y})` : '';
-      const fall = ev.broke ? (ja ? '砕け散った。' : ' It shatters.') : at ? (ja ? `${at} に落ちた。` : ` It lands at ${at}.`) : '';
+      // 落ちた所が見えないときは「見えない所に落ちた」（V3-7a 後の評価: 「消えた」で、壊れたのか分からなかった）
+      const fall = ev.broke ? (ja ? '砕け散った。' : ' It shatters.') : at ? (ja ? `${at} に落ちた。` : ` It lands at ${at}.`) : (ja ? '見えない所に落ちた。' : ' It lands somewhere out of sight.');
       if (!ev.outcome) {
         if (ja) return `${a}は${n}を投げた。${hit ? `${hit}に命中した。` : ''}${ev.broke ? '砕け散った。' : ''}`;
         return `${cap(a)} throw${ev.actor === self ? '' : 's'} ${n}.${hit ? ` It hits ${hit}.` : ''}${ev.broke ? ' It shatters.' : ''}`;

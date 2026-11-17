@@ -414,6 +414,15 @@ V3-2R で足した項目（同じく後方互換。会心と経験値のルー�
 - `player_state.reason: 'joined'`（キャンプから始まる参加）。参加コマンドの `atCamp`
 - プレイヤー向けの射影で、見えていた個体が視界の外へ動いた `entity_moved` に `dirOut`（向きだけ。行き先は伏せたまま）
 
+V3-7a の後の AI 評価の修正で足した項目（後方互換。同じシードの候補が変わるので `engineVersion` は 0.16.1、`eventVersion` は 12 のまま。DESIGN.md §28.1）:
+
+- World State: `ExpeditionOffer.guardianAffixes`・`Expedition.guardianAffixes`（候補の時点で引いた守護者の接辞。プレイヤーには渡さない）。目標階に置く守護者はこの接辞を持つ。候補の `guardian.traits`（速い・回避が高い・`poison`）と `guardian.maxHit` は接辞込み
+- 候補: 同じキャンプの候補に、同じ遺物を 2 枠出さない
+- マクロ: 停止理由 `hit_while_waiting`（fight の待つ手番に、標的ではない隣の敵の近接で被弾した。`until: 'clear'` なら止まらずその敵へ標的を替える）。能力値の修正だけの状態異常（錆）では止まらない。`explore toward: 'sense'` が止まるのは、この遠征の目的の遺物・守護者（節目なら大守護者、守護者なら名前が目的と同じもの）が見えた・覚えているときだけ。`explore toward: 'draft'` は、着いた境界の近くの境界を続けて追うとき、風の方角にある境界だけを追う
+- 観測: `visible.monsters[].speed_ratio`（速い・遅いときの、自分の速さに対する倍率。文は「遅い×0.8」）。`navigation.known_stairs[].occupied_by`（階段の上に見えている敵の ID）。最寄りの階段に敵が乗っていれば、valid_actions の `travel_to stairs_*` は「不可: 階段の上に … がいる」、alerts の escape にも「ただし階段の上に … がいて、ふさがれている」。致死の警告（`lethal_range`）に回復の手段（「回復の薬 N・立て直し 使える」）。節目に挑む遠征の状況の行の弱点は、試して分かる前でも記録庫の記憶があれば「投擲に弱い（記録庫の記憶）」
+- 観測・所持品: 鑑定済みの品に種類 ID（`ObsInvItem.kind`・`self.attack.throws[].kind`。`javelin` のように `core:` を省く）。観測の所持品の行では投げられる物に `{with:javelin}`、`inventory` の行に「（種類 javelin）」。fight の `with` に渡せる
+- 文: 投げた物が見えない所に落ちたら「届かず、見えない所に落ちた。」（前は「消えた」）
+
 V3-7a で足した項目（目標の宣言。後方互換。World と engine は変えていない。DESIGN.md §28）:
 
 - 目標（`shared/goals`）: `GoalDecl { type, value, within }`・`GoalRecord { id, player, type, value, within, fromNo, best, status: 'active'|'achieved'|'missed'|'withdrawn', endedNo? }`・`GoalCandidate { type, value, within, level: 'match'|'beat'|'beat_big'|'start', text }`・`GoalInfo { active, candidates, record: { declared, achieved }, lines }`。型は depth（最深到達。期限 1〜3 回）・banked（1 回の遠征の確定点。次の遠征）・milestone（次の未踏破の節目の大守護者。1〜3 回）・margin（達成した遠征で、最も下がった HP の %。次の遠征）

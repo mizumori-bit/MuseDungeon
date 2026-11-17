@@ -5,7 +5,7 @@ import type { Catalog } from './catalog';
 import type { ActionError, Command, MacroMode, TravelTarget } from './commands';
 import { actionError } from './commands';
 import type { ProjectedEvent } from './filter';
-import { armorWithStatuses, memoryKey, restCapHp } from './catalog';
+import { memoryKey, restCapHp } from './catalog';
 import { worstTurnOf } from './danger';
 import { abilityStatus, weaponReach } from './build';
 
@@ -28,7 +28,7 @@ export type MacroStop =
   | 'hostile_in_view' | 'damaged' | 'item_seen' | 'stairs_seen' | 'arrived' | 'explored'
   | 'unreachable' | 'unknown_destination' | 'step_limit' | 'full_hp' | 'status_changed'
   | 'not_your_turn' | 'dead' | 'run_ended' | 'floor_changed' | 'blocked' | 'error'
-  | 'target_hp' | 'max_turns' | 'left_board' | 'attacked' | 'collected' | 'hostile_adjacent' | 'sense_found'
+  | 'target_hp' | 'max_turns' | 'left_board' | 'attacked' | 'collected' | 'hostile_adjacent' | 'sense_found' | 'hit_while_waiting'
   | 'hp_floor' | 'hp_threshold' | 'target_down' | 'target_gone' | 'target_moved' | 'hostile_alerted'
   // fight の拡張（V3-2R2 §18.5）
   | 'target_adjacent' | 'out_of_ammo' | 'no_line_of_sight' | 'target_not_approaching' | 'target_not_hunting' | 'not_throwable'
@@ -488,7 +488,8 @@ export function macroNext(state: MacroState, view: PlayerView, catalog: Catalog,
       const st = (e.status as { id?: string; source?: string | null }) ?? {};
       if (e.target !== me.id || !st.id || state.myStatuses.includes(st.id)) return false;
       if (st.source === me.id) return false;
-      if (catalog.statuses[st.id]?.armor !== undefined && armorWithStatuses(catalog.statuses, [{ id: st.id }], me.stats.armor) === me.stats.armor) return false;
+      // 能力値の修正（錆）では止まらない（状態は観測と変化の欄に出る。V3-7a 後の評価: 錆が付くたびに止まった）
+      if (catalog.statuses[st.id]?.armor !== undefined) return false;
       return true;
     });
     // 継続ダメージ（毒）は careful でも止めない（HP のしきい値をまたぐまで）
@@ -509,6 +510,13 @@ export function macroNext(state: MacroState, view: PlayerView, catalog: Catalog,
       if (status) return { stop: 'status_changed' };
       // 待つ手番に、標的以外の射撃で被弾した: 1 回で止まる（撃たれ続けない。V3-4b §28.4）
       if (state.waited && ev('damaged', (e) => e.target === me.id && (e.via === 'ranged' || e.via === 'thrown') && e.source !== state.fightTarget)) return { stop: 'shot_while_waiting' };
+      // 待つ手番に、標的以外の隣の敵に殴られた: until: clear ならその敵へ、そうでなければ止まる（V3-7a 後の評価: 4 手番待つ間に 19 被弾）
+      if (state.waited) {
+        const hitter = events.find((e) => e.type === 'attack' && (e as unknown as { target?: string }).target === me.id && (e as unknown as { attacker?: string }).attacker !== state.fightTarget && !(e as unknown as { ranged?: boolean }).ranged) as unknown as { attacker?: string } | undefined;
+        const near = hitter?.attacker ? view.entities.find((h) => h.id === hitter.attacker && h.cat === 'monster' && cheb(h.pos, pos) <= 1) : undefined;
+        if (hitter && state.fightUntil === 'clear' && near) retarget(state, near);
+        else if (hitter) return { stop: 'hit_while_waiting' };
+      }
       // 待つ手番に標的に殴られたのに、標的が隣にいない（当てて離れる速い相手）: 待ち続けずに止まる（V3-3 後の AI 評価: 10 手番待つ間に 9 回殴られた）
       if (state.waited && ev('attack', (e) => e.attacker === state.fightTarget && e.target === me.id)) {
         const t0 = view.entities.find((h) => h.id === state.fightTarget);
@@ -824,8 +832,12 @@ export function macroNext(state: MacroState, view: PlayerView, catalog: Catalog,
   }
   let path: Pos[] | null;
   if (kind === 'explore' && state.toward === 'sense') {
-    // 気配の元（遺物・守護者）が見えた・覚えている: 探索を続けずに止まる（travel_to で向かう。V3-5a 後の AI 評価: 遺物を見たまま階の反対側まで探索した）
-    const found = view.entities.some((e) => (e.role === 'relic' && e.cat === 'item') || (e.role === 'guardian' && e.cat === 'monster'))
+    // 気配の元（遠征の目的の遺物・守護者）が見えた・覚えている: 探索を続けずに止まる（travel_to で向かう。V3-5a 後の AI 評価）。
+    // 目的ではない守護者には反応しない（V3-7a 後の評価: 階に残っていた別の守護者で止まった）
+    const xo = view.expedition;
+    const isObjectiveGuardian = (e: EntityView) => e.cat === 'monster' && e.role === 'guardian' && !!e.guardian
+      && (xo?.objective.type === 'slay_warden' ? !!e.guardian.warden : !!xo?.guardian && e.guardian.name.ja === xo.guardian.name.ja && e.guardian.name.en === xo.guardian.name.en);
+    const found = view.entities.some((e) => (e.role === 'relic' && e.cat === 'item') || isObjectiveGuardian(e))
       || view.memory.remembered.some((r) => r.role === 'relic');
     if (found) return { stop: 'sense_found' };
   }
@@ -836,9 +848,10 @@ export function macroNext(state: MacroState, view: PlayerView, catalog: Catalog,
     // 下への風の方角（と隣り合う方角）の未探索を優先する（V3-2R3 §20.5）
     // toward: draft は下への風、sense は遺物・守護者の気配の方角（V3-4b §28.7。同じ仕組み）
     const draft = state.toward === 'draft' ? view.floorHint?.draft ?? null : state.toward === 'sense' ? view.sense?.dir ?? null : null;
+    const nearSet = draft ? new Set<Dir>(nearDirs(draft)) : null;
+    const inDraft = (i: number) => { const d = compassDir(pos, { x: i % grid.width, y: Math.trunc(i / grid.width) }); return d !== null && !!nearSet?.has(d); };
     if (draft) {
-      const near = new Set<Dir>(nearDirs(draft));
-      const along = fr.filter((i) => { const d = compassDir(pos, { x: i % grid.width, y: Math.trunc(i / grid.width) }); return d !== null && near.has(d); });
+      const along = fr.filter(inDraft);
       if (along.length) fr = along;
     }
     const itemCells = state.pickup && !draft ? pickableItems(view, catalog, state.skipItems, state.pickUseful !== false).map((x) => x.cell) : [];
@@ -855,7 +868,8 @@ export function macroNext(state: MacroState, view: PlayerView, catalog: Catalog,
     // 方角の絞り込みで選び直すと、通路の先と遠い別の境界の間を往復する）
     if (path === null && draft && state.goal !== undefined) {
       const old = { x: state.goal % grid.width, y: Math.trunc(state.goal / grid.width) };
-      const nearOld = allFrontiers.filter((i) => i !== here && cheb({ x: i % grid.width, y: Math.trunc(i / grid.width) }, old) <= 3);
+      // 続けて追うのは、風の方角にある境界だけ（V3-7a 後の評価: 西の境界に着いた後、通路をたどって南東・東へ 16 歩流れた）
+      const nearOld = allFrontiers.filter((i) => i !== here && cheb({ x: i % grid.width, y: Math.trunc(i / grid.width) }, old) <= 3 && inDraft(i));
       if (nearOld.length) {
         path = route(nearOld);
         if (crossesTrap(path)) path = null;
@@ -928,7 +942,7 @@ export function macroStopError(L: Locale, stop: MacroStop, cmd: Command, dir?: D
   const flee = cmd.type === 'travel' || cmd.type === 'explore' || cmd.type === 'collect';
   switch (stop) {
     case 'sense_found':
-      return actionError('nothing_to_do', t(L, '気配の元（遺物・守護者）はもう見えているか、覚えている。', 'The source of the sense (relic or guardian) is already in view or remembered.'),
+      return actionError('nothing_to_do', t(L, '気配の元（この遠征の目的の遺物・守護者）はもう見えているか、覚えている。', 'The source of the sense (this expedition\'s relic or guardian) is already in view or remembered.'),
         t(L, 'travel_to { to: <遺物・守護者の ID> } で向かう（get_map で場所を見られる）。', 'Head there with travel_to { to: <relic or guardian id> } (get_map shows where).'));
     case 'hostile_adjacent':
       return actionError('hostile_adjacent', t(L, '隣に起きている敵がいるので、マクロは 1 歩も進めない。', 'An awake enemy is adjacent, so the macro cannot take a step.'),

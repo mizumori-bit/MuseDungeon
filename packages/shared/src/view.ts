@@ -231,7 +231,7 @@ export function campDepthOf(world: World): number {
 /** 候補から、プレイヤーに渡さない守護者の種族を外す */
 export function stripCamp(camp: CampState): CampState {
   const c = structuredClone(camp);
-  for (const o of c.offers) { delete o.guardianKind; delete o.guardianWeakness; }
+  for (const o of c.offers) { delete o.guardianKind; delete o.guardianWeakness; delete o.guardianAffixes; }
   return c;
 }
 
