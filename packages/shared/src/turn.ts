@@ -23,7 +23,9 @@ export type ChangeCode =
   /** 守護者が倒れた（ほかの変化と別の行で先頭に出す。V3-2R2 §18.6） */
   | 'guardian_slain'
   /** 条件付きの特技が効いた（V3-4b §28.6）・敵が目を覚ました理由（§28.8） */
-  | 'perk' | 'woke';
+  | 'perk' | 'woke'
+  /** 守護者のしたこと・分かった弱点（V3-3） */
+  | 'guardian' | 'intel';
 
 export interface Change { code: ChangeCode; text: string; entity?: string }
 
@@ -116,7 +118,7 @@ export function turnSnapshot(view: PlayerView, obs: Observation, state: TurnStat
 }
 
 const PRIORITY: ChangeCode[] = [
-  'guardian_slain', 'floor_changed', 'objective_complete', 'objective_progress', 'next_camp', 'can_extract', 'hp_low', 'killed', 'died_seen', 'hp_dropped', 'new_hostile',
+  'guardian_slain', 'guardian', 'intel', 'floor_changed', 'objective_complete', 'objective_progress', 'next_camp', 'can_extract', 'hp_low', 'killed', 'died_seen', 'hp_dropped', 'new_hostile',
   'level_up', 'status_gained', 'status_lost', 'woke', 'perk', 'item_found', 'stairs_found', 'reappeared', 'hostile_gone',
 ];
 
@@ -209,6 +211,8 @@ export function diffChanges(prev: TurnSnapshot | null, cur: TurnSnapshot, view: 
     if (cur.stairs.some((s) => !prev.stairs.includes(s))) out.push({ code: 'stairs_found', text: t(L, '階段を見つけた', 'Found stairs') });
   }
   if (cur.level > prev.level) out.push({ code: 'level_up', text: t(L, `レベル ${cur.level} になった`, `Reached level ${cur.level}`) });
+  // 守護者のしたこと・分かった弱点（V3-3）
+  for (const e of events) if (e.seq > prev.seq && (e.type === 'guardian_acted' || e.type === 'guardian_intel') && e.text) out.push({ code: e.type === 'guardian_intel' ? 'intel' : 'guardian', text: e.text.replace(/。$/, '') });
   // 敵が目を覚ました理由（V3-4b §28.8）: 同じ文は ×N にまとめる
   const wokeCount = new Map<string, number>();
   for (const e of events) if (e.seq > prev.seq && e.type === 'monster_woke' && e.text) { const s = e.text.replace(/。$/, ''); wokeCount.set(s, (wokeCount.get(s) ?? 0) + 1); }

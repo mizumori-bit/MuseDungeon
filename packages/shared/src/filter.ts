@@ -12,7 +12,7 @@ const PLAYER_VISIBLE: ReadonlySet<EventType> = new Set<EventType>([
   'tile_changed', 'entity_moved', 'entity_changed_floor',
   'attack', 'damaged', 'healed', 'max_hp_changed', 'died',
   'status_applied', 'status_expired',
-  'xp_gained', 'level_up', 'perk_offered', 'perk_chosen', 'perk_triggered', 'monster_woke', 'ability_used', 'curse_revealed', 'item_inspected', 'curse_lifted',
+  'xp_gained', 'level_up', 'perk_offered', 'perk_chosen', 'perk_triggered', 'monster_woke', 'guardian_intel', 'guardian_acted', 'ability_used', 'curse_revealed', 'item_inspected', 'curse_lifted',
   'item_picked_up', 'item_dropped', 'item_equipped', 'item_unequipped', 'item_used', 'item_thrown',
   'item_identified', 'item_issued', 'feature_state', 'trap_revealed', 'trap_triggered',
   'noise', 'thought', 'chat', 'entity_removed',
@@ -31,6 +31,7 @@ const SELF_ONLY: Partial<Record<EventType, (ev: any, playerId: PlayerId, selfId:
   curse_lifted: (ev, _p, self) => ev.actor === self,
   item_identified: (ev, p) => ev.player === p,
   trap_revealed: (ev, p) => ev.player === p,
+  guardian_intel: (ev, p) => ev.player === p,
   thought: (ev, p) => ev.player === p,
 };
 

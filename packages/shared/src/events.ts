@@ -3,11 +3,11 @@
 import type {
   AiState, BaseStats, CampState, Dir, Entity, EntityId, EquipSlot, Expedition, ExpeditionHaul, ExpeditionEndReason, ExpeditionResult, Floor,
   FloorKey, FloorPos, MonsterMemory, Objective, ObjectiveProgress, PlayerId, PlayerRecord, PlayerStats, Pos,
-  RememberedEntity, RngState, RunMeta, RunSummary, Sense, Stats, StatusInst, WorldSecret, FloorHint,
+  RememberedEntity, RngState, RunMeta, RunSummary, Sense, Stats, StatusInst, WorldSecret, FloorHint, Names,
 } from './types';
 
 /** 2: 遠征・実ダメージ・回復の蓄積値（IMPROVEMENTS_V2）。3: ビルド（特技・能動技・呪い。V3-4）。古いログもそのまま畳み込める */
-export const EVENT_VERSION = 4;
+export const EVENT_VERSION = 5;
 
 export interface EventBase {
   seq: number;
@@ -87,6 +87,12 @@ export type GameEvent =
   | E<'perk_offered', { target: EntityId; level: number; options: string[] }>
   /** 特技を取った。ability は覚えた能動技 */
   | E<'perk_chosen', { target: EntityId; perk: string; level: number; ability?: string | null }>
+  /** 守護者の状態の書き換え（after 値は put。俯瞰専用） */
+  | E<'guardian_state', { id: EntityId }>
+  /** 守護者のしたこと（手下を呼んだ・突進した・突進が外れた・怒った。見えている者に） */
+  | E<'guardian_acted', { id: EntityId; kind: string; guardianName: Names; act: 'summoned' | 'charged' | 'missed' | 'enraged'; count?: number }>
+  /** 守護者の弱点を知った（V3-3 §3.1。弱点が効いた場面を見た本人だけ） */
+  | E<'guardian_intel', { player: PlayerId; guardian: EntityId; guardianName: Names; weakness: string }>
   /** 敵が目を覚ました・気づいた理由（V3-4b §28.8）。見えている者にだけ。reason: noise（音。by が音を立てた者、ring は欠点が効いた指輪）/ sight（姿）/ pack（仲間の声） */
   | E<'monster_woke', { id: EntityId; kind: string; reason: 'noise' | 'sight' | 'pack'; by: EntityId | null; ring: string | null; wasAsleep: boolean }>
   /** 条件付きの特技が効いた（V3-4b §28.6）。effect: not_woken（忍び足）/ crit（不意打ち）/ picked（回収の手）/ braced（盾の構え）/ might（踏みとどまる）/ poison_halved（鉄の胃）/ cowed（威圧） */

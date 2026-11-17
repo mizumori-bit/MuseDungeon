@@ -12,6 +12,12 @@
     "afterInteract": "used"
   },
   {
+    "id": "core:ward_fire", "name": { "ja": "護りの火", "en": "ward fire" }, "category": "feature",
+    "states": ["lit", "out"], "initialState": "lit", "passable": true,
+    "onInteract": [],
+    "afterInteract": "out"
+  },
+  {
     "id": "core:trap_dart", "name": { "ja": "毒矢の罠", "en": "poison dart trap" }, "category": "trap",
     "passable": true, "depth": { "min": 1 }, "rarity": 1,
     "onEnter": [{ "effect": "damage", "amount": "1d4" }, { "effect": "status", "status": "core:poison", "turns": "1d4+2", "power": 1, "chancePct": 70 }]

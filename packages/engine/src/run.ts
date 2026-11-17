@@ -7,6 +7,7 @@ import type {
 import { actionError, CAMP_COMMANDS, emptyWorld, EVENT_VERSION, FREE_COMMANDS, MACRO_COMMANDS, Rng, t } from '@muse/shared';
 import { actions, freeCommand } from './actions';
 import './abilities';
+import './guardianBehaviors';
 import { initialBuild } from './build';
 import { Ctx } from './ctx';
 import { accrueHaul, checkObjective, huntingInView, offerExpeditions, startExpedition } from './expedition';
@@ -15,7 +16,7 @@ import { updateKnowledge } from './perception';
 import { advance, endTurn } from './scheduler';
 import { recomputeStats } from './stats';
 
-export const ENGINE_VERSION = '0.9.0';
+export const ENGINE_VERSION = '0.10.0';
 
 export interface CreateRunParams {
   runId: string;

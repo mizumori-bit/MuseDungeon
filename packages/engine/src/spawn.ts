@@ -52,6 +52,8 @@ export function makeMonster(ctx: Ctx, floor: FloorKey, spec: Extract<SpawnSpec, 
   if (spec.bounty) e.bounty = spec.bounty;
   // 守護者は置かれたマスを持ち場にする（守護者付きの遺物では遺物の隣。V3-2R3b §23.2）
   if (spec.role === 'guardian') e.home = { x: spec.x, y: spec.y };
+  // 守護者の型・名前・弱点（V3-3）
+  if (spec.guardian) e.guardian = structuredClone(spec.guardian);
   return e;
 }
 

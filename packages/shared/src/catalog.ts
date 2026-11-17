@@ -94,6 +94,10 @@ export interface Catalog {
   abilities: Record<string, CatalogAbility>;
   /** reach: 近接の届く距離（長柄）、attackCost: 近接の手番コスト（速い） */
   weaponTraits: Record<string, { name: Names; desc: Names; reach?: number; attackCost?: number }>;
+  /** 守護者の型（V3-3 §3.1）。name は称号 */
+  guardianTypes: Record<string, { name: Names; desc: Names; strongVs: 'melee' | 'thrown'; handler: string }>;
+  /** 守護者の弱点（V3-3 §3.1）。どの守護者が持つかは試すまで伏せる */
+  guardianWeaknesses: Record<string, { name: Names; desc: Names; handler: string }>;
   biomes: Record<string, { name: Names }>;
   floorTypes: Record<string, { name: Names }>;
   /** 公開ルールの数値（content の balance.json から。ルールブックと実際の挙動を一致させる） */

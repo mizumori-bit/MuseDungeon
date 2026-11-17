@@ -1,0 +1,20 @@
+[
+  { "id": "core:summoner", "name": { "ja": "呼び集める者", "en": "the Summoner" }, "handler": "summoner", "strongVs": "melee",
+    "desc": { "ja": "体力が 75%・50%・25% を切るたびに、1 手の予兆の後、その階の種族から手下を 2 体呼ぶ", "en": "Each time its HP falls below 75%, 50% and 25%, it signals for a turn, then calls two minions from the floor's creatures" },
+    "params": { "count": 2 } },
+  { "id": "core:charger", "name": { "ja": "突き進む者", "en": "the Charger" }, "handler": "charger", "strongVs": "thrown",
+    "desc": { "ja": "直線上（縦・横・斜め、6 マス以内）に相手がいると 1 手構え、次の手番にその直線を突進する。当たれば 2 倍のダメージ。外れると 1 手無防備", "en": "With you on a straight line (orthogonal or diagonal, within 6) it braces for a turn, then charges down that line: a hit deals double damage, a miss leaves it helpless for a turn" },
+    "params": { "range": 6, "mult": 2 } },
+  { "id": "core:warded", "name": { "ja": "護られし者", "en": "the Warded" }, "handler": "warded", "strongVs": "melee",
+    "desc": { "ja": "棲み処の護りの火（2 基）が 1 つでも灯っている間、装甲 +4。火は隣で interact するか、投げた物を当てると消える", "en": "While any of the two ward fires in its lair burns, armor +4. Put a fire out with interact when adjacent, or by throwing something at it" },
+    "params": { "armor": 4, "fires": 2 } },
+  { "id": "core:enrager", "name": { "ja": "荒ぶる者", "en": "the Enraged" }, "handler": "enrager", "strongVs": "melee",
+    "desc": { "ja": "体力が 50% 以下になると、1 手の予兆の後に怒り、速さ +30・威力 +2 になる", "en": "At 50% HP or less it signals for a turn, then rages: speed +30, might +2" },
+    "params": { "belowPct": 50, "speed": 30, "might": 2 } },
+  { "id": "core:stalker", "name": { "ja": "潜む者", "en": "the Stalker" }, "handler": "stalker", "strongVs": "thrown",
+    "desc": { "ja": "眠らない。見られている間は近づかず、相手の視界の外を通って寄る（一度気づいた相手は、見失っても 12 マス以内なら居場所を追い続ける）。視界の外から隣に来た最初の一撃は会心", "en": "Never sleeps. While you can see it, it will not approach; it closes in out of your sight (once it has noticed you, it keeps track of you within 12 cells even out of sight), and its first blow from out of sight is a critical hit" },
+    "params": { "sense": 12 } },
+  { "id": "core:deflector", "name": { "ja": "弾く者", "en": "the Deflector" }, "handler": "deflector", "strongVs": "thrown",
+    "desc": { "ja": "2 マス以上離れた相手からの投擲のダメージを半分にする（隣からは通常）", "en": "Halves thrown damage from 2 or more cells away (from adjacent cells it takes full damage)" },
+    "params": { "pct": 50, "minDist": 2 } }
+]

@@ -3,7 +3,7 @@
 import type { Catalog, CatalogEquipStats } from './catalog';
 import { abilityStatus, accBonuses, curseUnknown, isCursedItem, perkChoice, shortId, weaponReach } from './build';
 import { haulTotal, nameOf, nextCampOf, nextOverreach, offerGap, overreachPoints, payoutOf, regenInterval, regenStep, restCapHp } from './catalog';
-import { multText, objectiveText, offerText, partsText, progressText, resultText } from './expedition';
+import { guardianDisplayName, multText, objectiveText, offerText, partsText, progressText, resultText } from './expedition';
 import { isStationary, pickableItems, sameOrWorseEquip, worseEquip } from './macro';
 import { attacksPerTurn, chaseAttacks, memoryOf, monsterSpeedOf, selfSpeed } from './danger';
 import type { PerceivedEvent } from './filter';
@@ -62,6 +62,10 @@ export interface ObsMonster {
   shots: { slot: string; state: 'clear' | 'blocked' | 'out_of_range' }[];
   /** 倒すと戦利品に入る賞金 */
   bounty?: number;
+  /** 守護者の呼び名・型・分かった弱点（V3-3 §3.1。弱点は試して分かったものだけ） */
+  guardian?: { name: string; types: { id: string; name: string }[]; weakness?: { id: string; name: string } };
+  /** 予備動作（見えていれば出る。V3-3 §3.1）。on_line: 突進の直線の上に自分がいる */
+  intent?: { code: 'winding_up' | 'summoning' | 'enraging'; dir?: Dir; on_line?: boolean; text: string };
 }
 /** 同じセルの同種の物は 1 行にまとめる（ids に全て。id は先頭） */
 export interface ObsItem { id: string; ids?: string[]; name: string; pos: Pos; dir: Dir | null; dist: number; qty: number; remembered?: boolean; role?: EntityRole; mine?: boolean; value?: number; /** まとめた「自分が投げた物」の、最寄りのマスの本数 */ near_qty?: number }
@@ -84,6 +88,8 @@ export interface RestEstimate {
 
 export interface ObsExpedition {
   no: number;
+  /** この遠征の守護者の「称号＋名前」・型・分かった弱点（V3-3。弱点は試して分かったときだけ） */
+  guardian?: { name: string; types: { id: string; name: string }[]; weakness?: { id: string; name: string } };
   objective: { type: ObjectiveType; target_depth: number | null; text: string };
   progress: { depth: number | null; target_depth: number | null; reached?: boolean; guardian_slain?: boolean; relic_held?: boolean };
   status: Expedition['status'];
@@ -298,9 +304,13 @@ export function hpLeftEstimate(mem: MonsterMemory | undefined, band: HpState, da
  * 推定残り HP の文章（V3-2R §14.3）。記録は標本なので「記録どおりなら」と言う。
  * 「記録どおりなら残り 6〜8（記録 3 体: 体力 8〜8）」「記録どおりなら残り 3 以上（記録 1 体: 体力 8）」
  */
+/** 体力の記録を「確かな幅」として扱える標本の数（これ未満は上限を出さず、「個体差あり」を添える） */
+export const HP_RECORD_SURE = 5;
+
 export function hpEstimateText(locale: Locale, est: { min: number; max: number | null; samples: number; record?: { min: number; max: number } }): string {
   const rec = est.record ? (est.record.min === est.record.max ? `${est.record.min}` : t(locale, `${est.record.min}〜${est.record.max}`, `${est.record.min}-${est.record.max}`)) : '';
-  const recText = t(locale, `（記録 ${est.samples} 体${rec ? `: 体力 ${rec}` : ''}）`, ` (${est.samples} recorded${rec ? `, HP ${rec}` : ''})`);
+  const few = est.samples < HP_RECORD_SURE;
+  const recText = t(locale, `（記録 ${est.samples} 体${rec ? `: 体力 ${rec}` : ''}${few ? '。個体差あり' : ''}）`, ` (${est.samples} recorded${rec ? `, HP ${rec}` : ''}${few ? '; individuals vary' : ''})`);
   const range = est.max === null ? t(locale, `${est.min} 以上`, `>= ${est.min}`) : est.min === est.max ? `${est.min}` : t(locale, `${est.min}〜${est.max}`, `${est.min}-${est.max}`);
   return t(locale, `記録どおりなら残り ${range}${recText}`, `if typical, ${range} left${recText}`);
 }
@@ -385,7 +395,9 @@ export function memoryCombatText(locale: Locale, mem: MonsterMemory): string {
   const L = locale;
   const speed = mem.abilities.includes('fast') ? t(L, '速い', 'fast') : mem.abilities.includes('slow') ? t(L, '遅い', 'slow') : t(L, '普通（速さの違いは観測していない）', 'normal (no speed difference observed)');
   const ranged = mem.abilities.includes('ranged') ? t(L, `あり（観測した最長距離 ${mem.rangeMax ?? '?'}）`, `yes (longest seen ${mem.rangeMax ?? '?'})`) : t(L, '観測していない', 'not observed');
-  const hp = mem.hpSeen ? t(L, `${mem.hpSeen.min}〜${mem.hpSeen.max}（${mem.hpSeen.samples}体）`, `${mem.hpSeen.min}-${mem.hpSeen.max} (${mem.hpSeen.samples})`) : t(L, '記録なし', 'none');
+  // 記録が 5 体未満の間は、幅を確定値のように見せない（種族の体力はダイスで振られる。V3-3 の設計の指示）
+  const few = !!mem.hpSeen && mem.hpSeen.samples < HP_RECORD_SURE;
+  const hp = mem.hpSeen ? t(L, `${mem.hpSeen.min === mem.hpSeen.max ? mem.hpSeen.min : `${mem.hpSeen.min}〜${mem.hpSeen.max}`}（${mem.hpSeen.samples} 体${few ? '。個体差あり' : ''}）`, `${mem.hpSeen.min === mem.hpSeen.max ? mem.hpSeen.min : `${mem.hpSeen.min}-${mem.hpSeen.max}`} (${mem.hpSeen.samples} seen${few ? '; individuals vary' : ''})`) : t(L, '記録なし', 'none');
   const ab = mem.abilities.filter((a) => a !== 'fast' && a !== 'slow' && a !== 'ranged').map((a) => abilityName(L, a));
   return t(L,
     `遭遇${mem.encounters}回・撃破${mem.kills}回・速さ:${speed}・遠隔攻撃:${ranged}・受けた最大ダメージ${mem.maxDamageToYou}・与えた最大ダメージ${mem.maxDamageByYou}・体力の記録:${hp}${ab.length ? '・その他の能力:' + ab.join('、') : ''}`,
@@ -483,6 +495,18 @@ export function chaseEstimate(view: PlayerView, catalog: Catalog, hunters: reado
     if (mem && mem.maxDamageToYou > 0) worst += hits * mem.maxDamageToYou;
   }
   return { recordedWorst: worst, worst, catchers, shooters };
+}
+
+/** 予備動作の文（V3-3 §3.1）。突進は向きと、自分がその直線の上にいるか（6 マス以内） */
+function intentOf(L: Locale, e: EntityView, me: Pos | null): NonNullable<ObsMonster['intent']> {
+  const it = e.intent!;
+  if (it.kind === 'winding_up' && it.dir) {
+    let on = false;
+    if (me) for (let k = 1; k <= 6; k++) if (e.pos.x + DIR_VEC[it.dir][0] * k === me.x && e.pos.y + DIR_VEC[it.dir][1] * k === me.y) on = true;
+    return { code: it.kind, dir: it.dir, on_line: on, text: t(L, `突進の構え（${DIR_JA[it.dir]}の直線。次の手番に突進する${on ? '。あなたは線の上にいる' : ''}）`, `bracing to charge (${it.dir} line; charges next turn${on ? '; you are on the line' : ''})`) };
+  }
+  if (it.kind === 'summoning') return { code: it.kind, text: t(L, '手下を呼ぶ構え（次の手番に呼ぶ）', 'about to call minions (next turn)') };
+  return { code: it.kind, text: t(L, '怒りの予兆（次の手番に速さと威力が上がる）', 'about to rage (faster and stronger next turn)') };
 }
 
 export function threatOf(view: PlayerView, e: EntityView): 1 | 2 | 3 | 4 | 5 | null {
@@ -671,6 +695,16 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       if (e.bounty) m.bounty = e.bounty;
       if (e.fleeing) m.fleeing = true;
       if (e.damageSeen) m.damage_seen = e.damageSeen;
+      // 守護者の呼び名・型・分かった弱点、予備動作（V3-3 §3.1）
+      if (e.guardian) {
+        const w = e.guardian.weakness;
+        m.guardian = {
+          name: guardianDisplayName(L, e.guardian),
+          types: e.guardian.types.map((id) => ({ id, name: nameOf(catalog.guardianTypes[id]?.name, L, id) })),
+          ...(w ? { weakness: { id: w, name: nameOf(catalog.guardianWeaknesses[w]?.name, L, w) } } : {}),
+        };
+      }
+      if (e.intent) m.intent = intentOf(L, e, pos);
       // 推定残り HP（守護者は守護者の体力の記録から）
       const est = hpLeftEstimate(mem, m.hp_state, e.damageSeen ?? 0, catalog.rules?.estimateMinSamples ?? 5);
       if (est) m.hp_left_est = est;
@@ -834,6 +868,8 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
   }
   if (me.statuses.some((s) => s.id === 'core:poison')) alerts.push({ code: 'poisoned', text: t(L, '毒に冒されている', 'You are poisoned') });
   if (onStairs) alerts.push({ code: 'on_stairs', text: onStairs === 'down' ? t(L, '下り階段の上にいる', 'You are on stairs down') : t(L, '上り階段の上にいる', 'You are on stairs up') });
+  // 予備動作（V3-3 §3.1）: 見えている敵が次の手番に大きな行動を取る
+  for (const m of hostiles) if (m.intent) alerts.push({ code: 'intent', text: t(L, `予備動作: ${m.guardian?.name ?? m.name}が${m.intent.text}`, `Intent: ${m.guardian?.name ?? m.name} is ${m.intent.text}`), entity: m.id, data: { kind: m.intent.code, ...(m.intent.dir ? { dir: m.intent.dir } : {}), ...(m.intent.on_line !== undefined ? { on_line: m.intent.on_line } : {}) } });
   const itemsHere = items.filter((i) => i.dist === 0 && !i.remembered);
   if (itemsHere.length) alerts.push({ code: 'item_here', text: t(L, '足元にアイテム: ', 'Item here: ') + itemsHere.map((i) => i.name).join(', ') });
   const carried = view.inventory.filter((i) => !(i.kind && catalog.items[i.kind]?.bound)).length;
@@ -909,6 +945,20 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       text: [t(L, `【遠征${xv.no}】${objectiveText(L, xv.objective)}`, `[Expedition ${xv.no}] ${objectiveText(L, xv.objective)}`), statusText, progressText(L, xv, f?.depth ?? null), extractText].filter(Boolean).join(' | '),
     };
     if (blocked !== undefined) expedition.extract_blocked_by = blocked;
+    // 守護者（V3-3 §3.1）: 名前・型・分かった弱点。生きている間は【遠征】の行に「守護者「名」（弱点: …）」
+    if (xv.guardian) {
+      const g = xv.guardian;
+      const w = g.weakness;
+      expedition.guardian = {
+        name: guardianDisplayName(L, g),
+        types: g.types.map((id) => ({ id, name: nameOf(catalog.guardianTypes[id]?.name, L, id) })),
+        ...(w ? { weakness: { id: w, name: nameOf(catalog.guardianWeaknesses[w]?.name, L, w) } } : {}),
+      };
+      if (active && !xv.progress.guardianSlain) {
+        const wt = expedition.guardian.weakness ? expedition.guardian.weakness.name : t(L, '不明', 'unknown');
+        expedition.text += t(L, ` | 守護者「${expedition.guardian.name}」（弱点: ${wt}）`, ` | guardian "${expedition.guardian.name}" (weakness: ${wt})`);
+      }
+    }
     if (xv.result) expedition.result = { ...xv.result, text: resultText(L, xv, catalog.rules) };
     if (xv.slot) expedition.slot = xv.slot;
     if (xv.traits.length) expedition.traits = [...xv.traits];
@@ -1430,9 +1480,14 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
       const looksText = looks.length ? (L === 'en' ? ` [${looks.join(', ')}]` : `  [${looks.join('・')}]`) : '';
       const hitLine = [hitsText(L, m.hits), dealtText(L, m.dealt)].filter(Boolean).join(L === 'en' ? ', ' : '・');
       const hits = hitLine && !brief ? (L === 'en' ? ` ${hitLine}` : `  ${hitLine}`) : '';
+      // 守護者の呼び名・型・分かった弱点、予備動作（V3-3）
+      const gtext = m.guardian ? (L === 'en'
+        ? ` "${m.guardian.name}"${m.guardian.types.length ? ` type:${m.guardian.types.map((x) => x.name).join('/')}` : ''}${m.guardian.weakness ? ` weakness:${m.guardian.weakness.name}` : ''}`
+        : `  「${m.guardian.name}」${m.guardian.types.length ? `  型:${m.guardian.types.map((x) => x.name).join('・')}` : ''}${m.guardian.weakness ? `  弱点:${m.guardian.weakness.name}` : ''}`) : '';
+      const itext = m.intent ? (L === 'en' ? ` INTENT:${m.intent.text}` : `  予備動作:${m.intent.text}`) : '';
       lines.push(L === 'en'
-        ? `- ${m.name}${role} ${m.id} (${m.pos.x},${m.pos.y}) ${relLabel(L, from, m.pos)} hp:${m.hp_state} ${m.awareness}${m.fleeing ? '(fleeing)' : ''}${looksText} threat:${threat}${worst}${hits}${dmg}${est}${shot}${m.statuses.length ? ' ' + m.statuses.join(',') : ''}`
-        : `- ${m.name}${role} ${m.id} (${m.pos.x},${m.pos.y}) ${relLabel(L, from, m.pos)}  負傷:${HP_JA[m.hp_state]}  状態:${AW_JA[m.awareness] ?? m.awareness}${m.fleeing ? '(逃走中)' : ''}${looksText}  脅威:${threat}${worst}${hits}${dmg}${est}${shot}${m.statuses.length ? '  ' + m.statuses.join(',') : ''}`);
+        ? `- ${m.name}${role}${gtext} ${m.id} (${m.pos.x},${m.pos.y}) ${relLabel(L, from, m.pos)} hp:${m.hp_state} ${m.awareness}${m.fleeing ? '(fleeing)' : ''}${looksText} threat:${threat}${worst}${hits}${dmg}${est}${shot}${m.statuses.length ? ' ' + m.statuses.join(',') : ''}${itext}`
+        : `- ${m.name}${role}${gtext} ${m.id} (${m.pos.x},${m.pos.y}) ${relLabel(L, from, m.pos)}  負傷:${HP_JA[m.hp_state]}  状態:${AW_JA[m.awareness] ?? m.awareness}${m.fleeing ? '(逃走中)' : ''}${looksText}  脅威:${threat}${worst}${hits}${dmg}${est}${shot}${m.statuses.length ? '  ' + m.statuses.join(',') : ''}${itext}`);
     }
     for (const p of vis.players) lines.push(`- ${t(L, '味方', 'ally')} ${p.name} (${p.pos.x},${p.pos.y}) ${relLabel(L, from, p.pos)} ${L === 'en' ? p.hp_state : HP_JA[p.hp_state]}`);
     for (const it of vis.items) {
@@ -1532,10 +1587,15 @@ export function describeTarget(view: PlayerView, catalog: Catalog, target: Pos |
         ? t(L, '・守護者（通常の個体より大幅に頑丈）', ', guardian (far sturdier than a normal one)')
         : (e.affixes?.length || e.tier) ? t(L, '・接辞や深層強化があるので記録より頑丈なことがある', ', affixes/tier may make it sturdier than your records') : '';
       const ds = e.damageSeen ? t(L, `・この個体への与ダメ累計 ${e.damageSeen}`, `, damage you saw it take ${e.damageSeen}`) : '';
-      const est = hpLeftEstimate(mem, e.hp ?? 'healthy', e.damageSeen ?? 0, catalog.rules?.estimateMinSamples ?? 3);
+      const est = hpLeftEstimate(mem, e.hp ?? 'healthy', e.damageSeen ?? 0, catalog.rules?.estimateMinSamples ?? HP_RECORD_SURE);
       const estText = est ? t(L, `・推定残りHP ${hpEstimateText(L, est)}`, `, estimated HP left ${hpEstimateText(L, est)}`) : '';
       const shotText = e.shot === false ? t(L, '・射線: 通らない', ', shot: blocked') : '';
-      parts.push(`${name} [${L === 'en' ? e.hp : HP_JA[e.hp ?? 'healthy']}, ${L === 'en' ? e.awareness : AW_JA[e.awareness ?? 'unaware']}] ${memText}${hpText}${ds}${estText}${shotText}${sturdy}`);
+      // 守護者の呼び名・型の説明・分かった弱点（V3-3）。弱点は試して分かるまで「不明」
+      const g = e.guardian;
+      const gText = g ? t(L,
+        `・「${guardianDisplayName(L, g)}」${g.types.map((id) => `・型「${nameOf(catalog.guardianTypes[id]?.name, L, id)}」: ${nameOf(catalog.guardianTypes[id]?.desc, L, '')}`).join('')}・弱点: ${g.weakness ? `${nameOf(catalog.guardianWeaknesses[g.weakness]?.name, L, g.weakness)}（${nameOf(catalog.guardianWeaknesses[g.weakness]?.desc, L, '')}）` : '不明（試して確かめる）'}`,
+        `, "${guardianDisplayName(L, g)}"${g.types.map((id) => `, type ${nameOf(catalog.guardianTypes[id]?.name, L, id)}: ${nameOf(catalog.guardianTypes[id]?.desc, L, '')}`).join('')}, weakness: ${g.weakness ? `${nameOf(catalog.guardianWeaknesses[g.weakness]?.name, L, g.weakness)} (${nameOf(catalog.guardianWeaknesses[g.weakness]?.desc, L, '')})` : 'unknown (try things to find out)'}`) : '';
+      parts.push(`${name} [${L === 'en' ? e.hp : HP_JA[e.hp ?? 'healthy']}, ${L === 'en' ? e.awareness : AW_JA[e.awareness ?? 'unaware']}] ${memText}${hpText}${ds}${estText}${shotText}${sturdy}${gText}`);
       list.push({ id: e.id, name, hp_state: e.hp, awareness: e.awareness, memory: mem ?? null, threat: threatOf(view, e), role: e.role, damage_seen: e.damageSeen ?? 0, hp_left_est: est ?? null });
     } else if (e.cat === 'item') {
       const name = itemDisplayName(catalog, L, e.kind, e.appearanceId, e.affixes);

@@ -7,6 +7,7 @@ import {
   abilityHandlers, abilityReadyError, abilityState, attackCostOf, choosePerk, cursedSlot, gearOf, inspectItem, isCursed, markAbilityUsed,
   notePerk, perkHook, perkWithHook, reachLine, reachOf, resolveAbilityId, thrownAccOf,
 } from './build';
+import { armorOf, guardianCritIfUnaware, guardianIncoming } from './guardians';
 import { huntingInView } from './expedition';
 import { addStatus } from './statuses';
 import type { Ctx } from './ctx';
@@ -429,6 +430,8 @@ export function prepareThrow(ctx: Ctx, e: Entity, pr: PlayerRecord, slot: string
       if (hitEnt) {
         let o = rollToHit(ctx, me, hitEnt, (def?.throw?.acc ?? 0) + thrownAccOf(ctx, me) + (opts.accBonus ?? 0));
         if (opts.critIfUnaware && isUnaware(hitEnt)) o = { hit: true, crit: true, roll: o.roll };
+        // 眠りが深い守護者への、気づかれる前の一投は会心（V3-3）
+        if (!o.crit && isUnaware(hitEnt) && hitEnt.guardian && guardianCritIfUnaware(ctx, hitEnt)) o = { hit: true, crit: true, roll: o.roll };
         if (o.hit) { hit = hitEnt; crit = o.crit; }
         recordHit(ctx, me, hitEnt, o.hit, 'thrown');
       }
@@ -481,7 +484,9 @@ export function prepareThrow(ctx: Ctx, e: Entity, pr: PlayerRecord, slot: string
       makeNoise(ctx, key, landed, 4, me);
       if (hit) {
         const dmgDice = def?.throw?.dmg ?? '1d2';
-        const dmg = crit ? Math.max(1, diceMax(dmgDice)) : Math.max(1, roll(ctx.rng('runtime'), dmgDice) - (hit.stats?.armor ?? 0));
+        const base = crit ? Math.max(1, diceMax(dmgDice)) : Math.max(1, roll(ctx.rng('runtime'), dmgDice) - armorOf(ctx, hit));
+        // 守護者の受けるダメージの修正（弾く者・投擲に弱い。V3-3）
+        const dmg = hit.guardian ? guardianIncoming(ctx, hit, base, 'thrown', ctx.world.entities[me.id] ?? me) : base;
         applyDamage(ctx, hit, dmg, ctx.world.entities[me.id], 'thrown');
         const stillThere = ctx.world.entities[hit.id];
         if (broke && def?.onUse.length && stillThere && (stillThere.stats?.hp ?? 0) > 0) {
@@ -490,6 +495,11 @@ export function prepareThrow(ctx: Ctx, e: Entity, pr: PlayerRecord, slot: string
       } else if (hitEnt) {
         // 外れても狙われたことには気づく
         applyDamage(ctx, hitEnt, 0, null, 'thrown');
+      }
+      // 護りの火に投げた物を当てると消える（V3-3）
+      const fire = ctx.featureAt(key, landed.x, landed.y);
+      if (fire?.kind === 'core:ward_fire' && fire.feature?.state === 'lit') {
+        ctx.emit({ type: 'feature_state', id: fire.id, kind: fire.kind, state: 'out', ...ctx.perceive(key, [{ field: 'id', pos: landed }], [pr.id]), floor: key });
       }
       updateKnowledge(ctx, key);
       // 早投げ: 投擲の手番コストが下がる（V3-4 §4.1）
@@ -565,7 +575,8 @@ actions.register('interact', (ctx, e, pr, cmd: Extract<Command, { type: 'interac
   const feat = ctx.featureAt(key, p.x, p.y);
   if (feat?.feature) {
     const def = ctx.content.features[feat.kind];
-    if (!def?.onInteract.length) return fail(pr, 'cannot_use', 'それは操作できない。', 'Nothing happens.', '別の対象を選ぶ。', 'Try something else.');
+    // 効果は無くても、状態が変わる地物（護りの火を消す。V3-3）は操作できる
+    if (!def?.onInteract.length && !def?.afterInteract) return fail(pr, 'cannot_use', 'それは操作できない。', 'Nothing happens.', '別の対象を選ぶ。', 'Try something else.');
     if (def.afterInteract && feat.feature.state === def.afterInteract) return fail(pr, 'cannot_use', 'もう力を失っている。', 'It has already been used.', '他の地物を探す。', 'Look for another feature.');
     return {
       run: () => {

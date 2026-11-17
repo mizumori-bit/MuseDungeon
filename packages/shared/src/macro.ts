@@ -41,7 +41,9 @@ export type MacroStop =
   // 休憩で戻る上限（最大 HP の rest.capPct %）に達した（V3-4b §28.3）
   | 'rest_cap'
   // fight（V3-4b §28.4）: 標的が逃げて見えなくなった / 待つ間に標的以外の射撃で被弾した / until: 'clear' で届く追跡中の敵がいなくなった
-  | 'target_fled' | 'shot_while_waiting' | 'cleared';
+  | 'target_fled' | 'shot_while_waiting' | 'cleared'
+  // 見えている敵が新しく予備動作を見せた（突進の構え・手下を呼ぶ構え・怒りの予兆。V3-3 §3.1）
+  | 'intent';
 
 /** fight に載せられる能動技の振る舞い（V3-4a §25.3）。立て直し・身をかわすは、いつ使うかが判断そのものなので載せない */
 export const FIGHT_ABILITY_HANDLERS: readonly string[] = ['strike', 'cleave', 'aimed_throw'];
@@ -156,6 +158,8 @@ export interface MacroState {
   knownDown: number;
   /** wait: 直前の手で隣にいた敵 */
   adjacent: string[];
+  /** 直前の手で見えていた予備動作（id:kind。新しく見えたら止まる。V3-3） */
+  intents?: string[];
   /** explore: 下への風の方角を優先する */
   toward?: 'draft' | 'sense';
   /** fight: 被弾の記録が無い種族（思い出のキー）。最初の被弾で一度止まる */
@@ -358,6 +362,7 @@ export function macroStart(view: PlayerView, cmd: Command, catalog: Catalog): Ma
     } : {}),
     knownDown: downStairsCount(view, catalog),
     adjacent: view.self.pos ? view.entities.filter((e) => e.cat === 'monster' && cheb(e.pos, view.self.pos!) <= 1).map((e) => e.id) : [],
+    intents: intentKeys(view),
   };
   if (cmd.type === 'wait') st.maxTurns = cmd.turns ?? 1;
   if (cmd.type === 'rest') {
@@ -397,6 +402,11 @@ export type MacroDecision = { command: Command } | { stop: MacroStop; dir?: Dir 
  * 次の基本行動を決める。events は直前の手で知覚したイベント（中断判定用）。
  * state は破壊的に更新される。
  */
+/** 見えている予備動作（id:kind） */
+function intentKeys(view: PlayerView): string[] {
+  return view.entities.filter((e) => e.cat === 'monster' && e.intent).map((e) => `${e.id}:${e.intent!.kind}`);
+}
+
 export function macroNext(state: MacroState, view: PlayerView, catalog: Catalog, events: readonly ProjectedEvent[]): MacroDecision {
   if (view.runStatus === 'ended') return { stop: 'run_ended' };
   if (view.status === 'dead') return { stop: 'dead' };
@@ -464,6 +474,11 @@ export function macroNext(state: MacroState, view: PlayerView, catalog: Catalog,
   if ((kind === 'fight' || mode === 'steady' || mode === 'flee') && kind !== 'rest' && hp <= state.hpFloor) return { stop: 'hp_floor' };
 
   const hostiles = view.entities.filter((e) => e.cat === 'monster');
+  // 予備動作（V3-3 §3.1）: 見えている敵が新しく予備動作を見せたら、どのマクロも止まる（次の手番に大きな行動が来る）
+  const intents = intentKeys(view);
+  const newIntent = state.steps > 0 && intents.some((k) => !(state.intents ?? []).includes(k));
+  state.intents = intents;
+  if (newIntent) return { stop: 'intent' };
   const before = new Set(state.knownHostiles);
   const pursuing = (h: EntityView) => h.awareness === 'hunting' && !h.fleeing;
   // 自分に届く: 動かない種族は隣にいるときだけ

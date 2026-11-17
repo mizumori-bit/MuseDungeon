@@ -88,6 +88,8 @@ export function buildCatalog(c: Content): Catalog {
     abilities: Object.fromEntries(c.lists.abilities.map((ab) => [ab.id, {
       name: ab.name, desc: ab.desc, target: ab.target, cooldown: ab.cooldown, handler: ab.handler, ...(ab.perExpedition ? { perExpedition: ab.perExpedition } : {}),
     }])),
+    guardianTypes: Object.fromEntries(c.lists.guardianTypes.map((g) => [g.id, { name: g.name, desc: g.desc, strongVs: g.strongVs, handler: g.handler }])),
+    guardianWeaknesses: Object.fromEntries(c.lists.guardianWeaknesses.map((w) => [w.id, { name: w.name, desc: w.desc, handler: w.handler }])),
     weaponTraits: Object.fromEntries(c.lists.weaponTraits.map((w) => [w.id, {
       name: w.name, desc: w.desc,
       ...(w.handler === 'reach' ? { reach: w.params.range ?? 2 } : {}), ...(w.handler === 'attack_cost' ? { attackCost: w.params.cost ?? 100 } : {}),

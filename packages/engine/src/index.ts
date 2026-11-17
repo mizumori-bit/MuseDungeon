@@ -8,6 +8,8 @@ import { layoutGenerators } from './gen/layouts';
 import { statusHandlers } from './statuses';
 import { abilityHandlers, weaponTraits } from './build';
 import './abilities';
+import './guardianBehaviors';
+import { guardianTypeHandlers, weaknessHandlers } from './guardians';
 
 export { createRun, joinPlayer, step, isPlayersTurn, ENGINE_VERSION } from './run';
 export type { CreateRunParams, StepResult } from './run';
@@ -20,6 +22,9 @@ export { actions, archetypes, effects, validators, layoutGenerators, statusHandl
 /** コンテンツが参照するハンドラ ID が全てレジストリに登録されているか検証する */
 export function validateContentHandlers(content: Content): string[] {
   const errs: string[] = [];
+  // 守護者の型・弱点（V3-3）
+  for (const g of content.lists.guardianTypes) if (!guardianTypeHandlers.has(g.handler)) errs.push(`${g.id}: 未登録の guardian type handler ${g.handler}`);
+  for (const w of content.lists.guardianWeaknesses) if (!weaknessHandlers.has(w.handler)) errs.push(`${w.id}: 未登録の weakness handler ${w.handler}`);
   const eff = (list: { effect: string }[], where: string) => {
     for (const e of list) if (!effects.has(e.effect)) errs.push(`${where}: 未登録の effect ${e.effect}`);
   };

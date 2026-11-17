@@ -2,7 +2,7 @@
 // 仕様: docs/IMPROVEMENTS_V2.md §2.6。「次に何をすべきか」の提案は書かない（事実とルールのみ）。
 import type { CatalogRules } from './catalog';
 import { offerGap } from './catalog';
-import type { ExpeditionEndReason, ExpeditionOffer, Locale, Objective, OfferSlot } from './types';
+import type { ExpeditionEndReason, ExpeditionOffer, Locale, Names, Objective, OfferSlot } from './types';
 import { t } from './util';
 import type { ExpeditionView, PlayerView } from './view';
 
@@ -47,6 +47,8 @@ export function briefingLines(L: Locale, x: ExpeditionView, rules?: Pick<Catalog
       `Lifeline: use_item it anywhere to return to camp${lt > 0 ? ` after ${lt} turns` : ' at once'} (you keep your life and half the haul without the objective; a relic cannot come along; not a completed expedition)`),
     t(L, '終了理由: 達成して帰還 / 帰還の綱で帰還 / 撤退 / 死亡 / 引退(retire)', 'It ends by: completion + extract / lifeline / withdrawal / death / retire'),
   ];
+  // 守護者の名前と型（V3-3 §3.1）。型の振る舞いは look で読める。弱点は試して分かるまで出さない
+  if (x.guardian) lines.push(t(L, `守護者: 「${guardianDisplayName(L, x.guardian)}」（格 ${x.guardian.rank}${x.guardian.types.length ? '。型は look で確かめられる' : '。型なし'}。弱点は試して確かめる）`, `Guardian: "${guardianDisplayName(L, x.guardian)}" (rank ${x.guardian.rank}${x.guardian.types.length ? '; look at it for its type' : '; no type'}; find its weakness by trying)`));
   if (x.objective.type !== 'endless') {
     lines.push(t(L,
       `報酬: 遠征中に積み上げた戦利品（目的 +${x.points}・深追い・宝・賞金・発見・撃破）が、帰還で ${multText(x.multiplierPct)} されて確定する。撤退は目的を除いた半分、死亡すると全て失う。キャンプで全回復し、次の遠征を選べる`,
@@ -100,12 +102,20 @@ export function traitsText(L: Locale, rules: Pick<CatalogRules, 'traits'> | unde
 const GUARD_TRAIT_JA: Record<string, string> = { fast: '速い', slow: '遅い', ranged: '射撃する', large: '大柄', armored: '重装' };
 
 /** 守護者の見込みの文（「守護者: 格 2・射撃する・速い」。種族名は出さない。V3-2R3 §20.1） */
-export function guardianForecastText(L: Locale, g: { rank: number; traits: string[] } | undefined): string {
+/** 守護者の呼び名（称号＋名前。V3-3）: 「呼び集める者ヴォルン」/ "Volun the Summoner" */
+export function guardianDisplayName(L: Locale, g: { name: Names; title?: Names }): string {
+  if (L === 'en') return g.title ? `${g.name.en} ${g.title.en}` : g.name.en;
+  return `${g.title?.ja ?? ''}${g.name.ja}`;
+}
+
+export function guardianForecastText(L: Locale, g: { rank: number; traits: string[]; name?: Names; title?: Names } | undefined): string {
   if (!g) return '';
+  // 名前と称号（型）は公開。種族は会うまで出さない（V3-3）
+  const who = g.name ? t(L, `「${guardianDisplayName(L, { name: g.name, title: g.title })}」`, ` "${guardianDisplayName(L, { name: g.name, title: g.title })}"`) : '';
   // 速さは必ず書く（速い・遅いが無ければ「普通の速さ」）
   const speed = g.traits.includes('fast') || g.traits.includes('slow') ? [] : [t(L, '普通の速さ', 'normal speed')];
   const tr = [...g.traits.map((x) => (L === 'en' ? x : GUARD_TRAIT_JA[x] ?? x)), ...speed];
-  return t(L, `守護者: 格 ${g.rank}・${tr.join('・')}`, `guardian: rank ${g.rank}, ${tr.join(', ')}`);
+  return t(L, `守護者${who}: 格 ${g.rank}・${tr.join('・')}`, `guardian${who}: rank ${g.rank}, ${tr.join(', ')}`);
 }
 
 /** 候補の文章。rules と level があれば推奨レベルとの差と条件の危険度も付ける（公開の表と式だけで計算） */

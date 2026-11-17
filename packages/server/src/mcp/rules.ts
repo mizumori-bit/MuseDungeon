@@ -82,7 +82,9 @@ function ja(r: CatalogRules): Record<Topic, string> {
 - new_run で objective を省くとキャンプから始まり、最初の遠征も候補 3 つから選ぶ。objective を渡すと最初の遠征を直接始める（reach_depth = 堅実の枠 / slay_guardian = 標準の枠 / retrieve_relic = 野心の枠 / endless / auto = 1 番目の候補）。2 回目以降はキャンプの候補 3 つから選ぶ。`,
     expedition: `# 遠征
 - 目的の種類: reach_depth（目標の階を踏破する＝その階の下り階段に立つ。着いただけでは達成しない）、slay_guardian（目標の階の守護者を倒す）、retrieve_relic（目標の階の遺物を拾い、持ったまま帰る）、endless（目的なし）。
-- 守護者の格は枠で決まる: 堅実 格 1（その深度の候補の経験値の下位半分・射撃して距離を取る型を除く・体力 +${r.guardianRanks?.[0]?.hpPct ?? 50}%。堅実の遺物は無防備）、標準 格 2（上位半分・+${r.guardianRanks?.[1]?.hpPct ?? 100}%）、野心 格 3（上位半分・+${r.guardianRanks?.[2]?.hpPct ?? 150}%）。候補に守護者の見込み（格と、速い・遅い・射撃する・大柄・重装）が出る。種族名は会うまで出ない。
+- 守護者の格は枠で決まる: 堅実 格 1（その深度の候補の経験値の下位半分・射撃して距離を取る型を除く・体力 +${r.guardianRanks?.[0]?.hpPct ?? 50}%。堅実の遺物は無防備・型なし）、標準 格 2（1 つ深い階の候補の上位半分・+${r.guardianRanks?.[1]?.hpPct ?? 100}%・型 1 つ）、野心 格 3（2 つ深い階の候補の上位半分・+${r.guardianRanks?.[2]?.hpPct ?? 150}%・型 1 つ）。候補に守護者の名前と型（称号）、見込み（格と、速い・遅い・射撃する・大柄・重装）が出る。種族名は会うまで出ない。型の一覧は get_rules topic=classes の「守護者の型」。
+- 守護者には弱点が 1 つある（毒に弱い・投擲に弱い・眠りが深い・水場で遅い）。どれかは伏せられていて、弱点が効いた場面を見ると分かり、look と観測の「弱点」に出る。
+- 予備動作: 次の手番に大きな行動を取る敵（突進の構え・手下を呼ぶ構え・怒りの予兆）は、見えていれば観測の intent と alerts に出る。突進の構えは向きと、あなたがその直線の上にいるか（on_line）が分かる。移動・戦闘・休憩のマクロは、見えている敵が新しく予備動作を見せたら止まる（intent）。
 - 守護者・遺物の居場所は教えられない。観測では role: guardian / relic の印が付く。
 - 守護者は置かれた場所を持ち場にし、気づいていない間は持ち場の近くから離れない（守護者付きの遺物では遺物のそば）。追跡は他の敵と同じで、見失って捜索を終えると持ち場へ戻る。
 - 帰還（extract）: 目的を達成したうえで、いずれかの階段（上り・下り）の上にいること。追跡中の敵が見えていてもよい（敵は階段を追ってこない。階を移れば追ってこない）。遠征は「達成」で終わる。
@@ -236,7 +238,9 @@ function en(r: CatalogRules): Record<Topic, string> {
 - new_run without objective starts at camp, where you choose the first expedition from 3 offers. Passing objective starts it directly (reach_depth = safe slot / slay_guardian = standard slot / retrieve_relic = ambitious slot / endless / auto = the first offer). Later expeditions are chosen from 3 offers at camp.`,
     expedition: `# Expeditions
 - Objective types: reach_depth (cross the target depth = stand on its down stairs; arriving is not enough), slay_guardian (slay the guardian there), retrieve_relic (pick up the relic there and carry it out), endless (no objective).
-- The guardian's rank comes from the slot: safe rank 1 (lower XP half of the depth's candidates, no kiting shooters, HP +${r.guardianRanks?.[0]?.hpPct ?? 50}%; safe relics are unguarded), standard rank 2 (upper half, +${r.guardianRanks?.[1]?.hpPct ?? 100}%), ambitious rank 3 (upper half, +${r.guardianRanks?.[2]?.hpPct ?? 150}%). Offers show a guardian forecast (rank and fast / slow / ranged / large / armored); the species stays hidden until you meet it.
+- The guardian's rank comes from the slot: safe rank 1 (lower XP half of the depth's candidates, no kiting shooters, HP +${r.guardianRanks?.[0]?.hpPct ?? 50}%; safe relics are unguarded), standard rank 2 (upper half of the candidates one depth deeper, +${r.guardianRanks?.[1]?.hpPct ?? 100}%, one type), ambitious rank 3 (upper half two depths deeper, +${r.guardianRanks?.[2]?.hpPct ?? 150}%, one type); rank 1 has no type. Offers show the guardian's name and type (title) and a forecast (rank and fast / slow / ranged / large / armored); the species stays hidden until you meet it. The list of types is under "Guardian types" in get_rules topic=classes.
+- Each guardian has one weakness (weak to poison / weak to thrown weapons / a deep sleeper / slow in water). It is hidden; seeing it work reveals it, and look and the observation then show it.
+- Intents: an enemy about to make a big move next turn (bracing to charge / about to call minions / about to rage) shows it in the observation's intent and in alerts while you can see it. A charge shows its direction and whether you stand on that line (on_line). Movement, fight and rest macros stop when a visible enemy newly shows an intent (intent).
 - Guardian and relic locations are not revealed; observations mark them with role: guardian / relic.
 - A guardian keeps the place it was put as its post and, while unaware, stays near it (by the relic for a guarded relic). It hunts like any other monster, and once it loses you and ends its search it goes back to its post.
 - Extract (complete): objective done and standing on any stairs (up or down). Hunting enemies in view do not prevent it (monsters never follow you between floors). The expedition ends as completed.
@@ -364,9 +368,20 @@ Free: choose_perk{option} / observe / wait_for_turn / expedition / look / get_ma
   };
 }
 
+/** 守護者の型と弱点の一覧（公開カタログから。どの守護者が何を持つかは伏せる。V3-3 §3.1） */
+function guardiansText(c: Catalog, locale: 'ja' | 'en'): string {
+  const ja = locale !== 'en';
+  const nm = (n: { ja: string; en: string }) => (ja ? n.ja : n.en);
+  const lines = [ja ? '# 守護者の型（候補と観測に称号が出る）' : '# Guardian types (offers and observations show the title)'];
+  for (const [id, g] of Object.entries(c.guardianTypes)) lines.push(`- ${nm(g.name)}（${id.split(':')[1]}）: ${nm(g.desc)}`);
+  lines.push(ja ? '# 守護者の弱点（どれを持つかは伏せられている）' : '# Guardian weaknesses (which one a guardian has is hidden)');
+  for (const [, w] of Object.entries(c.guardianWeaknesses)) lines.push(`- ${nm(w.name)}: ${nm(w.desc)}`);
+  return lines.join('\n');
+}
+
 export function rulesText(topic: RulesTopic = 'all', locale: 'ja' | 'en' = 'ja', catalog: Catalog): string {
   const src = locale === 'en' ? en(catalog.rules) : ja(catalog.rules);
-  if (topic === 'classes') return classesText(catalog, locale);
-  if (topic === 'all') return [...Object.values(src), classesText(catalog, locale)].join('\n\n');
+  if (topic === 'classes') return [classesText(catalog, locale), guardiansText(catalog, locale)].join('\n\n');
+  if (topic === 'all') return [...Object.values(src), classesText(catalog, locale), guardiansText(catalog, locale)].join('\n\n');
   return src[topic];
 }

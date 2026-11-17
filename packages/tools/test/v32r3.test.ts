@@ -115,7 +115,7 @@ describe('V3-2R3 objectives and offers (§20.1, §20.2)', () => {
         }
       }
       const text = t.obs().camp!.offers.map((o) => o.text).join('\n');
-      if (t.world.camp!.offers.some((o) => o.guardian)) expect(text).toContain('守護者: 格');
+      if (t.world.camp!.offers.some((o) => o.guardian)) expect(text).toMatch(/守護者(「[^」]+」)?: 格/);
       t.manager.closeAll();
     }
     expect(checked).toBeGreaterThan(0);

@@ -10,6 +10,7 @@ import { isOpaqueFn, makeNoise, monsterSees, shotLine, updateMemory, wakeMonster
 import { Registry } from './registry';
 import { notePerk, perkHook, perkWithHook } from './build';
 import { addStatus } from './statuses';
+import { guardianCostPct, guardianTurn } from './guardians';
 
 export interface AiInput { target: Entity | null; ai: AiState; def: MonsterDef }
 /** 1 手番の行動を行い、行動コスト（標準 100）を返す */
@@ -48,7 +49,7 @@ function distFrom(ctx: Ctx, key: string, goal: Pos): Int32Array {
 }
 
 /** 1 歩動く（閉じた扉なら開ける）。罠は避ける */
-function stepTo(ctx: Ctx, m: Entity, to: Pos): boolean {
+export function stepTo(ctx: Ctx, m: Entity, to: Pos): boolean {
   const key = m.pos!.floor;
   const t = ctx.terrainAt(key, to.x, to.y);
   if (t.door === 'closed') {
@@ -65,7 +66,7 @@ function stepTo(ctx: Ctx, m: Entity, to: Pos): boolean {
   return true;
 }
 
-function freeNeighbors(ctx: Ctx, m: Entity): Pos[] {
+export function freeNeighbors(ctx: Ctx, m: Entity): Pos[] {
   const key = m.pos!.floor;
   const out: Pos[] = [];
   for (const d of DIRS) {
@@ -123,7 +124,7 @@ function wander(ctx: Ctx, m: Entity): void {
   if (opts.length) stepTo(ctx, m, opts[rng.int(opts.length)]);
 }
 
-function hpPct(m: Entity): number {
+export function hpPct(m: Entity): number {
   return m.stats ? Math.trunc((m.stats.hp * 100) / Math.max(1, m.stats.maxHp)) : 100;
 }
 
@@ -263,5 +264,10 @@ export function monsterTurn(ctx: Ctx, m: Entity): number {
     ctx.emit({ type: 'ai_state_changed', id: m.id, ai: next, dormant: false, nextActAt: m.actor!.nextActAt, seenBy: [], floor: key });
   }
   const cur = ctx.world.entities[m.id];
-  return archetypes.get(ai.archetype)(ctx, cur, { target, ai: next, def });
+  // 守護者の型（V3-3）: 予備動作・突進・手下・怒り・潜む。手番を使わなければ通常の行動様式
+  const gcost = cur.guardian ? guardianTurn(ctx, cur, target) : null;
+  const cost = gcost ?? archetypes.get(ai.archetype)(ctx, ctx.world.entities[m.id] ?? cur, { target, ai: next, def });
+  // 水場で遅い（弱点）: 浅い水の上では行動コストが増える
+  const after = ctx.world.entities[m.id];
+  return after?.guardian ? Math.trunc((cost * guardianCostPct(ctx, after)) / 100) : cost;
 }

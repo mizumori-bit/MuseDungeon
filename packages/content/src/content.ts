@@ -3,6 +3,7 @@ import { canonicalHash } from '@muse/shared';
 import type {
   AbilityDef, AffixDef, AppearanceDef, BalanceDef, BiomeDef, ClassDef, ExpeditionTraitDef, FeatureDef, FileKind, FloorTypeDef, ItemDef,
   LootTableDef, MonsterDef, PerkDef, PrefabDef, SpawnTableDef, StatusDef, TerrainDef, WeaponTraitDef,
+  GuardianTypeDef, GuardianWeaknessDef, GuardianNamesDef,
 } from './schema';
 import { FILE_SCHEMAS } from './schema';
 
@@ -31,11 +32,16 @@ export interface Content {
   perks: Record<string, PerkDef>;
   abilities: Record<string, AbilityDef>;
   weaponTraits: Record<string, WeaponTraitDef>;
+  /** 守護者（V3-3）: 型・弱点・名前の音節 */
+  guardianTypes: Record<string, GuardianTypeDef>;
+  guardianWeaknesses: Record<string, GuardianWeaknessDef>;
+  guardianNames: Record<string, GuardianNamesDef>;
   /** 各表の ID 昇順リスト（決定的な走査用） */
   lists: {
     monsters: MonsterDef[]; items: ItemDef[]; appearances: AppearanceDef[]; affixes: AffixDef[];
     biomes: BiomeDef[]; floorTypes: FloorTypeDef[]; prefabs: PrefabDef[]; classes: ClassDef[]; features: FeatureDef[];
     expeditionTraits: ExpeditionTraitDef[]; perks: PerkDef[]; abilities: AbilityDef[]; weaponTraits: WeaponTraitDef[];
+    guardianTypes: GuardianTypeDef[]; guardianWeaknesses: GuardianWeaknessDef[];
   };
   /** 定義済みの最深の出現深度（深層スケーリングの基準） */
   deepestDefined: number;
@@ -107,12 +113,16 @@ export function buildContent(packs: RawPack[]): Content {
     perks: table(list('perks') as PerkDef[], 'perks'),
     abilities: table(list('abilities') as AbilityDef[], 'abilities'),
     weaponTraits: table(list('weaponTraits') as WeaponTraitDef[], 'weaponTraits'),
+    guardianTypes: table(list('guardianTypes') as GuardianTypeDef[], 'guardianTypes'),
+    guardianWeaknesses: table(list('guardianWeaknesses') as GuardianWeaknessDef[], 'guardianWeaknesses'),
+    guardianNames: table(list('guardianNames') as GuardianNamesDef[], 'guardianNames'),
     lists: {
       monsters: list('monsters') as MonsterDef[], items: list('items') as ItemDef[], appearances: list('appearances') as AppearanceDef[],
       affixes: list('affixes') as AffixDef[], biomes: list('biomes') as BiomeDef[], floorTypes: list('floorTypes') as FloorTypeDef[],
       prefabs: list('prefabs') as PrefabDef[], classes: list('classes') as ClassDef[], features: list('features') as FeatureDef[],
       expeditionTraits: list('expeditionTraits') as ExpeditionTraitDef[],
       perks: list('perks') as PerkDef[], abilities: list('abilities') as AbilityDef[], weaponTraits: list('weaponTraits') as WeaponTraitDef[],
+      guardianTypes: list('guardianTypes') as GuardianTypeDef[], guardianWeaknesses: list('guardianWeaknesses') as GuardianWeaknessDef[],
     },
     deepestDefined: 1,
   };
@@ -124,6 +134,7 @@ export function buildContent(packs: RawPack[]): Content {
     prefabs: c.lists.prefabs, spawnTables: c.spawnTables, lootTables: c.lootTables, classes: c.lists.classes, features: c.lists.features,
     balance: c.balance, expeditionTraits: c.lists.expeditionTraits,
     perks: c.lists.perks, abilities: c.lists.abilities, weaponTraits: c.lists.weaponTraits,
+    guardianTypes: c.lists.guardianTypes, guardianWeaknesses: c.lists.guardianWeaknesses, guardianNames: c.guardianNames,
   }).slice(0, 12);
   return c;
 }

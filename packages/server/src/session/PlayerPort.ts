@@ -94,6 +94,7 @@ const STOP_TEXT: Record<string, [string, string]> = {
   target_fled: ['相手が逃げて見えなくなった', 'the target fled out of sight'],
   shot_while_waiting: ['待っている間に、標的ではない敵に撃たれた（射撃する敵へ近づく／視線を切る）', 'another enemy shot you while you waited (close in on the shooter or break line of sight)'],
   cleared: ['届く追跡中の敵がいなくなった', 'no hunting enemy left in reach'],
+  intent: ['見えている敵が予備動作を見せた（次の手番に大きな行動が来る。alerts の intent を見る）', 'a visible enemy shows an intent (a big move comes next turn; see the intent alert)'],
   target_moved: ['相手が離れた（逃げた・射程を出た）', 'the target moved away (fled or left range)'],
   target_adjacent: ['相手が隣に来た（近接で続けるなら fight { target }）', 'the target is adjacent (continue in melee with fight { target })'],
   out_of_ammo: ['投げる物が尽きた', 'nothing left to throw'],

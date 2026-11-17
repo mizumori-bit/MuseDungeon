@@ -270,6 +270,31 @@ export const AbilitySchema = z.object({
 });
 
 /** 武器の特性（V3-4 §4.4）。handler はエンジンのレジストリ（weaponTraits） */
+/** 守護者の型（V3-3 §3.1・§28.9）。振る舞いは engine の guardianTypeHandlers。strongVs: 近接に強い型か、投擲に強い型か（半々に引く） */
+export const GuardianTypeSchema = z.object({
+  id: IdSchema,
+  name: NamesSchema,
+  desc: NamesSchema,
+  handler: z.string().min(1),
+  strongVs: z.enum(['melee', 'thrown']),
+  params: z.record(z.number()).default({}),
+});
+
+/** 守護者の弱点（V3-3 §3.1）。最初は伏せる（試して分かるまで観測に出さない） */
+export const GuardianWeaknessSchema = z.object({
+  id: IdSchema,
+  name: NamesSchema,
+  desc: NamesSchema,
+  handler: z.string().min(1),
+  params: z.record(z.number()).default({}),
+});
+
+/** 守護者の名前の音節（V3-3 §3.1。シードで 2〜3 個つなぐ） */
+export const GuardianNamesSchema = z.object({
+  id: IdSchema,
+  parts: z.array(NamesSchema).min(4),
+});
+
 export const WeaponTraitSchema = z.object({
   id: IdSchema,
   name: NamesSchema,
@@ -319,7 +344,9 @@ export const BalanceSchema = z.object({
   /** 守護者の格（V3-2R3 §20.1。堅実 1・標準 2・野心 3）ごとの体力の上乗せ（%）と下限（minHpBase + minHpPerDepth × 深度） */
   guardian: z.object({
     /** tableDepth: 候補の種族を引く表の深さの上乗せ（格 2 は +1、格 3 は +2 の表の上位半分。V3-4b §28.2） */
-    ranks: z.array(z.object({ hpPct: Int.min(0), minHpBase: Int.min(0), minHpPerDepth: Int.min(0), tableDepth: Int.min(0).default(0) })).min(1),
+    ranks: z.array(z.object({ hpPct: Int.min(0), minHpBase: Int.min(0), minHpPerDepth: Int.min(0), tableDepth: Int.min(0).default(0),
+      /** 型の数（V3-3 §28.9: 格 1 は 0、格 2・3 は 1） */
+      types: Int.min(0).default(0) })).min(1),
     /** 持ち場の範囲（V3-2R3b §23.2）: 気づいていない守護者は持ち場からこのマス数（チェビシェフ）以内だけを動く */
     leash: Int.min(0).default(3),
   }),
@@ -403,6 +430,9 @@ export type ExpeditionTraitDef = z.infer<typeof ExpeditionTraitSchema>;
 export type PerkDef = z.infer<typeof PerkSchema>;
 export type AbilityDef = z.infer<typeof AbilitySchema>;
 export type WeaponTraitDef = z.infer<typeof WeaponTraitSchema>;
+export type GuardianTypeDef = z.infer<typeof GuardianTypeSchema>;
+export type GuardianWeaknessDef = z.infer<typeof GuardianWeaknessSchema>;
+export type GuardianNamesDef = z.infer<typeof GuardianNamesSchema>;
 
 /** ファイル名 → スキーマ。新しい定義ファイル種別はここに 1 行足す */
 export const FILE_SCHEMAS = {
@@ -424,6 +454,9 @@ export const FILE_SCHEMAS = {
   perks: PerkSchema,
   abilities: AbilitySchema,
   weaponTraits: WeaponTraitSchema,
+  guardianTypes: GuardianTypeSchema,
+  guardianWeaknesses: GuardianWeaknessSchema,
+  guardianNames: GuardianNamesSchema,
 } as const;
 
 export type FileKind = keyof typeof FILE_SCHEMAS;

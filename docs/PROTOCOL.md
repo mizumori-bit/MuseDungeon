@@ -134,7 +134,7 @@ ActionResult {
   ok: true
   outcome: string                 // 1〜2 文の結果要約
   steps?: number                  // マクロで実際に進んだ手数
-  interrupted_by?: string         // マクロの停止理由 'hostile_in_view' | 'hostile_alerted'（見えている敵が追跡に変わった）| 'hostile_adjacent' | 'attacked' | 'damaged' | 'blocked' | 'trap_ahead'（次のマスが発見済みの罠で、ほかに道が無い）| 'stairs_seen' | 'hp_floor' | 'hp_threshold' | 'arrived' | 'explored' | 'collected' | 'target_down' | 'target_moved' | 'target_gone' | 'full_hp' | 'target_hp' | 'max_turns'
+  interrupted_by?: string         // マクロの停止理由 'hostile_in_view' | 'hostile_alerted'（見えている敵が追跡に変わった）| 'intent'（見えている敵が新しく予備動作を見せた。V3-3）| 'hostile_adjacent' | 'attacked' | 'damaged' | 'blocked' | 'trap_ahead'（次のマスが発見済みの罠で、ほかに道が無い）| 'stairs_seen' | 'hp_floor' | 'hp_threshold' | 'arrived' | 'explored' | 'collected' | 'target_down' | 'target_moved' | 'target_gone' | 'full_hp' | 'target_hp' | 'max_turns'
                                   // V3-2R2 の fight: 'target_adjacent' | 'out_of_ammo' | 'not_throwable' | 'no_line_of_sight' | 'target_not_approaching' | 'target_not_hunting' | ...
   distance?: number               // explore / travel_to: 歩いた手数
   time_elapsed?: number | null    // explore / travel_to: 経過したフロア時間（階を移ったら null）
@@ -205,7 +205,9 @@ Observation {
                 hp_left_est?: { min, max: number | null, samples, record: { min, max } },   // 体力の記録がある種族のみ。記録が estimateMinSamples（5）体未満は max: null。record は記録した個体の体力の範囲（標本）
                 shot: 'clear' | 'blocked',                    // 自分のセルから投擲の経路が通るか（v3）
                 shots: { slot, state: 'clear'|'blocked'|'out_of_range' }[],   // 投げられる持ち物ごと（V3-2R）
-                bounty?: number }[]                           // 倒すと戦利品に入る賞金（v3）
+                bounty?: number,                              // 倒すと戦利品に入る賞金（v3）
+                guardian?: { name, types: { id, name }[], weakness?: { id, name } },   // 守護者の「称号＋名前」・型・分かった弱点（知るまで無い。V3-3）
+                intent?: { code: 'winding_up'|'summoning'|'enraging', dir?, on_line?, text } }[]   // 予備動作（見えている間だけ。on_line = 突進の直線の上に自分がいる。V3-3）
     items:    { id, ids?, name, pos, dir, dist, qty, role?: 'relic', remembered?, mine?: true, value? }[]
               // 同じセルの同種は 1 行（ids に全て）。mine = 自分が投げた物、value = 宝の価値（v3）
               // 自分が投げた物は見えている・記憶したものを全部で 1 行にまとめる（qty = 本数、pos = 最寄り、ids = 全て、near_qty = 最寄りのマスの本数。V3-2R2）
@@ -408,6 +410,17 @@ V3-2R で足した項目（同じく後方互換。会心と経験値のルー�
 - `StatusInst.source`（状態異常を与えた者。毒で倒したときの撃破者になる）、`status_applied.targetAffixes`
 - `player_state.reason: 'joined'`（キャンプから始まる参加）。参加コマンドの `atCamp`
 - プレイヤー向けの射影で、見えていた個体が視界の外へ動いた `entity_moved` に `dirOut`（向きだけ。行き先は伏せたまま）
+
+V3-3 の 1 段目で足した項目（守護者の型・予備動作・弱点・棲み処。同じく後方互換。守護者の振る舞いが変わったので `engineVersion` は 0.10.0、新しいイベントがあるので `eventVersion` は 5。DESIGN.md §20）:
+
+- World State: `Entity.guardian { name, title?, types, weakness, summoned?, enraged?, unseen?, lurk?, struck? }`（守護者だけ。`weakness` と内部の数はプレイヤーに渡さない）・`AiState.intent { kind: 'winding_up' | 'summoning' | 'enraging', dir? }`・`Offer.guardian.name / title / types`・`Offer.guardianWeakness`（World だけ。射影で消す）・`Expedition.guardianName / guardianTitle / guardianTypes / guardianWeakness`・`Knowledge.guardianIntel: Record<守護者 id, 弱点 id>`
+- PlayerView: `EntityView.guardian { name, title?, types, weakness? }`（`weakness` は知っているときだけ）・`EntityView.intent`（見えている敵だけ）・`ExpeditionView.guardian { rank, name, title?, types }`
+- イベント: `guardian_state { id }`（守護者の内部の状態。`put`。誰にも見せない）・`guardian_acted { id, kind, guardianName, act: 'summoned' | 'charged' | 'missed' | 'enraged', count? }`（見えている者だけ）・`guardian_intel { player, guardian, guardianName, weakness }`（本人だけ）。予備動作は `ai_state_changed` の `ai.intent`
+- 観測: `visible.monsters[].guardian { name, types: { id, name }[], weakness?: { id, name } }`・`visible.monsters[].intent { code, dir?, on_line?, text }`・alerts の `intent`（`data { kind, dir?, on_line? }`）・`turn.changes` の `guardian`（守護者のしたこと）と `intel`（分かった弱点）。敵の行に「名前」・型・弱点・予備動作。look に型の説明と弱点（知るまで「不明（試して確かめる）」）。候補とブリーフィングの守護者の行に「称号＋名前」
+- マクロの停止理由: `intent`（見えている敵が新しく予備動作を見せた。どのマクロも止まる）
+- 地物: `core:ward_fire`（護りの火。lit / out。隣で `interact`、または投げた物が落ちると消える）
+- 文: 体力の記録が 5 体未満なら「個体差あり」を添え、推定残り HP の上限を出さない（「記録どおりなら残り 3 以上」）
+- 公開カタログ: `guardianTypes { name, desc, strongVs, handler }`・`guardianWeaknesses { name, desc, handler }`。get_rules topic=classes（と all）に守護者の型と弱点の一覧
 
 V3-4b で足した項目（同じく後方互換。点の式と休憩の規則が変わったので `engineVersion` は 0.9.0、新しいイベントがあるので `eventVersion` は 4。DESIGN.md §19）:
 

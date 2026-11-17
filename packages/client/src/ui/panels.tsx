@@ -316,6 +316,7 @@ export function MonstersPanel({ monsters, hp, onFight, throwSlotFor, reach, onRe
             <li key={m.id} class={`${lethal ? 'lethal' : lethal2 ? 'lethal2' : ''} ${m.role ?? ''}`}>
               <div class="mhead">
                 <b>{m.name}</b>
+                {m.guardian && <span class="mgname">{tr(`「${m.guardian.name}」`, `"${m.guardian.name}"`)}</span>}
                 {m.first_seen && <span class="mfirst" title={tr('このランで初めて見た種族', 'A species you meet for the first time this run')}>{tr('初見', 'new')}</span>}
                 <small>{dirLabel(L, m.dir)} {m.dist}</small>
                 {aw && <span class={`maw ${m.awareness}`}>{tr(aw[0], aw[1])}{m.fleeing ? tr('・逃走中', ', fleeing') : ''}</span>}
@@ -343,6 +344,17 @@ export function MonstersPanel({ monsters, hp, onFight, throwSlotFor, reach, onRe
                   </span>
                 )}
               </div>
+              {m.intent && (
+                <div class={`mintent ${m.intent.on_line ? 'online' : ''}`} title={tr('予備動作: 次の手番に大きな行動を取る（見えている間だけ分かる）', 'Intent: a big move comes next turn (shown only while you can see it)')}>
+                  {tr('予備動作: ', 'Intent: ')}{m.intent.text}
+                </div>
+              )}
+              {m.guardian && (m.guardian.types.length > 0 || m.guardian.weakness) && (
+                <div class="mguard">
+                  {m.guardian.types.length > 0 && <span>{tr('型: ', 'type: ')}{m.guardian.types.map((x) => x.name).join(tr('・', '/'))}</span>}
+                  <span>{tr('弱点: ', 'weakness: ')}{m.guardian.weakness ? m.guardian.weakness.name : tr('不明', 'unknown')}</span>
+                </div>
+              )}
               <div class="msub">
                 <span class={`mthreat ${m.threat === null ? 'unknown' : `t${m.threat}`}`}>{threatText(m.threat, m.first_seen)}</span>
                 <span class={`mworst ${lethal ? 'lethal' : lethal2 ? 'lethal2' : ''}`}

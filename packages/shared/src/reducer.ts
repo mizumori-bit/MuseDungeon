@@ -135,6 +135,8 @@ export function applyEvent(world: World, ev: GameEvent): void {
     case 'perk_chosen':
     case 'perk_triggered':
     case 'monster_woke':
+    case 'guardian_state':
+    case 'guardian_acted':
     case 'ability_used':
     case 'curse_revealed':
     case 'item_inspected':
@@ -200,6 +202,11 @@ export function applyEvent(world: World, ev: GameEvent): void {
     case 'trap_revealed': {
       const tr = ent(world, ev.trap).trap!;
       if (!tr.revealedTo.includes(ev.player)) tr.revealedTo.push(ev.player);
+      break;
+    }
+    case 'guardian_intel': {
+      const p = world.players[ev.player];
+      if (p) p.knowledge.guardianIntel = { ...(p.knowledge.guardianIntel ?? {}), [ev.guardian]: ev.weakness };
       break;
     }
     case 'knowledge_updated': {

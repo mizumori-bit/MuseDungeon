@@ -281,7 +281,25 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
       return ja ? `${who(ctx, ev.id, ev.kind)}は階段を使った。` : `${cap(who(ctx, ev.id, ev.kind))} takes the stairs.`;
     }
     case 'feature_state':
+      // 護りの火が消えた（V3-3）
+      if (ev.kind === 'core:ward_fire' && ev.state === 'out') return ja ? '護りの火が消えた。' : 'A ward fire goes out.';
       return null;
+    case 'guardian_acted': {
+      const nm = nameOf(ev.guardianName, L, '?');
+      switch (ev.act) {
+        case 'summoned': return ja ? `${nm}が手下を ${ev.count ?? 0} 体呼んだ。` : `${nm} calls ${ev.count ?? 0} minions.`;
+        case 'charged': return ja ? `${nm}が直線を突進した。` : `${nm} charges down the line.`;
+        case 'missed': return ja ? `${nm}の突進が外れ、体勢を崩した（1 手無防備）。` : `${nm}'s charge misses and it staggers (helpless for a turn).`;
+        case 'enraged': return ja ? `${nm}が怒った（速さ・威力が上がった）。` : `${nm} rages (faster and stronger).`;
+        default: return null;
+      }
+    }
+    case 'guardian_intel': {
+      // 本人にだけ届く（filter の SELF_ONLY）
+      const nm = nameOf(ev.guardianName, L, '?');
+      const w = nameOf(ctx.catalog.guardianWeaknesses[ev.weakness]?.name, L, ev.weakness);
+      return ja ? `${nm}の弱点が分かった: ${w}。` : `You learn ${nm}'s weakness: ${w}.`;
+    }
     case 'trap_revealed':
       return ja ? `罠を見つけた: ${kindName(ctx.catalog, L, ev.kind)}` : `You find a trap: ${kindName(ctx.catalog, L, ev.kind)}.`;
     case 'trap_triggered': {

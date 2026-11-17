@@ -24,6 +24,21 @@ export interface AiState {
   /** 見失ってからの手番数（searching の打ち切り用） */
   lostTurns: number;
   params: Record<string, number>;
+  /** 予備動作（V3-3 §3.1）: 次の手番に大きな行動を取る。見えていれば公開情報。dir: 突進の向き */
+  intent?: Intent;
+}
+
+/** 予備動作: winding_up（突進の構え）/ summoning（手下を呼ぶ）/ enraging（怒る） */
+export interface Intent { kind: 'winding_up' | 'summoning' | 'enraging'; dir?: Dir }
+
+/**
+ * 守護者の型と名前（V3-3 §3.1）。name・types は公開（候補にも出る）。weakness はプレイヤーには渡さない（試して分かったら knowledge.guardianIntel）。
+ * summoned: 手下を呼んだ閾値の数、enraged: 怒った、unseen: 直前の手番を相手の視界の外で終えた（潜む者）
+ */
+export interface GuardianInfo {
+  name: Names; title?: Names; types: string[]; weakness: string | null; summoned?: number; enraged?: boolean;
+  /** 潜む者: unseen = 相手の視界の外から隣へ寄った（次の一撃が会心）、lurk = 見られたまま隠れていた手番、struck = 会心の一撃の後（退いて隠れ直す） */
+  unseen?: boolean; lurk?: number; struck?: boolean;
 }
 
 /** source: 状態異常を与えた者（毒で倒したときの撃破者。V3-2R 評価の修正） */
@@ -86,6 +101,8 @@ export interface Entity {
   home?: { x: number; y: number };
   /** ビルド（プレイヤー。V3-4 §4.1・§4.2） */
   build?: PlayerBuild;
+  /** 守護者の型・名前・弱点（V3-3） */
+  guardian?: GuardianInfo;
 }
 
 /** 特技の候補（レベルアップごとに 1 つ）。options が空なのは、前の候補を選ぶまで引いていないもの */
@@ -196,6 +213,8 @@ export interface Knowledge {
   sense?: Sense | null;
   /** 今いる階の手がかり（下への風・探索の進み具合） */
   floorHint?: FloorHint | null;
+  /** 試して分かった守護者の弱点（V3-3 §3.1。守護者の ID → 弱点の ID） */
+  guardianIntel?: Record<EntityId, string>;
 }
 
 export interface PlayerStats {
@@ -260,10 +279,12 @@ export interface ExpeditionOffer {
   traits?: string[];
   /** 帰還時の戦利品に掛かる倍率（%） */
   multiplierPct?: number;
-  /** 守護者の見込み（守護者を倒す・守護者付きの遺物。V3-2R3 §20.1）。種族名は会うまで出さない */
-  guardian?: { rank: 1 | 2 | 3; traits: string[] };
+  /** 守護者の見込み（守護者を倒す・守護者付きの遺物。V3-2R3 §20.1）。種族名は会うまで出さない。name・types（V3-3）は公開 */
+  guardian?: { rank: 1 | 2 | 3; traits: string[]; name?: Names; title?: Names; types?: string[] };
   /** 守護者の種族（候補を作った時点で決める。プレイヤーには渡さない） */
   guardianKind?: string;
+  /** 守護者の弱点（候補を作った時点で決める。プレイヤーには渡さない。V3-3） */
+  guardianWeakness?: string | null;
 }
 
 /** 遠征の戦利品のうち、参加者で共有する部分（目的・深追い・宝は別に計算する） */
@@ -340,6 +361,11 @@ export interface Expedition {
   /** 守護者の種族と格（候補から引き継ぐ。プレイヤーには渡さない。V3-2R3 §20.1） */
   guardianKind?: string;
   guardianRank?: 1 | 2 | 3;
+  /** 守護者の名前と型（公開）・弱点（プレイヤーには渡さない）。V3-3 */
+  guardianName?: Names;
+  guardianTitle?: Names;
+  guardianTypes?: string[];
+  guardianWeakness?: string | null;
 }
 
 export type RngState = [number, number, number, number];

@@ -3,20 +3,22 @@
 // 各段はレジストリのプラグイン。乱数は用途別の名前付きサブストリーム（地形はアイテム表の変更に影響されない）。
 // 生成は純関数: (content, runSeed, branch, depth) → { floor, spawns }。World を読まない。
 import type { BiomeDef, Content, FloorTypeDef, MonsterDef, PrefabDef } from '@muse/content';
-import type { EntityRole, Floor, Pos, Region } from '@muse/shared';
+import type { EntityRole, Floor, GuardianInfo, Pos, Region } from '@muse/shared';
 import { cheb, DIRS, DIR_VEC, floorDiv, floorKey, Rng } from '@muse/shared';
 import { Registry, roll } from '../registry';
+import { guardianAsleep, lairPlan } from '../guardians';
 import { DOOR, FLOOR, GenGrid, WALL } from './grid';
 import { layoutGenerators } from './layouts';
 
 export type SpawnSpec =
-  | { type: 'monster'; kind: string; x: number; y: number; hp: number; affixes: string[]; tier: number; asleep: boolean; delay: number; role?: EntityRole; bounty?: number; minHp?: number; hpBonusPct?: number }
+  | { type: 'monster'; kind: string; x: number; y: number; hp: number; affixes: string[]; tier: number; asleep: boolean; delay: number; role?: EntityRole; bounty?: number; minHp?: number; hpBonusPct?: number; guardian?: GuardianInfo }
   | { type: 'item'; kind: string; x: number; y: number; qty: number; affixes: string[]; role?: EntityRole; value?: number; hidden?: string[] }
   | { type: 'feature'; kind: string; x: number; y: number };
 
 /** 遠征の目標階に置くもの */
 /** rank: 守護者の格（堅実 1・標準 2・野心 3）。guardianKind: 候補で決めた種族（無ければ生成時に格で選ぶ） */
-export interface ObjectiveSpec { guardian: boolean; relic: boolean; rank?: 1 | 2 | 3; guardianKind?: string }
+/** info: 守護者の型・名前・弱点（V3-3。候補で決めたもの） */
+export interface ObjectiveSpec { guardian: boolean; relic: boolean; rank?: 1 | 2 | 3; guardianKind?: string; info?: GuardianInfo }
 
 /** 遠征の条件による生成の修飾（目標階までの新しい階に効く） */
 export interface GenMods { monstersPct: number; itemsPct: number; treasurePct: number; noFountain: boolean }
@@ -483,7 +485,7 @@ export function pickGuardianKind(content: Content, seed: string, branch: string,
 }
 
 /** 守護者の生成仕様（生成時と、生成済みの階に遠征の開始時に置くときで共用）。格で体力の上乗せと下限が決まる */
-export function guardianSpec(content: Content, depth: number, kind: string, rank: 1 | 2 | 3, x: number, y: number, rng: Rng): SpawnSpec {
+export function guardianSpec(content: Content, depth: number, kind: string, rank: 1 | 2 | 3, x: number, y: number, rng: Rng, info?: GuardianInfo): SpawnSpec {
   const def = content.monsters[kind];
   const tier = depth > content.deepestDefined ? floorDiv(depth - content.deepestDefined, 5) + 1 : 0;
   const spec = monsterSpec({ content, depth }, def, tier, x, y, false, rng);
@@ -497,8 +499,52 @@ export function guardianSpec(content: Content, depth: number, kind: string, rank
     const r = ranks[Math.min(ranks.length, rank) - 1];
     spec.hpBonusPct = r.hpPct;
     spec.minHp = r.minHpBase + r.minHpPerDepth * depth;
+    // 型・名前・弱点（V3-3）。眠りが深い守護者は眠っていて、潜む者は眠らない
+    if (info) {
+      spec.guardian = structuredClone(info);
+      spec.asleep = guardianAsleep(content, info, spec.asleep);
+    }
   }
   return spec;
+}
+
+/**
+ * 棲み処（V3-3 §3.1）: 型と弱点の読み合いが成立する地物・地形を、守護者のまわり（2〜4 マス）の開けた床に置く。
+ * 柱は 8 近傍がすべて床のマスだけ（通路をふさがない）。乱数は objective ストリーム
+ */
+function placeLair(s: GenState, cx: number, cy: number, info: GuardianInfo, rng: Rng, occupied: Set<number>): void {
+  const g = s.grid;
+  const plan = lairPlan(s.content, info);
+  const open = (i: number) => g.cells[i] === FLOOR && !g.override.has(i) && !occupied.has(i);
+  const interior = (i: number) => {
+    const x = i % g.w, y = (i - x) / g.w;
+    return DIRS.every((d) => g.inside(x + DIR_VEC[d][0], y + DIR_VEC[d][1]) && g.get(x + DIR_VEC[d][0], y + DIR_VEC[d][1]) === FLOOR && !g.override.has(g.idx(x + DIR_VEC[d][0], y + DIR_VEC[d][1])));
+  };
+  const ring: number[] = [];
+  for (let y = cy - 4; y <= cy + 4; y++) for (let x = cx - 4; x <= cx + 4; x++) {
+    if (!g.inside(x, y)) continue;
+    const d = Math.max(Math.abs(x - cx), Math.abs(y - cy));
+    if (d >= 2 && d <= 4) ring.push(g.idx(x, y));
+  }
+  for (const f of plan.features) {
+    for (let k = 0; k < f.count; k++) {
+      const cands = ring.filter(open);
+      if (!cands.length) break;
+      const at = cands[rng.int(cands.length)];
+      occupied.add(at);
+      s.spawns.push({ type: 'feature', kind: f.kind, x: at % g.w, y: Math.trunc(at / g.w) });
+    }
+  }
+  for (const t of plan.terrain) {
+    const pillar = !s.content.terrain[s.content.terrainIndex[t.id]]?.passable;
+    for (let k = 0; k < t.count; k++) {
+      const cands = ring.filter((i) => open(i) && (!pillar || interior(i)));
+      if (!cands.length) break;
+      const at = cands[rng.int(cands.length)];
+      g.override.set(at, t.id);
+      if (pillar) occupied.add(at);
+    }
+  }
 }
 
 /**
@@ -548,7 +594,9 @@ function placeObjective(s: GenState, obj: ObjectiveSpec): boolean {
         return c.length ? c[rng.int(c.length)].id : pickGuardianKind(s.content, s.seed, s.branch, s.depth, rank, rng);
       })();
     if (!kind) return false;
-    s.spawns.push(guardianSpec(s.content, s.depth, kind, rank, gx, gy, rng));
+    s.spawns.push(guardianSpec(s.content, s.depth, kind, rank, gx, gy, rng, obj.info));
+    occupied.add(g.idx(gx, gy));
+    if (obj.info) placeLair(s, gx, gy, obj.info, rng, occupied);
   }
   return true;
 }

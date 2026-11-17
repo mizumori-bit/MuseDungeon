@@ -1,7 +1,7 @@
 // ベースライン bot（ランダム／貪欲）。AI と同じ PlayerPort・同じ Command・同じ観測だけを使う。
 // 貪欲 bot は遠征を遊ぶ: 目的を追い、達成したら階段の上で extract、キャンプでは次の遠征を選ぶ。
 import type { Command, Dir, ExpeditionEndReason, OfferSlot, PlayerView } from '@muse/shared';
-import { abilityStatus, buildNavGrid, cheb, compassDir, dirTo, DIRS, distanceField, isCursedItem, offerGap, perkChoice, Rng } from '@muse/shared';
+import { abilityStatus, buildNavGrid, cheb, compassDir, DIR_VEC, dirTo, DIRS, distanceField, isCursedItem, offerGap, perkChoice, Rng } from '@muse/shared';
 import type { Catalog } from '@muse/shared';
 import type { PlayerPort, SessionManager } from '@muse/server';
 
@@ -145,6 +145,28 @@ function crossedEnough(x: NonNullable<PlayerView['expedition']>, memo: BotMemo):
   return x.objective.targetDepth === null || memo.overreach === 0 || x.crossedDepth >= x.objective.targetDepth + memo.overreach;
 }
 
+/** 突進の直線（6 マス以内）の上にいるか */
+function onChargeLine(from: { x: number; y: number }, dir: Dir, me: { x: number; y: number }): boolean {
+  for (let k = 1; k <= 6; k++) if (from.x + DIR_VEC[dir][0] * k === me.x && from.y + DIR_VEC[dir][1] * k === me.y) return true;
+  return false;
+}
+
+/** 突進の直線から外れる一歩（前後には動かない） */
+function sidestep(port: PlayerPort, v: PlayerView, from: { x: number; y: number }, dir: Dir, me: { x: number; y: number }): Dir | null {
+  const f = v.floor;
+  if (!f) return null;
+  for (const d of DIRS) {
+    if (DIR_VEC[d][0] === DIR_VEC[dir][0] && DIR_VEC[d][1] === DIR_VEC[dir][1]) continue;
+    if (DIR_VEC[d][0] === -DIR_VEC[dir][0] && DIR_VEC[d][1] === -DIR_VEC[dir][1]) continue;
+    const nx = me.x + DIR_VEC[d][0], ny = me.y + DIR_VEC[d][1];
+    if (nx < 0 || ny < 0 || nx >= f.width || ny >= f.height || onChargeLine(from, dir, { x: nx, y: ny })) continue;
+    const t = port.catalog.terrain[v.terrainTable[v.memory.terrain[ny * f.width + nx]]];
+    if (!t?.passable || v.entities.some((e) => (e.cat === 'monster' || e.cat === 'player') && e.pos.x === nx && e.pos.y === ny)) continue;
+    return d;
+  }
+  return null;
+}
+
 export function greedyDecide(port: PlayerPort, rng: Rng, memo: BotMemo): Command {
   const v = port.view();
   // 特技は手番を使わずに選べるので、候補が出たらすぐ選ぶ（V3-4）
@@ -177,6 +199,16 @@ export function greedyDecide(port: PlayerPort, rng: Rng, memo: BotMemo): Command
   const done = complete && (x!.objective.targetDepth === null || crossedEnough(x!, memo) || (memo.cautious && x!.maxDepth > x!.objective.targetDepth && hp < 60));
   const onTarget = !!x && x.objective.targetDepth !== null && v.floor?.depth === x.objective.targetDepth;
 
+  // 守護者の型（V3-3）: 突進の構えの直線の上にいれば外れる。護られし者がいて、隣に灯った護りの火があれば消す
+  const braced = hostiles.find((h) => h.intent?.kind === 'winding_up' && h.intent.dir && onChargeLine(h.pos, h.intent.dir, pos));
+  if (braced) {
+    const side = sidestep(port, v, braced.pos, braced.intent!.dir!, pos);
+    if (side) return { type: 'move', dir: side };
+  }
+  if (hostiles.some((h) => h.guardian?.types.includes('core:warded'))) {
+    const fire = v.entities.find((e) => e.cat === 'feature' && e.kind === 'core:ward_fire' && e.state === 'lit' && cheb(e.pos, pos) <= 1);
+    if (fire) { const d = cheb(fire.pos, pos) === 0 ? undefined : dirTo(pos, fire.pos) ?? undefined; return d ? { type: 'interact', dir: d } : { type: 'interact' }; }
+  }
   // 立て直し（遠征ごとに 1 回）は薬より先に使う
   if (hp < 40 && (adj || hostiles.length) && ready(v, port.catalog, 'core:second_wind')) return { type: 'ability', id: 'second_wind' };
   if (hp < 35 && healing && (adj || hostiles.length)) return { type: 'use', slot: healing.slot };

@@ -6,6 +6,7 @@ import type { Ctx } from './ctx';
 import { lifelineReturn } from './expedition';
 import { Registry } from './registry';
 import { notePerk, perkHook, perkWithHook } from './build';
+import { guardianDotMult } from './guardians';
 
 export interface StatusHandler {
   /** 手番開始時の処理（毒ダメージなど） */
@@ -22,7 +23,9 @@ statusHandlers.register('dot', {
   tick(ctx, e, inst) {
     // 毒を与えた者がまだいれば、その者のダメージとして数える（倒せばその者の撃破・賞金・経験値）
     const src = inst.source ? ctx.world.entities[inst.source] ?? null : null;
-    applyDamage(ctx, e, Math.max(1, inst.power), src && (src.stats?.hp ?? 0) > 0 ? src : null, 'poison');
+    // 毒に弱い守護者は 2 倍（V3-3）
+    const mult = e.guardian ? guardianDotMult(ctx, e, inst.id) : 1;
+    applyDamage(ctx, e, Math.max(1, inst.power) * mult, src && (src.stats?.hp ?? 0) > 0 ? src : null, 'poison');
   },
 });
 statusHandlers.register('speed_pct', {});

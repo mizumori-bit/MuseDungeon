@@ -287,6 +287,10 @@ button.exit { border-color: #2e8a4e; background: #1f4a30; }
 .mons .mshot { color: #8fe0a0; }
 .mons .mshot.blocked { color: var(--muted); }
 .mons .mbounty { color: #ffe08a; }
+.mons .mgname { color: #ffd27a; font-size: 12px; }
+.mons .mguard { display: flex; gap: 10px; font-size: 11.5px; color: #e8c98a; }
+.mons .mintent { font-size: 12px; padding: 1px 6px; border-radius: 4px; background: #4a3a10; color: #ffe08a; }
+.mons .mintent.online { background: #6a1f1f; color: #ffd0d0; font-weight: bold; }
 .inv .istats { display: block; color: #9fb4d0; font-size: 11px; }
 .actions .seg.mmode { align-items: center; gap: 2px; padding-right: 6px; margin-right: 2px; border-right: 1px solid var(--line); }
 .actions .seg.mmode .lbl { font-size: 11px; color: var(--muted); margin-right: 2px; }

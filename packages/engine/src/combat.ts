@@ -12,6 +12,7 @@ import { makeItem } from './spawn';
 import { effectiveStats } from './stats';
 import { hasStatus, removeStatus } from './statuses';
 import { meleeAccOf, notePerk, offerPerk, perkHook, perkWithHook, sweeps, weaponOnHit } from './build';
+import { armorOf, guardianCritIfUnaware, guardianIncoming } from './guardians';
 
 export interface AttackOutcome { hit: boolean; crit: boolean; roll: number }
 
@@ -41,6 +42,10 @@ export interface MeleeOpts {
   accBonus?: number;
   /** なぎ払いの 2 体目など: 武器の「薙ぐ」を重ねない */
   noSweep?: boolean;
+  /** ダメージの倍率（突き進む者の突進。V3-3） */
+  dmgMult?: number;
+  /** 必ず会心（潜む者の、視界の外からの一撃。V3-3） */
+  forceCrit?: boolean;
 }
 
 export function rollToHit(ctx: Ctx, attacker: Entity, target: Entity, accBonus: number): AttackOutcome {
@@ -116,6 +121,9 @@ export function melee(ctx: Ctx, attacker: Entity, target: Entity, opts: MeleeOpt
   let o = rollToHit(ctx, attacker, target, (opts.accBonus ?? 0) + meleeAccOf(ctx, attacker));
   const ambush = attacker.player && unaware && perkHook(ctx, attacker, 'ambush');
   if (ambush) o = { hit: true, crit: true, roll: o.roll };
+  // 守護者（V3-3）: 視界の外からの一撃（潜む者）・眠りが深い守護者への気づかれる前の一撃は会心
+  if (opts.forceCrit) o = { hit: true, crit: true, roll: o.roll };
+  if (!o.crit && attacker.player && unaware && target.guardian && guardianCritIfUnaware(ctx, target)) o = { hit: true, crit: true, roll: o.roll };
   // 身をかわした相手には近接が当たらない（次のその者の手番まで）
   if (hasStatus(target, 'core:evasive')) o = { hit: false, crit: false, roll: o.roll };
   if (ambush && o.crit) notePerk(ctx, attacker, perkWithHook(ctx, attacker, 'ambush'), 'crit', { subject: target });
@@ -126,9 +134,12 @@ export function melee(ctx: Ctx, attacker: Entity, target: Entity, opts: MeleeOpt
     const ls = lastStandMight(ctx, attacker);
     const might = attacker.stats!.might + ls;
     const brace = bracedArmor(target);
-    const dmg = o.crit
+    const base = o.crit
       ? Math.max(1, diceMax(attacker.stats!.dmg) + might)
-      : Math.max(1, roll(ctx.rng('runtime'), attacker.stats!.dmg) + might - (target.stats?.armor ?? 0) - brace);
+      : Math.max(1, roll(ctx.rng('runtime'), attacker.stats!.dmg) + might - armorOf(ctx, target) - brace);
+    // 突進の倍率と、守護者の受けるダメージの修正（V3-3）
+    const mult = base * (opts.dmgMult ?? 1);
+    const dmg = target.guardian ? guardianIncoming(ctx, target, mult, 'melee', attacker) : mult;
     if (ls > 0) notePerk(ctx, attacker, perkWithHook(ctx, attacker, 'last_stand'), 'might', { amount: ls });
     if (brace && !o.crit) notePerk(ctx, target, perkWithHook(ctx, target, 'brace'), 'braced', { amount: brace });
     if (brace) removeStatus(ctx, target, 'core:braced');

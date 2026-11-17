@@ -2,7 +2,7 @@
 // projectPlayerView はルール無しの純粋なフィルタ。仕様: docs/PROTOCOL.md §4
 import type {
   CampState, Controller, Entity, EntityId, EntityRole, EquipSlot, Expedition, ExpeditionEndReason, ExpeditionResult, FloorKey,
-  Locale, MonsterMemory, Objective, OfferSlot, PlayerBuild, PlayerId, PlayerState, Pos, RememberedEntity, Stats, StatusInst, World, Sense, FloorHint,
+  Locale, MonsterMemory, Objective, OfferSlot, PlayerBuild, PlayerId, PlayerState, Pos, RememberedEntity, Stats, StatusInst, World, Sense, FloorHint, Names, Intent,
 } from './types';
 
 export type HpState = 'healthy' | 'wounded' | 'badly_wounded' | 'near_death';
@@ -60,6 +60,10 @@ export interface EntityView {
   bounty?: number;
   /** 速さ（モンスター。状態異常を除く素の値。見れば分かる性質。観測では自分との比較の 3 段階にする。V3-2R2 §18.2） */
   speed?: number;
+  /** 守護者の名前と型（公開）。weakness は試して分かったときだけ（V3-3 §3.1） */
+  guardian?: { name: Names; title?: Names; types: string[]; weakness?: string };
+  /** 予備動作（見えていれば公開。V3-3 §3.1） */
+  intent?: Intent;
 }
 
 export interface RememberedView {
@@ -132,6 +136,9 @@ export interface ExpeditionView {
   maxDepth: number;
   /** この遠征で下り階段に立った最も深い階（踏破） */
   crossedDepth: number;
+  /** 守護者の名前と型（公開。V3-3）。弱点と種族は渡さない */
+  /** 守護者（V3-3）。weakness は試して分かったときだけ */
+  guardian?: { rank: 1 | 2 | 3; name: Names; title?: Names; types: string[]; weakness?: string };
 }
 
 export interface PlayerView {
@@ -208,7 +215,7 @@ export function campDepthOf(world: World): number {
 /** 候補から、プレイヤーに渡さない守護者の種族を外す */
 export function stripCamp(camp: CampState): CampState {
   const c = structuredClone(camp);
-  for (const o of c.offers) delete o.guardianKind;
+  for (const o of c.offers) { delete o.guardianKind; delete o.guardianWeakness; }
   return c;
 }
 
@@ -327,6 +334,12 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
           if (ds) v.damageSeen = ds;
           v.shot = shots.has(e.id);
           if (e.actor) v.speed = e.actor.speed;
+          // 守護者の名前と型は公開。弱点は試して分かったものだけ（V3-3 §3.1）
+          if (e.guardian) {
+            const known = k.guardianIntel?.[e.id];
+            v.guardian = { name: { ...e.guardian.name }, ...(e.guardian.title ? { title: { ...e.guardian.title } } : {}), types: [...e.guardian.types], ...(known ? { weakness: known } : {}) };
+          }
+          if (e.actor?.ai?.intent) v.intent = { ...e.actor.ai.intent };
           const met = k.metAt?.[e.id];
           if (met !== undefined) v.firstSeenSeq = met;
         } else {
@@ -373,6 +386,10 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
       startSeq: latest.startSeq, endSeq: latest.endSeq,
       slot: latest.slot ?? null, traits: [...(latest.traits ?? [])], multiplierPct: latest.multiplierPct ?? 100,
       haul: { ...(latest.haul ?? { bounty: 0, discovery: 0, kills: 0 }) }, maxDepth: latest.progress.maxDepth ?? 0, crossedDepth: latest.progress.crossedDepth ?? 0,
+      ...(latest.guardianName ? { guardian: {
+        rank: latest.guardianRank ?? 2, name: { ...latest.guardianName }, ...(latest.guardianTitle ? { title: { ...latest.guardianTitle } } : {}), types: [...(latest.guardianTypes ?? [])],
+        ...(latest.targets.guardian && k.guardianIntel?.[latest.targets.guardian] ? { weakness: k.guardianIntel[latest.targets.guardian] } : {}),
+      } } : {}),
     };
   }
 

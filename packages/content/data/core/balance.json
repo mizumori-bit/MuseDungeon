@@ -23,9 +23,9 @@
     "loot": { "throwStackMin": 1, "throwStackMax": 4 },
     "guardian": {
       "ranks": [
-        { "hpPct": 50, "minHpBase": 6, "minHpPerDepth": 2, "tableDepth": 0 },
-        { "hpPct": 100, "minHpBase": 10, "minHpPerDepth": 3, "tableDepth": 1 },
-        { "hpPct": 150, "minHpBase": 10, "minHpPerDepth": 3, "tableDepth": 2 }
+        { "hpPct": 50, "minHpBase": 6, "minHpPerDepth": 2, "tableDepth": 0, "types": 0 },
+        { "hpPct": 100, "minHpBase": 10, "minHpPerDepth": 3, "tableDepth": 1, "types": 1 },
+        { "hpPct": 150, "minHpBase": 10, "minHpPerDepth": 3, "tableDepth": 2, "types": 1 }
       ],
       "leash": 3
     },

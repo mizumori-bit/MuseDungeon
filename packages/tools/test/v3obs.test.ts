@@ -369,11 +369,12 @@ describe('V3-1 text and map (report 6, 7, 8, 9, 12, 13, 14)', () => {
     const e1 = hpLeftEstimate(mem, 'healthy', 0, 3)!;
     expect(e1.max).toBeNull();
     // 記録は標本なので「記録どおりなら」と言い、記録の体力を添える（V3-2R §14.3）
-    expect(hpEstimateText('ja', e1)).toBe(`記録どおりなら残り ${e1.min} 以上（記録 1 体: 体力 3）`);
-    // 最大 HP 4（記録 3 体で確定）、見ている間に 3 与えて重傷 → 残り 1
-    const e3 = hpLeftEstimate({ ...mem, hpSeen: { min: 4, max: 4, samples: 3 } }, 'badly_wounded', 3, 3)!;
+    // 記録が 5 体未満の間は幅を確定値のように見せない（V3-3 の設計の指示）
+    expect(hpEstimateText('ja', e1)).toBe(`記録どおりなら残り ${e1.min} 以上（記録 1 体: 体力 3。個体差あり）`);
+    // 最大 HP 4（記録 5 体で確定）、見ている間に 3 与えて重傷 → 残り 1
+    const e3 = hpLeftEstimate({ ...mem, hpSeen: { min: 4, max: 4, samples: 5 } }, 'badly_wounded', 3, 5)!;
     expect(e3.min).toBe(e3.max);
-    expect(hpEstimateText('ja', e3)).toBe(`記録どおりなら残り ${e3.min}（記録 3 体: 体力 4）`);
+    expect(hpEstimateText('ja', e3)).toBe(`記録どおりなら残り ${e3.min}（記録 5 体: 体力 4）`);
   });
 
   it('pick-up and equip texts keep affixes (report 7); ranged hits use the same verb as misses (report 13); unseen attackers give a direction', () => {
