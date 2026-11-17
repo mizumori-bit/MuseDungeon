@@ -108,7 +108,7 @@ export function traitsText(L: Locale, rules: Pick<CatalogRules, 'traits'> | unde
   }).join(' / ');
 }
 
-const GUARD_TRAIT_JA: Record<string, string> = { fast: '速い', slow: '遅い', ranged: '射撃する', large: '大柄', armored: '重装' };
+const GUARD_TRAIT_JA: Record<string, string> = { fast: '速い', slow: '遅い', ranged: '射撃する', large: '大柄', armored: '重装', rusting: '錆びさせる', pierce: '装甲を抜く' };
 
 /** 守護者の見込みの文（「守護者: 格 2・射撃する・速い」。種族名は出さない。V3-2R3 §20.1） */
 /** 守護者の呼び名（称号＋名前。V3-3）: 「呼び集める者ヴォルン」/ "Volun the Summoner" */

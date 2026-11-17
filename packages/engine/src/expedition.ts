@@ -104,6 +104,9 @@ export function guardianTraits(ctx: Ctx, kind: string): string[] {
   if (def.ranged || def.tags.includes('ranged')) out.push('ranged');
   if (def.size === 'large') out.push('large');
   if (def.stats.armor >= 3) out.push('armored');
+  // 錆びさせる・装甲を抜く（V3-5a §35.10。見れば分かる特徴）
+  if (def.tags.includes('rusting')) out.push('rusting');
+  if (def.tags.includes('pierce') || def.ranged?.pierce) out.push('pierce');
   return out;
 }
 

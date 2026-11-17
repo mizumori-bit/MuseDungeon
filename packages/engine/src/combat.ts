@@ -162,7 +162,7 @@ export function melee(ctx: Ctx, attacker: Entity, target: Entity, opts: MeleeOpt
 }
 
 /** 遠隔攻撃（モンスターの射撃） */
-export function rangedAttack(ctx: Ctx, attacker: Entity, target: Entity, dice: string, accBonus: number): void {
+export function rangedAttack(ctx: Ctx, attacker: Entity, target: Entity, dice: string, accBonus: number, pierce = false): void {
   const o = rollToHit(ctx, attacker, target, accBonus);
   emitAttack(ctx, attacker, target, o, true);
   recordHit(ctx, attacker, target, o.hit, 'ranged');
@@ -175,8 +175,10 @@ export function rangedAttack(ctx: Ctx, attacker: Entity, target: Entity, dice: s
     updateMemory(ctx, pr.id, attacker, (m) => { m.abilities.push('ranged'); m.rangeMax = Math.max(m.rangeMax ?? 0, dist); });
   }
   if (o.hit) {
-    const brace = bracedArmor(target);
-    const dmg = o.crit ? Math.max(1, diceMax(dice)) : Math.max(1, roll(ctx.rng('runtime'), dice) - (target.stats?.armor ?? 0) - brace);
+    // 装甲を抜く射撃（呪い火。V3-5a §35.10）は装甲も構えも無視する
+    const brace = pierce ? 0 : bracedArmor(target);
+    const armor = pierce ? 0 : armorOf(ctx, target);
+    const dmg = o.crit ? Math.max(1, diceMax(dice)) : Math.max(1, roll(ctx.rng('runtime'), dice) - armor - brace);
     if (brace && !o.crit) notePerk(ctx, target, perkWithHook(ctx, target, 'brace'), 'braced', { amount: brace });
     if (brace) removeStatus(ctx, target, 'core:braced');
     applyDamage(ctx, ctx.world.entities[target.id], dmg, attacker, 'ranged');

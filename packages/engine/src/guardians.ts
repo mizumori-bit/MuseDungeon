@@ -116,7 +116,14 @@ export function guardianArmor(ctx: Ctx, m: Entity): number {
 
 /** 実効の装甲（ダメージの計算で使う） */
 export function armorOf(ctx: Ctx, e: Entity): number {
-  return (e.stats?.armor ?? 0) + (e.guardian ? guardianArmor(ctx, e) : 0);
+  const base = (e.stats?.armor ?? 0) + (e.guardian ? guardianArmor(ctx, e) : 0);
+  // 状態異常の装甲の修正（錆。下げる修正では 0 未満にしない。V3-5a §35.10）
+  let d = 0;
+  for (const s of e.statuses ?? []) {
+    const def = ctx.content.statuses[s.id];
+    if (def?.handler === 'stat_mod') d += def.params.armor ?? 0;
+  }
+  return d < 0 ? Math.max(Math.min(base, 0), base + d) : base + d;
 }
 
 /** 受けるダメージの修正（弾く者・投擲に弱い）。弱点が効いたら見ている者に知らせる */

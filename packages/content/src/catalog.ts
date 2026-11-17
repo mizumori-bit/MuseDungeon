@@ -81,7 +81,8 @@ export function buildCatalog(c: Content): Catalog {
       name: f.name, category: f.category, states: f.states, interactable: f.onInteract.length > 0 || !!f.afterInteract, passable: f.passable,
       ...(f.afterInteract ? { afterInteract: f.afterInteract } : {}),
     }])),
-    statuses: Object.fromEntries(Object.values(c.statuses).map((s) => [s.id, s.handler === 'speed_pct' ? { name: s.name, speedPct: s.params.pct ?? 100 } : { name: s.name }])),
+    statuses: Object.fromEntries(Object.values(c.statuses).map((s) => [s.id, s.handler === 'speed_pct' ? { name: s.name, speedPct: s.params.pct ?? 100 }
+      : s.handler === 'stat_mod' ? { name: s.name, ...(s.params.armor ? { armor: s.params.armor } : {}) } : { name: s.name }])),
     affixes: Object.fromEntries(c.lists.affixes.map((a) => [a.id, {
       name: a.name, target: a.target,
       ...(a.target === 'item' ? { itemMods: { acc: a.mods?.acc ?? 0, dmgBonus: a.mods?.dmgBonus ?? 0, armor: a.mods?.armor ?? 0, eva: a.mods?.eva ?? 0, might: a.mods?.might ?? 0, maxHp: a.mods?.maxHp ?? 0, sight: a.mods?.sight ?? 0 } } : {}),

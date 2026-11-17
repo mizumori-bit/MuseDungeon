@@ -95,7 +95,8 @@ export interface Catalog {
   appearances: Record<string, { name: Names; category: string }>;
   features: Record<string, { name: Names; category: 'feature' | 'trap'; states: string[]; interactable: boolean; passable: boolean; afterInteract?: string }>;
   /** speedPct: 速度を変える状態異常の倍率（%）。公開ルール（加速 x2 など） */
-  statuses: Record<string, { name: Names; speedPct?: number }>;
+  /** armor: 装甲の修正（錆。V3-5a） */
+  statuses: Record<string, { name: Names; speedPct?: number; armor?: number }>;
   /** itemMods: 品物の接辞の効果（自分の持ち物の性能表示に使う。敵の接辞の値は出さない） */
   affixes: Record<string, { name: Names; target: 'monster' | 'item' | 'guardian'; itemMods?: { acc: number; dmgBonus: number; armor: number; eva?: number; might?: number; maxHp?: number; sight?: number }; cursed?: boolean }>;
   /** ビルド（V3-4） */
@@ -313,6 +314,13 @@ export function regenStep(acc: number, hp: number, limit: number, gain: number, 
   while (a >= interval && hp + heal < limit) { a -= interval; heal++; }
   if (hp + heal >= limit) a = 0;
   return { acc: a, heal };
+}
+
+/** 状態異常の装甲の修正を足した装甲（錆。下げる修正では 0 未満にしない。engine の armorOf と同じ規則。V3-5a §35.10） */
+export function armorWithStatuses(statusDefs: Record<string, { armor?: number }>, statuses: readonly { id: string }[] | undefined, armor: number): number {
+  let d = 0;
+  for (const s of statuses ?? []) d += statusDefs[s.id]?.armor ?? 0;
+  return d < 0 ? Math.max(Math.min(armor, 0), armor + d) : armor + d;
 }
 
 export function nameOf(n: Names | undefined, locale: 'ja' | 'en', fallback = '?'): string {

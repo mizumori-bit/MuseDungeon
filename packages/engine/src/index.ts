@@ -19,6 +19,7 @@ export { computeFov, hasLos, line } from './geom';
 export { shotLine } from './perception';
 export { pickRelic, relicInfo } from './boons';
 export { isMilestoneDepth } from './gen/generate';
+export { guardianTraits } from './expedition';
 export { rollWardenInfo } from './guardians';
 export { actions, archetypes, effects, validators, layoutGenerators, statusHandlers, abilityHandlers, weaponTraits };
 

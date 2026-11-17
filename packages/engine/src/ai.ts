@@ -192,7 +192,7 @@ archetypes.register('ranged_kiter', (ctx, m, { target, ai, def }) => {
   }
   if (d < keepAway && flee(ctx, m, target.pos!)) return 100;
   if (def.ranged && d <= range && clearShot(ctx, m, target)) {
-    rangedAttack(ctx, m, target, def.ranged.dice, def.ranged.acc);
+    rangedAttack(ctx, m, target, def.ranged.dice, def.ranged.acc, !!def.ranged.pierce);
     return 100;
   }
   approach(ctx, m, target.pos!);

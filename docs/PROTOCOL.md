@@ -199,7 +199,7 @@ Observation {
                 size?: 'small'|'large',                       // 体格（並は出さない。V3-2R3）
                 dealt?: { melee?: [sum, n], thrown?: [sum, n] },   // 通りの記録: 自分の攻撃が当たったときの実ダメージ（V3-2R3）
                 speed: 'slow'|'normal'|'fast',                // 自分の今の速さとの比較（見れば分かる。V3-2R2）
-                traits: ('pack'|'ranged'|'stationary'|'armored')[],   // 見れば分かる特徴（種族の公開タグ。V3-2R2。armored = 素の装甲 3 以上、V3-2R3）
+                traits: ('pack'|'ranged'|'stationary'|'armored'|'rusting'|'pierce')[],   // 見れば分かる特徴（種族の公開タグ。V3-2R2。armored = 素の装甲 3 以上、V3-2R3。rusting = 当たると錆びる・pierce = 射撃が装甲を無視、V3-5a）
                 first_seen?: true,                            // 本当に初めて見た種族（threat null の文が「不明（初見）」になる）
                 hits?: { your_melee?: [hits, tries], your_thrown?: [hits, tries], theirs?: [hits, tries] },   // 命中の記録（種族ごと。確率は出さない）
                 role?: 'guardian', fleeing?: true,            // 守護者 / 手負いで逃走中
@@ -412,6 +412,12 @@ V3-2R で足した項目（同じく後方互換。会心と経験値のルー�
 - `StatusInst.source`（状態異常を与えた者。毒で倒したときの撃破者になる）、`status_applied.targetAffixes`
 - `player_state.reason: 'joined'`（キャンプから始まる参加）。参加コマンドの `atCamp`
 - プレイヤー向けの射影で、見えていた個体が視界の外へ動いた `entity_moved` に `dirOut`（向きだけ。行き先は伏せたまま）
+
+V3-5a で足した項目（中層の敵。後方互換。種族と規則が増えたので `engineVersion` は 0.15.0。DESIGN.md §26）:
+
+- 種族: 洞窟狼（`core:cave_wolf`）・錆の粘体（`core:rust_slime`）・呪い火の術者（`core:hexfire_caster`）・石皮の甲虫（`core:stoneskin_beetle`）。大ネズミ・ジャッカル・ゴブリン・ゴブリンの投石兵に深さの上限（4・6・7・9）
+- コンテンツ: 射撃の `ranged.pierce`（装甲と構えを無視）、状態異常のハンドラ `stat_mod`（`params.armor` などの修正）と状態異常 `core:rust`（装甲 −2。0 未満にしない。10 手番。重ならない）。公開カタログの `statuses[id].armor`
+- 観測: `visible.monsters[].traits` に `rusting`・`pierce`。look に「見た目: …」（見れば分かる特徴）。`self.defense.armor` は状態異常の修正込み（`armorWithStatuses`）。守護者の見込みの特徴に `rusting`・`pierce`
 
 V3-6 で足した項目（振り返り。後方互換。遠征の開始の記録が増えたので `engineVersion` は 0.14.1、`expedition_started` の射影が増えたので `eventVersion` は 10。DESIGN.md §25）:
 

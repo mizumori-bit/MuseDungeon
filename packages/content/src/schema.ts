@@ -39,7 +39,8 @@ export const MonsterSchema = z.object({
   }),
   speed: z.number().int().min(10).default(100),
   attack: z.object({ dice: DiceSchema, onHit: z.array(EffectSchema).default([]) }),
-  ranged: z.object({ dice: DiceSchema, range: z.number().int().min(2), acc: z.number().int().default(0) }).optional(),
+  /** pierce: 装甲（と構え）を無視する射撃（V3-5a §35.10） */
+  ranged: z.object({ dice: DiceSchema, range: z.number().int().min(2), acc: z.number().int().default(0), pierce: z.boolean().optional() }).optional(),
   ai: z.object({ archetype: z.string().min(1) }).catchall(z.number()),
   xp: z.number().int().min(0),
   drops: z.array(z.object({ table: IdSchema, chancePct: z.number().int().min(0).max(100) })).default([]),

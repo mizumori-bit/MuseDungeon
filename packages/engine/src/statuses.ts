@@ -34,6 +34,8 @@ statusHandlers.register('incapacitate', { incapacitates: true });
 statusHandlers.register('evade', {});
 statusHandlers.register('brace', {});
 statusHandlers.register('cowed', {});
+// V3-5a: 能力値の修正（錆: 装甲 −2）。効果は armorOf が読む
+statusHandlers.register('stat_mod', {});
 // 帰還の綱（V3-2R2 §18.1）: その間は行動できず、切れたらキャンプへ戻る。被害は受ける
 statusHandlers.register('recall', { incapacitates: true, expire: (ctx, e) => lifelineReturn(ctx, e) });
 

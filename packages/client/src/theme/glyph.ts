@@ -35,6 +35,10 @@ const ACTOR: Record<string, GlyphDrawable> = {
   'core:imp': { kind: 'glyph', ch: 'i', fg: '#f06060', bold: true },
   'core:orc_brute': { kind: 'glyph', ch: 'O', fg: '#70b050', bold: true },
   'core:cave_troll': { kind: 'glyph', ch: 'T', fg: '#a0b8a0', bold: true },
+  'core:cave_wolf': { kind: 'glyph', ch: 'w', fg: '#a8a8b8', bold: true },
+  'core:rust_slime': { kind: 'glyph', ch: 'u', fg: '#c87838', bold: true },
+  'core:hexfire_caster': { kind: 'glyph', ch: 'c', fg: '#b060f0', bold: true },
+  'core:stoneskin_beetle': { kind: 'glyph', ch: 'b', fg: '#9a9080', bold: true },
 };
 
 // relic: 遠征の遺物（core:relic）。目印の光と星はレンダラーが役割（role）から重ねる

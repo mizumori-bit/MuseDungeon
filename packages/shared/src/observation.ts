@@ -2,7 +2,7 @@
 // 派生情報は PlayerView（とカタログ）だけから計算する。仕様: docs/PROTOCOL.md §3
 import type { Catalog, CatalogEquipStats } from './catalog';
 import { abilityStatus, accBonuses, curseUnknown, isCursedItem, perkChoice, shortId, weaponReach } from './build';
-import { boonHookSum, haulTotal, nameOf, nextCampOf, nextOverreach, offerGap, offerWardenExtra, overreachPoints, payoutOf, regenInterval, regenStep, restCapHp } from './catalog';
+import { armorWithStatuses, boonHookSum, haulTotal, nameOf, nextCampOf, nextOverreach, offerGap, offerWardenExtra, overreachPoints, payoutOf, regenInterval, regenStep, restCapHp } from './catalog';
 import { guardianDisplayName, multText, objectiveText, offerText, partsText, progressText, resultText } from './expedition';
 import { isStationary, pickableItems, sameOrWorseEquip, worseEquip } from './macro';
 import { attacksPerTurn, chaseAttacks, memoryOf, monsterSpeedOf, selfSpeed } from './danger';
@@ -21,8 +21,9 @@ import { hpState, xpForLevel } from './view';
 export interface Alert { code: string; text: string; entity?: string; data?: Record<string, unknown> }
 
 /** 見れば分かる特徴（V3-2R2 §18.2）: 群れる・飛び道具・動かない。種族の公開タグから */
-export type MonsterTrait = 'pack' | 'ranged' | 'stationary' | 'armored';
-const OBVIOUS_TRAITS: readonly MonsterTrait[] = ['pack', 'ranged', 'stationary'];
+export type MonsterTrait = 'pack' | 'ranged' | 'stationary' | 'armored' | 'rusting' | 'pierce';
+/** 錆びさせる・装甲を抜く（V3-5a §35.10）も種族の公開タグから */
+const OBVIOUS_TRAITS: readonly MonsterTrait[] = ['pack', 'ranged', 'stationary', 'rusting', 'pierce'];
 
 export interface ObsMonster {
   id: string; name: string; pos: Pos; dir: Dir | null; dist: number;
@@ -410,8 +411,8 @@ export function itemStatsText(L: Locale, s: ItemStats | undefined, catalog?: Cat
 
 /** 能力タグの表示名 */
 export function abilityName(locale: Locale, a: string): string {
-  const ja: Record<string, string> = { flees: '手負いで逃げる', ranged: '遠隔攻撃', fast: '速い', slow: '遅い', poison: '毒', stationary: '動かない', pack: '群れる', armored: '重装' };
-  const en: Record<string, string> = { flees: 'flees when hurt', ranged: 'ranged attack', fast: 'fast', slow: 'slow', poison: 'poison', stationary: 'stationary', pack: 'pack', armored: 'armored' };
+  const ja: Record<string, string> = { flees: '手負いで逃げる', ranged: '遠隔攻撃', fast: '速い', slow: '遅い', poison: '毒', stationary: '動かない', pack: '群れる', armored: '重装', rusting: '錆びさせる', pierce: '装甲を抜く' };
+  const en: Record<string, string> = { flees: 'flees when hurt', ranged: 'ranged attack', fast: 'fast', slow: 'slow', poison: 'poison', stationary: 'stationary', pack: 'pack', armored: 'armored', rusting: 'rusts armor', pierce: 'pierces armor' };
   return (locale === 'en' ? en[a] : ja[a]) ?? a;
 }
 
@@ -1218,7 +1219,8 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
         acc: me.stats.acc + bonuses.melee, dmg: `${me.stats.dmg}${me.stats.might ? (me.stats.might > 0 ? `+${me.stats.might}` : `${me.stats.might}`) : ''}`,
         ...(throwables.length ? { throws: throwables.map((tw) => ({ slot: tw.slot, name: itemDisplayName(catalog, L, tw.item.kind, tw.item.appearanceId, tw.item.affixes), dmg: tw.dmg, acc: me.stats.acc + tw.acc + bonuses.thrown, range: tw.range })) } : {}),
       },
-      defense: { eva: me.stats.eva, armor: me.stats.armor },
+      // 装甲は状態異常（錆）の修正込み（V3-5a）
+      defense: { eva: me.stats.eva, armor: armorWithStatuses(catalog.statuses, me.statuses, me.stats.armor) },
       equipment: { weapon: equipName(me.equip.weapon), armor: equipName(me.equip.armor), accessory: equipName(me.equip.accessory) },
       inventory_count: carried, inventory_capacity: me.capacity,
       turns: me.turns,
@@ -1721,6 +1723,10 @@ export function describeTarget(view: PlayerView, catalog: Catalog, target: Pos |
       const est = e.role === 'guardian' ? undefined : hpLeftEstimate(mem, e.hp ?? 'healthy', e.damageSeen ?? 0, catalog.rules?.estimateMinSamples ?? HP_RECORD_SURE);
       const estText = est ? t(L, `・推定残りHP ${hpEstimateText(L, est)}`, `, estimated HP left ${hpEstimateText(L, est)}`) : '';
       const shotText = e.shot === false ? t(L, '・射線: 通らない', ', shot: blocked') : '';
+      // 見れば分かる特徴（初見でも分かる。V3-2R2 §18.2・V3-5a §35.10: 錆びさせる・装甲を抜く）
+      const cmLook = e.kind ? catalog.monsters[e.kind] : undefined;
+      const lookTraits = [...OBVIOUS_TRAITS.filter((tr) => cmLook?.tags.includes(tr)), ...(cmLook?.armored ? ['armored'] : [])].map((tr) => abilityName(L, tr));
+      const traitText = lookTraits.length ? t(L, `・見た目: ${lookTraits.join('・')}`, `, looks: ${lookTraits.join(', ')}`) : '';
       // 守護者の呼び名・型の説明・分かった弱点（V3-3）。弱点は試して分かるまで「不明」
       const g = e.guardian;
       const gText = g ? t(L,
@@ -1729,7 +1735,7 @@ export function describeTarget(view: PlayerView, catalog: Catalog, target: Pos |
       // 大守護者: 記録庫の記憶（体力と最大の一撃の目安。V3-3a §35.7）
       const wi = g?.warden && view.floor ? view.wardenIntel?.[String(view.floor.depth)] : undefined;
       const wiText = wi?.hp !== undefined ? t(L, `・記録庫の記憶: 体力およそ ${wi.hp}・一撃 ${wi.maxHit} まで`, `, the archive remembers: about ${wi.hp} HP, hits up to ${wi.maxHit}`) : '';
-      parts.push(`${name} [${L === 'en' ? e.hp : HP_JA[e.hp ?? 'healthy']}, ${L === 'en' ? e.awareness : AW_JA[e.awareness ?? 'unaware']}] ${memText}${hpText}${ds}${estText}${shotText}${sturdy}${gText}${wiText}`);
+      parts.push(`${name} [${L === 'en' ? e.hp : HP_JA[e.hp ?? 'healthy']}, ${L === 'en' ? e.awareness : AW_JA[e.awareness ?? 'unaware']}] ${memText}${hpText}${traitText}${ds}${estText}${shotText}${sturdy}${gText}${wiText}`);
       list.push({ id: e.id, name, hp_state: e.hp, awareness: e.awareness, memory: mem ?? null, threat: threatOf(view, e), role: e.role, damage_seen: e.damageSeen ?? 0, hp_left_est: est ?? null });
     } else if (e.cat === 'item') {
       const name = itemDisplayName(catalog, L, e.kind, e.appearanceId, e.affixes);
