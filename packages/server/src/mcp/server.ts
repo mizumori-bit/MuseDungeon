@@ -223,7 +223,19 @@ export function createMcpServer(ctx: McpContext): McpServer {
     if (!port) return noSession();
     const lines = port.briefing('start');
     const o = port.observe({ detail: 'brief', map: false });
-    return withTurn(port, lines.join('\n'), { briefing: lines, expedition: o.observation.expedition ?? null, camp: o.observation.camp ?? null });
+    // 進行中なら途中経過、キャンプなら直前の遠征のレポート（V3-6 §6）
+    const rep = port.expeditionReportLines();
+    return withTurn(port, [...lines, ...rep.lines].join('\n'), { briefing: lines, expedition: o.observation.expedition ?? null, camp: o.observation.camp ?? null, ...(rep.progress ? { progress: rep.progress } : {}), ...(rep.report ? { report: rep.report } : {}) });
+  });
+  server.registerTool('review', {
+    title: '振り返り',
+    description: '終わった遠征のレポート（確定・戦闘・消耗・進み・このランの前の遠征との比較・場面）。expedition を省くと直前の遠征。手番を消費しない。Review an ended expedition (facts only).',
+    inputSchema: { ...common, expedition: z.number().int().min(1).optional().describe('遠征の番号（省略時は直前の遠征）') },
+  }, async (args) => {
+    const port = portOf(args.player_token);
+    if (!port) return noSession();
+    const r = port.review(args.expedition);
+    return withTurn(port, r.text, { report: r.data });
   });
   server.registerTool('start_expedition', {
     title: '遠征を始める',

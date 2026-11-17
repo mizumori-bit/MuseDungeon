@@ -7,6 +7,7 @@ import { guardianDisplayName, multText, objectiveText, offerText, partsText, pro
 import { isStationary, pickableItems, sameOrWorseEquip, worseEquip } from './macro';
 import { attacksPerTurn, chaseAttacks, memoryOf, monsterSpeedOf, selfSpeed } from './danger';
 import type { PerceivedEvent } from './filter';
+import type { ReportCompare } from './expeditionStats';
 import { kindName } from './narrate';
 import type { NavGrid } from './nav';
 import { buildNavGrid, distanceField, findFrontiers } from './nav';
@@ -143,6 +144,8 @@ export interface ObsCamp {
   milestone?: ObsMilestone;
   /** 記録庫に納めた欠片の数（V3-3a §35.7） */
   archive?: { delivered: number; total: number };
+  /** 直前の遠征の比較（2 行以内。V3-6 §35.9: 候補を選ぶ画面で自分の記録が目に入る） */
+  compare?: { no: number; lines: string[] } & ReportCompare;
 }
 
 /** 節目の大守護者（V3-3 §3.2）。弱点と種族は伏せる */
@@ -229,6 +232,8 @@ export interface ObservationOptions {
   recent?: PerceivedEvent[];
   /** 帰還の綱の長い説明はこの遠征で出した（以降は短い行。V3-3a §35.8） */
   lifelineShort?: boolean;
+  /** キャンプ: 直前の遠征の比較（遠征レポートから。V3-6 §35.9） */
+  campCompare?: { no: number; lines: string[]; compare?: ReportCompare };
 }
 
 const DIR_JA: Record<Dir, string> = { n: '北', ne: '北東', e: '東', se: '南東', s: '南', sw: '南西', w: '西', nw: '北西' };
@@ -1087,6 +1092,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
     const rules = catalog.rules;
     camp = {
       ...(view.camp.milestone ? { milestone: milestoneObs(L, catalog, view.camp.milestone, view.milestonesCleared ?? [], view.wardenIntel?.[String(view.camp.milestone.depth)]) } : {}),
+      ...(opts.campCompare && view.status === 'at_camp' ? { compare: { no: opts.campCompare.no, lines: opts.campCompare.lines.slice(0, 2), ...(opts.campCompare.compare ?? {}) } } : {}),
       // 記録庫に納めた欠片の数（V3-3a §35.7）
       archive: { delivered: view.archive?.length ?? 0, total: Object.values(catalog.items).filter((it) => it.category === 'relic' && it.boon).length },
       next_no: view.camp.nextNo,
@@ -1531,6 +1537,7 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
     // キャンプ専用の形: 成績と候補だけ
     lines.push(`[seq ${obs.seq} | ${t(L, 'キャンプ', 'Camp')} | HP ${s.hp}/${s.max_hp} | Lv${s.level} | ${statusText.at_camp[L === 'en' ? 1 : 0]}]`);
     if (obs.expedition?.result) lines.push(obs.expedition.result.text);
+    if (obs.camp?.compare) lines.push(...obs.camp.compare.lines);
     lines.push(t(L, `確定済み ${s.score.banked} 点・達成した遠征 ${s.score.expeditions_completed}`, `Banked ${s.score.banked}, expeditions completed ${s.score.expeditions_completed}`));
     lines.push(boonsText(L, s.boons ?? []));
     if (obs.camp?.milestone) lines.push(obs.camp.milestone.text);

@@ -683,7 +683,7 @@ export function startExpedition(ctx: Ctx, pr: PlayerRecord, offer: number | 'end
     const pe = w.entities[p.entityId];
     // この遠征を始める地点（キャンプからなら再開する階段、盤面にいればその場）
     const pos = p.state === 'at_camp' ? resumePointOf(ctx, pid) : pe?.pos ? { floor: pe.pos.floor, x: pe.pos.x, y: pe.pos.y } : undefined;
-    start[pid] = { kills: p.stats.kills, turns: pe?.actor?.turns ?? 0, deepest: p.stats.deepest, ...(pos ? { pos } : {}) };
+    start[pid] = { kills: p.stats.kills, turns: pe?.actor?.turns ?? 0, deepest: p.stats.deepest, ...(pos ? { pos } : {}), ...(pe?.stats ? { hp: pe.stats.hp, maxHp: pe.stats.maxHp } : {}) };
   }
   let startDepth = 0;
   for (const pid of participants) {

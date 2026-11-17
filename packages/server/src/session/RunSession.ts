@@ -5,12 +5,12 @@ import type { Catalog } from '@muse/shared';
 import type { Content } from '@muse/content';
 import { createRun, ENGINE_VERSION, isPlayersTurn, joinPlayer, step } from '@muse/engine';
 import type {
-  ActionError, AgentActivity, Command, CommandRecord, CommandSource, GameEvent, JoinCommand, MacroStop,
-  PerceivedEvent, PlayerId, PlayerView, RunMetaFile, RunSummary, TurnSnapshot, World,
+  ActionError, AgentActivity, Command, CommandRecord, CommandSource, Expedition, ExpeditionReport, GameEvent, JoinCommand, MacroStop,
+  PerceivedEvent, PlayerId, PlayerView, ReportCall, RunMetaFile, RunSummary, TurnSnapshot, World,
 } from '@muse/shared';
 import {
-  actionError, applyEvent, canonicalHash, emptyWorld, filterEventsForPlayer, FREE_COMMANDS, MACRO_COMMANDS,
-  macroNext, macroStart, macroStopError, narrate, projectPlayerView, t,
+  actionError, applyEvent, buildExpeditionReport, canonicalHash, guardianDisplayName, compareReports, emptyWorld, filterEventsForPlayer, FREE_COMMANDS, MACRO_COMMANDS,
+  macroNext, macroStart, macroStopError, narrate, projectPlayerView, selfTurnMarks, t,
 } from '@muse/shared';
 import type { ServerConfig } from '../config';
 import { LogWriter } from '../log/LogWriter';
@@ -96,6 +96,11 @@ export class RunSession {
   private readonly lastInput = new Map<PlayerId, number>();
   /** 応答テキストの表示オプション（ゲームには影響しない。World の外） */
   private readonly options = new Map<PlayerId, PlayerOptions>();
+  /** プレイヤーごとの、送ったコマンドの記録（遠征レポートの呼び出し数・マクロの割合。V3-6 §6） */
+  private readonly calls = new Map<PlayerId, ReportCall[]>();
+  private readonly macroKinds = new Map<number, string>();
+  /** 終了した遠征のレポート（プレイヤー×遠征） */
+  private readonly reports = new Map<string, ExpeditionReport>();
   private readonly log: LogWriter | null;
   private lastKeyframeSeq = 0;
   private metaFile: RunMetaFile;
@@ -147,6 +152,7 @@ export class RunSession {
       replayed.push(...evs);
     }
     s.history.push(...replayed);
+    s.rebuildCalls(commands);
     const logged = allEvents.filter((e) => e.seq > kf.seq);
     const strip = (es: GameEvent[]) => es.map((e) => ({ ...e, wall: 0 }));
     const verified = canonicalHash(strip(logged)) === canonicalHash(strip(replayed));
@@ -155,6 +161,29 @@ export class RunSession {
     for (const pid of s.world.playerOrder) s.rebuildMessages(pid);
     s.lastKeyframeSeq = kf.seq;
     return { session: s, verified, message: verified ? `recovered ${runId} (${replayed.length} events re-executed, hash ok)` : `recovered ${runId} with mismatch (logged ${logged.length}, replayed ${replayed.length})` };
+  }
+
+  /** コマンドの記録から、プレイヤーごとの呼び出しの記録を作り直す（復元時） */
+  private rebuildCalls(commands: readonly CommandRecord[]): void {
+    let lastSeq = 0;
+    for (const rec of commands) {
+      const pid = rec.player;
+      if (pid && rec.source !== 'timeout' && rec.source !== 'system' && rec.command.type !== 'join') {
+        if (rec.macro) {
+          this.macroKinds.set(rec.cseq, rec.command.type);
+          this.pushCall(pid, { seq: lastSeq + 1, kind: 'macro_call', type: rec.command.type });
+        } else if (rec.resultSeq) {
+          this.pushCall(pid, { seq: rec.resultSeq[0], kind: rec.parent ? 'macro_step' : 'call', type: rec.command.type, ...(rec.parent ? { macro: this.macroKinds.get(rec.parent) } : {}) });
+        }
+      }
+      if (rec.resultSeq) lastSeq = rec.resultSeq[1];
+    }
+  }
+
+  private pushCall(pid: PlayerId, c: ReportCall): void {
+    const list = this.calls.get(pid) ?? [];
+    list.push(c);
+    this.calls.set(pid, list);
   }
 
   private reexecute(rec: CommandRecord): GameEvent[] {
@@ -295,6 +324,61 @@ export class RunSession {
     return isPlayersTurn(this.world, pid);
   }
 
+  /**
+   * 遠征レポート（V3-6 §6・§35.9）。no を省くと、そのプレイヤーが参加した最後の遠征。
+   * 中身はそのプレイヤーが知覚した出来事（filterEventsForPlayer）と、自分の手番・自分のコマンドの記録だけから作る。終了した遠征は覚えておく
+   */
+  expeditionReport(pid: PlayerId, no?: number, opts: { endedOnly?: boolean } = {}): ExpeditionReport | null {
+    const xs = (this.world.expeditions ?? []).filter((x) => x.participants.includes(pid) && (!opts.endedOnly || x.endSeq !== null));
+    const x = no === undefined ? xs[xs.length - 1] : xs.find((y) => y.no === no);
+    if (!x) return null;
+    const key = `${pid}|${x.no}`;
+    const cached = this.reports.get(key);
+    if (cached) return cached;
+    const r = this.buildReport(pid, x);
+    if (x.endSeq === null) return r;
+    const prevs = xs.filter((y) => y.no < x.no && y.endSeq !== null).map((y) => this.expeditionReport(pid, y.no)).filter((y): y is ExpeditionReport => !!y);
+    const cmp = compareReports(this.view(pid).locale, r, prevs);
+    if (cmp) r.compare = cmp;
+    this.reports.set(key, r);
+    return r;
+  }
+
+  private buildReport(pid: PlayerId, x: Expedition): ExpeditionReport {
+    const view = this.view(pid);
+    const from = x.startSeq;
+    const to = x.endSeq ?? this.world.seq;
+    const i0 = this.indexOfSeq(from);
+    const i1 = this.indexOfSeq(to + 1);
+    const slice = this.history.slice(i0, i1);
+    // 遠征の前から正体を知っていた見た目（自分の item_identified）
+    const known = new Set<string>();
+    for (let i = 0; i < i0; i++) {
+      const e = this.history[i];
+      if (e.type === 'item_identified' && e.player === pid && e.appearanceId) known.add(e.appearanceId);
+    }
+    const ctx = this.narrateCtx(view);
+    return buildExpeditionReport({
+      locale: view.locale, catalog: this.deps.catalog, selfId: view.self.id, no: x.no,
+      events: filterEventsForPlayer(slice, pid, view), marks: selfTurnMarks(slice, view.self.id),
+      calls: (this.calls.get(pid) ?? []).filter((c) => c.seq >= from && c.seq <= to),
+      knownAppearances: known, milestone: this.deps.catalog.rules?.milestone,
+      // 公開されている名前だけ（節目の大守護者、この遠征の目的の守護者）
+      guardianNames: {
+        ...(x.milestone ? { warden: { [x.milestone.depth]: guardianDisplayName(view.locale, x.milestone) } } : {}),
+        ...(x.guardianName ? { objective: guardianDisplayName(view.locale, { name: x.guardianName, ...(x.guardianTitle ? { title: x.guardianTitle } : {}) }) } : {}),
+      },
+      narrate: (e) => narrate(e, ctx) ?? '',
+    });
+  }
+
+  /** seq 以上の最初の出来事の位置（履歴は seq 順） */
+  private indexOfSeq(seq: number): number {
+    let lo = 0, hi = this.history.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (this.history[mid].seq < seq) lo = mid + 1; else hi = mid; }
+    return lo;
+  }
+
   messages(pid: PlayerId): PerceivedEvent[] {
     return this.messageLogs.get(pid) ?? [];
   }
@@ -399,6 +483,7 @@ export class RunSession {
     if (!r.ok && !r.events.length) return { ok: false, error: r.error };
     this.cseq = cseq;
     this.commit({ cseq, player: pid, command: cmd, source, wall, thought, parent }, r.events);
+    if (source !== 'timeout' && source !== 'system' && r.events.length) this.pushCall(pid, { seq: r.events[0].seq, kind: parent ? 'macro_step' : 'call', type: cmd.type, ...(parent ? { macro: this.macroKinds.get(parent) } : {}) });
     if (!r.ok) return { ok: false, error: r.error };
     return { ok: true, events: r.events, startSeq };
   }
@@ -422,6 +507,8 @@ export class RunSession {
     const parent = await this.enqueue(() => {
       const c = ++this.cseq;
       this.log?.appendCommand({ cseq: c, player: pid, command: cmd, source: opts.source, macro: true, thought: opts.thought, wall: Date.now(), resultSeq: null });
+      this.macroKinds.set(c, cmd.type);
+      if (opts.source !== 'timeout' && opts.source !== 'system') this.pushCall(pid, { seq: this.world.seq + 1, kind: 'macro_call', type: cmd.type });
       return c;
     });
     const state = macroStart(this.view(pid), cmd, this.deps.catalog);

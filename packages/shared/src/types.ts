@@ -388,7 +388,8 @@ export interface Expedition {
   participants: PlayerId[];
   /** 開始時点の参加者の成績（結果の差分計算用） */
   /** pos: その参加者がこの遠征を始めた地点（綱で戻った次の遠征はここから。V3-2R3a §22.1） */
-  start: Record<PlayerId, { kills: number; turns: number; deepest: number; pos?: FloorPos }>;
+  /** hp / maxHp: 開始時点の HP（遠征レポートの HP の推移。V3-6 §6） */
+  start: Record<PlayerId, { kills: number; turns: number; deepest: number; pos?: FloorPos; hp?: number; maxHp?: number }>;
   /** 目標階に配置した守護者・遺物（目標階の生成時に決まる。プレイヤーには渡さない） */
   targets: { guardian: EntityId | null; relic: EntityId | null };
   progress: ObjectiveProgress;

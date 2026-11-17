@@ -1,16 +1,18 @@
 // PlayerPort: プレイヤー（AI・人間とも）への唯一の窓口。PlayerView 経由の情報しか返さない。
 // MCP アダプタと人間用 WS の両方がこれを使う（どちらかを特別扱いしない）。
 import type {
-  ActionError, Catalog, Command, GameEvent, Locale, Observation, PerceivedEvent, PlayerId, PlayerView, Pos, RunSummary, TurnBlock, TurnReason,
+  ActionError, Catalog, Command, ExpeditionReport, GameEvent, Locale, Observation, ObservationOptions, PerceivedEvent, PlayerId, PlayerView, Pos, RunSummary, TurnBlock, TurnReason,
 } from '@muse/shared';
 import {
-  actionError, briefingLines, briefingShort, buildObservation, buildTurnBlock, campLines, changesLine, describeInventory, describeTarget, diffChanges,
+  actionError, briefingLines, briefingShort, buildObservation, buildTurnBlock, campLines, changesLine, compareLines, describeInventory, describeTarget, diffChanges, progressLines, reportLines,
   formatObservationText, guardianDisplayName, kindName, MACRO_COMPLETED_STOPS, mapTextLines, memoryCombatText, memoryKey, mineCount, nameOf, pickableItems, progressText, renderAsciiMap, resultText, t,
   turnLine, turnSnapshot, turnStateOf,
 } from '@muse/shared';
 import type { PlayerOptions } from './RunSession';
 import type { MacroStop } from '@muse/shared';
 import type { RunSession, SubmitOpts } from './RunSession';
+
+const NL = String.fromCharCode(10);
 
 export interface BriefEvent { seq: number; type: string; text: string }
 
@@ -31,6 +33,8 @@ export interface ActionSuccess {
   turn: TurnBlock;
   /** start_expedition の応答: 遠征のブリーフィング */
   briefing?: string[];
+  /** 遠征が終わった応答: 遠征レポート（V3-6 §6。文は 12 行以内、JSON は全項目） */
+  report?: ExpeditionReport;
   /** collect の実績 */
   collected?: { picked: number; remaining: number };
 }
@@ -69,6 +73,12 @@ export interface PlayerPort {
   inventory(): InfoResult;
   recall(kindNameOrId: string): InfoResult;
   messages(sinceSeq?: number, limit?: number): InfoResult;
+  /** 遠征レポート（V3-6 §6）。no を省くと最後の遠征（進行中なら途中経過） */
+  report(no?: number): ExpeditionReport | null;
+  /** review: 終了した遠征のレポートと場面 */
+  review(no?: number): InfoResult;
+  /** expedition ツールに足す行（進行中なら途中経過、キャンプなら直前の遠征のレポート） */
+  expeditionReportLines(): { lines: string[]; progress?: Pick<ExpeditionReport, 'combat' | 'tempo'>; report?: ExpeditionReport };
   /** 前回の行動結果以降に知覚した出来事（消費しない） */
   pending(): PerceivedEvent[];
   /** seq より後に知覚した出来事（WS のフレーム用） */
@@ -178,8 +188,46 @@ export class SessionPlayerPort implements PlayerPort {
   observe(opts: { detail?: 'brief' | 'full'; map?: boolean; consume?: boolean } = {}): { observation: Observation; text: string } {
     const view = this.view();
     const recent = opts.consume ? this.session.consumeFor(this.playerId) : this.pending();
-    const observation = buildObservation(view, this.catalog, { detail: opts.detail ?? 'brief', map: opts.map ?? true, recent: recent.slice(-10) });
+    const observation = buildObservation(view, this.catalog, { detail: opts.detail ?? 'brief', map: opts.map ?? true, recent: recent.slice(-10), campCompare: this.campCompare(view) });
     return { observation, text: formatObservationText(observation, view.locale) };
+  }
+
+  /** キャンプの観測に出す、直前の遠征の比較（2 行以内。V3-6 §35.9） */
+  private campCompare(view: PlayerView): ObservationOptions['campCompare'] {
+    if (view.status !== 'at_camp') return undefined;
+    const r = this.session.expeditionReport(this.playerId, undefined, { endedOnly: true });
+    if (!r) return undefined;
+    return { no: r.no, lines: compareLines(view.locale, r), ...(r.compare ? { compare: r.compare } : {}) };
+  }
+
+  /** expedition ツールに足す行: 進行中なら途中経過（戦闘と進み）、キャンプなら直前の遠征のレポート（V3-6 §6.1・§6.2） */
+  expeditionReportLines(): { lines: string[]; progress?: Pick<ExpeditionReport, 'combat' | 'tempo'>; report?: ExpeditionReport } {
+    const view = this.view();
+    const L = view.locale;
+    const r = this.session.expeditionReport(this.playerId);
+    if (!r) return { lines: [] };
+    if (r.status === 'in_progress') return { lines: progressLines(L, r), progress: { combat: r.combat, tempo: r.tempo } };
+    // キャンプのブリーフィングに結果の行が出ているので、確定の行は省く
+    return { lines: reportLines(L, r, { payout: false }), report: r };
+  }
+
+  /** 遠征レポート（no を省くと最後の遠征。進行中なら途中経過） */
+  report(no?: number): ExpeditionReport | null {
+    return this.session.expeditionReport(this.playerId, no);
+  }
+
+  /** review: 終了した遠征のレポートと場面（V3-6 §6.2） */
+  review(no?: number): InfoResult {
+    const L = this.view().locale;
+    const r = this.session.expeditionReport(this.playerId, no, { endedOnly: true });
+    if (!r) return { text: no === undefined ? t(L, 'まだ終わった遠征が無い。', 'No expedition has ended yet.') : t(L, `遠征 ${no} は終わっていないか、参加していない。`, `Expedition ${no} has not ended or you did not take part.`), data: null };
+    const lines = reportLines(L, r);
+    // 12 行に入らなかった場面と、倒れる直前の出来事は全部出す
+    const shown = new Set(lines);
+    const rest = r.moments.map((m) => `- ${m.text}`).filter((x) => !shown.has(x));
+    if (rest.length) lines.push(t(L, 'ほかの場面:', 'More moments:'), ...rest);
+    if (r.death?.last_events.length) lines.push(t(L, '倒れる直前の出来事:', 'Right before you fell:'), ...r.death.last_events.map((x) => `- ${x}`));
+    return { text: lines.join(NL), data: r };
   }
 
   options(): PlayerOptions { return this.session.playerOptions(this.playerId); }
@@ -198,7 +246,7 @@ export class SessionPlayerPort implements PlayerPort {
     // 帰還の綱の長い説明は遠征ごとに最初の 1 回だけ（V3-3a §35.8）
     const xNo = view.expedition && view.expedition.status !== 'ended' ? view.expedition.no : undefined;
     const lifelineShort = xNo !== undefined && prev?.lifeNo === xNo;
-    const observation = buildObservation(view, this.catalog, { detail: p.detail ?? 'brief', map: true, recent: p.recent.slice(-10), lifelineShort });
+    const observation = buildObservation(view, this.catalog, { detail: p.detail ?? 'brief', map: true, recent: p.recent.slice(-10), lifelineShort, campCompare: this.campCompare(view) });
     const state = turnStateOf(view, p.expeditionEndedNow ?? false).state;
     const cur = turnSnapshot(view, observation, state);
     const longLife = observation.valid_actions.some((a) => a.includes('次の遠征はこの遠征を始めた階段から') || a.includes('the next expedition starts from where this one began'));
@@ -400,12 +448,23 @@ export class SessionPlayerPort implements PlayerPort {
     if (rest) payload.rest = rest;
     if (collected) payload.collected = collected;
     if (cmd.type === 'start_expedition') payload.briefing = this.briefing('start');
+    // 遠征が終わった: 遠征レポート（V3-6 §6.1）。キャンプなら結果の行と比較の行は観測に出ているので省く
+    if (endedNow) {
+      const xe = [...r.events].reverse().find((e) => e.type === 'expedition_ended') as Extract<GameEvent, { type: 'expedition_ended' }> | undefined;
+      const rep = xe ? this.session.expeditionReport(this.playerId, xe.no) : null;
+      if (rep && rep.status === 'ended') {
+        payload.report = rep;
+        const atCamp = view.status === 'at_camp';
+        this.reportText.set(payload, reportLines(L, rep, { payout: !atCamp, compare: !atCamp }));
+      }
+    }
     this.rendered.set(payload, res.text);
     return payload;
   }
 
   /** act が作ったテキスト本文（観測＋変化＋状態行） */
   private readonly rendered = new WeakMap<object, string>();
+  private readonly reportText = new WeakMap<object, string[]>();
 
   formatActionText(p: ActionPayload): string {
     const view = this.view();
@@ -419,7 +478,7 @@ export class SessionPlayerPort implements PlayerPort {
       ].filter(Boolean).join('\n');
     }
     const body = this.rendered.get(p) ?? [formatObservationText(p.observation, L), changesLine(L, p.turn.changes), turnLine(view, p.turn)].filter(Boolean).join('\n');
-    return [`${t(L, '結果', 'Result')}: ${p.outcome}`, ...(p.briefing ?? []), body].filter(Boolean).join('\n');
+    return [`${t(L, '結果', 'Result')}: ${p.outcome}`, ...(p.briefing ?? []), ...(this.reportText.get(p) ?? []), body].filter(Boolean).join('\n');
   }
 
   briefing(kind: 'start' | 'resume', opts: { camp?: boolean } = {}): string[] {

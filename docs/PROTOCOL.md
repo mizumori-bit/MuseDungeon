@@ -75,7 +75,8 @@ turn: {
 
 | ツール | 引数 | 結果 |
 |---|---|---|
-| `expedition` | – | 遠征の目的・達成条件・進捗（ブリーフィング）。キャンプでは次の遠征の候補。手番を消費しない |
+| `expedition` | – | 遠征の目的・達成条件・進捗（ブリーフィング）。キャンプでは次の遠征の候補。手番を消費しない。V3-6: 進行中なら途中経過（`progress: { combat, tempo }` と 3 行）、キャンプなら直前の遠征のレポート（`report`） |
+| `review` | `expedition?: number` | V3-6。終わった遠征のレポート（`report`。省略時は直前の遠征）。文は 12 行のレポートに、入りきらなかった場面と、倒れる直前の出来事を足したもの。手番を消費しない |
 | `extract` | `confirm?: boolean`, 共通引数 | 行動。階段（上り・下り）の上なら可（V3-2R2: 追跡中の敵が見えていてもよい。敵は階段を追ってこない）。目的を達成していれば**帰還**（遠征は `completed`、戦利品 × 倍率を確定）。未達成なら `confirm: true` で**撤退**（`withdrawn`、(戦利品 − 目的) × `withdrawPct`% を確定）。`confirm` が無ければ `confirm_required`。確定する点は観測の `expedition.haul.if_extract_now` と一致する。所持している宝は換金され、達成して持ち帰った遺物は納められ、どちらも所持品から消える |
 | `start_expedition` | `offer: 1..n | 'endless'` | キャンプで次の遠征を始める。前回 `extract` した階段から再開する。結果に `briefing`（目的・枠・条件・倍率・戦利品の説明） |
 
@@ -411,6 +412,15 @@ V3-2R で足した項目（同じく後方互換。会心と経験値のルー�
 - `StatusInst.source`（状態異常を与えた者。毒で倒したときの撃破者になる）、`status_applied.targetAffixes`
 - `player_state.reason: 'joined'`（キャンプから始まる参加）。参加コマンドの `atCamp`
 - プレイヤー向けの射影で、見えていた個体が視界の外へ動いた `entity_moved` に `dirOut`（向きだけ。行き先は伏せたまま）
+
+V3-6 で足した項目（振り返り。後方互換。遠征の開始の記録が増えたので `engineVersion` は 0.14.1、`expedition_started` の射影が増えたので `eventVersion` は 10。DESIGN.md §25）:
+
+- 遠征レポート `ExpeditionReport`（`shared/expeditionStats`）: `{ no, objective: { type, target_depth }, status: 'in_progress' | 'ended', reason, payout?: { parts, multiplier_pct, banked, lost }, compare?: { vs_previous?: { no, banked, taken, turns, kills, tool_calls }, personal_best?: string[] }, combat: { dealt, taken, hits, misses, crits, kills, melee_kills, thrown_kills, ability_uses }, economy: { potions_used, scrolls_read, items_left_unidentified, treasure_banked }, tempo: { turns, turns_resting, floors, turns_per_floor, deepest, tool_calls, macro_share_pct }, moments: { seq, turn_no, kind, text }[], death?: { killer, via, self_inflicted?, last_events, hp_trace } }`。`moments.kind` は `hp_min` / `big_hit_taken` / `near_death_escape` / `guardian_fight` / `warden_fight` / `level_up` / `discovery`（最大 8 件、seq 順）。`feats` は V3-7 まで出さない
+- 集計の入力は、そのプレイヤーが知覚した出来事（`filterEventsForPlayer`）・自分の `actor_scheduled`（手番の数）・自分が送ったコマンド（`source` が `timeout` と `system` のものは数えない。マクロの呼び出しは 1 件、マクロが展開した手は `macro_share_pct` と休憩の手番に数える）だけ。見ていないものは数えない
+- 遠征が終わった行動の応答: `ActionSuccess.report`（全項目）と、結果の行の後に 12 行以内の文（キャンプにいるなら確定と比較の行は観測に出ているので省く）
+- 観測: `camp.compare { no, lines, vs_previous?, personal_best? }`（直前の遠征。文は 2 行まで。最初の遠征の後は「比べる記録はまだ無い」の 1 行）
+- World State: `Expedition.start[pid].hp / maxHp`（開始時点の HP）。射影した `expedition_started.expedition.self { turns, hp, maxHp }`（自分の分だけ）
+- 比較はそのランの中の前の遠征と（プロフィールは V3-7）。自己最高は 確定点・最深・撃破・与ダメージ（すべての遠征と）、被ダメージの最少・手番の最短・呼び出しの最少（達成した遠征どうし）
 
 V3-3a で足した項目（見直し 5。後方互換。規則と候補の作り方が変わったので `engineVersion` は 0.14.0、新しいイベントがあるので `eventVersion` は 9。DESIGN.md §24）:
 

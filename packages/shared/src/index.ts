@@ -14,5 +14,6 @@ export * from './danger';
 export * from './build';
 export * from './macro';
 export * from './expedition';
+export * from './expeditionStats';
 export * from './turn';
 export * from './protocol';

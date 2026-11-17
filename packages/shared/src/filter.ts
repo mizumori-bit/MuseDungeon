@@ -99,9 +99,10 @@ export function filterEventsForPlayer(events: readonly GameEvent[], playerId: Pl
         break;
       }
       case 'expedition_started': {
-        // 開始時点の他プレイヤーの成績と目標の ID は渡さない
+        // 開始時点の他プレイヤーの成績と目標の ID は渡さない。自分の開始時点の手番と HP だけ渡す（遠征レポート。V3-6 §6）
         const x = (pe.expedition ?? {}) as Record<string, unknown>;
-        pe.expedition = { no: x.no, objective: x.objective, points: x.points, relicGuarded: x.relicGuarded, participants: x.participants };
+        const st = (x.start as Record<string, { turns?: number; hp?: number; maxHp?: number }> | undefined)?.[playerId];
+        pe.expedition = { no: x.no, objective: x.objective, points: x.points, relicGuarded: x.relicGuarded, participants: x.participants, ...(st ? { self: { turns: st.turns, hp: st.hp, maxHp: st.maxHp } } : {}) };
         break;
       }
       case 'max_hp_changed':

@@ -133,7 +133,7 @@ ${traitsLines(r, true)}
     actions: `# 行動
 手番を消費する: move{dir} / attack{target} / wait{turns?} / rest{until_hp?,max_turns?} / explore{mode?,hp_floor?,pickup?} / travel_to{to,mode?,hp_floor?,pickup?} / collect{what?,mode?} / fight{target,with?,hp_floor?,abilities?} / use_ability{id,target?,slot?} / pickup{item?} / drop{slot,qty?} / equip{slot} / unequip{slot} / use_item{slot,target?,target_slot?} / throw_item{slot,target} / interact{dir?} / use_stairs / extract{confirm?}
 キャンプで: start_expedition{offer} / retire
-手番を消費しない: choose_perk{option} / observe / wait_for_turn / expedition / look / get_map / inventory / recall / get_messages / notes / say / set_options / get_rules
+手番を消費しない: choose_perk{option} / observe / wait_for_turn / expedition / review / look / get_map / inventory / recall / get_messages / notes / say / set_options / get_rules
 - 方向は n ne e se s sw w nw。座標は左上原点、x は東、y は南へ増える。
 - move: 敵がいれば近接攻撃（バンプ攻撃）、閉じた扉なら開ける（その手番は移動しない）、味方なら位置交換。
 - attack{target}: 近接攻撃。隣の敵か、長柄の武器（槍）なら縦・横・斜めの直線で 2 マス先の敵（間のマスが通れて誰もいないこと）。fight も長柄なら 2 マス先から突く。
@@ -216,7 +216,8 @@ ${traitsLines(r, true)}
 - navigation: here(足元), passable_dirs, frontiers(未探索との境界、近い順), known_stairs(既知の階段と到達可否・path_len)。
 - map: 自分中心の 21×15 ASCII（フロア外は出さない）。上の 2 行が x 座標の 10 の位と 1 の位、行頭が y 座標。英字=モンスター（種族ごとに固定の 1 文字。凡例を参照） @=自分 #=壁 .=床 +=閉じた扉 '=開いた扉 >=下り階段 <=上り階段 ~=水 ,=草 %=背の高い草(視界を遮る) !=薬 ?=巻物 )=武器 [=防具 /=投擲 $=遺物 {=泉 _=祭壇 ^=罠 &=味方 (空白)=未知。凡例は地図と一緒に付く。
 - valid_actions: 今できる行動の例。テキストは structuredContent の要約で、テキストにしか無い情報は無い。
-- get_map で記憶している階全体の地図、look で対象の詳細（モンスターは「思い出」に基づく既知情報）、recall で種族ごとの思い出を引ける。`,
+- get_map で記憶している階全体の地図、look で対象の詳細（モンスターは「思い出」に基づく既知情報）、recall で種族ごとの思い出を引ける。
+- 振り返り: 遠征が終わった応答に、その遠征のレポート（戦闘・道具・進み・場面。12 行以内、JSON の report は全項目）が付く。集計するのは自分が見た出来事だけ。expedition は進行中なら途中経過（戦闘と進み）、キャンプなら直前の遠征のレポートを返す。review {expedition?} で終わった遠征のレポートを読み直せる（このランの前の遠征との比較と、全部の場面）。キャンプの観測には、直前の遠征の比較が 2 行まで出る。助言はしない（事実だけ）。`,
   };
 }
 
@@ -293,7 +294,7 @@ ${traitsLines(r, false)}
     actions: `# Actions
 Turn-consuming: move{dir} / attack{target} / wait{turns?} / rest{until_hp?,max_turns?} / explore{mode?,hp_floor?,pickup?} / travel_to{to,mode?,hp_floor?,pickup?} / collect{what?,mode?} / fight{target,with?,hp_floor?,abilities?} / use_ability{id,target?,slot?} / pickup{item?} / drop{slot,qty?} / equip{slot} / unequip{slot} / use_item{slot,target?,target_slot?} / throw_item{slot,target} / interact{dir?} / use_stairs / extract{confirm?}
 At camp: start_expedition{offer} / retire
-Free: choose_perk{option} / observe / wait_for_turn / expedition / look / get_map / inventory / recall / get_messages / notes / say / set_options / get_rules
+Free: choose_perk{option} / observe / wait_for_turn / expedition / review / look / get_map / inventory / recall / get_messages / notes / say / set_options / get_rules
 - Directions: n ne e se s sw w nw. Origin is top-left; x grows east, y grows south.
 - move attacks a hostile in that cell, opens a closed door (without moving), or swaps with an ally.
 - attack{target}: melee an adjacent enemy, or with a reach weapon (spear) one 2 cells away in a straight line (the cell between must be open and empty). fight also strikes from 2 cells with a reach weapon.
@@ -373,7 +374,8 @@ Free: choose_perk{option} / observe / wait_for_turn / expedition / look / get_ma
 - rest_estimate is omitted while you cannot rest (a hunting enemy is in view).
 - navigation: here, passable_dirs, frontiers (nearest first), known_stairs (with reachability and path_len).
 - map: 21x15 ASCII centered on you (clipped to the floor). Top rows give x tens/ones, each row starts with y. Letters = monsters (one fixed letter per species; see legend). @ you, # wall, . floor, + closed door, ' open door, > down, < up, ~ water, , grass, % tall grass (blocks sight), ! potion, ? scroll, ) weapon, [ armor, / throwing, $ relic, { fountain, _ altar, ^ trap, & ally, blank = unknown. The legend comes with the map.
-- valid_actions: example actions available now. Text output summarizes structuredContent; nothing exists only in text.`,
+- valid_actions: example actions available now. Text output summarizes structuredContent; nothing exists only in text.
+- Review: the response that ends an expedition carries its report (combat, items, tempo, moments; 12 lines of text, the full report in JSON). Only events you perceived are counted. expedition returns progress so far (combat and tempo) during an expedition and the last report at camp. review {expedition?} re-reads an ended expedition's report (with the comparison to your earlier expeditions in this run and every moment). At camp, the observation shows up to 2 lines comparing your last expedition. Facts only, no advice.`,
   };
 }
 
