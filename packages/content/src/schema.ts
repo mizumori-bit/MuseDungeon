@@ -23,6 +23,8 @@ export const TerrainSchema = z.object({
   door: z.enum(['open', 'closed']).optional(),
   stairs: z.enum(['up', 'down']).optional(),
   tags: z.array(z.string()).default([]),
+  /** 入るときの手番コストの倍率（%。V3-5 §5.2: 浅い水は 150） */
+  moveCostPct: z.number().int().min(1).default(100),
 });
 
 export const MonsterSchema = z.object({
@@ -154,6 +156,10 @@ export const BiomeSchema = z.object({
   features: z.array(z.object({ feature: IdSchema, chancePct: z.number().int().min(0).max(100) })).default([]),
   /** 初見の描写（1 文。V3-5 §5.4） */
   desc: NamesSchema.optional(),
+  /** バイオームの仕掛け（V3-5 §5.2）: levers 格子扉とレバーの組の数、ceilings 脆い天井の数、pods 胞子嚢の数 */
+  rules: z.object({ levers: z.number().int().min(0).default(0), ceilings: z.number().int().min(0).default(0), pods: z.number().int().min(0).default(0) }).default({}),
+  /** その階に置く品（V3-5 §5.2: 沈んだ書庫の残り頁） */
+  items: z.array(z.object({ item: IdSchema, min: z.number().int().min(0), max: z.number().int().min(0) })).default([]),
 });
 
 const Per1000Schema = z.object({ per1000: z.number().int().min(0) });
@@ -501,6 +507,12 @@ export const FeatureSchema = z.object({
   rarity: z.number().int().min(1).default(1),
   /** 説明（look で読める。V3-5 §5.1） */
   desc: NamesSchema.optional(),
+  /** レバー（V3-5 §5.2）: 操作するとつないだ格子扉を開け閉めする */
+  lever: z.boolean().default(false),
+  /** 脆い天井（V3-5 §5.2）: trigger マス以内で音量 loudness 以上の音がすると崩れ、radius マスの者に dmg を与え、その場は瓦礫になる */
+  collapse: z.object({ trigger: z.number().int().min(0), loudness: z.number().int().min(0), radius: z.number().int().min(0), dmg: DiceSchema }).optional(),
+  /** 胞子嚢（V3-5 §5.2）: 突く（interact）か投げた物が当たると弾け、radius マスに毒の雲（cloud）を turns 手番残す */
+  burst: z.object({ radius: z.number().int().min(0), cloud: IdSchema, turns: z.number().int().min(1) }).optional(),
   /** 賭けの祭壇（V3-5 §5.1）: 操作すると重みで 1 つ選び、その効果が起きる（表と確率は公開） */
   gamble: z.array(z.object({ weight: z.number().int().min(1), name: NamesSchema, effects: z.array(EffectSchema).min(1) })).optional(),
 });

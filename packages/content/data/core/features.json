@@ -60,5 +60,32 @@
       { "weight": 10, "name": { "ja": "HP が半分になる", "en": "your HP is halved" }, "effects": [{ "effect": "damage", "pct": 50 }] }
     ],
     "afterInteract": "used"
+  },
+  {
+    "id": "core:lever", "name": { "ja": "レバー", "en": "lever" }, "category": "feature",
+    "states": ["up", "down"], "initialState": "up", "passable": true, "lever": true,
+    "desc": { "ja": "近くの格子扉とつながっている。引くと（足元か隣で interact）格子扉が開け閉めされる。閉じた格子扉は見通せるが通れない（投げた物は通る）", "en": "Linked to a nearby grate. Pulling it (interact next to it) opens or closes the grate. A closed grate can be seen and thrown through, but not passed" },
+    "onInteract": []
+  },
+  {
+    "id": "core:brittle_ceiling", "name": { "ja": "脆い天井", "en": "brittle ceiling" }, "category": "feature",
+    "states": ["intact", "fallen"], "initialState": "intact", "passable": true,
+    "collapse": { "trigger": 3, "loudness": 4, "radius": 1, "dmg": "2d6" },
+    "desc": { "ja": "ひびの入った天井。3 マス以内で大きな音（投げた物が落ちる・戦い・敵が扉を開ける・水の上の音など。自分で扉を開ける音では崩れない）がすると崩れ、真下と周り 1 マスの者に 2d6 のダメージを与え、真下は瓦礫になる", "en": "A cracked ceiling. A loud noise within 3 cells (a thrown item landing, a fight, a monster opening a door, noise over water; not you opening a door) brings it down: 2d6 damage to anyone under it or next to it, and rubble below" },
+    "onInteract": []
+  },
+  {
+    "id": "core:spore_pod", "name": { "ja": "胞子嚢", "en": "spore pod" }, "category": "feature",
+    "states": ["ripe", "burst"], "initialState": "ripe", "passable": false,
+    "burst": { "radius": 1, "cloud": "core:spore_cloud", "turns": 3 },
+    "desc": { "ja": "膨らんだ胞子の袋。突く（隣で interact）か投げた物が当たると弾け、周り 1 マスにいる者を毒にし、毒の雲を 3 手番残す", "en": "A swollen sac of spores. Poking it (interact next to it) or hitting it with a throw bursts it: anyone within 1 cell is poisoned, and a poison cloud lingers for 3 turns" },
+    "onInteract": [],
+    "afterInteract": "burst"
+  },
+  {
+    "id": "core:spore_cloud", "name": { "ja": "毒の雲", "en": "poison cloud" }, "category": "feature",
+    "states": ["drifting"], "initialState": "drifting", "passable": true,
+    "desc": { "ja": "胞子の雲。入ると毒になる。しばらくすると晴れる", "en": "A cloud of spores. Entering it poisons you. It clears after a while" },
+    "onEnter": [{ "effect": "status", "status": "core:poison", "turns": "1d4+2", "power": 1 }]
   }
 ]

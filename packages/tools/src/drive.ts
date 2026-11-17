@@ -100,7 +100,9 @@ export function dummyInvoker(): AgentInvoker {
         const obs = resumed.structuredContent?.observation;
         if (!obs) throw new Error('resume_run returned no observation');
         const d = dummyDecide(obs);
-        await client.callTool({ name: d.tool, arguments: { ...d.args, thought: `dummy: ${d.tool}` } });
+        const r = (await client.callTool({ name: d.tool, arguments: { ...d.args, thought: `dummy: ${d.tool}` } })) as { isError?: boolean; structuredContent?: { ok?: boolean } };
+        // 断られた手（既知の経路で届かない相手への travel_to など）は時間が進まないので、同じ手を繰り返さないよう待つ
+        if (r.isError || r.structuredContent?.ok === false) await client.callTool({ name: 'wait', arguments: { thought: 'dummy: fallback wait' } });
       } finally {
         await client.close();
       }

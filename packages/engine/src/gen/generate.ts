@@ -13,7 +13,7 @@ import { layoutGenerators } from './layouts';
 export type SpawnSpec =
   | { type: 'monster'; kind: string; x: number; y: number; hp: number; affixes: string[]; tier: number; asleep: boolean; delay: number; role?: EntityRole; bounty?: number; minHp?: number; /** 体力の上限（大守護者。V3-3a §35.2） */ maxHp?: number; hpBonusPct?: number; guardian?: GuardianInfo; /** 速さの下限（大守護者。V3-3c §44.2） */ minSpeed?: number; /** 持たせる品（宝物庫の鍵。V3-5 §5.1） */ carries?: string; /** 名前付きの強敵（V3-5 §5.4） */ elite?: Names; /** 巡回の道（V3-5 §5.3） */ route?: Pos[] }
   | { type: 'item'; kind: string; x: number; y: number; qty: number; affixes: string[]; role?: EntityRole; value?: number; hidden?: string[] }
-  | { type: 'feature'; kind: string; x: number; y: number; /** 棲み処の地物（直前に置いた守護者のもの。V3-3c §44.6） */ lair?: boolean };
+  | { type: 'feature'; kind: string; x: number; y: number; /** 棲み処の地物（直前に置いた守護者のもの。V3-3c §44.6） */ lair?: boolean; /** レバーがつながる格子扉（V3-5 §5.2） */ links?: Pos[] };
 
 /** 遠征の目標階に置くもの */
 /** rank: 守護者の格（堅実 1・標準 2・野心 3）。guardianKind: 候補で決めた種族（無ければ生成時に格で選ぶ） */
@@ -580,6 +580,46 @@ function populate(s: GenState): void {
     if (!tr || at === null) break;
     s.spawns.push({ type: 'feature', kind: tr.id, x: at % g.w, y: Math.trunc(at / g.w) });
   }
+  // バイオームの仕掛け（V3-5 §5.2）: 脆い天井・胞子嚢・その階に置く品（残り頁）
+  const br = s.biome.rules;
+  // 脆い天井と胞子嚢は周り 8 マスがすべて床のマスにだけ（崩れた瓦礫や通れない胞子嚢が通路をふさがないように）
+  const open8 = spawnable.filter((i) => { const x = i % g.w, y = Math.trunc(i / g.w); return DIRS.every((d) => g.inside(x + DIR_VEC[d][0], y + DIR_VEC[d][1]) && s.passable(g.idx(x + DIR_VEC[d][0], y + DIR_VEC[d][1]))); });
+  for (let k = 0; k < (br?.ceilings ?? 0); k++) { const at = take(open8, frng); if (at === null) break; s.spawns.push({ type: 'feature', kind: 'core:brittle_ceiling', x: at % g.w, y: Math.trunc(at / g.w) }); }
+  for (let k = 0; k < (br?.pods ?? 0); k++) { const at = take(open8, frng); if (at === null) break; s.spawns.push({ type: 'feature', kind: 'core:spore_pod', x: at % g.w, y: Math.trunc(at / g.w) }); }
+  for (const bi of s.biome.items ?? []) {
+    const n = irng.range(bi.min, Math.max(bi.min, bi.max));
+    for (let k = 0; k < n; k++) { const at = take(spawnable, irng); if (at === null) break; s.spawns.push({ type: 'item', kind: bi.item, x: at % g.w, y: Math.trunc(at / g.w), qty: 1, affixes: [] }); }
+  }
+}
+
+/**
+ * 格子扉とレバー（V3-5 §5.2 石の広間・沈んだ書庫）: 扉 levers 個を開いた格子扉に替え、その近く（2〜5 マス）の床にレバーを置く。
+ * レバーを引くと格子扉が閉じる（見通せて投げた物は通るが、通れない）。features ストリーム
+ */
+function placeLevers(s: GenState): void {
+  const n = s.biome.rules?.levers ?? 0;
+  if (!n) return;
+  const g = s.grid;
+  const rng = s.stream('features');
+  const doors: number[] = [];
+  for (let i = 0; i < g.cells.length; i++) if (g.cells[i] === DOOR && !g.protect[i] && !g.override.has(i)) doors.push(i);
+  for (let k = 0; k < n && doors.length; k++) {
+    const d = doors.splice(rng.int(doors.length), 1)[0];
+    const dx = d % g.w, dy = Math.trunc(d / g.w);
+    const near: number[] = [];
+    for (let y = dy - 5; y <= dy + 5; y++) for (let x = dx - 5; x <= dx + 5; x++) {
+      if (!g.inside(x, y)) continue;
+      const i = g.idx(x, y);
+      const r = Math.max(Math.abs(x - dx), Math.abs(y - dy));
+      if (r < 2 || g.cells[i] !== FLOOR || g.protect[i] || g.override.has(i) || s.spawns.some((sp) => 'x' in sp && sp.x === x && sp.y === y)) continue;
+      near.push(i);
+    }
+    if (!near.length) continue;
+    const at = near[rng.int(near.length)];
+    g.cells[d] = FLOOR;
+    g.override.set(d, 'core:grate_open');
+    s.spawns.push({ type: 'feature', kind: 'core:lever', x: at % g.w, y: Math.trunc(at / g.w), links: [{ x: dx, y: dy }] });
+  }
 }
 
 /** 守護者になれない行動様式（動かない・逃げ回るものは討伐目標に向かない） */
@@ -846,6 +886,7 @@ export function generateFloor(content: Content, seed: string, branch: string, de
     placeStairs(s);
     populate(s);
     assignVaultKeys(s);
+    if (!fallback) placeLevers(s);
     assignElites(s);
     applyEventAfter(s);
     // 節目の大守護者（V3-3 §3.2）

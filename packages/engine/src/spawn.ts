@@ -88,7 +88,10 @@ export function spawnFromSpec(ctx: Ctx, floor: FloorKey, spec: SpawnSpec, reason
   else if (spec.type === 'item') {
     e = makeItem(floor, spec.kind, spec.x, spec.y, spec.qty, spec.affixes, id, sid, spec.value, spec.hidden);
     if (spec.role) e.role = spec.role;
-  } else e = makeFeature(ctx, floor, spec.kind, spec.x, spec.y, id, sid);
+  } else {
+    e = makeFeature(ctx, floor, spec.kind, spec.x, spec.y, id, sid);
+    if (spec.links?.length) e.links = spec.links.map((q) => ({ ...q }));
+  }
   // 棲み処の地物の持ち主（V3-3c §44.6）
   if (opts.lairOf) e.lairOf = opts.lairOf;
   const seen = ctx.perceive(floor, [{ field: 'entity', pos: e.pos }]);

@@ -2,6 +2,7 @@
   {
     "id": "core:stone_halls", "name": { "ja": "石の広間", "en": "Stone Halls" },
     "depth": { "min": 1 }, "weight": 10,
+    "rules": {"levers": 2},
     "palette": { "floor": "core:floor", "wall": "core:wall", "doorClosed": "core:door_closed", "doorOpen": "core:door_open",
       "extra": [{ "terrain": "core:rubble", "pct": 2, "clusters": 3 }] },
     "layouts": { "core:rooms_corridors": 85, "core:cellular_cave": 15 },
@@ -11,6 +12,7 @@
   {
     "id": "core:damp_caves", "name": { "ja": "湿った洞窟", "en": "Damp Caves" },
     "depth": { "min": 1 }, "weight": 8,
+    "rules": {"ceilings": 3},
     "palette": { "floor": "core:floor", "wall": "core:wall", "doorClosed": "core:door_closed", "doorOpen": "core:door_open",
       "extra": [{ "terrain": "core:shallow_water", "pct": 7, "clusters": 4 }] },
     "layouts": { "core:cellular_cave": 80, "core:rooms_corridors": 20 },
@@ -20,10 +22,23 @@
   {
     "id": "core:overgrown_ruins", "name": { "ja": "苔むした遺跡", "en": "Overgrown Ruins" },
     "depth": { "min": 2 }, "weight": 7,
+    "rules": {"pods": 4},
     "palette": { "floor": "core:floor", "wall": "core:wall", "doorClosed": "core:door_closed", "doorOpen": "core:door_open",
       "extra": [{ "terrain": "core:grass", "pct": 18, "clusters": 6 }, { "terrain": "core:tall_grass", "pct": 6, "clusters": 3 }] },
     "layouts": { "core:rooms_corridors": 70, "core:cellular_cave": 30 },
     "spawnTags": { "ruins": 160, "plant": 140, "pack": 130 },
     "features": [{ "feature": "core:altar", "chancePct": 20 }, { "feature": "core:fountain", "chancePct": 10 }]
-  , "desc": {"ja": "草と苔に覆われた遺跡。背の高い草が視界をさえぎる", "en": "Ruins overgrown with grass and moss; tall grass blocks the view"} }
+  , "desc": {"ja": "草と苔に覆われた遺跡。背の高い草が視界をさえぎる", "en": "Ruins overgrown with grass and moss; tall grass blocks the view"} },
+  {
+    "id": "core:sunken_archive", "name": { "ja": "沈んだ書庫", "en": "Sunken Archive" },
+    "depth": { "min": 6 }, "weight": 6,
+    "rules": { "levers": 1 },
+    "palette": { "floor": "core:floor", "wall": "core:wall", "doorClosed": "core:door_closed", "doorOpen": "core:door_open",
+      "extra": [{ "terrain": "core:bookshelf", "pct": 7, "clusters": 8 }] },
+    "layouts": { "core:rooms_corridors": 75, "core:cellular_cave": 25 },
+    "spawnTags": { "undead": 160, "humanoid": 120, "ruins": 120 },
+    "features": [{ "feature": "core:altar", "chancePct": 25 }],
+    "items": [{ "item": "core:loose_page", "min": 2, "max": 4 }],
+    "desc": { "ja": "記録庫の沈んだ書架の階。本棚は視界をさえぎり、押して動かせる。床に残り頁が落ちている", "en": "A floor of the archive's sunken stacks. Bookshelves block the view and can be pushed. Loose pages lie on the floor" }
+  }
 ]

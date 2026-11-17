@@ -77,7 +77,9 @@ describe('engine', () => {
   it('floor terrain does not depend on actions taken (named sub-streams)', () => {
     const a = play('streams-1', 50);
     const b = play('streams-1', 10);
-    expect(a.world.floors['main:1'].terrain).toEqual(b.world.floors['main:1'].terrain);
+    // 生成したときの地形（遊ぶ間に扉・崩れた天井・押した本棚で変わる分は比べない。V3-5 §5.2）
+    const gen = (r: ReturnType<typeof play>) => r.events.find((e) => e.type === 'floor_generated' && e.floor === 'main:1') as unknown as { terrainRle: unknown };
+    expect(gen(a).terrainRle).toEqual(gen(b).terrainRle);
   });
 
   it('entity ids are opaque, not sequential', () => {

@@ -157,7 +157,7 @@ effects.register('uncurse', (ctx, _p, ec) => {
   liftCurses(ctx, ctx.world.entities[user.id]);
 });
 
-effects.register('map', (ctx, _p, ec) => {
+effects.register('map', (ctx, p, ec) => {
   const t = ec.target;
   if (!t.player || !t.pos) return;
   const key = t.pos.floor;
@@ -166,10 +166,13 @@ effects.register('map', (ctx, _p, ec) => {
   const fk = pr.knowledge.floors[key];
   const newly: number[] = [];
   const wallIdx = ctx.world.meta.terrainTable.indexOf('core:wall');
+  // radius: その距離までだけ（残り頁。V3-5 §5.2）
+  const rad = typeof p.radius === 'number' ? p.radius : null;
   for (let y = 0; y < f.height; y++) {
     for (let x = 0; x < f.width; x++) {
       const i = y * f.width + x;
       const tv = f.terrain[i];
+      if (rad !== null && Math.max(Math.abs(x - t.pos.x), Math.abs(y - t.pos.y)) > rad) continue;
       if ((fk?.seen[i] ?? 0) === tv) continue;
       if (tv === wallIdx) {
         // 床に接する壁だけ

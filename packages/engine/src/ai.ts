@@ -341,5 +341,9 @@ export function monsterTurn(ctx: Ctx, m: Entity): number {
   const cost = scost ?? archetypes.get(ai.archetype)(ctx, ctx.world.entities[m.id] ?? cur, { target, ai: next, def });
   // 水場で遅い（弱点）: 浅い水の上では行動コストが増える
   const after = ctx.world.entities[m.id];
-  return after?.guardian ? Math.trunc((cost * guardianCostPct(ctx, after)) / 100) : cost;
+  // 地形の手番の倍率（浅い水は 150%。動いた手番だけ。V3-5 §5.2）
+  const moved = !!after?.pos && (after.pos.x !== m.pos!.x || after.pos.y !== m.pos!.y);
+  const terrainPct = moved && after?.pos ? ctx.terrainAt(after.pos.floor, after.pos.x, after.pos.y).moveCostPct : 100;
+  const c2 = Math.trunc((cost * terrainPct) / 100);
+  return after?.guardian ? Math.trunc((c2 * guardianCostPct(ctx, after)) / 100) : c2;
 }

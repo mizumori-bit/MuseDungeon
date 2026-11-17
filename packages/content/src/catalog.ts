@@ -64,7 +64,7 @@ export function buildCatalog(c: Content): Catalog {
   }
   return {
     contentVersion: c.version,
-    terrain: Object.fromEntries(c.terrain.map((t) => [t.id, { name: t.name, passable: t.passable, opaque: t.opaque, layer: t.layer, door: t.door, stairs: t.stairs, tags: t.tags }])),
+    terrain: Object.fromEntries(c.terrain.map((t) => [t.id, { name: t.name, passable: t.passable, opaque: t.opaque, layer: t.layer, door: t.door, stairs: t.stairs, tags: t.tags, ...(t.moveCostPct !== 100 ? { moveCostPct: t.moveCostPct } : {}) }])),
     // size・armored・evasive は見れば分かる性質（V3-2R3 §20.4・V3-3b §40.2）。armored は素の装甲が 3 以上、evasive は素の回避が 5 以上（値そのものは出さない）
     monsters: Object.fromEntries(c.lists.monsters.map((m) => [m.id, { name: m.name, tags: m.tags, glyph: m.glyph, size: m.size, armored: m.stats.armor >= 3, evasive: m.stats.eva >= 5, ...(m.desc ? { desc: m.desc } : {}) }])),
     classes: Object.fromEntries(c.lists.classes.map((k) => [k.id, {
@@ -80,7 +80,7 @@ export function buildCatalog(c: Content): Catalog {
     items,
     appearances: Object.fromEntries(c.lists.appearances.map((a) => [a.id, { name: a.name, category: a.category }])),
     features: Object.fromEntries(c.lists.features.map((f) => [f.id, {
-      name: f.name, category: f.category, states: f.states, interactable: f.onInteract.length > 0 || !!f.afterInteract || !!f.gamble, passable: f.passable,
+      name: f.name, category: f.category, states: f.states, interactable: f.onInteract.length > 0 || !!f.afterInteract || !!f.gamble || f.lever || !!f.burst, passable: f.passable,
       ...(f.afterInteract ? { afterInteract: f.afterInteract } : {}),
       ...(f.desc ? { desc: f.desc } : {}),
       // 賭けの祭壇の表（確率は % に直して公開。V3-5 §5.1）

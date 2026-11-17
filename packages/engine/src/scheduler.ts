@@ -89,6 +89,10 @@ function beginPlayerTurn(ctx: Ctx, pe: Entity): boolean {
   // 自然回復は手番の終わり（endTurn）で蓄積値として進める
   // 徘徊モンスター（休憩し放題への圧力）
   const f = ctx.world.floors[key];
+  // 時間で消える地物（毒の雲。V3-5 §5.2）
+  for (const c of ctx.entitiesOn(key)) {
+    if (c.feature?.expiresAt !== undefined && c.feature.expiresAt <= f.time) ctx.emit({ type: 'entity_removed', id: c.id, kind: c.kind, reason: 'expired', seenBy: ctx.seersOf(key, c.pos!), floor: key });
+  }
   const wb = ctx.content.balance.wander;
   if (!f.rules.noWander && cur.actor!.nextActAt >= f.nextWanderAt) {
     // 遠征の条件と、目的達成後の圧力で間隔が変わる

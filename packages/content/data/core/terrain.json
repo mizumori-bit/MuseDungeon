@@ -6,12 +6,13 @@
   { "id": "core:door_open", "name": { "ja": "開いた扉", "en": "open door" }, "passable": true, "opaque": false, "layer": "object", "door": "open", "tags": ["door"] },
   { "id": "core:stairs_down", "name": { "ja": "下り階段", "en": "stairs down" }, "passable": true, "opaque": false, "layer": "object", "stairs": "down", "tags": ["stairs"] },
   { "id": "core:stairs_up", "name": { "ja": "上り階段", "en": "stairs up" }, "passable": true, "opaque": false, "layer": "object", "stairs": "up", "tags": ["stairs"] },
-  { "id": "core:shallow_water", "name": { "ja": "浅い水たまり", "en": "shallow water" }, "passable": true, "opaque": false, "layer": "ground", "tags": ["water", "floor"] },
+  { "id": "core:shallow_water", "name": { "ja": "浅い水たまり", "en": "shallow water" }, "passable": true, "opaque": false, "layer": "ground", "tags": ["water", "floor"], "moveCostPct": 150 },
   { "id": "core:grass", "name": { "ja": "草地", "en": "grass" }, "passable": true, "opaque": false, "layer": "ground", "tags": ["grass", "floor"] },
-  { "id": "core:tall_grass", "name": { "ja": "背の高い草", "en": "tall grass" }, "passable": true, "opaque": true, "layer": "ground", "tags": ["tall_grass", "floor"] },
+  { "id": "core:tall_grass", "name": { "ja": "背の高い草", "en": "tall grass" }, "passable": true, "opaque": true, "layer": "ground", "tags": ["tall_grass", "floor", "conceal"] },
   { "id": "core:rubble", "name": { "ja": "瓦礫", "en": "rubble" }, "passable": false, "opaque": false, "layer": "ground", "tags": ["obstacle"] },
   { "id": "core:pillar", "name": { "ja": "柱", "en": "pillar" }, "passable": false, "opaque": true, "layer": "ground", "tags": ["wall"] },
   { "id": "core:grate_locked", "name": { "ja": "鍵のかかった格子扉", "en": "locked grate" }, "passable": false, "opaque": false, "layer": "object", "tags": ["grate", "locked"] },
   { "id": "core:grate_open", "name": { "ja": "開いた格子扉", "en": "open grate" }, "passable": true, "opaque": false, "layer": "object", "tags": ["grate"] },
-  { "id": "core:bookshelf", "name": { "ja": "本棚", "en": "bookshelf" }, "passable": false, "opaque": true, "layer": "object", "tags": ["wall", "shelf"] }
+  { "id": "core:bookshelf", "name": { "ja": "本棚", "en": "bookshelf" }, "passable": false, "opaque": true, "layer": "object", "tags": ["wall", "shelf", "pushable"] },
+  { "id": "core:grate_closed", "name": { "ja": "閉じた格子扉", "en": "closed grate" }, "passable": false, "opaque": false, "layer": "object", "tags": ["grate", "lever"] }
 ]

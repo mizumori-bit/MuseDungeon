@@ -96,7 +96,10 @@ export interface Entity {
   item?: { qty: number; affixes: string[]; heldBy?: EntityId; slot?: string; thrownBy?: PlayerId; value?: number; hidden?: string[]; inspected?: boolean };
   statuses?: StatusInst[];
   trap?: { revealedTo: PlayerId[] };
-  feature?: { state: string };
+  /** expiresAt: この階の時刻を過ぎたら消える（毒の雲。V3-5 §5.2） */
+  feature?: { state: string; expiresAt?: number };
+  /** レバーがつながっている格子扉のマス（V3-5 §5.2） */
+  links?: Pos[];
   player?: PlayerId;
   level?: { level: number; xp: number };
   scale?: { tier: number; affixes: string[] };
@@ -464,6 +467,8 @@ export interface RunMeta {
   createdSeq: number;
   /** terrain index → terrain ID。リプレイがコンテンツ更新に影響されないようランごとに固定 */
   terrainTable: string[];
+  /** 中にいる者が隣からしか見えない地形（背の高い草。V3-5 §5.2）の terrainTable の番号 */
+  concealTerrain?: number[];
   options: RunOptions;
 }
 

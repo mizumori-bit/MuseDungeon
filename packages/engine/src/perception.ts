@@ -6,6 +6,8 @@ import { computeFov, hasLos, inCircle, line } from './geom';
 import { firstStealthPerk, gearOf, noiseRingOf, notePerk, perkStealth, stealthOf } from './build';
 import { boonHook } from './boons';
 import { deepSleepStealth, restGuardian } from './guardians';
+import { applyDamage } from './combat';
+import { roll } from './registry';
 
 /**
  * 投げ物・射撃の経路（始点を含まず終点を含む）。from→to の直線か、to→from の直線を逆にたどったもののうち、
@@ -16,7 +18,9 @@ export function shotLine(ctx: Ctx, key: FloorKey, from: Pos, to: Pos): Pos[] | n
   const ok = (path: Pos[]) => {
     for (let i = 0; i < path.length; i++) {
       const p = path[i];
-      if (!ctx.terrainAt(key, p.x, p.y).passable) return false;
+      // 格子扉は投げた物を通す（V3-5 §5.2）
+      const tr = ctx.terrainAt(key, p.x, p.y);
+      if (!tr.passable && !tr.tags.includes('grate')) return false;
       if (i < path.length - 1 && ctx.actorAt(key, p.x, p.y)) return false;
     }
     return true;
@@ -121,6 +125,7 @@ export function updateKnowledge(ctx: Ctx, key: FloorKey): void {
       const idx = e.pos.y * f.width + e.pos.x;
       if (!fovSet.has(idx)) continue;
       if (e.actor && !e.player && (e.stats?.hp ?? 0) > 0) {
+        if (me?.pos && concealedFrom(ctx, me.pos, e.pos)) continue;
         if (!metSet.has(e.id)) met.push(e.id);
         if (me?.pos && shotClear(ctx, key, me.pos, e.pos)) shots.push(e.id);
         continue;
@@ -242,9 +247,15 @@ function floorHintFor(ctx: Ctx, pr: PlayerRecord, key: FloorKey, newlySeen: numb
 }
 
 /** モンスターがプレイヤーを視認できるか（プレイヤーの視界と対称、半径外は射線） */
+/** 背の高い草の中の者は、隣からしか見えない（V3-5 §5.2） */
+export function concealedFrom(ctx: Ctx, viewer: Pos, target: Pos & { floor: FloorKey }): boolean {
+  return cheb(viewer, target) > 1 && ctx.terrainAt(target.floor, target.x, target.y).tags.includes('conceal');
+}
+
 export function monsterSees(ctx: Ctx, m: Entity, target: Entity): boolean {
   if (!m.pos || !target.pos || m.pos.floor !== target.pos.floor) return false;
   if (!inCircle(m.pos, target.pos, m.stats!.sight)) return false;
+  if (concealedFrom(ctx, m.pos, target.pos)) return false;
   const pr = target.player ? ctx.world.players[target.player] : undefined;
   if (pr) {
     const f = ctx.world.floors[m.pos.floor];
@@ -292,8 +303,31 @@ export function wakeMonster(ctx: Ctx, m: Entity, targetPos: Pos | null, why?: Wa
   }
 }
 
+/** 脆い天井が崩れる（V3-5 §5.2）: trigger マス以内で loudness 以上の音。radius マスの者に dmg、真下は瓦礫 */
+function collapseCeilings(ctx: Ctx, key: FloorKey, pos: Pos, loudness: number): void {
+  for (const c of ctx.entitiesOn(key)) {
+    const def = c.feature && c.pos ? ctx.content.features[c.kind]?.collapse : undefined;
+    if (!def || c.feature!.state !== 'intact' || loudness < def.loudness || cheb(c.pos!, pos) > def.trigger) continue;
+    const at = { x: c.pos!.x, y: c.pos!.y };
+    ctx.emit({ type: 'feature_state', id: c.id, kind: c.kind, state: 'fallen', ...ctx.perceive(key, [{ field: 'id', pos: at }], []), floor: key });
+    const rng = ctx.rng('runtime');
+    for (const v of ctx.entitiesOn(key)) {
+      if (!v.actor || !v.pos || cheb(v.pos, at) > def.radius || (v.stats?.hp ?? 0) <= 0) continue;
+      applyDamage(ctx, v, Math.max(1, roll(rng, def.dmg)), null, 'effect');
+    }
+    if (!ctx.actorAt(key, at.x, at.y)) {
+      const rubble = ctx.world.meta.terrainTable.indexOf('core:rubble');
+      if (rubble >= 0) ctx.emit({ type: 'tile_changed', x: at.x, y: at.y, terrain: rubble, reason: 'collapse', by: null, ...ctx.tileSeen(key, at, null), floor: key });
+    }
+  }
+}
+
 /** 騒音: 聞こえたプレイヤーへのイベントと、周囲のモンスターの起床 */
-export function makeNoise(ctx: Ctx, key: FloorKey, pos: Pos, loudness: number, source: Entity | null): void {
+export function makeNoise(ctx: Ctx, key: FloorKey, pos: Pos, loudness0: number, source: Entity | null): void {
+  // 水の上の音は 2 倍遠くまで届く（V3-5 §5.2 湿った洞窟）
+  const loudness = ctx.terrainAt(key, pos.x, pos.y).tags.includes('water') ? loudness0 * 2 : loudness0;
+  // 脆い天井（V3-5 §5.2）: 近くで大きな音がすると崩れる
+  collapseCeilings(ctx, key, pos, loudness);
   const hearers = ctx.playersOn(key).filter((pr) => {
     const e = ctx.world.entities[pr.entityId];
     return e.pos && inCircle(e.pos, pos, loudness) && e.id !== source?.id;

@@ -336,11 +336,14 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
     const ordered: Entity[] = [];
     for (const e of Object.values(world.entities)) if (e.pos?.floor === floorKey) ordered.push(e);
     ordered.sort((a, b) => a.sid - b.sid);
+    const conceal = new Set(world.meta.concealTerrain ?? []);
     for (const e of ordered) {
       if (!e.pos || e.pos.floor !== floorKey || e.id === me.id) continue;
       if (!visibleSet.has(e.pos.y * floor.width + e.pos.x)) continue;
       const cat = entityCat(e);
       if (!cat) continue;
+      // 背の高い草の中の者は、隣からしか見えない（V3-5 §5.2）
+      if ((cat === 'monster' || cat === 'player') && conceal.has(floor.terrain[e.pos.y * floor.width + e.pos.x]) && me.pos && cheb(me.pos, e.pos) > 1) continue;
       if (cat === 'trap' && !e.trap!.revealedTo.includes(playerId)) continue;
       const pos = { x: e.pos.x, y: e.pos.y };
       if (cat === 'item') {

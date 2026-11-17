@@ -17,7 +17,7 @@ import { updateKnowledge } from './perception';
 import { advance, endTurn } from './scheduler';
 import { recomputeStats } from './stats';
 
-export const ENGINE_VERSION = '0.20.0';
+export const ENGINE_VERSION = '0.21.0';
 
 export interface CreateRunParams {
   runId: string;
@@ -53,6 +53,7 @@ export function createRun(content: Content, p: CreateRunParams): { world: World;
     mode,
     createdSeq: 1,
     terrainTable: content.terrain.map((tr) => tr.id),
+    concealTerrain: content.terrain.map((tr, i) => (tr.tags.includes('conceal') ? i : -1)).filter((i) => i >= 0),
     options: {
       turnTimeoutMs: p.options?.turnTimeoutMs !== undefined ? p.options.turnTimeoutMs : mode === 'coop' ? 30000 : null,
       maxPlayers: p.options?.maxPlayers ?? (mode === 'coop' ? 4 : 1),

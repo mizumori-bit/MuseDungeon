@@ -414,6 +414,15 @@ V3-2R で足した項目（同じく後方互換。会心と経験値のルー�
 - `player_state.reason: 'joined'`（キャンプから始まる参加）。参加コマンドの `atCamp`
 - プレイヤー向けの射影で、見えていた個体が視界の外へ動いた `entity_moved` に `dirOut`（向きだけ。行き先は伏せたまま）
 
+V3-5e で足した項目（バイオームの仕掛け。後方互換。生成と規則が変わったので `engineVersion` は 0.21.0。出来事の種類は増やしていないので `eventVersion` は 16 のまま。DESIGN.md §33）:
+
+- コンテンツ: 地形の `moveCostPct`（入る手番の倍率。浅い水は 150）とタグ `conceal`（背の高い草）・`pushable`（本棚）・`grate`。地形 `core:grate_closed`（閉じた格子扉: 通れず見通せる。投げた物と射撃は通る）。地物 `core:lever`（`lever`）・`core:brittle_ceiling`（`collapse { trigger 3, loudness 4, radius 1, dmg 2d6 }`）・`core:spore_pod`（`burst { radius 1, cloud, turns 3 }`）・`core:spore_cloud`（入ると毒）。アイテム `core:loose_page`（区分 `page`。効果 `map` の `radius` 10）。バイオームの `rules { levers, ceilings, pods }`・`items [{ item, min, max }]`。バイオーム `core:sunken_archive`（沈んだ書庫。地下 6 階から）。公開カタログの `terrain[id].moveCostPct`
+- World State: 地物の `feature.expiresAt`（その階の時刻を過ぎたら消える）・`Entity.links`（レバーにつながった格子扉のマス）・`meta.concealTerrain`
+- イベント: `tile_changed.reason` に `lever`（格子扉の開け閉め）・`collapse`（崩れた天井の瓦礫）・`push`（押した本棚）。時間で消えた毒の雲は `entity_removed.reason: 'expired'`
+- PlayerView: 背の高い草の中の者（敵・プレイヤー）は、隣からしか見えない
+- 観測: valid_actions の interact にレバーと胞子嚢。get_rules に「バイオームの仕掛け」の項目
+- 規則: レバーを足元か隣で interact すると、つないだ格子扉を閉じる・開ける（閉じるマスに者か物があれば開いたまま。音 4）。浅い水は入る手番 150、水の上の音は大きさ 2 倍。脆い天井は 3 マス以内で大きさ 4 以上の音（投げた物が落ちる 4・戦い 5・敵が扉を開ける 4。自分で扉を開けるのは 3 なので崩れない）で崩れ、周り 1 マスに 2d6、真下は瓦礫。背の高い草の中の者は隣からしか見えない（敵からも）。胞子嚢は突くか投げた物が当たると弾け、周り 1 マスの者を毒にし、毒の雲を 3 手番残す。本棚は move で押すと、向こうが空いた床なら動く（手番 150・音 4）。残り頁を読むと周り 10 マスの地形が分かる
+
 V3-5d で足した項目（階の異変・描写と手がかり・名前付きの強敵。後方互換。生成と規則が変わったので `engineVersion` は 0.20.0、出来事が増えたので `eventVersion` は 16。DESIGN.md §32）:
 
 - コンテンツ: `floorEvents.json`（`FloorEventSchema { id, name, arrival, handler, depth, weight }`）。異変は賞金首（`bounty`）・深い眠り（`deep_sleep`）・荒らされた跡（`ransacked`）・溢れた宝（`treasure_glut`）・番人の巡回（`patrol`）。階の種類の `rules.events`（通常の階と大空洞）。`balance.floorEvent.chancePct`（25）・`balance.elite { chancePct 3, minDepth 3, affixes 2, bountyBase 150, bountyPerDepth 30 }`・`balance.clueTurns`（30）。種族とバイオームの `desc`、薬と巻物の `clue`、職業の `clueOnPickup`（斥候）。行動様式 `patrol`。公開カタログの `monsters[id].desc`・`biomes[id].desc`・`items[id].clue`・`rules.floorEventPct / elite / clueTurns`

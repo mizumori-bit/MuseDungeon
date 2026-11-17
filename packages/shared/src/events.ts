@@ -27,7 +27,7 @@ export interface EventBase {
   del?: EntityId[];
 }
 
-export type TerrainChangeReason = 'door_open' | 'door_close' | 'effect' | 'other' | 'unlock';
+export type TerrainChangeReason = 'door_open' | 'door_close' | 'effect' | 'other' | 'unlock' | 'lever' | 'collapse' | 'push';
 export type MoveMode = 'walk' | 'teleport' | 'swap' | 'knockback';
 export type DamageVia = 'melee' | 'ranged' | 'thrown' | 'poison' | 'trap' | 'effect' | 'other';
 

@@ -22,6 +22,7 @@ import { hasStatus, removeStatus } from './statuses';
 import { Registry, roll } from './registry';
 import { regenTick } from './scheduler';
 import { recomputeStats } from './stats';
+import { spawnFromSpec } from './spawn';
 
 export interface ActionOutcome { cost: number; scheduled?: boolean }
 export type Prepared = { error: ActionError } | { run: () => ActionOutcome };
@@ -76,6 +77,42 @@ export function triggerTrap(ctx: Ctx, victim: Entity, trap: Entity): void {
   applyEffects(ctx, def?.onEnter ?? [], { user: null, target: victim, pos, source: null, via: 'trap' });
 }
 
+/** レバーを引く（V3-5 §5.2）: つないだ格子扉を閉じる・開ける（閉じるマスに者か物があれば、そのマスは開いたまま） */
+function pullLever(ctx: Ctx, e: Entity, lever: Entity): void {
+  const key = lever.pos!.floor;
+  const closed = ctx.world.meta.terrainTable.indexOf('core:grate_closed');
+  const open = ctx.world.meta.terrainTable.indexOf('core:grate_open');
+  const down = lever.feature!.state !== 'down';
+  ctx.emit({ type: 'feature_state', id: lever.id, kind: lever.kind, state: down ? 'down' : 'up', ...ctx.perceive(key, [{ field: 'id', pos: lever.pos }], e.player ? [e.player] : []), floor: key });
+  for (const q of lever.links ?? []) {
+    const cur = ctx.terrainAt(key, q.x, q.y);
+    if (down && cur.id === 'core:grate_open' && !ctx.actorAt(key, q.x, q.y) && !ctx.itemsAt(key, q.x, q.y).length) ctx.emit({ type: 'tile_changed', x: q.x, y: q.y, terrain: closed, reason: 'lever', by: e.id, ...ctx.tileSeen(key, q, e), floor: key });
+    else if (!down && cur.id === 'core:grate_closed') ctx.emit({ type: 'tile_changed', x: q.x, y: q.y, terrain: open, reason: 'lever', by: e.id, ...ctx.tileSeen(key, q, e), floor: key });
+  }
+  makeNoise(ctx, key, lever.pos!, 4, e);
+}
+
+/** 胞子嚢が弾ける（V3-5 §5.2）: radius マスの者を毒にし、通れるマスに毒の雲を turns 手番残す */
+export function burstPod(ctx: Ctx, pod: Entity): void {
+  const def = ctx.content.features[pod.kind]?.burst;
+  if (!def || !pod.pos || pod.feature?.state === 'burst') return;
+  const key = pod.pos.floor;
+  const at = { x: pod.pos.x, y: pod.pos.y };
+  ctx.emit({ type: 'feature_state', id: pod.id, kind: pod.kind, state: 'burst', ...ctx.perceive(key, [{ field: 'id', pos: at }], []), floor: key });
+  const f = ctx.world.floors[key];
+  const cloudDef = ctx.content.features[def.cloud];
+  for (let y = at.y - def.radius; y <= at.y + def.radius; y++) for (let x = at.x - def.radius; x <= at.x + def.radius; x++) {
+    if (x < 0 || y < 0 || x >= f.width || y >= f.height) continue;
+    const v = ctx.actorAt(key, x, y);
+    if (v && cloudDef) applyEffects(ctx, cloudDef.onEnter, { user: null, target: v, pos: { x, y }, source: null, via: 'feature' });
+    if ((x === at.x && y === at.y) || !ctx.terrainAt(key, x, y).passable || ctx.featureAt(key, x, y)) continue;
+    const c = spawnFromSpec(ctx, key, { type: 'feature', kind: def.cloud, x, y }, 'burst');
+    const body = structuredClone(c);
+    body.feature!.expiresAt = f.time + def.turns * 100;
+    ctx.emit({ type: 'feature_state', id: c.id, kind: c.kind, state: c.feature!.state, put: [body], seenBy: [], floor: key });
+  }
+}
+
 function openDoor(ctx: Ctx, e: Entity, p: Pos): void {
   const key = e.pos!.floor;
   const open = ctx.world.meta.terrainTable.indexOf('core:door_open');
@@ -103,6 +140,25 @@ actions.register('move', (ctx, e, pr, cmd: Extract<Command, { type: 'move' }>) =
   if (occ) return { run: () => { melee(ctx, e, occ); return { cost: attackCostOf(ctx, e) }; } };
   const tr = ctx.terrainAt(key, to.x, to.y);
   if (tr.door === 'closed') return { run: () => { openDoor(ctx, e, to); return { cost: 100 }; } };
+  // 押せる本棚（V3-5 §5.2 沈んだ書庫）: 向こうのマスが空いた床なら押して進む（手番 150）
+  if (tr.tags.includes('pushable')) {
+    const beyond = stepPos(to, cmd.dir);
+    const bt = beyond.x >= 0 && beyond.y >= 0 && beyond.x < f.width && beyond.y < f.height ? ctx.terrainAt(key, beyond.x, beyond.y) : null;
+    const free = !!bt && bt.passable && !bt.stairs && !bt.door && !ctx.actorAt(key, beyond.x, beyond.y) && !ctx.itemsAt(key, beyond.x, beyond.y).length && !ctx.featureAt(key, beyond.x, beyond.y);
+    if (!free) return fail(pr, 'blocked', `${t(pr.locale, tr.name.ja, tr.name.en)}の向こうがふさがっていて押せない。`, `Something behind the ${tr.name.en} keeps it from moving.`, '別の向きから押すか、回り道する。', 'Push from another side or go around.');
+    return {
+      run: () => {
+        const floorIdx = ctx.world.meta.terrainTable.indexOf('core:floor');
+        const shelfIdx = f.terrain[to.y * f.width + to.x];
+        ctx.emit({ type: 'tile_changed', x: beyond.x, y: beyond.y, terrain: shelfIdx, reason: 'push', by: e.id, ...ctx.tileSeen(key, beyond, e), floor: key });
+        ctx.emit({ type: 'tile_changed', x: to.x, y: to.y, terrain: floorIdx, reason: 'push', by: e.id, ...ctx.tileSeen(key, to, e), floor: key });
+        const from = { x: e.pos!.x, y: e.pos!.y };
+        ctx.emit({ type: 'entity_moved', id: e.id, kind: e.kind, from, to, mode: 'walk', ...ctx.perceive(key, [{ field: 'from', pos: from }, { field: 'to', pos: to }], [e.player!]), floor: key });
+        makeNoise(ctx, key, to, 4, e);
+        return { cost: 150 };
+      },
+    };
+  }
   if (!tr.passable) {
     return fail(pr, 'blocked', `${t(pr.locale, tr.name.ja, tr.name.en)}があって進めない。`, `A ${tr.name.en} blocks the way.`, 'observe の navigation.passable_dirs から選ぶか、explore / travel_to を使う。', 'Choose from navigation.passable_dirs, or use explore / travel_to.');
   }
@@ -112,6 +168,8 @@ actions.register('move', (ctx, e, pr, cmd: Extract<Command, { type: 'move' }>) =
       ctx.emit({ type: 'entity_moved', id: e.id, kind: e.kind, from, to, mode: 'walk', ...ctx.perceive(key, [{ field: 'from', pos: from }, { field: 'to', pos: to }], [e.player!]), floor: key });
       const trap = ctx.featureAt(key, to.x, to.y);
       if (trap?.trap) triggerTrap(ctx, ctx.world.entities[e.id], trap);
+      // 入ると効果のある地物（毒の雲。V3-5 §5.2）
+      else if (trap?.feature && ctx.content.features[trap.kind]?.onEnter.length) applyEffects(ctx, ctx.content.features[trap.kind].onEnter, { user: null, target: ctx.world.entities[e.id], pos: to, source: null, via: 'feature' });
       // 自分が投げた物は、移動の一部として拾う（追加の手番なし。入らなければ拾わない）。回収の手なら隣のマスからも
       const me = ctx.world.entities[e.id];
       if (me?.pos && ctx.world.players[pr.id].state === 'alive') {
@@ -122,8 +180,8 @@ actions.register('move', (ctx, e, pr, cmd: Extract<Command, { type: 'move' }>) =
         if (mine.length) { pickUpItems(ctx, me, mine, true); updateKnowledge(ctx, key); }
         if (fromNext > 0) notePerk(ctx, ctx.world.entities[me.id] ?? me, perkWithHook(ctx, me, 'collect_adjacent'), 'picked', { amount: fromNext });
       }
-      // 重い鎧は歩く手番のコストが増える（V3-4 §14.5）
-      return { cost: gearOf(ctx, ctx.world.entities[e.id] ?? e).moveCost };
+      // 重い鎧は歩く手番のコストが増える（V3-4 §14.5）。浅い水などは地形の倍率も掛かる（V3-5 §5.2）
+      return { cost: Math.trunc((gearOf(ctx, ctx.world.entities[e.id] ?? e).moveCost * tr.moveCostPct) / 100) };
     },
   };
 });
@@ -519,6 +577,9 @@ export function prepareThrow(ctx: Ctx, e: Entity, pr: PlayerRecord, slot: string
       if (fire?.kind === 'core:ward_fire' && fire.feature?.state === 'lit') {
         ctx.emit({ type: 'feature_state', id: fire.id, kind: fire.kind, state: 'out', ...ctx.perceive(key, [{ field: 'id', pos: landed }], [pr.id]), floor: key });
       }
+      // 胞子嚢に当たると弾ける（V3-5 §5.2）
+      const pod = fire && ctx.content.features[fire.kind]?.burst ? fire : null;
+      if (pod) burstPod(ctx, pod);
       updateKnowledge(ctx, key);
       // 早投げ: 投擲の手番コストが下がる（V3-4 §4.1）
       return { cost: perkHook(ctx, me, 'throw_cost')?.cost ?? 100 };
@@ -636,6 +697,15 @@ actions.register('interact', (ctx, e, pr, cmd: Extract<Command, { type: 'interac
     };
   }
   const feat = ctx.featureAt(key, p.x, p.y);
+  // レバー（V3-5 §5.2）: つないだ格子扉を開け閉めする
+  if (feat?.feature && ctx.content.features[feat.kind]?.lever) {
+    return { run: () => { pullLever(ctx, ctx.world.entities[e.id], feat); return { cost: 100 }; } };
+  }
+  // 胞子嚢を突く（V3-5 §5.2）
+  if (feat?.feature && ctx.content.features[feat.kind]?.burst) {
+    if (feat.feature.state === 'burst') return fail(pr, 'cannot_use', 'もう弾けている。', 'It has already burst.', '他の地物を探す。', 'Look for another feature.');
+    return { run: () => { burstPod(ctx, feat); return { cost: 100 }; } };
+  }
   if (feat?.feature) {
     const def = ctx.content.features[feat.kind];
     // 効果は無くても、状態が変わる地物（護りの火を消す。V3-3）は操作できる
