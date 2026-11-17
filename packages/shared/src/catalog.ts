@@ -64,6 +64,8 @@ export interface CatalogPerk {
   mods: { maxHp: number; acc: number; eva: number; might: number; armor: number; capacity: number; stealthPct: number };
   ability?: string;
   hooks: string[];
+  /** 投擲で無視する装甲（1 ランクあたり。急所狙い。V3-3b §40.1） */
+  thrownPierce?: number;
 }
 
 /** 能動技（V3-4 §4.2） */
@@ -89,7 +91,7 @@ export interface Catalog {
   terrain: Record<string, CatalogTerrain>;
   /** glyph: 地図の 1 文字（種族ごとに一意） */
   /** size・armored: 見れば分かる性質（V3-2R3 §20.4） */
-  monsters: Record<string, { name: Names; tags: string[]; glyph: string; size?: 'small' | 'medium' | 'large'; armored?: boolean }>;
+  monsters: Record<string, { name: Names; tags: string[]; glyph: string; size?: 'small' | 'medium' | 'large'; armored?: boolean; evasive?: boolean }>;
   classes: Record<string, CatalogClass>;
   items: Record<string, CatalogItem>;
   appearances: Record<string, { name: Names; category: string }>;
@@ -136,7 +138,7 @@ export interface CatalogRules {
   wander: { intervalMin: number; intervalMax: number };
   score: { perDepth: number; perKill: number; perLevel: number };
   /** 候補の点 = 枠の基礎点 × typePct % × (depthPct.base + depthPct.perDepth × 目標深度) %（V3-2R2 §18.3） */
-  expedition: { firstTargetDepth: Record<'safe' | 'standard' | 'ambitious', number>; typePct: Record<string, number>; depthPct: { base: number; perDepth: number }; repeatPct?: number };
+  expedition: { firstTargetDepth: Record<'safe' | 'standard' | 'ambitious', number>; typePct: Record<string, number>; depthPct: { base: number; perDepth: number }; repeatPct?: number; repeatMinPct?: number };
   /** 敵の HP 4 段階の境界（%）: healthy >= [0], wounded >= [1], badly_wounded >= [2], それ未満 near_death */
   hpBands: [number, number, number];
   /** 推定残り HP: 記録がこの数未満の間は上限を出さない */

@@ -216,7 +216,8 @@ export const SpawnTableSchema = z.object({
 
 export const LootTableSchema = z.object({
   id: IdSchema,
-  entries: z.array(z.object({ item: IdSchema.optional(), category: z.string().optional(), weight: z.number().int().min(1) })).min(1),
+  /** depthMin: この深さ（depthBonus を足した深さ）から引く（V3-3b §40.1: 投げ槍） */
+  entries: z.array(z.object({ item: IdSchema.optional(), category: z.string().optional(), weight: z.number().int().min(1), depthMin: z.number().int().min(1).optional() })).min(1),
   depthBonus: z.number().int().default(0),
   affixChancePct: z.number().int().min(0).max(100).default(10),
 });
@@ -260,6 +261,8 @@ export const PerkSchema = z.object({
   /** 取ると覚える能動技 */
   ability: IdSchema.optional(),
   hooks: z.array(z.object({ hook: z.string().min(1) }).catchall(z.number())).default([]),
+  /** このレベルまでに一度も候補に出ていなければ、このレベルの候補の 1 枠をこれにする（その職業の系統のときだけ。V3-3b §40.1） */
+  offerByLevel: z.number().int().min(2).optional(),
 });
 
 /** 能動技（V3-4 §4.2）。資源は持たず、再使用までの手番（cooldown）だけ。handler はエンジンのレジストリ（abilities） */
@@ -408,6 +411,8 @@ export const BalanceSchema = z.object({
     typePct: z.record(Int.min(1)),
     /** 同じ階を目標にした達成を繰り返すと、目的の基礎点に掛かる %（2 回目 50%、3 回目 25%。V3-3a §35.2） */
     repeatPct: Int.min(0).max(100).default(50),
+    /** 繰り返しの減点の下限（V3-3b §40.6。2 回目 50%、3 回目からは 25% で止まる） */
+    repeatMinPct: Int.min(0).max(100).default(25),
     /** 深さの係数 = base + perDepth × 目標深度（%） */
     depthPct: z.object({ base: Int.min(1), perDepth: Int.min(0) }),
     /** retrieve_relic で遺物を守護者が守る確率 */

@@ -49,7 +49,9 @@ function summonMinions(ctx: Ctx, m: Entity, count: number, target: Entity | null
     const pick = pickMonster({ content: ctx.content, depth: f.depth, biome, floorType }, rng);
     if (!pick || pick.def.ai.archetype === 'stationary') continue;
     const s = spawnFromSpec(ctx, key, { type: 'monster', kind: pick.def.id, x: p.x, y: p.y, hp: Math.max(1, roll(rng, pick.def.stats.hp)), affixes: [], tier: pick.tier, asleep: false, delay: 0 }, 'summoned');
-    if (s && target?.pos) wakeMonster(ctx, s, { x: target.pos.x, y: target.pos.y });
+    // 呼んだ守護者の印（落ち着くと去る。V3-3b §40.3）
+    if (s) { const b = structuredClone(s); b.minionOf = m.id; ctx.emit({ type: 'guardian_state', id: s.id, put: [b], seenBy: [], floor: key }); }
+    if (s && target?.pos) wakeMonster(ctx, ctx.world.entities[s.id] ?? s, { x: target.pos.x, y: target.pos.y });
     n++;
   }
   return n;

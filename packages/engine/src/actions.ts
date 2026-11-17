@@ -2,10 +2,10 @@
 // 不正なコマンドはイベントを出さず時間も消費しない（ActionError を返す）。
 import type { ActionError, Command, Entity, EquipSlot, PlayerRecord, Pos } from '@muse/shared';
 import { actionError, cheb, currentExpedition, diceMax, DIR_VEC, DIRS, EQUIP_SLOTS, stepPos, t } from '@muse/shared';
-import { endRun, grantXp, isUnaware, melee, recordHit, rollToHit, applyDamage, checkRunEnd } from './combat';
+import { endRun, grantXp, isHelpless, isUnaware, melee, recordHit, rollToHit, applyDamage, checkRunEnd } from './combat';
 import {
   abilityHandlers, abilityReadyError, abilityState, attackCostOf, choosePerk, cursedSlot, gearOf, inspectItem, isCursed, markAbilityUsed,
-  notePerk, perkHook, perkWithHook, reachLine, reachOf, resolveAbilityId, thrownAccOf,
+  notePerk, perkHook, perkWithHook, reachLine, reachOf, resolveAbilityId, thrownAccOf, thrownPierceOf,
 } from './build';
 import { armorOf, guardianCritIfUnaware, guardianIncoming, markGuardiansAway, noteTrial, restGuardians } from './guardians';
 import { boonHook } from './boons';
@@ -431,7 +431,8 @@ export function prepareThrow(ctx: Ctx, e: Entity, pr: PlayerRecord, slot: string
       let crit = false;
       if (hitEnt) {
         let o = rollToHit(ctx, me, hitEnt, (def?.throw?.acc ?? 0) + thrownAccOf(ctx, me) + (opts.accBonus ?? 0));
-        if (opts.critIfUnaware && isUnaware(hitEnt)) o = { hit: true, crit: true, roll: o.roll };
+        // 狙い撃ち: 気づいていない・眠っている・朦朧（無防備）の相手には会心（V3-3b §40.1: 突進を外した突き進む者の「1 手無防備」）
+        if (opts.critIfUnaware && (isUnaware(hitEnt) || isHelpless(ctx, hitEnt))) o = { hit: true, crit: true, roll: o.roll };
         // 眠りが深い守護者への、気づかれる前の一投は会心（V3-3）
         if (!o.crit && isUnaware(hitEnt) && hitEnt.guardian && guardianCritIfUnaware(ctx, hitEnt)) o = { hit: true, crit: true, roll: o.roll };
         if (o.hit && isUnaware(hitEnt) && hitEnt.guardian) noteTrial(ctx, hitEnt, 'unaware_hit');
@@ -487,7 +488,9 @@ export function prepareThrow(ctx: Ctx, e: Entity, pr: PlayerRecord, slot: string
       makeNoise(ctx, key, landed, 4, me);
       if (hit) {
         const dmgDice = def?.throw?.dmg ?? '1d2';
-        const base = crit ? Math.max(1, diceMax(dmgDice)) : Math.max(1, roll(ctx.rng('runtime'), dmgDice) - armorOf(ctx, hit));
+        // 急所狙い: 相手の装甲を無視する分（V3-3b §40.1）。弾く者の半減はこの後に掛かる
+        const armorLeft = Math.max(0, armorOf(ctx, hit) - thrownPierceOf(ctx, me));
+        const base = crit ? Math.max(1, diceMax(dmgDice)) : Math.max(1, roll(ctx.rng('runtime'), dmgDice) - armorLeft);
         // 守護者の受けるダメージの修正（弾く者・投擲に弱い。V3-3）
         const dmg = hit.guardian ? guardianIncoming(ctx, hit, base, 'thrown', ctx.world.entities[me.id] ?? me) : base;
         applyDamage(ctx, hit, dmg, ctx.world.entities[me.id], 'thrown');
@@ -711,6 +714,9 @@ export function freeCommand(ctx: Ctx, pr: PlayerRecord, cmd: Command): ActionErr
         ctx.emit({ type: 'actor_scheduled', id: me.id, nextActAt: me.actor!.nextActAt, turns: me.actor!.turns, seenBy: [pr.id], floor: fk });
       }
       ctx.emit({ type: 'player_stats', player: pr.id, stats: { ...pr.stats, deathCause: 'retired', endedSeq: ctx.world.seq + 1 }, seenBy: [pr.id], put: [body], floor: fk });
+    } else {
+      // キャンプで引退しても記録は「引退」（V3-3b の計測: キャンプでの引退だけ死因が空だった）
+      ctx.emit({ type: 'player_stats', player: pr.id, stats: { ...pr.stats, deathCause: 'retired', endedSeq: ctx.world.seq + 1 }, seenBy: [pr.id], floor: null });
     }
     ctx.emit({ type: 'player_state', player: pr.id, state: 'left', reason: 'retired', seenBy: 'all', floor: null });
     maybeEndExpedition(ctx);

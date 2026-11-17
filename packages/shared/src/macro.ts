@@ -106,6 +106,10 @@ export interface MacroState {
   /** fight: 投げる品のスロットと、開始時のその品の種類（尽きたら止まる） */
   fightWith?: string;
   fightKind?: string | null;
+  /** 投げる物が尽きたら拾いに行く（V3-3b §40.1。既定 true） */
+  fightRetrieve?: boolean;
+  /** 拾いに行った手の数 */
+  retrieved?: number;
   /** fight: 使える手番ごとに使う能動技（解決した ID）と、使えない指定（覚えていない・載せられない。V3-4a §25.3） */
   fightAbilities?: string[];
   fightAbilityError?: 'unknown' | 'not_allowed' | 'needs_with';
@@ -184,6 +188,36 @@ function mineCells(view: PlayerView): number[] {
   for (const e of view.entities) if (e.cat === 'item' && e.mine) cells.add(e.pos.y * f.width + e.pos.x);
   for (const r of view.memory.remembered) if (r.cat === 'item' && r.mine) cells.add(r.pos.y * f.width + r.pos.x);
   return [...cells].sort((a, b) => a - b);
+}
+
+/**
+ * fight の拾いに行く 1 歩（V3-3b §40.1）: 自分が投げた同じ種類の品のうち、追跡中の敵（逃走中を除く）の隣を通らずに届く物へ。
+ * 届く物が無ければ null
+ */
+function retrieveStep(view: PlayerView, catalog: Catalog, pos: Pos, hostiles: readonly EntityView[], kind: string): Dir | null {
+  const f = view.floor;
+  if (!f) return null;
+  const grid = buildNavGrid(view, catalog);
+  if (!grid) return null;
+  const danger = new Set<number>();
+  for (const h of hostiles) {
+    if (h.awareness !== 'hunting' || h.fleeing) continue;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const x = h.pos.x + dx, y = h.pos.y + dy;
+      if (x >= 0 && y >= 0 && x < f.width && y < f.height) danger.add(y * f.width + x);
+    }
+  }
+  const goals = new Set<number>();
+  for (const e of view.entities) if (e.cat === 'item' && e.mine && e.kind === kind) goals.add(e.pos.y * f.width + e.pos.x);
+  for (const r of view.memory.remembered) if (r.cat === 'item' && r.mine && r.kind === kind) goals.add(r.pos.y * f.width + r.pos.x);
+  const here = pos.y * f.width + pos.x;
+  const safeGoals = [...goals].filter((i) => !danger.has(i) && !grid.occupied[i] && i !== here);
+  if (!safeGoals.length) return null;
+  const passable = grid.passable.slice();
+  for (const i of danger) if (i !== here) passable[i] = 0;
+  const path = findPath({ ...grid, passable }, pos, safeGoals, 'strict');
+  if (!path || !path.length) return null;
+  return dirBetween(pos, path[0]);
 }
 
 /** 既知の「自分が投げた物」の個数 */
@@ -333,7 +367,9 @@ export function macroStart(view: PlayerView, cmd: Command, catalog: Catalog): Ma
   const rules = catalog.rules;
   const kind = cmd.type as MacroState['kind'];
   const withSlot = cmd.type === 'fight' ? cmd.with : undefined;
-  const withItem = withSlot ? view.inventory.find((i) => i.slot === withSlot) : undefined;
+  // with は品の種類でもよい（V3-3b §40.1）。種類なら所持品の先頭の同じ種類、無ければ（全部投げた）種類だけ覚える
+  const withKindArg = withSlot && withSlot.length > 1 ? (withSlot.startsWith('core:') ? withSlot : `core:${withSlot}`) : undefined;
+  const withItem = withSlot ? (withKindArg ? view.inventory.find((i) => i.kind === withKindArg) : view.inventory.find((i) => i.slot === withSlot)) : undefined;
   const mode: MacroMode = (cmd.type === 'explore' || cmd.type === 'travel' || cmd.type === 'collect') ? (cmd.mode ?? 'careful') : 'careful';
   const floorPct = kind === 'fight' ? HP_FLOOR_PCT.fight : HP_FLOOR_PCT[mode];
   const explicitFloor = 'hpFloor' in cmd ? cmd.hpFloor : undefined;
@@ -357,7 +393,7 @@ export function macroStart(view: PlayerView, cmd: Command, catalog: Catalog): Ma
       ...(cmd.lostOk ? { lostOk: true } : {}),
       ...(() => { const tg = view.entities.find((e) => e.id === cmd.target); return tg ? { targetFleeing: !!tg.fleeing } : {}; })(),
     } : {}),
-    ...(withSlot ? { fightWith: withSlot, fightKind: withItem ? (withItem.kind ?? withItem.appearanceId) : null } : {}),
+    ...(withSlot ? { fightWith: withSlot, fightKind: withItem ? (withItem.kind ?? withItem.appearanceId) : (withKindArg ?? null), fightRetrieve: cmd.type === 'fight' ? cmd.retrieve !== false : true } : {}),
     ...(cmd.type === 'fight' && cmd.abilities?.length ? (() => {
       const r = resolveFightAbilities(view, catalog, cmd.abilities, withSlot);
       return { fightAbilities: r.ids, ...(r.error ? { fightAbilityError: r.error } : {}) };
@@ -593,9 +629,15 @@ export function macroNext(state: MacroState, view: PlayerView, catalog: Catalog,
     // with の相手が隣に来た: adjacent に従う（stop: 止まる / throw: 隣でも投げる / melee: 近接に切り替える）
     const throwing = !!state.fightWith && !(d <= 1 && state.fightAdjacent === 'melee');
     if (throwing && state.fightWith) {
-      const slot = state.fightWith;
-      const it = view.inventory.find((i) => i.slot === slot);
-      if (!it || (state.fightKind !== undefined && (it.kind ?? it.appearanceId) !== state.fightKind)) return { stop: 'out_of_ammo' };
+      // 投げる品: 同じ種類の品（拾ってスロットが変わっても続ける。V3-3b §40.1）。種類が分からなければスロット
+      const it = state.fightKind ? view.inventory.find((i) => (i.kind ?? i.appearanceId) === state.fightKind) : view.inventory.find((i) => i.slot === state.fightWith);
+      if (!it) {
+        // 尽きた: 追跡中の敵の隣を通らずに届く自分の投擲物（同じ種類）を拾いに行く（踏めば拾う）
+        const step = state.fightRetrieve !== false && state.fightKind ? retrieveStep(view, catalog, pos, hostiles, state.fightKind) : null;
+        if (step) { state.steps += 1; state.retrieved = (state.retrieved ?? 0) + 1; return { command: { type: 'move', dir: step } }; }
+        return { stop: 'out_of_ammo' };
+      }
+      const slot = it.slot;
       const range = throwRangeOf(view, catalog, slot);
       if (range === null) return { stop: 'not_throwable' };
       if (d <= 1 && state.fightAdjacent !== 'throw') return { stop: 'target_adjacent' };
@@ -715,6 +757,18 @@ export function macroNext(state: MacroState, view: PlayerView, catalog: Catalog,
   if (state.steps >= state.limit) return { stop: 'step_limit' };
 
   const grid = buildNavGrid(view, catalog)!;
+  // 気づいていない・眠っている守護者の 2 マス以内は、ほかに道があれば通らない（V3-3b §40.7: flee の経路が大守護者のそばを通った）
+  if (kind === 'travel' || kind === 'collect' || kind === 'explore') {
+    const quiet = hostiles.filter((h) => h.role === 'guardian' && h.awareness !== 'hunting');
+    if (quiet.length) {
+      const hazard = grid.hazard.slice();
+      for (const h of quiet) for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+        const x = h.pos.x + dx, y = h.pos.y + dy;
+        if (x >= 0 && y >= 0 && x < grid.width && y < grid.height) hazard[y * grid.width + x] = 1;
+      }
+      grid.hazard = hazard;
+    }
+  }
   const here = pos.y * grid.width + pos.x;
   // 動かない敵の隣は罠と同じく避ける（V3-2R2 §18.5）。この呼び出しの間に一度見た敵は、見えなくなっても避け続ける
   // （見えると遠回り・見えないと近道、を繰り返して 2 マスの間を往復した。AI 評価 2026-11-17 の後の bot の計測）

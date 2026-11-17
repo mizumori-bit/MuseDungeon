@@ -38,12 +38,15 @@
   { "id": "core:perk_retrieve", "name": { "ja": "回収の手", "en": "Retriever" }, "lineage": "scout_archer",
     "desc": { "ja": "歩いたとき、自分が投げた物を隣のマスからも拾う", "en": "When you step, you also pick up your thrown items from adjacent cells" },
     "hooks": [{ "hook": "collect_adjacent" }] },
+  { "id": "core:perk_weak_spot", "name": { "ja": "急所狙い", "en": "Weak spot" }, "lineage": "scout_archer", "maxRanks": 2, "offerByLevel": 4,
+    "desc": { "ja": "投擲は相手の装甲を 2 無視する（ランク 2 で 4。弾く者の半減は今までどおり掛かる）", "en": "Your throws ignore 2 points of armor (4 at rank 2; the Deflector still halves them)" },
+    "hooks": [{ "hook": "thrown_pierce", "armor": 2 }] },
 
   { "id": "core:perk_stealth", "name": { "ja": "忍び足", "en": "Light step" }, "lineage": "scout_shadow",
     "desc": { "ja": "眠っている敵に気づかれにくい（起こしにくさ +20）", "en": "Sleeping enemies notice you less (stealth +20)" },
     "mods": { "stealthPct": 20 } },
   { "id": "core:perk_ambush", "name": { "ja": "不意打ち", "en": "Ambush" }, "lineage": "scout_shadow",
-    "desc": { "ja": "気づいていない・眠っている敵への近接は必ず会心", "en": "Melee against unaware or sleeping enemies always crits" },
+    "desc": { "ja": "気づいていない・眠っている・朦朧（無防備）の敵への近接は必ず会心", "en": "Melee against unaware, sleeping or stunned (helpless) enemies always crits" },
     "hooks": [{ "hook": "ambush" }] },
   { "id": "core:perk_slip", "name": { "ja": "身をかわす", "en": "Slip away" }, "lineage": "scout_shadow",
     "desc": { "ja": "能動技「身をかわす」を覚える", "en": "Learn the Slip ability" }, "ability": "core:slip" }

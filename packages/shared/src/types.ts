@@ -101,6 +101,8 @@ export interface Entity {
   role?: EntityRole;
   /** 倒すと遠征の戦利品に入る賞金（守護者・名前付きの強敵） */
   bounty?: number;
+  /** 呼んだ守護者（呼び集める者の手下。守護者が落ち着くと去る。V3-3b §40.3）。プレイヤーには渡さない */
+  minionOf?: EntityId;
   /** 持ち場（守護者が置かれたマス。V3-2R3b §23.2）。気づいていない間はここから guardian.leash マス以内だけを動く。プレイヤーには渡さない */
   home?: { x: number; y: number };
   /** ビルド（プレイヤー。V3-4 §4.1・§4.2） */
@@ -240,7 +242,7 @@ export interface Knowledge {
   /** 試して外れた弱点（守護者 → 弱点 ID の一覧。V3-3a §35.3） */
   guardianTried?: Record<EntityId, string[]>;
   /** 記録庫が返した節目の大守護者の記憶（深さ → 弱点・体力・最大の一撃。V3-3a §35.7） */
-  wardenIntel?: Record<string, { weakness?: string; hp?: number; maxHit?: number }>;
+  wardenIntel?: Record<string, { weakness?: string; hp?: number; maxHit?: number; armor?: number }>;
   /** 記録庫に納めた遺物の種類 */
   archive?: string[];
 }
@@ -309,7 +311,8 @@ export interface ExpeditionOffer {
   /** 帰還時の戦利品に掛かる倍率（%） */
   multiplierPct?: number;
   /** 守護者の見込み（守護者を倒す・守護者付きの遺物。V3-2R3 §20.1）。種族名は会うまで出さない。name・types（V3-3）は公開 */
-  guardian?: { rank: 1 | 2 | 3; traits: string[]; name?: Names; title?: Names; types?: string[] };
+  /** maxHit: 一撃の目安（装甲で減る前。V3-3b §40.6） */
+  guardian?: { rank: 1 | 2 | 3; traits: string[]; name?: Names; title?: Names; types?: string[]; maxHit?: number };
   /** 守護者の種族（候補を作った時点で決める。プレイヤーには渡さない） */
   guardianKind?: string;
   /** 守護者の弱点（候補を作った時点で決める。プレイヤーには渡さない。V3-3） */

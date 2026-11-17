@@ -50,7 +50,7 @@ export function monsterSpeedLabel(speed: ObsMonster['speed']): string {
 
 const TRAIT_LABEL: Record<MonsterTrait, [string, string]> = {
   pack: ['群れる', 'pack'], ranged: ['飛び道具', 'ranged'], stationary: ['動かない', 'stationary'], armored: ['重装', 'armored'],
-  rusting: ['錆びさせる', 'rusts armor'], pierce: ['装甲を抜く', 'pierces armor'],
+  rusting: ['錆びさせる', 'rusts armor'], pierce: ['装甲を抜く', 'pierces armor'], evasive: ['回避が高い', 'evasive'],
 };
 
 /** 見れば分かる特徴（群れる・飛び道具・動かない・重装） */

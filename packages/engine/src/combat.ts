@@ -28,6 +28,11 @@ export function isUnaware(e: Entity): boolean {
   return isSleeping(e) || e.actor?.ai?.state === 'unaware';
 }
 
+/** 無防備（朦朧・眠りなど、行動できない状態異常）。狙い撃ちと不意打ちの会心の条件（V3-3b §40.1） */
+export function isHelpless(ctx: Ctx, e: Entity): boolean {
+  return (e.statuses ?? []).some((s) => ctx.content.statuses[s.id]?.handler === 'incapacitate');
+}
+
 /** 構え（盾の構え）の装甲の上乗せ。当たったら構えは解ける */
 function bracedArmor(e: Entity): number {
   return (e.statuses ?? []).find((s) => s.id === 'core:braced')?.power ?? 0;
@@ -122,7 +127,8 @@ export function melee(ctx: Ctx, attacker: Entity, target: Entity, opts: MeleeOpt
   const tpos = { x: target.pos!.x, y: target.pos!.y };
   const unaware = isUnaware(target);
   let o = rollToHit(ctx, attacker, target, (opts.accBonus ?? 0) + meleeAccOf(ctx, attacker));
-  const ambush = attacker.player && unaware && perkHook(ctx, attacker, 'ambush');
+  // 不意打ち: 気づいていない・眠っている・朦朧（無防備）の相手（V3-3b §40.1）
+  const ambush = attacker.player && (unaware || isHelpless(ctx, target)) && perkHook(ctx, attacker, 'ambush');
   if (ambush) o = { hit: true, crit: true, roll: o.roll };
   // 守護者（V3-3）: 視界の外からの一撃（潜む者）・眠りが深い守護者への気づかれる前の一撃は会心
   if (opts.forceCrit) o = { hit: true, crit: true, roll: o.roll };

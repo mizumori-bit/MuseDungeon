@@ -39,10 +39,10 @@
   },
   {
     "id": "core:imp", "size": "small", "glyph": "i", "name": { "ja": "小悪魔", "en": "imp" }, "tags": ["demon", "ruins", "cave"],
-    "depth": { "min": 3, "peak": 6, "max": 14 }, "rarity": 2,
-    "stats": { "hp": "3d4+2", "acc": 4, "eva": 6, "might": 1, "armor": 0, "sight": 8 },
+    "depth": { "min": 4, "peak": 6, "max": 10 }, "rarity": 2,
+    "stats": { "hp": "3d4+2", "acc": 3, "eva": 5, "might": 1, "armor": 0, "sight": 8 },
     "speed": 130, "attack": { "dice": "1d5" },
-    "ai": { "archetype": "skittish", "fleeBelowHpPct": 50 }, "xp": 7, "abilities": ["fast", "flees"]
+    "ai": { "archetype": "skittish", "fleeBelowHpPct": 50 }, "xp": 9, "abilities": ["fast", "flees"]
   },
   {
     "id": "core:orc_brute", "size": "medium", "glyph": "O", "name": { "ja": "オークの荒くれ", "en": "orc brute" }, "tags": ["humanoid", "halls"],

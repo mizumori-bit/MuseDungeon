@@ -4,7 +4,7 @@ import type {
   ActionError, Entity, Expedition, ExpeditionEndReason, FloorPos, Pos, ExpeditionHaul, ExpeditionOffer, ExpeditionResult, HaulParts, Objective,
   ObjectiveProgress, ObjectiveType, OfferSlot, PlayerId, PlayerRecord, GuardianInfo, Names,
 } from '@muse/shared';
-import { campDepthOf, cheb, currentExpedition, deepestGenerated, guardianDisplayName, haulTotal, isPursuing, killPoints, offerPoints, overreachPoints, payoutOf, Rng, actionError, t } from '@muse/shared';
+import { addDiceBonus, campDepthOf, cheb, currentExpedition, deepestGenerated, diceMax, floorDiv, guardianDisplayName, haulTotal, isPursuing, killPoints, offerPoints, overreachPoints, payoutOf, Rng, actionError, t } from '@muse/shared';
 import { buildSummary, grantXp } from './combat';
 import type { Ctx } from './ctx';
 import { findFreeCell } from './floors';
@@ -16,7 +16,7 @@ import { grantBoon, ownedBoons, pickRelic } from './boons';
 import { livingWarden, nextMilestone, wardenPreview } from './warden';
 import { num, pickLore, tellStory } from './story';
 import { isMilestoneDepth } from './gen/generate';
-import { spawnFromSpec } from './spawn';
+import { spawnFromSpec, sumAffixMods } from './spawn';
 import { recomputeStats } from './stats';
 
 const OFFER_TYPES: ObjectiveType[] = ['reach_depth', 'slay_guardian', 'retrieve_relic'];
@@ -94,6 +94,16 @@ export function displayName(g: { name: Names; title?: Names }): Names {
   return { ja: guardianDisplayName('ja', g), en: guardianDisplayName('en', g) };
 }
 
+/** 守護者の一撃の目安（装甲で減る前。生成と同じ計算: 種族のダイス + 守護者の接辞 + 深層強化。ほかの接辞は含まない。V3-3b §40.6） */
+export function guardianMaxHit(ctx: Ctx, depth: number, kind: string): number {
+  const def = ctx.content.monsters[kind];
+  if (!def) return 0;
+  const tier = depth > ctx.content.deepestDefined ? floorDiv(depth - ctx.content.deepestDefined, 5) + 1 : 0;
+  const guardAffix = ctx.content.lists.affixes.find((a) => a.target === 'guardian');
+  const mods = sumAffixMods(ctx.content, guardAffix ? [guardAffix.id] : []);
+  return diceMax(addDiceBonus(def.attack.dice, mods.dmgBonus)) + def.stats.might + tier + mods.might;
+}
+
 /** 守護者の見込みに出す、見れば分かる特徴（速さ・射撃・大柄・重装）。種族名は出さない */
 export function guardianTraits(ctx: Ctx, kind: string): string[] {
   const def = ctx.content.monsters[kind];
@@ -104,6 +114,7 @@ export function guardianTraits(ctx: Ctx, kind: string): string[] {
   if (def.ranged || def.tags.includes('ranged')) out.push('ranged');
   if (def.size === 'large') out.push('large');
   if (def.stats.armor >= 3) out.push('armored');
+  if (def.stats.eva >= 5) out.push('evasive');
   // 錆びさせる・装甲を抜く（V3-5a §35.10。見れば分かる特徴）
   if (def.tags.includes('rusting')) out.push('rusting');
   if (def.tags.includes('pierce') || def.ranged?.pierce) out.push('pierce');
@@ -167,7 +178,13 @@ export function makeOffers(ctx: Ctx, no: number): ExpeditionOffer[] {
     let points = type === 'slay_warden' ? offerPoints(pr, 'ambitious', 'slay_guardian', false, target) : offerPoints(pr, slot, type, relicGuarded, target);
     // 同じ階の達成の繰り返しは基礎点を repeatPct % ずつ（2 回目 50%、3 回目 25%）
     const done = achievedAt(target);
-    for (let k = 0; k < done; k++) points = Math.trunc((points * (b.repeatPct ?? 100)) / 100);
+    // 下限は repeatMinPct %（V3-3b §40.6: 2112 → 1056 → 528 → 264 と細り、選ぶ理由が無くなった）
+    if (done > 0) {
+      let pct = 100;
+      for (let k = 0; k < done; k++) pct = Math.trunc((pct * (b.repeatPct ?? 100)) / 100);
+      pct = Math.max(pct, b.repeatMinPct ?? 0);
+      points = Math.trunc((points * pct) / 100);
+    }
     const offer: ExpeditionOffer = { index: i + 1, objective: { type, targetDepth: target }, points, relicGuarded, slot, traits, multiplierPct };
     if (done > 0) offer.repeatNo = done + 1;
     // 目標が次の節目より深い: 途中で大守護者を倒す必要がある
@@ -191,7 +208,7 @@ export function makeOffers(ctx: Ctx, no: number): ExpeditionOffer[] {
         // 型・名前・弱点（V3-3 §3.1・§28.9）: 型と名前は候補に出す。弱点と種族は伏せる
         const gi = rollGuardianInfo(ctx.content, ctx.world.secret.seed, no, i, rank);
         offer.guardianKind = kind;
-        offer.guardian = { rank, traits: guardianTraits(ctx, kind), name: gi.name, ...(gi.title ? { title: gi.title } : {}), types: gi.types };
+        offer.guardian = { rank, traits: guardianTraits(ctx, kind), name: gi.name, ...(gi.title ? { title: gi.title } : {}), types: gi.types, maxHit: guardianMaxHit(ctx, target, kind) };
         offer.guardianWeakness = gi.weakness;
       }
     }
@@ -518,7 +535,14 @@ export function doExtract(ctx: Ctx, e: Entity, pr: PlayerRecord, completed: bool
   const cur = ctx.world.entities[e.id];
   // 綱で戻った次の遠征は、この遠征を始めた地点から（綱を使った地点ではない。V3-2R3a §22.1）
   const startPos = lifeline ? x.start[pr.id]?.pos : undefined;
-  const extractPos = startPos && ctx.world.floors[startPos.floor] ? { ...startPos } : { floor: key, x: cur.pos!.x, y: cur.pos!.y };
+  let extractPos = startPos && ctx.world.floors[startPos.floor] ? { ...startPos } : { floor: key, x: cur.pos!.x, y: cur.pos!.y };
+  // 封じられた下り階段（大守護者の広間）の上なら、次の遠征はその階の上り階段から（V3-3b §40.6: 全快した大守護者の広間から始まった）
+  {
+    const ef = ctx.world.floors[extractPos.floor];
+    if (ef?.stairs.up && ef.stairs.down.some((s) => s.x === extractPos.x && s.y === extractPos.y) && livingWarden(ctx, extractPos.floor)) {
+      extractPos = { floor: extractPos.floor, x: ef.stairs.up.x, y: ef.stairs.up.y };
+    }
+  }
   const body = structuredClone(cur);
   delete body.pos;
   if (treasureIds.length) body.inv = { ...body.inv!, items: body.inv!.items.filter((id) => !treasureIds.includes(id)) };
@@ -543,7 +567,7 @@ function recallWarden(ctx: Ctx, pr: PlayerRecord, relic: string, floor: string):
   }
   if (known.hp === undefined) {
     const pv = wardenPreview(ctx, ms.depth);
-    if (pv) { ctx.emit({ ...base, memory: 'vitals', hp: pv.hp, maxHit: pv.maxHit }); return; }
+    if (pv) { ctx.emit({ ...base, memory: 'vitals', hp: pv.hp, maxHit: pv.maxHit, armor: pv.armor }); return; }
   }
   ctx.emit({ ...base, memory: 'none' });
 }
@@ -726,7 +750,13 @@ export function startExpedition(ctx: Ctx, pr: PlayerRecord, offer: number | 'end
     settleFloor(ctx, at, settleRng);
   }
   // キャンプで休んでいる間に、すべての階の守護者も全快して落ち着く（V3-3a §35.1）
-  for (const e of Object.values(w.entities).filter((x) => x.guardian && x.pos && (x.stats?.hp ?? 0) > 0).sort((a, b) => a.sid - b.sid)) settleGuardian(ctx, e);
+  for (const e of Object.values(w.entities).filter((x) => x.guardian && x.pos && (x.stats?.hp ?? 0) > 0).sort((a, b) => a.sid - b.sid)) {
+    const r = settleGuardian(ctx, e);
+    if (!r.healed && !r.dispersed) continue;
+    // その階を知っている参加者に、戻ったときの変化として知らせる（V3-3b §40.3: 「ミセの手下は散っていた」）
+    const seen = participants.filter((pid) => !!w.players[pid]?.knowledge.floors[e.pos!.floor] && w.players[pid].knowledge.met.includes(e.id));
+    for (const pid of seen) ctx.emit({ type: 'guardian_rested', id: e.id, guardianName: { ...e.guardian!.name }, full: true, player: pid, ...(r.dispersed ? { dispersed: r.dispersed } : {}), seenBy: [pid], floor: e.pos!.floor });
+  }
   for (const pid of participants) if (w.players[pid].state === 'at_camp') returnFromCamp(ctx, pid);
   // キャンプが帰還の綱を 1 本持たせる
   for (const pid of participants) issueLifeline(ctx, pid);

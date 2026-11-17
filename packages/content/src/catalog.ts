@@ -63,8 +63,8 @@ export function buildCatalog(c: Content): Catalog {
   return {
     contentVersion: c.version,
     terrain: Object.fromEntries(c.terrain.map((t) => [t.id, { name: t.name, passable: t.passable, opaque: t.opaque, layer: t.layer, door: t.door, stairs: t.stairs, tags: t.tags }])),
-    // size・armored は見れば分かる性質（V3-2R3 §20.4）。armored は素の装甲が 3 以上（値そのものは出さない）
-    monsters: Object.fromEntries(c.lists.monsters.map((m) => [m.id, { name: m.name, tags: m.tags, glyph: m.glyph, size: m.size, armored: m.stats.armor >= 3 }])),
+    // size・armored・evasive は見れば分かる性質（V3-2R3 §20.4・V3-3b §40.2）。armored は素の装甲が 3 以上、evasive は素の回避が 5 以上（値そのものは出さない）
+    monsters: Object.fromEntries(c.lists.monsters.map((m) => [m.id, { name: m.name, tags: m.tags, glyph: m.glyph, size: m.size, armored: m.stats.armor >= 3, evasive: m.stats.eva >= 5 }])),
     classes: Object.fromEntries(c.lists.classes.map((k) => [k.id, {
       name: k.name, desc: k.desc,
       // 自キャラの初期値と成長は公開情報（キー名 hp は使わない: 能力値を出さないカタログの検査に合わせる）
@@ -92,6 +92,8 @@ export function buildCatalog(c: Content): Catalog {
       name: pk.name, desc: pk.desc, lineage: pk.lineage, maxRanks: pk.maxRanks, requires: [...pk.requires],
       mods: { maxHp: pk.mods.maxHp ?? 0, acc: pk.mods.acc ?? 0, eva: pk.mods.eva ?? 0, might: pk.mods.might ?? 0, armor: pk.mods.armor ?? 0, capacity: pk.mods.capacity ?? 0, stealthPct: pk.mods.stealthPct ?? 0 },
       ...(pk.ability ? { ability: pk.ability } : {}), hooks: pk.hooks.map((h) => h.hook),
+      // 投擲で無視する装甲（急所狙い。V3-3b §40.1）
+      ...(pk.hooks.some((h) => h.hook === 'thrown_pierce') ? { thrownPierce: pk.hooks.filter((h) => h.hook === 'thrown_pierce').reduce((a, h) => a + (Number((h as Record<string, unknown>).armor) || 0), 0) } : {}),
     }])),
     abilities: Object.fromEntries(c.lists.abilities.map((ab) => [ab.id, {
       name: ab.name, desc: ab.desc, target: ab.target, cooldown: ab.cooldown, handler: ab.handler, ...(ab.perExpedition ? { perExpedition: ab.perExpedition } : {}),
@@ -144,7 +146,7 @@ export function buildCatalog(c: Content): Catalog {
       traits: Object.fromEntries(c.lists.expeditionTraits.map((t) => [t.id, { name: t.name, desc: t.desc, multiplierPct: t.multiplierPct, danger: t.danger }])),
       expedition: {
         firstTargetDepth: { ...c.balance.expedition.firstTargetDepth },
-        typePct: { ...c.balance.expedition.typePct }, depthPct: { ...c.balance.expedition.depthPct }, repeatPct: c.balance.expedition.repeatPct,
+        typePct: { ...c.balance.expedition.typePct }, depthPct: { ...c.balance.expedition.depthPct }, repeatPct: c.balance.expedition.repeatPct, repeatMinPct: c.balance.expedition.repeatMinPct,
       },
       hpBands: [HP_BANDS[0], HP_BANDS[1], HP_BANDS[2]],
     },

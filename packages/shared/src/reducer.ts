@@ -266,7 +266,7 @@ export function applyEvent(world: World, ev: GameEvent): void {
         const key = String(ev.depth);
         const cur = { ...(p.knowledge.wardenIntel?.[key] ?? {}) };
         if (ev.memory === 'weakness' && ev.weakness) cur.weakness = ev.weakness;
-        if (ev.memory === 'vitals') { cur.hp = ev.hp; cur.maxHit = ev.maxHit; }
+        if (ev.memory === 'vitals') { cur.hp = ev.hp; cur.maxHit = ev.maxHit; if (ev.armor !== undefined) cur.armor = ev.armor; }
         p.knowledge.wardenIntel = { ...(p.knowledge.wardenIntel ?? {}), [key]: cur };
       }
       break;

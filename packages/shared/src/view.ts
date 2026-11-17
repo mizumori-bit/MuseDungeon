@@ -173,7 +173,7 @@ export interface PlayerView {
   identified: string[];
   monsterMemory: Record<string, MonsterMemory>;
   /** 記録庫が返した節目の大守護者の記憶と、納めた遺物（V3-3a §35.7） */
-  wardenIntel: Record<string, { weakness?: string; hp?: number; maxHit?: number }>;
+  wardenIntel: Record<string, { weakness?: string; hp?: number; maxHit?: number; armor?: number }>;
   archive: string[];
   notes: string[];
   party: PartyMemberView[];

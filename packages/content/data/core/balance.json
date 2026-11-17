@@ -35,6 +35,7 @@
       "firstTargetDepth": { "safe": 2, "standard": 3, "ambitious": 3 },
       "typePct": { "reach_depth": 100, "slay_guardian": 110, "retrieve_relic": 110, "retrieve_relic_guarded": 125 },
       "repeatPct": 50,
+      "repeatMinPct": 25,
       "depthPct": { "base": 100, "perDepth": 5 },
       "relicGuardianPct": 50,
       "afterObjective": { "wanderIntervalPct": 50 },

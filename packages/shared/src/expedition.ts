@@ -108,7 +108,7 @@ export function traitsText(L: Locale, rules: Pick<CatalogRules, 'traits'> | unde
   }).join(' / ');
 }
 
-const GUARD_TRAIT_JA: Record<string, string> = { fast: '速い', slow: '遅い', ranged: '射撃する', large: '大柄', armored: '重装', rusting: '錆びさせる', pierce: '装甲を抜く' };
+const GUARD_TRAIT_JA: Record<string, string> = { fast: '速い', slow: '遅い', ranged: '射撃する', large: '大柄', armored: '重装', rusting: '錆びさせる', pierce: '装甲を抜く', evasive: '回避が高い' };
 
 /** 守護者の見込みの文（「守護者: 格 2・射撃する・速い」。種族名は出さない。V3-2R3 §20.1） */
 /** 守護者の呼び名（称号＋名前。V3-3）: 「呼び集める者ヴォルン」/ "Volun the Summoner" */
@@ -117,7 +117,7 @@ export function guardianDisplayName(L: Locale, g: { name: Names; title?: Names }
   return `${g.title?.ja ?? ''}${g.name.ja}`;
 }
 
-export function guardianForecastText(L: Locale, g: { rank: number; traits: string[]; name?: Names; title?: Names; types?: string[] } | undefined): string {
+export function guardianForecastText(L: Locale, g: { rank: number; traits: string[]; name?: Names; title?: Names; types?: string[]; maxHit?: number } | undefined): string {
   if (!g) return '';
   // 名前と称号（型）は公開。種族は会うまで出さない（V3-3）
   const who = g.name ? t(L, `「${guardianDisplayName(L, { name: g.name, title: g.title })}」`, ` "${guardianDisplayName(L, { name: g.name, title: g.title })}"`) : '';
@@ -126,7 +126,9 @@ export function guardianForecastText(L: Locale, g: { rank: number; traits: strin
   // 型の無い守護者（格 1）は「型なし」と書く（見落としと区別できるように）
   const noType = g.name && g.types && !g.types.length ? [t(L, '型なし', 'no type')] : [];
   const tr = [...noType, ...g.traits.map((x) => (L === 'en' ? x : GUARD_TRAIT_JA[x] ?? x)), ...speed];
-  return t(L, `守護者${who}: 格 ${g.rank}・${tr.join('・')}`, `guardian${who}: rank ${g.rank}, ${tr.join(', ')}`);
+  // 一撃の目安（V3-3b §40.6。装甲で減る前）
+  const hit = g.maxHit ? [t(L, `一撃は最大 ${g.maxHit} まで（装甲で減る前）`, `hits up to ${g.maxHit} (before armor)`)] : [];
+  return t(L, `守護者${who}: 格 ${g.rank}・${[...tr, ...hit].join('・')}`, `guardian${who}: rank ${g.rank}, ${[...tr, ...hit].join(', ')}`);
 }
 
 /** 遺物の文（「遺物「息吹の欠片」→ 加護「息吹」: 自然回復の間隔 −2」。V3-3 §3.3） */

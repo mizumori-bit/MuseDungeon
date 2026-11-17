@@ -413,6 +413,15 @@ V3-2R で足した項目（同じく後方互換。会心と経験値のルー�
 - `player_state.reason: 'joined'`（キャンプから始まる参加）。参加コマンドの `atCamp`
 - プレイヤー向けの射影で、見えていた個体が視界の外へ動いた `entity_moved` に `dirOut`（向きだけ。行き先は伏せたまま）
 
+V3-3b で足した項目（見直し 6。後方互換。規則が変わったので `engineVersion` は 0.16.0、`eventVersion` は 12。DESIGN.md §27）:
+
+- コマンド: `fight.with` は品の種類でもよい（`throwing_knife`・`core:javelin`。手番ごとに同じ種類の品のスロットを引き直す）。`fight.retrieve`（既定 true。投げる物が尽きたら、追跡中の敵の隣を通らずに届く自分の投擲物を拾いに行く）
+- コンテンツ: 特技 `core:perk_weak_spot`（急所狙い: フック `thrown_pierce`、ランク 2 まで）と特技の `offerByLevel`。戦利品の項目の `depthMin`。弱点 `core:weak_sleep` の `params.stealthPct`。`balance.expedition.repeatMinPct`。公開カタログ: `perks[id].thrownPierce`・`monsters[id].evasive`・`rules.expedition.repeatMinPct`
+- 観測: `visible.monsters[].traits` に `evasive`（素の回避 5 以上）。`camp.milestone.memory.armor`。候補の `guardian.maxHit`（一撃の目安。装甲で減る前）。次の節目の文に、記録庫が装甲を返していれば「いまの持ち物で 1 回に通る目安」
+- イベント: `archive_recalled.armor`・`guardian_rested.dispersed`（去った手下の数。遠征の開始で落ち着いたときも、その階を知っている参加者に出す）
+- World State: `Entity.minionOf`（呼んだ守護者。プレイヤーには渡さない）。`GuardianInfo.awaySince` は「休み始め」（階を離れた・追跡をやめた）
+- 規則: 守護者は追っていない間も回復する（見えたとき・追跡を再開したとき・階に戻ったときに一度に）。落ち着くと呼んだ手下は去り、眠りが深い守護者は眠りに戻る（起こしにくさ +30）。狙い撃ちと不意打ちは朦朧（行動不能の状態異常）の相手にも会心。封じられた下り階段で終えた遠征は、次をその階の上り階段から始める。valid_actions は、投擲の適性が負の職業に投擲の fight を出さず、使い切った能動技を出さず、突進の直線の上では外れる向きの move に印を付ける。移動マクロの経路は、気づいていない守護者の 2 マス以内をできるだけ避ける
+
 V3-5a の後の AI 評価の修正で足した項目（後方互換。`engineVersion` は 0.15.1、`eventVersion` は 11。DESIGN.md §26.1）:
 
 - イベント: `status_expired.targetAffixes`・`ability_used.targetAffixes`（守護者の印を文に出す）

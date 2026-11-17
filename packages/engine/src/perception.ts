@@ -5,6 +5,7 @@ import type { Ctx } from './ctx';
 import { computeFov, hasLos, inCircle, line } from './geom';
 import { firstStealthPerk, gearOf, noiseRingOf, notePerk, perkStealth, stealthOf } from './build';
 import { boonHook } from './boons';
+import { deepSleepStealth, restGuardian } from './guardians';
 
 /**
  * 投げ物・射撃の経路（始点を含まず終点を含む）。from→to の直線か、to→from の直線を逆にたどったもののうち、
@@ -172,6 +173,12 @@ export function updateKnowledge(ctx: Ctx, key: FloorKey): void {
         mm.abilities.push(...visibleAbilities(ctx, m));
       });
     }
+    // 休んでいた守護者が見えた: 過ぎた手番の分だけ回復する（V3-3b §40.5。見えたときにまとめて）
+    if (me?.pos) for (const g of ents) {
+      if (!g.guardian?.awaySince || !g.pos || (g.stats?.hp ?? 0) <= 0) continue;
+      if (!fovSet.has(g.pos.y * f.width + g.pos.x)) continue;
+      restGuardian(ctx, g, ctx.world.entities[pr.entityId] ?? me);
+    }
   }
 }
 
@@ -313,8 +320,8 @@ export function wakeChecks(ctx: Ctx, key: FloorKey): void {
       const pe = ctx.world.entities[pr.entityId];
       if (!pe.pos || !inCircle(m.pos, pe.pos, m.stats!.sight)) continue;
       if (!monsterSees(ctx, m, pe)) continue;
-      // 起こしにくさ = 職業 + 特技（忍び足）+ 装備。重い鎧は起きる確率を足す（V3-4）
-      const stealth = stealthOf(ctx, pr);
+      // 起こしにくさ = 職業 + 特技（忍び足）+ 装備。重い鎧は起きる確率を足す（V3-4）。眠りが深い守護者は起きにくい（V3-3b §40.4）
+      const stealth = Math.min(100, stealthOf(ctx, pr) + (m.guardian ? deepSleepStealth(ctx, m) : 0));
       // 加護（鎮め。V3-3 §3.3）: 起きる確率に pct % を掛ける（最小 1）
       const calm = boonHook(ctx, pe, 'soothe');
       const wakePct = (s: number) => {

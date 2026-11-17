@@ -10,7 +10,7 @@ import { isOpaqueFn, makeNoise, monsterSees, shotLine, updateMemory, wakeMonster
 import { Registry } from './registry';
 import { notePerk, perkHook, perkWithHook } from './build';
 import { addStatus } from './statuses';
-import { guardianCostPct, guardianTurn } from './guardians';
+import { guardianCostPct, guardianTurn, noteGuardianCalm, restGuardian } from './guardians';
 
 export interface AiInput { target: Entity | null; ai: AiState; def: MonsterDef }
 /** 1 手番の行動を行い、行動コスト（標準 100）を返す */
@@ -234,6 +234,13 @@ export function monsterTurn(ctx: Ctx, m: Entity): number {
       break;
     }
   }
+  // 休んでいた守護者が相手を見つけた: 過ぎた手番の分だけ回復してから動く（V3-3b §40.5）
+  if (target && m.guardian?.awaySince) {
+    restGuardian(ctx, m, target);
+    const back = ctx.world.entities[m.id];
+    if (!back?.actor?.ai) return 100;
+    if (back.actor.ai.state === 'asleep' || back.actor.dormant) return 100;
+  }
   const next: AiState = { ...ai, targetPos: ai.targetPos ? { ...ai.targetPos } : null };
   if (target) {
     next.state = 'hunting';
@@ -256,6 +263,11 @@ export function monsterTurn(ctx: Ctx, m: Entity): number {
       next.state = 'unaware';
       next.targetPos = null;
       next.lostTurns = 0;
+      // 守護者は、追跡をやめたこの手番から休み始める（V3-3b §40.5）
+      if (m.guardian) {
+        const pe = ctx.playersOn(key).map((pr) => ctx.world.entities[pr.entityId]).find((e) => !!e?.pos);
+        noteGuardianCalm(ctx, m, pe);
+      }
     }
   } else if (ai.state === 'asleep') {
     next.state = 'unaware';

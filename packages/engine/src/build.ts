@@ -194,7 +194,22 @@ export function rollPerkOptions(ctx: Ctx, pr: PlayerRecord, level: number, owned
     });
     if (missing) out[out.length - 1] = missing;
   }
+  // offerByLevel: このレベルまでに一度も候補に出ていない特技（その職業の系統）は、このレベルの候補に入れる（V3-3b §40.1: 斥候の急所狙いは Lv4 までに）
+  for (const id of cands) {
+    const pk = ctx.content.perks[id];
+    if (!pk?.offerByLevel || pk.offerByLevel !== level || !classLineages.has(pk.lineage) || offered.includes(id) || out.includes(id)) continue;
+    // 入れ替えるのは、同じ規則で入れた枠でない最初の枠（末尾から）
+    const slot = [...out.keys()].reverse().find((i) => !ctx.content.perks[out[i]]?.offerByLevel);
+    if (slot !== undefined) out[slot] = id;
+  }
   return out;
+}
+
+/** 投擲で無視する装甲（急所狙いのランクの合計。V3-3b §40.1） */
+export function thrownPierceOf(ctx: Ctx, e: Entity | null | undefined): number {
+  let n = 0;
+  for (const id of e?.build?.perks ?? []) for (const h of ctx.content.perks[id]?.hooks ?? []) if (h.hook === 'thrown_pierce') n += Number((h as Record<string, unknown>).armor) || 0;
+  return n;
 }
 
 /** レベルアップ: 特技の候補を足す（前の候補を選んでいなければ、引くのは選んだ後） */

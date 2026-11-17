@@ -98,6 +98,16 @@ export function diceMax(s: string): number {
   return d.n * d.sides + d.bonus;
 }
 
+export function diceMin(s: string): number {
+  const d = parseDice(s);
+  return d.n + d.bonus;
+}
+
+/** 装甲に対して 1 回に通るダメージの範囲（engine のダメージの式と同じ: ダイス + 上乗せ − 装甲、最低 1。会心は除く。V3-3b §40.1） */
+export function damageRangeVs(dice: string, bonus: number, armor: number): { min: number; max: number } {
+  return { min: Math.max(1, diceMin(dice) + bonus - armor), max: Math.max(1, diceMax(dice) + bonus - armor) };
+}
+
 /** ダイス表記の加算（ボーナスのみ加える） */
 export function addDiceBonus(s: string, bonus: number): string {
   const d = parseDice(s);

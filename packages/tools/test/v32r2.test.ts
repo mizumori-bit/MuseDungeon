@@ -363,7 +363,7 @@ describe('V3-2R2 calls (§18.5)', () => {
     const knives = o.self.attack.throws?.[0];
     expect(knives).toBeDefined();
     if (!o.visible.monsters.some((m) => m.id === 'e_r2fb01' && m.dist > 1)) return;
-    expect(o.valid_actions.some((a) => a.startsWith('fight ') && a.includes(`with:${knives!.slot}`))).toBe(true);
+    expect(o.valid_actions.some((a) => a.startsWith("fight ") && (a.includes(`with:${knives!.slot}`) || a.includes("with:throwing_knife")))).toBe(true);
     const s0 = t.world.seq;
     const r = await t.act({ type: 'fight', target: 'e_r2fb01', with: knives!.slot, hpFloor: 0 });
     expect(r.ok).toBe(true);

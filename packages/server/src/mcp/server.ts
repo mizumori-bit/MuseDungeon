@@ -391,14 +391,15 @@ export function createMcpServer(ctx: McpContext): McpServer {
     inputSchema: { ...actionCommon, what: z.enum(['thrown', 'items']).optional(), ...moveArgs },
   }, async (a) => act('collect', a, { type: 'collect', what: a.what, mode: a.mode, hpFloor: a.hp_floor }));
   server.registerTool('fight', {
-    title: '戦う', description: 'マクロ: その相手と決着を付ける。with なしは近接（追跡中の相手が隣に来るまで待つ。最大 10 手番）、with にスロットを渡すとその品を投げて戦う（射程と射線が通るまで待つ）。相手が倒れた・離れた・逃げて見えなくなった、（with）隣に来た・品が尽きた、HP が hp_floor（既定 50%）を下回った、被弾の記録の無い種族の追跡中の敵が現れた、待つ間に別の敵に撃たれた、状態異常を受けたら止まる（記録のある種族が新しく見えても止まらない）。物陰に入った相手は数手番待つ。眠っている・気付いていない相手は待たない。until: clear なら、標的を倒した後も届く追跡中の敵（隣の敵、いなければ最も近い敵）へ続ける。adjacent は with の相手が隣に来たとき（stop: 止まる・既定 / throw: 投げ続ける / melee: 近接に切り替える）。abilities に能動技（強打・なぎ払い・狙い撃ち）を並べると、使える手番ごとに使う（強打は標的が隣、なぎ払いは起きている敵が隣に 2 体以上、狙い撃ちは with の品で射程と射線が通るとき。それ以外の手番は通常の攻撃）。結果に与えた・受けた攻撃の回数と合計、使った能動技の回数。',
+    title: '戦う', description: 'マクロ: その相手と決着を付ける。with なしは近接（追跡中の相手が隣に来るまで待つ。最大 10 手番）、with にスロットか品の種類を渡すとその品を投げて戦う（射程と射線が通るまで待つ。品が尽きたら、追跡中の敵の隣を通らずに届く自分の投擲物を拾いに行って続ける。retrieve: false で切れる）。相手が倒れた・離れた・逃げて見えなくなった、（with）隣に来た・品が尽きた、HP が hp_floor（既定 50%）を下回った、被弾の記録の無い種族の追跡中の敵が現れた、待つ間に別の敵に撃たれた、状態異常を受けたら止まる（記録のある種族が新しく見えても止まらない）。物陰に入った相手は数手番待つ。眠っている・気付いていない相手は待たない。until: clear なら、標的を倒した後も届く追跡中の敵（隣の敵、いなければ最も近い敵）へ続ける。adjacent は with の相手が隣に来たとき（stop: 止まる・既定 / throw: 投げ続ける / melee: 近接に切り替える）。abilities に能動技（強打・なぎ払い・狙い撃ち）を並べると、使える手番ごとに使う（強打は標的が隣、なぎ払いは起きている敵が隣に 2 体以上、狙い撃ちは with の品で射程と射線が通るとき。それ以外の手番は通常の攻撃）。結果に与えた・受けた攻撃の回数と合計、使った能動技の回数。',
     inputSchema: {
-      ...actionCommon, target: z.string().regex(/^e_[0-9a-z]{6}$/), with: z.string().regex(/^[a-z]$/).optional().describe('投げて戦う品の所持品スロット（self.attack.throws）'), hp_floor: z.number().int().min(0).optional(),
+      ...actionCommon, target: z.string().regex(/^e_[0-9a-z]{6}$/), with: z.string().regex(/^([a-z]|(core:)?[a-z][a-z0-9_]+)$/).optional().describe('投げて戦う品の所持品スロット（self.attack.throws）か品の種類（throwing_knife など。拾ってスロットが変わっても同じ種類を投げる）'), hp_floor: z.number().int().min(0).optional(),
+      retrieve: z.boolean().optional().describe('with の品が尽きたら、追跡中の敵の隣を通らずに届く自分の投擲物を拾いに行く（既定 true）'),
       until: z.enum(['target', 'clear']).optional().describe('clear: 標的を倒した後も、届く追跡中の敵へ続ける（既定 target: 標的 1 体）'),
       adjacent: z.enum(['throw', 'melee', 'stop']).optional().describe('with の相手が隣に来たとき（既定 stop）'),
       abilities: z.array(z.string().min(1)).max(4).optional().describe('使える手番ごとに使う能動技（bash・cleave・aimed_throw。aimed_throw は with と一緒に。second_wind・slip は載せられない）'),
     },
-  }, async (a) => act('fight', a, { type: 'fight', target: a.target, ...(a.with ? { with: a.with } : {}), hpFloor: a.hp_floor, ...(a.abilities?.length ? { abilities: a.abilities } : {}), ...(a.until ? { until: a.until } : {}), ...(a.adjacent ? { adjacent: a.adjacent } : {}) }));
+  }, async (a) => act('fight', a, { type: 'fight', target: a.target, ...(a.with ? { with: a.with } : {}), hpFloor: a.hp_floor, ...(a.abilities?.length ? { abilities: a.abilities } : {}), ...(a.until ? { until: a.until } : {}), ...(a.adjacent ? { adjacent: a.adjacent } : {}), ...(a.retrieve === false ? { retrieve: false } : {}) }));
   server.registerTool('attack', {
     title: '攻撃', description: '近接攻撃。隣の敵か、長柄の武器（槍）なら縦・横・斜めの直線で 2 マス先の敵（間のマスが通れて誰もいないこと）。隣の敵なら move でも攻撃できる。',
     inputSchema: { ...actionCommon, target: z.string().regex(/^e_[0-9a-z]{6}$/) },

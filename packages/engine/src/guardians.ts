@@ -180,10 +180,14 @@ export function guardianAsleep(content: Content, info: GuardianInfo, fallback: b
  * 守護者を落ち着かせる（全快・状態異常を消す・追跡をやめる・持ち場へ・怒りと呼んだ回数を戻す・見ていた与ダメの累計を戻す）。
  * キャンプから遠征を始めるとき（全階）と、離れている間の回復で全快したとき（V3-3a §35.1）
  */
-export function settleGuardian(ctx: Ctx, m0: Entity): void {
+export function settleGuardian(ctx: Ctx, m0: Entity): { healed: number; dispersed: number } {
   const m = ctx.world.entities[m0.id];
-  if (!m?.guardian || !m.pos || !m.stats || !m.actor) return;
+  if (!m?.guardian || !m.pos || !m.stats || !m.actor) return { healed: 0, dispersed: 0 };
   const key = m.pos.floor;
+  const healed = Math.max(0, m.stats.maxHp - m.stats.hp);
+  // 呼んだ手下は去る（経験値も戦利品も残さない。V3-3b §40.3）
+  const minions = ctx.entitiesOn(key).filter((e) => e.minionOf === m.id && (e.stats?.hp ?? 0) > 0);
+  for (const e of minions) ctx.emit({ type: 'entity_removed', id: e.id, kind: e.kind, reason: 'dispersed', seenBy: [], floor: key });
   if (m.stats.hp < m.stats.maxHp) ctx.emit({ type: 'healed', target: m.id, targetKind: m.kind, amount: m.stats.maxHp - m.stats.hp, hpAfter: m.stats.maxHp, via: 'camp', resetSeen: true, seenBy: [], floor: key });
   const cur = ctx.world.entities[m.id];
   const body = structuredClone(cur);
@@ -197,44 +201,78 @@ export function settleGuardian(ctx: Ctx, m0: Entity): void {
     g.enraged = false;
   }
   delete g.summoned; delete g.unseen; delete g.lurk; delete g.struck; delete g.awaySince;
+  // 眠りが深い守護者は、落ち着くと持ち場で眠りに戻る（V3-3b §40.4。潜む者は眠らない）
+  const sleep = guardianAsleep(ctx.content, g, body.actor!.ai?.state === 'asleep');
   if (body.actor!.ai) {
-    body.actor!.ai = { ...body.actor!.ai, state: body.actor!.ai.state === 'asleep' ? 'asleep' : 'unaware', targetPos: null, lostTurns: 0 };
+    body.actor!.ai = { ...body.actor!.ai, state: sleep ? 'asleep' : 'unaware', targetPos: null, lostTurns: 0 };
     delete body.actor!.ai.intent;
   }
+  if (sleep) body.actor!.dormant = true;
   if (body.home && !(body.pos!.x === body.home.x && body.pos!.y === body.home.y) && !ctx.actorAt(key, body.home.x, body.home.y)) body.pos = { floor: key, x: body.home.x, y: body.home.y };
   ctx.emit({ type: 'guardian_state', id: m.id, put: [body], seenBy: [], floor: key });
+  return { healed, dispersed: minions.length };
+}
+
+/** 休み始めを記録する（追跡をやめた。V3-3b §40.5）。もう記録があれば残す */
+export function noteGuardianCalm(ctx: Ctx, m: Entity, player: Entity | undefined): void {
+  if (!m.guardian || m.guardian.awaySince || !player?.player) return;
+  setGuardian(ctx, m, (e) => { e.guardian!.awaySince = { player: player.player!, turns: player.actor?.turns ?? 0 }; });
+}
+
+/**
+ * 休んでいた守護者の回復（V3-3a §35.1・V3-3b §40.5）: 休み始めから過ぎた手番 × awayHealPct %。全快なら落ち着く。
+ * viewer: 見た・追われた・階に戻ったプレイヤー（知らせる相手）
+ */
+export function restGuardian(ctx: Ctx, m0: Entity, viewer: Entity): void {
+  const m = ctx.world.entities[m0.id];
+  const a = m?.guardian?.awaySince;
+  if (!m || !a || !m.stats || m.stats.hp <= 0 || !m.pos || !viewer.player) return;
+  const key = m.pos.floor;
+  const pct = ctx.content.balance.guardian.awayHealPct ?? 0;
+  // 過ぎた手番は、休み始めを記録したプレイヤーの手番で数える（いなければ見た者）
+  const who = ctx.world.players[a.player] ? ctx.world.entities[ctx.world.players[a.player].entityId] : undefined;
+  const nowTurns = who?.actor?.turns ?? viewer.actor?.turns ?? 0;
+  const away = Math.max(0, nowTurns - a.turns);
+  const heal = Math.trunc((m.stats.maxHp * pct * away) / 100);
+  const pr = viewer.player;
+  if (m.stats.hp >= m.stats.maxHp) {
+    // 傷は無い: 手下が残っていれば去る（落ち着く）
+    if (ctx.entitiesOn(key).some((e) => e.minionOf === m.id && (e.stats?.hp ?? 0) > 0)) {
+      const r = settleGuardian(ctx, m);
+      ctx.emit({ type: 'guardian_rested', id: m.id, guardianName: { ...m.guardian!.name }, full: true, player: pr, dispersed: r.dispersed, seenBy: [pr], floor: key });
+    } else setGuardian(ctx, m, (e) => { delete e.guardian!.awaySince; });
+    return;
+  }
+  if (m.stats.hp + heal >= m.stats.maxHp) {
+    const r = settleGuardian(ctx, m);
+    ctx.emit({ type: 'guardian_rested', id: m.id, guardianName: { ...m.guardian!.name }, full: true, player: pr, ...(r.dispersed ? { dispersed: r.dispersed } : {}), seenBy: [pr], floor: key });
+  } else {
+    if (heal > 0) {
+      ctx.emit({ type: 'healed', target: m.id, targetKind: m.kind, amount: heal, hpAfter: m.stats.hp + heal, via: 'away', seenBy: [], floor: key });
+      ctx.emit({ type: 'guardian_rested', id: m.id, guardianName: { ...m.guardian!.name }, full: false, player: pr, seenBy: [pr], floor: key });
+    }
+    setGuardian(ctx, ctx.world.entities[m.id], (e) => { delete e.guardian!.awaySince; });
+  }
 }
 
 /** 最後のプレイヤーが階を離れた: その階の守護者に、離れたときの手番数を付ける */
 export function markGuardiansAway(ctx: Ctx, key: string, leaver: Entity): void {
   if (ctx.playersOn(key).some((pr) => pr.entityId !== leaver.id && ctx.world.entities[pr.entityId]?.pos?.floor === key)) return;
   for (const m of ctx.entitiesOn(key)) {
-    if (!m.guardian || (m.stats?.hp ?? 0) <= 0) continue;
+    if (!m.guardian || (m.stats?.hp ?? 0) <= 0 || m.guardian.awaySince) continue;
     setGuardian(ctx, m, (e) => { e.guardian!.awaySince = { player: leaver.player!, turns: leaver.actor?.turns ?? 0 }; });
   }
 }
 
 /** プレイヤーが階に戻った: 離れていた手番 × awayHealPct % だけ守護者が回復する（全快なら落ち着く） */
 export function restGuardians(ctx: Ctx, key: string, arriver: Entity): void {
-  const pct = ctx.content.balance.guardian.awayHealPct ?? 0;
-  for (const m of ctx.entitiesOn(key)) {
-    const a = m.guardian?.awaySince;
-    if (!a || !m.stats || m.stats.hp <= 0) continue;
-    const away = Math.max(0, (arriver.actor?.turns ?? 0) - a.turns);
-    const heal = Math.trunc((m.stats.maxHp * pct * away) / 100);
-    const pr = arriver.player!;
-    if (m.stats.hp >= m.stats.maxHp) { setGuardian(ctx, m, (e) => { delete e.guardian!.awaySince; }); continue; }
-    if (m.stats.hp + heal >= m.stats.maxHp) {
-      settleGuardian(ctx, m);
-      ctx.emit({ type: 'guardian_rested', id: m.id, guardianName: { ...m.guardian!.name }, full: true, player: pr, seenBy: [pr], floor: key });
-    } else {
-      if (heal > 0) {
-        ctx.emit({ type: 'healed', target: m.id, targetKind: m.kind, amount: heal, hpAfter: m.stats.hp + heal, via: 'away', seenBy: [], floor: key });
-        ctx.emit({ type: 'guardian_rested', id: m.id, guardianName: { ...m.guardian!.name }, full: false, player: pr, seenBy: [pr], floor: key });
-      }
-      setGuardian(ctx, ctx.world.entities[m.id], (e) => { delete e.guardian!.awaySince; });
-    }
-  }
+  for (const m of ctx.entitiesOn(key)) if (m.guardian?.awaySince) restGuardian(ctx, m, arriver);
+}
+
+/** 眠りが深い守護者の起こしにくさ（V3-3b §40.4。弱点の params.stealthPct） */
+export function deepSleepStealth(ctx: Ctx, m: Entity): number {
+  const w = weaknessOf(ctx, m);
+  return w?.h.asleep ? (w.params.stealthPct ?? 0) : 0;
 }
 
 /** 弱点の試し（V3-3a §35.3）: 毒を与えた・投擲を当てた・気づかれる前に一撃を入れた・水場の上にいた */

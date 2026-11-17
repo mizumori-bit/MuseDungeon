@@ -165,7 +165,8 @@ export function pickLoot(content: Content, tableId: string, depth: number, rng: 
   if (!table) return null;
   const d = depth + table.depthBonus;
   for (let tries = 0; tries < 8; tries++) {
-    const entry = rng.weighted(table.entries, (e) => e.weight);
+    // depthMin: その深さから引く項目（V3-3b §40.1: 投げ槍）
+    const entry = rng.weighted(table.entries.filter((e) => !e.depthMin || d >= e.depthMin), (e) => e.weight);
     if (!entry) return null;
     let kind: string | null = null;
     if (entry.item) kind = entry.item;
