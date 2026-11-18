@@ -1,7 +1,7 @@
 // 効果 DSL のハンドラ（レジストリ登録）。データ（アイテム・地物・罠・攻撃時効果）から ID で参照される。
 import type { EffectDef } from '@muse/content';
 import type { Entity, Pos } from '@muse/shared';
-import { cheb, isPursuing } from '@muse/shared';
+import { cheb, inCover, isPursuing } from '@muse/shared';
 import { applyDamage, heal } from './combat';
 import type { Ctx } from './ctx';
 import { hasLos, inCircle } from './geom';
@@ -91,10 +91,11 @@ effects.register('teleport', (ctx, _p, ec) => {
   const hunters = t.player
     ? ctx.entitiesOn(key).filter((m) => m.actor && !m.player && m.pos && (m.stats?.hp ?? 0) > 0 && isPursuing(m))
     : [];
-  const playerVis = t.player ? [] : ctx.playersOn(key).map((pr) => ctx.visibleSet(pr.id));
+  const players = t.player ? [] : ctx.playersOn(key);
+  // そこに着いた者が見えるか（草の中は隣からだけ。V4-0c §4.2）
   const watched = (x: number, y: number): boolean => {
-    if (t.player) return hunters.some((m) => inCircle(m.pos!, { x, y }, m.stats!.sight) && hasLos(m.pos!, { x, y }, opaque));
-    return playerVis.some((v) => v.has(y * f.width + x));
+    if (t.player) return hunters.some((m) => inCircle(m.pos!, { x, y }, m.stats!.sight) && !inCover(ctx.world, key, { x, y }, m.pos) && hasLos(m.pos!, { x, y }, opaque));
+    return players.some((pr) => ctx.seesActorAt(pr.id, key, { x, y }));
   };
   const any: Pos[] = [];
   const far: Pos[] = [];
@@ -112,7 +113,7 @@ effects.register('teleport', (ctx, _p, ec) => {
   const pool = hidden.length ? hidden : far.length ? far : any;
   if (!pool.length) return;
   const to = pool[ctx.rng('runtime').int(pool.length)];
-  const seen = ctx.perceive(key, [{ field: 'from', pos: from }, { field: 'to', pos: to }], t.player ? [t.player] : []);
+  const seen = ctx.perceive(key, [{ field: 'from', pos: from, entity: t.id }, { field: 'to', pos: to, entity: t.id }], t.player ? [t.player] : []);
   ctx.emit({ type: 'entity_moved', id: t.id, kind: t.kind, from, to: { ...to }, mode: 'teleport', ...seen });
 });
 

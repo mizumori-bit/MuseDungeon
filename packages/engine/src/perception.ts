@@ -1,6 +1,6 @@
 // 知覚: プレイヤーの視界と知識（knowledge_updated）、モンスターの視認、騒音、起床、モンスターの思い出。
 import type { Entity, FloorHint, FloorKey, MonsterMemory, PlayerId, PlayerRecord, Pos, RememberedEntity, Sense } from '@muse/shared';
-import { cheb, compassDir, currentExpedition, indicesToRanges, memoryKey } from '@muse/shared';
+import { cheb, compassDir, currentExpedition, inCover, indicesToRanges, memoryKey } from '@muse/shared';
 import type { Ctx } from './ctx';
 import { computeFov, hasLos, inCircle, line } from './geom';
 import { firstStealthPerk, gearOf, noiseRingOf, notePerk, perkStealth, stealthOf } from './build';
@@ -129,7 +129,8 @@ export function updateKnowledge(ctx: Ctx, key: FloorKey): void {
       const idx = e.pos.y * f.width + e.pos.x;
       if (!fovSet.has(idx)) continue;
       if (e.actor && !e.player && (e.stats?.hp ?? 0) > 0) {
-        if (me?.pos && concealedFrom(ctx, me.pos, e.pos)) continue;
+        // 背の高い草の中の者は隣からしか見えない（判定は actorSeen 1 つ。V4-0c §4.2）
+        if (inCover(ctx.world, key, e.pos, me?.pos)) continue;
         if (!metSet.has(e.id)) met.push(e.id);
         if (me?.pos && shotClear(ctx, key, me.pos, e.pos)) shots.push(e.id);
         continue;
@@ -252,16 +253,14 @@ function floorHintFor(ctx: Ctx, pr: PlayerRecord, key: FloorKey, newlySeen: numb
   return { floor: key, draft, explored };
 }
 
-/** モンスターがプレイヤーを視認できるか（プレイヤーの視界と対称、半径外は射線） */
-/** 背の高い草の中の者は、隣からしか見えない（V3-5 §5.2） */
-export function concealedFrom(ctx: Ctx, viewer: Pos, target: Pos & { floor: FloorKey }): boolean {
-  return cheb(viewer, target) > 1 && ctx.terrainAt(target.floor, target.x, target.y).tags.includes('conceal');
-}
-
+/**
+ * モンスターがプレイヤーを視認できるか（プレイヤーの視界と対称、半径外は射線）。
+ * 背の高い草の中の者は、隣からしか見えない（V3-5 §5.2。判定はプレイヤーの側と同じ inCover。V4-0c §4.2）
+ */
 export function monsterSees(ctx: Ctx, m: Entity, target: Entity): boolean {
   if (!m.pos || !target.pos || m.pos.floor !== target.pos.floor) return false;
   if (!inCircle(m.pos, target.pos, m.stats!.sight)) return false;
-  if (concealedFrom(ctx, m.pos, target.pos)) return false;
+  if (inCover(ctx.world, target.pos.floor, target.pos, m.pos)) return false;
   const pr = target.player ? ctx.world.players[target.player] : undefined;
   if (pr) {
     const f = ctx.world.floors[m.pos.floor];

@@ -168,6 +168,8 @@ export interface MacroState {
   lostTurns?: number;
   /** 標的を最後に見たときに逃走中だったか（この呼び出しで見ていなければ undefined） */
   targetFleeing?: boolean;
+  /** 標的を最後に見た場所（見失って止まったときに結果の文へ出す。草へ入るところを見ていたら、その草のマス。V4-0c §4.2） */
+  targetSeenAt?: Pos;
   /** 標的は直前の応答で見えていて逃げていなかった（始めた時点で見えなくても待つ） */
   lostOk?: boolean;
   /** 直前の手が待つ手だった（待つ間に標的以外の射撃で被弾したら止まる） */
@@ -395,6 +397,7 @@ function nextFightTarget(view: PlayerView, catalog: Catalog, pos: Pos, exclude: 
 
 function retarget(state: MacroState, next: EntityView): void {
   state.fightTarget = next.id;
+  state.targetSeenAt = { x: next.pos.x, y: next.pos.y };
   state.engaged = false;
   state.waits = 0;
   state.apart = 0;
@@ -445,7 +448,7 @@ export function macroStart(view: PlayerView, cmd: Command, catalog: Catalog): Ma
       fightTarget: cmd.target, engaged: false, waits: 0, apart: 0, blocked: 0,
       fightUntil: cmd.until ?? 'target', fightAdjacent: cmd.adjacent ?? 'stop', lostTurns: 0, cleared: 0,
       ...(cmd.lostOk ? { lostOk: true } : {}),
-      ...(() => { const tg = view.entities.find((e) => e.id === cmd.target); return tg ? { targetFleeing: !!tg.fleeing } : {}; })(),
+      ...(() => { const tg = view.entities.find((e) => e.id === cmd.target); return tg ? { targetFleeing: !!tg.fleeing, targetSeenAt: { x: tg.pos.x, y: tg.pos.y } } : {}; })(),
     } : {}),
     ...(withSlot ? { fightWith: withSlot, fightKind: withList[0].kind, fightRetrieve: cmd.type === 'fight' ? cmd.retrieve !== false : true, ...(withList.length > 1 ? { fightWithList: withList } : {}) } : {}),
     ...(cmd.type === 'fight' && cmd.collectAfter ? { collectAfter: true } : {}),
@@ -743,6 +746,11 @@ function macroStep(state: MacroState, view: PlayerView, catalog: Catalog, events
       if (next) { retarget(state, next); tg = next; }
     }
     if (!tg) {
+      // 最後に見た場所: 見えなくなる一歩の行き先が分かっていれば（草へ入るのを見ていた。V4-0c §4.2）そこ
+      for (const e of events) {
+        const x = e as unknown as { type: string; id?: string; to?: Pos | null };
+        if (x.type === 'entity_moved' && x.id === state.fightTarget && x.to) state.targetSeenAt = { x: x.to.x, y: x.to.y };
+      }
       // 見失った（V3-4b §28.4）: 逃げて見えなくなったなら止まる。追跡中で逃げていなかったなら、物陰から出てくるまで待つ
       if (state.targetFleeing === true) return { stop: 'target_fled' };
       if (state.targetFleeing === undefined && !state.lostOk) return { stop: 'target_gone' };
@@ -755,6 +763,7 @@ function macroStep(state: MacroState, view: PlayerView, catalog: Catalog, events
     }
     state.lostTurns = 0;
     state.targetFleeing = !!tg.fleeing;
+    state.targetSeenAt = { x: tg.pos.x, y: tg.pos.y };
     const d = cheb(tg.pos, pos);
     const hunting = tg.awareness === 'hunting';
     // with の相手が隣に来た: adjacent に従う（stop: 止まる / throw: 隣でも投げる / melee: 近接に切り替える）

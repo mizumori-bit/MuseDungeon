@@ -94,7 +94,7 @@ export function spawnFromSpec(ctx: Ctx, floor: FloorKey, spec: SpawnSpec, reason
   }
   // 棲み処の地物の持ち主（V3-3c §44.6）
   if (opts.lairOf) e.lairOf = opts.lairOf;
-  const seen = ctx.perceive(floor, [{ field: 'entity', pos: e.pos }]);
+  const seen = ctx.perceive(floor, [{ field: 'entity', pos: e.pos, actor: !!(e.actor || e.player) }]);
   ctx.emit({ type: 'entity_spawned', entity: e, reason, floor, seenBy: seen.seenBy });
   return ctx.world.entities[id];
 }

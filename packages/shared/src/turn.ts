@@ -256,14 +256,23 @@ export function diffChanges(prev: TurnSnapshot | null, cur: TurnSnapshot, view: 
     }
     for (const [id, name] of Object.entries(prev.hostiles)) {
       if (id in cur.hostiles || dead.has(id)) continue;
-      // 最後に見た位置と、視界の外へ出た一歩の向き（知覚した移動の向きだけ。行き先は分からない）
-      const lp = prev.hostilePos?.[id];
+      // 最後に見た位置と、視界の外へ出た一歩の向き（知覚した移動の向きだけ。行き先は分からない）。
+      // 見えなくなる一歩の行き先が分かっているとき（草へ入るのを見ていた。V4-0c §4.2）は、そこが最後に見た位置
+      let lp: { x: number; y: number } | undefined = prev.hostilePos?.[id];
       let out1: string | null = null;
       for (const e of events) {
         const ev = e.event as Record<string, unknown>;
-        if (e.type === 'entity_moved' && ev.id === id && typeof ev.dirOut === 'string') out1 = ev.dirOut;
+        if (e.type !== 'entity_moved' || ev.id !== id) continue;
+        const to = ev.to as { x: number; y: number } | null | undefined;
+        const from = ev.from as { x: number; y: number } | null | undefined;
+        if (to) { lp = { x: to.x, y: to.y }; out1 = null; } else if (from) lp = { x: from.x, y: from.y };
+        if (typeof ev.dirOut === 'string') out1 = ev.dirOut;
       }
-      const where = [lp ? t(L, `最後に見た位置 (${lp.x},${lp.y})`, `last seen (${lp.x},${lp.y})`) : '', out1 ? t(L, `${dirLabel(L, out1 as Dir)}へ`, `heading ${out1}`) : ''].filter(Boolean).join(L === 'en' ? ', ' : '・');
+      // 最後に見た位置が背の高い草なら、そう書く（草に入って見えなくなった）
+      const w = view.floor?.width;
+      const lt = lp && w && catalog ? catalog.terrain[view.terrainTable[view.memory.terrain[lp.y * w + lp.x] ?? 0]] : undefined;
+      const inGrass = !out1 && !!lt?.tags.includes('conceal');
+      const where = [lp ? t(L, `最後に見た位置 (${lp.x},${lp.y})`, `last seen (${lp.x},${lp.y})`) : '', inGrass ? t(L, '背の高い草の中', 'in the tall grass') : '', out1 ? t(L, `${dirLabel(L, out1 as Dir)}へ`, `heading ${out1}`) : ''].filter(Boolean).join(L === 'en' ? ', ' : '・');
       out.push({ code: 'hostile_gone', text: t(L, `見えなくなった敵: ${name}${where ? `（${where}）` : ''}`, `Out of sight: ${name}${where ? ` (${where})` : ''}`), entity: id });
     }
     const newItems = Object.entries(cur.items).filter(([id]) => !seenItems.has(id));

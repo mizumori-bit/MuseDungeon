@@ -346,12 +346,10 @@ export function noteTrial(ctx: Ctx, m: Entity, trial: WeaknessTrial): void {
   if (!g || !m.pos) return;
   const def = ctx.content.lists.guardianWeaknesses.find((w) => w.handler === TRIAL_HANDLER[trial]);
   if (!def || g.weakness === def.id) return;
-  const f = ctx.world.floors[m.pos.floor];
-  if (!f) return;
-  const cell = m.pos.y * f.width + m.pos.x;
+  if (!ctx.world.floors[m.pos.floor]) return;
   for (const pr of ctx.playersOn(m.pos.floor)) {
     if (pr.knowledge.guardianIntel?.[m.id] || pr.knowledge.guardianTried?.[m.id]?.includes(def.id)) continue;
-    if (!ctx.visibleSet(pr.id).has(cell)) continue;
+    if (!ctx.seesActor(pr.id, m)) continue;
     ctx.emit({ type: 'guardian_intel', player: pr.id, guardian: m.id, guardianName: { ...g.name }, weakness: def.id, miss: true, seenBy: [pr.id], floor: m.pos.floor });
   }
 }
@@ -360,12 +358,10 @@ export function noteTrial(ctx: Ctx, m: Entity, trial: WeaknessTrial): void {
 export function revealWeakness(ctx: Ctx, m: Entity): void {
   const w = m.guardian?.weakness;
   if (!w || !m.pos) return;
-  const f = ctx.world.floors[m.pos.floor];
-  if (!f) return;
-  const cell = m.pos.y * f.width + m.pos.x;
+  if (!ctx.world.floors[m.pos.floor]) return;
   for (const pr of ctx.playersOn(m.pos.floor)) {
     if (pr.knowledge.guardianIntel?.[m.id]) continue;
-    if (!ctx.visibleSet(pr.id).has(cell)) continue;
+    if (!ctx.seesActor(pr.id, m)) continue;
     ctx.emit({ type: 'guardian_intel', player: pr.id, guardian: m.id, guardianName: { ...m.guardian!.name }, weakness: w, seenBy: [pr.id], floor: m.pos.floor });
   }
 }
@@ -411,11 +407,10 @@ export function lineDir(from: Pos, to: Pos): Dir | null {
   return DIRS.find((d) => DIR_VEC[d][0] === sx && DIR_VEC[d][1] === sy) ?? null;
 }
 
-/** プレイヤーがそのマスを見ているか */
+/** そのマスにいる者が、プレイヤーから見えるか（草の中は隣からだけ。V4-0c §4.2） */
 export function playerSees(ctx: Ctx, player: Entity, pos: Pos): boolean {
   if (!player.player || !player.pos) return false;
-  const f = ctx.world.floors[player.pos.floor];
-  return !!f && ctx.visibleSet(player.player).has(pos.y * f.width + pos.x);
+  return ctx.seesActorAt(player.player, player.pos.floor, pos);
 }
 
 /** 棲み処（生成時）: 型と弱点の読み合いが成立する地物・地形の置き場所。中心のまわりの開けたマスから選ぶ */

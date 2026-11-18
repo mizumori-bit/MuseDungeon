@@ -297,6 +297,25 @@ export function maskKind(world: World, identified: readonly string[], kind: stri
   return { kind: null, appearanceId: app };
 }
 
+/**
+ * 背の高い草（中にいる者を隠す地形。world.meta.concealTerrain）の中にいて、viewer の隣でない（V3-5 §5.2・V4-0c §4.2）。
+ * 隠れるのは者（モンスター・プレイヤー）だけ。品や地物は隠れない
+ */
+export function inCover(world: World, floor: FloorKey, at: Pos, viewer: Pos | null | undefined): boolean {
+  const f = world.floors[floor];
+  const conceal = world.meta.concealTerrain;
+  if (!f || !viewer || !conceal?.length || cheb(viewer, at) <= 1) return false;
+  return conceal.includes(f.terrain[at.y * f.width + at.x]);
+}
+
+/**
+ * その者が viewer から見えるか（V4-0c §4.2: 見えるかどうかの判定は 1 つ）。条件: at のマスが視界にあり（cellInView）、
+ * かつ草の中でないか隣にいる。表示のリスト・記憶・出来事の伏せ方・敵の目・射線・fight と投擲の標的が、すべてこれを使う
+ */
+export function actorSeen(world: World, floor: FloorKey, at: Pos, viewer: Pos | null | undefined, cellInView: boolean): boolean {
+  return cellInView && !inCover(world, floor, at, viewer);
+}
+
 export function entityCat(e: Entity): EntityView['cat'] | null {
   if (e.player) return 'player';
   if (e.actor) return 'monster';
@@ -338,14 +357,13 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
     const ordered: Entity[] = [];
     for (const e of Object.values(world.entities)) if (e.pos?.floor === floorKey) ordered.push(e);
     ordered.sort((a, b) => a.sid - b.sid);
-    const conceal = new Set(world.meta.concealTerrain ?? []);
     for (const e of ordered) {
       if (!e.pos || e.pos.floor !== floorKey || e.id === me.id) continue;
       if (!visibleSet.has(e.pos.y * floor.width + e.pos.x)) continue;
       const cat = entityCat(e);
       if (!cat) continue;
-      // 背の高い草の中の者は、隣からしか見えない（V3-5 §5.2）
-      if ((cat === 'monster' || cat === 'player') && conceal.has(floor.terrain[e.pos.y * floor.width + e.pos.x]) && me.pos && cheb(me.pos, e.pos) > 1) continue;
+      // 背の高い草の中の者は、隣からしか見えない（V3-5 §5.2。判定は actorSeen 1 つ。V4-0c §4.2）
+      if ((cat === 'monster' || cat === 'player') && !actorSeen(world, floorKey, e.pos, me.pos, true)) continue;
       if (cat === 'trap' && !e.trap!.revealedTo.includes(playerId)) continue;
       const pos = { x: e.pos.x, y: e.pos.y };
       if (cat === 'item') {

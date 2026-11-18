@@ -34,6 +34,16 @@ import { runGaps } from './warden';
 export function checkRunGaps(world: World, content: Content): string[] {
   return runGaps(new Ctx(world, content, null, 0));
 }
+/**
+ * その者がいる場所で出来事が起きたら、そのプレイヤーに主体として伝わるか（出来事の伏せ方。World は変えない。
+ * 表示のリストと食い違わないかを確かめるテスト用。V4-0c §4.4）
+ */
+export function actorPerceived(world: World, content: Content, pid: string, entityId: string): boolean {
+  const e = world.entities[entityId];
+  if (!e?.pos) return false;
+  const s = new Ctx(world, content, null, 0).perceive(e.pos.floor, [{ field: 'x', pos: e.pos, entity: e.id }]);
+  return s.seenBy.includes(pid) && !s.masks?.[pid]?.includes('x');
+}
 /** 版の新旧（'0.8.0' と '0.25.0' を数で比べる。a が古ければ負） */
 export function compareVersions(a: string, b: string): number {
   const pa = a.split('.').map((x) => parseInt(x, 10) || 0), pb = b.split('.').map((x) => parseInt(x, 10) || 0);

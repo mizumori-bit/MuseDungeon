@@ -4,7 +4,7 @@ import type { Content, TerrainDef } from '@muse/content';
 import type {
   Entity, EventDraft, FloorKey, GameEvent, Locale, PlayerId, PlayerRecord, Pos, World,
 } from '@muse/shared';
-import { applyEvent, opaqueId, Rng } from '@muse/shared';
+import { actorSeen, applyEvent, opaqueId, Rng } from '@muse/shared';
 
 export class Ctx {
   readonly events: GameEvent[] = [];
@@ -189,14 +189,31 @@ export class Ctx {
     return this.playersOn(key).filter((pr) => this.visibleSet(pr.id).has(idx)).map((pr) => pr.id);
   }
 
-  /** 地形変化の知覚: そのセルが見えている者だけが知る（行為者が見えなければ by を伏せる） */
-  tileSeen(key: FloorKey, p: Pos, actor: Entity | null): { seenBy: PlayerId[]; masks?: Record<PlayerId, string[]> } {
+  /**
+   * プレイヤー pid から、key の pos にいる者が見えるか（V4-0c §4.2: 見えるかどうかの判定は 1 つ。actorSeen）。
+   * マスが視界にあり、かつ背の高い草の中でないか隣にいる
+   */
+  seesActorAt(pid: PlayerId, key: FloorKey, pos: Pos): boolean {
+    const pr = this.world.players[pid];
+    const me = pr ? this.world.entities[pr.entityId] : undefined;
     const f = this.world.floors[key];
+    if (!f || me?.pos?.floor !== key) return false;
+    return actorSeen(this.world, key, pos, me.pos, this.visibleSet(pid).has(pos.y * f.width + pos.x));
+  }
+
+  /** プレイヤー pid から、その者が見えるか（本人は常に見える） */
+  seesActor(pid: PlayerId, e: Entity): boolean {
+    if (e.player === pid) return true;
+    return !!e.pos && this.seesActorAt(pid, e.pos.floor, e.pos);
+  }
+
+  /** 地形変化の知覚: そのセルが見えている者だけが知る（行為者が見えなければ by を伏せる。草の中の行為者も。V4-0c） */
+  tileSeen(key: FloorKey, p: Pos, actor: Entity | null): { seenBy: PlayerId[]; masks?: Record<PlayerId, string[]> } {
     const seen = new Set(this.seersOf(key, p));
     if (actor?.player) seen.add(actor.player);
     const masks: Record<PlayerId, string[]> = {};
     for (const pid of seen) {
-      if (actor && actor.player !== pid && actor.pos && !this.visibleSet(pid).has(actor.pos.y * f.width + actor.pos.x)) masks[pid] = ['by'];
+      if (actor && actor.player !== pid && actor.pos && !this.seesActorAt(pid, key, actor.pos)) masks[pid] = ['by'];
     }
     const seenBy = [...seen].sort();
     return Object.keys(masks).length ? { seenBy, masks } : { seenBy };
@@ -206,17 +223,21 @@ export class Ctx {
    * 複数の主体を持つイベントの seenBy と masks を計算する。
    * 主体のどれかが見えていれば知覚でき、見えていない主体のフィールドは伏せる。
    */
-  perceive(key: FloorKey, subjects: { field: string; pos: Pos | null | undefined; entity?: string | null }[], always: PlayerId[] = []): { seenBy: PlayerId[]; masks?: Record<PlayerId, string[]> } {
-    const f = this.world.floors[key];
+  perceive(key: FloorKey, subjects: PerceiveSubject[], always: PlayerId[] = []): { seenBy: PlayerId[]; masks?: Record<PlayerId, string[]> } {
     const seen = new Set<PlayerId>(always);
     const masks: Record<PlayerId, string[]> = {};
     for (const pr of this.playersOn(key)) {
-      const vis = this.visibleSet(pr.id);
       const hidden: string[] = [];
       let any = false;
+      const shown: boolean[] = [];
       for (const s of subjects) {
-        const isSelf = s.entity && s.entity === pr.entityId;
-        const visible = isSelf || (s.pos ? vis.has(s.pos.y * f.width + s.pos.x) : false);
+        let visible = this.subjectSeen(pr, key, s);
+        // 見えていた者が草に入って見えなくなる移動: 出どころが見えていたので、行き先も伝える（V4-0c §4.2）
+        if (!visible && s.enterFrom !== undefined && shown[s.enterFrom] && s.pos) {
+          const f = this.world.floors[key];
+          visible = this.visibleSet(pr.id).has(s.pos.y * f.width + s.pos.x);
+        }
+        shown.push(visible);
         if (visible) any = true;
         else hidden.push(s.field);
       }
@@ -228,4 +249,33 @@ export class Ctx {
     const seenBy = [...seen].sort();
     return Object.keys(masks).length ? { seenBy, masks } : { seenBy };
   }
+
+  /**
+   * 主体 1 つが、そのプレイヤーに見えるか。者（モンスター・プレイヤー）なら actorSeen（草の中は隣からだけ）、
+   * それ以外（品・地物・マス）はマスが視界にあるか
+   */
+  private subjectSeen(pr: PlayerRecord, key: FloorKey, s: PerceiveSubject): boolean {
+    if (s.entity && s.entity === pr.entityId) return true;
+    if (!s.pos) return false;
+    const f = this.world.floors[key];
+    const cell = this.visibleSet(pr.id).has(s.pos.y * f.width + s.pos.x);
+    const ent = s.entity ? this.world.entities[s.entity] : undefined;
+    const isActor = s.actor ?? !!(ent?.actor || ent?.player);
+    if (!isActor) return cell;
+    return actorSeen(this.world, key, s.pos, this.world.entities[pr.entityId]?.pos, cell);
+  }
+
+  /**
+   * 者の移動（歩く・入れ替わる）の知覚（V4-0c §4.2）: 出どころと行き先を、その者が見えるかで伏せる。
+   * 見えていた者が草に入って見えなくなる移動は、行き先も伝える（最後に見た場所）。草から草へ・見えない者の移動は伝えない
+   */
+  perceiveMove(key: FloorKey, e: Entity, from: Pos, to: Pos, always: PlayerId[] = []): { seenBy: PlayerId[]; masks?: Record<PlayerId, string[]> } {
+    return this.perceive(key, [{ field: 'from', pos: from, entity: e.id }, { field: 'to', pos: to, entity: e.id, enterFrom: 0 }], always);
+  }
 }
+
+/**
+ * 出来事の主体: field を伏せるかどうかを pos（と entity）から決める。
+ * actor: 者として扱う（まだ World にいない生まれたばかりの者）。enterFrom: その番号の主体が見えていれば、マスが視界にあるだけで見える（草に入る移動の行き先）
+ */
+export interface PerceiveSubject { field: string; pos: Pos | null | undefined; entity?: string | null; actor?: boolean; enterFrom?: number }

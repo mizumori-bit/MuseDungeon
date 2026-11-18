@@ -1,7 +1,7 @@
 // PlayerPort: プレイヤー（AI・人間とも）への唯一の窓口。PlayerView 経由の情報しか返さない。
 // MCP アダプタと人間用 WS の両方がこれを使う（どちらかを特別扱いしない）。
 import type {
-  ActionError, Catalog, Command, ExpeditionReport, GameEvent, Locale, Observation, ObservationOptions, PerceivedEvent, PlayerId, PlayerView, Pos, RunSummary, TurnBlock, TurnReason,
+  ActionError, Catalog, Command, Dir, ExpeditionReport, GameEvent, Locale, Observation, ObservationOptions, PerceivedEvent, PlayerId, PlayerView, Pos, RunSummary, TurnBlock, TurnReason,
 } from '@muse/shared';
 import {
   actionError, briefingLines, briefingShort, buildObservation, buildTurnBlock, campLines, changesLine, compareLines, describeInventory, describeTarget, diffChanges, progressLines, reportLines,
@@ -170,6 +170,19 @@ function harmSummary(events: readonly GameEvent[], selfId: string): { hits: numb
   return { hits, misses, total, other, healed, levelHp };
 }
 
+/** 見えていない相手からの射撃の方角（古い順。草の中の射手など。V4-0c §4.3） */
+function unseenShots(events: readonly PerceivedEvent[], selfId: string): Dir[] {
+  const out: Dir[] = [];
+  // 当たった射撃は damaged（攻撃の出来事は外れたときだけ文になる）、外れた射撃は attack で数える
+  for (const e of events) {
+    const ev = e.event as unknown as { attacker?: string | null; source?: string | null; target?: string; fromDir?: Dir | null; ranged?: boolean; hit?: boolean; via?: string };
+    if (ev.target !== selfId || !ev.fromDir) continue;
+    if (e.type === 'attack' && ev.attacker === null && ev.ranged && !ev.hit) out.push(ev.fromDir);
+    if (e.type === 'damaged' && ev.source === null && (ev.via === 'ranged' || ev.via === 'thrown')) out.push(ev.fromDir);
+  }
+  return out;
+}
+
 /** HP の前後（回復・レベルアップが混ざったら添える） */
 function hpDelta(L: Locale, before: number, after: number, total: number, levelHp = 0): string {
   const regen = after - (before - total) - levelHp;
@@ -298,7 +311,8 @@ export class SessionPlayerPort implements PlayerPort {
     const created = this.session.world.meta.engineVersion;
     const versionNote = view.status === 'at_camp' && !prev?.versionNoted && !!created && compareVersions(created, ENGINE_VERSION) < 0
       ? t(L, `このランは古い版で始まった（engine ${created}）。階の一部が姿を変えることがある`, `This run began on an older version (engine ${created}). Some floors may change shape`) : undefined;
-    const observation = buildObservation(view, this.catalog, { detail: p.detail ?? 'brief', map: true, recent: p.recent.slice(-10), lifelineShort, boonsShort, campCompare: this.campCompare(view), offerNotes: this.offerNotes(view), records: this.campRecords(view), ...(versionNote ? { versionNote } : {}) });
+    const shots = unseenShots(p.recent, view.self.id);
+    const observation = buildObservation(view, this.catalog, { detail: p.detail ?? 'brief', map: true, recent: p.recent.slice(-10), lifelineShort, boonsShort, campCompare: this.campCompare(view), offerNotes: this.offerNotes(view), records: this.campRecords(view), ...(versionNote ? { versionNote } : {}), ...(shots.length ? { unseenShots: shots } : {}) });
     const state = turnStateOf(view, p.expeditionEndedNow ?? false).state;
     const cur = turnSnapshot(view, observation, state);
     const longLife = observation.valid_actions.some((a) => a.includes('次の遠征はこの遠征を始めた階段から') || a.includes('the next expedition starts from where this one began'));
@@ -307,7 +321,8 @@ export class SessionPlayerPort implements PlayerPort {
     cur.versionNoted = prev?.versionNoted || !!versionNote;
     let changes: TurnBlock['changes'] = [];
     if (p.changes) {
-      const events = prev ? this.session.messages(this.playerId).filter((m) => m.seq > prev.seq) : [];
+      // 文になった出来事と、知覚した他の者の移動（見えなくなった敵の最後に見た位置。V4-0c §4.2）
+      const events = prev ? [...this.session.messages(this.playerId).filter((m) => m.seq > prev.seq), ...this.session.movesSince(this.playerId, prev.seq)].sort((a, b) => a.seq - b.seq) : [];
       changes = diffChanges(prev, cur, view, observation, events, this.catalog);
       if (p.changes === true) this.session.setTurnSnapshot(this.playerId, cur);
     }
@@ -388,15 +403,19 @@ export class SessionPlayerPort implements PlayerPort {
     let collected: { picked: number; remaining: number } | undefined;
     if (r.steps !== undefined) {
       const stop = r.interruptedBy ? STOP_TEXT[r.interruptedBy] : undefined;
+      // 見えない相手に撃たれて止まった: 停止の理由に方角を書く（V4-0c §4.3。休憩もほかのマクロも）
+      const unseen = r.interruptedBy ? unseenShots(mine, view.self.id) : [];
+      const unseenText = unseen.length
+        ? t(L, `${dirLabel(L, unseen[unseen.length - 1])}から撃たれた。相手は見えていない。`, ` Shot from the ${unseen[unseen.length - 1]}; the shooter is not in sight.`) : '';
       const m = r.macro;
       if (cmd.type === 'rest') {
         rest = { hp_gained: m?.hpGained ?? 0, turns: r.steps, time_elapsed: m?.timeElapsed ?? null, stopped_by: r.interruptedBy ?? 'step_limit' };
         outcome = t(L,
-          `rest: ${r.steps} 手休んだ。HP ${rest.hp_gained >= 0 ? '+' : ''}${rest.hp_gained}${rest.time_elapsed !== null ? `、時間 ${rest.time_elapsed}` : ''}。${stop ? `停止: ${stop[0]}。` : ''}`,
-          `rest: ${r.steps} turns. HP ${rest.hp_gained >= 0 ? '+' : ''}${rest.hp_gained}${rest.time_elapsed !== null ? `, time ${rest.time_elapsed}` : ''}.${stop ? ` Stopped: ${stop[1]}.` : ''}`);
+          `rest: ${r.steps} 手休んだ。HP ${rest.hp_gained >= 0 ? '+' : ''}${rest.hp_gained}${rest.time_elapsed !== null ? `、時間 ${rest.time_elapsed}` : ''}。${stop ? `停止: ${stop[0]}。` : ''}${unseenText}`,
+          `rest: ${r.steps} turns. HP ${rest.hp_gained >= 0 ? '+' : ''}${rest.hp_gained}${rest.time_elapsed !== null ? `, time ${rest.time_elapsed}` : ''}.${stop ? ` Stopped: ${stop[1]}.` : ''}${unseenText}`);
       } else {
         const tm = m?.timeElapsed !== null && m?.timeElapsed !== undefined ? t(L, `（${m.distance} 歩、時間 ${m.timeElapsed}）`, ` (${m.distance} moves, time ${m.timeElapsed})`) : '';
-        outcome = t(L, `${cmd.type}: ${r.steps} 手進んだ${tm}。${stop ? `停止: ${stop[0]}。` : ''}`, `${cmd.type}: ${r.steps} steps${tm}.${stop ? ` Stopped: ${stop[1]}.` : ''}`);
+        outcome = t(L, `${cmd.type}: ${r.steps} 手進んだ${tm}。${stop ? `停止: ${stop[0]}。` : ''}${unseenText}`, `${cmd.type}: ${r.steps} steps${tm}.${stop ? ` Stopped: ${stop[1]}.` : ''}${unseenText}`);
         // 止まったマスに品がある: 拾う前に止まったことを言う（V3-7 の評価: 薬の上で止まり、拾っていないと気づかなかった）
         if (r.interruptedBy && (cmd.type === 'travel' || cmd.type === 'collect' || cmd.type === 'explore')) {
           const me = view.self.pos;
@@ -405,12 +424,11 @@ export class SessionPlayerPort implements PlayerPort {
         }
         // 遅い追跡者に追われたまま探索した（V4-0b §1.4）
         if (m?.slowChasers) outcome += ' ' + t(L, `遅い敵 ${m.slowChasers} 体に追われたまま探索した。`, `Explored with ${m.slowChasers} slow hunter${m.slowChasers > 1 ? 's' : ''} on your trail.`);
-        // fight で見失った・逃げられた: 最後に見た場所（V4-0b §1.4）
+        // fight で見失った・逃げられた: 最後に見た場所（V4-0b §1.4。マクロが覚えた場所。V4-0c §4.2）
         if (cmd.type === 'fight' && (r.interruptedBy === 'target_gone' || r.interruptedBy === 'target_fled')) {
-          const tgId = cmd.target;
-          const rm = view.memory.remembered.find((x) => x.id === tgId);
+          const at = m?.targetSeenAt;
           const me = view.self.pos;
-          if (rm && me) outcome += ' ' + t(L, `最後に見た場所: (${rm.pos.x},${rm.pos.y})・${dirLabel(L, compassDir(me, rm.pos))}${cheb(rm.pos, me)} マス。`, `Last seen at (${rm.pos.x},${rm.pos.y}), ${dirLabel(L, compassDir(me, rm.pos))} ${cheb(rm.pos, me)}.`);
+          if (at && me) outcome += ' ' + t(L, `最後に見た場所: (${at.x},${at.y})・${dirLabel(L, compassDir(me, at))}${cheb(at, me)} マス。`, `Last seen at (${at.x},${at.y}), ${dirLabel(L, compassDir(me, at))} ${cheb(at, me)}.`);
         }
         // hp_risk: 何にすれば、あと 1 回の最悪の被害まで続けられるか（V3-3a §35.6）
         if (r.interruptedBy === 'hp_risk' && cmd.type === 'fight') {

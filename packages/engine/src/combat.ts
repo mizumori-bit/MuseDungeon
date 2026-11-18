@@ -1,7 +1,7 @@
 // 戦闘（整数のみ）。命中: d20 + acc >= 10 + eva。20 は必中＋会心、1 は必ず外れ。
 // ダメージ: ダイス + might - armor、最低 1。会心は「ダイスの最大値 + might、装甲無視」（V3-2R §14.3）。
 import type { DamageVia, Dir, Entity, PlayerId, PlayerRecord, RunSummary, RunSummaryPlayer } from '@muse/shared';
-import { ceilDiv, cheb, currentExpedition, diceMax, dirTo, xpForLevel } from '@muse/shared';
+import { ceilDiv, cheb, currentExpedition, diceMax, dirTo, inCover, xpForLevel } from '@muse/shared';
 import type { Ctx } from './ctx';
 import { applyEffects } from './effects';
 import { displayName, maybeEndExpedition } from './expedition';
@@ -101,10 +101,7 @@ function fromDirFor(target: Entity, source: Entity | null, masks: Record<string,
  */
 export function recordHit(ctx: Ctx, attacker: Entity, target: Entity, hit: boolean, kind: 'melee' | 'thrown' | 'ranged'): void {
   // 守護者は種族と別の記録（guardian|種族）に残る（V3-2R3 §20.4）
-  const sees = (pid: PlayerId, m: Entity) => {
-    const f = m.pos ? ctx.world.floors[m.pos.floor] : undefined;
-    return !!f && ctx.visibleSet(pid).has(m.pos!.y * f.width + m.pos!.x);
-  };
+  const sees = (pid: PlayerId, m: Entity) => ctx.seesActor(pid, m);
   if (attacker.player && !target.player && target.actor && kind !== 'ranged' && sees(attacker.player, target)) {
     updateMemory(ctx, attacker.player, target, (m) => {
       const cur = m.hitsByYou?.[kind] ?? [0, 0];
@@ -178,10 +175,10 @@ export function rangedAttack(ctx: Ctx, attacker: Entity, target: Entity, dice: s
   recordHit(ctx, attacker, target, o.hit, 'ranged');
   // 遠隔攻撃を見た者（撃った側が見えている者）の思い出に、能力と観測した距離を残す
   const key = attacker.pos!.floor;
-  const f = ctx.world.floors[key];
   const dist = cheb(attacker.pos!, target.pos!);
   for (const pr of ctx.playersOn(key)) {
-    if (!ctx.visibleSet(pr.id).has(attacker.pos!.y * f.width + attacker.pos!.x)) continue;
+    // 撃った者が見えている者だけ（草の中の射手は隣からしか見えない。V4-0c §4.1）
+    if (!ctx.seesActor(pr.id, attacker)) continue;
     updateMemory(ctx, pr.id, attacker, (m) => { m.abilities.push('ranged'); m.rangeMax = Math.max(m.rangeMax ?? 0, dist); });
   }
   if (o.hit) {
@@ -213,11 +210,15 @@ function drainHeal(ctx: Ctx, attacker: Entity, dealt: number): void {
   ctx.emit({ type: 'healed', target: a.id, targetKind: a.kind, amount, hpAfter: a.stats.hp + amount, via: 'drain', ...seen, floor: a.pos?.floor ?? null });
 }
 
-/** 攻撃された（外れた）モンスターは攻撃者に気づく */
+/**
+ * 攻撃された（外れた）モンスターは攻撃者に気づく。草の中の攻撃者（隣でない）は見えたことにならない:
+ * 起きはするが、居場所は渡さない（向かうのは音の届いた先。V4-0c §4.1）
+ */
 function provoke(ctx: Ctx, target: Entity, attacker: Entity): void {
   if (target.actor?.ai && attacker.pos) {
     if (hasStatus(target, 'core:sleep')) removeStatus(ctx, target, 'core:sleep');
-    wakeMonster(ctx, target, { x: attacker.pos.x, y: attacker.pos.y });
+    const hidden = !!target.pos && inCover(ctx.world, attacker.pos.floor, attacker.pos, target.pos);
+    wakeMonster(ctx, target, hidden ? null : { x: attacker.pos.x, y: attacker.pos.y });
   }
 }
 
@@ -253,10 +254,11 @@ export function applyDamage(ctx: Ctx, target: Entity, amount: number, source: En
     ...fromDirFor(t, source, seen.masks, 'source'), ...seen,
   });
   // 思い出（受けたダメージは脅威の見積もり用に出目どおり、与えたダメージは実ダメージ）
-  if (source && t.player && !source.player) {
+  // 種族の思い出に残すのは、相手が見えているときだけ（見えない射手の種族を記憶に出さない。V4-0c §4.4）
+  if (source && t.player && !source.player && ctx.seesActor(t.player, source)) {
     updateMemory(ctx, t.player, source, (m) => { m.maxDamageToYou = Math.max(m.maxDamageToYou, amount); });
   }
-  if (source?.player && !t.player && t.actor) {
+  if (source?.player && !t.player && t.actor && ctx.seesActor(source.player, t)) {
     // 通りの記録（V3-2R3 §20.4）: 当たったときの実ダメージの合計と回数（近接・投擲）
     const kindOf = via === 'melee' ? 'melee' as const : via === 'thrown' ? 'thrown' as const : null;
     updateMemory(ctx, source.player, t, (m) => {

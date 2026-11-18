@@ -83,7 +83,7 @@ abilityHandlers.register('slip', (ctx, e, pr, def, cmd) => {
         const me = ctx.world.entities[e.id];
         if (!me?.pos || me.pos.floor !== key) return;
         const from = { x: me.pos.x, y: me.pos.y };
-        ctx.emit({ type: 'entity_moved', id: me.id, kind: me.kind, from, to: { ...to }, mode: 'walk', ...ctx.perceive(key, [{ field: 'from', pos: from }, { field: 'to', pos: to }], [pr.id]), floor: key });
+        ctx.emit({ type: 'entity_moved', id: me.id, kind: me.kind, from, to: { ...to }, mode: 'walk', ...ctx.perceiveMove(key, me, from, to, [pr.id]), floor: key });
         const trap = ctx.featureAt(key, to.x, to.y);
         if (trap?.trap) { triggerTrap(ctx, ctx.world.entities[e.id], trap); break; }
       }

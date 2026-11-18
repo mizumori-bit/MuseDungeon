@@ -656,11 +656,9 @@ export function huntingInView(ctx: Ctx, pr: PlayerRecord, forRest = false): bool
   const me = ctx.world.entities[pr.entityId];
   if (!me?.pos) return false;
   const key = me.pos.floor;
-  const f = ctx.world.floors[key];
-  const vis = ctx.visibleSet(pr.id);
   for (const e of ctx.entitiesOn(key)) {
     if (!e.actor || e.player || !e.pos || (e.stats?.hp ?? 0) <= 0) continue;
-    if (!vis.has(e.pos.y * f.width + e.pos.x)) continue;
+    if (!ctx.seesActor(pr.id, e)) continue;
     if (forRest && ctx.content.monsters[e.kind]?.tags.includes('stationary') && cheb(e.pos, me.pos) > 1) continue;
     if (isPursuing(e)) return true;
   }

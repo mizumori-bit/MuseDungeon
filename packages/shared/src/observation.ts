@@ -266,6 +266,8 @@ export interface ObservationOptions {
   records?: { line: string; featsNew?: string[] };
   /** キャンプ: 古い版で始まったランの 1 行（V4-0b §1.2。サーバーが版を比べて渡す） */
   versionNote?: string;
+  /** この応答の間に、見えていない相手から撃たれた方角（古い順。V4-0c §4.3） */
+  unseenShots?: Dir[];
 }
 
 const DIR_JA: Record<Dir, string> = { n: '北', ne: '北東', e: '東', se: '南東', s: '南', sw: '南西', w: '西', nw: '北西' };
@@ -1047,6 +1049,11 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
     alerts.push({ code: 'lethal_range', text: t(L, `1 手で倒されうる: 追跡中の敵の 1 手の最悪の被害の合計 ${worstSum} ≥ HP ${me.stats.hp}${healNote}`, `One turn could kill you: worst damage per turn of hunting enemies sums to ${worstSum} >= HP ${me.stats.hp}${healNote}`), entity: recorded[0].id });
   } else if (recorded.length && worstSum * 2 >= me.stats.hp && view.status !== 'dead') {
     alerts.push({ code: 'lethal_2turns', text: t(L, `2 手で倒されうる: 1 手の最悪の被害 ${worstSum} × 2 ≥ HP ${me.stats.hp}`, `Two turns could kill you: worst damage per turn ${worstSum} x 2 >= HP ${me.stats.hp}`), entity: recorded[0].id });
+  }
+  // 見えていない相手に撃たれた（草の中の射手など）: 最悪の被害の見立ては見えている敵からなので、入っていないと言う（V4-0c §4.3）
+  if (opts.unseenShots?.length && view.status !== 'dead') {
+    const dirs = [...new Set(opts.unseenShots)].map((d) => dirLabel(L, d)).join(L === 'en' ? ', ' : '・');
+    alerts.push({ code: 'unseen_shooter', text: t(L, `見えていない相手に撃たれている（${dirs}から）。最悪の被害の見立てに入っていない`, `Shot by something you cannot see (from ${dirs}); it is not in the worst-damage estimates`) });
   }
   if (me.statuses.some((s) => s.id === 'core:poison')) alerts.push({ code: 'poisoned', text: t(L, '毒に冒されている', 'You are poisoned') });
   if (onStairs) alerts.push({ code: 'on_stairs', text: onStairs === 'down' ? t(L, '下り階段の上にいる', 'You are on stairs down') : t(L, '上り階段の上にいる', 'You are on stairs up') });

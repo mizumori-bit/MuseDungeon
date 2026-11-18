@@ -154,9 +154,8 @@ export function advance(ctx: Ctx, key: FloorKey): void {
     updateKnowledge(ctx, key);
     // 見ていた行動の回数（V3-8 §53.4。自分の手番が来たら 2 回のものを知識に残す）
     if (cur?.pos && !incap) {
-      const f2 = ctx.world.floors[key];
       for (const pr of ctx.playersOn(key)) {
-        if (!ctx.visibleSet(pr.id).has(cur.pos.y * f2.width + cur.pos.x)) continue;
+        if (!ctx.seesActor(pr.id, cur)) continue;
         const m = ctx.actsSeen.get(pr.id) ?? new Map<string, number>();
         m.set(cur.id, (m.get(cur.id) ?? 0) + 1);
         ctx.actsSeen.set(pr.id, m);

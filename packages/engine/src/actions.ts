@@ -130,8 +130,8 @@ actions.register('move', (ctx, e, pr, cmd: Extract<Command, { type: 'move' }>) =
     return {
       run: () => {
         const a = { x: e.pos!.x, y: e.pos!.y };
-        ctx.emit({ type: 'entity_moved', id: e.id, kind: e.kind, from: a, to, mode: 'swap', ...ctx.perceive(key, [{ field: 'from', pos: a }, { field: 'to', pos: to }], [e.player!]), floor: key });
-        ctx.emit({ type: 'entity_moved', id: occ.id, kind: occ.kind, from: to, to: a, mode: 'swap', ...ctx.perceive(key, [{ field: 'from', pos: to }, { field: 'to', pos: a }], [occ.player!]), floor: key });
+        ctx.emit({ type: 'entity_moved', id: e.id, kind: e.kind, from: a, to, mode: 'swap', ...ctx.perceiveMove(key, e, a, to, [e.player!]), floor: key });
+        ctx.emit({ type: 'entity_moved', id: occ.id, kind: occ.kind, from: to, to: a, mode: 'swap', ...ctx.perceiveMove(key, occ, to, a, [occ.player!]), floor: key });
         return { cost: 100 };
       },
     };
@@ -153,7 +153,7 @@ actions.register('move', (ctx, e, pr, cmd: Extract<Command, { type: 'move' }>) =
         ctx.emit({ type: 'tile_changed', x: beyond.x, y: beyond.y, terrain: shelfIdx, reason: 'push', by: e.id, ...ctx.tileSeen(key, beyond, e), floor: key });
         ctx.emit({ type: 'tile_changed', x: to.x, y: to.y, terrain: floorIdx, reason: 'push', by: e.id, ...ctx.tileSeen(key, to, e), floor: key });
         const from = { x: e.pos!.x, y: e.pos!.y };
-        ctx.emit({ type: 'entity_moved', id: e.id, kind: e.kind, from, to, mode: 'walk', ...ctx.perceive(key, [{ field: 'from', pos: from }, { field: 'to', pos: to }], [e.player!]), floor: key });
+        ctx.emit({ type: 'entity_moved', id: e.id, kind: e.kind, from, to, mode: 'walk', ...ctx.perceiveMove(key, e, from, to, [e.player!]), floor: key });
         makeNoise(ctx, key, to, 4, e);
         return { cost: 150 };
       },
@@ -165,7 +165,7 @@ actions.register('move', (ctx, e, pr, cmd: Extract<Command, { type: 'move' }>) =
   return {
     run: () => {
       const from = { x: e.pos!.x, y: e.pos!.y };
-      ctx.emit({ type: 'entity_moved', id: e.id, kind: e.kind, from, to, mode: 'walk', ...ctx.perceive(key, [{ field: 'from', pos: from }, { field: 'to', pos: to }], [e.player!]), floor: key });
+      ctx.emit({ type: 'entity_moved', id: e.id, kind: e.kind, from, to, mode: 'walk', ...ctx.perceiveMove(key, e, from, to, [e.player!]), floor: key });
       const trap = ctx.featureAt(key, to.x, to.y);
       if (trap?.trap) triggerTrap(ctx, ctx.world.entities[e.id], trap);
       // 入ると効果のある地物（毒の雲。V3-5 §5.2）
@@ -425,8 +425,8 @@ function resolveTarget(ctx: Ctx, e: Entity, pr: PlayerRecord, target: unknown, r
   }
   if (typeof target === 'string') {
     const te = ctx.world.entities[target];
-    const vis = ctx.visibleSet(pr.id);
-    if (!te?.pos || te.pos.floor !== key || !vis.has(te.pos.y * f.width + te.pos.x)) {
+    // 標的にできるのは見えている相手だけ（草の中の者は隣からだけ。V4-0c §4.2）
+    if (!te?.pos || te.pos.floor !== key || !ctx.seesActorAt(pr.id, key, te.pos)) {
       return actionError('no_target', t(pr.locale, 'その対象は見えていない。', 'You cannot see that target.'), t(pr.locale, 'visible.monsters の id を指定する。', 'Use an id from visible.monsters.'));
     }
     // 射程外の対象（ID 指定）は拒否する。手番も品物も失わない（座標を狙えば手前に落ちる）
@@ -619,9 +619,8 @@ function returnThrown(ctx: Ctx, actorId: string, thrownId: string, stackId: stri
 // 近接攻撃（V3-4）: 隣の敵、または長柄の武器なら直線で 2 マス先（間のマスが通れて誰もいない）
 actions.register('attack', (ctx, e, pr, cmd: Extract<Command, { type: 'attack' }>) => {
   const key = e.pos!.floor;
-  const f = ctx.world.floors[key];
   const te = ctx.world.entities[cmd.target];
-  if (!te?.pos || te.pos.floor !== key || !te.actor || te.player || !ctx.visibleSet(pr.id).has(te.pos.y * f.width + te.pos.x)) {
+  if (!te?.pos || te.pos.floor !== key || !te.actor || te.player || !ctx.seesActorAt(pr.id, key, te.pos)) {
     return fail(pr, 'no_target', 'その敵は見えていない。', 'You cannot see that enemy.', 'visible.monsters の id を指定する。', 'Use an id from visible.monsters.');
   }
   const d = cheb(e.pos!, te.pos);
@@ -755,7 +754,7 @@ actions.register('stairs', (ctx, e, pr) => {
       const from = { floor: key, x: me.pos!.x, y: me.pos!.y };
       ctx.emit({
         type: 'entity_changed_floor', id: me.id, kind: me.kind, from, to: { floor: toKey, x: cell.x, y: cell.y }, nextActAt: to.time,
-        dir: tr.stairs!, ...ctx.perceive(key, [{ field: 'from', pos: from }], [pr.id]), floor: key,
+        dir: tr.stairs!, ...ctx.perceive(key, [{ field: 'from', pos: from, entity: me.id }], [pr.id]), floor: key,
       });
       // 守護者は、相手が階を離れている間に回復する（V3-3a §35.1）
       markGuardiansAway(ctx, key, ctx.world.entities[me.id]);

@@ -6,7 +6,7 @@ import type { Content } from '@muse/content';
 import { createRun, ENGINE_VERSION, isPlayersTurn, joinPlayer, step } from '@muse/engine';
 import type {
   ActionError, AgentActivity, Command, CommandRecord, CommandSource, Expedition, ExpeditionReport, GameEvent, JoinCommand, LegacyMonster, MacroStop, ProjectedEvent,
-  PerceivedEvent, PlayerId, PlayerView, ReportCall, RunMetaFile, RunSummary, TurnSnapshot, World,
+  PerceivedEvent, PlayerId, PlayerView, Pos, ReportCall, RunMetaFile, RunSummary, TurnSnapshot, World,
 } from '@muse/shared';
 import {
   actionError, applyEvent, buildExpeditionReport, canonicalHash, guardianDisplayName, compareReports, emptyWorld, filterEventsForPlayer, FREE_COMMANDS, MACRO_COMMANDS,
@@ -62,6 +62,8 @@ export interface MacroReport {
   hpGained: number;
   /** explore（careful）が止まらずに続けた、遅く離れた追跡中の敵の数（V4-0b §1.4） */
   slowChasers?: number;
+  /** fight: 標的を最後に見た場所（V4-0c §4.2） */
+  targetSeenAt?: Pos;
 }
 
 export type SubmitResult =
@@ -336,6 +338,18 @@ export class RunSession {
     return this.joinInfo.get(pid)?.legacy ?? null;
   }
 
+  /**
+   * seq より後に、そのプレイヤーが知覚した他の者の移動（文にならないので出来事の記録には残らない）。
+   * 見えなくなった敵の最後に見た位置と向きに使う（V4-0c §4.2）
+   */
+  movesSince(pid: PlayerId, seq: number): PerceivedEvent[] {
+    const slice = this.history.slice(this.indexOfSeq(seq + 1)).filter((e) => e.type === 'entity_moved');
+    if (!slice.length) return [];
+    const view = this.view(pid);
+    return filterEventsForPlayer(slice, pid, view).filter((e) => (e as unknown as { id?: string }).id !== view.self.id)
+      .map((e) => ({ seq: e.seq, type: e.type, text: '', event: e }));
+  }
+
   /** その遠征の間に、そのプレイヤーが知覚した出来事（実績の判定。V3-7） */
   expeditionEvents(pid: PlayerId, no: number): ProjectedEvent[] {
     const x = (this.world.expeditions ?? []).find((y) => y.no === no);
@@ -600,6 +614,7 @@ export class RunSession {
       timeElapsed: sameFloor && end.floor ? end.floor.time - state.startTime : null,
       hpGained: end.self.stats.hp - state.startHp,
       ...(state.slowChasers?.length ? { slowChasers: state.slowChasers.length } : {}),
+      ...(state.targetSeenAt ? { targetSeenAt: { ...state.targetSeenAt } } : {}),
     };
     return { ok: true, events: all, startSeq, steps: state.steps, interruptedBy: stop, macro };
   }

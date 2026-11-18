@@ -61,7 +61,7 @@ export function stepTo(ctx: Ctx, m: Entity, to: Pos): boolean {
   }
   if (!t.passable || ctx.actorAt(key, to.x, to.y)) return false;
   const from = { x: m.pos!.x, y: m.pos!.y };
-  const seen = ctx.perceive(key, [{ field: 'from', pos: from }, { field: 'to', pos: to }]);
+  const seen = ctx.perceiveMove(key, m, from, to);
   ctx.emit({ type: 'entity_moved', id: m.id, kind: m.kind, from, to: { x: to.x, y: to.y }, mode: 'walk', ...seen, floor: key });
   return true;
 }
@@ -112,7 +112,7 @@ export function flee(ctx: Ctx, m: Entity, from: Pos): boolean {
   }
   if (!best) return false;
   for (const pr of ctx.playersOn(key)) {
-    if (ctx.visibleSet(pr.id).has(m.pos!.y * f.width + m.pos!.x)) updateMemory(ctx, pr.id, m, (mm) => { mm.abilities.push('flees'); });
+    if (ctx.seesActor(pr.id, m)) updateMemory(ctx, pr.id, m, (mm) => { mm.abilities.push('flees'); });
   }
   return stepTo(ctx, m, best);
 }

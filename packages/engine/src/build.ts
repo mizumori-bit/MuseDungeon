@@ -34,8 +34,7 @@ export function notePerk(ctx: Ctx, actor: Entity, perk: string | null, effect: P
   const pr = ctx.world.players[actor.player];
   if (!pr) return;
   const sub = o.subject ?? null;
-  const f = sub?.pos ? ctx.world.floors[sub.pos.floor] : undefined;
-  const seen = !!sub?.pos && !!f && sub.pos.floor === actor.pos?.floor && ctx.visibleSet(pr.id).has(sub.pos.y * f.width + sub.pos.x);
+  const seen = !!sub?.pos && sub.pos.floor === actor.pos?.floor && ctx.seesActor(pr.id, sub);
   ctx.emit({
     type: 'perk_triggered', actor: actor.id, perk, effect, subject: sub?.id ?? null, subjectKind: seen ? sub!.kind : null,
     ...(o.amount !== undefined ? { amount: o.amount } : {}), seenBy: [pr.id], floor: actor.pos?.floor ?? null,
