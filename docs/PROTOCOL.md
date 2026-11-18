@@ -413,6 +413,13 @@ V3-2R で足した項目（同じく後方互換。会心と経験値のルー�
 - `player_state.reason: 'joined'`（キャンプから始まる参加）。参加コマンドの `atCamp`
 - プレイヤー向けの射影で、見えていた個体が視界の外へ動いた `entity_moved` に `dirOut`（向きだけ。行き先は伏せたまま）
 
+V4-0d で変えた項目（`engineVersion` 0.28.0。出来事の種類は増やしていないので `eventVersion` は 20 のまま。DESIGN.md §36.4）:
+
+- `ExpeditionOffer.guardian.hpRange` を格 1〜3 の守護者にも持たせる（体力ダイスの最小と最大に、目安と同じ上乗せと下限。大守護者は今までどおり `hp` が無く `hpRange` だけ）。`ExpeditionOffer.bounty.hpRange`（古い候補には無い）
+- 観測: `camp.offers[].bounty.hp_range`、`camp.offers[].guardian.hp`・`hp_range`。候補の文は「体力はおよそ 20（9〜32）」（幅が 1 点なら括弧なし）
+- 生成: 賞金首（目的・異変）と巡回の強敵も、その階の深層強化（tier。地下 19 階から先）を受ける
+- get_rules: 守護者の体力の目安の文に、括弧の中の幅の説明
+
 V4-0c で変えた項目（`engineVersion` 0.27.0。出来事の種類は増やしていないので `eventVersion` は 20 のまま。DESIGN.md §36.3）:
 
 - 伏せ方: 背の高い草の中の者（隣でない）が主体の出来事は、その者を見えていないものとして伏せる（`attack.attacker`・`from`、`damaged.source`、`entity_moved`、`died` など。被害を受けたのが自分なら `fromDir` だけ残る）。見えていた者が草に入る `entity_moved` は `to` も伝わる。草から草への移動は伝わらない

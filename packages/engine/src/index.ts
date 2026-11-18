@@ -20,9 +20,11 @@ export { shotLine } from './perception';
 export { pickRelic, relicInfo } from './boons';
 export { isMilestoneDepth } from './gen/generate';
 export { guardianTraits } from './expedition';
-import { makeOffers } from './expedition';
+import { bountyOffer, guardianHpEstimate, guardianHpRange, guardianMaxHit, makeOffers, monsterArmorEstimate } from './expedition';
+import { makeMonster } from './spawn';
+import type { SpawnSpec } from './gen/generate';
 import { Ctx } from './ctx';
-import type { ExpeditionOffer, World } from '@muse/shared';
+import type { BountyInfo, Entity, ExpeditionOffer, FloorKey, World } from '@muse/shared';
 /** 候補を作って返す（World は変えない。テストと計測用） */
 export function previewOffers(world: World, content: Content, no: number): ExpeditionOffer[] {
   return makeOffers(new Ctx(world, content, null, 0), no);
@@ -43,6 +45,20 @@ export function actorPerceived(world: World, content: Content, pid: string, enti
   if (!e?.pos) return false;
   const s = new Ctx(world, content, null, 0).perceive(e.pos.floor, [{ field: 'x', pos: e.pos, entity: e.id }]);
   return s.seenBy.includes(pid) && !s.masks?.[pid]?.includes('x');
+}
+/**
+ * 候補の目安（賞金首・格 1〜3 の守護者）と、生成の仕様から作った敵（どちらも World を変えない。
+ * 生成された個体が目安と幅に入るかを確かめるテスト用。V4-0d §6）
+ */
+export function previewBounty(world: World, content: Content, depth: number, b: BountyInfo): NonNullable<ExpeditionOffer['bounty']> {
+  return bountyOffer(new Ctx(world, content, null, 0), depth, b);
+}
+export function previewGuardian(world: World, content: Content, depth: number, kind: string, rank: 1 | 2 | 3, affixes: string[] = []): { hp: number; hpRange?: { min: number; max: number }; maxHit: number; armor: number } {
+  const ctx = new Ctx(world, content, null, 0);
+  return { hp: guardianHpEstimate(ctx, depth, kind, rank, affixes), hpRange: guardianHpRange(ctx, depth, kind, rank, affixes), maxHit: guardianMaxHit(ctx, depth, kind, affixes), armor: monsterArmorEstimate(ctx, depth, kind, affixes) };
+}
+export function monsterFromSpec(world: World, content: Content, floor: FloorKey, spec: Extract<SpawnSpec, { type: 'monster' }>): Entity {
+  return makeMonster(new Ctx(world, content, null, 0), floor, spec, 'e_preview', 0);
 }
 /** 版の新旧（'0.8.0' と '0.25.0' を数で比べる。a が古ければ負） */
 export function compareVersions(a: string, b: string): number {

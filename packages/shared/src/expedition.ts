@@ -138,9 +138,9 @@ export function guardianForecastText(L: Locale, g: { rank: number; traits: strin
   const hit = g.maxHit ? [floorHit !== null
     ? t(L, `一撃は最大 ${g.maxHit} まで（装甲で減る前。装甲で減っても ${floorHit} より下がらない）`, `hits up to ${g.maxHit} (before armor; armor cannot bring it below ${floorHit})`)
     : t(L, `一撃は最大 ${g.maxHit} まで（装甲で減る前）`, `hits up to ${g.maxHit} (before armor)`)] : [];
-  // 体力の目安（V3-3c §44.2）: 格 1〜3 はおよその値、大守護者は式の幅
-  if (g.hpRange) hit.unshift(t(L, `体力 ${g.hpRange.min}〜${g.hpRange.max}`, `HP ${g.hpRange.min}-${g.hpRange.max}`));
-  else if (g.hp) hit.unshift(t(L, `体力はおよそ ${g.hp}`, `about ${g.hp} HP`));
+  // 体力の目安（V3-3c §44.2）: 格 1〜3 はおよその値に幅を添える（V4-0d §6.1）、大守護者は式の幅
+  if (g.hp) hit.unshift(hpAboutText(L, g.hp, g.hpRange));
+  else if (g.hpRange) hit.unshift(t(L, `体力 ${g.hpRange.min}〜${g.hpRange.max}`, `HP ${g.hpRange.min}-${g.hpRange.max}`));
   // 装甲の目安（V3-8a §56.1。型の効果を除く）
   if (g.armor !== undefined) hit.push(t(L, `装甲はおよそ ${g.armor}`, `about ${g.armor} armor`));
   return t(L, `守護者${who}: 格 ${g.rank}・${[...tr, ...hit].join('・')}`, `guardian${who}: rank ${g.rank}, ${[...tr, ...hit].join(', ')}`);
@@ -150,12 +150,18 @@ export function guardianForecastText(L: Locale, g: { rank: number; traits: strin
  * 賞金首の見込みの文（V3-8 §53.2。守護者の候補と同じ並び）: 種族・接辞・体力の目安・一撃の目安。
  * 名前付きの強敵は種族を隠さない（異変の賞金首と同じく、見れば分かる）。通る目安はキャンプの観測が添える
  */
-export function bountyForecastText(L: Locale, b: { name: Names; kindName?: Names; affixNames?: Names[]; hp: number; maxHit: number }): string {
+/** 体力の目安と幅（V4-0d §6.1）: 「体力はおよそ 20（9〜32）」。幅が無い（古い候補）・幅が 1 点なら目安だけ */
+export function hpAboutText(L: Locale, hp: number, range?: { min: number; max: number }): string {
+  const r = range && range.min !== range.max ? t(L, `（${range.min}〜${range.max}）`, ` (${range.min}-${range.max})`) : '';
+  return t(L, `体力はおよそ ${hp}${r}`, `about ${hp} HP${r}`);
+}
+
+export function bountyForecastText(L: Locale, b: { name: Names; kindName?: Names; affixNames?: Names[]; hp: number; hpRange?: { min: number; max: number }; maxHit: number }): string {
   const who = nameOf(b.name, L, '?');
   const kn = b.kindName ? nameOf(b.kindName, L, '') : '';
   const an = (b.affixNames ?? []).map((n) => nameOf(n, L, ''));
   const kind = kn ? t(L, `（${kn}${an.length ? `・${an.join('・')}` : ''}）`, ` (${kn}${an.length ? `, ${an.join(', ')}` : ''})`) : '';
-  return t(L, `賞金首「${who}」${kind}: 体力はおよそ ${b.hp}・一撃は最大 ${b.maxHit} まで（装甲で減る前）`, `bounty "${who}"${kind}: about ${b.hp} HP, hits up to ${b.maxHit} (before armor)`);
+  return t(L, `賞金首「${who}」${kind}: ${hpAboutText(L, b.hp, b.hpRange)}・一撃は最大 ${b.maxHit} まで（装甲で減る前）`, `bounty "${who}"${kind}: ${hpAboutText(L, b.hp, b.hpRange)}, hits up to ${b.maxHit} (before armor)`);
 }
 
 /** 遺物の文（「遺物「息吹の欠片」→ 加護「息吹」: 自然回復の間隔 −2」。V3-3 §3.3） */

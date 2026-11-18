@@ -147,8 +147,11 @@ export interface ObsCamp {
     rechallenge?: { no: number | null };
     /** 推奨レベルと、自分のレベルとの差（正なら推奨より低い）。条件の危険度の合計は別に出す（V3-2R §14.4） */
     recommended_level: number | null; level_gap: number | null; trait_danger: number;
-    /** 守護者の見込み（格と見れば分かる特徴。種族名は会うまで出さない。V3-2R3 §20.1） */
-    guardian?: { rank: 1 | 2 | 3; traits: string[] };
+    /** 守護者の見込み（格と見れば分かる特徴。種族名は会うまで出さない。V3-2R3 §20.1）。hp: 体力の目安（格 1〜3）、hp_range: 体力の幅（V4-0d §6.1。大守護者は式の幅）、armor: 装甲の目安 */
+    guardian?: { rank: 1 | 2 | 3; traits: string[]; armor?: number; hp?: number; hp_range?: { min: number; max: number } };
+    /** 賞金首の見込み（V3-8 §53.2）。hp_range: 体力の幅（V4-0d §6.1。古い候補には無い） */
+    bounty?: { kind: string; name: string; hp: number; hp_range?: { min: number; max: number }; max_hit: number };
+    vault?: boolean; scar?: number;
     /** 遺物の名前と、持ち帰るとなる加護（V3-3 §3.3）。owned: もう持っている加護（新しくは付かない） */
     relic?: { kind: string; name: string; boon: string | null; boon_name?: string; boon_desc?: string; owned?: boolean };
   }[];
@@ -1248,10 +1251,13 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
         })() + (o.bounty ? ` / ${gearVsArmorText(L, catalog, view, o.bounty.armor, Math.max(1, o.bounty.hp - (o.scar ?? 0)))}` : '')
           // 守護者の候補（格 1〜3。再挑戦を含む）にも通る目安（V3-8a §56.1。大守護者は記録庫の記憶の装甲で出す）
           + (o.guardian?.armor !== undefined && o.objective.type !== 'slay_warden' ? ` / ${gearVsArmorText(L, catalog, view, o.guardian.armor, o.guardian.hp !== undefined ? Math.max(1, o.guardian.hp - (o.scar ?? 0)) : undefined)}` : ''),
-        ...(o.bounty ? { bounty: { kind: o.bounty.kind, name: nameOf(o.bounty.name, L, ''), hp: o.bounty.hp, max_hit: o.bounty.maxHit } } : {}),
+        ...(o.bounty ? { bounty: { kind: o.bounty.kind, name: nameOf(o.bounty.name, L, ''), hp: o.bounty.hp, ...(o.bounty.hpRange ? { hp_range: { ...o.bounty.hpRange } } : {}), max_hit: o.bounty.maxHit } } : {}),
         ...(o.vault ? { vault: true } : {}), ...(o.scar ? { scar: o.scar } : {}),
         ...(o.slot ? { slot: o.slot } : {}), ...(o.traits?.length ? { traits: [...o.traits] } : {}),
-        ...(o.guardian ? { guardian: { rank: o.guardian.rank, traits: [...o.guardian.traits], ...(o.guardian.armor !== undefined ? { armor: o.guardian.armor } : {}) } } : {}),
+        ...(o.guardian ? { guardian: {
+          rank: o.guardian.rank, traits: [...o.guardian.traits], ...(o.guardian.armor !== undefined ? { armor: o.guardian.armor } : {}),
+          ...(o.guardian.hp !== undefined ? { hp: o.guardian.hp } : {}), ...(o.guardian.hpRange ? { hp_range: { ...o.guardian.hpRange } } : {}),
+        } } : {}),
         ...(o.relic ? { relic: {
           kind: o.relic.kind, name: nameOf(o.relic.name, L, o.relic.kind), boon: o.relic.boon,
           ...(o.relic.boonName ? { boon_name: nameOf(o.relic.boonName, L, '') } : {}), ...(o.relic.boonDesc ? { boon_desc: nameOf(o.relic.boonDesc, L, '') } : {}),

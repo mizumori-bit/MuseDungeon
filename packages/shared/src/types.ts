@@ -346,7 +346,7 @@ export interface ExpeditionOffer {
   multiplierPct?: number;
   /** 守護者の見込み（守護者を倒す・守護者付きの遺物。V3-2R3 §20.1）。種族名は会うまで出さない。name・types（V3-3）は公開 */
   /** maxHit: 一撃の目安（装甲で減る前。V3-3b §40.6） */
-  /** hp: 体力の目安（格 1〜3。種族の体力の平均から。V3-3c §44.2）、hpRange: 大守護者の体力の幅（式の下限と上限） */
+  /** hp: 体力の目安（格 1〜3。種族の体力の平均から。V3-3c §44.2）、hpRange: 体力の幅（格 1〜3 は体力ダイスの最小と最大に目安と同じ上乗せ。V4-0d §6.1。大守護者は式の下限と上限で、hp は無い） */
   /** armor: 装甲の目安（種族・接辞・深層強化。型の効果を除く。V3-8a §56.1） */
   guardian?: { rank: 1 | 2 | 3; traits: string[]; name?: Names; title?: Names; types?: string[]; maxHit?: number; hp?: number; hpRange?: { min: number; max: number }; armor?: number };
   /** 守護者の種族（候補を作った時点で決める。プレイヤーには渡さない） */
@@ -366,7 +366,8 @@ export interface ExpeditionOffer {
   /** 再挑戦（V3-3c §44.1）: 目標の階に残っている守護者をもう一度目的にする。no はその守護者を目的にした遠征、guardian はその守護者（賞金首なら bounty。V3-8 §53.3） */
   rechallenge?: { no: number | null; guardian: EntityId; bounty?: boolean };
   /** 賞金首を討つ（V3-8 §53.2）: 種族・接辞・名前・体力と一撃の目安・装甲（公開。守護者の候補と同じ並び） */
-  bounty?: BountyInfo & { kindName: Names; affixNames: Names[]; hp: number; maxHit: number; armor: number };
+  /** hpRange: 体力の幅（体力ダイスの最小と最大に目安と同じ上乗せ。V4-0d §6.1。古い候補には無い） */
+  bounty?: BountyInfo & { kindName: Names; affixNames: Names[]; hp: number; hpRange?: { min: number; max: number }; maxHit: number; armor: number };
   /** 宝物庫を開ける（V3-8 §53.2）: 鍵を持つ敵が階にいる */
   vault?: boolean;
   /** 傷跡（V3-8 §53.3）: 前の挑戦で与えたダメージのうち、次の挑戦に残る体力の減り（再挑戦の守護者・賞金首・大守護者） */

@@ -138,11 +138,19 @@ function monsterWeight(m: MonsterDef, depth: number, biome: BiomeDef): number {
   return Math.max(0, w);
 }
 
+/**
+ * 深層強化の段（定義の最深より深い階で 5 階ごとに 1 段）。普通の敵・守護者・賞金首・巡回の強敵の生成と、
+ * 候補の目安（体力・一撃・装甲）で共用する（V4-0d §6.2: 目安は生成と同じ式）
+ */
+export function deepTier(content: Pick<Content, 'deepestDefined'>, depth: number): number {
+  return depth > content.deepestDefined ? floorDiv(depth - content.deepestDefined, 5) + 1 : 0;
+}
+
 export function pickMonster(s: Pick<GenState, 'content' | 'depth' | 'biome' | 'floorType'>, rng: Rng): { def: MonsterDef; tier: number } | null {
   const c = s.content;
   const table = c.spawnTables[s.floorType.monsters.table];
   const effective = Math.min(s.depth, c.deepestDefined);
-  const tier = s.depth > c.deepestDefined ? floorDiv(s.depth - c.deepestDefined, 5) + 1 : 0;
+  const tier = deepTier(c, s.depth);
   let d = effective;
   // 低確率で深層の敵が混ざる（浅い階では深度差を抑える）
   if (table && rng.chance(table.oodChancePct)) d = Math.min(c.deepestDefined, effective + Math.min(table.oodDepth, s.depth));
@@ -336,7 +344,8 @@ function applyEventAfter(s: GenState): void {
   while (pts.length < n && pool.length) pts.push(pool.splice(rng.int(pool.length), 1)[0]);
   const route = pts.map((i) => ({ x: i % s.grid.w, y: Math.trunc(i / s.grid.w) }));
   const start = route[0];
-  const spec = monsterSpec(s, def, 0, start.x, start.y, false, rng);
+  // 賞金首（目的・異変）と巡回の強敵も、その階の深層強化を受ける（V4-0d §6.2。同じ階の普通の敵より弱くならない）
+  const spec = monsterSpec(s, def, deepTier(s.content, s.depth), start.x, start.y, false, rng);
   if (spec.type !== 'monster') return;
   spec.route = route;
   spec.delay = 0;
@@ -702,8 +711,7 @@ export function pickGuardianKind(content: Content, seed: string, branch: string,
 /** 守護者の生成仕様（生成時と、生成済みの階に遠征の開始時に置くときで共用）。格で体力の上乗せと下限が決まる */
 export function guardianSpec(content: Content, depth: number, kind: string, rank: 1 | 2 | 3, x: number, y: number, rng: Rng, info?: GuardianInfo, affixes?: string[]): SpawnSpec {
   const def = content.monsters[kind];
-  const tier = depth > content.deepestDefined ? floorDiv(depth - content.deepestDefined, 5) + 1 : 0;
-  const spec = monsterSpec({ content, depth }, def, tier, x, y, false, rng);
+  const spec = monsterSpec({ content, depth }, def, deepTier(content, depth), x, y, false, rng);
   if (spec.type === 'monster') {
     // 候補で決めた接辞があればそれ（乱数は今までどおり引いてから替える。V3-5a 後の評価 2: 見込みが接辞を反映していなかった）
     if (affixes) spec.affixes = [...affixes];

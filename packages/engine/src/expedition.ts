@@ -10,7 +10,7 @@ import type { Ctx } from './ctx';
 import { ensureFloor, findFreeCell, syncTerrainTable } from './floors';
 import { hasLos, inCircle } from './geom';
 import { isOpaqueFn } from './perception';
-import { guardianCandidates, guardianSpec, pickGuardianKind, rollMonsterAffixes, selectBiome, selectFloorType } from './gen/generate';
+import { deepTier, guardianCandidates, guardianSpec, pickGuardianKind, rollMonsterAffixes, selectBiome, selectFloorType } from './gen/generate';
 import { departGuardians, lairPlan, makeName, projectedScar, rollGuardianInfo, rollWardenInfo, settleGuardian } from './guardians';
 import { grantBoon, ownedBoons, pickRelic } from './boons';
 import { nextMilestone, restoreMilestoneFloors, sealedFloor, wardenHpRange, wardenPreview } from './warden';
@@ -98,7 +98,7 @@ export function displayName(g: { name: Names; title?: Names }): Names {
 export function guardianMaxHit(ctx: Ctx, depth: number, kind: string, affixes: readonly string[] = []): number {
   const def = ctx.content.monsters[kind];
   if (!def) return 0;
-  const tier = depth > ctx.content.deepestDefined ? floorDiv(depth - ctx.content.deepestDefined, 5) + 1 : 0;
+  const tier = deepTier(ctx.content, depth);
   const guardAffix = ctx.content.lists.affixes.find((a) => a.target === 'guardian');
   const mods = sumAffixMods(ctx.content, [...(guardAffix ? [guardAffix.id] : []), ...affixes]);
   return diceMax(addDiceBonus(def.attack.dice, mods.dmgBonus)) + def.stats.might + tier + mods.might;
@@ -108,40 +108,60 @@ export function guardianMaxHit(ctx: Ctx, depth: number, kind: string, affixes: r
 export function monsterArmorEstimate(ctx: Ctx, depth: number, kind: string, affixes: readonly string[] = [], guardian = true): number {
   const def = ctx.content.monsters[kind];
   if (!def) return 0;
-  const tier = depth > ctx.content.deepestDefined ? floorDiv(depth - ctx.content.deepestDefined, 5) + 1 : 0;
+  const tier = deepTier(ctx.content, depth);
   const guardAffix = guardian ? ctx.content.lists.affixes.find((a) => a.target === 'guardian') : undefined;
   const mods = sumAffixMods(ctx.content, [...(guardAffix ? [guardAffix.id] : []), ...affixes]);
   return def.stats.armor + floorDiv(tier, 2) + mods.armor;
 }
 
 /**
- * 守護者の体力の目安（V3-3c §44.2。一撃の目安と同じ考え方: 種族の体力ダイスの平均 × 格の上乗せ・守護者の接辞・候補の接辞・深層強化。下限も同じ）
+ * 体力ダイスの平均・最小・最大に上乗せ（%）を掛け、下限で切る（目安と幅。生成と同じ式: 振った値は 1 以上、
+ * 最大体力 = max(1, 下限, ⌊振った値 × 上乗せ / 100⌋)。V4-0d §6.1）
  */
-export function guardianHpEstimate(ctx: Ctx, depth: number, kind: string, rank: 1 | 2 | 3, affixes: readonly string[] = []): number {
+function scaledHp(dice: string, pct: number, minHp: number): { avg: number; min: number; max: number } {
+  const f = (v: number) => Math.max(1, minHp, floorDiv(v * pct, 100));
+  return { avg: f(floorDiv(diceMin(dice) + diceMax(dice), 2)), min: f(Math.max(1, diceMin(dice))), max: f(Math.max(1, diceMax(dice))) };
+}
+
+/** 守護者（格 1〜3）の体力: 種族の体力ダイス × 格の上乗せ・守護者の接辞・候補の接辞・深層強化。下限も生成と同じ */
+function guardianHp(ctx: Ctx, depth: number, kind: string, rank: 1 | 2 | 3, affixes: readonly string[]): { avg: number; min: number; max: number } | null {
   const def = ctx.content.monsters[kind];
-  if (!def) return 0;
-  const tier = depth > ctx.content.deepestDefined ? floorDiv(depth - ctx.content.deepestDefined, 5) + 1 : 0;
+  if (!def) return null;
+  const tier = deepTier(ctx.content, depth);
   const guardAffix = ctx.content.lists.affixes.find((a) => a.target === 'guardian');
   const mods = sumAffixMods(ctx.content, [...(guardAffix ? [guardAffix.id] : []), ...affixes]);
   const ranks = ctx.content.balance.guardian.ranks;
   const r = ranks[Math.min(ranks.length, rank) - 1];
-  const avg = floorDiv(diceMin(def.stats.hp) + diceMax(def.stats.hp), 2);
-  return Math.max(1, r.minHpBase + r.minHpPerDepth * depth, floorDiv(avg * (100 + 50 * tier + mods.hpPct + r.hpPct), 100));
+  return scaledHp(def.stats.hp, 100 + 50 * tier + mods.hpPct + r.hpPct, r.minHpBase + r.minHpPerDepth * depth);
+}
+
+/**
+ * 守護者の体力の目安（V3-3c §44.2。一撃の目安と同じ考え方: 種族の体力ダイスの平均 × 格の上乗せ・守護者の接辞・候補の接辞・深層強化。下限も同じ）
+ */
+export function guardianHpEstimate(ctx: Ctx, depth: number, kind: string, rank: 1 | 2 | 3, affixes: readonly string[] = []): number {
+  return guardianHp(ctx, depth, kind, rank, affixes)?.avg ?? 0;
+}
+
+/** 守護者の体力の幅（V4-0d §6.1。体力ダイスの最小と最大に、目安と同じ上乗せと下限） */
+export function guardianHpRange(ctx: Ctx, depth: number, kind: string, rank: 1 | 2 | 3, affixes: readonly string[] = []): { min: number; max: number } | undefined {
+  const h = guardianHp(ctx, depth, kind, rank, affixes);
+  return h ? { min: h.min, max: h.max } : undefined;
 }
 
 /** 深い階の遠征の新しい目的が出る深さ（V3-8 §53.2: 目標が地下 6 階より深い踏破の枠） */
 const DEEP_OBJECTIVE_DEPTH = 6;
 
 /** 賞金首の見込み（V3-8 §53.2）: 種族・接辞・名前・体力と一撃の目安・装甲。名前付きの強敵は種族を隠さない */
-function bountyOffer(ctx: Ctx, depth: number, b: BountyInfo): NonNullable<ExpeditionOffer['bounty']> {
+export function bountyOffer(ctx: Ctx, depth: number, b: BountyInfo): NonNullable<ExpeditionOffer['bounty']> {
   const def = ctx.content.monsters[b.kind];
-  const tier = depth > ctx.content.deepestDefined ? floorDiv(depth - ctx.content.deepestDefined, 5) + 1 : 0;
+  const tier = deepTier(ctx.content, depth);
   const mods = sumAffixMods(ctx.content, b.affixes);
-  const avg = def ? floorDiv(diceMin(def.stats.hp) + diceMax(def.stats.hp), 2) : 0;
+  // 体力の目安と幅（V4-0d §6.1。生成と同じ: 種族の体力ダイス × (100 + 深層強化 + 接辞)%）
+  const hp = def ? scaledHp(def.stats.hp, 100 + 50 * tier + mods.hpPct, 1) : { avg: 1, min: 1, max: 1 };
   return {
     kind: b.kind, name: { ...b.name }, affixes: [...b.affixes],
     kindName: def ? { ...def.name } : { ja: b.kind, en: b.kind }, affixNames: b.affixes.map((a) => ({ ...(ctx.content.affixes[a]?.name ?? { ja: a, en: a }) })),
-    hp: Math.max(1, floorDiv(avg * (100 + 50 * tier + mods.hpPct), 100)),
+    hp: hp.avg, hpRange: { min: hp.min, max: hp.max },
     maxHit: def ? diceMax(addDiceBonus(def.attack.dice, mods.dmgBonus)) + def.stats.might + tier + mods.might : 0,
     armor: monsterArmorEstimate(ctx, depth, b.kind, b.affixes, false),
   };
@@ -328,7 +348,7 @@ export function makeOffers(ctx: Ctx, no: number): ExpeditionOffer[] {
         // 接辞もここで決める（見込みの特徴と一撃の目安に入れる。生成ではこれを使う）
         const affixes = rollMonsterAffixes(ctx.content, target, Rng.fromSeed(`${ctx.world.secret.seed}|guardian-affix|${no}|${i}`));
         offer.guardianAffixes = affixes;
-        offer.guardian = { rank, traits: guardianTraits(ctx, kind, affixes, 0, rank >= 2), name: gi.name, ...(gi.title ? { title: gi.title } : {}), types: gi.types, maxHit: guardianMaxHit(ctx, target, kind, affixes), hp: guardianHpEstimate(ctx, target, kind, rank, affixes), armor: monsterArmorEstimate(ctx, target, kind, affixes) };
+        offer.guardian = { rank, traits: guardianTraits(ctx, kind, affixes, 0, rank >= 2), name: gi.name, ...(gi.title ? { title: gi.title } : {}), types: gi.types, maxHit: guardianMaxHit(ctx, target, kind, affixes), hp: guardianHpEstimate(ctx, target, kind, rank, affixes), hpRange: guardianHpRange(ctx, target, kind, rank, affixes), armor: monsterArmorEstimate(ctx, target, kind, affixes) };
         offer.guardianWeakness = gi.weakness;
       }
       // 再挑戦: 新しい守護者を作らず、残っている守護者をもう一度目的にする（同じ名前・型・弱点。乱数は上で引いたまま）
@@ -340,7 +360,7 @@ export function makeOffers(ctx: Ctx, no: number): ExpeditionOffer[] {
         offer.guardianKind = rematch.kind;
         offer.guardianAffixes = affs;
         offer.guardianWeakness = g.weakness;
-        offer.guardian = { rank: rr, traits: guardianTraits(ctx, rematch.kind, affs, 0, !!g.heavy), name: { ...g.name }, ...(g.title ? { title: { ...g.title } } : {}), types: [...g.types], maxHit: guardianMaxHit(ctx, target, rematch.kind, affs), hp: guardianHpEstimate(ctx, target, rematch.kind, rr, affs), armor: monsterArmorEstimate(ctx, target, rematch.kind, affs) };
+        offer.guardian = { rank: rr, traits: guardianTraits(ctx, rematch.kind, affs, 0, !!g.heavy), name: { ...g.name }, ...(g.title ? { title: { ...g.title } } : {}), types: [...g.types], maxHit: guardianMaxHit(ctx, target, rematch.kind, affs), hp: guardianHpEstimate(ctx, target, rematch.kind, rr, affs), hpRange: guardianHpRange(ctx, target, rematch.kind, rr, affs), armor: monsterArmorEstimate(ctx, target, rematch.kind, affs) };
         offer.rechallenge = { no: src?.no ?? null, guardian: rematch.id };
         const sc = projectedScar(rematch);
         if (sc) offer.scar = sc;
