@@ -18,6 +18,27 @@ import { getLocale, getPref, setPref, tr } from '../util';
 
 interface Bubble { id: string; text: string; until: number }
 
+/**
+ * 観戦の再生の待ち行列（届いた順）。AI のマクロ（explore・travel など）は 1 回の呼び出しで何十歩も一度に進むので、
+ * 見る側だけ 1 手（同じ命令から出た出来事のまとまり）ずつ間を置いて見せる。AI の進みは変えない
+ */
+type Frame = { t: 'events'; events: GameEvent[] } | { t: 'view'; msg: Extract<ServerMsg, { t: 'view' }> } | { t: 'ended'; summary: RunSummary };
+/** 1 手の間（ミリ秒）。届いた時点でたまっている手を、およそ PACE_DRAIN_MS で見せ終える間にする（AI の応答の待ち時間で追いつく） */
+const PACE_MAX_MS = 150;
+const PACE_MIN_MS = 25;
+const PACE_DRAIN_MS = 2500;
+
+/** 出来事を 1 手ずつに分ける（同じ命令 cause の、続いた出来事が 1 手） */
+function splitSteps(events: readonly GameEvent[]): GameEvent[][] {
+  const out: GameEvent[][] = [];
+  for (const ev of events) {
+    const last = out[out.length - 1];
+    if (last && ev.cause !== null && last[0].cause === ev.cause) last.push(ev);
+    else out.push([ev]);
+  }
+  return out;
+}
+
 export function Watch({ runId }: { runId: string }) {
   useLocaleRefresh();
   const { catalog, error: catErr } = useCatalog();
@@ -47,6 +68,11 @@ export function Watch({ runId }: { runId: string }) {
   /** 最後にイベント・AI の記録を受け取った時刻（「AI の応答待ち」の秒数） */
   const lastMsgRef = useRef<number>(performance.now());
   const macroRef = useRef<Record<string, string>>({});
+  const queueRef = useRef<Frame[]>([]);
+  const playTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const paceRef = useRef(PACE_MAX_MS);
+  /** 最後に 1 手を見せた時刻（マクロの 1 歩ずつが数ミリ秒おきに別々に届くので、届いた時ではなく、見せた時から間を数える） */
+  const lastPlayRef = useRef(0);
   catalogRef.current = catalog;
   modeRef.current = mode;
   followRef.current = follow;
@@ -147,53 +173,86 @@ export function Watch({ runId }: { runId: string }) {
     const hello = followOnly
       ? { t: 'hello' as const, role: 'spectator' as const, runId, mode: 'follow' as const, follow: follow! }
       : { t: 'hello' as const, role: 'spectator' as const, runId, mode: 'director' as const };
-    const onMsg = (m: ServerMsg) => {
+    /** 1 手を見せる（World に畳んで描く・記録・吹き出し・音） */
+    const applyEvents = (events: GameEvent[]) => {
       const c = catalogRef.current;
+      const w = worldRef.current;
+      if (!w) return;
+      const applied: GameEvent[] = [];
+      for (const ev of events) {
+        if (ev.seq <= w.seq) continue;
+        try {
+          applyEvent(w, ev);
+          applied.push(ev);
+        } catch (e) {
+          setError(`${tr('イベント適用エラー', 'Failed to apply event')} #${ev.seq}: ${(e as Error).message}`);
+          break;
+        }
+      }
+      if (!applied.length) return;
+      if (c) setLog((l) => [...l, ...narrateWorld(applied, w, c, getLocale(), modeRef.current === 'follow' ? followRef.current : null)].slice(-400));
+      const th2 = thoughtsFrom(applied, w);
+      if (th2.length) {
+        setThoughts((t) => [...t, ...th2].slice(-100));
+        for (const t of th2) {
+          const eid = w.players[t.player]?.entityId;
+          if (eid) bubblesRef.current.push({ id: eid, text: t.text, until: performance.now() + 4000 });
+        }
+        setTimeout(() => render(), 4100);
+      }
+      setTick((n) => n + 1);
+      render(applied);
+      sound(applied);
+    };
+    const applyFrame = (f: Frame) => {
+      if (f.t === 'events') applyEvents(f.events);
+      else if (f.t === 'view') {
+        const m = f.msg;
+        viewRef.current = m.view;
+        setLog((l) => [...l, ...perceivedLines(m.events)].slice(-400));
+        setTick((n) => n + 1);
+        render();
+        soundDirector.update(m.view, m.events.map((e) => e.event), catalogRef.current);
+      } else setSummary(f.summary);
+      // 「AI の応答待ち」は、画面が追いついたときから数える
+      lastMsgRef.current = performance.now();
+    };
+    /** 待ち行列から 1 手ずつ見せる。前の 1 手から paceRef の間を置いて（しばらく何も無かった後の 1 手はすぐ） */
+    const play = () => {
+      const f = queueRef.current.shift();
+      if (!f) { playTimer.current = null; return; }
+      applyFrame(f);
+      lastPlayRef.current = performance.now();
+      playTimer.current = queueRef.current.length ? setTimeout(play, paceRef.current) : null;
+    };
+    const enqueue = (frames: Frame[]) => {
+      queueRef.current.push(...frames);
+      // たまっている手を、およそ PACE_DRAIN_MS で見せ終える間（届くたびに決め直す）
+      paceRef.current = Math.max(PACE_MIN_MS, Math.min(PACE_MAX_MS, Math.floor(PACE_DRAIN_MS / Math.max(1, queueRef.current.length))));
+      if (playTimer.current) return;
+      const wait = paceRef.current - (performance.now() - lastPlayRef.current);
+      if (wait > 0) playTimer.current = setTimeout(play, wait);
+      else play();
+    };
+    const onMsg = (m: ServerMsg) => {
       if (m.t === 'snapshot' || m.t === 'events' || m.t === 'view' || m.t === 'agent' || m.t === 'macro') lastMsgRef.current = performance.now();
       switch (m.t) {
         case 'snapshot':
+          // つなぎ直し: 待ち行列を捨てて、届いた World から見せ直す
+          if (playTimer.current) clearTimeout(playTimer.current);
+          playTimer.current = null;
+          queueRef.current = [];
           worldRef.current = structuredClone(m.world);
           if (worldRef.current.status === 'ended') setSummary(null);
           setTick((n) => n + 1);
           render();
           sound([], true);
           break;
-        case 'events': {
-          const w = worldRef.current;
-          if (!w) break;
-          const applied: GameEvent[] = [];
-          for (const ev of m.events) {
-            if (ev.seq <= w.seq) continue;
-            try {
-              applyEvent(w, ev);
-              applied.push(ev);
-            } catch (e) {
-              setError(`${tr('イベント適用エラー', 'Failed to apply event')} #${ev.seq}: ${(e as Error).message}`);
-              break;
-            }
-          }
-          if (!applied.length) break;
-          if (c) setLog((l) => [...l, ...narrateWorld(applied, w, c, getLocale(), modeRef.current === 'follow' ? followRef.current : null)].slice(-400));
-          const th2 = thoughtsFrom(applied, w);
-          if (th2.length) {
-            setThoughts((t) => [...t, ...th2].slice(-100));
-            for (const t of th2) {
-              const eid = w.players[t.player]?.entityId;
-              if (eid) bubblesRef.current.push({ id: eid, text: t.text, until: performance.now() + 4000 });
-            }
-            setTimeout(() => render(), 4100);
-          }
-          setTick((n) => n + 1);
-          render(applied);
-          sound(applied);
+        case 'events':
+          if (worldRef.current) enqueue(splitSteps(m.events).map((events) => ({ t: 'events' as const, events })));
           break;
-        }
         case 'view':
-          viewRef.current = m.view;
-          setLog((l) => [...l, ...perceivedLines(m.events)].slice(-400));
-          setTick((n) => n + 1);
-          render();
-          soundDirector.update(m.view, m.events.map((e) => e.event), catalogRef.current);
+          enqueue([{ t: 'view', msg: m }]);
           break;
         case 'agent': {
           setActivities((a) => [...a, m.activity].slice(-50));
@@ -210,7 +269,7 @@ export function Watch({ runId }: { runId: string }) {
           setMacro((s) => ({ ...s, [m.playerId]: m.state === 'running' ? `${m.kind} (${m.steps})` : '' }));
           break;
         case 'ended':
-          setSummary(m.summary);
+          enqueue([{ t: 'ended', summary: m.summary }]);
           break;
         case 'error':
           setError(`${m.error.message}${m.error.hint ? ` — ${m.error.hint}` : ''}`);
@@ -220,7 +279,13 @@ export function Watch({ runId }: { runId: string }) {
       }
     };
     const ws = connectWs(hello, onMsg, setWsStatus);
-    return () => { ws.close(); soundDirector.leave(); };
+    return () => {
+      ws.close();
+      if (playTimer.current) clearTimeout(playTimer.current);
+      playTimer.current = null;
+      queueRef.current = [];
+      soundDirector.leave();
+    };
   }, [runId, policy, followOnly ? follow : null]);
 
   useEffect(() => { render(); }, [catalog, mode, follow, floorSel]);
