@@ -55,7 +55,8 @@ export interface TurnSnapshot {
   /** 帰還の綱の長い説明を出した遠征の通番（V3-3a §35.8） */
   lifeNo?: number;
   /** 加護の説明を出した遠征（2 回目からは名前だけ。V3-3c §44.6） */
-  boonNo?: number;
+  /** 説明を出した加護の組（ID を並べたもの。V3-8a） */
+  boonKey?: string;
   state: TurnState | null;
   /** 既知のセル数（地図の変化の判定用） */
   knownCells: number;

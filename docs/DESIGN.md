@@ -1341,3 +1341,13 @@ bot の計測（`bot --runs 10`・`npm run budget -- --runs 20`）は IMPROVEMEN
 - **見つけた部屋の場所**: `room_found.at`（見つけたときに見えた、部屋の範囲の通れるマス）。文に方角と歩数を添える（「「賭けの祭壇」を見つけた（発見。東・5 マス先に部屋の一角が見えた）。」）。部屋の中の地物は、見えるまで出さない。
 - **呪いの判定の文**: `item_inspected.affixes`（確かめた後の接辞）で、接辞付きの名前にする（「補強された革鎧に呪いは無い。」）。
 - **静寂の指輪の短い説明**: 「自分の立てた音（攻撃・扉・投擲）で、眠っている敵が必ず起きる」。効き目は変えていない。
+
+### 35.8 V3-8a（IMPROVEMENTS_V3 §56.1）
+
+実装メモは IMPROVEMENTS_V3 §57。`engineVersion` 0.24.0。テストは `packages/tools/test/v38a.test.ts`。**これで土台（V3-1〜V3-8）は完成とした。**
+
+- **守護者の候補**: `ExpeditionOffer.guardian.armor`（装甲の目安: 種族 + 深層強化の段の半分 + 守護者の接辞 + 候補の接辞。型の効果は除く。`monsterArmorEstimate`。賞金首も同じ式）。見込みの文に「装甲はおよそ N」、キャンプの候補の文と人間の候補のカードに「いまの持ち物で 1 回に通る目安」（大守護者は記録庫の記憶の装甲で、今までどおり）。
+- **規則の文**: 枠は目標の遠さと見返りを表し、危険は候補ごとの見立て（推奨レベルとの差・一撃・通る目安）で読む。
+- **マクロ**: `macroNext` は、止まる判断が出たとき、collect（what: items）か品を目的地にした travel_to で足元にその品があれば、拾う 1 手を挟んでから止まる（`MacroState.pendingStop`。hp_floor・hp_risk・予備動作では挟まない）。steady の explore・travel・collect は、その呼び出しの被害の合計（`MacroState.damageTaken`）が最大 HP の 4 分の 1 を超えたら `damage_taken`。
+- **地物の ID**: 観測の `visible.features[].id`。travel_to の目的地に地物を指すと、隣に着けば到着。
+- **加護の説明**: ターンの要約に、説明を出した加護の組（`boonKey`）を持ち、組が変わったときだけ説明を出す（それ以外は名前だけ）。

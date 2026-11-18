@@ -117,6 +117,7 @@ const STOP_TEXT: Record<string, [string, string]> = {
   target_shooting: ['標的は離れたまま撃ってくる（その場で撃つ相手。射線を切るか、寄って殴る）', 'the target keeps shooting from where it stands (it does not close in: break its line of fire or close in yourself)'],
   target_not_hunting: ['相手はあなたを追っていない', 'the target is not hunting you'],
   collect_far: ['残りの品は within 歩より遠い（拾うなら within を大きくする）', 'the remaining items are farther than within steps (raise within to fetch them)'],
+  damage_taken: ['この呼び出しで受けた被害の合計が最大 HP の 4 分の 1 を超えた（steady）', 'the damage taken during this call passed a quarter of your max HP (steady)'],
   damaged: ['ダメージを受けた', 'you took damage'],
   item_seen: ['新しいアイテムを見つけた', 'you spotted a new item'],
   stairs_seen: ['階段を見つけた', 'you found stairs'],
@@ -288,14 +289,15 @@ export class SessionPlayerPort implements PlayerPort {
     // 帰還の綱の長い説明は遠征ごとに最初の 1 回だけ（V3-3a §35.8）
     const xNo = view.expedition && view.expedition.status !== 'ended' ? view.expedition.no : undefined;
     const lifelineShort = xNo !== undefined && prev?.lifeNo === xNo;
-    // 加護の説明も遠征ごとに最初の 1 回だけ（V3-3c §44.6: 応答の長さ）
-    const boonsShort = xNo !== undefined && prev?.boonNo === xNo;
+    // 加護の説明は、持っている加護が変わったときの 1 回だけ（V3-3c §44.6 は遠征ごとに 1 回。V3-8a §56.1 の 5 で、ランを通して 1 回に）
+    const boonKey = [...(view.self.boons ?? [])].sort().join(',');
+    const boonsShort = !!boonKey && prev?.boonKey === boonKey;
     const observation = buildObservation(view, this.catalog, { detail: p.detail ?? 'brief', map: true, recent: p.recent.slice(-10), lifelineShort, boonsShort, campCompare: this.campCompare(view), offerNotes: this.offerNotes(view), records: this.campRecords(view) });
     const state = turnStateOf(view, p.expeditionEndedNow ?? false).state;
     const cur = turnSnapshot(view, observation, state);
     const longLife = observation.valid_actions.some((a) => a.includes('次の遠征はこの遠征を始めた階段から') || a.includes('the next expedition starts from where this one began'));
     cur.lifeNo = lifelineShort ? prev?.lifeNo : longLife ? xNo : prev?.lifeNo;
-    cur.boonNo = xNo !== undefined && (view.self.boons?.length ?? 0) > 0 ? xNo : prev?.boonNo;
+    cur.boonKey = xNo !== undefined && boonKey ? boonKey : prev?.boonKey;
     let changes: TurnBlock['changes'] = [];
     if (p.changes) {
       const events = prev ? this.session.messages(this.playerId).filter((m) => m.seq > prev.seq) : [];

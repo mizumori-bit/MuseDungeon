@@ -413,6 +413,13 @@ V3-2R で足した項目（同じく後方互換。会心と経験値のルー�
 - `player_state.reason: 'joined'`（キャンプから始まる参加）。参加コマンドの `atCamp`
 - プレイヤー向けの射影で、見えていた個体が視界の外へ動いた `entity_moved` に `dirOut`（向きだけ。行き先は伏せたまま）
 
+V3-8a で足した項目（表示と使い勝手だけ。後方互換。候補の中身が増えたので `engineVersion` は 0.24.0。出来事の種類は増やしていないので `eventVersion` は 19 のまま。DESIGN.md §35.8）:
+
+- 候補: `ExpeditionOffer.guardian.armor`（守護者の装甲の目安）。観測の `camp.offers[].guardian.armor`。候補の文に「装甲はおよそ N」と「いまの持ち物で 1 回に通る目安」（守護者の候補。大守護者を除く）
+- 観測: `visible.features[].id`（地物の ID。文の行にも出す）。get_rules の「遠征の候補」に枠の読み方
+- マクロ: 止まり方 `damage_taken`（steady の explore・travel_to・collect で、その呼び出しの被害の合計が最大 HP の 4 分の 1 を超えた）。collect（what: items）と品を目的地にした travel_to は、着いた手番に止まるなら拾ってから止まる（hp_floor・hp_risk・予備動作を除く）。travel_to の `to` に地物の ID（隣に着けば到着）
+- 加護の説明: 持っている加護が変わったときの 1 回だけ（`self.boons_brief` が true なら名前だけ）
+
 V3-8 で足した項目と外した項目（最後の見直し。規則・候補・生成が変わったので `engineVersion` は 0.23.0、出来事が増えたので `eventVersion` は 18。DESIGN.md §35）:
 
 - 外した: MCP の `declare_goal`、観測の `expedition.goal`・`camp.goal`、遠征レポートの `goal`、WS の `goal`（サーバーからの通知と `view.goal`）、`shared/goals`（`GoalDecl`・`GoalRecord`・`GoalCandidate`・`GoalInfo`）、ログの `goals.jsonl`（古いランに残っていても読まない）

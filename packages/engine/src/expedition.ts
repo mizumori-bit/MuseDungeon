@@ -104,6 +104,16 @@ export function guardianMaxHit(ctx: Ctx, depth: number, kind: string, affixes: r
   return diceMax(addDiceBonus(def.attack.dice, mods.dmgBonus)) + def.stats.might + tier + mods.might;
 }
 
+/** 守護者・賞金首の装甲の目安（V3-8a §56.1。生成と同じ: 種族 + 深層強化の半分 + 接辞。守護者の接辞も入れる。型の効果は除く） */
+export function monsterArmorEstimate(ctx: Ctx, depth: number, kind: string, affixes: readonly string[] = [], guardian = true): number {
+  const def = ctx.content.monsters[kind];
+  if (!def) return 0;
+  const tier = depth > ctx.content.deepestDefined ? floorDiv(depth - ctx.content.deepestDefined, 5) + 1 : 0;
+  const guardAffix = guardian ? ctx.content.lists.affixes.find((a) => a.target === 'guardian') : undefined;
+  const mods = sumAffixMods(ctx.content, [...(guardAffix ? [guardAffix.id] : []), ...affixes]);
+  return def.stats.armor + floorDiv(tier, 2) + mods.armor;
+}
+
 /**
  * 守護者の体力の目安（V3-3c §44.2。一撃の目安と同じ考え方: 種族の体力ダイスの平均 × 格の上乗せ・守護者の接辞・候補の接辞・深層強化。下限も同じ）
  */
@@ -133,7 +143,7 @@ function bountyOffer(ctx: Ctx, depth: number, b: BountyInfo): NonNullable<Expedi
     kindName: def ? { ...def.name } : { ja: b.kind, en: b.kind }, affixNames: b.affixes.map((a) => ({ ...(ctx.content.affixes[a]?.name ?? { ja: a, en: a }) })),
     hp: Math.max(1, floorDiv(avg * (100 + 50 * tier + mods.hpPct), 100)),
     maxHit: def ? diceMax(addDiceBonus(def.attack.dice, mods.dmgBonus)) + def.stats.might + tier + mods.might : 0,
-    armor: (def?.stats.armor ?? 0) + mods.armor,
+    armor: monsterArmorEstimate(ctx, depth, b.kind, b.affixes, false),
   };
 }
 
@@ -318,7 +328,7 @@ export function makeOffers(ctx: Ctx, no: number): ExpeditionOffer[] {
         // 接辞もここで決める（見込みの特徴と一撃の目安に入れる。生成ではこれを使う）
         const affixes = rollMonsterAffixes(ctx.content, target, Rng.fromSeed(`${ctx.world.secret.seed}|guardian-affix|${no}|${i}`));
         offer.guardianAffixes = affixes;
-        offer.guardian = { rank, traits: guardianTraits(ctx, kind, affixes, 0, rank >= 2), name: gi.name, ...(gi.title ? { title: gi.title } : {}), types: gi.types, maxHit: guardianMaxHit(ctx, target, kind, affixes), hp: guardianHpEstimate(ctx, target, kind, rank, affixes) };
+        offer.guardian = { rank, traits: guardianTraits(ctx, kind, affixes, 0, rank >= 2), name: gi.name, ...(gi.title ? { title: gi.title } : {}), types: gi.types, maxHit: guardianMaxHit(ctx, target, kind, affixes), hp: guardianHpEstimate(ctx, target, kind, rank, affixes), armor: monsterArmorEstimate(ctx, target, kind, affixes) };
         offer.guardianWeakness = gi.weakness;
       }
       // 再挑戦: 新しい守護者を作らず、残っている守護者をもう一度目的にする（同じ名前・型・弱点。乱数は上で引いたまま）
@@ -330,7 +340,7 @@ export function makeOffers(ctx: Ctx, no: number): ExpeditionOffer[] {
         offer.guardianKind = rematch.kind;
         offer.guardianAffixes = affs;
         offer.guardianWeakness = g.weakness;
-        offer.guardian = { rank: rr, traits: guardianTraits(ctx, rematch.kind, affs, 0, !!g.heavy), name: { ...g.name }, ...(g.title ? { title: { ...g.title } } : {}), types: [...g.types], maxHit: guardianMaxHit(ctx, target, rematch.kind, affs), hp: guardianHpEstimate(ctx, target, rematch.kind, rr, affs) };
+        offer.guardian = { rank: rr, traits: guardianTraits(ctx, rematch.kind, affs, 0, !!g.heavy), name: { ...g.name }, ...(g.title ? { title: { ...g.title } } : {}), types: [...g.types], maxHit: guardianMaxHit(ctx, target, rematch.kind, affs), hp: guardianHpEstimate(ctx, target, rematch.kind, rr, affs), armor: monsterArmorEstimate(ctx, target, rematch.kind, affs) };
         offer.rechallenge = { no: src?.no ?? null, guardian: rematch.id };
         const sc = projectedScar(rematch);
         if (sc) offer.scar = sc;

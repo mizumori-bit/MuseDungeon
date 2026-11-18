@@ -169,7 +169,8 @@ export interface ObsMilestone { depth: number; name: string; types: { id: string
 export interface ObsBoon { id: string; name: string; desc: string; used?: boolean }
 export interface ObsPlayer { id: string; name: string; pos: Pos; dir: Dir | null; dist: number; hp_state: HpState }
 /** lair: 棲み処の地物（護りの火）の持ち主の守護者の呼び名（V3-3c §44.6） */
-export interface ObsFeature { type: string; name: string; pos: Pos; dir: Dir | null; dist: number; state?: string; lair?: string }
+/** id: travel_to で指せる（V3-8a §56.1 の 5） */
+export interface ObsFeature { id?: string; type: string; name: string; pos: Pos; dir: Dir | null; dist: number; state?: string; lair?: string }
 /**
  * 自分の持ち物の性能（鑑定済みのみ。接辞込み）。weapon.traits は武器の特性（V3-4）、armor の move_cost / wake_pct は重い鎧、
  * mods は装飾品の修正と、接辞による追加の修正（最大 HP・視界など）
@@ -886,7 +887,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
     } else if (e.cat === 'player') {
       players.push({ id: e.id, name: e.name ?? '?', pos: e.pos, ...rel(e.pos), hp_state: e.hp ?? 'healthy' });
     } else {
-      features.push({ type: e.kind ?? 'feature', name: kindName(catalog, L, e.kind), pos: e.pos, ...rel(e.pos), state: e.state, ...(e.lair ? { lair: guardianDisplayName(L, e.lair) } : {}) });
+      features.push({ id: e.id, type: e.kind ?? 'feature', name: kindName(catalog, L, e.kind), pos: e.pos, ...rel(e.pos), state: e.state, ...(e.lair ? { lair: guardianDisplayName(L, e.lair) } : {}) });
     }
   }
   monsters.sort((a, b) => a.dist - b.dist || (a.id < b.id ? -1 : 1));
@@ -903,7 +904,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       if (r.value !== undefined) it.value = r.value;
       rememberedItems.push(it);
     }
-    if (r.cat !== 'item') features.push({ type: r.kind ?? 'feature', name: kindName(catalog, L, r.kind), pos: r.pos, ...rel(r.pos), state: r.state, ...(r.lair ? { lair: guardianDisplayName(L, r.lair) } : {}) });
+    if (r.cat !== 'item') features.push({ id: r.id, type: r.kind ?? 'feature', name: kindName(catalog, L, r.kind), pos: r.pos, ...rel(r.pos), state: r.state, ...(r.lair ? { lair: guardianDisplayName(L, r.lair) } : {}) });
   }
   // 記憶の中のアイテムは近い順に 3 件まで（遺物は常に出す）。戦闘中（追跡中の敵が見えている間）は出さない。残りは件数だけ（V3-2R §14.2）
   rememberedItems.sort((a, b) => a.dist - b.dist || (a.id < b.id ? -1 : 1));
@@ -1223,11 +1224,13 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
           const kn = view.wardenIntel?.[String(msd)] ?? {};
           const left = 2 - (kn.weakness ? 1 : 0) - (kn.hp !== undefined ? 1 : 0);
           return left > 0 ? t(L, ` / 納めると、記録庫が地下${msd}階の番人の記憶を 1 つ返す（残り ${left}）`, ` / delivering it makes the archive recall one memory of the depth-${msd} keeper (${left} left)`) : '';
-        })() + (o.bounty ? ` / ${gearVsArmorText(L, catalog, view, o.bounty.armor, Math.max(1, o.bounty.hp - (o.scar ?? 0)))}` : ''),
+        })() + (o.bounty ? ` / ${gearVsArmorText(L, catalog, view, o.bounty.armor, Math.max(1, o.bounty.hp - (o.scar ?? 0)))}` : '')
+          // 守護者の候補（格 1〜3。再挑戦を含む）にも通る目安（V3-8a §56.1。大守護者は記録庫の記憶の装甲で出す）
+          + (o.guardian?.armor !== undefined && o.objective.type !== 'slay_warden' ? ` / ${gearVsArmorText(L, catalog, view, o.guardian.armor, o.guardian.hp !== undefined ? Math.max(1, o.guardian.hp - (o.scar ?? 0)) : undefined)}` : ''),
         ...(o.bounty ? { bounty: { kind: o.bounty.kind, name: nameOf(o.bounty.name, L, ''), hp: o.bounty.hp, max_hit: o.bounty.maxHit } } : {}),
         ...(o.vault ? { vault: true } : {}), ...(o.scar ? { scar: o.scar } : {}),
         ...(o.slot ? { slot: o.slot } : {}), ...(o.traits?.length ? { traits: [...o.traits] } : {}),
-        ...(o.guardian ? { guardian: { rank: o.guardian.rank, traits: [...o.guardian.traits] } } : {}),
+        ...(o.guardian ? { guardian: { rank: o.guardian.rank, traits: [...o.guardian.traits], ...(o.guardian.armor !== undefined ? { armor: o.guardian.armor } : {}) } } : {}),
         ...(o.relic ? { relic: {
           kind: o.relic.kind, name: nameOf(o.relic.name, L, o.relic.kind), boon: o.relic.boon,
           ...(o.relic.boonName ? { boon_name: nameOf(o.relic.boonName, L, '') } : {}), ...(o.relic.boonDesc ? { boon_desc: nameOf(o.relic.boonDesc, L, '') } : {}),
@@ -1799,7 +1802,7 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
       lines.push(`- ${it.name}${qtyText}${tags} ${it.id} (${it.pos.x},${it.pos.y}) ${relLabel(L, from, it.pos)}${it.remembered ? t(L, ' (記憶)', ' (remembered)') : ''}`);
     }
     if (vis.items_omitted) lines.push(`- ${t(L, `ほかに記憶しているアイテム ${vis.items_omitted} 件（get_map の注目点）`, `${vis.items_omitted} more remembered items (see get_map)`)}`);
-    for (const ft of vis.features) lines.push(`- ${ft.name}${ft.lair ? t(L, `（${ft.lair}の棲み処）`, ` (${ft.lair}'s lair)`) : ''} (${ft.pos.x},${ft.pos.y}) ${relLabel(L, from, ft.pos)}${ft.state && ft.state !== 'idle' ? ` [${featureStateText(L, ft.state)}]` : ''}`);
+    for (const ft of vis.features) lines.push(`- ${ft.name}${ft.lair ? t(L, `（${ft.lair}の棲み処）`, ` (${ft.lair}'s lair)`) : ''}${ft.id ? ` ${ft.id}` : ''} (${ft.pos.x},${ft.pos.y}) ${relLabel(L, from, ft.pos)}${ft.state && ft.state !== 'idle' ? ` [${featureStateText(L, ft.state)}]` : ''}`);
     for (const st2 of stairsLines) {
       const name = st2.type === 'down' ? t(L, '下り階段', 'stairs down') : t(L, '上り階段', 'stairs up');
       lines.push(`- ${name} (${st2.pos.x},${st2.pos.y}) ${t(L, '距離', 'dist')}${st2.dist} ${st2.reachable ? t(L, '到達可', 'reachable') : t(L, '到達不明', 'unknown path')}`);

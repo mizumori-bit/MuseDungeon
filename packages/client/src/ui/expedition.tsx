@@ -5,7 +5,7 @@ import type {
   RestEstimate, World,
 } from '@muse/shared';
 import {
-  bountyForecastText, briefingLines, buildObservation, campDepthOf, currentExpedition, dirLabel, endReasonText, guardianForecastText, haulTotal, latestExpedition, multText, nameOf,
+  bountyForecastText, briefingLines, buildObservation, campDepthOf, gearVsArmorText, currentExpedition, dirLabel, endReasonText, guardianForecastText, haulTotal, latestExpedition, multText, nameOf,
   nextCampOf, nextOverreach, objectiveText, offerGap, offerText, overreachPoints, partsText, progressText, recordsCampLine, resultText, slotName,
 } from '@muse/shared';
 import { api } from '../api';
@@ -393,7 +393,7 @@ export function RestEstimateLine({ est }: { est: RestEstimate }) {
   );
 }
 
-function OfferCard({ o, rules, level, onStart }: { o: ExpeditionOffer; rules: CatalogRules | undefined; level: number; onStart: (offer: number) => void }) {
+function OfferCard({ o, rules, level, onStart, view, catalog }: { o: ExpeditionOffer; rules: CatalogRules | undefined; level: number; onStart: (offer: number) => void; view?: PlayerView; catalog?: Catalog | null }) {
   const L = getLocale();
   const g = rules ? offerGap(rules, o.objective.targetDepth, o.traits ?? [], level) : null;
   const guarded = o.objective.type === 'retrieve_relic' && o.relicGuarded ? tr('（守護者付き）', ' (guarded)') : '';
@@ -425,6 +425,12 @@ function OfferCard({ o, rules, level, onStart }: { o: ExpeditionOffer; rules: Ca
         {o.vault && <span class="oguard">{tr('宝物庫: 鍵を持つ敵が階にいる', 'vault: a monster on the floor carries the key')}</span>}
         {o.scar ? <span class="oguard" title={tr('前の挑戦で与えたダメージの 4 分の 1 が残っている', 'A quarter of the damage you dealt last time stays')}>{tr(`傷跡で体力 −${o.scar}`, `scars: −${o.scar} HP`)}</span> : null}
       </div>
+      {/* いまの持ち物で 1 回に通る目安（守護者・賞金首。AI の候補の文と同じ。V3-8a §56.1） */}
+      {view && catalog && (o.bounty || (o.guardian?.armor !== undefined && o.objective.type !== 'slay_warden')) && (
+        <div class="ometa"><span>{o.bounty
+          ? gearVsArmorText(L, catalog, view, o.bounty.armor, Math.max(1, o.bounty.hp - (o.scar ?? 0)))
+          : gearVsArmorText(L, catalog, view, o.guardian!.armor!, o.guardian!.hp !== undefined ? Math.max(1, o.guardian!.hp - (o.scar ?? 0)) : undefined)}</span></div>
+      )}
       <TraitList traits={o.traits ?? []} rules={rules} />
     </li>
   );
@@ -477,7 +483,7 @@ export function CampPanel({ view, catalog, onStart, onRetire }: { view: PlayerVi
         <>
           <h3>{first ? tr(`最初の遠征の候補（遠征 ${camp.nextNo}）`, `Offers for expedition ${camp.nextNo}`) : tr(`次の遠征の候補（遠征 ${camp.nextNo}）`, `Offers for expedition ${camp.nextNo}`)}</h3>
           <ul class="offers cards">
-            {camp.offers.map((o) => <OfferCard key={o.index} o={o} rules={rules} level={view.self.level} onStart={onStart} />)}
+            {camp.offers.map((o) => <OfferCard key={o.index} o={o} rules={rules} level={view.self.level} onStart={onStart} view={view} catalog={catalog} />)}
             <li class="offer endless">
               <div class="ohead">
                 <span class="otext">{tr('endless) 目的なし。できるだけ深く潜る', 'endless) No objective: descend as deep as you can')}</span>

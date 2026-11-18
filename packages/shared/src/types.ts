@@ -347,7 +347,8 @@ export interface ExpeditionOffer {
   /** 守護者の見込み（守護者を倒す・守護者付きの遺物。V3-2R3 §20.1）。種族名は会うまで出さない。name・types（V3-3）は公開 */
   /** maxHit: 一撃の目安（装甲で減る前。V3-3b §40.6） */
   /** hp: 体力の目安（格 1〜3。種族の体力の平均から。V3-3c §44.2）、hpRange: 大守護者の体力の幅（式の下限と上限） */
-  guardian?: { rank: 1 | 2 | 3; traits: string[]; name?: Names; title?: Names; types?: string[]; maxHit?: number; hp?: number; hpRange?: { min: number; max: number } };
+  /** armor: 装甲の目安（種族・接辞・深層強化。型の効果を除く。V3-8a §56.1） */
+  guardian?: { rank: 1 | 2 | 3; traits: string[]; name?: Names; title?: Names; types?: string[]; maxHit?: number; hp?: number; hpRange?: { min: number; max: number }; armor?: number };
   /** 守護者の種族（候補を作った時点で決める。プレイヤーには渡さない） */
   guardianKind?: string;
   /** 守護者の接辞（候補の時点で決める。見込みの特徴と一撃の目安に入る。プレイヤーには渡さない。V3-5a 後の評価 2） */

@@ -123,7 +123,7 @@ export function guardianDisplayName(L: Locale, g: { name: Names; title?: Names }
   return `${g.title?.ja ?? ''}${g.name.ja}`;
 }
 
-export function guardianForecastText(L: Locale, g: { rank: number; traits: string[]; name?: Names; title?: Names; types?: string[]; maxHit?: number; hp?: number; hpRange?: { min: number; max: number } } | undefined): string {
+export function guardianForecastText(L: Locale, g: { rank: number; traits: string[]; name?: Names; title?: Names; types?: string[]; maxHit?: number; hp?: number; hpRange?: { min: number; max: number }; armor?: number } | undefined): string {
   if (!g) return '';
   // 名前と称号（型）は公開。種族は会うまで出さない（V3-3）
   const who = g.name ? t(L, `「${guardianDisplayName(L, { name: g.name, title: g.title })}」`, ` "${guardianDisplayName(L, { name: g.name, title: g.title })}"`) : '';
@@ -141,6 +141,8 @@ export function guardianForecastText(L: Locale, g: { rank: number; traits: strin
   // 体力の目安（V3-3c §44.2）: 格 1〜3 はおよその値、大守護者は式の幅
   if (g.hpRange) hit.unshift(t(L, `体力 ${g.hpRange.min}〜${g.hpRange.max}`, `HP ${g.hpRange.min}-${g.hpRange.max}`));
   else if (g.hp) hit.unshift(t(L, `体力はおよそ ${g.hp}`, `about ${g.hp} HP`));
+  // 装甲の目安（V3-8a §56.1。型の効果を除く）
+  if (g.armor !== undefined) hit.push(t(L, `装甲はおよそ ${g.armor}`, `about ${g.armor} armor`));
   return t(L, `守護者${who}: 格 ${g.rank}・${[...tr, ...hit].join('・')}`, `guardian${who}: rank ${g.rank}, ${[...tr, ...hit].join(', ')}`);
 }
 

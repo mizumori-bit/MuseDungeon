@@ -428,7 +428,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
     },
   }, async (a) => act('explore', a, { type: 'explore', mode: a.mode, hpFloor: a.hp_floor, pickup: a.pickup, ...(a.toward ? { toward: a.toward } : {}) }));
   server.registerTool('travel_to', {
-    title: '移動（目的地）', description: "マクロ: 既知地図上の経路で座標・階段・記憶した対象へ移動。目的地がアイテムなら着いて拾う。隣に敵がいても退くなら mode: 'flee'。",
+    title: '移動（目的地）', description: "マクロ: 既知地図上の経路で座標・階段・記憶した対象（敵・アイテム・地物の ID）へ移動。目的地がアイテムなら着いて拾う（着いた手番に止まっても、hp_floor・hp_risk・予備動作でなければ拾ってから止まる）。地物は隣に着けば到着。隣に敵がいても退くなら mode: 'flee'。",
     inputSchema: { ...actionCommon, to: z.union([PosZ, z.enum(['stairs_down', 'stairs_up']), z.string().regex(/^e_[0-9a-z]{6}$/)]), ...moveArgs, pickup: z.union([z.boolean(), z.literal('useful')]).optional().describe("通り道のアイテムも拾う（既定: 目的地がアイテムのとき true。'useful' は使える物だけ）") },
   }, async (a) => act('travel_to', a, { type: 'travel', to: a.to, mode: a.mode, hpFloor: a.hp_floor, pickup: a.pickup }));
   server.registerTool('collect', {

@@ -50,6 +50,8 @@ export type MacroStop =
   | 'hit_and_run' | 'target_shooting'
   // collect: 残りの品はどれも within 歩より遠い（V3-8 §53.4）
   | 'collect_far'
+  // steady の移動マクロで、始めてからの被害の合計が最大 HP の 4 分の 1 を超えた（V3-8a §56.1）
+  | 'damage_taken'
   // 移動マクロが同じ 2 マスを往復している（見えるものが変わるたびに最短の道が入れ替わった。V3-3 後の bot の計測）
   | 'no_progress';
 
@@ -119,6 +121,10 @@ export interface MacroState {
   /** fight: 決着の後に自分の投擲物を拾う（V3-3c §44.6）。fightDone: 拾い始めたときの決着（拾い終えたらこの理由で止まる） */
   collectAfter?: boolean;
   fightDone?: MacroStop;
+  /** 足元の目的の品を拾ってから止まる理由（V3-8a §56.1。拾う 1 手の次の判断でこの理由で止まる） */
+  pendingStop?: MacroStop;
+  /** この呼び出しで受けた被害の合計（steady の damage_taken。V3-8a §56.1） */
+  damageTaken?: number;
   /** 投げる物が尽きたら拾いに行く（V3-3b §40.1。既定 true） */
   fightRetrieve?: boolean;
   /** 拾いに行った手の数 */
@@ -489,9 +495,10 @@ function resolveTravelGoal(view: PlayerView, catalog: Catalog, target: TravelTar
     return goals.length ? { goals, adjacentOk: false } : null;
   }
   const e = view.entities.find((x) => x.id === target);
-  if (e) return { goals: [e.pos.y * f.width + e.pos.x], adjacentOk: e.cat === 'monster' || e.cat === 'player' };
+  if (e) return { goals: [e.pos.y * f.width + e.pos.x], adjacentOk: e.cat === 'monster' || e.cat === 'player' || e.cat === 'feature' };
   const r = view.memory.remembered.find((x) => x.id === target);
-  if (r) return { goals: [r.pos.y * f.width + r.pos.x], adjacentOk: false };
+  // 地物（祭壇・泉・レバーなど）は隣に着けば到着（V3-8a §56.1 の 5。隣か足元で interact する）
+  if (r) return { goals: [r.pos.y * f.width + r.pos.x], adjacentOk: r.cat === 'feature' };
   return null;
 }
 
@@ -507,7 +514,32 @@ function intentKeys(view: PlayerView): string[] {
   return view.entities.filter((e) => e.cat === 'monster' && e.intent).map((e) => `${e.id}:${e.intent!.kind}`);
 }
 
+/** 足元の目的の品を拾ってから止まる、の対象にしない止まり方（V3-8a §56.1: HP・被弾の前の停止・予備動作と、もう動けないもの） */
+const NO_PICK_STOPS: ReadonlySet<MacroStop> = new Set<MacroStop>(['hp_floor', 'hp_risk', 'intent', 'run_ended', 'dead', 'left_board', 'not_your_turn', 'floor_changed', 'error']);
+
 export function macroNext(state: MacroState, view: PlayerView, catalog: Catalog, events: readonly ProjectedEvent[]): MacroDecision {
+  // 拾う 1 手を挟んだ後は、そのときの理由で止まる
+  if (state.pendingStop) { const s = state.pendingStop; delete state.pendingStop; return { stop: s }; }
+  const d = macroStep(state, view, catalog, events);
+  if (!('stop' in d) || NO_PICK_STOPS.has(d.stop)) return d;
+  // collect（what: items）と、品を目的地にした travel_to: 品のマスに着いた手番に止まるなら、拾ってから止まる（V3-8a §56.1）
+  if (view.status !== 'your_turn' || !view.floor || !view.self.pos || view.floor.key !== state.floorKey) return d;
+  const here = view.self.pos.y * view.floor.width + view.self.pos.x;
+  const visible = (id: string) => view.entities.some((e) => e.id === id && e.cat === 'item');
+  let pick: string | undefined;
+  if (state.kind === 'collect' && state.collectWhat === 'items') pick = collectableItems(view, catalog, state).find((x) => x.cell === here && visible(x.id))?.id;
+  else if (state.kind === 'travel' && typeof state.target === 'string') {
+    const t = view.entities.find((e) => e.id === state.target && e.cat === 'item');
+    if (t && t.pos.y * view.floor.width + t.pos.x === here) pick = t.id;
+  }
+  if (!pick || state.skipItems.includes(pick)) return d;
+  state.skipItems.push(pick);
+  state.steps += 1;
+  state.pendingStop = d.stop;
+  return { command: { type: 'pickup', item: pick } };
+}
+
+function macroStep(state: MacroState, view: PlayerView, catalog: Catalog, events: readonly ProjectedEvent[]): MacroDecision {
   if (view.runStatus === 'ended') return { stop: 'run_ended' };
   if (view.status === 'dead') return { stop: 'dead' };
   if (view.status === 'at_camp') return { stop: 'left_board' };
@@ -600,6 +632,15 @@ export function macroNext(state: MacroState, view: PlayerView, catalog: Catalog,
         const amount = typeof x.amount === 'number' ? x.amount : 0;
         if (amount * 100 >= maxHp * (catalog.rules.fightFirstHitStopPct ?? 0)) return { stop: 'first_hit' };
       }
+    } else if (mode === 'steady' && (kind === 'explore' || kind === 'travel' || kind === 'collect')) {
+      // 始めてからの被害の合計が最大 HP の 4 分の 1 を超えたら止まる（V3-8a §56.1。毒も数える。1 回ずつは小さい射撃が積み重なる）
+      let got = 0;
+      for (const e of events) {
+        const x = e as unknown as { type: string; target?: string; amount?: number };
+        if (x.type === 'damaged' && x.target === me.id && typeof x.amount === 'number') got += x.amount;
+      }
+      state.damageTaken = (state.damageTaken ?? 0) + got;
+      if (state.damageTaken * 4 > maxHp) return { stop: 'damage_taken' };
     } else if (mode === 'careful') {
       if (attacked) return { stop: 'attacked' };
       if (hurt) return { stop: 'damaged' };

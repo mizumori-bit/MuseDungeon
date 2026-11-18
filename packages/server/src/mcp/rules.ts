@@ -130,6 +130,7 @@ function ja(r: CatalogRules): Record<Topic, string> {
   - 堅実: +${sl.safe.aheadMin}〜${sl.safe.aheadMax} 階、条件 ${sl.safe.traitsMin}〜${sl.safe.traitsMax} 個、枠の基礎点 ${sl.safe.base}
   - 標準: +${sl.standard.aheadMin}〜${sl.standard.aheadMax} 階、条件 ${sl.standard.traitsMin}〜${sl.standard.traitsMax} 個、枠の基礎点 ${sl.standard.base}
   - 野心: +${sl.ambitious.aheadMin}〜${sl.ambitious.aheadMax} 階、条件 ${sl.ambitious.traitsMin}〜${sl.ambitious.traitsMax} 個、枠の基礎点 ${sl.ambitious.base}
+- 枠（堅実・標準・野心）は、目標の遠さと見返りの大きさを表す。危険は、候補ごとの見立て（推奨レベルとの差・一撃の目安・通る目安）で読む（同じ枠でも、目的の種類と相手の種族・装甲で危険は大きく違う）。守護者（格 1〜3。再挑戦を含む）と賞金首の候補には、体力・一撃・装甲の目安と「いまの持ち物で 1 回に通る目安」（倒すのに要るおよその命中の数）が出る。装甲の目安は種族・接辞・深さから（型の効果は除く）。
 - 候補の基礎点 = 枠の基礎点 × 種類の係数（到達 ${x.typePct.reach_depth ?? 100}%・守護者 ${x.typePct.slay_guardian ?? 100}%・遺物 ${x.typePct.retrieve_relic ?? 100}%・守護者付きの遺物 ${x.typePct.retrieve_relic_guarded ?? 100}%・賞金首 ${x.typePct.slay_bounty ?? 100}%・宝物庫 ${x.typePct.open_vault ?? 100}%）× 深さの係数（${x.depthPct.base} + ${x.depthPct.perDepth}×目標深度 %）。どの組み合わせでも 堅実 < 標準 < 野心。
 - 条件は、その遠征で目標階までのまだ生成していない階（初めて降りる階）に効く公開の修飾（前の遠征で行った階は、敵・宝・泉もそのまま残る）。倍率は帰還時の戦利品に掛かる（複数なら掛け合わせ）:
 ${traitsLines(r, true)}
@@ -153,8 +154,9 @@ ${traitsLines(r, true)}
 - explore: 未見の区画へ自動移動するマクロ（最大 ${r.macroStepLimit} 手）。pickup（既定 'useful'）なら通り道と見えている・記憶したアイテムのうち使える物を拾う（遺物・鑑定済みの有害品（投げて使える毒薬などは拾う）・装備中の品と同じ種類で性能が同じか下の装備は拾わない。'useful' はさらに、鑑定済みで接辞の無い武器・防具のうち、公開の数字が装備中の品以下のもの（防具は装甲、武器はダメージのダイスの平均。種類が違っても比べる）を拾わない。true は全部、false は拾わない。所持品が一杯なら拾わない）。toward: 'draft' なら下への風の方角、'sense' なら遺物・守護者の気配の方角の未探索を優先する（'sense' はこの遠征の目的の遺物・守護者が見えたか覚えていれば止まる。そこへは travel_to）。steady・flee では、1 マス幅の通路をふさぐ逃走中の敵を攻撃して進む。地図の巻物で地形だけ知った区画も「未見」として行き先になる。
 - travel_to: {x,y} / "stairs_down" / "stairs_up" / エンティティ ID へ既知地図上で移動するマクロ。目的地がアイテムなら着いて拾う。既知の階段には path_len（既知地図上の経路長）が付く。
 - 移動マクロ（explore / travel_to / collect）の mode（慎重さ）:
+  - collect（what: items）と、品を目的地にした travel_to は、品のマスに着いた手番に止まるとき、止まる理由が hp_floor・hp_risk・予備動作でなければ、拾ってから止まる（拾う 1 手番を使う）。travel_to は地物の ID（visible.features の id）も指せ、地物は隣に着けば到着。
   - careful（既定）: 初見の種族が見えた／追跡中（逃走中でない）で自分に届く敵が現れた／見えている敵が追跡に変わった／攻撃を受けた（外れも含む）／毒以外のダメージを受けた／状態異常を受けた／HP が 50%・25% の線をまたいだ／階段を見つけた（explore）で止まる。既知の種族の眠っている・気づいていない個体、動かない敵で隣にいないもの、毒の継続ダメージ、アイテムの発見では止まらない（changes には出る）。隣に起きている敵（逃走中を除く）がいると動かない。
-  - steady: 追跡中の敵が隣に来た／初見の種族が見えた／HP が hp_floor（既定 最大 HP の 50%）を下回った／その階の下り階段を初めて見たで止まる。弱い射撃や毒を受けながら進むとき。
+  - steady: 追跡中の敵が隣に来た／初見の種族が見えた／HP が hp_floor（既定 最大 HP の 50%）を下回った／その階の下り階段を初めて見た／この呼び出しで受けた被害の合計（毒も含む）が最大 HP の 4 分の 1 を超えた（damage_taken）で止まる。弱い射撃や毒を受けながら進むとき。
   - flee: 到着／進路をふさがれた／HP が hp_floor（既定 25%。始める時点ですでにそれ以下なら 0）を下回ったで止まる。隣に敵がいても動く（退却。途中で受けた攻撃はすべて結果に出る）。
   - careful と steady は、その階の下り階段を初めて見たときにも止まる（踏破の判断の起点）。経路は、見えている動かない敵の隣を罠と同じく避ける（ほかに道が無ければ通る）。
   - どの mode も 1 歩ずつ通常の move として行い、敵は通常どおり攻撃してくる。マクロは攻撃しない（次のマスに敵がいれば blocked で止まる）。valid_actions にはその場で進める mode だけが出る。
@@ -306,6 +308,7 @@ function en(r: CatalogRules): Record<Topic, string> {
   - safe: +${sl.safe.aheadMin}-${sl.safe.aheadMax}, ${sl.safe.traitsMin}-${sl.safe.traitsMax} traits, slot base ${sl.safe.base}
   - standard: +${sl.standard.aheadMin}-${sl.standard.aheadMax}, ${sl.standard.traitsMin}-${sl.standard.traitsMax} traits, slot base ${sl.standard.base}
   - ambitious: +${sl.ambitious.aheadMin}-${sl.ambitious.aheadMax}, ${sl.ambitious.traitsMin}-${sl.ambitious.traitsMax} traits, slot base ${sl.ambitious.base}
+- The slots (safe / standard / ambitious) stand for how far the target is and how big the reward is. Read the danger from each offer's forecast (recommended level gap, biggest hit, per-hit damage): within one slot it varies a lot with the objective type and the foe's kind and armor. Guardian offers (rank 1-3, rematches too) and bounty offers show estimates of HP, biggest hit and armor plus "per hit with your gear" (about how many hits it takes). The armor estimate comes from the kind, affixes and depth (type effects excluded).
 - Offer points = slot base x type factor (reach ${x.typePct.reach_depth ?? 100}%, guardian ${x.typePct.slay_guardian ?? 100}%, relic ${x.typePct.retrieve_relic ?? 100}%, guarded relic ${x.typePct.retrieve_relic_guarded ?? 100}%, bounty ${x.typePct.slay_bounty ?? 100}%, vault ${x.typePct.open_vault ?? 100}%) x depth factor (${x.depthPct.base} + ${x.depthPct.perDepth}*target depth %). Always safe < standard < ambitious.
 - Traits are public modifiers on the floors down to the target that have not been generated yet (floors you visited on earlier expeditions keep their monsters, loot and fountains). Their multipliers apply to the haul on completion (multiplied together):
 ${traitsLines(r, false)}
@@ -328,8 +331,9 @@ Free: choose_perk{option} / observe / wait_for_turn / expedition / review / reco
 - Movement macros (explore, travel_to, collect) stop with no_progress when they bounce between the same two cells (change the goal or the route). travel_to also stops with no_progress when the way to its goal has not got shorter for 20 steps.
 - travel_to: macro to {x,y}, "stairs_down", "stairs_up" or an entity id over the known map; if the destination is an item it picks it up. Known stairs carry path_len.
 - Movement macro mode (explore / travel_to / collect):
+  - collect (what: items) and travel_to an item: when they stop on the turn they reach the item's cell, they pick it up first (one turn) unless the reason is hp_floor, hp_risk or an intent. travel_to also takes a feature id (visible.features id); a feature counts as reached once you are next to it.
   - careful (default): stops on a species you have never seen, a hunting (not fleeing) enemy that can reach you appearing, a visible monster starting to hunt, being attacked (even if missed), non-poison damage, a status, HP crossing 50% / 25%, stairs found (explore). Known species asleep/unaware, stationary monsters not adjacent, poison ticks and items found do not stop it (they appear in changes). It will not move while an awake non-fleeing enemy is adjacent.
-  - steady: stops when a hunting enemy is adjacent, a never-seen species appears, HP falls below hp_floor (default 50% of max), or you first see the floor's down stairs. For moving on through weak shots or poison.
+  - steady: stops when a hunting enemy is adjacent, a never-seen species appears, HP falls below hp_floor (default 50% of max), you first see the floor's down stairs, or the damage taken during the call (poison included) passes a quarter of your max HP (damage_taken). For moving on through weak shots or poison.
   - flee: stops on arrival, a blocked path or HP below hp_floor (default 25%, or 0 if you start below it). Moves even with enemies adjacent (a retreat; every attack taken shows in the result).
   - Every mode walks with ordinary moves and enemies attack as usual. Macros never attack (an enemy in the next cell stops them: blocked). valid_actions only lists modes that can move right now.
   - careful and steady also stop when you first see the floor's down stairs (where the crossing decision starts). Paths avoid cells next to visible stationary monsters like traps (unless there is no other way).
