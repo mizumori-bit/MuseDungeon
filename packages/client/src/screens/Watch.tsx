@@ -8,7 +8,9 @@ import { connectWs, type WsStatus } from '../net/ws';
 import type { Canvas2DRenderer } from '../render/canvas2d';
 import { toViewEvents } from '../render/events';
 import { directorFloor, sceneFromView, sceneFromWorld } from '../render/scene';
+import { soundDirector } from '../sound/director';
 import { ErrorBanner, Header, MapView, ThemePicker, useCatalog, useLocaleRefresh, useTheme } from '../ui/common';
+import { SoundControls } from '../ui/sound';
 import { AgentWaitBadge, directorExpInfo, ExpeditionStatusPanel, followExpInfo, type ExpInfo } from '../ui/expedition';
 import { narrateWorld, perceivedLines, thoughtsFrom } from '../ui/narration';
 import { AiPanel, MessageLog, PartyPanel, SummaryDialog, type LogLine, type ThoughtLine } from '../ui/panels';
@@ -91,6 +93,18 @@ export function Watch({ runId }: { runId: string }) {
     return { name: pr.name };
   };
 
+  /** 音: 見ている相手のプレイヤー（追従の相手。俯瞰でも選んでいる相手）の視界と、その人に届いた出来事から（観戦者だけに見える情報は使わない） */
+  const sound = (events: GameEvent[], quiet = false) => {
+    const w = worldRef.current, pid = followRef.current;
+    if (!w || !pid || !w.players[pid]) return;
+    try {
+      const v = projectPlayerView(w, pid);
+      soundDirector.update(v, events.length ? filterEventsForPlayer(events, pid, v) : [], catalogRef.current, { quiet });
+    } catch {
+      /* 視界を作れない（参加の前など）ときは鳴らさない */
+    }
+  };
+
   const render = (events?: GameEvent[]) => {
     const c = catalogRef.current, r = rRef.current;
     if (!c || !r) return;
@@ -142,6 +156,7 @@ export function Watch({ runId }: { runId: string }) {
           if (worldRef.current.status === 'ended') setSummary(null);
           setTick((n) => n + 1);
           render();
+          sound([], true);
           break;
         case 'events': {
           const w = worldRef.current;
@@ -170,6 +185,7 @@ export function Watch({ runId }: { runId: string }) {
           }
           setTick((n) => n + 1);
           render(applied);
+          sound(applied);
           break;
         }
         case 'view':
@@ -177,6 +193,7 @@ export function Watch({ runId }: { runId: string }) {
           setLog((l) => [...l, ...perceivedLines(m.events)].slice(-400));
           setTick((n) => n + 1);
           render();
+          soundDirector.update(m.view, m.events.map((e) => e.event), catalogRef.current);
           break;
         case 'agent': {
           setActivities((a) => [...a, m.activity].slice(-50));
@@ -203,10 +220,12 @@ export function Watch({ runId }: { runId: string }) {
       }
     };
     const ws = connectWs(hello, onMsg, setWsStatus);
-    return () => ws.close();
+    return () => { ws.close(); soundDirector.leave(); };
   }, [runId, policy, followOnly ? follow : null]);
 
   useEffect(() => { render(); }, [catalog, mode, follow, floorSel]);
+  // 見ている相手が替わったら、その人の視界で音を作り直す（合図は鳴らさない）
+  useEffect(() => { if (!followOnly) sound([], true); }, [catalog, follow]);
 
   const setMode = (m: 'director' | 'follow') => { setPref('watchMode', m); setModeState(m); setLog([]); };
 
@@ -253,6 +272,7 @@ export function Watch({ runId }: { runId: string }) {
       <Header title={`${tr('観戦', 'Spectate')} ${runId}`}>
         <span class={`ws ${wsStatus}`}>{wsStatus}</span>
         <ThemePicker themes={th.themes} themeId={th.themeId} onChange={th.setThemeId} />
+        <SoundControls />
         <a class="button small" href={`#/replay/${runId}`}>{tr('巻き戻し', 'Rewind')}</a>
       </Header>
       <ErrorBanner error={error ?? catErr ?? th.error} onClose={() => setError(null)} />

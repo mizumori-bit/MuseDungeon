@@ -4,5 +4,6 @@
   "include": [
     "packages/shared/src", "packages/content/src", "packages/engine/src",
     "packages/server/src", "packages/tools/src", "packages/*/test", "vitest.config.ts"
-  ]
+  ],
+  "exclude": ["packages/client/test"]
 }

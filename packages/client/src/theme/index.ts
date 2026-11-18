@@ -7,7 +7,8 @@ import type { Theme } from './types';
 export type { Theme } from './types';
 export { createGlyphTheme } from './glyph';
 
-export interface ThemeInfo { id: string; name: string }
+/** kinds: そのテーマが持つもの（image＝theme.json、sound＝sound.json。docs/SOUND_SPEC.md §12）。無ければ image */
+export interface ThemeInfo { id: string; name: string; kinds?: string[] }
 
 const BASE = (import.meta as unknown as { env?: { BASE_URL?: string } }).env?.BASE_URL ?? '/';
 
@@ -17,7 +18,7 @@ export async function listThemes(): Promise<ThemeInfo[]> {
     const res = await fetch(`${BASE}themes/index.json`);
     if (res.ok) {
       const list = (await res.json()) as ThemeInfo[];
-      for (const t of list) if (t.id !== 'glyph') out.push(t);
+      for (const t of list) if (t.id !== 'glyph' && (!t.kinds || t.kinds.includes('image'))) out.push(t);
     }
   } catch {
     /* 一覧が無くても glyph だけで動く */

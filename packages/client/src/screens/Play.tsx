@@ -12,10 +12,12 @@ import { connectWs, type WsHandle, type WsStatus } from '../net/ws';
 import type { Canvas2DRenderer } from '../render/canvas2d';
 import { toViewEvents } from '../render/events';
 import { sceneFromView } from '../render/scene';
+import { soundDirector } from '../sound/director';
 import {
   AlertsBar, carriedCount, InventoryPanel, isApproaching, isBoundItem, MessageLog, MonstersPanel, StatusPanel, SummaryDialog, type InvAction, type LogLine,
 } from '../ui/panels';
 import { ErrorBanner, Header, MapView, ThemePicker, useCatalog, useLocaleRefresh, useTheme } from '../ui/common';
+import { SoundControls } from '../ui/sound';
 import { BriefingCard, CampPanel, completesOnExtract, ExpeditionPanel, extractConfirmText, lifelineConfirmText, RestEstimateLine, rulesOf, TurnBar } from '../ui/expedition';
 import { abilityDisplayName, AbilityBar, BoonChoicePanel, DirPad, PerkChoicePanel } from '../ui/build';
 import {
@@ -263,6 +265,8 @@ export function Play({ runId }: { runId: string }) {
           setView(m.view);
           addLog(perceivedLines(m.events));
           redraw(m.events);
+          // 音の状態と合図（演出だけ。届いた視界と出来事から。マクロは 1 歩ごとに届くので、画面の位置に合わせて追う）
+          soundDirector.update(m.view, m.events.map((e) => e.event), catalogRef.current);
           break;
         case 'macro':
           macroRef.current = m.state === 'running';
@@ -303,7 +307,7 @@ ${tr('それでも装備しますか？', 'Equip it anyway?')}`)) send({ ...last
     };
     const ws = connectWs({ t: 'hello', role: 'player', runId, token: token.token }, onMsg, setWsStatus);
     wsRef.current = ws;
-    return () => ws.close();
+    return () => { ws.close(); soundDirector.leave(); };
   }, [runId]);
 
   useEffect(() => { redraw(); }, [catalog]);
@@ -1038,6 +1042,7 @@ ${tr('それでも装備しますか？', 'Equip it anyway?')}`)) send({ ...last
         )}
         <span class={`ws ${wsStatus}`}>{wsStatus}</span>
         <ThemePicker themes={th.themes} themeId={th.themeId} onChange={th.setThemeId} />
+        <SoundControls />
         <a class="button small" href={`#/watch/${runId}`}>{tr('観戦画面', 'Spectate')}</a>
       </Header>
       <ErrorBanner error={error ?? catErr ?? th.error} onClose={() => setError(null)} />

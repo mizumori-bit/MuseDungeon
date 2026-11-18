@@ -2,5 +2,10 @@
   {
     "id": "sample",
     "name": "sample（検証用ダミー画像）"
+  },
+  {
+    "id": "hollow",
+    "name": "hollow",
+    "kinds": ["sound"]
   }
 ]

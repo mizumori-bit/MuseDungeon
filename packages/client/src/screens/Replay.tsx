@@ -15,6 +15,8 @@ import { narrateWorld, thoughtsFrom } from '../ui/narration';
 import { AiPanel, MessageLog, PartyPanel } from '../ui/panels';
 import { clamp, getLocale, tr } from '../util';
 import { filterEventsForPlayer } from '@muse/shared';
+import { soundDirector } from '../sound/director';
+import { SoundControls } from '../ui/sound';
 
 const CHUNK = 5000;
 const SPEEDS = [0.25, 0.5, 1, 2, 4, 8, 16];
@@ -103,6 +105,22 @@ export function Replay({ runId }: { runId: string }) {
     if (applied?.length && stateRef.current.speed <= 8) void r.animate(toViewEvents(applied.filter((e) => e.floor === auto.floorKey), c, true));
   };
 
+  /**
+   * 音: 見ている相手のプレイヤー（選んでいる相手。いなければ最初のプレイヤー）の視界と、その人に届いた出来事から。
+   * 飛んだとき（seek）と速い再生（×8 より速い）では合図を鳴らさない
+   */
+  const sound = (applied: GameEvent[], quiet = false) => {
+    const w = worldRef.current;
+    const pid = stateRef.current.follow ?? w?.playerOrder[0];
+    if (!w || !pid || !w.players[pid]) return;
+    try {
+      const v = projectPlayerView(w, pid);
+      soundDirector.update(v, applied.length ? filterEventsForPlayer(applied, pid, v) : [], catalogRef.current, { quiet: quiet || stateRef.current.speed > 8 });
+    } catch {
+      /* 視界を作れない（参加の前など）ときは鳴らさない */
+    }
+  };
+
   const keyframeWorld = async (kf: number): Promise<World> => {
     let w = kfCache.current.get(kf);
     if (!w) {
@@ -138,6 +156,7 @@ export function Replay({ runId }: { runId: string }) {
     bubblesRef.current = [];
     setSeq(w.seq);
     render();
+    sound([], true);
   };
 
   /** n イベント、または次の手番開始（turn_began）まで進める */
@@ -163,6 +182,7 @@ export function Replay({ runId }: { runId: string }) {
       }
       setSeq(w.seq);
       render(applied);
+      sound(applied);
     }
     return applied;
   };
@@ -248,6 +268,9 @@ export function Replay({ runId }: { runId: string }) {
   }, [playing]);
 
   useEffect(() => { render(); }, [catalog, mode, follow, speed]);
+  // 見ている相手が替わったら、その人の視界で音を作り直す（合図は鳴らさない）。画面を離れたら流れを切る
+  useEffect(() => { sound([], true); }, [catalog, follow]);
+  useEffect(() => () => soundDirector.leave(), [runId]);
 
   const w = worldRef.current;
   const lastSeq = index?.lastSeq ?? 0;
@@ -334,6 +357,7 @@ export function Replay({ runId }: { runId: string }) {
     <div class="page replay">
       <Header title={`${tr('リプレイ', 'Replay')} ${runId}`}>
         <ThemePicker themes={th.themes} themeId={th.themeId} onChange={th.setThemeId} />
+        <SoundControls />
         {meta?.status === 'active' && <a class="button small" href={`#/watch/${runId}`}>{tr('ライブへ', 'Go live')}</a>}
       </Header>
       <ErrorBanner error={error ?? catErr ?? th.error} onClose={() => setError(null)} />

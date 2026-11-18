@@ -141,6 +141,8 @@ export const StatusSchema = z.object({
   /** engine の status ハンドラ ID（dot / speed_pct / incapacitate など） */
   handler: z.string().min(1),
   params: z.record(z.number()).default({}),
+  /** 付いた者にとって悪い・良い状態か（音の状態の ailment・boost。SOUND_SPEC §2.1）。無ければどちらでもない（帰還中など） */
+  tone: z.enum(['bad', 'good']).optional(),
 });
 
 export const BiomeSchema = z.object({

@@ -394,3 +394,8 @@ button.ability .astate { margin-left: 2px; }
 /* 記録と図鑑（V3-7） */
 pre.records { white-space: pre-wrap; max-height: 24rem; overflow: auto; font-size: 0.8rem; background: rgba(255, 255, 255, 0.03); padding: 0.5rem; border-radius: 4px; }
 label.check { display: flex; gap: 0.4rem; align-items: center; }
+
+/* 音の設定（docs/SOUND_SPEC.md §6） */
+.soundctl { display: inline-flex; align-items: center; gap: 6px; }
+.soundctl input[type='range'] { width: 72px; }
+.soundctl small.error { color: #e49a8a; }

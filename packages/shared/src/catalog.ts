@@ -102,7 +102,8 @@ export interface Catalog {
   features: Record<string, { name: Names; category: 'feature' | 'trap'; states: string[]; interactable: boolean; passable: boolean; afterInteract?: string; desc?: Names; gamble?: { name: Names; pct: number }[] }>;
   /** speedPct: 速度を変える状態異常の倍率（%）。公開ルール（加速 x2 など） */
   /** armor: 装甲の修正（錆。V3-5a） */
-  statuses: Record<string, { name: Names; speedPct?: number; armor?: number }>;
+  /** tone: 付いた者にとって悪い・良い状態か（音の状態の ailment・boost。SOUND_SPEC §2.1） */
+  statuses: Record<string, { name: Names; speedPct?: number; armor?: number; tone?: 'bad' | 'good' }>;
   /** itemMods: 品物の接辞の効果（自分の持ち物の性能表示に使う。敵の接辞の値は出さない） */
   affixes: Record<string, { name: Names; target: 'monster' | 'item' | 'guardian'; itemMods?: { acc: number; dmgBonus: number; armor: number; eva?: number; might?: number; maxHp?: number; sight?: number }; cursed?: boolean; /** 敵の接辞の効き目（V3-8） */ monsterMods?: Record<string, number> }>;
   /** ビルド（V3-4） */

@@ -86,8 +86,11 @@ export function buildCatalog(c: Content): Catalog {
       // 賭けの祭壇の表（確率は % に直して公開。V3-5 §5.1）
       ...(f.gamble ? { gamble: f.gamble.map((g) => ({ name: g.name, pct: Math.trunc((g.weight * 100) / f.gamble!.reduce((a, x) => a + x.weight, 0)) })) } : {}),
     }])),
-    statuses: Object.fromEntries(Object.values(c.statuses).map((s) => [s.id, s.handler === 'speed_pct' ? { name: s.name, speedPct: s.params.pct ?? 100 }
-      : s.handler === 'stat_mod' ? { name: s.name, ...(s.params.armor ? { armor: s.params.armor } : {}) } : { name: s.name }])),
+    statuses: Object.fromEntries(Object.values(c.statuses).map((s) => [s.id, {
+      ...(s.handler === 'speed_pct' ? { name: s.name, speedPct: s.params.pct ?? 100 }
+        : s.handler === 'stat_mod' ? { name: s.name, ...(s.params.armor ? { armor: s.params.armor } : {}) } : { name: s.name }),
+      ...(s.tone ? { tone: s.tone } : {}),
+    }])),
     affixes: Object.fromEntries(c.lists.affixes.map((a) => [a.id, {
       name: a.name, target: a.target,
       ...(a.target === 'item' ? { itemMods: { acc: a.mods?.acc ?? 0, dmgBonus: a.mods?.dmgBonus ?? 0, armor: a.mods?.armor ?? 0, eva: a.mods?.eva ?? 0, might: a.mods?.might ?? 0, maxHp: a.mods?.maxHp ?? 0, sight: a.mods?.sight ?? 0 } } : {}),
