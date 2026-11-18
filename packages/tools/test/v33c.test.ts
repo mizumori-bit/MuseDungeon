@@ -222,14 +222,6 @@ describe('V3-3c fight and texts (§44.5・§44.6)', () => {
     a.manager.closeAll();
   });
 
-  it('the camp goal is one line; declare_goal with no arguments gives the options', async () => {
-    const t = await newRun('v33c-goal-1');
-    const o = t.r.port.observe({ map: false });
-    expect(o.observation.camp?.goal?.lines).toHaveLength(1);
-    expect(t.r.port.goalInfo().full?.some((l) => l.startsWith('目標の候補'))).toBe(true);
-    t.manager.closeAll();
-  });
-
   it('ward fires name their guardian; once one is seen, the others show a direction', async () => {
     const a = await arena('v33c-ward', { map: ['P.........', '..........', '..........'], guardian: { kind: 'core:goblin', hp: 50, dmg: '1d1', types: ['core:warded'], state: 'asleep' }, player: { hp: 100 } });
     const fire = (id: string, x: number, y: number): Entity => ({ id, kind: 'core:ward_fire', sid: ++sid, pos: { floor: a.key, x, y }, feature: { state: 'lit' }, lairOf: a.gId } as Entity);

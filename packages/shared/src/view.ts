@@ -62,8 +62,10 @@ export interface EntityView {
   bounty?: number;
   /** 速さ（モンスター。状態異常を除く素の値。見れば分かる性質。観測では自分との比較の 3 段階にする。V3-2R2 §18.2） */
   speed?: number;
+  /** 自分の 1 手番に 2 回動いたのを見てから過ぎた手番（V3-8 §53.4）。見ていなければ無い */
+  paceAgo?: number;
   /** 守護者の名前と型（公開）。weakness は試して分かったときだけ（V3-3 §3.1） */
-  guardian?: { name: Names; title?: Names; types: string[]; weakness?: string; warden?: boolean; notWeak?: string[] };
+  guardian?: { name: Names; title?: Names; types: string[]; weakness?: string; warden?: boolean; notWeak?: string[]; heavy?: boolean };
   /** 予備動作（見えていれば公開。V3-3 §3.1） */
   intent?: Intent;
   /** 棲み処の地物（護りの火）の持ち主の守護者の呼び名（V3-3c §44.6） */
@@ -139,7 +141,7 @@ export interface ExpeditionView {
   relicGuarded: boolean;
   status: Expedition['status'];
   endReason: ExpeditionEndReason | null;
-  progress: { reached: boolean; guardianSlain: boolean; relicHeld: boolean; relicHeldByYou: boolean };
+  progress: { reached: boolean; guardianSlain: boolean; relicHeld: boolean; relicHeldByYou: boolean; vaultOpened?: boolean };
   /** 自分が extract 済みか */
   extracted: boolean;
   result: ExpeditionResult | null;
@@ -372,12 +374,16 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
           if (ds) v.damageSeen = ds;
           v.shot = shots.has(e.id);
           if (e.actor) v.speed = e.actor.speed;
+          // 2 回動いたのを見てから過ぎた手番（V3-8 §53.4）
+          const ps = k.paceSeen?.[e.id];
+          const myTurns = me?.actor?.turns;
+          if (ps !== undefined && myTurns !== undefined) v.paceAgo = Math.max(0, myTurns - ps);
           // 守護者の名前と型は公開。弱点は試して分かったものだけ（V3-3 §3.1）
           if (e.guardian) {
             // 大守護者の弱点は、記録庫の記憶からも分かる（V3-3a §35.7）
             const known = k.guardianIntel?.[e.id] ?? (e.guardian.warden && e.pos ? k.wardenIntel?.[String(world.floors[e.pos.floor]?.depth ?? 0)]?.weakness : undefined);
             const tried = k.guardianTried?.[e.id];
-            v.guardian = { name: { ...e.guardian.name }, ...(e.guardian.title ? { title: { ...e.guardian.title } } : {}), types: [...e.guardian.types], ...(known ? { weakness: known } : {}), ...(e.guardian.warden ? { warden: true } : {}), ...(!known && tried?.length ? { notWeak: [...tried] } : {}) };
+            v.guardian = { name: { ...e.guardian.name }, ...(e.guardian.title ? { title: { ...e.guardian.title } } : {}), types: [...e.guardian.types], ...(known ? { weakness: known } : {}), ...(e.guardian.warden ? { warden: true } : {}), ...(e.guardian.heavy ? { heavy: true } : {}), ...(!known && tried?.length ? { notWeak: [...tried] } : {}) };
           }
           if (e.actor?.ai?.intent) v.intent = { ...e.actor.ai.intent };
           // 持っている品（宝物庫の鍵。見れば分かる。V3-5 §5.1）
@@ -443,7 +449,7 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
     expedition = {
       no: latest.no, objective: { ...latest.objective }, points: latest.points, relicGuarded: latest.relicGuarded,
       status: latest.status, endReason: latest.endReason,
-      progress: { reached: latest.progress.reached, guardianSlain: latest.progress.guardianSlain, relicHeld: held !== null, relicHeldByYou: held === me.id },
+      progress: { reached: latest.progress.reached, guardianSlain: latest.progress.guardianSlain, relicHeld: held !== null, relicHeldByYou: held === me.id, ...(latest.progress.vaultOpened ? { vaultOpened: true } : {}) },
       extracted: latest.extracted.some((x) => x.player === playerId),
       result: latest.result ? structuredClone(latest.result) : null,
       startSeq: latest.startSeq, endSeq: latest.endSeq,

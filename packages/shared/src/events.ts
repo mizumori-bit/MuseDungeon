@@ -7,7 +7,7 @@ import type {
 } from './types';
 
 /** 2: 遠征・実ダメージ・回復の蓄積値（IMPROVEMENTS_V2）。3: ビルド（特技・能動技・呪い。V3-4）。古いログもそのまま畳み込める */
-export const EVENT_VERSION = 17;
+export const EVENT_VERSION = 18;
 
 export interface EventBase {
   seq: number;
@@ -104,7 +104,11 @@ export type GameEvent =
   /** 通常の敵の大きな行動の結果（V3-5b §44.7: 大振りが当たった・空を切った） */
   | E<'monster_acted', { id: EntityId; kind: string; act: 'swing_hit' | 'swing_missed' }>
   /** 目的でなくなった守護者が階を去った（V3-3c §44.1）。その守護者に会ったことのある参加者に。forget: 記憶から消す地物（棲み処の火） */
-  | E<'guardian_departed', { id: EntityId; guardianName: Names; depth: number; player: PlayerId; forget: EntityId[] }>
+  | E<'guardian_departed', { id: EntityId; guardianName: Names; depth: number; player: PlayerId; forget: EntityId[]; /** 名前付きの強敵（V3-8 §53.3） */ elite?: boolean }>
+  /** 見ていた敵が自分の 1 手番のあいだに 2 回動いた（V3-8 §53.4: 次の数手番は 1 回しか動けないと分かる）。turn: そのときの自分の手番数 */
+  | E<'pace_seen', { player: PlayerId; ids: EntityId[]; turn: number }>
+  /** 階の異変が消えた（V3-8 §53.3: 賞金首・番人の巡回の強敵が階を去った） */
+  | E<'floor_event_cleared', { floorKey: FloorKey }>
   /** 遺物を記録庫に納めた。記録庫が次の節目の大守護者の記憶を 1 つ返す（V3-3a §35.7。本人に）。memory: weakness / vitals / none */
   | E<'archive_recalled', { player: PlayerId; relic: string; depth: number; guardianName: Names; memory: 'weakness' | 'vitals' | 'none'; weakness?: string; hp?: number; maxHit?: number; /** 素の装甲（V3-3b §40.1） */ armor?: number }>
   /** 物語の 1 文（V3-3 §3.4。全員に）。守護者・大守護者を倒した、遺物を納めた */

@@ -5,11 +5,11 @@ import type { Catalog } from '@muse/shared';
 import type { Content } from '@muse/content';
 import { createRun, ENGINE_VERSION, isPlayersTurn, joinPlayer, step } from '@muse/engine';
 import type {
-  ActionError, AgentActivity, Command, CommandRecord, CommandSource, Expedition, ExpeditionReport, GameEvent, GoalDecl, GoalProfile, GoalRecord, JoinCommand, LegacyMonster, MacroStop, ProjectedEvent,
+  ActionError, AgentActivity, Command, CommandRecord, CommandSource, Expedition, ExpeditionReport, GameEvent, JoinCommand, LegacyMonster, MacroStop, ProjectedEvent,
   PerceivedEvent, PlayerId, PlayerView, ReportCall, RunMetaFile, RunSummary, TurnSnapshot, World,
 } from '@muse/shared';
 import {
-  actionError, applyEvent, buildExpeditionReport, canonicalHash, goalReportOf, guardianDisplayName, judgeGoal, makeGoal, compareReports, emptyWorld, filterEventsForPlayer, FREE_COMMANDS, MACRO_COMMANDS,
+  actionError, applyEvent, buildExpeditionReport, canonicalHash, guardianDisplayName, compareReports, emptyWorld, filterEventsForPlayer, FREE_COMMANDS, MACRO_COMMANDS,
   macroNext, macroStart, macroStopError, narrate, projectPlayerView, selfTurnMarks, t,
 } from '@muse/shared';
 import type { ServerConfig } from '../config';
@@ -104,11 +104,8 @@ export class RunSession {
   private readonly macroKinds = new Map<number, string>();
   /** 終了した遠征のレポート（プレイヤー×遠征） */
   private readonly reports = new Map<string, ExpeditionReport>();
-  /** 目標の宣言（V3-7a。World の外。goals.jsonl に残す） */
-  private readonly goals = new Map<PlayerId, GoalRecord[]>();
   /** 参加コマンドのプロフィールの ID と継承した知識（V3-7。参加コマンドから。復元時も作り直す） */
   private readonly joinInfo = new Map<PlayerId, { profile?: string; legacy?: LegacyMonster[] }>();
-  private goalSeq = 0;
   private readonly log: LogWriter | null;
   private lastKeyframeSeq = 0;
   private metaFile: RunMetaFile;
@@ -161,9 +158,7 @@ export class RunSession {
     }
     s.history.push(...replayed);
     s.rebuildCalls(commands);
-    // 目標（V3-7a）: 1 行 = 記録の最新の形
-    const goalFile = join(dir, 'goals.jsonl');
-    if (existsSync(goalFile)) for (const g of readJsonl<GoalRecord>(goalFile)) s.putGoal(g, false);
+    // 目標の宣言（V3-7a）は V3-8 §53.5 で外した。古いランの goals.jsonl は読まない（再実行は commands.jsonl だけで、宣言はゲームに影響しない）
     const logged = allEvents.filter((e) => e.seq > kf.seq);
     const strip = (es: GameEvent[]) => es.map((e) => ({ ...e, wall: 0 }));
     const verified = canonicalHash(strip(logged)) === canonicalHash(strip(replayed));
@@ -264,72 +259,15 @@ export class RunSession {
     }
     // プロフィール（V3-7）: 参加・遠征の終わり・ランの終わりで記録を書き直す（図鑑・実績の目標の判定より先に）
     if (events.length) this.deps.profiles?.onCommit(this, events);
-    // 目標の判定（V3-7a）: 遠征が終わるたびに、参加者の宣言中の目標を判定する
-    for (const e of events) if (e.type === 'expedition_ended') this.judgeGoals(e.no);
     if (events.length) for (const l of this.listeners) l.onEvents?.(events);
     for (const w of [...this.waiters]) w();
     this.scheduleTimeouts();
-  }
-
-  // ---------- 目標（V3-7a §40.8） ----------
-
-  private putGoal(g: GoalRecord, persist = true): void {
-    const list = this.goals.get(g.player) ?? [];
-    const i = list.findIndex((x) => x.id === g.id);
-    if (i >= 0) list[i] = g; else list.push(g);
-    this.goals.set(g.player, list);
-    this.goalSeq = Math.max(this.goalSeq, g.id);
-    if (persist) this.log?.appendGoal(g);
-  }
-
-  goalsOf(pid: PlayerId): readonly GoalRecord[] {
-    return this.goals.get(pid) ?? [];
-  }
-
-  activeGoal(pid: PlayerId): GoalRecord | null {
-    return this.goalsOf(pid).find((g) => g.status === 'active') ?? null;
   }
 
   /** そのプレイヤーの終わった遠征のレポート（古い順） */
   endedReports(pid: PlayerId): ExpeditionReport[] {
     return (this.world.expeditions ?? []).filter((x) => x.participants.includes(pid) && x.endSeq !== null)
       .map((x) => this.expeditionReport(pid, x.no)).filter((r): r is ExpeditionReport => !!r);
-  }
-
-  /** 目標を宣言する（キャンプで。decl が null なら取り下げ）。宣言中の目標があれば取り下げてから */
-  declareGoal(pid: PlayerId, decl: GoalDecl | null): { ok: true; goal: GoalRecord | null } | { ok: false; error: string } {
-    const view = this.view(pid);
-    if (view.status !== 'at_camp' || !view.camp) return { ok: false, error: 'not_at_camp' };
-    const fromNo = view.camp.nextNo;
-    let rec: GoalRecord | null = null;
-    if (decl) {
-      const ms = view.camp.milestone && !(view.milestonesCleared ?? []).includes(view.camp.milestone.depth) ? { depth: view.camp.milestone.depth } : null;
-      const r = makeGoal(decl, { id: this.goalSeq + 1, player: pid, fromNo, reports: this.endedReports(pid), nextMilestone: ms, profile: this.goalProfile(pid) });
-      if ('error' in r) return { ok: false, error: r.error };
-      rec = r;
-    }
-    const cur = this.activeGoal(pid);
-    if (cur) this.putGoal({ ...cur, status: 'withdrawn', endedNo: fromNo - 1 });
-    if (rec) this.putGoal(rec);
-    for (const l of this.listeners) l.onEvents?.([]);
-    for (const w of [...this.waiters]) w();
-    return { ok: true, goal: rec };
-  }
-
-  /** 遠征 no が終わった: 参加者の宣言中の目標を判定し、その遠征のレポートに目標を添える */
-  private judgeGoals(no: number): void {
-    const x = (this.world.expeditions ?? []).find((e) => e.no === no);
-    if (!x) return;
-    for (const pid of x.participants) {
-      const g = this.activeGoal(pid);
-      if (!g || g.fromNo > no) continue;
-      const reports = this.endedReports(pid).filter((r) => r.no >= g.fromNo);
-      const status = judgeGoal(g, reports, this.world.milestones?.cleared ?? [], this.goalProfile(pid));
-      const next = status === 'active' ? g : { ...g, status, endedNo: no };
-      if (next !== g) this.putGoal(next);
-      const rep = this.expeditionReport(pid, no);
-      if (rep) rep.goal = goalReportOf(next);
-    }
   }
 
   private appendMessages(pid: PlayerId, events: GameEvent[]): void {
@@ -384,12 +322,6 @@ export class RunSession {
       this.lastResultSeq.set(r.playerId, 0);
       return { ok: true as const, playerId: r.playerId, token };
     });
-  }
-
-  /** 目標の比べる相手（V3-7: プロフィールの前のランまでの自己最高）と、図鑑・実績の数 */
-  goalProfile(pid: PlayerId): GoalProfile | undefined {
-    const id = this.profileOf(pid);
-    return id && this.deps.profiles ? this.deps.profiles.goalProfile(id, this.runId) : undefined;
   }
 
   /** そのプレイヤーのプロフィールの ID（V3-7） */
@@ -471,6 +403,7 @@ export class RunSession {
         ...(x.guardianName ? { objective: guardianDisplayName(view.locale, { name: x.guardianName, ...(x.guardianTitle ? { title: x.guardianTitle } : {}) }) } : {}),
       },
       narrate: (e) => narrate(e, ctx) ?? '',
+      ...(x.targets.bounty ? { bountyIds: [x.targets.bounty] } : {}),
     });
   }
 

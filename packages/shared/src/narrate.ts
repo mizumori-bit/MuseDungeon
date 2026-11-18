@@ -360,6 +360,7 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
     }
     case 'guardian_departed': {
       const nm = nameOf(ev.guardianName as Names, L, '?');
+      if (ev.elite) return ja ? `地下${ev.depth}階の強敵「${nm}」は階を去っていた。` : `The elite "${nm}" of depth ${ev.depth} has left the floor.`;
       return ja ? `地下${ev.depth}階の守護者「${nm}」は棲み処を去っていた（目的ではなくなった）。` : `The guardian "${nm}" of depth ${ev.depth} has left its lair (no longer an objective).`;
     }
     case 'warden_slain': {

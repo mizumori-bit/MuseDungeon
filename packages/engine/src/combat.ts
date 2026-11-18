@@ -1,7 +1,7 @@
 // 戦闘（整数のみ）。命中: d20 + acc >= 10 + eva。20 は必中＋会心、1 は必ず外れ。
 // ダメージ: ダイス + might - armor、最低 1。会心は「ダイスの最大値 + might、装甲無視」（V3-2R §14.3）。
 import type { DamageVia, Dir, Entity, PlayerId, PlayerRecord, RunSummary, RunSummaryPlayer } from '@muse/shared';
-import { cheb, currentExpedition, diceMax, dirTo, xpForLevel } from '@muse/shared';
+import { ceilDiv, cheb, currentExpedition, diceMax, dirTo, xpForLevel } from '@muse/shared';
 import type { Ctx } from './ctx';
 import { applyEffects } from './effects';
 import { displayName, maybeEndExpedition } from './expedition';
@@ -145,9 +145,10 @@ export function melee(ctx: Ctx, attacker: Entity, target: Entity, opts: MeleeOpt
     const might = attacker.stats!.might + ls;
     const brace = bracedArmor(target);
     // 重い一撃: 近接の会心のダメージの上乗せ（V3-3c §44.4）
+    const raw = o.crit ? 0 : roll(ctx.rng('runtime'), attacker.stats!.dmg) + might;
     const base = o.crit
       ? Math.max(1, diceMax(attacker.stats!.dmg) + might + perkHookSum(ctx, attacker, 'melee_crit_dmg', 'dmg'))
-      : Math.max(1, roll(ctx.rng('runtime'), attacker.stats!.dmg) + might - armorOf(ctx, target) - brace);
+      : Math.max(1, heavyFloor(attacker, raw, raw - armorOf(ctx, target) - brace));
     // 突進の倍率と、守護者の受けるダメージの修正（V3-3）
     const mult = base * (opts.dmgMult ?? 1);
     const dmg = target.guardian ? guardianIncoming(ctx, target, mult, 'melee', attacker) : mult;
@@ -187,7 +188,8 @@ export function rangedAttack(ctx: Ctx, attacker: Entity, target: Entity, dice: s
     // 装甲を抜く射撃（呪い火。V3-5a §35.10）は装甲も構えも無視する
     const brace = pierce ? 0 : bracedArmor(target);
     const armor = pierce ? 0 : armorOf(ctx, target);
-    const dmg = o.crit ? Math.max(1, diceMax(dice)) : Math.max(1, roll(ctx.rng('runtime'), dice) - armor - brace);
+    const raw = o.crit ? 0 : roll(ctx.rng('runtime'), dice);
+    const dmg = o.crit ? Math.max(1, diceMax(dice)) : Math.max(1, heavyFloor(attacker, raw, raw - armor - brace));
     if (brace && !o.crit) notePerk(ctx, target, perkWithHook(ctx, target, 'brace'), 'braced', { amount: brace });
     if (brace) removeStatus(ctx, target, 'core:braced');
     applyDamage(ctx, ctx.world.entities[target.id], dmg, attacker, 'ranged');
@@ -400,6 +402,11 @@ export function grantXp(ctx: Ctx, e: Entity, amount: number): void {
 export function scoreOf(ctx: Ctx, p: { deepest: number; kills: number; level: number; expeditionPoints?: number }): number {
   const s = ctx.content.balance.score;
   return p.deepest * s.perDepth + p.kills * s.perKill + p.level * s.perLevel + (p.expeditionPoints ?? 0);
+}
+
+/** 重い一撃（V3-8 §53.1）: 格 2 以上の守護者と大守護者の攻撃は、装甲（と構え）で一撃の半分までしか減らない */
+function heavyFloor(attacker: Entity, raw: number, reduced: number): number {
+  return attacker.guardian?.heavy ? Math.max(reduced, ceilDiv(raw, 2)) : reduced;
 }
 
 /** hideSeed: ラン継続中（遠征の終了時）の要約ではシードを伏せる */

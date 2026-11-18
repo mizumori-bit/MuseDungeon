@@ -191,6 +191,7 @@ describe('V3-2R3 lifeline and reading danger (§20.3, §20.4)', () => {
     const me = structuredClone(t.me());
     me.stats!.hp = 17;
     t.inject({ put: [me] });
+    delete t.world.players[t.pid].knowledge.paceSeen; // 2 回動いたのを見た直後は 1 回と数える（V3-8 §53.4）。ここでは素の数え方を見る
     const view = projectPlayerView(t.world, t.pid);
     const o = buildObservation(view, catalog, { detail: 'brief', map: false });
     const jackal = o.visible.monsters.find((m) => m.id === 'e_r3wt01');

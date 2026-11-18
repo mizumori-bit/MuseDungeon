@@ -188,10 +188,8 @@ describe('V3-6 reports in the session (§6.1・§6.2・§35.9)', () => {
     expect(end.report!.tempo.turns).toBe(t.me().actor!.turns);
     const text = t.r.port.formatActionText(end);
     expect(text).toContain('振り返り（遠征 1・帰還・達成）:');
-    // キャンプの観測: 比較の行は目標の文に吸収された（V3-7a §40.8）。比較のデータは残る
-    expect(text).toContain('目標: 未宣言');
-    // キャンプの目標の行は 1 行（V3-3c §44.5。候補は declare_goal を引数なしで）
-    expect(text).toContain('目標: 未宣言（declare_goal で候補が出る');
+    // キャンプの観測: 目標の宣言は外した（V3-8 §53.5）。比較は 1 行
+    expect(text).not.toContain('目標:');
     const obs1 = t.r.port.observe({ map: false }).observation;
     expect(obs1.camp?.compare?.lines).toHaveLength(1);
     // キャンプの expedition: 直前の遠征のレポート

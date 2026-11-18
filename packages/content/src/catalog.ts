@@ -92,6 +92,8 @@ export function buildCatalog(c: Content): Catalog {
       name: a.name, target: a.target,
       ...(a.target === 'item' ? { itemMods: { acc: a.mods?.acc ?? 0, dmgBonus: a.mods?.dmgBonus ?? 0, armor: a.mods?.armor ?? 0, eva: a.mods?.eva ?? 0, might: a.mods?.might ?? 0, maxHp: a.mods?.maxHp ?? 0, sight: a.mods?.sight ?? 0 } } : {}),
       ...(a.cursed ? { cursed: true } : {}),
+      // 敵の接辞の効き目（V3-8 §53.3: 強敵の見立て。look に出す）
+      ...(a.target === 'monster' ? { monsterMods: Object.fromEntries(Object.entries(a.mods ?? {}).filter(([k, v]) => k !== 'xpPct' && v)) } : {}),
     }])),
     perks: Object.fromEntries(c.lists.perks.map((pk) => [pk.id, {
       name: pk.name, desc: pk.desc, lineage: pk.lineage, maxRanks: pk.maxRanks, requires: [...pk.requires],

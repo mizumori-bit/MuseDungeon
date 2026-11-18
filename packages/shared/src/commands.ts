@@ -21,7 +21,8 @@ export const CommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('wait'), turns: z.number().int().min(1).max(10).optional() }),
   z.object({ type: z.literal('pickup'), item: EntityRefSchema.optional() }),
   z.object({ type: z.literal('drop'), slot: SlotSchema, qty: z.number().int().positive().optional() }),
-  z.object({ type: z.literal('equip'), slot: SlotSchema }),
+  /** confirm: 呪いと分かっている品を装備する（装備すると外せない。V3-8 §53.4） */
+  z.object({ type: z.literal('equip'), slot: SlotSchema, confirm: z.boolean().optional() }),
   z.object({ type: z.literal('unequip'), slot: z.union([SlotSchema, EquipSlotSchema]) }),
   /** targetSlot: 鑑定の巻物などの対象（所持品のスロット） */
   z.object({ type: z.literal('use'), slot: SlotSchema, target: TargetSchema.optional(), targetSlot: SlotSchema.optional() }),
@@ -35,7 +36,9 @@ export const CommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('travel'), to: TravelTargetSchema, mode: MacroModeSchema.optional(), hpFloor: HpFloorSchema.optional(), pickup: z.union([z.boolean(), z.literal('useful')]).optional() }),
   z.object({ type: z.literal('rest'), untilHp: z.number().int().positive().optional(), maxTurns: z.number().int().positive().optional() }),
   /** 既知の「自分が投げた物」（what: 'thrown'、既定）か、見えている・記憶したアイテム（'items'）を近い順に拾う */
-  z.object({ type: z.literal('collect'), what: z.enum(['thrown', 'items']).optional(), mode: MacroModeSchema.optional(), hpFloor: HpFloorSchema.optional() }),
+  /** within: 歩数の上限（既定 15）、kinds: 品の種類（種類 ID か区分）、all: 劣る装備も拾う（V3-8 §53.4） */
+  z.object({ type: z.literal('collect'), what: z.enum(['thrown', 'items']).optional(), mode: MacroModeSchema.optional(), hpFloor: HpFloorSchema.optional(),
+    within: z.number().int().min(1).max(200).optional(), kinds: z.array(z.string().regex(/^(core:)?[a-z][a-z0-9_]+$/)).max(8).optional(), all: z.boolean().optional() }),
   /**
    * その相手と決着を付ける（V3-2R2 §18.5）。with なし: 近接（追跡中の相手は隣に来るまで待つ）。with: そのスロットの品を投げて戦う（射程と射線が通るまで待つ）。
    * 倒れた・離れた・HP が hpFloor を下回った・別の追跡中の敵・状態異常で止まる

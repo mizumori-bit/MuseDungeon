@@ -1,11 +1,11 @@
 // 遠征まわりの表示部品: 目的と進捗、戦利品（未確定の点）、ブリーフィング、手番の状態行と変化、休憩の見積もり、キャンプ、観戦用の要約、AI の応答待ち。
 // 文章と数値は shared の expedition.ts / turn.ts / catalog.ts / observation.ts で作る。ここでは並べて見せるだけで、ゲームの判定はしない。
 import type {
-  Catalog, CatalogRules, Change, Dir, Expedition, ExpeditionOffer, ExpeditionView, GoalDecl, GoalInfo, GoalType, HaulParts, ObsExpedition, Observation, OfferSlot, PlayerView,
+  Catalog, CatalogRules, Change, Dir, Expedition, ExpeditionOffer, ExpeditionView, HaulParts, ObsExpedition, Observation, OfferSlot, PlayerView,
   RestEstimate, World,
 } from '@muse/shared';
 import {
-  briefingLines, buildObservation, campDepthOf, currentExpedition, dirLabel, endReasonText, guardianForecastText, haulTotal, latestExpedition, multText, nameOf,
+  bountyForecastText, briefingLines, buildObservation, campDepthOf, currentExpedition, dirLabel, endReasonText, guardianForecastText, haulTotal, latestExpedition, multText, nameOf,
   nextCampOf, nextOverreach, objectiveText, offerGap, offerText, overreachPoints, partsText, progressText, recordsCampLine, resultText, slotName,
 } from '@muse/shared';
 import { api } from '../api';
@@ -417,31 +417,16 @@ function OfferCard({ o, rules, level, onStart }: { o: ExpeditionOffer; rules: Ca
             {guardianForecastText(L, o.guardian)}
           </span>
         )}
+        {o.bounty && (
+          <span class="oguard r2" title={tr('賞金首: 名前付きの強敵。種族・接辞・名前は候補の時点で分かる', 'Bounty: a named elite. Its kind, affixes and name are known from the offer')}>
+            {bountyForecastText(L, o.bounty)}
+          </span>
+        )}
+        {o.vault && <span class="oguard">{tr('宝物庫: 鍵を持つ敵が階にいる', 'vault: a monster on the floor carries the key')}</span>}
+        {o.scar ? <span class="oguard" title={tr('前の挑戦で与えたダメージの 4 分の 1 が残っている', 'A quarter of the damage you dealt last time stays')}>{tr(`傷跡で体力 −${o.scar}`, `scars: −${o.scar} HP`)}</span> : null}
       </div>
       <TraitList traits={o.traits ?? []} rules={rules} />
     </li>
-  );
-}
-
-/** 目標の宣言（V3-7a §40.8。AI の declare_goal と同じ候補・同じ口）。任意で、点には影響しない */
-function GoalBox({ goal, onGoal }: { goal: GoalInfo; onGoal: (d: GoalDecl | null) => void }) {
-  const typeName: Record<GoalType, string> = { depth: tr('深さ', 'Depth'), banked: tr('確定点', 'Banked'), milestone: tr('節目', 'Milestone'), margin: tr('余力', 'Margin'), codex: tr('図鑑', 'Codex'), feats: tr('実績', 'Feats') };
-  const levelName = { match: tr('自己最高に並ぶ', 'match your best'), beat: tr('少し超える', 'beat it'), beat_big: tr('大きく超える', 'beat it big'), start: tr('初期値', 'start') };
-  const types = [...new Set(goal.candidates.map((c) => c.type))];
-  return (
-    <div class="goalbox">
-      <h3>{tr('目標（任意・点には影響しない）', 'Goal (optional, no effect on points)')}</h3>
-      {(goal.full ?? goal.lines).map((l) => <p class="muted">{l}</p>)}
-      {types.map((ty) => (
-        <div class="row goal-row">
-          <span class="goal-type">{typeName[ty]}</span>
-          {goal.candidates.filter((c) => c.type === ty).map((c) => (
-            <button class="small" title={levelName[c.level]} onClick={() => onGoal({ type: c.type, value: c.value, within: c.within })}>{c.text}</button>
-          ))}
-        </div>
-      ))}
-      {goal.active && <button class="small" onClick={() => onGoal(null)}>{tr('目標を取り下げる', 'Withdraw the goal')}</button>}
-    </div>
   );
 }
 
@@ -462,7 +447,7 @@ function CampRecords({ nextNo }: { nextNo: number }) {
 }
 
 /** キャンプ（遠征と遠征の間）。成績・前の遠征の払い戻し・候補を出し、次の遠征を選ぶか、ここで終える */
-export function CampPanel({ view, catalog, onStart, onRetire, goal, onGoal }: { view: PlayerView; catalog?: Catalog | null; onStart: (offer: number | 'endless') => void; onRetire: () => void; goal?: GoalInfo | null; onGoal?: (d: GoalDecl | null) => void }) {
+export function CampPanel({ view, catalog, onStart, onRetire }: { view: PlayerView; catalog?: Catalog | null; onStart: (offer: number | 'endless') => void; onRetire: () => void }) {
   const x = view.expedition;
   const camp = view.camp;
   const rules = rulesOf(catalog);
@@ -488,7 +473,6 @@ export function CampPanel({ view, catalog, onStart, onRetire, goal, onGoal }: { 
             `You are off the board (time does not pass). HP ${view.self.stats.hp}/${view.self.stats.maxHp}, Lv${view.self.level}. Deepest: ${view.deepestDepth}. You may stop here.`)}
       </p>
       {camp && <CampRecords nextNo={camp.nextNo} />}
-      {camp && goal && onGoal && <GoalBox goal={goal} onGoal={onGoal} />}
       {camp ? (
         <>
           <h3>{first ? tr(`最初の遠征の候補（遠征 ${camp.nextNo}）`, `Offers for expedition ${camp.nextNo}`) : tr(`次の遠征の候補（遠征 ${camp.nextNo}）`, `Offers for expedition ${camp.nextNo}`)}</h3>
@@ -534,7 +518,7 @@ export interface ExpInfo {
 function viewOf(x: Expedition): ExpeditionView {
   return {
     no: x.no, objective: x.objective, points: x.points, relicGuarded: x.relicGuarded, status: x.status, endReason: x.endReason,
-    progress: { reached: x.progress.reached, guardianSlain: x.progress.guardianSlain, relicHeld: x.progress.relicHeldBy !== null, relicHeldByYou: false },
+    progress: { reached: x.progress.reached, guardianSlain: x.progress.guardianSlain, relicHeld: x.progress.relicHeldBy !== null, relicHeldByYou: false, ...(x.progress.vaultOpened ? { vaultOpened: true } : {}) },
     extracted: false, result: x.result, startSeq: x.startSeq, endSeq: x.endSeq,
     slot: x.slot ?? null, traits: [...(x.traits ?? [])], multiplierPct: x.multiplierPct ?? 100,
     haul: { ...(x.haul ?? { bounty: 0, discovery: 0, kills: 0 }) }, maxDepth: x.progress.maxDepth ?? 0, crossedDepth: x.progress.crossedDepth ?? 0,
@@ -586,6 +570,8 @@ export function directorExpInfo(world: World, depth: number | null, catalog?: Ca
   if (o.type === 'reach_depth') parts.push(x.progress.reached ? tr('目標階を踏破済み', 'target crossed') : tr('目標階の下り階段に未到達', 'target not crossed yet'));
   if (o.type === 'slay_warden') parts.push(x.progress.guardianSlain ? tr('大守護者: 討伐済み', 'warden: slain') : tr('大守護者: 未討伐', 'warden: alive'));
   if (o.type === 'slay_guardian') parts.push(x.progress.guardianSlain ? tr('守護者: 討伐済み', 'guardian: slain') : tr('守護者: 未討伐', 'guardian: alive'));
+  if (o.type === 'slay_bounty') parts.push(x.progress.guardianSlain ? tr('賞金首: 討伐済み', 'bounty: slain') : tr('賞金首: 未討伐', 'bounty: alive'));
+  if (o.type === 'open_vault') parts.push(x.progress.vaultOpened ? tr('宝物庫: 開けた', 'vault: opened') : tr('宝物庫: まだ開けていない', 'vault: still locked'));
   if (o.type === 'retrieve_relic') {
     const holder = x.progress.relicHeldBy ? world.entities[x.progress.relicHeldBy]?.player : undefined;
     const name = holder ? world.players[holder]?.name ?? holder : null;

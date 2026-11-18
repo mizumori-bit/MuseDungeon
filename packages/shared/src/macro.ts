@@ -47,7 +47,9 @@ export type MacroStop =
   // 見えている敵が新しく予備動作を見せた（突進の構え・手下を呼ぶ構え・怒りの予兆。V3-3 §3.1）
   | 'intent'
   // fight: 待つ間に標的に殴られたが、標的は隣にいない（当てて離れる速い相手。V3-3 後の AI 評価）
-  | 'hit_and_run'
+  | 'hit_and_run' | 'target_shooting'
+  // collect: 残りの品はどれも within 歩より遠い（V3-8 §53.4）
+  | 'collect_far'
   // 移動マクロが同じ 2 マスを往復している（見えるものが変わるたびに最短の道が入れ替わった。V3-3 後の bot の計測）
   | 'no_progress';
 
@@ -69,7 +71,7 @@ export function resolveFightAbilities(view: PlayerView, catalog: Catalog, ids: r
 }
 
 /** 自然に終わった（中断ではない）停止理由 */
-export const MACRO_COMPLETED_STOPS: ReadonlySet<MacroStop> = new Set<MacroStop>(['arrived', 'explored', 'full_hp', 'target_hp', 'max_turns', 'collected', 'target_down', 'cleared', 'rest_cap', 'sense_found']);
+export const MACRO_COMPLETED_STOPS: ReadonlySet<MacroStop> = new Set<MacroStop>(['arrived', 'explored', 'full_hp', 'target_hp', 'max_turns', 'collected', 'collect_far', 'target_down', 'cleared', 'rest_cap', 'sense_found']);
 
 /** 直線で 2 マス先、間のマスが既知の地形で通れて、見えている者がいない（長柄。engine の reachLine と同じ判定） */
 export function reachMidOpen(view: PlayerView, catalog: Catalog, from: Pos, to: Pos): boolean {
@@ -103,6 +105,10 @@ export interface MacroState {
   pickup: boolean;
   /** collect: 自分が投げた物だけか、見えている・記憶したアイテム全般か */
   collectWhat: 'thrown' | 'items';
+  /** collect の絞り込み（V3-8 §53.4）: 歩数の上限・品の種類（種類 ID か区分）・劣る装備も拾う */
+  collectWithin?: number;
+  collectKinds?: string[];
+  collectAll?: boolean;
   /** fight: 相手 */
   fightTarget?: string;
   /** fight: 投げる品のスロットと、開始時のその品の種類（尽きたら止まる） */
@@ -289,6 +295,26 @@ function pickable(view: PlayerView, catalog: Catalog, it: { kind: string | null;
   return true;
 }
 
+/** collect の歩数の上限の既定（V3-8 §53.4） */
+export const COLLECT_WITHIN = 15;
+
+/**
+ * collect what=items の拾う品（V3-8 §53.4）: 種類の絞り込み（種類 ID か区分）と、鑑定済みで今の装備より劣る装備を飛ばす
+ * （記憶の品は種類の素の性能で比べる。all なら劣る装備も拾う）
+ */
+function collectableItems(view: PlayerView, catalog: Catalog, state: Pick<MacroState, 'skipItems' | 'pickUseful' | 'collectKinds' | 'collectAll'>): { id: string; cell: number }[] {
+  const list = pickableItems(view, catalog, state.skipItems, !state.collectAll && state.pickUseful !== false);
+  const kinds = state.collectKinds;
+  const kindOf = (id: string) => view.entities.find((e) => e.id === id)?.kind ?? view.memory.remembered.find((r) => r.id === id)?.kind ?? null;
+  const visible = new Set(view.entities.map((e) => e.id));
+  return list.filter((x) => {
+    const k = kindOf(x.id);
+    if (kinds && !(k && (kinds.includes(k.replace(/^core:/, '')) || kinds.includes(catalog.items[k]?.category ?? '')))) return false;
+    if (!state.collectAll && k && !visible.has(x.id) && catalog.items[k]?.slot && sameOrWorseEquip(view, catalog, { kind: k, affixes: [] })) return false;
+    return true;
+  });
+}
+
 /** 見えている・記憶しているアイテムのうち拾ってよいもの（id とセル）。useful（既定）なら種類の違う劣る装備も外す（V3-4b §28.7） */
 export function pickableItems(view: PlayerView, catalog: Catalog, skip: readonly string[] = [], useful = true): { id: string; cell: number }[] {
   const f = view.floor;
@@ -401,6 +427,7 @@ export function macroStart(view: PlayerView, cmd: Command, catalog: Catalog): Ma
     pickup: cmd.type === 'explore' ? (cmd.pickup ?? 'useful') !== false : cmd.type === 'travel' ? (cmd.pickup ?? itemTarget) !== false : cmd.type === 'collect' ? (cmd.what ?? 'thrown') === 'items' : false,
     pickUseful: !((cmd.type === 'explore' || cmd.type === 'travel') && cmd.pickup === true),
     collectWhat: cmd.type === 'collect' ? (cmd.what ?? 'thrown') : 'thrown',
+    ...(cmd.type === 'collect' ? { collectWithin: cmd.within ?? COLLECT_WITHIN, ...(cmd.kinds?.length ? { collectKinds: cmd.kinds.map((k) => k.replace(/^core:/, '')) } : {}), ...(cmd.all ? { collectAll: true } : {}) } : {}),
     ...(cmd.type === 'fight' ? {
       fightTarget: cmd.target, engaged: false, waits: 0, apart: 0, blocked: 0,
       fightUntil: cmd.until ?? 'target', fightAdjacent: cmd.adjacent ?? 'stop', lostTurns: 0, cleared: 0,
@@ -553,7 +580,9 @@ export function macroNext(state: MacroState, view: PlayerView, catalog: Catalog,
       // 待つ手番に標的に殴られたのに、標的が隣にいない（当てて離れる速い相手）: 待ち続けずに止まる（V3-3 後の AI 評価: 10 手番待つ間に 9 回殴られた）
       if (state.waited && ev('attack', (e) => e.attacker === state.fightTarget && e.target === me.id)) {
         const t0 = view.entities.find((h) => h.id === state.fightTarget);
-        if (!t0 || cheb(t0.pos, pos) > 1) return { stop: 'hit_and_run' };
+        // その場で撃つ相手（骨の射手。V3-8 §53.4）は離れないので、当てて離れる相手と分ける
+        const shot = ev('attack', (e) => e.attacker === state.fightTarget && e.target === me.id && !!(e as unknown as { ranged?: boolean }).ranged);
+        if (!t0 || cheb(t0.pos, pos) > 1) return { stop: shot ? 'target_shooting' : 'hit_and_run' };
       }
       // 被弾の記録が無い種族から初めて被弾した: 数字を見てから続けるかを決められるよう一度止まる（V3-2R3 §20.4）
       const firstHit = events.find((e) => {
@@ -927,7 +956,7 @@ export function macroNext(state: MacroState, view: PlayerView, catalog: Catalog,
     }
     if (path === null || path.length === 0) return { stop: findPath(grid, pos, targets.filter((i) => i !== here), 'none') ? 'blocked' : 'explored' };
   } else if (kind === 'collect') {
-    const goals = (state.collectWhat === 'items' ? pickableItems(view, catalog, state.skipItems, state.pickUseful !== false).map((x) => x.cell) : mineCells(view)).filter((i) => i !== here);
+    const goals = (state.collectWhat === 'items' ? collectableItems(view, catalog, state).map((x) => x.cell) : mineCells(view)).filter((i) => i !== here);
     // 決着の後に拾っていた（fight の collect_after）: 拾い終えたら決着の理由で止まる
     if (!goals.length) return { stop: state.fightDone ?? 'collected' };
     // 敵が乗っている品は後回し（経路探しは行き先のマスの敵を通すので、いちばん近い品が敵の足元だと 1 歩目でふさがれた。V3-5a 後の AI 評価）
@@ -935,6 +964,8 @@ export function macroNext(state: MacroState, view: PlayerView, catalog: Catalog,
     path = route(free.length ? free : goals);
     if (path === null) return { stop: findPath(grid, pos, goals, 'none') ? 'blocked' : 'unreachable' };
     if (path.length === 0) return { stop: 'collected' };
+    // 歩数の上限（V3-8 §53.4。いちばん近い品が上限より遠ければ、残りも遠い）
+    if (state.collectWithin !== undefined && path.length > state.collectWithin) return { stop: state.fightDone ?? 'collect_far' };
   } else {
     // 目的地のアイテムを拾った（所持品に入った・同じ品の山に重なった）なら到着（V3-5a 後の AI 評価: 重なった薬で「相手が見えなくなった」と出た）
     if (typeof state.target === 'string' && view.inventory.some((i) => i.id === state.target)) return { stop: 'arrived' };
@@ -1032,7 +1063,11 @@ export function macroStopError(L: Locale, stop: MacroStop, cmd: Command, dir?: D
     case 'explored':
       return actionError('nothing_to_do', t(L, 'この階で辿り着ける未見の区画も、拾うアイテムも無い。', 'Nothing reachable left to explore or pick up on this floor.'), t(L, 'travel_to stairs_down か extract。', 'travel_to stairs_down, or extract.'));
     case 'collected':
-      return actionError('nothing_to_do', t(L, '回収する物が無い。', 'Nothing to collect.'), '');
+      return actionError('nothing_to_do', t(L, '回収する物が無い。', 'Nothing to collect.'), cmd.type === 'collect' && cmd.kinds?.length ? t(L, 'kinds の種類の品が見えていない・記憶に無い（kinds を外すと他の品も拾う）。', 'No item of those kinds is visible or remembered (drop kinds to pick up other items).') : '');
+    case 'collect_far': {
+      const w = cmd.type === 'collect' ? (cmd.within ?? COLLECT_WITHIN) : COLLECT_WITHIN;
+      return actionError('nothing_to_do', t(L, `${w} 歩以内に回収する物が無い。`, `Nothing to collect within ${w} steps.`), t(L, 'もっと遠くまで拾うなら within を大きくする（例 within: 40）。', 'Raise within to go farther (e.g. within: 40).'));
+    }
     case 'arrived':
       return actionError('nothing_to_do', t(L, 'すでに目的地にいる。', 'You are already there.'), '');
     case 'full_hp':

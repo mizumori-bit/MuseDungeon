@@ -20,6 +20,13 @@ export { shotLine } from './perception';
 export { pickRelic, relicInfo } from './boons';
 export { isMilestoneDepth } from './gen/generate';
 export { guardianTraits } from './expedition';
+import { makeOffers } from './expedition';
+import { Ctx } from './ctx';
+import type { ExpeditionOffer, World } from '@muse/shared';
+/** 候補を作って返す（World は変えない。テストと計測用） */
+export function previewOffers(world: World, content: Content, no: number): ExpeditionOffer[] {
+  return makeOffers(new Ctx(world, content, null, 0), no);
+}
 export { rollGuardianInfo, rollWardenInfo, weaknessHandlers } from './guardians';
 export { wardenHpRange } from './warden';
 export { actions, archetypes, effects, validators, layoutGenerators, statusHandlers, abilityHandlers, weaponTraits };

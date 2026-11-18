@@ -1,6 +1,6 @@
 // V3-7（IMPROVEMENTS_V3 §7・§16.3）の確認: プロフィール（作成・トークン・積み上げ）、継承（種族の知識だけ・legacy:false・
 // legacyPolicy・commands.jsonl だけで再実行できる）、記録と図鑑（本人の知識だけ・完成度）、実績（条件・伏せる）、
-// 目標の比べる相手（前のランまでの自己最高）と図鑑・実績の型、records が MCP と HTTP で同じ、トークンがログに出ない。
+// records が MCP と HTTP で同じ、トークンがログに出ない。（目標の宣言は V3-8 §53.5 で外した）
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,7 +8,7 @@ import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { loadContent } from '@muse/content';
 import type { FeatContext, ProfileRun } from '@muse/shared';
-import { emptyCodex, evalFeatCond, floorsUnhurt, goalCandidates, judgeGoal, legacyFrom, memoryCombatText } from '@muse/shared';
+import { emptyCodex, evalFeatCond, floorsUnhurt, legacyFrom, memoryCombatText } from '@muse/shared';
 import { createApp, loadConfig, SessionManager } from '@muse/server';
 import { playWithPort, verifyRunDir } from '../src/index';
 
@@ -208,19 +208,4 @@ describe('V3-7 records, codex and feats (§7.2・§7.4)', () => {
       await app.close();
     }
   }, 30000);
-});
-
-describe('V3-7 goals against the profile (§40.8)', () => {
-  it('bests include earlier runs; codex and feats goals count the profile', () => {
-    const prior = { depth: 6, banked: 9000, margin: 70 };
-    const c = goalCandidates('ja', [], null, { prior, codex: { found: 20, total: 62 }, feats: { earned: 5, total: 32 } });
-    expect(c.filter((x) => x.type === 'depth').map((x) => x.value)).toEqual([6, 7, 8]);
-    expect(c.filter((x) => x.type === 'banked').map((x) => x.value)).toEqual([9000, 9900, 11700]);
-    expect(c.filter((x) => x.type === 'codex').map((x) => [x.value, x.within])).toEqual([[22, 1], [24, 2], [26, 3]]);
-    expect(c.filter((x) => x.type === 'feats').map((x) => [x.value, x.within])).toEqual([[6, 1], [7, 2], [8, 3]]);
-    const g = { id: 1, player: 'p_1', type: 'codex' as const, value: 24, within: 2, fromNo: 1, best: 20, status: 'active' as const };
-    const rep = { no: 1, status: 'ended', reason: 'completed' } as never;
-    expect(judgeGoal(g, [rep], [], { codex: { found: 23, total: 62 } })).toBe('active');
-    expect(judgeGoal(g, [rep], [], { codex: { found: 24, total: 62 } })).toBe('achieved');
-  });
 });

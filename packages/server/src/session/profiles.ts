@@ -6,9 +6,9 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFile
 import { join } from 'node:path';
 import type { Content } from '@muse/content';
 import type {
-  Catalog, CodexIndex, CodexRun, FeatContext, FeatDefLite, FeatRecord, GameEvent, GoalProfile, LegacyMonster, Locale, PlayerId, ProfileData, ProfileRecords, ProfileRun,
+  Catalog, CodexIndex, CodexRun, FeatContext, FeatDefLite, FeatRecord, GameEvent, LegacyMonster, Locale, PlayerId, ProfileData, ProfileRecords, ProfileRun,
 } from '@muse/shared';
-import { abilityName, buildRecords, codexCount, emptyCodex, evalFeatCond, floorsUnhurt, goalBest, kindName, legacyFrom, mergeCodex, profileBest, recordsCampLine, recordsLines, t } from '@muse/shared';
+import { abilityName, buildRecords, codexCount, emptyCodex, evalFeatCond, expeditionBest, floorsUnhurt, kindName, legacyFrom, mergeCodex, recordsCampLine, recordsLines, t } from '@muse/shared';
 import type { RunSession } from './RunSession';
 
 interface ProfileFile extends ProfileData { version: 1; tokenHash: string }
@@ -121,9 +121,8 @@ export class ProfilePort {
 export interface ProfileHooks {
   onCommit(session: RunSession, events: readonly GameEvent[]): void;
   /** キャンプの観測の 1 行（記録の要約と次の節目） */
-  campLine(profileId: string, L: Locale): string | null;
-  /** 目標の宣言の比べる相手（前のランまでの自己最高）と、図鑑・実績の数 */
-  goalProfile(profileId: string, runId: string): GoalProfile;
+  /** firstOf: このランの最初のキャンプなら、そのランの ID（前のランまでの記録を先頭に出す。V3-8 §53.5） */
+  campLine(profileId: string, L: Locale, firstOf?: string): string | null;
   featsOf(profileId: string | null, runId: string, no: number, L: Locale): string[];
 }
 
@@ -211,7 +210,7 @@ export class ProfileService implements ProfileHooks {
       level: e?.level?.level ?? 1, banked: p.stats.banked ?? 0, deepest: p.stats.deepest,
       expeditions: reports.length, completed: reports.filter((r) => r.reason === 'completed').length, withdrawn: reports.filter((r) => r.reason === 'withdrawn').length,
       wardens: [...(w.milestones?.cleared ?? [])].sort((a, b) => a - b), streakMax,
-      best: { depth: goalBest('depth', reports), banked: goalBest('banked', reports), margin: goalBest('margin', reports) },
+      best: expeditionBest(reports),
       codex: this.runCodex(session, pid),
     };
   }
@@ -296,17 +295,16 @@ export class ProfileService implements ProfileHooks {
     return { records, lines: recordsLines(L, records, { kindName: name, className: name }) };
   }
 
-  goalProfile(profileId: string, runId: string): GoalProfile {
-    const p = this.store.get(profileId);
-    if (!p) return {};
-    const cc = codexCount(mergeCodex(p.runs.map((r) => r.codex)), this.index);
-    const earned = new Set(p.feats.map((f) => f.id)).size;
-    return { prior: profileBest(p.runs, runId), codex: cc, feats: { earned, total: this.feats.length } };
-  }
-
-  campLine(profileId: string, L: Locale): string | null {
+  campLine(profileId: string, L: Locale, firstOf?: string): string | null {
     const r = this.records(profileId, L);
-    return r ? recordsCampLine(L, r.records) : null;
+    if (!r) return null;
+    const line = recordsCampLine(L, r.records);
+    // 2 回目以降のランの最初のキャンプ: 前のランまでの確定の最高・最深を先頭に（V3-8 §53.5: records を呼ばなくても目に入るように）
+    const before = firstOf ? (this.store.get(profileId)?.runs ?? []).filter((x) => x.runId !== firstOf && x.status === 'ended') : [];
+    if (!before.length) return line;
+    const best = Math.max(...before.map((x) => x.banked));
+    const deep = Math.max(...before.map((x) => x.deepest));
+    return t(L, `前のランまで: 確定の最高 ${best}・最深 地下${deep}階（${before.length} ラン）。`, `Earlier runs: best banked ${best}, deepest ${deep} (${before.length} runs). `) + line;
   }
 
   /** その遠征で取った実績の名前（キャンプの遠征レポートの行） */

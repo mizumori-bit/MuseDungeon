@@ -2,7 +2,7 @@
 // 状態は全てイベント（expedition_* / objective_* / player_state）で変わる。
 import type {
   ActionError, Entity, Expedition, ExpeditionEndReason, FloorPos, Pos, ExpeditionHaul, ExpeditionOffer, ExpeditionResult, HaulParts, Objective,
-  ObjectiveProgress, ObjectiveType, OfferSlot, PlayerId, PlayerRecord, GuardianInfo, Names,
+  BountyInfo, ObjectiveProgress, ObjectiveType, OfferSlot, PlayerId, PlayerRecord, GuardianInfo, Names,
 } from '@muse/shared';
 import { addDiceBonus, campDepthOf, cheb, currentExpedition, deepestGenerated, diceMax, diceMin, floorDiv, guardianDisplayName, haulTotal, isPursuing, killPoints, offerPoints, overreachPoints, payoutOf, Rng, actionError, t } from '@muse/shared';
 import { buildSummary, grantXp } from './combat';
@@ -10,8 +10,8 @@ import type { Ctx } from './ctx';
 import { findFreeCell } from './floors';
 import { hasLos, inCircle } from './geom';
 import { isOpaqueFn } from './perception';
-import { guardianSpec, pickGuardianKind, rollMonsterAffixes } from './gen/generate';
-import { departGuardians, lairPlan, rollGuardianInfo, rollWardenInfo, settleGuardian } from './guardians';
+import { guardianCandidates, guardianSpec, pickGuardianKind, rollMonsterAffixes, selectBiome, selectFloorType } from './gen/generate';
+import { departGuardians, lairPlan, makeName, projectedScar, rollGuardianInfo, rollWardenInfo, settleGuardian } from './guardians';
 import { grantBoon, ownedBoons, pickRelic } from './boons';
 import { livingWarden, nextMilestone, wardenHpRange, wardenPreview } from './warden';
 import { num, pickLore, tellStory } from './story';
@@ -82,7 +82,7 @@ export function treasureHeld(ctx: Ctx, e: Entity): number {
 }
 
 /** 目標階に置くもの。rank: 守護者の格、guardianKind: 候補で決めた種族 */
-export interface ObjectivePlacement { guardian: boolean; relic: boolean; rank?: 1 | 2 | 3; guardianKind?: string; guardianAffixes?: string[]; info?: GuardianInfo; relicKind?: string }
+export interface ObjectivePlacement { guardian: boolean; relic: boolean; rank?: 1 | 2 | 3; guardianKind?: string; guardianAffixes?: string[]; info?: GuardianInfo; relicKind?: string; bounty?: BountyInfo; vault?: boolean }
 
 /** 枠ごとの守護者の格（V3-2R3 §20.1）: 堅実 1・標準 2・野心 3。枠の無い遠征は 2 */
 export function guardianRankOf(slot: OfferSlot | undefined | null): 1 | 2 | 3 {
@@ -119,8 +119,41 @@ export function guardianHpEstimate(ctx: Ctx, depth: number, kind: string, rank: 
   return Math.max(1, r.minHpBase + r.minHpPerDepth * depth, floorDiv(avg * (100 + 50 * tier + mods.hpPct + r.hpPct), 100));
 }
 
+/** 深い階の遠征の新しい目的が出る深さ（V3-8 §53.2: 目標が地下 6 階より深い踏破の枠） */
+const DEEP_OBJECTIVE_DEPTH = 6;
+
+/** 賞金首の見込み（V3-8 §53.2）: 種族・接辞・名前・体力と一撃の目安・装甲。名前付きの強敵は種族を隠さない */
+function bountyOffer(ctx: Ctx, depth: number, b: BountyInfo): NonNullable<ExpeditionOffer['bounty']> {
+  const def = ctx.content.monsters[b.kind];
+  const tier = depth > ctx.content.deepestDefined ? floorDiv(depth - ctx.content.deepestDefined, 5) + 1 : 0;
+  const mods = sumAffixMods(ctx.content, b.affixes);
+  const avg = def ? floorDiv(diceMin(def.stats.hp) + diceMax(def.stats.hp), 2) : 0;
+  return {
+    kind: b.kind, name: { ...b.name }, affixes: [...b.affixes],
+    kindName: def ? { ...def.name } : { ja: b.kind, en: b.kind }, affixNames: b.affixes.map((a) => ({ ...(ctx.content.affixes[a]?.name ?? { ja: a, en: a }) })),
+    hp: Math.max(1, floorDiv(avg * (100 + 50 * tier + mods.hpPct), 100)),
+    maxHit: def ? diceMax(addDiceBonus(def.attack.dice, mods.dmgBonus)) + def.stats.might + tier + mods.might : 0,
+    armor: (def?.stats.armor ?? 0) + mods.armor,
+  };
+}
+
+/** 候補で決める賞金首（種族・接辞・名前。乱数は expedition|通番|bounty|枠） */
+function rollBounty(ctx: Ctx, depth: number, no: number, i: number): BountyInfo | null {
+  const rng = Rng.fromSeed(`${ctx.world.secret.seed}|expedition|${no}|bounty|${i}`);
+  const cands = guardianCandidates(ctx.content, selectFloorType(ctx.content, ctx.world.secret.seed, 'main', depth), selectBiome(ctx.content, ctx.world.secret.seed, 'main', depth), depth, 2)
+    .filter((m) => m.ai.archetype !== 'stationary');
+  if (!cands.length) return null;
+  const def = cands[rng.int(cands.length)];
+  const eb = ctx.content.balance.elite;
+  const pool = ctx.content.lists.affixes.filter((a) => a.target === 'monster' && a.depth.min <= depth && (a.depth.max === undefined || depth <= a.depth.max));
+  const affixes: string[] = [];
+  while (affixes.length < eb.affixes && pool.length) affixes.push(pool.splice(rng.int(pool.length), 1)[0].id);
+  return { kind: def.id, name: makeName(ctx.content, rng), affixes };
+}
+
+
 /** 守護者の見込みに出す、見れば分かる特徴（速さ・射撃・大柄・重装）。種族名は出さない。minSpeed: 速さの下限（大守護者） */
-export function guardianTraits(ctx: Ctx, kind: string, affixes: readonly string[] = [], minSpeed = 0): string[] {
+export function guardianTraits(ctx: Ctx, kind: string, affixes: readonly string[] = [], minSpeed = 0, heavy = false): string[] {
   const def = ctx.content.monsters[kind];
   if (!def) return [];
   const out: string[] = [];
@@ -140,6 +173,8 @@ export function guardianTraits(ctx: Ctx, kind: string, affixes: readonly string[
   // 血を吸う・大振り（V3-5b §44.7。見れば分かる特徴）
   if (def.tags.includes('drain')) out.push('drain');
   if (def.tags.includes('heavy_swing')) out.push('heavy_swing');
+  // 重い一撃（V3-8 §53.1）: 格 2 以上と大守護者
+  if (heavy) out.push('heavy_blow');
   return out;
 }
 
@@ -173,6 +208,16 @@ export function makeOffers(ctx: Ctx, no: number): ExpeditionOffer[] {
     const [branch, ds] = e.pos.floor.split(':');
     if (branch === 'main') leftover.set(Number(ds), e);
   }
+  // 目的だった賞金首で、まだ生きているもの（V3-8 §53.3: 倒せずに帰ったら再挑戦の候補）
+  const bountyIds = new Set((ctx.world.expeditions ?? []).map((x) => x.targets.bounty).filter((id): id is string => !!id));
+  const bountyLeft = new Map<number, Entity>();
+  for (const id of [...bountyIds].sort()) {
+    const e = ctx.world.entities[id];
+    if (!e?.pos || (e.stats?.hp ?? 0) <= 0) continue;
+    const [branch, ds] = e.pos.floor.split(':');
+    if (branch === 'main') bountyLeft.set(Number(ds), e);
+  }
+  const lastObjective = (ctx.world.expeditions ?? []).at(-1)?.objective.type ?? null;
   return SLOTS.map((slot, i) => {
     const s = b.slots[slot];
     let type = types[i % types.length];
@@ -192,6 +237,13 @@ export function makeOffers(ctx: Ctx, no: number): ExpeditionOffer[] {
     while (type !== 'slay_warden' && isMilestoneDepth(ctx.content, target)) target++;
     // その階の下り階段にすでに立った（下の階が生成済み）なら、踏破型は出さず別の種類に替える
     if (type === 'reach_depth' && (target < deepest || target <= crossedMax)) type = rng.chance(50) ? 'slay_guardian' : 'retrieve_relic';
+    // 深い階の遠征（V3-8 §53.2）: 目標が地下 6 階より深い踏破の枠は、踏破・賞金首・宝物庫から等しく引く。直前の遠征が踏破なら踏破は引かない。
+    // 賞金首と宝物庫はまだ生成していない階だけ（残っている目的の賞金首は再挑戦）。乱数は別の流れ（ほかの候補を動かさない）
+    if (type === 'reach_depth' && target > DEEP_OBJECTIVE_DEPTH) {
+      const fresh = !ctx.world.floors[`main:${target}`];
+      const pool: ObjectiveType[] = [...(lastObjective === 'reach_depth' ? [] : ['reach_depth' as const]), ...(fresh || bountyLeft.has(target) ? ['slay_bounty' as const] : []), ...(fresh ? ['open_vault' as const] : [])];
+      if (pool.length) type = pool[Rng.fromSeed(`${ctx.world.secret.seed}|expedition|${no}|deep|${i}`).int(pool.length)];
+    }
     const n = rng.range(s.traitsMin, s.traitsMax);
     const traits: string[] = [];
     for (const id of rng.shuffle([...traitIds])) {
@@ -209,8 +261,8 @@ export function makeOffers(ctx: Ctx, no: number): ExpeditionOffer[] {
     let points = type === 'slay_warden' ? offerPoints(pr, 'ambitious', 'slay_guardian', false, target) : offerPoints(pr, slot, type, relicGuarded, target);
     // 再挑戦（V3-3c §44.1）: 守護者を倒す枠の目標の階に、未討伐の守護者が残っている
     const rematch = type === 'slay_guardian' ? leftover.get(target) : undefined;
-    // 同じ階の達成の繰り返しは基礎点を repeatPct % ずつ（2 回目 50%、3 回目 25%）。再挑戦には掛けない
-    const done = rematch ? 0 : achievedAt(target);
+    // 同じ階の達成の繰り返しは基礎点を repeatPct % ずつ（2 回目 50%、3 回目 25%）。再挑戦（守護者・賞金首。V3-8 §53.2）には掛けない
+    const done = rematch || (type === 'slay_bounty' && bountyLeft.get(target)?.named) ? 0 : achievedAt(target);
     // 下限は repeatMinPct %（V3-3b §40.6: 2112 → 1056 → 528 → 264 と細り、選ぶ理由が無くなった）
     if (done > 0) {
       let pct = 100;
@@ -227,8 +279,29 @@ export function makeOffers(ctx: Ctx, no: number): ExpeditionOffer[] {
       offer.warden = structuredClone(ms);
       const pv = wardenPreview(ctx, target);
       // 体力の幅（式の下限と上限。V3-3c §44.2）。大守護者は遅くならない
-      offer.guardian = { rank: 3, traits: pv ? guardianTraits(ctx, pv.kind, pv.affixes, ctx.content.balance.guardian.warden.minSpeed) : [], name: { ...ms.name }, ...(ms.title ? { title: { ...ms.title } } : {}), types: [...ms.types], hpRange: wardenHpRange(ctx.content, target) };
+      offer.guardian = { rank: 3, traits: pv ? guardianTraits(ctx, pv.kind, pv.affixes, ctx.content.balance.guardian.warden.minSpeed, true) : [], name: { ...ms.name }, ...(ms.title ? { title: { ...ms.title } } : {}), types: [...ms.types], hpRange: wardenHpRange(ctx.content, target) };
+      // 傷跡（V3-8 §53.3）: 前の挑戦で与えたダメージの 4 分の 1
+      const live = Object.values(ctx.world.entities).find((e) => e.guardian?.warden && e.pos?.floor === `main:${target}` && (e.stats?.hp ?? 0) > 0);
+      const sc = live ? projectedScar(live) : 0;
+      if (sc) offer.scar = sc;
     }
+    // 賞金首（V3-8 §53.2）: 種族・接辞・名前は候補で決める（公開）。残っている目的の賞金首は再挑戦（傷跡が残る。§53.3）
+    if (type === 'slay_bounty') {
+      const left = bountyLeft.get(target);
+      if (left?.named) {
+        const src = [...(ctx.world.expeditions ?? [])].reverse().find((x) => x.targets.bounty === left.id);
+        offer.bounty = bountyOffer(ctx, target, { kind: left.kind, name: left.named, affixes: [...(left.scale?.affixes ?? [])] });
+        offer.rechallenge = { no: src?.no ?? null, guardian: left.id, bounty: true };
+        const sc = projectedScar(left);
+        if (sc) offer.scar = sc;
+      } else {
+        const b = rollBounty(ctx, target, no, i);
+        if (b) offer.bounty = bountyOffer(ctx, target, b);
+        else offer.objective.type = 'reach_depth';
+      }
+    }
+    // 宝物庫（V3-8 §53.2）: 鍵を持つ敵が階にいる
+    if (type === 'open_vault') offer.vault = true;
     // 遺物（V3-3 §3.3）: 候補の時点で名前と加護を出す
     if (type === 'retrieve_relic') {
       const ri = pickRelic(ctx.content, ctx.world.secret.seed, no, i, owned, offeredRelics);
@@ -245,7 +318,7 @@ export function makeOffers(ctx: Ctx, no: number): ExpeditionOffer[] {
         // 接辞もここで決める（見込みの特徴と一撃の目安に入れる。生成ではこれを使う）
         const affixes = rollMonsterAffixes(ctx.content, target, Rng.fromSeed(`${ctx.world.secret.seed}|guardian-affix|${no}|${i}`));
         offer.guardianAffixes = affixes;
-        offer.guardian = { rank, traits: guardianTraits(ctx, kind, affixes), name: gi.name, ...(gi.title ? { title: gi.title } : {}), types: gi.types, maxHit: guardianMaxHit(ctx, target, kind, affixes), hp: guardianHpEstimate(ctx, target, kind, rank, affixes) };
+        offer.guardian = { rank, traits: guardianTraits(ctx, kind, affixes, 0, rank >= 2), name: gi.name, ...(gi.title ? { title: gi.title } : {}), types: gi.types, maxHit: guardianMaxHit(ctx, target, kind, affixes), hp: guardianHpEstimate(ctx, target, kind, rank, affixes) };
         offer.guardianWeakness = gi.weakness;
       }
       // 再挑戦: 新しい守護者を作らず、残っている守護者をもう一度目的にする（同じ名前・型・弱点。乱数は上で引いたまま）
@@ -257,8 +330,10 @@ export function makeOffers(ctx: Ctx, no: number): ExpeditionOffer[] {
         offer.guardianKind = rematch.kind;
         offer.guardianAffixes = affs;
         offer.guardianWeakness = g.weakness;
-        offer.guardian = { rank: rr, traits: guardianTraits(ctx, rematch.kind, affs), name: { ...g.name }, ...(g.title ? { title: { ...g.title } } : {}), types: [...g.types], maxHit: guardianMaxHit(ctx, target, rematch.kind, affs), hp: guardianHpEstimate(ctx, target, rematch.kind, rr, affs) };
+        offer.guardian = { rank: rr, traits: guardianTraits(ctx, rematch.kind, affs, 0, !!g.heavy), name: { ...g.name }, ...(g.title ? { title: { ...g.title } } : {}), types: [...g.types], maxHit: guardianMaxHit(ctx, target, rematch.kind, affs), hp: guardianHpEstimate(ctx, target, rematch.kind, rr, affs) };
         offer.rechallenge = { no: src?.no ?? null, guardian: rematch.id };
+        const sc = projectedScar(rematch);
+        if (sc) offer.scar = sc;
       }
     }
     return offer;
@@ -282,6 +357,9 @@ export function placementFor(ctx: Ctx, branch: string, depth: number): Objective
   // 再挑戦は新しく置かない（V3-3c §44.1）
   if (x.objective.type === 'slay_guardian') return { guardian: !x.rechallengeOf, relic: false, ...g };
   if (x.objective.type === 'retrieve_relic') return { guardian: x.relicGuarded, relic: true, ...g, ...(x.relic ? { relicKind: x.relic.kind } : {}) };
+  // 賞金首・宝物庫（V3-8 §53.2）: 生成で異変「賞金首」・施錠された宝物庫を必ず付ける（再挑戦は新しく置かない）
+  if (x.objective.type === 'slay_bounty') return x.rechallengeOf || !x.bounty ? null : { guardian: false, relic: false, bounty: structuredClone(x.bounty) };
+  if (x.objective.type === 'open_vault') return { guardian: false, relic: false, vault: true };
   return null;
 }
 
@@ -373,13 +451,17 @@ function placeOnExistingFloor(ctx: Ctx, x: Expedition): void {
 }
 
 /** ensureFloor から: 生成された守護者・遺物を遠征に記録する（俯瞰専用イベント） */
-export function recordTargets(ctx: Ctx, spawned: Entity[]): void {
+export function recordTargets(ctx: Ctx, spawned: Entity[], extra: { bounty?: string | null; vaultLocks?: number } = {}): void {
   const x = currentExpedition(ctx.world);
   if (!x) return;
   const g = spawned.find((e) => e.role === 'guardian');
   const r = spawned.find((e) => e.role === 'relic');
-  if (!g && !r) return;
-  const targets = { guardian: g?.id ?? x.targets.guardian, relic: r?.id ?? x.targets.relic };
+  if (!g && !r && !extra.bounty && !extra.vaultLocks) return;
+  const targets = {
+    guardian: g?.id ?? x.targets.guardian, relic: r?.id ?? x.targets.relic,
+    ...(extra.bounty ? { bounty: extra.bounty } : x.targets.bounty ? { bounty: x.targets.bounty } : {}),
+    ...(extra.vaultLocks ? { vaultLocks: extra.vaultLocks } : x.targets.vaultLocks ? { vaultLocks: x.targets.vaultLocks } : {}),
+  };
   ctx.emit({ type: 'objective_progress', no: x.no, progressAfter: { ...x.progress }, statusAfter: x.status, targetsAfter: targets, seenBy: [], floor: null });
 }
 
@@ -415,21 +497,32 @@ export function computeProgress(ctx: Ctx, x: Expedition): ObjectiveProgress {
     }
   }
   const guardianSlain = x.progress.guardianSlain
-    || (x.objective.type === 'slay_warden' ? (w.milestones?.cleared ?? []).includes(x.objective.targetDepth ?? -1) : (x.targets.guardian !== null && !w.entities[x.targets.guardian]));
+    || (x.objective.type === 'slay_warden' ? (w.milestones?.cleared ?? []).includes(x.objective.targetDepth ?? -1)
+      : x.objective.type === 'slay_bounty' ? (!!x.targets.bounty && !w.entities[x.targets.bounty])
+        : (x.targets.guardian !== null && !w.entities[x.targets.guardian]));
+  // 宝物庫を開けた（V3-8 §53.2）: 目標階の鍵のかかった格子扉が、置いたときより減った
+  let vaultOpened = x.progress.vaultOpened ?? false;
+  if (!vaultOpened && x.objective.type === 'open_vault' && x.targets.vaultLocks && x.objective.targetDepth !== null) {
+    const f = w.floors[`main:${x.objective.targetDepth}`];
+    const li = w.meta.terrainTable.indexOf('core:grate_locked');
+    if (f && li >= 0) { let n = 0; for (const tv of f.terrain) if (tv === li) n++; vaultOpened = n < x.targets.vaultLocks; }
+  }
   let relicHeldBy: string | null = null;
   if (x.targets.relic) {
     const holder = w.entities[x.targets.relic]?.item?.heldBy;
     const he = holder ? w.entities[holder] : undefined;
     if (he?.player && present(w.players[he.player])) relicHeldBy = he.id;
   }
-  return { reached, guardianSlain, relicHeldBy, maxDepth, ...(crossedDepth ? { crossedDepth } : {}) };
+  return { reached, guardianSlain, relicHeldBy, maxDepth, ...(crossedDepth ? { crossedDepth } : {}), ...(vaultOpened ? { vaultOpened } : {}) };
 }
 
 function statusFor(o: Objective, p: ObjectiveProgress): Expedition['status'] {
   switch (o.type) {
     case 'reach_depth': return p.reached ? 'objective_complete' : 'in_progress';
     case 'slay_guardian':
+    case 'slay_bounty':
     case 'slay_warden': return p.guardianSlain ? 'objective_complete' : 'in_progress';
+    case 'open_vault': return p.vaultOpened ? 'objective_complete' : 'in_progress';
     case 'retrieve_relic': return p.relicHeldBy ? 'objective_complete' : 'in_progress';
     default: return 'in_progress';
   }
@@ -443,7 +536,7 @@ export function checkObjective(ctx: Ctx): void {
   const status = statusFor(x.objective, p);
   const prev = x.status;
   if (p.reached === x.progress.reached && p.guardianSlain === x.progress.guardianSlain && p.relicHeldBy === x.progress.relicHeldBy
-    && (p.maxDepth ?? 0) === (x.progress.maxDepth ?? 0) && (p.crossedDepth ?? 0) === (x.progress.crossedDepth ?? 0) && status === prev) return;
+    && (p.maxDepth ?? 0) === (x.progress.maxDepth ?? 0) && (p.crossedDepth ?? 0) === (x.progress.crossedDepth ?? 0) && !!p.vaultOpened === !!x.progress.vaultOpened && status === prev) return;
   ctx.emit({ type: 'objective_progress', no: x.no, progressAfter: p, statusAfter: status, seenBy: [], floor: null });
   if (status === 'objective_complete' && prev !== 'objective_complete') {
     ctx.emit({ type: 'objective_completed', no: x.no, objective: { ...x.objective }, seenBy: 'all', floor: null });
@@ -779,6 +872,7 @@ export function startExpedition(ctx: Ctx, pr: PlayerRecord, offer: number | 'end
   let rechallengeOf: string | undefined;
   let guardianInfo: { name?: Names; title?: Names; types?: string[]; weakness?: string | null } = {};
   let relic: Expedition['relic'];
+  let bounty: BountyInfo | undefined;
   if (offer === 'endless') objective = { type: 'endless', targetDepth: null };
   else {
     const o = camp.offers.find((c) => c.index === offer);
@@ -795,6 +889,7 @@ export function startExpedition(ctx: Ctx, pr: PlayerRecord, offer: number | 'end
     if (o.rechallenge && w.entities[o.rechallenge.guardian]) rechallengeOf = o.rechallenge.guardian;
     if (o.guardian?.name) guardianInfo = { name: { ...o.guardian.name }, ...(o.guardian.title ? { title: { ...o.guardian.title } } : {}), types: [...(o.guardian.types ?? [])], weakness: o.guardianWeakness ?? null };
     if (o.relic) relic = structuredClone(o.relic);
+    if (o.bounty) bounty = { kind: o.bounty.kind, name: { ...o.bounty.name }, affixes: [...o.bounty.affixes] };
   }
   const participants: PlayerId[] = w.playerOrder.filter((pid) => present(w.players[pid]));
   const start: Expedition['start'] = {};
@@ -814,12 +909,13 @@ export function startExpedition(ctx: Ctx, pr: PlayerRecord, offer: number | 'end
   }
   const exp: Expedition = {
     no: camp.nextNo, objective, points, relicGuarded, status: 'in_progress', startSeq: w.seq + 1, endSeq: null, endReason: null,
-    participants, start, targets: { guardian: null, relic: null }, progress: { reached: false, guardianSlain: false, relicHeldBy: null, maxDepth: startDepth },
+    participants, start, targets: { guardian: null, relic: null, ...(objective.type === 'slay_bounty' && rechallengeOf ? { bounty: rechallengeOf } : {}) }, progress: { reached: false, guardianSlain: false, relicHeldBy: null, maxDepth: startDepth },
     extracted: [], result: null,
     ...(slot ? { slot } : {}), traits, multiplierPct, haul: { bounty: 0, discovery: 0, kills: 0 },
     ...(guardianKind ? { guardianKind } : {}), ...(guardianAffixes ? { guardianAffixes: [...guardianAffixes] } : {}), ...(rechallengeOf ? { rechallengeOf } : {}), guardianRank: objective.type === 'slay_warden' ? 3 : (camp.offers.find((c) => c.index === offer)?.guardian?.rank ?? guardianRankOf(slot)),
     ...(guardianInfo.name ? { guardianName: guardianInfo.name, ...(guardianInfo.title ? { guardianTitle: guardianInfo.title } : {}), guardianTypes: guardianInfo.types ?? [], guardianWeakness: guardianInfo.weakness ?? null } : {}),
     ...(relic ? { relic } : {}),
+    ...(bounty ? { bounty } : {}),
     ...(camp.milestone ? { milestone: structuredClone(camp.milestone) } : {}),
   };
   // 物語の 1 文（V3-3 §3.4）: 目的・守護者の型・遺物から選ぶ
@@ -844,11 +940,24 @@ export function startExpedition(ctx: Ctx, pr: PlayerRecord, offer: number | 'end
   }
   // キャンプで休んでいる間に、すべての階の守護者も全快して落ち着く（V3-3a §35.1）
   for (const e of Object.values(w.entities).filter((x) => x.guardian && x.pos && (x.stats?.hp ?? 0) > 0).sort((a, b) => a.sid - b.sid)) {
-    const r = settleGuardian(ctx, e);
+    const r = settleGuardian(ctx, e, true);
     if (!r.healed && !r.dispersed) continue;
     // その階を知っている参加者に、戻ったときの変化として知らせる（V3-3b §40.3: 「ミセの手下は散っていた」）
     const seen = participants.filter((pid) => !!w.players[pid]?.knowledge.floors[e.pos!.floor] && w.players[pid].knowledge.met.includes(e.id));
     for (const pid of seen) ctx.emit({ type: 'guardian_rested', id: e.id, guardianName: { ...e.guardian!.name }, full: true, player: pid, ...(r.dispersed ? { dispersed: r.dispersed } : {}), seenBy: [pid], floor: e.pos!.floor });
+  }
+  // 再挑戦の賞金首（V3-8 §53.3）: キャンプの間に落ち着いて傷が癒える（傷跡の分は残る）
+  const kept = exp.objective.type === 'slay_bounty' && exp.rechallengeOf ? w.entities[exp.rechallengeOf] : undefined;
+  if (kept?.pos && kept.stats && kept.actor) {
+    const scar = projectedScar(kept);
+    const top = kept.stats.maxHp - scar;
+    const key = kept.pos.floor;
+    if (kept.stats.hp < top) ctx.emit({ type: 'healed', target: kept.id, targetKind: kept.kind, amount: top - kept.stats.hp, hpAfter: top, via: 'camp', resetSeen: true, seenBy: [], floor: key });
+    const body = structuredClone(w.entities[kept.id]);
+    body.statuses = [];
+    if (scar) body.scar = scar;
+    if (body.actor!.ai) { body.actor!.ai = { ...body.actor!.ai, state: 'unaware', targetPos: null, lostTurns: 0 }; delete body.actor!.ai.intent; }
+    ctx.emit({ type: 'guardian_state', id: kept.id, put: [body], seenBy: [], floor: key });
   }
   for (const pid of participants) if (w.players[pid].state === 'at_camp') returnFromCamp(ctx, pid);
   // キャンプが帰還の綱を 1 本持たせる

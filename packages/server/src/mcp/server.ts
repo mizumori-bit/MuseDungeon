@@ -2,7 +2,7 @@
 // 1 MCP 接続 = 1 プレイヤー（接続に束縛）。ステートレスなクライアント向けに全ツールが player_token も受け付ける。
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { ActionError, Command, Controller, GoalType, ObjectiveChoice, TurnBlock } from '@muse/shared';
+import type { ActionError, Command, Controller, ObjectiveChoice, TurnBlock } from '@muse/shared';
 import { actionError, CommandSchema, t } from '@muse/shared';
 import type { PlayerPort, ActionPayload } from '../session/PlayerPort';
 import type { SessionManager } from '../session/SessionManager';
@@ -272,33 +272,6 @@ export function createMcpServer(ctx: McpContext): McpServer {
     const rep = port.expeditionReportLines();
     return withTurn(port, [...lines, ...rep.lines].join('\n'), { briefing: lines, expedition: o.observation.expedition ?? null, camp: o.observation.camp ?? null, ...(rep.progress ? { progress: rep.progress } : {}), ...(rep.report ? { report: rep.report } : {}) });
   });
-  server.registerTool('declare_goal', {
-    title: '目標を宣言する',
-    description: 'キャンプで、次の遠征からの目標を 1 つ宣言する（任意。点・経験値・戦利品には影響しない）。型は depth（最深到達を地下 N 階に。期限 1〜3 回の遠征）・banked（1 回の遠征で確定 X 点以上。次の遠征）・milestone（次の節目の大守護者を倒す。期限 1〜3 回）・margin（達成した遠征で、最も下がった HP を最大の N% 以上に保つ。次の遠征）・codex（図鑑を N にする。期限 1〜3 回）・feats（実績を N にする。期限 1〜3 回）。自己最高はプロフィールの前のランまでの記録も含む。option に 1〜3 を渡すと候補（自己最高に並ぶ／少し超える／大きく超える）の値を使う。value で好きな値も宣言できる。type: none で取り下げ。宣言し直すと前の目標は取り下げになる。候補はキャンプの観測と expedition に出る。手番を消費しない。Declare an optional goal at camp (no effect on points).',
-    inputSchema: {
-      ...common,
-      type: z.enum(['depth', 'banked', 'milestone', 'margin', 'codex', 'feats', 'none']).optional().describe('目標の型（none で取り下げ。省くと候補と記録を返す）'),
-      option: z.number().int().min(1).max(3).optional().describe('候補の番号（1: 自己最高に並ぶ・2: 少し超える・3: 大きく超える。節目は 1: 3 回以内・2: 2 回以内・3: 次の遠征）'),
-      value: z.number().int().min(1).optional().describe('値（深さ・確定点・HP の %。節目は次の節目の深さ）'),
-      within: z.number().int().min(1).max(3).optional().describe('期限の遠征の数（depth・milestone・codex・feats だけ。既定 1、候補を使えば候補の値）'),
-    },
-  }, async (args) => {
-    const port = portOf(args.player_token);
-    if (!port) return noSession();
-    const L = port.view().locale;
-    // 引数なし: 候補と記録を返す（V3-3c §44.5: キャンプの観測は 1 行になった）
-    if (args.type === undefined) { const info = port.goalInfo(); return withTurn(port, (info.full ?? info.lines).join('\n'), { info } as Record<string, unknown>); }
-    if (args.type === 'none') { const r = port.declareGoal(null); return withTurn(port, r.text, (r.data ?? {}) as Record<string, unknown>); }
-    let decl: { type: GoalType; value: number; within: number } | null = null;
-    const gtype = args.type;
-    if (args.option !== undefined) {
-      const c = port.goalInfo().candidates.filter((x) => x.type === gtype)[args.option - 1];
-      if (c) decl = { type: c.type, value: args.value ?? c.value, within: args.within ?? c.within };
-    } else if (args.value !== undefined) decl = { type: gtype, value: args.value, within: args.within ?? 1 };
-    if (!decl) return withTurn(port, t(L, 'value か option を渡す（候補はキャンプの観測の「目標の候補」）。', 'Pass value or option (see the goal options at camp).'), { error: 'no_value' });
-    const r = port.declareGoal(decl);
-    return withTurn(port, r.text, (r.data ?? {}) as Record<string, unknown>);
-  });
   server.registerTool('review', {
     title: '振り返り',
     description: '終わった遠征のレポート（確定・戦闘・消耗・進み・このランの前の遠征との比較・場面）。expedition を省くと直前の遠征。手番を消費しない。Review an ended expedition (facts only).',
@@ -459,9 +432,9 @@ export function createMcpServer(ctx: McpContext): McpServer {
     inputSchema: { ...actionCommon, to: z.union([PosZ, z.enum(['stairs_down', 'stairs_up']), z.string().regex(/^e_[0-9a-z]{6}$/)]), ...moveArgs, pickup: z.union([z.boolean(), z.literal('useful')]).optional().describe("通り道のアイテムも拾う（既定: 目的地がアイテムのとき true。'useful' は使える物だけ）") },
   }, async (a) => act('travel_to', a, { type: 'travel', to: a.to, mode: a.mode, hpFloor: a.hp_floor, pickup: a.pickup }));
   server.registerTool('collect', {
-    title: '回収', description: "マクロ: what: 'thrown'（既定）は既知の自分が投げた物を、'items' は見えている・記憶したアイテム（遺物と鑑定済みの有害品を除く）を近い順に回って拾う。結果に回収数と残り。",
-    inputSchema: { ...actionCommon, what: z.enum(['thrown', 'items']).optional(), ...moveArgs },
-  }, async (a) => act('collect', a, { type: 'collect', what: a.what, mode: a.mode, hpFloor: a.hp_floor }));
+    title: '回収', description: "マクロ: what: 'thrown'（既定）は既知の自分が投げた物を、'items' は見えている・記憶したアイテム（遺物と鑑定済みの有害品、鑑定済みで今の装備より劣る装備を除く）を近い順に回って拾う。within は歩数の上限（既定 15。それより遠い品へは行かない）、kinds は品の種類（種類 ID か区分。例 [\"potion\",\"javelin\"]）、all: true で劣る装備も拾う。結果に回収数と残り。",
+    inputSchema: { ...actionCommon, what: z.enum(['thrown', 'items']).optional(), within: z.number().int().min(1).max(200).optional(), kinds: z.array(z.string()).max(8).optional(), all: z.boolean().optional(), ...moveArgs },
+  }, async (a) => act('collect', a, { type: 'collect', what: a.what, mode: a.mode, hpFloor: a.hp_floor, ...(a.within !== undefined ? { within: a.within } : {}), ...(a.kinds ? { kinds: a.kinds } : {}), ...(a.all ? { all: true } : {}) }));
   server.registerTool('fight', {
     title: '戦う', description: 'マクロ: その相手と決着を付ける。with なしは近接（追跡中の相手が隣に来るまで待つ。最大 10 手番）、with にスロットか品の種類を渡すとその品を投げて戦う（射程と射線が通るまで待つ。品が尽きたら、追跡中の敵の隣を通らずに届く自分の投擲物を拾いに行って続ける。retrieve: false で切れる）。相手が倒れた・離れた・逃げて見えなくなった、（with）隣に来た・品が尽きた、HP が hp_floor（既定 50%）を下回った、被弾の記録の無い種族の追跡中の敵が現れた、待つ間に別の敵に撃たれた、状態異常を受けたら止まる（記録のある種族が新しく見えても止まらない）。物陰に入った相手は数手番待つ。眠っている・気付いていない相手は待たない。until: clear なら、標的を倒した後も届く追跡中の敵（隣の敵、いなければ最も近い敵）へ続ける。adjacent は with の相手が隣に来たとき（stop: 止まる・既定 / throw: 投げ続ける / melee: 近接に切り替える）。abilities に能動技（強打・なぎ払い・狙い撃ち）を並べると、使える手番ごとに使う（強打は標的が隣、なぎ払いは起きている敵が隣に 2 体以上、狙い撃ちは with の品で射程と射線が通るとき。それ以外の手番は通常の攻撃）。結果に与えた・受けた攻撃の回数と合計、使った能動技の回数。',
     inputSchema: {
@@ -495,14 +468,31 @@ export function createMcpServer(ctx: McpContext): McpServer {
     async (a) => act('pickup', a, { type: 'pickup', item: a.item }));
   server.registerTool('drop', { title: '置く', description: '所持品を足元に置く。', inputSchema: { ...actionCommon, slot: SlotZ, qty: z.number().int().positive().optional() } },
     async (a) => act('drop', a, { type: 'drop', slot: a.slot, qty: a.qty }));
-  server.registerTool('equip', { title: '装備', description: '武器・防具・装飾品を装備する。装備すると正体と呪いの有無が分かる（呪われていれば外せない）。', inputSchema: { ...actionCommon, slot: SlotZ } },
-    async (a) => act('equip', a, { type: 'equip', slot: a.slot }));
+  server.registerTool('equip', { title: '装備', description: '武器・防具・装飾品を装備する。装備すると正体と呪いの有無が分かる（呪われていれば外せない）。呪いと分かっている品は confirm: true が要る。', inputSchema: { ...actionCommon, slot: SlotZ, confirm: z.boolean().optional() } },
+    async (a) => act('equip', a, { type: 'equip', slot: a.slot, ...(a.confirm ? { confirm: true } : {}) }));
   server.registerTool('unequip', { title: '装備解除', description: '装備を外す（スロット文字か weapon/armor/accessory）。', inputSchema: { ...actionCommon, slot: z.union([SlotZ, z.enum(['weapon', 'armor', 'accessory'])]) } },
     async (a) => act('unequip', a, { type: 'unequip', slot: a.slot }));
   server.registerTool('use_item', {
-    title: '使う', description: '薬を飲む・巻物を読む・帰還の綱を使う（その場でキャンプへ。目的を除く戦利品の半分が確定。遺物は運べない）。鑑定の巻物は target_slot で対象を選べる（省略時はスロット順で最初の未鑑定品か、呪いの有無を確かめていない装備品）。',
-    inputSchema: { ...actionCommon, slot: z.string().describe(SlotZ.description ?? ''), target: z.any().optional().describe(TargetZ.description ?? ''), target_slot: z.string().optional().describe('鑑定の巻物などの対象の所持品スロット') },
-  }, async (a) => act('use_item', a, { type: 'use', slot: a.slot, target: a.target as never, targetSlot: a.target_slot }));
+    title: '使う', description: '薬を飲む・巻物を読む・帰還の綱を使う（その場でキャンプへ。目的を除く戦利品の半分が確定。遺物は運べない）。slot はスロット文字か、正体の分かっている品の種類 ID（例 "potion_healing"。同じ種類が複数ならスロット順で最初）。鑑定の巻物は target_slot で対象を選べる（省略時はスロット順で最初の未鑑定品か、呪いの有無を確かめていない装備品）。',
+    inputSchema: { ...actionCommon, slot: z.string().describe(`${SlotZ.description ?? ''}（または種類 ID）`), target: z.any().optional().describe(TargetZ.description ?? ''), target_slot: z.string().optional().describe('鑑定の巻物などの対象の所持品スロット') },
+  }, async (a) => {
+    // 種類 ID での指定（V3-8 §53.4）: 正体の分かっている所持品のスロットに読み替える（見えている所持品だけを使う）
+    let slot = a.slot;
+    if (!/^[a-z]$/.test(slot)) {
+      const port = portOf(a.player_token as string | undefined);
+      const k = slot.startsWith('core:') ? slot : `core:${slot}`;
+      const hit = port?.view().inventory.filter((i) => i.kind === k).sort((x, y) => x.slot.localeCompare(y.slot))[0];
+      if (port && !hit) {
+        const L = port.locale();
+        const err = actionError('no_such_item', t(L, `種類 ${slot} の品を持っていない（未鑑定の品はスロット文字で指定する）。`, `You carry no ${slot} (use the slot letter for unidentified items).`), t(L, 'inventory のスロットを見る。', 'Check slots in inventory.'));
+        const tb = port.turnBlock('action_rejected');
+        record(port, 'use_item', a, `${err.code} ${err.message}`);
+        return errOut(err, port.observe({ map: false }).observation.valid_actions, { block: tb, line: port.turnLine(tb) });
+      }
+      if (hit) slot = hit.slot;
+    }
+    return act('use_item', a, { type: 'use', slot, target: a.target as never, targetSlot: a.target_slot });
+  });
   server.registerTool('throw_item', {
     title: '投げる', description: '対象（エンティティ ID・座標・方向）へ投げる。ID・座標の指定で経路が通らなければ no_line_of_sight、射程外なら out_of_range（どちらも手番を使わない）。方向を狙えば遮られた位置・射程の端に落ちる。',
     inputSchema: { ...actionCommon, slot: z.string().describe(SlotZ.description ?? ''), target: z.any().describe(TargetZ.description ?? '') },

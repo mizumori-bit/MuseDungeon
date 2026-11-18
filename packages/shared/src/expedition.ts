@@ -3,7 +3,7 @@
 import type { CatalogRules } from './catalog';
 import { nameOf, offerGap, offerWardenExtra } from './catalog';
 import type { ExpeditionEndReason, ExpeditionOffer, Locale, Names, Objective, OfferSlot, RelicInfo } from './types';
-import { t } from './util';
+import { ceilDiv, t } from './util';
 import type { ExpeditionView, PlayerView } from './view';
 
 export function objectiveText(L: Locale, o: Objective): string {
@@ -13,6 +13,8 @@ export function objectiveText(L: Locale, o: Objective): string {
     case 'slay_guardian': return t(L, `地下${d}階の守護者を倒し、階段から帰還する`, `Slay the guardian on depth ${d}, then extract from any stairs`);
     case 'retrieve_relic': return t(L, `地下${d}階の遺物を見つけ、持ったまま階段から帰還する`, `Find the relic on depth ${d} and extract from any stairs while carrying it`);
     case 'slay_warden': return t(L, `節目に挑む: 地下${d}階の大守護者を倒し、階段から帰還する`, `Challenge the milestone: slay the warden on depth ${d}, then extract from any stairs`);
+    case 'slay_bounty': return t(L, `賞金首を討つ: 地下${d}階の名前付きの強敵を倒し、階段から帰還する`, `Hunt the bounty: slay the named elite on depth ${d}, then extract from any stairs`);
+    case 'open_vault': return t(L, `宝物庫を開ける: 地下${d}階の施錠された宝物庫の格子扉を開け、階段から帰還する`, `Open the vault: unlock the locked vault's grate on depth ${d}, then extract from any stairs`);
     default: return t(L, '目的なし。できるだけ深く潜る', 'No objective: descend as deep as you can');
   }
 }
@@ -23,6 +25,8 @@ export function conditionText(L: Locale, o: Objective): string {
     case 'slay_guardian': return t(L, '守護者を倒す → いずれかの階段の上で extract', 'Slay the guardian → extract while standing on any stairs');
     case 'retrieve_relic': return t(L, '遺物を拾う → 持ったままいずれかの階段の上で extract', 'Pick up the relic → extract on any stairs while carrying it');
     case 'slay_warden': return t(L, '大守護者を倒す → いずれかの階段の上で extract（広間の下り階段でも、前室の上り階段でもよい）', 'Slay the warden → extract while standing on any stairs (the hall\'s stairs down or the antechamber\'s stairs up)');
+    case 'slay_bounty': return t(L, '名前付きの強敵（賞金首）を倒す → いずれかの階段の上で extract（賞金は別に入る）', 'Slay the named elite (the bounty) → extract while standing on any stairs (its bounty is paid separately)');
+    case 'open_vault': return t(L, '宝物庫の鍵を手に入れ（鍵を持つ敵を倒すか、床で拾う）、鍵のかかった格子扉を隣で interact して開ける → いずれかの階段の上で extract（中身は別に入る）', 'Get the vault key (slay its carrier or pick it up), interact with the locked grate next to it → extract while standing on any stairs (the loot inside counts separately)');
     default: return t(L, '達成条件なし（階段の上で extract(confirm) すると撤退として終わる）', 'No completion condition (extract(confirm) on stairs ends it as a withdrawal)');
   }
 }
@@ -83,6 +87,8 @@ export function progressText(L: Locale, x: ExpeditionView, depth: number | null)
   if (o.type === 'reach_depth') parts.push(x.progress.reached ? t(L, '目標階を踏破済み', 'target crossed') : t(L, '目標階の下り階段に未到達', 'target not crossed yet'));
   if (o.type === 'slay_guardian') parts.push(x.progress.guardianSlain ? t(L, '守護者: 討伐済み', 'guardian: slain') : t(L, '守護者: 未討伐', 'guardian: alive'));
   if (o.type === 'slay_warden') parts.push(x.progress.guardianSlain ? t(L, '大守護者: 討伐済み', 'warden: slain') : t(L, '大守護者: 未討伐', 'warden: alive'));
+  if (o.type === 'slay_bounty') parts.push(x.progress.guardianSlain ? t(L, '賞金首: 討伐済み', 'bounty: slain') : t(L, '賞金首: 未討伐', 'bounty: alive'));
+  if (o.type === 'open_vault') parts.push(x.progress.vaultOpened ? t(L, '宝物庫: 開けた', 'vault: opened') : t(L, '宝物庫: まだ開けていない', 'vault: still locked'));
   if (o.type === 'retrieve_relic') {
     parts.push(x.progress.relicHeldByYou ? t(L, '遺物: 所持', 'relic: carried') : x.progress.relicHeld ? t(L, '遺物: 仲間が所持', 'relic: carried by an ally') : t(L, '遺物: 未入手', 'relic: not held'));
   }
@@ -108,7 +114,7 @@ export function traitsText(L: Locale, rules: Pick<CatalogRules, 'traits'> | unde
   }).join(' / ');
 }
 
-const GUARD_TRAIT_JA: Record<string, string> = { fast: '速い', slow: '遅い', ranged: '射撃する', large: '大柄', armored: '重装', rusting: '錆びさせる', pierce: '装甲を抜く', evasive: '回避が高い', poison: '毒', drain: '血を吸う', heavy_swing: '大振り' };
+const GUARD_TRAIT_JA: Record<string, string> = { fast: '速い', slow: '遅い', ranged: '射撃する', large: '大柄', armored: '重装', rusting: '錆びさせる', pierce: '装甲を抜く', evasive: '回避が高い', poison: '毒', drain: '血を吸う', heavy_swing: '大振り', heavy_blow: '重い一撃（装甲で半分までしか減らない）' };
 
 /** 守護者の見込みの文（「守護者: 格 2・射撃する・速い」。種族名は出さない。V3-2R3 §20.1） */
 /** 守護者の呼び名（称号＋名前。V3-3）: 「呼び集める者ヴォルン」/ "Volun the Summoner" */
@@ -127,11 +133,27 @@ export function guardianForecastText(L: Locale, g: { rank: number; traits: strin
   const noType = g.name && g.types && !g.types.length ? [t(L, '型なし', 'no type')] : [];
   const tr = [...noType, ...g.traits.map((x) => (L === 'en' ? x : GUARD_TRAIT_JA[x] ?? x)), ...speed];
   // 一撃の目安（V3-3b §40.6。装甲で減る前）
-  const hit = g.maxHit ? [t(L, `一撃は最大 ${g.maxHit} まで（装甲で減る前）`, `hits up to ${g.maxHit} (before armor)`)] : [];
+  // 重い一撃（V3-8 §53.1）: 装甲で減っても一撃の半分より下がらない
+  const floorHit = g.traits.includes('heavy_blow') && g.maxHit ? ceilDiv(g.maxHit, 2) : null;
+  const hit = g.maxHit ? [floorHit !== null
+    ? t(L, `一撃は最大 ${g.maxHit} まで（装甲で減る前。装甲で減っても ${floorHit} より下がらない）`, `hits up to ${g.maxHit} (before armor; armor cannot bring it below ${floorHit})`)
+    : t(L, `一撃は最大 ${g.maxHit} まで（装甲で減る前）`, `hits up to ${g.maxHit} (before armor)`)] : [];
   // 体力の目安（V3-3c §44.2）: 格 1〜3 はおよその値、大守護者は式の幅
   if (g.hpRange) hit.unshift(t(L, `体力 ${g.hpRange.min}〜${g.hpRange.max}`, `HP ${g.hpRange.min}-${g.hpRange.max}`));
   else if (g.hp) hit.unshift(t(L, `体力はおよそ ${g.hp}`, `about ${g.hp} HP`));
   return t(L, `守護者${who}: 格 ${g.rank}・${[...tr, ...hit].join('・')}`, `guardian${who}: rank ${g.rank}, ${[...tr, ...hit].join(', ')}`);
+}
+
+/**
+ * 賞金首の見込みの文（V3-8 §53.2。守護者の候補と同じ並び）: 種族・接辞・体力の目安・一撃の目安。
+ * 名前付きの強敵は種族を隠さない（異変の賞金首と同じく、見れば分かる）。通る目安はキャンプの観測が添える
+ */
+export function bountyForecastText(L: Locale, b: { name: Names; kindName?: Names; affixNames?: Names[]; hp: number; maxHit: number }): string {
+  const who = nameOf(b.name, L, '?');
+  const kn = b.kindName ? nameOf(b.kindName, L, '') : '';
+  const an = (b.affixNames ?? []).map((n) => nameOf(n, L, ''));
+  const kind = kn ? t(L, `（${kn}${an.length ? `・${an.join('・')}` : ''}）`, ` (${kn}${an.length ? `, ${an.join(', ')}` : ''})`) : '';
+  return t(L, `賞金首「${who}」${kind}: 体力はおよそ ${b.hp}・一撃は最大 ${b.maxHit} まで（装甲で減る前）`, `bounty "${who}"${kind}: about ${b.hp} HP, hits up to ${b.maxHit} (before armor)`);
 }
 
 /** 遺物の文（「遺物「息吹の欠片」→ 加護「息吹」: 自然回復の間隔 −2」。V3-3 §3.3） */
@@ -160,8 +182,14 @@ export function offerText(L: Locale, o: ExpeditionOffer, ctx?: { rules: Pick<Cat
   const wd = o.warden ? t(L, ` / 大守護者「${guardianDisplayName(L, o.warden)}」（型: ${o.warden.types.length}）`, ` / warden "${guardianDisplayName(L, o.warden)}" (${o.warden.types.length} types)`) : '';
   const rep = (o.repeatNo ?? 1) > 1 ? t(L, ` / この階は ${o.repeatNo} 回目: 基礎点が減っている`, ` / attempt ${o.repeatNo} at this depth: reduced base`) : '';
   // 再挑戦（V3-3c §44.1）: 階に残っている守護者をもう一度目的にする（同じ名前・型・弱点。繰り返しの減点なし）
-  const rc = o.rechallenge ? t(L, ` / 再挑戦: ${o.rechallenge.no ? `遠征 ${o.rechallenge.no} で倒せなかった` : '階に残っている'}守護者（同じ名前・型・弱点。繰り返しの減点なし）`, ` / rematch: the guardian ${o.rechallenge.no ? `left standing in expedition ${o.rechallenge.no}` : 'still on that floor'} (same name, type and weakness; no repeat reduction)`) : '';
-  const gf = wd + rep + rc + (o.guardian ? ` / ${guardianForecastText(L, o.guardian)}` : '') + (o.relic ? ` / ${relicText(L, o.relic)}` : '')
+  const rc = !o.rechallenge ? ''
+    : o.rechallenge.bounty ? t(L, ` / 再挑戦: ${o.rechallenge.no ? `遠征 ${o.rechallenge.no} で倒せなかった` : '階に残っている'}賞金首（同じ名前・接辞。繰り返しの減点なし）`, ` / rematch: the bounty ${o.rechallenge.no ? `left standing in expedition ${o.rechallenge.no}` : 'still on that floor'} (same name and affixes; no repeat reduction)`)
+    : t(L, ` / 再挑戦: ${o.rechallenge.no ? `遠征 ${o.rechallenge.no} で倒せなかった` : '階に残っている'}守護者（同じ名前・型・弱点。繰り返しの減点なし）`, ` / rematch: the guardian ${o.rechallenge.no ? `left standing in expedition ${o.rechallenge.no}` : 'still on that floor'} (same name, type and weakness; no repeat reduction)`);
+  // 賞金首と宝物庫（V3-8 §53.2）・傷跡（§53.3）
+  const bt = o.bounty ? ` / ${bountyForecastText(L, o.bounty)}` : '';
+  const vt = o.vault ? t(L, ' / 宝物庫: 鍵を持つ敵が階にいる', ' / vault: an enemy on the floor carries the key') : '';
+  const sc = o.scar ? t(L, ` / 傷跡で体力 −${o.scar}`, ` / scars: −${o.scar} HP`) : '';
+  const gf = wd + rep + rc + sc + bt + vt + (o.guardian ? ` / ${guardianForecastText(L, o.guardian)}` : '') + (o.relic ? ` / ${relicText(L, o.relic)}` : '')
     + (o.passesWarden ? t(L, ` / 途中の地下${o.passesWarden.depth}階で大守護者「${guardianDisplayName(L, o.passesWarden)}」を倒す必要がある（倒すまで下り階段が封じられている）`, ` / you must slay the warden "${guardianDisplayName(L, o.passesWarden)}" on depth ${o.passesWarden.depth} on the way (its stairs down are sealed until then)`) : '');
   return t(L, `${head} — 基礎 +${o.points} / 倍率 ${multText(mult)}${traits ? `（${traits}）` : ''}${danger}${gf}`,
     `${head} — base +${o.points} / multiplier ${multText(mult)}${traits ? ` (${traits})` : ''}${danger}${gf}`);

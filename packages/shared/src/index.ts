@@ -15,7 +15,6 @@ export * from './build';
 export * from './macro';
 export * from './expedition';
 export * from './expeditionStats';
-export * from './goals';
 export * from './turn';
 export * from './protocol';
 export * from './profile';

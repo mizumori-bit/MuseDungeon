@@ -183,20 +183,36 @@ export function guardianAsleep(content: Content, info: GuardianInfo, fallback: b
 }
 
 /**
+ * 傷跡の見込み（V3-8 §53.3）: 次の遠征の開始時に残る体力の減り。いまの傷（最大体力 − 傷跡 − 体力）の 4 分の 1 を足し、最大体力の半分まで。
+ * settleGuardian・settleBounty と同じ式
+ */
+export function projectedScar(e: Entity): number {
+  const max = e.stats?.maxHp ?? 0;
+  const prev = e.scar ?? 0;
+  const wound = Math.max(0, max - prev - (e.stats?.hp ?? max));
+  return Math.min(floorDiv(max, 2), prev + floorDiv(wound, 4));
+}
+
+/**
  * 守護者を落ち着かせる（全快・状態異常を消す・追跡をやめる・持ち場へ・怒りと呼んだ回数を戻す・見ていた与ダメの累計を戻す）。
  * キャンプから遠征を始めるとき（全階）と、離れている間の回復で全快したとき（V3-3a §35.1）
  */
-export function settleGuardian(ctx: Ctx, m0: Entity): { healed: number; dispersed: number } {
+export function settleGuardian(ctx: Ctx, m0: Entity, camp = false): { healed: number; dispersed: number } {
   const m = ctx.world.entities[m0.id];
   if (!m?.guardian || !m.pos || !m.stats || !m.actor) return { healed: 0, dispersed: 0 };
   const key = m.pos.floor;
-  const healed = Math.max(0, m.stats.maxHp - m.stats.hp);
+  // 傷跡（V3-8 §53.3）: キャンプ（遠征の開始時）に、前の挑戦の傷の 4 分の 1 が残る（最大体力の半分まで）。全快は最大体力 − 傷跡まで。
+  // 遠征の中の休み（restGuardian）は傷跡を増やさない
+  const scar = camp ? projectedScar(m) : (m.scar ?? 0);
+  const top = m.stats.maxHp - scar;
+  const healed = Math.max(0, top - m.stats.hp);
   // 呼んだ手下は去る（経験値も戦利品も残さない。V3-3b §40.3）
   const minions = ctx.entitiesOn(key).filter((e) => e.minionOf === m.id && (e.stats?.hp ?? 0) > 0);
   for (const e of minions) ctx.emit({ type: 'entity_removed', id: e.id, kind: e.kind, reason: 'dispersed', seenBy: [], floor: key });
-  if (m.stats.hp < m.stats.maxHp) ctx.emit({ type: 'healed', target: m.id, targetKind: m.kind, amount: m.stats.maxHp - m.stats.hp, hpAfter: m.stats.maxHp, via: 'camp', resetSeen: true, seenBy: [], floor: key });
+  if (m.stats.hp < top) ctx.emit({ type: 'healed', target: m.id, targetKind: m.kind, amount: top - m.stats.hp, hpAfter: top, via: 'camp', resetSeen: true, seenBy: [], floor: key });
   const cur = ctx.world.entities[m.id];
   const body = structuredClone(cur);
+  if (scar) body.scar = scar;
   body.statuses = [];
   const g = body.guardian!;
   if (g.enraged) {
@@ -224,12 +240,24 @@ export function settleGuardian(ctx: Ctx, m0: Entity): { healed: number; disperse
  * 呼んだ手下と棲み処の地物（護りの火）も消える。その守護者に会ったことのある参加者に知らせ、記憶から火を消す
  */
 export function departGuardians(ctx: Ctx, keep: string | null, participants: readonly string[]): void {
+  // 名前付きの強敵も、目的でなければ去る（V3-8 §53.3: 目標になる階に居座った）
   const gone = Object.values(ctx.world.entities)
-    .filter((e) => e.role === 'guardian' && e.guardian && !e.guardian.warden && e.pos && (e.stats?.hp ?? 0) > 0 && e.id !== keep)
+    .filter((e) => ((e.role === 'guardian' && e.guardian && !e.guardian.warden) || (e.role === 'elite' && !!e.named)) && e.pos && (e.stats?.hp ?? 0) > 0 && e.id !== keep)
     .sort((a, b) => a.sid - b.sid);
   for (const m of gone) {
     const key = m.pos!.floor;
     const depth = ctx.world.floors[key]?.depth ?? 0;
+    if (m.role === 'elite') {
+      ctx.emit({ type: 'entity_removed', id: m.id, kind: m.kind, reason: 'departed', seenBy: [], floor: key });
+      for (const pid of participants) {
+        if (!ctx.world.players[pid]?.knowledge.met.includes(m.id)) continue;
+        ctx.emit({ type: 'guardian_departed', id: m.id, guardianName: { ...m.named! }, depth, player: pid, forget: [], elite: true, seenBy: [pid], floor: key });
+      }
+      // 賞金首・番人の巡回の強敵（道を持つ）が去ったら、階の異変も消える
+      const ev = ctx.world.floors[key]?.event;
+      if (ev && (ev.handler === 'bounty' || ev.handler === 'patrol') && m.actor?.ai?.route?.length) ctx.emit({ type: 'floor_event_cleared', floorKey: key, seenBy: [], floor: key });
+      continue;
+    }
     const on = ctx.entitiesOn(key);
     const minions = on.filter((e) => e.minionOf === m.id && (e.stats?.hp ?? 0) > 0);
     // 持ち主の無い古い火は、持ち場から 4 マス以内のものをこの守護者の火とみなす
@@ -258,6 +286,8 @@ export function restGuardian(ctx: Ctx, m0: Entity, viewer: Entity): void {
   const m = ctx.world.entities[m0.id];
   const a = m?.guardian?.awaySince;
   if (!m || !a || !m.stats || m.stats.hp <= 0 || !m.pos || !viewer.player) return;
+  // 傷跡（V3-8 §53.3）: 休んでも最大体力 − 傷跡までしか戻らない
+  const cap = m.stats.maxHp - (m.scar ?? 0);
   const key = m.pos.floor;
   const pct = ctx.content.balance.guardian.awayHealPct ?? 0;
   // 過ぎた手番は、休み始めを記録したプレイヤーの手番で数える（いなければ見た者）
@@ -266,7 +296,7 @@ export function restGuardian(ctx: Ctx, m0: Entity, viewer: Entity): void {
   const away = Math.max(0, nowTurns - a.turns);
   const heal = Math.trunc((m.stats.maxHp * pct * away) / 100);
   const pr = viewer.player;
-  if (m.stats.hp >= m.stats.maxHp) {
+  if (m.stats.hp >= cap) {
     // 傷は無い: 手下が残っていれば去る（落ち着く）
     if (ctx.entitiesOn(key).some((e) => e.minionOf === m.id && (e.stats?.hp ?? 0) > 0)) {
       const r = settleGuardian(ctx, m);
@@ -274,7 +304,7 @@ export function restGuardian(ctx: Ctx, m0: Entity, viewer: Entity): void {
     } else setGuardian(ctx, m, (e) => { delete e.guardian!.awaySince; });
     return;
   }
-  if (m.stats.hp + heal >= m.stats.maxHp) {
+  if (m.stats.hp + heal >= cap) {
     const r = settleGuardian(ctx, m);
     ctx.emit({ type: 'guardian_rested', id: m.id, guardianName: { ...m.guardian!.name }, full: true, player: pr, ...(r.dispersed ? { dispersed: r.dispersed } : {}), seenBy: [pr], floor: key });
   } else {

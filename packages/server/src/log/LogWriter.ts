@@ -29,11 +29,6 @@ export class LogWriter {
     appendFileSync(join(this.dir, 'events.jsonl'), events.map((e) => JSON.stringify(e)).join('\n') + '\n', 'utf8');
   }
 
-  /** 目標の宣言と決着（V3-7a。World の外。1 行 = 記録の最新の形） */
-  appendGoal(rec: unknown): void {
-    appendFileSync(join(this.dir, 'goals.jsonl'), JSON.stringify(rec) + '\n', 'utf8');
-  }
-
   appendCommand(rec: CommandRecord): void {
     appendFileSync(join(this.dir, 'commands.jsonl'), JSON.stringify(rec) + '\n', 'utf8');
   }

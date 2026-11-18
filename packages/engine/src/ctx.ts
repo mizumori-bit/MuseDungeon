@@ -19,6 +19,8 @@ export class Ctx {
   readonly fovCache = new Map<PlayerId, { key: string; cells: number[] }>();
   /** step 内でのみ有効な計算キャッシュ（距離マップなど） */
   readonly scratch = new Map<string, unknown>();
+  /** step の中で見ていた敵の行動の回数（プレイヤー → 敵 → 回数。V3-8 §53.4） */
+  readonly actsSeen = new Map<PlayerId, Map<string, number>>();
   /** フロアごとのエンティティ一覧（sid 順）。エンティティの増減・置換で無効化 */
   private floorEnts = new Map<FloorKey, Entity[]>();
 

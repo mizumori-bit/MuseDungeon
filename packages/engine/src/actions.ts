@@ -316,6 +316,8 @@ actions.register('equip', (ctx, e, pr, cmd: Extract<Command, { type: 'equip' }>)
   if (equippedSlotOf(e, it.id)) return fail(pr, 'cannot_use', 'それは既に装備している。', 'Already equipped.', '別のアイテムを選ぶ。', 'Choose another item.');
   // 呪われた装備は外せないので、同じ場所に別の品も付けられない（V3-4 §4.4）
   if (cursedSlot(ctx, e, def.equip.slot)) return cursedFail(pr);
+  // 呪いと分かっている品は確認してから付ける（V3-8 §53.4）
+  if (isCursed(ctx, it) && !cmd.confirm) return fail(pr, 'confirm_required', 'その品は呪われている（装備すると、解呪するまで外せない）。', 'That item is cursed (once equipped it will not come off until the curse is lifted).', 'それでも付けるなら equip { slot, confirm: true }。', 'To wear it anyway, equip { slot, confirm: true }.');
   return {
     run: () => {
       const slotName = def.equip!.slot;

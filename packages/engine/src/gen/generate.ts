@@ -3,7 +3,7 @@
 // 各段はレジストリのプラグイン。乱数は用途別の名前付きサブストリーム（地形はアイテム表の変更に影響されない）。
 // 生成は純関数: (content, runSeed, branch, depth) → { floor, spawns }。World を読まない。
 import type { BiomeDef, Content, FloorEventDef, FloorTypeDef, MonsterDef, PrefabDef } from '@muse/content';
-import type { EntityRole, Floor, GuardianInfo, Names, Pos, Region } from '@muse/shared';
+import type { BountyInfo, EntityRole, Floor, GuardianInfo, Names, Pos, Region } from '@muse/shared';
 import { cheb, DIRS, DIR_VEC, floorDiv, floorKey, Rng } from '@muse/shared';
 import { Registry, roll } from '../registry';
 import { guardianAsleep, lairPlan, makeName, rollWardenInfo } from '../guardians';
@@ -11,14 +11,18 @@ import { DOOR, FLOOR, GenGrid, WALL } from './grid';
 import { layoutGenerators } from './layouts';
 
 export type SpawnSpec =
-  | { type: 'monster'; kind: string; x: number; y: number; hp: number; affixes: string[]; tier: number; asleep: boolean; delay: number; role?: EntityRole; bounty?: number; minHp?: number; /** 体力の上限（大守護者。V3-3a §35.2） */ maxHp?: number; hpBonusPct?: number; guardian?: GuardianInfo; /** 速さの下限（大守護者。V3-3c §44.2） */ minSpeed?: number; /** 持たせる品（宝物庫の鍵。V3-5 §5.1） */ carries?: string; /** 名前付きの強敵（V3-5 §5.4） */ elite?: Names; /** 巡回の道（V3-5 §5.3） */ route?: Pos[] }
+  | { type: 'monster'; kind: string; x: number; y: number; hp: number; affixes: string[]; tier: number; asleep: boolean; delay: number; role?: EntityRole; /** 遠征の目的の賞金首（V3-8 §53.2） */ objectiveBounty?: boolean; bounty?: number; minHp?: number; /** 体力の上限（大守護者。V3-3a §35.2） */ maxHp?: number; hpBonusPct?: number; guardian?: GuardianInfo; /** 速さの下限（大守護者。V3-3c §44.2） */ minSpeed?: number; /** 持たせる品（宝物庫の鍵。V3-5 §5.1） */ carries?: string; /** 名前付きの強敵（V3-5 §5.4） */ elite?: Names; /** 巡回の道（V3-5 §5.3） */ route?: Pos[] }
   | { type: 'item'; kind: string; x: number; y: number; qty: number; affixes: string[]; role?: EntityRole; value?: number; hidden?: string[] }
   | { type: 'feature'; kind: string; x: number; y: number; /** 棲み処の地物（直前に置いた守護者のもの。V3-3c §44.6） */ lair?: boolean; /** レバーがつながる格子扉（V3-5 §5.2） */ links?: Pos[] };
 
 /** 遠征の目標階に置くもの */
 /** rank: 守護者の格（堅実 1・標準 2・野心 3）。guardianKind: 候補で決めた種族（無ければ生成時に格で選ぶ） */
 /** info: 守護者の型・名前・弱点（V3-3。候補で決めたもの） */
-export interface ObjectiveSpec { guardian: boolean; relic: boolean; rank?: 1 | 2 | 3; guardianKind?: string; guardianAffixes?: string[]; info?: GuardianInfo; relicKind?: string }
+export interface ObjectiveSpec { guardian: boolean; relic: boolean; rank?: 1 | 2 | 3; guardianKind?: string; guardianAffixes?: string[]; info?: GuardianInfo; relicKind?: string;
+  /** 賞金首を討つ（V3-8 §53.2）: 異変「賞金首」を必ず付け、この種族・接辞・名前の強敵にする */
+  bounty?: BountyInfo;
+  /** 宝物庫を開ける（V3-8 §53.2）: 施錠された宝物庫を必ず置く */
+  vault?: boolean }
 
 /** 遠征の条件による生成の修飾（目標階までの新しい階に効く） */
 export interface GenMods { monstersPct: number; itemsPct: number; treasurePct: number; noFountain: boolean }
@@ -62,6 +66,8 @@ export interface GenState {
   mods?: GenMods;
   /** 階の異変（V3-5 §5.3） */
   event?: FloorEventDef;
+  /** 遠征の目的の賞金首（V3-8 §53.2） */
+  bounty?: BountyInfo;
   grid: GenGrid;
   entry: Pos;
   up: Pos | null;
@@ -312,8 +318,10 @@ function applyEventAfter(s: GenState): void {
   }
   if (h !== 'bounty' && h !== 'patrol') return;
   const cands = guardianCandidates(s.content, s.floorType, s.biome, s.depth, h === 'patrol' ? 1 : 2).filter((m) => m.ai.archetype !== 'stationary');
-  if (!cands.length) return;
-  const def = cands[rng.int(cands.length)];
+  if (!cands.length && !s.bounty) return;
+  // 遠征の目的の賞金首（V3-8 §53.2）: 候補で決めた種族（乱数は今までどおり引いてから替える）
+  const picked = cands.length ? cands[rng.int(cands.length)] : undefined;
+  const def = (s.bounty && s.content.monsters[s.bounty.kind]) || picked!;
   const cells: number[] = [];
   for (let i = 0; i < s.grid.cells.length; i++) {
     const x = i % s.grid.w, y = Math.trunc(i / s.grid.w);
@@ -333,7 +341,18 @@ function applyEventAfter(s: GenState): void {
   spec.route = route;
   spec.delay = 0;
   makeElite(s, spec, rng);
+  if (s.bounty && h === 'bounty') {
+    spec.affixes = [...s.bounty.affixes];
+    spec.elite = { ...s.bounty.name };
+    spec.objectiveBounty = true;
+  }
   s.spawns.push(spec);
+}
+
+/** この階に、まだ開いていない施錠された宝物庫があるか（格子扉の地形で見る） */
+function hasLockedVault(s: GenState): boolean {
+  for (const t of s.grid.override.values()) if (t === 'core:grate_locked') return true;
+  return false;
 }
 
 /** 名前付きの強敵にする（V3-5 §5.4）: 接辞 N 個・名前・賞金。倒すと宝を必ず落とす（接辞付きの決まり） */
@@ -699,7 +718,8 @@ export function guardianSpec(content: Content, depth: number, kind: string, rank
     spec.minHp = r.minHpBase + r.minHpPerDepth * depth;
     // 型・名前・弱点（V3-3）。眠りが深い守護者は眠っていて、潜む者は眠らない
     if (info) {
-      spec.guardian = structuredClone(info);
+      // 重い一撃（V3-8 §53.1）: 格 2 以上と大守護者
+      spec.guardian = { ...structuredClone(info), ...(rank >= 2 || info.warden ? { heavy: true } : {}) };
       spec.asleep = guardianAsleep(content, info, spec.asleep);
     }
   }
@@ -921,8 +941,15 @@ export function generateFloor(content: Content, seed: string, branch: string, de
       },
     };
     if (!fallback) placePrefabs(s);
-    // 階の異変（V3-5 §5.3）
-    if (!fallback && floorType.rules.events) { const ev = rollFloorEvent(s); if (ev) s.event = ev; }
+    // 宝物庫を開ける（V3-8 §53.2）: 施錠された宝物庫を必ず置く（置けなければ作り直す。最後の作り直しでも試す）
+    if (objective?.vault && !hasLockedVault(s)) {
+      const pf = content.prefabs['core:locked_vault'];
+      if (!pf || !tryPlacePrefab(s, pf, s.stream('prefab'))) { if (!fallback) continue; }
+    }
+    // 階の異変（V3-5 §5.3）。賞金首を討つ遠征は「賞金首」を必ず付ける（V3-8 §53.2）
+    const bountyEvent = objective?.bounty ? content.lists.floorEvents.find((e) => e.handler === 'bounty') : undefined;
+    if (bountyEvent) { s.event = bountyEvent; s.bounty = objective!.bounty; }
+    else if (!fallback && floorType.rules.events) { const ev = rollFloorEvent(s); if (ev) s.event = ev; }
     applyEventBefore(s);
     grid.connectAll(layoutRng, s.passable);
     if (!fallback) applyBiomeExtras(s);

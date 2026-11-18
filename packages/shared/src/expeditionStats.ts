@@ -7,8 +7,6 @@ import type { GameEvent } from './events';
 import { partsText, multText } from './expedition';
 import type { ProjectedEvent } from './filter';
 import { kindName } from './narrate';
-import type { GoalType } from './goals';
-import { goalText } from './goals';
 import type { ExpeditionEndReason, HaulParts, Locale, Names } from './types';
 import { t } from './util';
 
@@ -35,7 +33,9 @@ export interface ExpeditionReport {
   /** min_hp_pct: この遠征で最も下がった HP（最大 HP に対する %。目標の「余力」。V3-7a） */
   /** guardian_fights: 守護者ごとの戦い（与えた・受けた・結末。再挑戦の候補の「前回は与 3・被 22」に使う。V3-3c §44.1） */
   combat: { dealt: number; taken: number; hits: number; misses: number; crits: number; kills: number; melee_kills: number; thrown_kills: number; ability_uses: number; min_hp_pct?: number;
-    guardian_fights?: { id: string; dealt: number; taken: number; outcome: 'slain' | 'slain_by_other' | 'left' | 'died' | 'ongoing' }[] };
+    guardian_fights?: { id: string; dealt: number; taken: number; outcome: 'slain' | 'slain_by_other' | 'left' | 'died' | 'ongoing' }[];
+    /** bounty_fights: 目的の賞金首との戦い（与えた・受けた。再挑戦の候補の「前回は与 N・被 M」に使う。V3-8 §53.3） */
+    bounty_fights?: { id: string; dealt: number; taken: number }[] };
   /** potions_detail: 飲んだ薬の内訳（「回復の薬 2・加速の薬 1」。V3-3c §44.6） */
   economy: { potions_used: number; scrolls_read: number; items_left_unidentified: number; treasure_banked: number; potions_detail?: string };
   tempo: { turns: number; turns_resting: number; floors: number; turns_per_floor: number; deepest: number; tool_calls: number; macro_share_pct: number };
@@ -43,8 +43,6 @@ export interface ExpeditionReport {
   moments: ReportMoment[];
   /** 死亡したとき: 倒した相手、直前 10 件の出来事、直近 20 手番の HP */
   death?: { killer: string | null; via: string; self_inflicted?: boolean; last_events: string[]; hp_trace: number[] };
-  /** この遠征に掛かっていた目標（V3-7a §40.8）。result: 達成・未達・取り下げ・まだ続く */
-  goal?: { type: string; value: number; within: number; diff_from_best: number | null; result: 'active' | 'achieved' | 'missed' | 'withdrawn' };
 }
 
 export interface ReportInput {
@@ -66,6 +64,8 @@ export interface ReportInput {
   narrate?: (e: ProjectedEvent) => string;
   /** 公開されている守護者の名前（表示用）: 節目の階の大守護者、この遠征の目的の守護者 */
   guardianNames?: { warden?: Record<number, string>; objective?: string };
+  /** この遠征の目的の賞金首（与えた・受けたを数える。V3-8 §53.3） */
+  bountyIds?: readonly string[];
 }
 
 /** 自分の手番の記録（自分の actor_scheduled の after 値だけを読む） */
@@ -135,6 +135,9 @@ export function buildExpeditionReport(inp: ReportInput): ExpeditionReport {
   const levelUps: { seq: number; level: number }[] = [];
   const discoveries: { seq: number; amount: number; reasons: string[] }[] = [];
   const fights = new Map<string, Fight>();
+  const bounties = new Set(inp.bountyIds ?? []);
+  const bountyFights = new Map<string, { id: string; dealt: number; taken: number }>();
+  const bountyOf = (id: string) => { let b = bountyFights.get(id); if (!b) { b = { id, dealt: 0, taken: 0 }; bountyFights.set(id, b); } return b; };
   const names = new Map<string, Names>();
   const wardens = new Set<string>();
   let death: { seq: number; killer: string | null; selfHarm: boolean; via: string } | null = null;
@@ -190,9 +193,11 @@ export function buildExpeditionReport(inp: ReportInput): ExpeditionReport {
           if (hp !== null && maxHp) minPct = Math.min(minPct, Math.max(0, Math.trunc((hp * 100) / maxHp)));
           if (hp !== null && hp > 0 && maxHp && hp * 100 <= maxHp * 25 && (!low || hp < low.hp)) low = { seq: e.seq, hp, maxHp };
           if (e.source && isGuardian(e.sourceAffixes)) fightOf(e.source, e.sourceKind ?? null, e.seq, e.floor).taken += amt;
+          else if (e.source && bounties.has(e.source)) bountyOf(e.source).taken += amt;
         } else if (e.source === self) {
           combat.dealt += amt;
           if (e.target && isGuardian(e.targetAffixes)) fightOf(e.target, e.targetKind ?? null, e.seq, e.floor).dealt += amt;
+          else if (e.target && bounties.has(e.target)) bountyOf(e.target).dealt += amt;
         }
         break;
       }
@@ -358,6 +363,8 @@ export function buildExpeditionReport(inp: ReportInput): ExpeditionReport {
   combat.min_hp_pct = minPct;
   const gf = [...fights.values()].filter((f) => f.dealt || f.taken).sort((a, b) => a.first - b.first).map((f) => ({ id: f.id, dealt: f.dealt, taken: f.taken, outcome: f.outcome }));
   if (gf.length) (combat as ExpeditionReport['combat']).guardian_fights = gf;
+  const bf = [...bountyFights.values()].filter((f) => f.dealt || f.taken);
+  if (bf.length) (combat as ExpeditionReport['combat']).bounty_fights = bf;
   if (potionKinds.size) economy.potions_detail = [...potionKinds].map(([k, n]) => `${k} ${n}`).join(t(L, '・', ', '));
   const report: ExpeditionReport = {
     no: inp.no, objective, status: reason === null ? 'in_progress' : 'ended', reason,
@@ -458,12 +465,7 @@ export function reportLines(L: Locale, r: ExpeditionReport, opts: { payout?: boo
     const parts = [r.compare.personal_best?.join(t(L, '・', ', ')), r.compare.vs_previous ? t(L, `前回（遠征 ${r.compare.vs_previous.no}）より ${vsText(L, r.compare.vs_previous)}`, `vs expedition ${r.compare.vs_previous.no}: ${vsText(L, r.compare.vs_previous)}`) : ''].filter(Boolean);
     if (parts.length) lines.push(t(L, `比較: ${parts.join('／')}`, `Compare: ${parts.join('; ')}`));
   }
-  if (r.goal) {
-    const res = { achieved: t(L, '達成', 'achieved'), missed: t(L, '未達', 'missed'), withdrawn: t(L, '取り下げ', 'withdrawn'), active: t(L, 'まだ続く', 'still running') }[r.goal.result];
-    const what = goalText(L, { type: r.goal.type as GoalType, value: r.goal.value, within: r.goal.within });
-    const diff = r.goal.diff_from_best !== null ? t(L, `・自己最高との差 ${r.goal.diff_from_best > 0 ? '+' : ''}${r.goal.diff_from_best}`, `, vs best ${r.goal.diff_from_best > 0 ? '+' : ''}${r.goal.diff_from_best}`) : '';
-    lines.push(t(L, `目標: ${what} → ${res}${diff}`, `Goal: ${what} -> ${res}${diff}`));
-  }
+
   if (r.death) {
     const d = r.death;
     const how = d.killer ? t(L, `${d.killer}の${viaText(L, d.via)}で倒れた`, `fell to ${d.killer} (${d.via})`)

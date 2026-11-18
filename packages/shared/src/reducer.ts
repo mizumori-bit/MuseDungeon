@@ -111,6 +111,18 @@ export function applyEvent(world: World, ev: GameEvent): void {
       if (r) r.found = true;
       break;
     }
+    case 'pace_seen': {
+      const k = world.players[ev.player]?.knowledge;
+      if (!k) break;
+      k.paceSeen = { ...(k.paceSeen ?? {}) };
+      for (const id of ev.ids) k.paceSeen[id] = ev.turn;
+      break;
+    }
+    case 'floor_event_cleared': {
+      const f = world.floors[ev.floorKey];
+      if (f) delete f.event;
+      break;
+    }
     case 'guardian_departed': {
       // 去った守護者の棲み処の地物を記憶から消す（V3-3c §44.1）
       const fk = ev.floor ? world.players[ev.player]?.knowledge.floors[ev.floor] : undefined;

@@ -46,6 +46,8 @@ export interface GuardianInfo {
   unseen?: boolean; lurk?: number; struck?: boolean;
   /** 節目の大守護者（V3-3 §3.2）。倒すまでその階の下り階段は封じられる */
   warden?: boolean;
+  /** 重い一撃（V3-8 §53.1）: 格 2 以上と大守護者。攻撃は装甲で一撃の半分までしか減らない */
+  heavy?: boolean;
   /** 最後のプレイヤーが階を離れたときの、そのプレイヤーの手番数（戻ったときに離れていた手番だけ回復する。V3-3a §35.1） */
   awaySince?: { player: string; turns: number };
 }
@@ -117,6 +119,8 @@ export interface Entity {
   carries?: string;
   /** 名前付きの強敵の名前（V3-5 §5.4。role: elite） */
   named?: Names;
+  /** 傷跡（V3-8 §53.3）: 遠征をまたいで残る体力の減り（大守護者・再挑戦の守護者・賞金首）。キャンプでの全快は最大体力 − 傷跡まで */
+  scar?: number;
   /** 持ち場（守護者が置かれたマス。V3-2R3b §23.2）。気づいていない間はここから guardian.leash マス以内だけを動く。プレイヤーには渡さない */
   home?: { x: number; y: number };
   /** ビルド（プレイヤー。V3-4 §4.1・§4.2） */
@@ -270,6 +274,8 @@ export interface Knowledge {
   wardenIntel?: Record<string, { weakness?: string; hp?: number; maxHit?: number; armor?: number }>;
   /** 記録庫に納めた遺物の種類 */
   archive?: string[];
+  /** 見ていた敵が 1 手番に 2 回動いたときの自分の手番数（V3-8 §53.4。hp_risk の数え方） */
+  paceSeen?: Record<EntityId, number>;
 }
 
 export interface PlayerStats {
@@ -310,7 +316,8 @@ export type PlayerState = 'alive' | 'dead' | 'left' | 'at_camp';
 
 // ---- 遠征（IMPROVEMENTS_V2 §2） ----
 /** slay_warden: 節目に挑む（節目の大守護者を倒して帰る。V3-3a §35.2） */
-export type ObjectiveType = 'reach_depth' | 'slay_guardian' | 'retrieve_relic' | 'slay_warden' | 'endless';
+/** slay_bounty: 賞金首を討つ・open_vault: 宝物庫を開ける（V3-8 §53.2。目標が地下 6 階より深い踏破の枠から） */
+export type ObjectiveType = 'reach_depth' | 'slay_guardian' | 'retrieve_relic' | 'slay_warden' | 'slay_bounty' | 'open_vault' | 'endless';
 /** lifeline: 帰還の綱で戻った（V3-2R2 §18.1） */
 export type ExpeditionEndReason = 'completed' | 'withdrawn' | 'lifeline' | 'died' | 'retired';
 export const OBJECTIVE_TYPES: readonly ObjectiveType[] = ['reach_depth', 'slay_guardian', 'retrieve_relic', 'endless'];
@@ -355,9 +362,18 @@ export interface ExpeditionOffer {
   warden?: MilestoneInfo;
   /** 同じ階を目標にした何回目の達成か（2 以上で基礎点に repeatPct が掛かる。V3-3a §35.2） */
   repeatNo?: number;
-  /** 再挑戦（V3-3c §44.1）: 目標の階に残っている守護者をもう一度目的にする。no はその守護者を目的にした遠征、guardian はその守護者 */
-  rechallenge?: { no: number | null; guardian: EntityId };
+  /** 再挑戦（V3-3c §44.1）: 目標の階に残っている守護者をもう一度目的にする。no はその守護者を目的にした遠征、guardian はその守護者（賞金首なら bounty。V3-8 §53.3） */
+  rechallenge?: { no: number | null; guardian: EntityId; bounty?: boolean };
+  /** 賞金首を討つ（V3-8 §53.2）: 種族・接辞・名前・体力と一撃の目安・装甲（公開。守護者の候補と同じ並び） */
+  bounty?: BountyInfo & { kindName: Names; affixNames: Names[]; hp: number; maxHit: number; armor: number };
+  /** 宝物庫を開ける（V3-8 §53.2）: 鍵を持つ敵が階にいる */
+  vault?: boolean;
+  /** 傷跡（V3-8 §53.3）: 前の挑戦で与えたダメージのうち、次の挑戦に残る体力の減り（再挑戦の守護者・賞金首・大守護者） */
+  scar?: number;
 }
+
+/** 賞金首（V3-8 §53.2。名前付きの強敵を遠征の目的にする） */
+export interface BountyInfo { kind: string; name: Names; affixes: string[] }
 
 /** 遠征の戦利品のうち、参加者で共有する部分（目的・深追い・宝は別に計算する） */
 export interface ExpeditionHaul {
@@ -397,6 +413,8 @@ export interface ObjectiveProgress {
   maxDepth?: number;
   /** 踏破: 参加者が下り階段に立った最も深い階（目標より深い階だけが点になる。V3-2R） */
   crossedDepth?: number;
+  /** 宝物庫を開けた（open_vault。V3-8 §53.2） */
+  vaultOpened?: boolean;
 }
 
 export interface ExpeditionResult {
@@ -425,8 +443,8 @@ export interface Expedition {
   /** pos: その参加者がこの遠征を始めた地点（綱で戻った次の遠征はここから。V3-2R3a §22.1） */
   /** hp / maxHp: 開始時点の HP（遠征レポートの HP の推移。V3-6 §6） */
   start: Record<PlayerId, { kills: number; turns: number; deepest: number; pos?: FloorPos; hp?: number; maxHp?: number }>;
-  /** 目標階に配置した守護者・遺物（目標階の生成時に決まる。プレイヤーには渡さない） */
-  targets: { guardian: EntityId | null; relic: EntityId | null };
+  /** 目標階に配置した守護者・遺物（目標階の生成時に決まる。プレイヤーには渡さない）。bounty: 目的の賞金首、vaultLocks: 目標階の鍵のかかった格子扉の数（V3-8 §53.2） */
+  targets: { guardian: EntityId | null; relic: EntityId | null; bounty?: EntityId | null; vaultLocks?: number };
   progress: ObjectiveProgress;
   /** treasure: extract のときに持ち帰った宝の価値の合計 */
   /** lifeline: 帰還の綱で戻った（確定は戦利品の lifeline.pct %） */
@@ -438,8 +456,10 @@ export interface Expedition {
   haul?: ExpeditionHaul;
   /** 守護者の種族と格（候補から引き継ぐ。プレイヤーには渡さない。V3-2R3 §20.1） */
   guardianKind?: string;
-  /** 再挑戦の守護者（V3-3c §44.1。新しく置かず、この守護者を目的にする） */
+  /** 再挑戦の守護者（V3-3c §44.1。新しく置かず、この守護者を目的にする）。賞金首の再挑戦もここ（V3-8 §53.3） */
   rechallengeOf?: EntityId;
+  /** 賞金首（V3-8 §53.2）: 候補で決めた種族・接辞・名前（公開） */
+  bounty?: BountyInfo;
   /** 守護者の接辞（候補の時点で決める。見込みの特徴と一撃の目安に入る。プレイヤーには渡さない。V3-5a 後の評価 2） */
   guardianAffixes?: string[];
   guardianRank?: 1 | 2 | 3;

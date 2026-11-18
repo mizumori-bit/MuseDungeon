@@ -31,12 +31,17 @@ export function ensureFloor(ctx: Ctx, key: FloorKey): Floor {
   const spawned: Entity[] = [];
   // 棲み処の地物は、直前に置いた守護者のもの（V3-3c §44.6）
   let lastGuardian: string | null = null;
+  let bountyId: string | null = null;
   for (const spec of gen.spawns) {
     const e = spawnFromSpec(ctx, key, spec, 'generated', spec.type === 'feature' && spec.lair && lastGuardian ? { lairOf: lastGuardian } : {});
     if (e.role === 'guardian') lastGuardian = e.id;
+    if (spec.type === 'monster' && spec.objectiveBounty) bountyId = e.id;
     spawned.push(e);
   }
-  if (objective) recordTargets(ctx, spawned);
+  // 賞金首・宝物庫（V3-8 §53.2）: 目的の強敵と、目標階の鍵のかかった格子扉の数
+  const li = ctx.world.meta.terrainTable.indexOf('core:grate_locked');
+  const vaultLocks = objective?.vault && li >= 0 ? terrain.filter((tv) => tv === li).length : 0;
+  if (objective) recordTargets(ctx, spawned, { bounty: bountyId, vaultLocks });
   ctx.curFloor = prevFloor;
   ctx.now = prevNow;
   return ctx.world.floors[key];

@@ -253,6 +253,18 @@ export interface RecordsOptions {
 const avg = (xs: readonly number[]) => (xs.length ? Math.round(xs.reduce((a, b) => a + b, 0) / xs.length) : 0);
 const maxOr0 = (xs: readonly number[]) => (xs.length ? Math.max(...xs) : 0);
 
+/** 1 ランの遠征レポートから、遠征 1 回の自己最高（深さ・確定点・達成した遠征の「最も下がった HP」の最大） */
+export function expeditionBest(reports: readonly ExpeditionReport[]): ProfileBest {
+  const ended = reports.filter((r) => r.status === 'ended');
+  const banked = ended.map((r) => r.payout?.banked ?? 0);
+  const margin = ended.filter((r) => r.reason === 'completed').map((r) => r.combat.min_hp_pct ?? 0);
+  return {
+    depth: ended.length ? Math.max(...ended.map((r) => r.tempo.deepest)) : null,
+    banked: banked.length && Math.max(...banked) > 0 ? Math.max(...banked) : null,
+    margin: margin.length ? Math.max(...margin) : null,
+  };
+}
+
 /** プロフィールの自己最高（進行中のランも含む。遠征 1 回の値） */
 export function profileBest(runs: readonly ProfileRun[], exceptRun?: string): ProfileBest {
   const rs = runs.filter((r) => r.runId !== exceptRun);

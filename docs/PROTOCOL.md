@@ -76,7 +76,6 @@ turn: {
 | ツール | 引数 | 結果 |
 |---|---|---|
 | `expedition` | – | 遠征の目的・達成条件・進捗（ブリーフィング）。キャンプでは次の遠征の候補。手番を消費しない。V3-6: 進行中なら途中経過（`progress: { combat, tempo }` と 3 行）、キャンプなら直前の遠征のレポート（`report`） |
-| `declare_goal` | `type: 'depth'|'banked'|'milestone'|'margin'|'none'`, `option?: 1..3`, `value?`, `within?: 1..3` | V3-7a。キャンプで目標を 1 つ宣言する（任意。点・経験値・戦利品には影響しない）。`option` は候補（1: 自己最高に並ぶ・2: 少し超える・3: 大きく超える。節目は 3／2／1 回以内）、`value` で好きな値。`none` で取り下げ。宣言し直すと前の目標は取り下げ。手番を消費しない |
 | `review` | `expedition?: number` | V3-6。終わった遠征のレポート（`report`。省略時は直前の遠征）。文は 12 行のレポートに、入りきらなかった場面と、倒れる直前の出来事を足したもの。手番を消費しない |
 | `extract` | `confirm?: boolean`, 共通引数 | 行動。階段（上り・下り）の上なら可（V3-2R2: 追跡中の敵が見えていてもよい。敵は階段を追ってこない）。目的を達成していれば**帰還**（遠征は `completed`、戦利品 × 倍率を確定）。未達成なら `confirm: true` で**撤退**（`withdrawn`、(戦利品 − 目的) × `withdrawPct`% を確定）。`confirm` が無ければ `confirm_required`。確定する点は観測の `expedition.haul.if_extract_now` と一致する。所持している宝は換金され、達成して持ち帰った遺物は納められ、どちらも所持品から消える |
 | `start_expedition` | `offer: 1..n | 'endless'` | キャンプで次の遠征を始める。前回 `extract` した階段から再開する。結果に `briefing`（目的・枠・条件・倍率・戦利品の説明） |
@@ -117,12 +116,12 @@ turn: {
 | `rest` | `until_hp?`, `max_turns?` | マクロ。全快（かつ毒が抜ける）か、指定の HP・手数か、中断まで（上限 `rest.maxTurns`） |
 | `explore` | `mode?`, `hp_floor?`, `pickup?`（既定 true）, `toward?: 'draft'` | マクロ。未見の区画（地図の巻物で地形だけ知った区画を含む）へ自動移動。pickup（既定 'useful'。V3-4b）なら通り道と見えている・記憶したアイテムも拾う（'useful' は、鑑定済みで接辞の無い武器・防具のうち公開の数字が装備中の品以下のものを種類が違っても拾わない。true は全部。遺物・鑑定済みの有害品・装備中の品と同じ種類で接辞が含まれる＝同じか劣る装備は拾わない。V3-2R3）。`toward: 'draft'` は下への風の方角、`'sense'`（V3-4b）は遺物・守護者の気配の方角（と隣り合う方角）の未探索を優先する（V3-2R3）。決めた行き先は境界である間は追い続け、見えて消えたらそのすぐ近くの境界を追う（風の方角が歩くたびに変わっても往復しない。2026-11-17） |
 | `travel_to` | `to: {x,y} | 'stairs_down' | 'stairs_up' | entity_id`, `mode?`, `hp_floor?`, `pickup?` | マクロ。既知地図上のみ。目的地がアイテムなら着いて拾う |
-| `collect` | `what?: 'thrown'|'items'`, `mode?`, `hp_floor?` | マクロ（v3）。`thrown`（既定）は既知の自分が投げた物、`items` は見えている・記憶したアイテムを近い順に回って拾う。結果に `collected: { picked, remaining }` |
+| `collect` | `what?: 'thrown'|'items'`, `within?: 1..200`, `kinds?: string[]`, `all?: boolean`, `mode?`, `hp_floor?` | マクロ（v3）。`thrown`（既定）は既知の自分が投げた物、`items` は見えている・記憶したアイテムを近い順に回って拾う。結果に `collected: { picked, remaining }`。V3-8: `within` は歩数の上限（既定 15。残りがどれも遠ければ `collect_far`）、`kinds` は種類 ID か区分、`items` は鑑定済みで今の装備より劣る装備を飛ばす（`all: true` で拾う） |
 | `fight` | `target: entity_id`, `with?: slot`, `hp_floor?`, `abilities?: string[]`, `until?: 'target'\|'clear'`, `adjacent?: 'throw'\|'melee'\|'stop'` | マクロ（V3-2R、V3-2R2 で拡張）。`until: 'clear'`（V3-4b）: 標的を倒した後も、隣の追跡中の敵、いなければ最も近い追跡中の敵へ続け、いなくなれば `cleared`。`adjacent`（V3-4b、with のとき）: 相手が隣に来たら stop（既定）／throw（投げ続ける）／melee（近接に切り替える）。新しく見えた追跡中の敵で止まるのは被弾の記録の無い種族だけ。追跡中で逃げていない標的が見えなくなったら `fight.lostWait`（5）手番まで待つ（逃げて見えなくなったら `target_fled`）。待つ手番に標的以外の射撃で被弾したら `shot_while_waiting`。`abilities`（V3-4a）: 並べた能動技を使える手番ごとに使う。強打は標的が隣、なぎ払いは起きている敵が隣に 2 体以上、狙い撃ちは `with` の品で射程と射線が通るとき（それ以外の手番は通常の攻撃）。立て直し・身をかわすは載せられない、覚えていない、`with` の無い狙い撃ちは手番を使わずに `cannot_use`。結果の文に使った能動技と回数。その相手と決着を付ける。`with` なし: 隣なら近接攻撃を繰り返す。相手が追跡中で届かない間は隣に来るまで待つ（最大 10 手番、`target_not_approaching`）。当てて逃げる相手は追跡中で 2 マス以内なら 2 手番まで待つ（追わない）。`with`: そのスロットの品を投げて戦う（射程と射線が通るまで待つ）。止まるのは: 相手が倒れた（`target_down`）・離れた／逃げて射程を出た（`target_moved`）・見えなくなった（`target_gone`）・（`with`）隣に来た（`target_adjacent`）・品が尽きた（`out_of_ammo`）・射線が 3 手番続けて通らない（`no_line_of_sight`）・HP が `hp_floor`（既定 50%）以下・**次の手番に、届く追跡中の敵（隣・飛び道具）から 1 手の最悪の被害（`worst_turn` の合計）を受けると `hp_floor` を割る（`hp_risk`。被弾の前に止まる。始める前なら `hp_floor` のエラーで拒否）**・被弾の記録の無い種族から初めて被弾した（`first_hit`。一度だけ）・追跡中の別の敵・状態異常（V3-2R3）。眠っている・気付いていない相手は待たない（`target_not_hunting` で拒否）。結果の `outcome` に与えた攻撃（投げた）回数・命中・合計・待った手番 |
 | `pickup` | `item?: entity_id` | 省略時は足元の全て（入る分だけ） |
 | `drop` | `slot`, `qty?` | |
-| `equip` / `unequip` | `slot` | 装備すると、未鑑定の種類（装飾品）は正体が、装備品は呪いの有無が分かる（V3-4）。呪われた装備は外せない・同じ場所に別の品を付けられない・捨てられない（`cannot_use`） |
-| `use_item` | `slot`, `target?: dir | {x,y} | entity_id`, `target_slot?` | 帰還の綱（`core:lifeline`。V3-2R2）は使うと、`lifeline.turns` が 0（V3-2R3 の既定）ならその手番でキャンプへ戻る。1 以上ならその手番のあいだ行動できず（状態 `core:recall`、その間も攻撃は受ける）、切れるとキャンプへ戻る。達成した遠征の数には入らない。遠征の開始時にキャンプが 1 本にそろえる。捨てる・投げることはできず（`cannot_use`）、所持数に数えない。`target_slot`: 鑑定の巻物で鑑定する品（省略時はスロット順で最初の未鑑定品か、呪いの有無を確かめていない装備品。読んだ巻物自身の種類は除く。V3-4）。解呪の巻物と祭壇は所持品すべての呪いを解く。引数の形が合わないときもゲームのエラー形式（`bad_request`・hint・valid_actions）で返す |
+| `equip` / `unequip` | `slot`, `confirm?`（equip のみ） | 呪いと分かっている品の equip は `confirm: true` が要る（無ければ `confirm_required`。V3-8）。装備すると、未鑑定の種類（装飾品）は正体が、装備品は呪いの有無が分かる（V3-4）。呪われた装備は外せない・同じ場所に別の品を付けられない・捨てられない（`cannot_use`） |
+| `use_item` | `slot`, `target?: dir | {x,y} | entity_id`, `target_slot?` | `slot` は正体の分かっている品の種類 ID でもよい（V3-8。スロット順で最初の品）。帰還の綱（`core:lifeline`。V3-2R2）は使うと、`lifeline.turns` が 0（V3-2R3 の既定）ならその手番でキャンプへ戻る。1 以上ならその手番のあいだ行動できず（状態 `core:recall`、その間も攻撃は受ける）、切れるとキャンプへ戻る。達成した遠征の数には入らない。遠征の開始時にキャンプが 1 本にそろえる。捨てる・投げることはできず（`cannot_use`）、所持数に数えない。`target_slot`: 鑑定の巻物で鑑定する品（省略時はスロット順で最初の未鑑定品か、呪いの有無を確かめていない装備品。読んだ巻物自身の種類は除く。V3-4）。解呪の巻物と祭壇は所持品すべての呪いを解く。引数の形が合わないときもゲームのエラー形式（`bad_request`・hint・valid_actions）で返す |
 | `throw_item` | `slot`, `target: {x,y} | entity_id` | 投擲の経路は双方向（自分→相手の直線か、相手→自分の直線を逆にたどったもののうち通る方。敵の射撃も同じ経路。V3-2R2）。ID 指定で経路が通らない相手は `no_line_of_sight`、射程外は `out_of_range`（どちらも手番も品物も失わない。観測の `shots`）。座標指定は遮られた位置か射程の端に落ちる。結果は必ず 命中 / 外れ / 遮られた / 届かない / 誰もいない と落下地点で書く。自分が投げた物はそのマスに入るだけで拾う（追加の手番なし） |
 | `interact` | `dir?` | 扉の開閉、地物の操作。省略時は足元 |
 | `use_stairs` | – | 足元の階段 |
@@ -413,6 +412,20 @@ V3-2R で足した項目（同じく後方互換。会心と経験値のルー�
 - `StatusInst.source`（状態異常を与えた者。毒で倒したときの撃破者になる）、`status_applied.targetAffixes`
 - `player_state.reason: 'joined'`（キャンプから始まる参加）。参加コマンドの `atCamp`
 - プレイヤー向けの射影で、見えていた個体が視界の外へ動いた `entity_moved` に `dirOut`（向きだけ。行き先は伏せたまま）
+
+V3-8 で足した項目と外した項目（最後の見直し。規則・候補・生成が変わったので `engineVersion` は 0.23.0、出来事が増えたので `eventVersion` は 18。DESIGN.md §35）:
+
+- 外した: MCP の `declare_goal`、観測の `expedition.goal`・`camp.goal`、遠征レポートの `goal`、WS の `goal`（サーバーからの通知と `view.goal`）、`shared/goals`（`GoalDecl`・`GoalRecord`・`GoalCandidate`・`GoalInfo`）、ログの `goals.jsonl`（古いランに残っていても読まない）
+- 目的の種類: `slay_bounty`（賞金首を討つ）・`open_vault`（宝物庫を開ける）。`ObjectiveProgress.vaultOpened`（PlayerView の `expedition.progress.vaultOpened`）。賞金首の討伐は `guardianSlain` で表す
+- 候補（`ExpeditionOffer`）: `bounty { kind, name, affixes, kindName, affixNames, hp, maxHit, armor }`・`vault`（true）・`scar`（傷跡で減る体力）・`rechallenge.bounty`（賞金首の再挑戦）。公開カタログの `rules.expedition.typePct.slay_bounty`・`open_vault`
+- World State: `Expedition.bounty { kind, name, affixes }`・`Expedition.targets.bounty`（目的の賞金首の ID）・`targets.vaultLocks`（生成のときの施錠の格子扉の数）・`GuardianInfo.heavy`（重い一撃）・`Entity.scar`・`Knowledge.paceSeen { [id]: 自分の手番数 }`
+- イベント: `floor_event_cleared { floorKey }`（強敵が去って階の異変が消えた。全員に）・`pace_seen { player, ids, turn }`（前の手番の間に 2 回以上動いたのを見た敵。本人だけ）・`guardian_departed.elite`（去ったのが名前付きの強敵）
+- PlayerView: `EntityView.paceAgo`（2 回動いたのを見てから過ぎた自分の手番）
+- コマンド: `collect.within`（1〜200。既定 15）・`collect.kinds`（種類 ID か区分、8 つまで）・`collect.all`・`equip.confirm`（呪いと分かっている品）。止まり方 `collect_far`・`target_shooting`。`equip` の拒否 `confirm_required`
+- MCP: `collect { within?, kinds?, all? }`・`equip { confirm? }`・`use_item` の `slot` に種類 ID（正体の分かっている所持品のスロットに読み替える。無ければ `no_such_item`）
+- 観測: 敵の `traits` に `heavy_blow`、look に強敵の接辞の中身、キャンプの `camp.records.line` の先頭に「前のランまで: …」（2 回目以降のランの最初のキャンプ）、候補の注記に傷跡、extract・階段・帰還の綱の説明に床に残した投擲物の数、投擲の fight の結果に「投げ物: 手元 N・床に M（うち敵の足元 K）」
+- 遠征レポート: `combat.bounty_fights { id, dealt, taken }[]`（目的の賞金首との戦い）
+- コンテンツ: 接辞の `monsterMods`（公開カタログに出す）・`balance.expedition.typePct.slay_bounty`（110）・`open_vault`（105）
 
 V3-5e で足した項目（バイオームの仕掛け。後方互換。生成と規則が変わったので `engineVersion` は 0.21.0。出来事の種類は増やしていないので `eventVersion` は 16 のまま。DESIGN.md §33）:
 

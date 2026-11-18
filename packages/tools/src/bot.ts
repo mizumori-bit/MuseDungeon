@@ -302,6 +302,34 @@ export function greedyDecide(port: PlayerPort, rng: Rng, memo: BotMemo): Command
       const g = hostiles.find((h) => h.role === 'guardian');
       if (g && hp >= 60 && !memo.avoid.has(g.id)) return { type: 'travel', to: g.id };
     }
+    // 賞金首を討つ（V3-8 §53.2）: 名前付きの強敵へ向かう
+    if (x.objective.type === 'slay_bounty' && !x.progress.guardianSlain) {
+      const b = hostiles.find((h) => h.role === 'elite');
+      if (b && hp >= 60 && !memo.avoid.has(b.id)) return { type: 'travel', to: b.id };
+    }
+    // 宝物庫を開ける（V3-8 §53.2）: 鍵があれば格子扉の隣で interact、無ければ鍵を持つ敵か床の鍵へ
+    if (x.objective.type === 'open_vault' && !x.progress.vaultOpened) {
+      const key = inv.find((i) => i.kind === 'core:vault_key');
+      const f = v.floor;
+      const gi = v.terrainTable.indexOf('core:grate_locked');
+      if (key && f && gi >= 0) {
+        for (let i = 0; i < v.memory.terrain.length; i++) {
+          if (v.memory.terrain[i] !== gi) continue;
+          const gp = { x: i % f.width, y: Math.trunc(i / f.width) };
+          if (cheb(gp, pos) <= 1) { const d = dirTo(pos, gp); if (d) return { type: 'interact', dir: d }; }
+          const side = DIRS.map((d) => ({ x: gp.x + DIR_VEC[d][0], y: gp.y + DIR_VEC[d][1] })).find((q) => {
+            const tv = v.memory.terrain[q.y * f.width + q.x];
+            return q.x >= 0 && q.y >= 0 && q.x < f.width && q.y < f.height && tv > 0 && !!port.catalog.terrain[v.terrainTable[tv]]?.passable;
+          });
+          if (side && !memo.avoid.has(`vault|${gp.x}|${gp.y}`)) return { type: 'travel', to: side };
+        }
+      } else if (!key) {
+        const carrier = hostiles.find((h) => h.carries === 'core:vault_key');
+        if (carrier && hp >= 60 && !memo.avoid.has(carrier.id)) return { type: 'travel', to: carrier.id };
+        const lying = v.entities.find((e) => e.cat === 'item' && e.kind === 'core:vault_key');
+        if (lying) return lying.pos.x === pos.x && lying.pos.y === pos.y ? { type: 'pickup', item: lying.id } : { type: 'travel', to: lying.id };
+      }
+    }
     if (x.objective.type === 'retrieve_relic' && !x.progress.relicHeld) {
       const here = v.entities.find((e) => e.role === 'relic' && e.pos.x === pos.x && e.pos.y === pos.y);
       if (here && carried >= me.capacity) {
@@ -320,6 +348,8 @@ export function greedyDecide(port: PlayerPort, rng: Rng, memo: BotMemo): Command
   const stuck = (slot: 'weapon' | 'armor' | 'accessory') => { const c = inv.find((i) => i.equipped === slot); return !!c && isCursedItem(port.catalog, c.affixes); };
   for (const it of inv) {
     if (it.equipped) continue;
+    // 呪いと分かっている品は付けない（V3-8 §53.4: 付けるには confirm が要る）
+    if (isCursedItem(port.catalog, it.affixes)) continue;
     // 装飾品: 何も付けていなければ付けてみる（正体と呪いの有無は付けると分かる）
     const cat = it.kind ? port.catalog.items[it.kind]?.category : it.appearanceId ? port.catalog.appearances[it.appearanceId]?.category : undefined;
     if ((cat === 'ring' || cat === 'amulet') && !inv.some((i) => i.equipped === 'accessory')) return { type: 'equip', slot: it.slot };

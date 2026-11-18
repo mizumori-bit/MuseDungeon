@@ -1,7 +1,7 @@
 // プレイ画面（人間）。AI と同じ Command を同じ PlayerPort（WS 経由）へ送る。
 // 受け取るのはサーバーの PlayerView フレーム＋知覚イベントだけ（生のイベント列は受け取らない）。
 import type {
-  ActionError, ActionErrorCode, Catalog, Change, Command, Dir, EntityView, GoalDecl, GoalInfo, ObsMonster, Observation, PerceivedEvent, PlayerView, Pos, RunSummary, ServerMsg, TurnSnapshot,
+  ActionError, ActionErrorCode, Catalog, Change, Command, Dir, EntityView, ObsMonster, Observation, PerceivedEvent, PlayerView, Pos, RunSummary, ServerMsg, TurnSnapshot,
 } from '@muse/shared';
 import {
   buildNavGrid, buildObservation, buildTurnBlock, curseUnknown, diffChanges, dirLabel, findPath, isCursedItem, itemDisplayName, itemStats, monsterDisplayName, pickableItems, sameOrWorseEquip, turnLine,
@@ -153,7 +153,6 @@ export function Play({ runId }: { runId: string }) {
   const token = getToken(runId);
   const [view, setView] = useState<PlayerView | null>(null);
   // 目標（V3-7a。World の外。view と一緒に届く）
-  const [goal, setGoal] = useState<GoalInfo | null>(null);
   const [log, setLog] = useState<LogLine[]>([]);
   const [macro, setMacro] = useState<{ kind: string; state: string; steps: number; reason?: string } | null>(null);
   const [summary, setSummary] = useState<RunSummary | null>(null);
@@ -179,6 +178,8 @@ export function Play({ runId }: { runId: string }) {
   const rRef = useRef<Canvas2DRenderer | null>(null);
   const wsRef = useRef<WsHandle | null>(null);
   const pendingRef = useRef(false);
+  /** 最後に送ったコマンド（確認が要ると拒否されたとき、何の確認かを分ける） */
+  const lastSentRef = useRef<Command | null>(null);
   const macroRef = useRef(false);
   const modeRef = useRef<Mode>('normal');
   const cursorRef = useRef<Pos | null>(null);
@@ -260,7 +261,6 @@ export function Play({ runId }: { runId: string }) {
           pendingRef.current = false;
           if (m.events.length) eventsRef.current = [...eventsRef.current, ...m.events];
           setView(m.view);
-          setGoal(m.goal ?? null);
           addLog(perceivedLines(m.events));
           redraw(m.events);
           break;
@@ -279,7 +279,12 @@ export function Play({ runId }: { runId: string }) {
           if (m.error.code === 'hostile_adjacent') flash(errorLine(m.error), [...fleeActions(obsNow()), ...lifelineActions()]);
           else if (!QUIET_ERRORS.has(m.error.code)) flash(errorLine(m.error));
           // 表示上は達成に見えても、サーバーが撤退扱いと判断した場合（最終判定はサーバー）
-          if (m.error.code === 'confirm_required' && window.confirm(extractConfirmText(obsNow()?.expedition, false, rulesOf(catalogRef.current)))) {
+          // 呪いと分かっている品の装備（V3-8 §53.4）は、拒否の文をそのまま確かめる
+          if (m.error.code === 'confirm_required' && lastSentRef.current?.type === 'equip') {
+            const last = lastSentRef.current;
+            if (window.confirm(`${m.error.message}
+${tr('それでも装備しますか？', 'Equip it anyway?')}`)) send({ ...last, confirm: true });
+          } else if (m.error.code === 'confirm_required' && window.confirm(extractConfirmText(obsNow()?.expedition, false, rulesOf(catalogRef.current)))) {
             send({ type: 'extract', confirm: true });
           }
           if (m.error.code === 'no_session' || m.error.code === 'bad_request') setError(m.error.message);
@@ -316,6 +321,7 @@ export function Play({ runId }: { runId: string }) {
       if (curSnapRef.current) pendingBaseRef.current = curSnapRef.current;
     }
     pathRef.current = null;
+    lastSentRef.current = command;
     wsRef.current.send({ t: 'command', command, expectSeq: free || camp ? undefined : v.seq });
   };
 
@@ -480,7 +486,6 @@ export function Play({ runId }: { runId: string }) {
   };
 
   const startExpedition = (offer: number | 'endless') => send({ type: 'start_expedition', offer });
-  const declareGoal = (decl: GoalDecl | null) => wsRef.current?.send({ t: 'goal', decl });
   const retire = () => {
     const msg = tr('引退しますか？ ランは終了し、キャラクターは戻りません。', 'Retire? The run ends and the character does not return.');
     if (window.confirm(msg)) send({ type: 'retire' });
@@ -1113,7 +1118,7 @@ export function Play({ runId }: { runId: string }) {
                 )}
                 {macro?.state === 'running' && <div class="macro">{tr('自動行動中', 'Auto')}: {macro.kind} ({macro.steps})</div>}
                 {view && view.status === 'waiting_others' && <div class="macro">{tr('他のプレイヤーの手番を待っています…', 'Waiting for other players…')}</div>}
-                {view && atCamp && <div class="campwrap"><CampPanel view={view} catalog={catalog} onStart={startExpedition} onRetire={retire} goal={goal} onGoal={declareGoal} /></div>}
+                {view && atCamp && <div class="campwrap"><CampPanel view={view} catalog={catalog} onStart={startExpedition} onRetire={retire} /></div>}
                 {exp && expActive && briefingNo === exp.no && <BriefingCard x={exp} catalog={catalog} onClose={() => setBriefingNo(null)} />}
                 {view && view.status === 'dead' && !summary && (
                   <div class="deadbox">{tr('あなたは倒れた。', 'You have fallen.')} <a href={`#/watch/${runId}`}>{tr('観戦を続ける', 'Keep watching')}</a> / <a href={`#/replay/${runId}`}>{tr('リプレイ', 'Replay')}</a></div>

@@ -104,7 +104,7 @@ export interface Catalog {
   /** armor: 装甲の修正（錆。V3-5a） */
   statuses: Record<string, { name: Names; speedPct?: number; armor?: number }>;
   /** itemMods: 品物の接辞の効果（自分の持ち物の性能表示に使う。敵の接辞の値は出さない） */
-  affixes: Record<string, { name: Names; target: 'monster' | 'item' | 'guardian'; itemMods?: { acc: number; dmgBonus: number; armor: number; eva?: number; might?: number; maxHp?: number; sight?: number }; cursed?: boolean }>;
+  affixes: Record<string, { name: Names; target: 'monster' | 'item' | 'guardian'; itemMods?: { acc: number; dmgBonus: number; armor: number; eva?: number; might?: number; maxHp?: number; sight?: number }; cursed?: boolean; /** 敵の接辞の効き目（V3-8） */ monsterMods?: Record<string, number> }>;
   /** ビルド（V3-4） */
   perks: Record<string, CatalogPerk>;
   abilities: Record<string, CatalogAbility>;

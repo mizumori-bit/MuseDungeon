@@ -1,10 +1,10 @@
 // PlayerPort: プレイヤー（AI・人間とも）への唯一の窓口。PlayerView 経由の情報しか返さない。
 // MCP アダプタと人間用 WS の両方がこれを使う（どちらかを特別扱いしない）。
 import type {
-  ActionError, Catalog, Command, ExpeditionReport, GameEvent, GoalDecl, GoalInfo, Locale, Observation, ObservationOptions, PerceivedEvent, PlayerId, PlayerView, Pos, RunSummary, TurnBlock, TurnReason,
+  ActionError, Catalog, Command, ExpeditionReport, GameEvent, Locale, Observation, ObservationOptions, PerceivedEvent, PlayerId, PlayerView, Pos, RunSummary, TurnBlock, TurnReason,
 } from '@muse/shared';
 import {
-  actionError, briefingLines, briefingShort, buildObservation, buildTurnBlock, campLines, changesLine, compareLines, describeInventory, describeTarget, diffChanges, goalCampLines, goalCandidates, goalDiffText, goalProgressText, goalText, progressLines, reportLines,
+  actionError, briefingLines, briefingShort, buildObservation, buildTurnBlock, campLines, changesLine, compareLines, describeInventory, describeTarget, diffChanges, progressLines, reportLines,
   formatObservationText, guardianDisplayName, kindName, MACRO_COMPLETED_STOPS, mapTextLines, memoryCombatText, memoryKey, mineCount, nameOf, pickableItems, progressText, renderAsciiMap, resultText, t,
   turnLine, turnSnapshot, turnStateOf,
 } from '@muse/shared';
@@ -76,9 +76,6 @@ export interface PlayerPort {
   /** 遠征レポート（V3-6 §6）。no を省くと最後の遠征（進行中なら途中経過） */
   report(no?: number): ExpeditionReport | null;
   /** 目標（V3-7a §40.8）: 宣言中の目標・候補・記録・キャンプの文 */
-  goalInfo(): GoalInfo;
-  /** 目標を宣言する（キャンプで。null で取り下げ）。AI の declare_goal と人間の画面が同じ口を使う */
-  declareGoal(decl: GoalDecl | null): InfoResult;
   /** review: 終了した遠征のレポートと場面 */
   review(no?: number): InfoResult;
   /** expedition ツールに足す行（進行中なら途中経過、キャンプなら直前の遠征のレポート） */
@@ -117,7 +114,9 @@ const STOP_TEXT: Record<string, [string, string]> = {
   target_not_approaching: ['相手が近づいてこない（3 手番続けて近づかない・待つ上限）', 'the target is not coming (3 turns without closing in, or the wait limit)'],
   no_progress: ['同じ 2 マスを往復して進めない（行き先か道を変える）', 'stuck going back and forth between two cells (pick another destination or route)'],
   hit_and_run: ['待つ間に標的に殴られたが、標的は隣にいない（当てては離れる相手。寄って殴る・通路で受ける・投げる）', 'the target hit you while you waited but is not adjacent (it strikes and backs off: close in, hold a corridor, or throw)'],
+  target_shooting: ['標的は離れたまま撃ってくる（その場で撃つ相手。射線を切るか、寄って殴る）', 'the target keeps shooting from where it stands (it does not close in: break its line of fire or close in yourself)'],
   target_not_hunting: ['相手はあなたを追っていない', 'the target is not hunting you'],
+  collect_far: ['残りの品は within 歩より遠い（拾うなら within を大きくする）', 'the remaining items are farther than within steps (raise within to fetch them)'],
   damaged: ['ダメージを受けた', 'you took damage'],
   item_seen: ['新しいアイテムを見つけた', 'you spotted a new item'],
   stairs_seen: ['階段を見つけた', 'you found stairs'],
@@ -194,7 +193,7 @@ export class SessionPlayerPort implements PlayerPort {
   observe(opts: { detail?: 'brief' | 'full'; map?: boolean; consume?: boolean } = {}): { observation: Observation; text: string } {
     const view = this.view();
     const recent = opts.consume ? this.session.consumeFor(this.playerId) : this.pending();
-    const observation = buildObservation(view, this.catalog, { detail: opts.detail ?? 'brief', map: opts.map ?? true, recent: recent.slice(-10), campCompare: this.campCompare(view), goal: this.goalOpt(view), offerNotes: this.offerNotes(view), records: this.campRecords(view) });
+    const observation = buildObservation(view, this.catalog, { detail: opts.detail ?? 'brief', map: opts.map ?? true, recent: recent.slice(-10), campCompare: this.campCompare(view), offerNotes: this.offerNotes(view), records: this.campRecords(view) });
     return { observation, text: formatObservationText(observation, view.locale) };
   }
 
@@ -205,21 +204,12 @@ export class SessionPlayerPort implements PlayerPort {
     const prof = this.session.deps.profiles;
     const id = this.session.profileOf(this.playerId);
     if (!prof || !id) return undefined;
-    const line = prof.campLine(id, view.locale);
+    const first = this.session.endedReports(this.playerId).length === 0;
+    const line = prof.campLine(id, view.locale, first ? this.session.runId : undefined);
     if (!line) return undefined;
     const last = this.session.endedReports(this.playerId).pop();
     const featsNew = last ? prof.featsOf(id, this.session.runId, last.no, view.locale) : [];
     return { line, ...(featsNew.length ? { featsNew } : {}) };
-  }
-
-  private goalOpt(view: PlayerView): ObservationOptions['goal'] {
-    if (view.status === 'at_camp') return { info: this.goalInfo() };
-    const active = this.session.activeGoal(this.playerId);
-    if (!active || !view.expedition || view.expedition.status === 'ended') return undefined;
-    // 余力: いままでの最も下がった HP（進行中の遠征レポートから。宣言しているときだけ作る）
-    const minHpPct = active.type === 'margin' ? this.session.expeditionReport(this.playerId)?.combat.min_hp_pct : undefined;
-    const done = this.session.endedReports(this.playerId).filter((r) => r.no >= active.fromNo).length;
-    return { active, live: { ...(minHpPct !== undefined ? { minHpPct } : {}), leftExpeditions: Math.max(1, active.within - done) } };
   }
 
   /** 候補に添える注記（V3-3c §44.1）: 再挑戦の守護者と前回戦ったときの与えた・受けた被害（本人の遠征レポートから） */
@@ -231,12 +221,15 @@ export class SessionPlayerPort implements PlayerPort {
       if (!o.rechallenge) continue;
       // その守護者と戦った最後の遠征
       let last: { no: number; dealt: number; taken: number } | null = null;
+      const bounty = !!o.rechallenge.bounty;
       for (const r of this.session.endedReports(this.playerId)) {
-        const f = r.combat.guardian_fights?.find((x) => x.id === o.rechallenge!.guardian);
+        const f = (bounty ? r.combat.bounty_fights : r.combat.guardian_fights)?.find((x) => x.id === o.rechallenge!.guardian);
         if (f) last = { no: r.no, dealt: f.dealt, taken: f.taken };
       }
-      out[o.index] = last ? t(L, `前回（遠征 ${last.no}）は与 ${last.dealt}・被 ${last.taken}`, `last time (expedition ${last.no}): dealt ${last.dealt}, took ${last.taken}`)
-        : t(L, 'この守護者とはまだ戦っていない', 'you have not fought this guardian yet');
+      // 傷跡（V3-8 §53.3）は候補の文にも出るが、前回の戦いと並べて読めるようにここにも添える
+      const scar = o.scar ? t(L, `。傷跡で体力 −${o.scar}`, `; scars: −${o.scar} HP`) : '';
+      out[o.index] = (last ? t(L, `前回（遠征 ${last.no}）は与 ${last.dealt}・被 ${last.taken}`, `last time (expedition ${last.no}): dealt ${last.dealt}, took ${last.taken}`)
+        : bounty ? t(L, 'この賞金首とはまだ戦っていない', 'you have not fought this bounty yet') : t(L, 'この守護者とはまだ戦っていない', 'you have not fought this guardian yet')) + scar;
     }
     return Object.keys(out).length ? out : undefined;
   }
@@ -254,48 +247,10 @@ export class SessionPlayerPort implements PlayerPort {
     const view = this.view();
     const L = view.locale;
     const r = this.session.expeditionReport(this.playerId);
-    // キャンプ: 目標の候補と記録（V3-7a §40.8）
-    const goalLines = view.status === 'at_camp' ? (this.goalInfo().full ?? []) : [];
-    if (!r) return { lines: goalLines };
-    if (r.status === 'in_progress') {
-      // 宣言中の目標（V3-7a §40.8）
-      const go = this.goalOpt(view);
-      const gl = go?.active ? [goalProgressText(L, go.active, { maxDepth: view.expedition?.maxDepth, minHpPct: go.live?.minHpPct, leftExpeditions: go.live?.leftExpeditions })] : [];
-      return { lines: [...progressLines(L, r), ...gl], progress: { combat: r.combat, tempo: r.tempo } };
-    }
+    if (!r) return { lines: [] };
+    if (r.status === 'in_progress') return { lines: progressLines(L, r), progress: { combat: r.combat, tempo: r.tempo } };
     // キャンプのブリーフィングに結果の行が出ているので、確定の行は省く
-    return { lines: [...reportLines(L, r, { payout: false }), ...goalLines], report: r };
-  }
-
-  goalInfo(): GoalInfo {
-    const view = this.view();
-    const L = view.locale;
-    const reports = this.session.endedReports(this.playerId);
-    const msInfo = view.camp?.milestone ?? view.expedition?.milestone;
-    const ms = msInfo && !(view.milestonesCleared ?? []).includes(msInfo.depth) ? { depth: msInfo.depth, name: guardianDisplayName(L, msInfo) } : null;
-    const all = this.session.goalsOf(this.playerId);
-    const active = this.session.activeGoal(this.playerId);
-    const base = { active, candidates: goalCandidates(L, reports, ms, this.session.goalProfile(this.playerId)), record: { declared: all.length, achieved: all.filter((g) => g.status === 'achieved').length } };
-    // 期限の残り（その目標で数え終えた遠征の数を引く）
-    const done = active ? reports.filter((r) => r.no >= active.fromNo).length : 0;
-    const left = active ? Math.max(1, active.within - done) : undefined;
-    return { ...base, lines: goalCampLines(L, base, left, { compact: true }), full: goalCampLines(L, base, left) };
-  }
-
-  declareGoal(decl: GoalDecl | null): InfoResult {
-    const L = this.view().locale;
-    const r = this.session.declareGoal(this.playerId, decl);
-    if (!r.ok) {
-      const msg: Record<string, [string, string]> = {
-        not_at_camp: ['目標はキャンプで宣言する（遠征の間は宣言し直せない）。', 'Declare goals at camp (not during an expedition).'],
-      };
-      const m = msg[r.error] ?? [`宣言できない: ${r.error}`, `Cannot declare: ${r.error}`];
-      return { text: t(L, m[0], m[1]), data: { error: r.error } };
-    }
-    const info = this.goalInfo();
-    const head = r.goal ? t(L, `目標を宣言した: ${goalText(L, r.goal)}${goalDiffText(L, r.goal) ? `（${goalDiffText(L, r.goal)}）` : ''}。点には影響しない。`, `Goal declared: ${goalText(L, r.goal)}${goalDiffText(L, r.goal) ? ` (${goalDiffText(L, r.goal)})` : ''}. It does not affect points.`)
-      : t(L, '目標を取り下げた。', 'Goal withdrawn.');
-    return { text: [head, ...(info.full ?? info.lines)].join(NL), data: { goal: r.goal, info } };
+    return { lines: reportLines(L, r, { payout: false }), report: r };
   }
 
   /** 遠征レポート（no を省くと最後の遠征。進行中なら途中経過） */
@@ -335,7 +290,7 @@ export class SessionPlayerPort implements PlayerPort {
     const lifelineShort = xNo !== undefined && prev?.lifeNo === xNo;
     // 加護の説明も遠征ごとに最初の 1 回だけ（V3-3c §44.6: 応答の長さ）
     const boonsShort = xNo !== undefined && prev?.boonNo === xNo;
-    const observation = buildObservation(view, this.catalog, { detail: p.detail ?? 'brief', map: true, recent: p.recent.slice(-10), lifelineShort, boonsShort, campCompare: this.campCompare(view), goal: this.goalOpt(view), offerNotes: this.offerNotes(view), records: this.campRecords(view) });
+    const observation = buildObservation(view, this.catalog, { detail: p.detail ?? 'brief', map: true, recent: p.recent.slice(-10), lifelineShort, boonsShort, campCompare: this.campCompare(view), offerNotes: this.offerNotes(view), records: this.campRecords(view) });
     const state = turnStateOf(view, p.expeditionEndedNow ?? false).state;
     const cur = turnSnapshot(view, observation, state);
     const longLife = observation.valid_actions.some((a) => a.includes('次の遠征はこの遠征を始めた階段から') || a.includes('the next expedition starts from where this one began'));
@@ -453,6 +408,18 @@ export class SessionPlayerPort implements PlayerPort {
           const hpNow = after.self.stats.hp;
           const k = inc > 0 ? Math.min(3, Math.trunc((hpNow - 1) / inc)) : 0;
           if (adj >= 2 && k >= 2) outcome += t(L, ` 隣に ${adj} 体いるので、この hp_floor では毎手番止まる。hp_floor を ${hpNow - k * inc} にすれば ${k} 手番続く。`, ` ${adj} enemies are adjacent, so this hp_floor stops every turn; hp_floor ${hpNow - k * inc} keeps going for ${k} turns.`);
+        }
+        // 投げた物の在りか（V3-8 §53.3）: 手元の数と床の数（敵の足元の分を含む）
+        if (cmd.type === 'fight' && (cmd.with || r.events.some((e) => e.type === 'item_thrown' && e.actor === view.self.id))) {
+          const hand = view.inventory.filter((i) => i.kind && this.catalog.items[i.kind]?.category === 'throwing').reduce((a, i) => a + i.qty, 0);
+          const mons = view.entities.filter((e) => e.cat === 'monster');
+          const floorItems = [
+            ...view.entities.filter((e) => e.cat === 'item' && e.mine).map((e) => ({ pos: e.pos, qty: e.qty ?? 1 })),
+            ...view.memory.remembered.filter((m) => m.cat === 'item' && m.mine && !view.entities.some((e) => e.id === m.id)).map((m) => ({ pos: m.pos, qty: m.qty })),
+          ];
+          const onFloor = floorItems.reduce((a, i) => a + i.qty, 0);
+          const under = floorItems.filter((i) => mons.some((m) => m.pos.x === i.pos.x && m.pos.y === i.pos.y)).reduce((a, i) => a + i.qty, 0);
+          if (onFloor || hand) outcome += ' ' + t(L, `投げ物: 手元 ${hand}・床に ${onFloor}${under ? `（うち敵の足元 ${under}）` : ''}。`, `Throwables: ${hand} in hand, ${onFloor} on the floor${under ? ` (${under} under enemies)` : ''}.`);
         }
         // 初被弾（記録の無い種族から。止まらずに続けた小さい被弾も）: 名前と値（V3-3a §35.6）
         if (cmd.type === 'fight') {

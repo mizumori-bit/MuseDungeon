@@ -32,11 +32,21 @@ export function memoryOf(view: PlayerView, e: Pick<EntityView, 'kind' | 'role'>)
   return e.kind ? view.monsterMemory[memoryKey(e.kind, e.role)] : undefined;
 }
 
-/** 自分の 1 手番のあいだにその相手が行動する回数（速さの比の切り上げ。自分より速ければ 2 回） */
-export function attacksPerTurn(view: PlayerView, catalog: Catalog, e: Pick<EntityView, 'speed' | 'statuses'>): number {
+/**
+ * 自分の 1 手番のあいだにその相手が行動する回数（速さの比の切り上げ。自分より速ければ 2 回）。
+ * 2 回動いたのを見た敵は、次に 2 回動けるまでの手番を 1 回と数える（V3-8 §53.4）: 1 回の行動の時間 c = 10000 ÷ 敵の速さ、
+ * 自分の P = 10000 ÷ 自分の速さ（どちらも切り捨て）。2 回動いた手番の後の 切り捨て((2c − P) ÷ (P − c)) 手番は 1 回（速さ 120 と 100 なら 3）
+ */
+export function attacksPerTurn(view: PlayerView, catalog: Catalog, e: Pick<EntityView, 'speed' | 'statuses' | 'paceAgo'>): number {
   const sp = monsterSpeedOf(catalog, e);
   if (sp === null) return 1;
-  return Math.max(1, ceilDiv(sp, selfSpeed(view, catalog)));
+  const self = selfSpeed(view, catalog);
+  const n = Math.max(1, ceilDiv(sp, self));
+  if (n === 2 && e.paceAgo !== undefined) {
+    const c = floorDiv(10000, sp), P = floorDiv(10000, self);
+    if (P > c && 2 * c > P && e.paceAgo < floorDiv(2 * c - P, P - c)) return 1;
+  }
+  return n;
 }
 
 /** 歩く手番のコスト（重い鎧。装備中の品の最大。100 が普通） */
@@ -64,7 +74,7 @@ export function chaseAttacks(view: PlayerView, catalog: Catalog, e: Pick<EntityV
 }
 
 /** 1 手番あたりの最悪の被害 = 受けた最大の一撃 × 行動の回数（記録が無ければ null） */
-export function worstTurnOf(view: PlayerView, catalog: Catalog, e: Pick<EntityView, 'kind' | 'role' | 'speed' | 'statuses'>): number | null {
+export function worstTurnOf(view: PlayerView, catalog: Catalog, e: Pick<EntityView, 'kind' | 'role' | 'speed' | 'statuses' | 'paceAgo'>): number | null {
   const mem = memoryOf(view, e);
   if (!mem || mem.maxDamageToYou <= 0) return null;
   return mem.maxDamageToYou * attacksPerTurn(view, catalog, e);

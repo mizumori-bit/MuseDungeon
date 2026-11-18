@@ -8,8 +8,6 @@ import { isStationary, pickableItems, sameOrWorseEquip, worseEquip } from './mac
 import { attacksPerTurn, chaseAttacks, memoryOf, monsterSpeedOf, selfSpeed } from './danger';
 import type { PerceivedEvent } from './filter';
 import type { ReportCompare } from './expeditionStats';
-import type { GoalInfo, GoalRecord } from './goals';
-import { goalProgressText } from './goals';
 import { kindName } from './narrate';
 import type { NavGrid } from './nav';
 import { buildNavGrid, distanceField, findFrontiers } from './nav';
@@ -23,7 +21,7 @@ import { hpState, xpForLevel } from './view';
 export interface Alert { code: string; text: string; entity?: string; data?: Record<string, unknown> }
 
 /** 見れば分かる特徴（V3-2R2 §18.2）: 群れる・飛び道具・動かない。種族の公開タグから */
-export type MonsterTrait = 'pack' | 'ranged' | 'stationary' | 'armored' | 'rusting' | 'pierce' | 'evasive' | 'drain' | 'heavy_swing';
+export type MonsterTrait = 'pack' | 'ranged' | 'stationary' | 'armored' | 'rusting' | 'pierce' | 'evasive' | 'drain' | 'heavy_swing' | 'heavy_blow';
 /** 錆びさせる・装甲を抜く（V3-5a §35.10）も種族の公開タグから */
 const OBVIOUS_TRAITS: readonly MonsterTrait[] = ['pack', 'ranged', 'stationary', 'rusting', 'pierce', 'drain', 'heavy_swing'];
 
@@ -118,8 +116,6 @@ export interface ObsExpedition {
   result?: { reason: string; points: number; deepest: number; kills: number; turns: number; text: string };
   slot?: OfferSlot;
   traits?: string[];
-  /** 宣言中の目標と、いまの値との差（V3-7a §40.8） */
-  goal?: { type: string; value: number; within: number; text: string };
   /** 目標の気配（目標階にいる間。方角と 10 マス以内かどうか。V3-2R §14.2） */
   sense?: { what: 'guardian' | 'relic'; dir: Dir; range: 'far' | 'near'; text: string };
   /** 護りの火の手がかり（V3-3c §44.6）: 同じ守護者の火を 1 基見ていれば、まだ見ていない灯っている火の方角と遠さ */
@@ -160,10 +156,8 @@ export interface ObsCamp {
   milestone?: ObsMilestone;
   /** 記録庫に納めた欠片の数（V3-3a §35.7） */
   archive?: { delivered: number; total: number };
-  /** 直前の遠征の比較（2 行以内。V3-6 §35.9: 候補を選ぶ画面で自分の記録が目に入る）。目標があればその文に吸収する（V3-7a） */
+  /** 直前の遠征の比較（2 行以内。V3-6 §35.9: 候補を選ぶ画面で自分の記録が目に入る） */
   compare?: { no: number; lines: string[] } & ReportCompare;
-  /** 目標（V3-7a §40.8）: 宣言中の目標・候補（自己最高に並ぶ／少し超える／大きく超える）・記録・文（3 行以内） */
-  goal?: GoalInfo;
   /** プロフィールの記録の要約と次の節目（1 行。V3-7 §7.2）・直前の遠征で取った実績 */
   records?: { line: string; feats_new?: string[] };
 }
@@ -262,8 +256,6 @@ export interface ObservationOptions {
   boonsShort?: boolean;
   /** キャンプ: 直前の遠征の比較（遠征レポートから。V3-6 §35.9） */
   campCompare?: { no: number; lines: string[]; compare?: ReportCompare };
-  /** 目標（V3-7a §40.8）: キャンプでは info、遠征中は宣言中の目標といまの値（最も下がった HP・期限の残り） */
-  goal?: { info?: GoalInfo; active?: GoalRecord; live?: { minHpPct?: number; leftExpeditions?: number } };
   /** キャンプ: 候補に添える注記（候補の番号 → 文。再挑戦の前回の戦い。V3-3c §44.1） */
   offerNotes?: Record<number, string>;
   /** キャンプ: プロフィールの記録の 1 行と、直前の遠征で取った実績（V3-7 §7.2・§7.4） */
@@ -456,10 +448,21 @@ export function clueText(L: Locale, catalog: Catalog, view: Pick<PlayerView, 'id
   return t(L, `${base}。${known.map(nm).join('・')}は判明済みなので、${nm(left[0])}のはず`, `${base}; ${known.map(nm).join(', ')} is known, so this should be ${nm(left[0])}`);
 }
 
+const MOD_JA: Record<string, string> = { hpPct: '体力', speed: '速さ', acc: '命中', eva: '回避', might: '威力', armor: '装甲', dmgBonus: 'ダメージ', maxHp: '最大 HP', sight: '視界' };
+/** 敵の接辞の効き目の文（「古の（体力 +60%・命中 +2・威力 +1）」。V3-8 §53.3） */
+export function monsterAffixText(L: Locale, catalog: Catalog, ids: readonly string[]): string {
+  return ids.map((id) => {
+    const a = catalog.affixes[id];
+    if (!a) return id;
+    const mods = Object.entries(a.monsterMods ?? {}).map(([k, v]) => `${L === 'en' ? k : MOD_JA[k] ?? k} ${v > 0 ? '+' : ''}${v}${k === 'hpPct' ? '%' : ''}`);
+    return `${nameOf(a.name, L, id)}${mods.length ? (L === 'en' ? ` (${mods.join(', ')})` : `（${mods.join('・')}）`) : ''}`;
+  }).join(L === 'en' ? '; ' : '、');
+}
+
 /** 能力タグの表示名 */
 export function abilityName(locale: Locale, a: string): string {
-  const ja: Record<string, string> = { flees: '手負いで逃げる', ranged: '遠隔攻撃', fast: '速い', slow: '遅い', poison: '毒', stationary: '動かない', pack: '群れる', armored: '重装', rusting: '錆びさせる', pierce: '装甲を抜く', evasive: '回避が高い', drain: '血を吸う', heavy_swing: '大振り' };
-  const en: Record<string, string> = { flees: 'flees when hurt', ranged: 'ranged attack', fast: 'fast', slow: 'slow', poison: 'poison', stationary: 'stationary', pack: 'pack', armored: 'armored', rusting: 'rusts armor', pierce: 'pierces armor', evasive: 'evasive', drain: 'drains blood', heavy_swing: 'heavy swing' };
+  const ja: Record<string, string> = { flees: '手負いで逃げる', ranged: '遠隔攻撃', fast: '速い', slow: '遅い', poison: '毒', stationary: '動かない', pack: '群れる', armored: '重装', rusting: '錆びさせる', pierce: '装甲を抜く', evasive: '回避が高い', drain: '血を吸う', heavy_swing: '大振り', heavy_blow: '重い一撃（装甲で半分までしか減らない）' };
+  const en: Record<string, string> = { flees: 'flees when hurt', ranged: 'ranged attack', fast: 'fast', slow: 'slow', poison: 'poison', stationary: 'stationary', pack: 'pack', armored: 'armored', rusting: 'rusts armor', pierce: 'pierces armor', evasive: 'evasive', drain: 'drains blood', heavy_swing: 'heavy swing', heavy_blow: 'heavy blow (armor cuts at most half)' };
   return (locale === 'en' ? en[a] : ja[a]) ?? a;
 }
 
@@ -607,7 +610,7 @@ export function milestoneObs(L: Locale, catalog: Catalog, m: { depth: number; na
   // 記録庫が返した記憶（V3-3a §35.7）
   const mem = [
     intel?.weakness ? t(L, `弱点 ${nameOf(catalog.guardianWeaknesses[intel.weakness]?.name, L, intel.weakness)}${intel.weakness === 'core:weak_sleep' ? '（キャンプの後は眠りに戻る）' : ''}`, `weakness: ${nameOf(catalog.guardianWeaknesses[intel.weakness]?.name, L, intel.weakness)}${intel.weakness === 'core:weak_sleep' ? ' (back asleep after camp)' : ''}`) : '',
-    intel?.hp !== undefined ? t(L, `体力およそ ${intel.hp}・一撃 ${intel.maxHit} まで`, `about ${intel.hp} HP, hits up to ${intel.maxHit}`) : '',
+    intel?.hp !== undefined ? t(L, `体力およそ ${intel.hp}・一撃 ${intel.maxHit} まで（重い一撃: 装甲で減っても ${ceilDiv(intel.maxHit ?? 0, 2)} より下がらない）`, `about ${intel.hp} HP, hits up to ${intel.maxHit} (heavy blow: armor cannot bring it below ${ceilDiv(intel.maxHit ?? 0, 2)})`) : '',
     intel?.armor !== undefined ? t(L, `装甲 ${intel.armor}`, `armor ${intel.armor}`) : '',
   ].filter(Boolean);
   // 装甲が分かっていれば、いまの持ち物で通る目安（V3-3b §40.1）
@@ -821,7 +824,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
         worst_turn: mem && mem.maxDamageToYou > 0 ? mem.maxDamageToYou * attacksPerTurn(view, catalog, e) : null,
         speed: sp === null || sp === mySpeed ? 'normal' : sp > mySpeed ? 'fast' : 'slow',
         ...(sp !== null && sp !== mySpeed && mySpeed > 0 ? { speed_ratio: Math.round((sp * 10) / mySpeed) / 10 } : {}),
-        traits: [...OBVIOUS_TRAITS.filter((tr) => tags.includes(tr)), ...(cm?.armored ? ['armored' as const] : []), ...(cm?.evasive ? ['evasive' as const] : [])],
+        traits: [...OBVIOUS_TRAITS.filter((tr) => tags.includes(tr)), ...(cm?.armored ? ['armored' as const] : []), ...(cm?.evasive ? ['evasive' as const] : []), ...(e.guardian?.heavy ? ['heavy_blow' as const] : [])],
         shot: e.shot ? 'clear' : 'blocked',
         shots: throwables.map((tw) => ({ slot: tw.slot, state: !e.shot ? 'blocked' as const : pos && cheb(pos, e.pos) > tw.range ? 'out_of_range' as const : 'clear' as const })),
       };
@@ -1199,13 +1202,6 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
           `haul ${total} (${partsText(L, parts) || 'none'}) ${expedition.extract_outcome === 'complete' ? multText(xv.multiplierPct) : `withdraw ${catalog.rules.haul.withdrawPct}% without objective`} → extract now +${ifNow}${lifeText}${nextText}${campText} / banked ${view.record.banked}`),
       };
     }
-    // 宣言中の目標と、いまの値との差（V3-7a §40.8: 記録が判断の場面で目に入る）
-    const g = opts.goal?.active;
-    if (g && xv.status !== 'ended') {
-      expedition.goal = { type: g.type, value: g.value, within: g.within, text: goalProgressText(L, g, {
-        ifExtractNow: expedition.haul?.if_extract_now, maxDepth: xv.maxDepth, minHpPct: opts.goal?.live?.minHpPct, leftExpeditions: opts.goal?.live?.leftExpeditions,
-      }) };
-    }
   }
   let camp: ObsCamp | undefined;
   if (view.camp) {
@@ -1213,7 +1209,6 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
     camp = {
       ...(view.camp.milestone ? { milestone: milestoneObs(L, catalog, view.camp.milestone, view.milestonesCleared ?? [], view.wardenIntel?.[String(view.camp.milestone.depth)], view) } : {}),
       ...(opts.campCompare && view.status === 'at_camp' ? { compare: { no: opts.campCompare.no, lines: opts.campCompare.lines.slice(0, 2), ...(opts.campCompare.compare ?? {}) } } : {}),
-      ...(opts.goal?.info && view.status === 'at_camp' ? { goal: opts.goal.info } : {}),
       ...(opts.records && view.status === 'at_camp' ? { records: { line: opts.records.line, ...(opts.records.featsNew?.length ? { feats_new: [...opts.records.featsNew] } : {}) } } : {}),
       // 記録庫に納めた欠片の数（V3-3a §35.7）
       archive: { delivered: view.archive?.length ?? 0, total: Object.values(catalog.items).filter((it) => it.category === 'relic' && it.boon).length },
@@ -1228,7 +1223,9 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
           const kn = view.wardenIntel?.[String(msd)] ?? {};
           const left = 2 - (kn.weakness ? 1 : 0) - (kn.hp !== undefined ? 1 : 0);
           return left > 0 ? t(L, ` / 納めると、記録庫が地下${msd}階の番人の記憶を 1 つ返す（残り ${left}）`, ` / delivering it makes the archive recall one memory of the depth-${msd} keeper (${left} left)`) : '';
-        })(),
+        })() + (o.bounty ? ` / ${gearVsArmorText(L, catalog, view, o.bounty.armor, Math.max(1, o.bounty.hp - (o.scar ?? 0)))}` : ''),
+        ...(o.bounty ? { bounty: { kind: o.bounty.kind, name: nameOf(o.bounty.name, L, ''), hp: o.bounty.hp, max_hit: o.bounty.maxHit } } : {}),
+        ...(o.vault ? { vault: true } : {}), ...(o.scar ? { scar: o.scar } : {}),
         ...(o.slot ? { slot: o.slot } : {}), ...(o.traits?.length ? { traits: [...o.traits] } : {}),
         ...(o.guardian ? { guardian: { rank: o.guardian.rank, traits: [...o.guardian.traits] } } : {}),
         ...(o.relic ? { relic: {
@@ -1300,7 +1297,6 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
     passable_dirs, onStairs, itemsHere: itemsHere.length > 0, relicHere: itemsHere.some((i) => i.role === 'relic'), hostiles, frontiers: frontiers.length, known_stairs, grid,
     canExtract: expedition?.can_extract ?? false, objectiveComplete: expedition?.extract_outcome === 'complete', restTurns: rest && !rest.blocked_by ? rest.turns : null,
     attackers, mineCount, pickables, huntingReach, worstSum, unrecorded, chaseOf, lifelineShort: !!opts.lifelineShort,
-    ...(opts.goal?.active?.type === 'banked' && expedition?.haul ? { goalBanked: opts.goal.active.value, ifExtractNow: expedition.haul.if_extract_now } : {}),
     draft: view.floorHint?.draft ?? null,
     ifLifeline: expedition?.haul?.if_lifeline_now,
     perkChoice: perkChoiceObs, boonChoice: boonChoiceObs, abilities: abilitiesList, bonuses,
@@ -1379,9 +1375,6 @@ const EXTRACT_BLOCK_JA: Record<string, string> = { not_on_stairs: '階段の上�
 
 interface VAInput {
   lifelineShort?: boolean;
-  /** 目標の確定点と、いま帰ったときの確定点（V3-7a） */
-  goalBanked?: number;
-  ifExtractNow?: number;
   passable_dirs: Dir[]; onStairs: 'up' | 'down' | null; itemsHere: boolean; relicHere?: boolean; hostiles: ObsMonster[]; pickables: number;
   frontiers: number; known_stairs: Observation['navigation']['known_stairs']; grid: NavGrid | null;
   canExtract: boolean; objectiveComplete: boolean; restTurns: number | null;
@@ -1476,10 +1469,9 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
   const fromHere = sealedHere
     ? t(L, '・次の遠征はこの階の上り階段から始まる（封じられた下り階段なので）。階の敵は追跡をやめて全快する', '; the next expedition starts from this floor\'s stairs up (these stairs down are sealed); monsters stop hunting and heal fully')
     : t(L, '・次の遠征はこの階段から始まる。階の敵は追跡をやめて全快する', '; the next expedition starts from these stairs, where monsters stop hunting and heal fully');
-  // 目標の確定点との差（V3-7a §40.8）
-  const goalNote = x.goalBanked !== undefined && x.ifExtractNow !== undefined
-    ? (x.ifExtractNow >= x.goalBanked ? t(L, `・目標の確定 ${x.goalBanked} に届く`, `; reaches your goal of ${x.goalBanked}`) : t(L, `・目標の確定 ${x.goalBanked} まであと ${x.goalBanked - x.ifExtractNow}`, `; ${x.goalBanked - x.ifExtractNow} short of your goal of ${x.goalBanked}`)) : '';
-  if (x.canExtract) out.push(x.objectiveComplete ? `extract (${t(L, '帰還: 遠征達成', 'complete the expedition')}${fromHere}${goalNote})` : `extract confirm:true (${t(L, '撤退: 未達成のまま終える', 'withdraw without the reward')}${fromHere}${goalNote})`);
+  // 投げた物が床に残っている（V3-8 §53.3。止めはしない）
+  const leftBehind = x.mineCount > 0 ? t(L, `・投げた物が ${x.mineCount} 個、この階の床に残っている`, `; ${x.mineCount} of your thrown items are still on this floor`) : '';
+  if (x.canExtract) out.push(x.objectiveComplete ? `extract (${t(L, '帰還: 遠征達成', 'complete the expedition')}${fromHere}${leftBehind})` : `extract confirm:true (${t(L, '撤退: 未達成のまま終える', 'withdraw without the reward')}${fromHere}${leftBehind})`);
   // 移動マクロはその場で進める mode だけを出す（V3-2R §14.2）。隣に起きている敵がいれば careful では動かないので flee を出す
   const adjAwake = x.hostiles.filter((m) => m.dist <= 1 && m.awareness !== 'asleep' && !m.fleeing);
   // 既定の hp_floor の実数（steady・fight は最大 HP の 50%。V3-2R2 §18.5）
@@ -1590,7 +1582,7 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
   const guardWatch = x.hostiles.some((m) => m.role === 'guardian' && m.awareness === 'hunting') ? t(L, '。階を離れている間、守護者は回復する', '; guardians heal while you are away') : '';
   if (x.onStairs) out.push(x.onStairs === 'down' && sealed
     ? `use_stairs (${t(L, '不可: 下り階段は封じられている。この階の大守護者を倒すまで降りられない', 'unavailable: the stairs down are sealed until this floor\'s warden falls')})`
-    : `use_stairs (${x.onStairs === 'down' ? t(L, '降りる', 'descend') : t(L, '上る', 'ascend')}${guardWatch})`);
+    : `use_stairs (${x.onStairs === 'down' ? t(L, '降りる', 'descend') : t(L, '上る', 'ascend')}${guardWatch}${x.mineCount > 0 ? t(L, `・投げた物が ${x.mineCount} 個、この階の床に残っている`, `; ${x.mineCount} of your thrown items are still on this floor`) : ''})`);
   if (x.itemsHere) out.push(x.relicHere ? `pickup (${t(L, '遺物を拾うと階が目覚める: 眠っている敵がすべて起き、遺物の場所へ向かう', 'picking up the relic wakes the floor: every sleeping enemy wakes and heads for it')})` : 'pickup');
   if (x.mineCount > 0 && !adjAwake.length) out.push(`collect (${t(L, `自分が投げた物 ${x.mineCount} 個を回収`, `pick up ${x.mineCount} thrown items`)})`);
   if (x.pickables > 0 && !adjAwake.length) out.push(`collect what:items (${t(L, `見えている・記憶したアイテム ${x.pickables} 個を拾って回る（遺物は除く）`, `pick up ${x.pickables} known items (not the relic)`)})`);
@@ -1612,7 +1604,8 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
         ? t(L, `・追跡中 ${x.huntingReach.length} 体の 1 手の最悪の被害 ${x.worstSum}${x.unrecorded ? `＋記録なし ${x.unrecorded} 体` : ''}`, `, ${x.huntingReach.length} hunting: worst ${x.worstSum}/turn${x.unrecorded ? ` + ${x.unrecorded} unrecorded` : ''}`) : '';
       const how = x.lifelineShort ? t(L, 'キャンプへ戻る', 'back to camp') : (turns > 0 ? t(L, `${turns} 手番動けずにキャンプへ戻る`, `${turns} turns helpless, then back to camp`) : t(L, 'その場でキャンプへ戻る（命と、目的を除く戦利品の半分を持ち帰る）', 'back to camp at once (you keep your life and half the haul without the objective)'))
         + (x.lifelineShort ? '' : t(L, '・次の遠征はこの遠征を始めた階段から', '; the next expedition starts from where this one began'));
-      const line = `use_item ${it.slot} (${t(L, `${name}: ${how}${x.ifLifeline !== undefined ? `・+${x.ifLifeline} 確定` : ''}${risk}`, `${name}: ${how}${x.ifLifeline !== undefined ? `, banks +${x.ifLifeline}` : ''}${risk}`)})`;
+      const left = x.mineCount > 0 ? t(L, `・投げた物が ${x.mineCount} 個、この階の床に残っている`, `; ${x.mineCount} of your thrown items are still on this floor`) : '';
+      const line = `use_item ${it.slot} (${t(L, `${name}: ${how}${x.ifLifeline !== undefined ? `・+${x.ifLifeline} 確定` : ''}${risk}${left}`, `${name}: ${how}${x.ifLifeline !== undefined ? `, banks +${x.ifLifeline}` : ''}${risk}${left}`)})`;
       out.push(line);
       lifelineLines.push(line);
       continue;
@@ -1707,8 +1700,8 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
     // キャンプ専用の形: 成績と候補だけ
     lines.push(`[seq ${obs.seq} | ${t(L, 'キャンプ', 'Camp')} | HP ${s.hp}/${s.max_hp} | Lv${s.level} | ${statusText.at_camp[L === 'en' ? 1 : 0]}]`);
     if (obs.expedition?.result) lines.push(obs.expedition.result.text);
-    if (obs.camp?.goal) lines.push(...obs.camp.goal.lines);
-    else if (obs.camp?.compare) lines.push(...obs.camp.compare.lines);
+    // 直前の遠征の比較（1 行。目標の宣言は V3-8 §53.5 で外した）
+    if (obs.camp?.compare?.lines.length) lines.push(obs.camp.compare.lines[0]);
     lines.push(t(L, `確定済み ${s.score.banked} 点・達成した遠征 ${s.score.expeditions_completed}`, `Banked ${s.score.banked}, expeditions completed ${s.score.expeditions_completed}`));
     lines.push(boonsText(L, s.boons ?? []));
     if (obs.camp?.milestone) lines.push(obs.camp.milestone.text);
@@ -1741,7 +1734,6 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
       ? t(L, `【遠征${x.no}】${x.can_extract ? 'この場で extract できる' : 'extract は階段の上で'}`, `[Expedition ${x.no}] ${x.can_extract ? 'you can extract here' : 'extract on stairs'}`)
       : x.text;
     lines.push([head, x.haul?.text, x.sense?.text, ...(x.ward_fires ?? []).map((w) => w.text)].filter(Boolean).join(' | '));
-    if (x.goal) lines.push(x.goal.text);
   }
   if (obs.alerts.length) lines.push('!! ' + obs.alerts.map((a) => a.text).join(' / '));
   const st = s.statuses.length ? s.statuses.map((x) => `${x.name}(${x.turns_left})`).join(' ') : t(L, 'なし', 'none');
@@ -1904,6 +1896,8 @@ export function describeTarget(view: PlayerView, catalog: Catalog, target: Pos |
       const cmLook = e.kind ? catalog.monsters[e.kind] : undefined;
       const lookTraits = [...OBVIOUS_TRAITS.filter((tr) => cmLook?.tags.includes(tr)), ...(cmLook?.armored ? ['armored'] : []), ...(cmLook?.evasive ? ['evasive'] : [])].map((tr) => abilityName(L, tr));
       const traitText = lookTraits.length ? t(L, `・見た目: ${lookTraits.join('・')}`, `, looks: ${lookTraits.join(', ')}`) : '';
+      // 接辞の効き目（V3-8 §53.3: 強敵の見立て）
+      const affText = (e.affixes ?? []).length ? t(L, `・接辞: ${monsterAffixText(L, catalog, e.affixes ?? [])}`, `, affixes: ${monsterAffixText(L, catalog, e.affixes ?? [])}`) : '';
       // 守護者の呼び名・型の説明・分かった弱点（V3-3）。弱点は試して分かるまで「不明」
       const g = e.guardian;
       const gText = g ? t(L,
@@ -1912,7 +1906,7 @@ export function describeTarget(view: PlayerView, catalog: Catalog, target: Pos |
       // 大守護者: 記録庫の記憶（体力と最大の一撃の目安。V3-3a §35.7）
       const wi = g?.warden && view.floor ? view.wardenIntel?.[String(view.floor.depth)] : undefined;
       const wiText = wi?.hp !== undefined ? t(L, `・記録庫の記憶: 体力およそ ${wi.hp}・一撃 ${wi.maxHit} まで`, `, the archive remembers: about ${wi.hp} HP, hits up to ${wi.maxHit}`) : '';
-      parts.push(`${name} [${L === 'en' ? e.hp : HP_JA[e.hp ?? 'healthy']}, ${L === 'en' ? e.awareness : AW_JA[e.awareness ?? 'unaware']}] ${memText}${hpText}${traitText}${ds}${estText}${shotText}${sturdy}${gText}${wiText}`);
+      parts.push(`${name} [${L === 'en' ? e.hp : HP_JA[e.hp ?? 'healthy']}, ${L === 'en' ? e.awareness : AW_JA[e.awareness ?? 'unaware']}] ${memText}${hpText}${traitText}${affText}${ds}${estText}${shotText}${sturdy}${gText}${wiText}`);
       list.push({ id: e.id, name, hp_state: e.hp, awareness: e.awareness, memory: mem ?? null, threat: threatOf(view, e), role: e.role, damage_seen: e.damageSeen ?? 0, hp_left_est: est ?? null });
     } else if (e.cat === 'item') {
       const name = itemDisplayName(catalog, L, e.kind, e.appearanceId, e.affixes);

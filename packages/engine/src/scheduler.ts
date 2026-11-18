@@ -83,6 +83,13 @@ function spawnWanderer(ctx: Ctx, key: FloorKey): void {
 function beginPlayerTurn(ctx: Ctx, pe: Entity): boolean {
   const key = pe.pos!.floor;
   const pr = ctx.world.players[pe.player!];
+  // 前の手番のあいだに 2 回動いたのを見た敵（V3-8 §53.4）
+  const seen = ctx.actsSeen.get(pr.id);
+  if (seen) {
+    const ids = [...seen.entries()].filter(([, n]) => n >= 2).map(([id]) => id).sort();
+    if (ids.length) ctx.emit({ type: 'pace_seen', player: pr.id, ids, turn: pe.actor?.turns ?? 0, seenBy: [pr.id], floor: key });
+    ctx.actsSeen.delete(pr.id);
+  }
   const incap = tickStatuses(ctx, pe);
   let cur = ctx.world.entities[pe.id];
   if (!cur?.pos || pr.state !== 'alive' || ctx.world.status === 'ended') return false;
@@ -145,6 +152,16 @@ export function advance(ctx: Ctx, key: FloorKey): void {
     cur = ctx.world.entities[actor.id];
     if (cur?.actor && (cur.stats?.hp ?? 0) > 0 && cur.pos?.floor === key) endTurn(ctx, cur, cost);
     updateKnowledge(ctx, key);
+    // 見ていた行動の回数（V3-8 §53.4。自分の手番が来たら 2 回のものを知識に残す）
+    if (cur?.pos && !incap) {
+      const f2 = ctx.world.floors[key];
+      for (const pr of ctx.playersOn(key)) {
+        if (!ctx.visibleSet(pr.id).has(cur.pos.y * f2.width + cur.pos.x)) continue;
+        const m = ctx.actsSeen.get(pr.id) ?? new Map<string, number>();
+        m.set(cur.id, (m.get(cur.id) ?? 0) + 1);
+        ctx.actsSeen.set(pr.id, m);
+      }
+    }
   }
   throw new Error(`scheduler did not converge on ${key}`);
 }
