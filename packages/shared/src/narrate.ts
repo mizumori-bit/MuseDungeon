@@ -191,7 +191,8 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
     }
     case 'item_inspected': {
       if (ev.actor !== self) return null;
-      const n = kindName(ctx.catalog, L, (ev.kind as string | null) ?? null, (ev.appearanceId as string | null) ?? null);
+      // 接辞付きの名前で（「補強された革鎧に呪いは無い」。V3-8 の確認の評価）
+      const n = itemName(ctx, ev as unknown as Record<string, unknown>);
       return ja ? `${n}に呪いは無い。` : `The ${n} is not cursed.`;
     }
     case 'curse_lifted': {
@@ -338,7 +339,11 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
     }
     case 'room_found': {
       const mine = ev.player === self || (!!ctx.selfPlayerId && ev.player === ctx.selfPlayerId);
-      return ja ? `${mine ? '' : '仲間が'}「${nameOf(ev.name, L, ev.room)}」を見つけた（発見）。` : `${mine ? 'Found' : 'An ally found'}: ${nameOf(ev.name, L, ev.room)} (discovery).`;
+      // 見えた部屋の一角の方角と歩数（見つけた時点では中の地物がまだ見えていないことがある。V3-8 の確認の評価）
+      const d = ctx.selfPos && ev.at ? dirTo(ctx.selfPos, ev.at) : null;
+      const n = ctx.selfPos && ev.at ? Math.max(Math.abs(ev.at.x - ctx.selfPos.x), Math.abs(ev.at.y - ctx.selfPos.y)) : 0;
+      const where = d ? (ja ? `。${DIR_JA[d]}・${n} マス先に部屋の一角が見えた` : ` A corner of it is ${n} cells to the ${DIR_EN[d]}.`) : '';
+      return ja ? `${mine ? '' : '仲間が'}「${nameOf(ev.name, L, ev.room)}」を見つけた（発見${where}）。` : `${mine ? 'Found' : 'An ally found'}: ${nameOf(ev.name, L, ev.room)} (discovery).${where}`;
     }
     case 'inscription_read': {
       const what = ev.note ? (ja ? '書き置き' : 'the note') : (ja ? '碑文' : 'the inscription');

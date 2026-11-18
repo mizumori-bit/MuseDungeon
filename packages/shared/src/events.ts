@@ -7,7 +7,7 @@ import type {
 } from './types';
 
 /** 2: 遠征・実ダメージ・回復の蓄積値（IMPROVEMENTS_V2）。3: ビルド（特技・能動技・呪い。V3-4）。古いログもそのまま畳み込める */
-export const EVENT_VERSION = 18;
+export const EVENT_VERSION = 19;
 
 export interface EventBase {
   seq: number;
@@ -94,7 +94,8 @@ export type GameEvent =
   /** 守護者が、相手が階を離れている間に回復した（V3-3a §35.1。戻ってきた本人に）。full: 全快して落ち着いた */
   | E<'guardian_rested', { id: EntityId; guardianName: Names; full: boolean; player: PlayerId; /** 落ち着いて去った手下の数（V3-3b §40.3） */ dispersed?: number }>
   /** 特殊部屋を見つけた（V3-5 §5.1。発見の点）。region はその階の regions の番号 */
-  | E<'room_found', { player: PlayerId; floorKey: FloorKey; region: number; room: string; name: Names }>
+  /** at: 見えた部屋の一角（見つけたときに見えた通れるマス。V3-8 の確認の評価） */
+  | E<'room_found', { player: PlayerId; floorKey: FloorKey; region: number; room: string; name: Names; at?: Pos }>
   /** 碑文・書き置きを読んだ（V3-5 §5.1）。clue: 手がかりの種類、clueText: 手がかりの文（宝物庫の場所など。弱点と正体は別の出来事で出る） */
   | E<'inscription_read', { player: PlayerId; feature: EntityId; note: boolean; lore: Names | null; clue: 'weakness' | 'vault' | 'identify' | 'none'; clueText?: Names }>
   /** 賭けの祭壇（V3-5 §5.1）: 表から起きたこと */
@@ -135,7 +136,8 @@ export type GameEvent =
   /** 呪いが分かった（装備した・鑑定した）。affixes は見えるようになった呪いの接辞 */
   | E<'curse_revealed', { actor: EntityId; item: EntityId; kind: string | null; appearanceId: string | null; affixes: string[]; via: 'equip' | 'identify' }>
   /** 呪いの有無を確かめた（呪いは無かった） */
-  | E<'item_inspected', { actor: EntityId; item: EntityId; kind: string | null; appearanceId: string | null; via: 'equip' | 'identify' }>
+  /** affixes: 確かめた後の接辞（文で接辞付きの名前を出す。V3-8 の確認の評価） */
+  | E<'item_inspected', { actor: EntityId; item: EntityId; kind: string | null; appearanceId: string | null; via: 'equip' | 'identify'; affixes?: string[] }>
   /** 呪いが解けた（接辞が消えた） */
   | E<'curse_lifted', { actor: EntityId; item: EntityId; kind: string | null; appearanceId: string | null; affixes: string[] }>
   // アイテム（状態変化は put/del で表す）

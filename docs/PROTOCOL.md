@@ -426,6 +426,7 @@ V3-8 で足した項目と外した項目（最後の見直し。規則・候補
 - 観測: 敵の `traits` に `heavy_blow`、look に強敵の接辞の中身、キャンプの `camp.records.line` の先頭に「前のランまで: …」（2 回目以降のランの最初のキャンプ）、候補の注記に傷跡、extract・階段・帰還の綱の説明に床に残した投擲物の数、投擲の fight の結果に「投げ物: 手元 N・床に M（うち敵の足元 K）」
 - 遠征レポート: `combat.bounty_fights { id, dealt, taken }[]`（目的の賞金首との戦い）
 - コンテンツ: 接辞の `monsterMods`（公開カタログに出す）・`balance.expedition.typePct.slay_bounty`（110）・`open_vault`（105）
+- 確認の評価の直し（`engineVersion` 0.23.1、`eventVersion` 19。DESIGN.md §35.7）: `room_found.at { x, y }`（見つけたときに見えた部屋の一角）・`item_inspected.affixes`（確かめた後の接辞）。どちらも任意の項目
 
 V3-5e で足した項目（バイオームの仕掛け。後方互換。生成と規則が変わったので `engineVersion` は 0.21.0。出来事の種類は増やしていないので `eventVersion` は 16 のまま。DESIGN.md §33）:
 

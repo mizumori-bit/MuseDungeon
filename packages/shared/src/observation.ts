@@ -426,7 +426,7 @@ export function itemStatsText(L: Locale, s: ItemStats | undefined, catalog?: Cat
     push(m.acc, '命中', 'acc'); push(m.eva, '回避', 'eva'); push(m.might, '威力', 'might'); push(m.armor, '装甲', 'armor');
     push(m.maxHp, '最大HP', 'max HP'); push(m.sight, '視界', 'sight'); push(m.meleeAcc, '近接の命中', 'melee acc'); push(m.thrownAcc, '投擲の命中', 'thrown acc');
     push(m.stealthPct, '起こしにくさ', 'stealth');
-    if (m.noiseWakes) { ja.push('自分の音で眠りが必ず覚める'); en.push('your noise always wakes sleepers'); }
+    if (m.noiseWakes) { ja.push('自分の立てた音（攻撃・扉・投擲）で、眠っている敵が必ず起きる'); en.push('noise you make (attacks, doors, throws) always wakes sleeping enemies'); }
     if (ja.length) parts.push(L === 'en' ? en.join(', ') : ja.join('・'));
   }
   if (s.throw) parts.push(s.throw.dmg ? t(L, `投擲${s.throw.dmg}・射程${s.throw.range}・命中${sgn(s.throw.acc)}`, `thrown ${s.throw.dmg}, range ${s.throw.range}, acc ${sgn(s.throw.acc)}`)

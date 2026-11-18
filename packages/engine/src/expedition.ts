@@ -625,15 +625,15 @@ export function noteRooms(ctx: Ctx): void {
     if (!rooms.length) continue;
     const vis = ctx.visibleSet(pid);
     for (const r of rooms) {
-      let seen = false;
-      for (let y = r.y; y < r.y + r.h && !seen; y++) for (let xx = r.x; xx < r.x + r.w; xx++) {
+      let at: { x: number; y: number } | null = null;
+      for (let y = r.y; y < r.y + r.h && !at; y++) for (let xx = r.x; xx < r.x + r.w; xx++) {
         if (!vis.has(y * f.width + xx)) continue;
         const tr = ctx.terrainAt(f.key, xx, y);
-        if (tr.passable || tr.tags.includes('grate')) { seen = true; break; }
+        if (tr.passable || tr.tags.includes('grate')) { at = { x: xx, y }; break; }
       }
-      if (!seen) continue;
+      if (!at) continue;
       const def = ctx.content.lists.prefabs.find((pf) => pf.id === r.tags[0]);
-      ctx.emit({ type: 'room_found', player: pid, floorKey: f.key, region: r.id, room: r.tags[0], name: def?.name ? { ...def.name } : { ja: r.tags[0], en: r.tags[0] }, seenBy: [...x.participants].sort(), floor: f.key });
+      ctx.emit({ type: 'room_found', player: pid, floorKey: f.key, region: r.id, room: r.tags[0], name: def?.name ? { ...def.name } : { ja: r.tags[0], en: r.tags[0] }, at, seenBy: [...x.participants].sort(), floor: f.key });
     }
   }
 }

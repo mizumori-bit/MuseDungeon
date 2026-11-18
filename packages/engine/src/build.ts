@@ -426,7 +426,7 @@ export function inspectItem(ctx: Ctx, holder: Entity, it: Entity, via: 'equip' |
   const pid = holder.player;
   const seen = holder.pos ? ctx.perceive(holder.pos.floor, [{ field: 'actor', pos: holder.pos, entity: holder.id }], pid ? [pid] : []) : { seenBy: pid ? [pid] : [] };
   if (hidden.length) ctx.emit({ type: 'curse_revealed', actor: holder.id, item: cur.id, kind: cur.kind, appearanceId: app, affixes: [...hidden], via, put: [body], ...seen, floor: holder.pos?.floor ?? null });
-  else ctx.emit({ type: 'item_inspected', actor: holder.id, item: cur.id, kind: cur.kind, appearanceId: app, via, put: [body], seenBy: pid ? [pid] : [], floor: holder.pos?.floor ?? null });
+  else ctx.emit({ type: 'item_inspected', actor: holder.id, item: cur.id, kind: cur.kind, appearanceId: app, via, affixes: [...body.item!.affixes], put: [body], seenBy: pid ? [pid] : [], floor: holder.pos?.floor ?? null });
 }
 
 /** 呪いを解く（所持品すべて。見えていない呪いも消える） */
