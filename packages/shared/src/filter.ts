@@ -18,6 +18,8 @@ const PLAYER_VISIBLE: ReadonlySet<EventType> = new Set<EventType>([
   'noise', 'thought', 'chat', 'entity_removed',
   // 遠征（objective_progress は守護者・遺物の ID を含むので俯瞰専用）
   'expedition_offered', 'expedition_started', 'objective_completed', 'expedition_ended', 'haul_changed',
+  // 階の作り直し（V4-0a §1.1。消すエンティティは del で、プレイヤーには渡らない）
+  'floor_reset',
 ]);
 
 /** 自分に関するときだけ渡す種別 */

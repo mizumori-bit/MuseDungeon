@@ -9,7 +9,7 @@ import {
 } from './build';
 import { armorOf, guardianCritIfUnaware, guardianIncoming, markGuardiansAway, noteTrial, restGuardians } from './guardians';
 import { boonHook } from './boons';
-import { chooseBoon, livingWarden } from './warden';
+import { chooseBoon, sealedFloor } from './warden';
 import { huntingInView } from './expedition';
 import { addStatus } from './statuses';
 import type { Ctx } from './ctx';
@@ -740,9 +740,8 @@ actions.register('stairs', (ctx, e, pr) => {
   if (!tr.stairs) return fail(pr, 'nothing_here', '足元に階段は無い。', 'There are no stairs here.', 'travel_to stairs_down で階段へ移動する。', 'Use travel_to stairs_down to reach the stairs.');
   const depth = tr.stairs === 'down' ? f.depth + 1 : f.depth - 1;
   if (depth < 1) return fail(pr, 'cannot_use', '地上への道は閉ざされている。', 'The way to the surface is sealed.', '下り階段を探す。', 'Find the stairs down.');
-  // 節目の大守護者が生きている間は、下り階段は封じられている（V3-3 §3.2）
-  const warden = tr.stairs === 'down' ? livingWarden(ctx, key) : null;
-  if (warden) return fail(pr, 'sealed', '下り階段は封じられている。この階の大守護者を倒すまで降りられない。', 'The stairs down are sealed until this floor\'s warden falls.', 'extract で帰るか、大守護者を倒す。', 'Extract to go home, or slay the warden.');
+  // 節目の階の下り階段は、大守護者を倒すまで封じられている（V3-3 §3.2）。判定は表示と同じ（V4-0a §1.1: 節目の深さで、倒した記録が無い）
+  if (tr.stairs === 'down' && sealedFloor(ctx, key)) return fail(pr, 'sealed', '下り階段は封じられている。この階の大守護者を倒すまで降りられない。', 'The stairs down are sealed until this floor\'s warden falls.', 'extract で帰るか、大守護者を倒す。', 'Extract to go home, or slay the warden.');
   return {
     run: () => {
       const regenAfter = regenTick(ctx, e, false);

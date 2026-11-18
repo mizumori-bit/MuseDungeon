@@ -7,7 +7,7 @@ import type {
 } from './types';
 
 /** 2: 遠征・実ダメージ・回復の蓄積値（IMPROVEMENTS_V2）。3: ビルド（特技・能動技・呪い。V3-4）。古いログもそのまま畳み込める */
-export const EVENT_VERSION = 19;
+export const EVENT_VERSION = 20;
 
 export interface EventBase {
   seq: number;
@@ -110,6 +110,16 @@ export type GameEvent =
   | E<'pace_seen', { player: PlayerId; ids: EntityId[]; turn: number }>
   /** 階の異変が消えた（V3-8 §53.3: 賞金首・番人の巡回の強敵が階を去った） */
   | E<'floor_event_cleared', { floorKey: FloorKey }>
+  /**
+   * 階を作り直す（V4-0a §1.1）: 倒した記録の無い節目の階に、生きている大守護者がいなかった。
+   * 階を捨て（階のエンティティは del で消す）、全員のその階の地図と記憶を消す。次に誰かが着いたとき、今の生成で作る
+   */
+  /**
+   * 地形の表に、今のコンテンツの地形を後ろに足す（V4-0a: 古い版で始まったランで、新しい地形を使う階を作る前）。
+   * 番号は後ろに足すだけなので、作り済みの階の地形は変わらない。concealAdded: 足した地形のうち、中にいる者を隠すものの番号（今までの分に足す）
+   */
+  | E<'terrain_table_extended', { added: string[]; concealAdded: number[] }>
+  | E<'floor_reset', { floorKey: FloorKey; depth: number; reason: 'warden_missing'; /** その階の大守護者の名前（次の節目と同じ。シードと深さから決まる） */ guardianName?: Names }>
   /** 遺物を記録庫に納めた。記録庫が次の節目の大守護者の記憶を 1 つ返す（V3-3a §35.7。本人に）。memory: weakness / vitals / none */
   | E<'archive_recalled', { player: PlayerId; relic: string; depth: number; guardianName: Names; memory: 'weakness' | 'vitals' | 'none'; weakness?: string; hp?: number; maxHit?: number; /** 素の装甲（V3-3b §40.1） */ armor?: number }>
   /** 物語の 1 文（V3-3 §3.4。全員に）。守護者・大守護者を倒した、遺物を納めた */

@@ -413,6 +413,13 @@ V3-2R で足した項目（同じく後方互換。会心と経験値のルー�
 - `player_state.reason: 'joined'`（キャンプから始まる参加）。参加コマンドの `atCamp`
 - プレイヤー向けの射影で、見えていた個体が視界の外へ動いた `entity_moved` に `dirOut`（向きだけ。行き先は伏せたまま）
 
+V4-0a で足した項目（`engineVersion` 0.25.0、`eventVersion` 20。DESIGN.md §36.1）:
+
+- イベント: `floor_reset { floorKey, depth, reason: 'warden_missing', guardianName? }`（倒していない節目の階に大守護者がいなかったので、遠征の開始時に階を捨てた。全員に。階のエンティティは del で消え、その階の地図と記憶も消える。次に着いたとき大守護者の間として作られる）・`terrain_table_extended { added, concealAdded }`（古い版で始まったランの地形の表に、今の地形を後ろに足した。俯瞰専用）・`player_state.reason: 'floor_reset'`（再開する地点を、作り直した階の上り階段へ移した）
+- 規則: 下り階段の封印は「節目の深さで、倒した記録が無い」（前は「その階に生きている大守護者がいる」。表示と同じ判定にした）。get_rules の節目の文に作り直しの 1 文
+- ターンの要約: changes の `floor_reset`（作り直した階の文。先頭）。開始の応答の outcome にも同じ文
+- 遠征レポート: 大守護者との戦い（`warden_fight`）は大守護者の個体だけ（節目の深さの守護者は `guardian_fight`）
+
 V3-8a で足した項目（表示と使い勝手だけ。後方互換。候補の中身が増えたので `engineVersion` は 0.24.0。出来事の種類は増やしていないので `eventVersion` は 19 のまま。DESIGN.md §35.8）:
 
 - 候補: `ExpeditionOffer.guardian.armor`（守護者の装甲の目安）。観測の `camp.offers[].guardian.armor`。候補の文に「装甲はおよそ N」と「いまの持ち物で 1 回に通る目安」（守護者の候補。大守護者を除く）

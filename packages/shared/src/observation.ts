@@ -2,7 +2,7 @@
 // 派生情報は PlayerView（とカタログ）だけから計算する。仕様: docs/PROTOCOL.md §3
 import type { Catalog, CatalogEquipStats } from './catalog';
 import { abilityStatus, accBonuses, curseUnknown, isCursedItem, perkChoice, shortId, weaponReach } from './build';
-import { armorWithStatuses, boonHookSum, haulTotal, nameOf, nextCampOf, nextOverreach, offerGap, offerWardenExtra, overreachPoints, payoutOf, regenInterval, regenStep, restCapHp } from './catalog';
+import { armorWithStatuses, boonHookSum, haulTotal, nameOf, nextCampOf, nextOverreach, offerGap, offerWardenExtra, overreachPoints, payoutOf, regenInterval, regenStep, restCapHp, stairsSealed } from './catalog';
 import { guardianDisplayName, multText, objectiveText, offerText, partsText, progressText, resultText } from './expedition';
 import { isStationary, pickableItems, sameOrWorseEquip, worseEquip } from './macro';
 import { attacksPerTurn, chaseAttacks, memoryOf, monsterSpeedOf, selfSpeed } from './danger';
@@ -1183,8 +1183,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
         next = { depth: nx.depth, points: nx.points, at: 'stairs_down', path_len: down ? down.path_len : null, ...(draft ? { dir: draft } : {}) };
         const where = here ? (down ? t(L, `（経路 ${down.path_len}）`, ` (path ${down.path_len})`) : draft ? t(L, `（未発見・下への風は${DIR_JA[draft]}）`, ` (not found yet; the draft blows ${draft})`) : t(L, '（未発見）', ' (not found yet)')) : '';
         // 節目の階で大守護者が生きていれば、下り階段は封じられている（V3-3 後の AI 評価）
-        const ms = catalog.rules?.milestone;
-        const sealedNx = !!ms && nx.depth >= ms.min && nx.depth % ms.every === 0 && !(view.milestonesCleared ?? []).includes(nx.depth);
+        const sealedNx = stairsSealed(catalog.rules?.milestone, nx.depth, view.milestonesCleared ?? []);
         const sealNote = sealedNx ? t(L, '（大守護者を倒すまで封じられている）', ' (sealed until the warden falls)') : '';
         nextText = t(L, ` / 地下${nx.depth}階の下り階段に着けば +${nx.points}${where}${sealNote}`, ` / reach the down stairs of depth ${nx.depth} for +${nx.points}${where}${sealNote}`);
       }
@@ -1466,9 +1465,7 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
     else out.push(hunting ? `rest (${t(L, '不可: 追跡中の敵が見えている', 'unavailable: a hunting enemy is in view')})` : x.restTurns !== null ? `rest (${t(L, `休憩（HP ${capPct}% の ${capHp} まで）約${x.restTurns}手`, `rest to ${capHp} (${capPct}% HP) in ~${x.restTurns} turns`)})` : 'rest');
   }
   // 帰還する階段: 次の遠征はこの階段から始まる（V3-2R3 §20.6）。封じられた下り階段なら、次もこの大守護者の間から（V3-5a 後の AI 評価）
-  const msX = catalog.rules?.milestone;
-  const dX = view.floor?.depth ?? 0;
-  const sealedHere = x.onStairs === 'down' && !!msX && dX >= msX.min && dX % msX.every === 0 && !(view.milestonesCleared ?? []).includes(dX);
+  const sealedHere = x.onStairs === 'down' && stairsSealed(catalog.rules?.milestone, view.floor?.depth ?? 0, view.milestonesCleared ?? []);
   const fromHere = sealedHere
     ? t(L, '・次の遠征はこの階の上り階段から始まる（封じられた下り階段なので）。階の敵は追跡をやめて全快する', '; the next expedition starts from this floor\'s stairs up (these stairs down are sealed); monsters stop hunting and heal fully')
     : t(L, '・次の遠征はこの階段から始まる。階の敵は追跡をやめて全快する', '; the next expedition starts from these stairs, where monsters stop hunting and heal fully');
@@ -1578,9 +1575,7 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
   if (x.known_stairs.some((s) => s.type === 'down' && !(x.onStairs === 'down'))) out.push(stairsOrNote('down'));
   if (x.known_stairs.some((s) => s.type === 'up' && !(x.onStairs === 'up'))) out.push(stairsOrNote('up'));
   // 節目の階の下り階段は、大守護者を倒すまで封じられている（V3-3 §3.2）
-  const ms = catalog.rules?.milestone;
-  const depthNow = view.floor?.depth ?? 0;
-  const sealed = !!ms && depthNow >= ms.min && depthNow % ms.every === 0 && !(view.milestonesCleared ?? []).includes(depthNow);
+  const sealed = stairsSealed(catalog.rules?.milestone, view.floor?.depth ?? 0, view.milestonesCleared ?? []);
   // 守護者に気づかれているときは、階を離れている間に守護者が回復することを添える（V3-3a §35.1）
   const guardWatch = x.hostiles.some((m) => m.role === 'guardian' && m.awareness === 'hunting') ? t(L, '。階を離れている間、守護者は回復する', '; guardians heal while you are away') : '';
   if (x.onStairs) out.push(x.onStairs === 'down' && sealed

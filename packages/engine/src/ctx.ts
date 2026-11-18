@@ -50,8 +50,10 @@ export class Ctx {
     this.events.push(ev);
     if (ev.type === 'knowledge_updated' && (ev as any).visible) this.visCache.delete((ev as any).player);
     if (ev.type === 'tile_changed') this.terrainVer.set(ev.floor!, (this.terrainVer.get(ev.floor!) ?? 0) + 1);
+    // 階の作り直し（V4-0a §1.1）: 同じ鍵の階が別の地形になる
+    if (ev.type === 'floor_reset') { this.terrainVer.set(ev.floorKey, (this.terrainVer.get(ev.floorKey) ?? 0) + 1); this.visCache.clear(); this.fovCache.clear(); this.scratch.clear(); }
     if (ev.type === 'entity_changed_floor' || ev.type === 'player_joined') this.visCache.clear();
-    if (ev.put || ev.del || ev.type === 'entity_spawned' || ev.type === 'entity_removed' || ev.type === 'entity_changed_floor' || ev.type === 'player_joined' || ev.type === 'floor_generated') this.floorEnts.clear();
+    if (ev.put || ev.del || ev.type === 'entity_spawned' || ev.type === 'entity_removed' || ev.type === 'entity_changed_floor' || ev.type === 'player_joined' || ev.type === 'floor_generated' || ev.type === 'floor_reset') this.floorEnts.clear();
     return ev;
   }
 

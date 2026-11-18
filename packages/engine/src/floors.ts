@@ -8,9 +8,28 @@ import { currentExpedition } from '@muse/shared';
 import { generateFloor } from './gen/generate';
 import { spawnFromSpec } from './spawn';
 
+/** 今のコンテンツの地形のうち、このランの地形の表に無いもの（古い版で始まったラン） */
+export function missingTerrain(ctx: Ctx): string[] {
+  const tt = new Set(ctx.world.meta.terrainTable);
+  return ctx.content.terrain.map((tr) => tr.id).filter((id) => !tt.has(id));
+}
+
+/**
+ * 古い版で始まったランの地形の表に、今の地形を後ろに足す（V4-0a: 作り直した節目の階など、新しい階が新しい地形を使う）。
+ * 階を作る前に呼ぶ。番号は後ろに足すだけなので、作り済みの階は変わらない
+ */
+export function extendTerrainTable(ctx: Ctx): void {
+  const added = missingTerrain(ctx);
+  if (!added.length) return;
+  const base = ctx.world.meta.terrainTable.length;
+  const concealAdded = added.map((id, i) => (ctx.content.terrain[ctx.content.terrainIndex[id]]?.tags.includes('conceal') ? base + i : -1)).filter((i) => i >= 0);
+  ctx.emit({ type: 'terrain_table_extended', added, concealAdded, seenBy: [], floor: null, ft: 0 });
+}
+
 export function ensureFloor(ctx: Ctx, key: FloorKey): Floor {
   const existing = ctx.world.floors[key];
   if (existing) return existing;
+  extendTerrainTable(ctx);
   const [branch, depthStr] = key.split(':');
   const depth = parseInt(depthStr, 10);
   // 遠征の目標階なら守護者・遺物を置く（生成の専用段。他の乱数ストリームはずれない）

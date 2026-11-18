@@ -2,11 +2,12 @@
 // 倒すと大きな賞金と、加護の選択（choose_boon。手番を消費しない）。次の節目はキャンプと遠征に出す。
 import type { Content } from '@muse/content';
 import type { ActionError, Entity, FloorKey, MilestoneInfo, PlayerRecord } from '@muse/shared';
-import { actionError, Rng, t } from '@muse/shared';
+import { actionError, guardianDisplayName, Rng, stairsSealed, t } from '@muse/shared';
 import { grantBoon } from './boons';
 import type { Ctx } from './ctx';
 import { rollWardenInfo } from './guardians';
 import { generateFloor } from './gen/generate';
+import { missingTerrain } from './floors';
 import { addDiceBonus, diceMax, floorDiv } from '@muse/shared';
 import { sumAffixMods } from './spawn';
 
@@ -38,7 +39,8 @@ export function wardenPreview(ctx: Ctx, depth: number): { kind: string; hp: numb
   const live = ctx.world.floors[key] ? ctx.entitiesOn(key).find((e) => e.guardian?.warden) : undefined;
   const plain = (a: readonly string[]) => a.filter((x) => ctx.content.affixes[x]?.target !== 'guardian');
   if (live?.stats) return { kind: live.kind, hp: live.stats.maxHp, maxHit: diceMax(live.stats.dmg) + live.stats.might, armor: live.stats.armor, affixes: plain(live.scale?.affixes ?? []) };
-  const g = generateFloor(ctx.content, ctx.world.secret.seed, 'main', depth, ctx.world.meta.terrainTable);
+  // 下見は階を作らないので、地形の表は今の地形を足したもので足りる（古い版で始まったランでも生成できる。V4-0a）
+  const g = generateFloor(ctx.content, ctx.world.secret.seed, 'main', depth, [...ctx.world.meta.terrainTable, ...missingTerrain(ctx)]);
   const sp = g.spawns.find((x) => x.type === 'monster' && x.guardian?.warden);
   if (!sp || sp.type !== 'monster') return null;
   // makeMonster と同じ式（spawn.ts）
@@ -58,9 +60,46 @@ export function wardenHpRange(content: Content, depth: number): { min: number; m
   return { min: wb.minHpBase + wb.minHpPerDepth * depth, max: wb.maxHpBase + wb.maxHpPerDepth * depth };
 }
 
-/** その階で生きている大守護者（いれば下り階段は封じられている） */
+/** その階で生きている大守護者 */
 export function livingWarden(ctx: Ctx, key: FloorKey): Entity | null {
   return ctx.entitiesOn(key).find((e) => !!e.guardian?.warden && (e.stats?.hp ?? 0) > 0) ?? null;
+}
+
+/**
+ * その階の下り階段が封じられているか（V4-0a §1.1）: 節目の深さで、倒した記録が無い。
+ * 表示（observation）と同じ関数（shared の stairsSealed）を呼ぶ
+ */
+export function sealedFloor(ctx: Ctx, key: FloorKey): boolean {
+  const f = ctx.world.floors[key];
+  return !!f && stairsSealed(milestoneRule(ctx.content), f.depth, ctx.world.milestones?.cleared ?? []);
+}
+
+/**
+ * 節目の階の不変条件（V4-0a §1.1）: 倒した記録の無い節目の階が生成済みなら、そこには生きている大守護者がいる。
+ * 破れている階（古い版で通常の階として作られた・大守護者が消えた）を捨てる（floor_reset）。次に誰かが着いたとき、今の生成で大守護者の間として作る。
+ * プレイヤーの体がその階にある間は作り直さない（協力では、誰もいなくなった次の開始時に）。遠征の開始時に呼ぶ。作り直した階の一覧を返す
+ */
+export function restoreMilestoneFloors(ctx: Ctx): FloorKey[] {
+  const w = ctx.world;
+  const out: FloorKey[] = [];
+  const keys = Object.keys(w.floors).sort((a, b) => w.floors[a].depth - w.floors[b].depth || (a < b ? -1 : a > b ? 1 : 0));
+  for (const key of keys) {
+    const f = w.floors[key];
+    if (!sealedFloor(ctx, key) || livingWarden(ctx, key)) continue;
+    if (Object.values(w.players).some((p) => w.entities[p.entityId]?.pos?.floor === key)) continue;
+    // 階のエンティティ（敵・地物・床の品）と、敵が持っていた品
+    const del = new Set<string>();
+    for (const e of ctx.entitiesOn(key)) {
+      if (e.player) continue;
+      del.add(e.id);
+      for (const it of e.inv?.items ?? []) del.add(it);
+    }
+    const info = rollWardenInfo(ctx.content, w.secret.seed, f.depth);
+    const name = { ja: guardianDisplayName('ja', info), en: guardianDisplayName('en', info) };
+    ctx.emit({ type: 'floor_reset', floorKey: key, depth: f.depth, reason: 'warden_missing', guardianName: name, del: [...del], seenBy: 'all', floor: null, ft: 0 });
+    out.push(key);
+  }
+  return out;
 }
 
 /** 加護の候補（seed|warden|深さ|boon|プレイヤー。持っていない加護から boonOptions 個） */

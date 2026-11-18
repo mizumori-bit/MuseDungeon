@@ -7,13 +7,13 @@ import type {
 import { addDiceBonus, campDepthOf, cheb, currentExpedition, deepestGenerated, diceMax, diceMin, floorDiv, guardianDisplayName, haulTotal, isPursuing, killPoints, offerPoints, overreachPoints, payoutOf, Rng, actionError, t } from '@muse/shared';
 import { buildSummary, grantXp } from './combat';
 import type { Ctx } from './ctx';
-import { findFreeCell } from './floors';
+import { ensureFloor, findFreeCell } from './floors';
 import { hasLos, inCircle } from './geom';
 import { isOpaqueFn } from './perception';
 import { guardianCandidates, guardianSpec, pickGuardianKind, rollMonsterAffixes, selectBiome, selectFloorType } from './gen/generate';
 import { departGuardians, lairPlan, makeName, projectedScar, rollGuardianInfo, rollWardenInfo, settleGuardian } from './guardians';
 import { grantBoon, ownedBoons, pickRelic } from './boons';
-import { livingWarden, nextMilestone, wardenHpRange, wardenPreview } from './warden';
+import { nextMilestone, restoreMilestoneFloors, sealedFloor, wardenHpRange, wardenPreview } from './warden';
 import { num, pickLore, tellStory } from './story';
 import { isMilestoneDepth } from './gen/generate';
 import { spawnFromSpec, sumAffixMods } from './spawn';
@@ -489,7 +489,7 @@ export function computeProgress(ctx: Ctx, x: Expedition): ObjectiveProgress {
       const pr = w.players[pid];
       if (pr.state !== 'alive') continue;
       const e = w.entities[pr.entityId];
-      if (e?.pos && (w.floors[e.pos.floor]?.depth ?? 0) >= x.objective.targetDepth && ctx.terrainAt(e.pos.floor, e.pos.x, e.pos.y).stairs === 'down' && !livingWarden(ctx, e.pos.floor)) reached = true;
+      if (e?.pos && (w.floors[e.pos.floor]?.depth ?? 0) >= x.objective.targetDepth && ctx.terrainAt(e.pos.floor, e.pos.x, e.pos.y).stairs === 'down' && !sealedFloor(ctx, e.pos.floor)) reached = true;
     }
   }
   let maxDepth = x.progress.maxDepth ?? 0;
@@ -501,8 +501,8 @@ export function computeProgress(ctx: Ctx, x: Expedition): ObjectiveProgress {
     const depth = w.floors[e.pos.floor]?.depth ?? 0;
     maxDepth = Math.max(maxDepth, depth);
     // 踏破: 目標より深い階の下り階段に立った（その階を横切り終えた）
-    // 封じられた下り階段（大守護者が生きている）に立っても踏破にならない（V3-3 §3.2）
-    if (x.objective.targetDepth !== null && depth > x.objective.targetDepth && ctx.terrainAt(e.pos.floor, e.pos.x, e.pos.y).stairs === 'down' && !livingWarden(ctx, e.pos.floor)) {
+    // 封じられた下り階段（大守護者を倒した記録が無い）に立っても踏破にならない（V3-3 §3.2・V4-0a §1.1）
+    if (x.objective.targetDepth !== null && depth > x.objective.targetDepth && ctx.terrainAt(e.pos.floor, e.pos.x, e.pos.y).stairs === 'down' && !sealedFloor(ctx, e.pos.floor)) {
       crossedDepth = Math.max(crossedDepth, depth);
     }
   }
@@ -728,7 +728,7 @@ export function doExtract(ctx: Ctx, e: Entity, pr: PlayerRecord, completed: bool
   // 封じられた下り階段（大守護者の広間）の上なら、次の遠征はその階の上り階段から（V3-3b §40.6: 全快した大守護者の広間から始まった）
   {
     const ef = ctx.world.floors[extractPos.floor];
-    if (ef?.stairs.up && ef.stairs.down.some((s) => s.x === extractPos.x && s.y === extractPos.y) && livingWarden(ctx, extractPos.floor)) {
+    if (ef?.stairs.up && ef.stairs.down.some((s) => s.x === extractPos.x && s.y === extractPos.y) && sealedFloor(ctx, extractPos.floor)) {
       extractPos = { floor: extractPos.floor, x: ef.stairs.up.x, y: ef.stairs.up.y };
     }
   }
@@ -871,6 +871,9 @@ export function startExpedition(ctx: Ctx, pr: PlayerRecord, offer: number | 'end
   if (pr.state !== 'at_camp' && pr.state !== 'alive') return actionError('dead', t(L, 'あなたは既にランから外れている。', 'You are no longer in the run.'), '');
   const camp = w.camp;
   if (!camp) return actionError('not_at_camp', t(L, '遠征の候補が無い。', 'There are no expedition offers.'), t(L, '仲間の遠征が終わるのを待つ。', 'Wait for your allies to finish.'));
+  if (offer !== 'endless' && !camp.offers.some((c) => c.index === offer)) return actionError('bad_request', t(L, `候補 ${offer} は無い。`, `There is no offer ${offer}.`), t(L, `offer は 1〜${camp.offers.length} か "endless"。`, `offer is 1-${camp.offers.length} or "endless".`));
+  // 節目の階の不変条件（V4-0a §1.1）: 倒した記録の無い節目の階に大守護者がいなければ、作り直す
+  restoreForStart(ctx);
   let objective: Objective;
   let points = 0;
   let relicGuarded = false;
@@ -983,6 +986,24 @@ export function startExpedition(ctx: Ctx, pr: PlayerRecord, offer: number | 'end
     if (e?.pos) recomputeStats(ctx, e, 'expedition');
   }
   return null;
+}
+
+/**
+ * 遠征の開始時の検査（V4-0a §1.1）: 大守護者のいない、倒した記録の無い節目の階を作り直す。
+ * キャンプから再開する地点がその階だった参加者は、作り直した階の上り階段から始める（その階はこの時点で作る）
+ */
+function restoreForStart(ctx: Ctx): void {
+  const w = ctx.world;
+  const reset = restoreMilestoneFloors(ctx);
+  if (!reset.length) return;
+  for (const pid of w.playerOrder) {
+    const p = w.players[pid];
+    const at = p.extractPos;
+    if (p.state !== 'at_camp' || !at || !reset.includes(at.floor)) continue;
+    const f = ensureFloor(ctx, at.floor);
+    const up = f.stairs.up ?? f.entry;
+    ctx.emit({ type: 'player_state', player: pid, state: p.state, reason: 'floor_reset', extractPos: { floor: at.floor, x: up.x, y: up.y }, seenBy: 'all', floor: null });
+  }
 }
 
 /** キャンプから再開する地点（前回 extract した地点。無ければ地下 1 階の入口） */

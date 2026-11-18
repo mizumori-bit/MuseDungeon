@@ -245,6 +245,20 @@ export function recommendedLevel(rules: Pick<CatalogRules, 'recommendedLevel'>, 
   return t[n - 1] + Math.trunc(((d - n) * rise) / span);
 }
 
+/** 節目の深さか（大守護者の間が強制される深さ。V3-3 §3.2） */
+export function isMilestoneOf(ms: { every: number; min: number } | null | undefined, depth: number): boolean {
+  return !!ms && ms.every > 0 && depth >= ms.min && depth % ms.every === 0;
+}
+
+/**
+ * その深さの下り階段が封じられているか（V4-0a §1.1）: 節目の深さで、その大守護者を倒した記録が無い。
+ * 規則（stairs・帰還の位置・目標の到達）と表示（valid_actions・候補・次の節目）はこれだけを呼ぶ。
+ * 倒した記録の無い節目の階には必ず生きている大守護者がいる（遠征の開始時に確かめて作り直す）ので、封じられた階には必ず倒す相手がいる
+ */
+export function stairsSealed(ms: { every: number; min: number } | null | undefined, depth: number, cleared: readonly number[]): boolean {
+  return isMilestoneOf(ms, depth) && !cleared.includes(depth);
+}
+
 /** 候補の難しさ（V3-2R §14.4）: 推奨レベルとの差と、条件の危険度の合計。段階に丸めない */
 export function offerGap(rules: Pick<CatalogRules, 'recommendedLevel' | 'traits'> & Partial<Pick<CatalogRules, 'milestone'>>, targetDepth: number | null, traits: readonly string[], level: number,
   extra?: { warden?: boolean; passesWarden?: number }): { recommendedLevel: number | null; levelGap: number | null; traitDanger: number } {
@@ -270,9 +284,8 @@ export function offerWardenExtra(o: { objective: { type: string }; passesWarden?
 export function nextCampOf(rules: Pick<CatalogRules, 'recommendedLevel' | 'slots' | 'expedition'> & Partial<Pick<CatalogRules, 'milestone'>>, campDepth: number, cleared: readonly number[] = []): { minTargetDepth: number; recommendedLevel: number } {
   let min = Math.max(rules.expedition.firstTargetDepth?.safe ?? 1, campDepth + rules.slots.safe.aheadMin);
   // 節目の階（大守護者の間）は目標にならない: 未踏破なら堅実はその 1 つ上（力を付ける）、踏破済みなら 1 つ深く（V3-3a §35.2）
-  const ms = rules.milestone;
-  const isMs = (d: number) => !!ms && d >= ms.min && d % ms.every === 0;
-  if (isMs(min) && !cleared.includes(min)) min -= 1;
+  const isMs = (d: number) => isMilestoneOf(rules.milestone, d);
+  if (stairsSealed(rules.milestone, min, cleared)) min -= 1;
   while (isMs(min)) min++;
   return { minTargetDepth: min, recommendedLevel: recommendedLevel(rules, min) };
 }

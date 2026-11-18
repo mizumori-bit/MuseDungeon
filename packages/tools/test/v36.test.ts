@@ -95,7 +95,7 @@ describe('V3-6 expedition report (§6.1)', () => {
       ev('damaged', { source: ME, target: 'e_w00001', targetKind: 'core:cave_troll', targetAffixes: ['core:guardian'], amount: 9, dealt: 9, via: 'melee', floor: 'main:5' }),
       ev('expedition_ended', { no: 2, reason: 'withdrawn', result: { reason: 'withdrawn', deepest: 5 } }),
     ];
-    const r = buildExpeditionReport({ locale: 'ja', catalog, selfId: ME, no: 2, events, marks: [[2, 1], [3, 2], [4, 3]], calls: [], milestone: { every: 5, min: 5 }, guardianNames: { warden: { 5: '呼び集める者ヤロ' } } });
+    const r = buildExpeditionReport({ locale: 'ja', catalog, selfId: ME, no: 2, events, marks: [[2, 1], [3, 2], [4, 3]], calls: [], milestone: { every: 5, min: 5 }, guardianNames: { warden: { 5: '呼び集める者ヤロ' } }, wardenIds: ['e_w00001'] });
     expect(r.moments.map((m) => m.kind)).toEqual(['guardian_fight', 'warden_fight']);
     expect(r.moments[0].text).toBe('手番 2: 守護者オークの荒くれと戦った（与 6・被 0、倒さずに離れた）');
     expect(r.moments[1].text).toBe('手番 3: 大守護者「呼び集める者ヤロ」と戦った（与 9・被 0、倒さずに離れた）');

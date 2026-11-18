@@ -58,8 +58,13 @@ export interface ReportInput {
   calls: readonly ReportCall[];
   /** 遠征の前から正体を知っていた見た目（未鑑定のまま、の数から除く） */
   knownAppearances?: ReadonlySet<string>;
-  /** 節目の階（大守護者の判定。rules.milestone） */
+  /** 節目の階（rules.milestone。大守護者の判定には使わない: V4-0a §1.3） */
   milestone?: { every: number; min: number };
+  /**
+   * 大守護者の個体（V4-0a §1.3: 大守護者との戦いと数えるのは、この個体と warden_slain が出た個体だけ。階の深さでは決めない）。
+   * 呼び出し側が World の大守護者と、履歴の warden_slain から渡す
+   */
+  wardenIds?: readonly string[];
   /** 出来事の文（死亡の直前 10 件に使う） */
   narrate?: (e: ProjectedEvent) => string;
   /** 公開されている守護者の名前（表示用）: 節目の階の大守護者、この遠征の目的の守護者 */
@@ -96,8 +101,7 @@ export function buildExpeditionReport(inp: ReportInput): ExpeditionReport {
   const L = inp.locale;
   const self = inp.selfId;
   const cat = inp.catalog;
-  const ms = inp.milestone;
-  const isMilestone = (d: number | null) => !!ms && d !== null && d >= ms.min && d % ms.every === 0;
+  const wardenIds = new Set(inp.wardenIds ?? []);
   const name = (kind: string | null | undefined) => (kind ? kindName(cat, L, kind) : t(L, '見えない何か', 'something unseen'));
   const combat: ExpeditionReport['combat'] = { dealt: 0, taken: 0, hits: 0, misses: 0, crits: 0, kills: 0, melee_kills: 0, thrown_kills: 0, ability_uses: 0 };
   let minPct = 100;
@@ -146,7 +150,7 @@ export function buildExpeditionReport(inp: ReportInput): ExpeditionReport {
   let objectiveGuardian: string | null = null;
   const fightOf = (id: string, kind: string | null, seq: number, floor: unknown): Fight => {
     let f = fights.get(id);
-    if (!f) { f = { id, kind, depth: depthOf(floor), warden: isMilestone(depthOf(floor)), first: seq, last: seq, dealt: 0, taken: 0, outcome: 'ongoing' }; fights.set(id, f); }
+    if (!f) { f = { id, kind, depth: depthOf(floor), warden: wardenIds.has(id), first: seq, last: seq, dealt: 0, taken: 0, outcome: 'ongoing' }; fights.set(id, f); }
     f.last = seq;
     return f;
   };

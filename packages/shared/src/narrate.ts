@@ -368,6 +368,12 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
       if (ev.elite) return ja ? `地下${ev.depth}階の強敵「${nm}」は階を去っていた。` : `The elite "${nm}" of depth ${ev.depth} has left the floor.`;
       return ja ? `地下${ev.depth}階の守護者「${nm}」は棲み処を去っていた（目的ではなくなった）。` : `The guardian "${nm}" of depth ${ev.depth} has left its lair (no longer an objective).`;
     }
+    case 'floor_reset': {
+      const nm = ev.guardianName ? nameOf(ev.guardianName, L, '?') : null;
+      return ja
+        ? `地下${ev.depth}階は姿を変えた。${nm ? `大守護者「${nm}」` : '大守護者'}の間になっている（その階の地図と記憶は消え、床に残していた品は失われた）。`
+        : `Depth ${ev.depth} has changed shape: it is now the hall of ${nm ? `the warden "${nm}"` : 'its warden'} (your map and memories of it are gone, and items left on its floor are lost).`;
+    }
     case 'warden_slain': {
       const nm = nameOf(ev.guardianName, L, '?');
       return ja ? `節目の大守護者${nm}が倒れた（地下${ev.depth}階）。下り階段の封印が解けた。` : `The warden ${nm} falls (depth ${ev.depth}). The stairs down are unsealed.`;
@@ -415,6 +421,8 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
     case 'player_state':
       if (ev.state === 'dead') return ja ? `${ctx.playerNames[ev.player] ?? '仲間'} は倒れた。` : `${ctx.playerNames[ev.player] ?? 'An ally'} has fallen.`;
       if (ev.state === 'left') return ja ? 'プレイヤーが離脱した。' : 'A player left.';
+      // 再開する階が作り直された（V4-0a §1.1）: floor_reset の文に任せる
+      if (ev.reason === 'floor_reset') return null;
       if (ev.state === 'at_camp' && ev.reason === 'joined') return ja ? `${ctx.playerNames[ev.player] ?? 'プレイヤー'} はキャンプにいる。最初の遠征を選ぶ。` : `${ctx.playerNames[ev.player] ?? 'A player'} is at camp, choosing the first expedition.`;
       if (ev.state === 'at_camp' && ev.reason === 'lifeline') {
         const lost = ev.relicLost ? (ja ? '遺物は持ち帰れず、失われた。' : ' The relic could not come along and is lost.') : '';

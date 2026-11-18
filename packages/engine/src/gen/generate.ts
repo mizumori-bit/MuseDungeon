@@ -769,36 +769,41 @@ function placeLair(s: GenState, cx: number, cy: number, info: GuardianInfo, rng:
  * 遠征の目標階の専用段: 守護者・遺物を入口から離れた到達可能なセルに置く。
  * 乱数は 'objective' ストリームだけを使う（他の段の結果は変わらない）。
  */
-/** 節目の大守護者を、レイアウトの目印（無ければ下り階段に近い床）に置き、棲み処を整える */
-function placeWarden(s: GenState): void {
+/**
+ * 節目の大守護者を、レイアウトの目印（無ければ下り階段に近い床）に置き、棲み処を整える。
+ * 最後の作り直し（fallback）には目印が無いので、下り階段の近くの空いたマスに置く（V4-0a §1.1）。置けなければ false
+ */
+function placeWarden(s: GenState): boolean {
   const g = s.grid;
   const rng = s.stream('objective');
   let at = g.anchors.warden;
   if (at === undefined && s.down[0]) at = g.idx(s.down[0].x, s.down[0].y);
-  if (at === undefined) return;
-  // 目印のマスがバイオームの地形で通れなくなっていたら、近い順に通れる床を探す
+  if (at === undefined) return false;
+  // 目印のマスがバイオームの地形で通れなくなっていたら、近い順に通れる床を探す（ほかの敵のいるマスは除く）
   const free = (i: number) => s.passable(i) && !g.override.get(i)?.startsWith('core:stairs');
   if (!free(at)) {
+    const taken = new Set<number>(s.spawns.filter((sp) => sp.type === 'monster').map((sp) => g.idx(sp.x, sp.y)));
     const ax = at % g.w, ay = Math.trunc(at / g.w);
     let found: number | undefined;
-    for (let r = 1; r <= 6 && found === undefined; r++) for (let dy = -r; dy <= r && found === undefined; dy++) for (let dx = -r; dx <= r; dx++) {
+    for (let r = 1; r <= Math.max(g.w, g.h) && found === undefined; r++) for (let dy = -r; dy <= r && found === undefined; dy++) for (let dx = -r; dx <= r; dx++) {
       if (Math.max(Math.abs(dx), Math.abs(dy)) !== r || !g.inside(ax + dx, ay + dy)) continue;
       const i = g.idx(ax + dx, ay + dy);
-      if (free(i)) { found = i; break; }
+      if (free(i) && !taken.has(i)) { found = i; break; }
     }
-    if (found === undefined) return;
+    if (found === undefined) return false;
     at = found;
   }
   const x = at % g.w, y = Math.trunc(at / g.w);
   const info = rollWardenInfo(s.content, s.seed, s.depth);
   const kind = pickGuardianKind(s.content, s.seed, s.branch, s.depth, 3, rng);
-  if (!kind) return;
+  if (!kind) return false;
   const spec = wardenSpec(s.content, s.depth, kind, x, y, rng, info);
   s.spawns.push(spec);
   const occupied = new Set<number>([at, ...s.spawns.filter((sp) => 'x' in sp).map((sp) => g.idx((sp as { x: number }).x, (sp as { y: number }).y))]);
   if (s.up) occupied.add(g.idx(s.up.x, s.up.y));
   for (const d of s.down) occupied.add(g.idx(d.x, d.y));
   placeLair(s, x, y, info, rng, occupied);
+  return true;
 }
 
 /** 大守護者の生成仕様（格 3 の守護者に、大守護者の体力・下限・賞金を上書きする） */
@@ -959,8 +964,11 @@ export function generateFloor(content: Content, seed: string, branch: string, de
     if (!fallback) placeLevers(s);
     assignElites(s);
     applyEventAfter(s);
-    // 節目の大守護者（V3-3 §3.2）
-    if (floorType.rules.warden && !fallback) placeWarden(s);
+    // 節目の大守護者（V3-3 §3.2）。最後の作り直しでも置く。置けない生成は失敗とし、黙って大守護者のいない階を作らない（V4-0a §1.1）
+    if (floorType.rules.warden && !placeWarden(s)) {
+      if (!fallback) continue;
+      throw new Error(`generateFloor: the warden could not be placed on ${branch}:${depth}`);
+    }
     if (objective && !placeObjective(s, objective) && !fallback) continue;
     // 条件「泉が無い」
     if (mods?.noFountain) s.spawns = s.spawns.filter((sp) => !(sp.type === 'feature' && sp.kind.includes('fountain')));

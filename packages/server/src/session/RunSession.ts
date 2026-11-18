@@ -397,6 +397,8 @@ export class RunSession {
       events: filterEventsForPlayer(slice, pid, view), marks: selfTurnMarks(slice, view.self.id),
       calls: (this.calls.get(pid) ?? []).filter((c) => c.seq >= from && c.seq <= to),
       knownAppearances: known, milestone: this.deps.catalog.rules?.milestone,
+      // 大守護者の個体（V4-0a §1.3）: 生きている大守護者と、倒れた大守護者（履歴の warden_slain）。節目の深さの守護者を大守護者と数えない
+      wardenIds: this.wardenIds(),
       // 公開されている名前だけ（節目の大守護者、この遠征の目的の守護者）
       guardianNames: {
         ...(x.milestone ? { warden: { [x.milestone.depth]: guardianDisplayName(view.locale, x.milestone) } } : {}),
@@ -405,6 +407,14 @@ export class RunSession {
       narrate: (e) => narrate(e, ctx) ?? '',
       ...(x.targets.bounty ? { bountyIds: [x.targets.bounty] } : {}),
     });
+  }
+
+  /** 大守護者の個体の ID（生きている個体と、履歴で倒れた個体） */
+  private wardenIds(): string[] {
+    const ids = new Set<string>();
+    for (const e of Object.values(this.world.entities)) if (e.guardian?.warden) ids.add(e.id);
+    for (const e of this.history) if (e.type === 'warden_slain' && e.id) ids.add(e.id);
+    return [...ids];
   }
 
   /** seq 以上の最初の出来事の位置（履歴は seq 順） */

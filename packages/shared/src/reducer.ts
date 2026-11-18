@@ -314,6 +314,22 @@ export function applyEvent(world: World, ev: GameEvent): void {
       }
       break;
     }
+    case 'terrain_table_extended':
+      world.meta.terrainTable = [...world.meta.terrainTable, ...ev.added];
+      if (ev.concealAdded.length) world.meta.concealTerrain = [...(world.meta.concealTerrain ?? []), ...ev.concealAdded];
+      break;
+    case 'floor_reset': {
+      // 階を捨てる（階のエンティティは ev.del で消える）。全員のその階の地図と記憶を消す（V4-0a §1.1）
+      delete world.floors[ev.floorKey];
+      for (const p of Object.values(world.players)) {
+        if (p.knowledge.floors[ev.floorKey]) {
+          const { [ev.floorKey]: _f, ...rest } = p.knowledge.floors;
+          p.knowledge.floors = rest;
+        }
+        if (p.knowledge.floorHint?.floor === ev.floorKey) p.knowledge.floorHint = null;
+      }
+      break;
+    }
     case 'warden_slain': {
       const cleared = new Set(world.milestones?.cleared ?? []);
       cleared.add(ev.depth);

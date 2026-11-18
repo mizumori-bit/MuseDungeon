@@ -31,7 +31,9 @@ export type ChangeCode =
   /** 得た加護・効いた加護（V3-3 §3.3）・物語の 1 文（§3.4） */
   | 'boon' | 'story'
   /** このランで初めて見た種族・地物・バイオームの描写（V3-5 §5.4） */
-  | 'first_seen';
+  | 'first_seen'
+  /** 節目の階が作り直された（V4-0a §1.1。遠征の開始の応答） */
+  | 'floor_reset';
 
 export interface Change { code: ChangeCode; text: string; entity?: string }
 
@@ -131,7 +133,7 @@ export function turnSnapshot(view: PlayerView, obs: Observation, state: TurnStat
 }
 
 const PRIORITY: ChangeCode[] = [
-  'guardian_slain', 'guardian', 'intel', 'boon', 'story', 'floor_changed', 'objective_complete', 'objective_progress', 'next_camp', 'can_extract', 'hp_low', 'killed', 'died_seen', 'hp_dropped', 'new_hostile',
+  'floor_reset', 'guardian_slain', 'guardian', 'intel', 'boon', 'story', 'floor_changed', 'objective_complete', 'objective_progress', 'next_camp', 'can_extract', 'hp_low', 'killed', 'died_seen', 'hp_dropped', 'new_hostile',
   'level_up', 'status_gained', 'status_lost', 'woke', 'perk', 'item_found', 'stairs_found', 'reappeared', 'hostile_gone', 'first_seen',
 ];
 
@@ -253,6 +255,8 @@ export function diffChanges(prev: TurnSnapshot | null, cur: TurnSnapshot, view: 
   for (const e of events) if (e.seq > prev.seq && (e.type === 'boon_granted' || e.type === 'boon_triggered' || e.type === 'boon_offered' || e.type === 'warden_slain' || e.type === 'archive_recalled') && e.text) out.push({ code: 'boon', text: e.text.replace(/。$/, '') });
   // 守護者のしたこと・分かった弱点（V3-3）
   for (const e of events) if (e.seq > prev.seq && (e.type === 'guardian_acted' || e.type === 'guardian_intel' || e.type === 'guardian_rested' || e.type === 'guardian_departed') && e.text) out.push({ code: e.type === 'guardian_intel' ? 'intel' : 'guardian', text: e.text.replace(/。$/, '') });
+  // 節目の階の作り直し（V4-0a §1.1）
+  for (const e of events) if (e.seq > prev.seq && e.type === 'floor_reset' && e.text) out.push({ code: 'floor_reset', text: e.text.replace(/。$/, '') });
   // 敵が目を覚ました理由（V3-4b §28.8）: 同じ文は ×N にまとめる
   const wokeCount = new Map<string, number>();
   for (const e of events) if (e.seq > prev.seq && e.type === 'monster_woke' && e.text) { const s = e.text.replace(/。$/, ''); wokeCount.set(s, (wokeCount.get(s) ?? 0) + 1); }

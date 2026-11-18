@@ -999,7 +999,7 @@ bot の計測（`bot --runs 10`・`npm run budget -- --runs 20`）は IMPROVEMEN
 - 観測の敵の行は「[大守護者・賞金 N]」、`visible.monsters[].guardian.warden`。弱点は守護者と同じく、効くまで出ない。
 
 ### 22.3 封じられた下り階段
-- その階に生きている大守護者がいる間、下り階段の `stairs` は手番を使わずに `sealed` で断る（「下り階段は封じられている。この階の大守護者を倒すまで降りられない」）。valid_actions の use_stairs は「不可: …」。
+- 節目の深さで、その大守護者を倒した記録が無い間、下り階段の `stairs` は手番を使わずに `sealed` で断る（V4-0a で「その階に生きている大守護者がいる間」から改めた。判定は表示と同じ shared の `stairsSealed`。§36.1）（「下り階段は封じられている。この階の大守護者を倒すまで降りられない」）。valid_actions の use_stairs は「不可: …」。
 - 封じられた下り階段に立っても、到達（reach_depth）・踏破にならない。extract（帰還・撤退）は今までどおりできる。
 
 ### 22.4 倒したとき
@@ -1151,7 +1151,7 @@ bot の計測（`bot --runs 10`・`npm run budget -- --runs 20`）は IMPROVEMEN
 ### 27.4 節目の手前（§40.6）
 - 繰り返しの減点に下限 `expedition.repeatMinPct`（25%）。
 - 守護者が目的の候補に、一撃の目安（`guardian.maxHit`。装甲で減る前。種族のダイス + 守護者の接辞 + 深層強化。ほかの接辞は含まない）。
-- 封じられた下り階段（生きている大守護者の階）の上で終えた遠征と、帰還の綱の戻り先がそこだった遠征は、次をその階の上り階段から始める。
+- 封じられた下り階段（倒していない大守護者の階）の上で終えた遠征と、帰還の綱の戻り先がそこだった遠征は、次をその階の上り階段から始める。
 
 ### 27.5 実装担当の判断（§40.7）
 - valid_actions: 投擲の適性が負の職業（戦士）には投擲の fight を出さない。投擲の fight は品の種類で示す。使い切った能動技は出さない（`self.abilities` の `uses_left` で分かる）。突進の構えの直線の上にいれば、外れる向きの move に「突進の直線から外れる」。
@@ -1351,3 +1351,16 @@ bot の計測（`bot --runs 10`・`npm run budget -- --runs 20`）は IMPROVEMEN
 - **マクロ**: `macroNext` は、止まる判断が出たとき、collect（what: items）か品を目的地にした travel_to で足元にその品があれば、拾う 1 手を挟んでから止まる（`MacroState.pendingStop`。hp_floor・hp_risk・予備動作では挟まない）。steady の explore・travel・collect は、その呼び出しの被害の合計（`MacroState.damageTaken`）が最大 HP の 4 分の 1 を超えたら `damage_taken`。
 - **地物の ID**: 観測の `visible.features[].id`。travel_to の目的地に地物を指すと、隣に着けば到着。
 - **加護の説明**: ターンの要約に、説明を出した加護の組（`boonKey`）を持ち、組が変わったときだけ説明を出す（それ以外は名前だけ）。
+
+## 36. Muse の報告への判断 V4-0（IMPROVEMENTS_V4 §1）
+
+### 36.1 V4-0a（IMPROVEMENTS_V4 §1.1・§1.3）
+
+実装メモは IMPROVEMENTS_V4 §2。`engineVersion` 0.25.0、`eventVersion` 20。テストは `packages/tools/test/v40a.test.ts`。
+
+- **不変条件**: 倒した記録の無い節目の階が生成済みなら、そこには生きている大守護者がいる。遠征の開始時（`startExpedition` の最初。候補の番号を確かめた後）に `restoreMilestoneFloors` が確かめ、破れている階を `floor_reset { floorKey, depth, reason: 'warden_missing', guardianName }` で捨てる（階のエンティティと、敵が持っていた品は `del`。reducer は階と、全員のその階の `knowledge.floors`・`floorHint` を消す）。プレイヤーの体がその階にあれば作り直さない。再開する地点がその階のプレイヤーは、その場で `ensureFloor` し、上り階段へ `extractPos` を移す（`player_state` の `reason: 'floor_reset'`。文は出さない）。それ以外は、次に着いたときに今の生成で作る。
+- **生成**: 節目の階は fallback でも大守護者を置く（目印が無ければ下り階段に近い、ほかの敵のいない通れる床。探す範囲は階の全体）。`placeWarden` が置けなければ、fallback 以外は作り直し、fallback は例外。
+- **封印の判定**: shared の `isMilestoneOf`・`stairsSealed`（節目の深さで、倒した記録が無い）。engine の `sealedFloor(ctx, key)` が包む。規則（stairs・reach_depth の到達・踏破・封じられた階段での帰還の位置）と表示（valid_actions・次の階の封印の注記・帰還の文・次のキャンプの目標）はこれだけを呼ぶ。`livingWarden` は作り直しの検査だけに使う。
+- **地形の表**: `ensureFloor` は階を作る前に、今のコンテンツの地形のうちランの表に無いものを `terrain_table_extended { added, concealAdded }` で表の後ろに足す（古い版で始まったラン）。`wardenPreview` は階を作らないので、足した表で生成するだけ。
+- **伝える**: `floor_reset` の文「地下N階は姿を変えた。大守護者「名前」の間になっている（その階の地図と記憶は消え、床に残していた品は失われた）」は、開始の応答の outcome と、ターンの要約の changes（`floor_reset`。先頭）に出る。get_rules の節目の文にも 1 文。
+- **レポート**: `buildExpeditionReport` の大守護者との戦いは、`wardenIds`（呼び出し側が World の大守護者と履歴の `warden_slain` から渡す）と、その遠征の `warden_slain` の個体だけ。階の深さでは決めない。
