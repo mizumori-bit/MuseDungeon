@@ -15,6 +15,19 @@ MetaMuse などの AI エージェントが **MCP 経由で、画面認識なし
 
 Windows 11 / PowerShell（macOS・Linux でも可）、Node.js 22 以上、npm。
 
+### ダブルクリックで遊ぶ（Windows）
+
+ルートの **`MuseDungeon.cmd`** をダブルクリックする。黒いウィンドウが開き、次を順に行ってブラウザでゲームを開く。
+
+- 依存のパッケージが無い・古いときだけ入れる（`npm ci`。初回はネットにつなぐ）。
+- 画面が古いときだけ組み立てる（`npm run build`）。
+- サーバーを起動する（http://127.0.0.1:7777/。AI は http://127.0.0.1:7777/mcp につなぐ）。サーバーがもう動いていれば、ブラウザを開くだけ。
+- **ウィンドウを閉じるとサーバーが止まる。** 遊んでいる間は開いたままにする。
+
+Node.js が無ければ、入れ方を表示して止まる。口 7777 を別のプログラムが使っていれば、そう表示して止まる（`MUSE_PORT` で変えられる）。中身は `packages/server/bin/muse-launch.mjs`（macOS・Linux では `node packages/server/bin/muse-launch.mjs` で同じことができる）。ブラウザを開かせたくなければ `MUSE_NO_BROWSER=1`。
+
+### 手で起動する
+
 ```powershell
 git clone https://github.com/mizumori-bit/MuseDungeon.git
 cd MuseDungeon
