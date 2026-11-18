@@ -263,6 +263,10 @@ const def = {
     dusk:  { root: 'C3',  steps: [0, 2, 3, 5, 7, 8, 10] },
     deep:  { root: 'B2',  steps: [0, 1, 3, 5, 7, 8, 10] },
     abyss: { root: 'Bb2', steps: [0, 1, 4, 5, 7, 8, 10] },
+    // 地下 20 階より深い階（depth_tier 4 以上）は、暗い旋法のまま基音を移して 4 つを巡る
+    abyss_b: { root: 'C#3', steps: [0, 1, 3, 5, 7, 8, 10] },
+    abyss_c: { root: 'B2',  steps: [0, 1, 4, 5, 7, 8, 10] },
+    abyss_d: { root: 'D3',  steps: [0, 1, 3, 5, 7, 8, 10] },
   },
   parts: [
     { id: 'bass', role: 'bass', octave: -1, gain: 0.2,
@@ -286,6 +290,14 @@ const def = {
     { when: { depth_band: 1 }, set: { scale: 'dusk' } },
     { when: { depth_band: 2 }, set: { scale: 'deep' } },
     { when: { depth_band: 3 }, set: { scale: 'abyss' } },
+    { when: { depth_tier: { min: 4, mod: 4, rem: 0 } }, set: { scale: 'abyss_b' } },
+    { when: { depth_tier: { min: 4, mod: 4, rem: 1 } }, set: { scale: 'abyss_c' } },
+    { when: { depth_tier: { min: 4, mod: 4, rem: 2 } }, set: { scale: 'abyss_d' } },
+
+    // バイオーム: 音色だけを変える。石の広間・none・知らない ID は基準の音色のまま
+    { when: { biome: 'core:damp_caves' }, set: { parts: { pad: { voice: { lowpass: 700, release: 0.3 } }, lead: { voice: { release: 0.3 } } } } },
+    { when: { biome: 'core:overgrown_ruins' }, set: { parts: { lead: { voice: { wave: 'triangle' }, gain: 1.5 }, pad: { voice: { lowpass: 1100 } } } } },
+    { when: { biome: 'core:sunken_archive' }, set: { parts: { pad: { voice: { wave: 'triangle' }, gain: 1.6 }, lead: { voice: { lowpass: 1000, attack: 0.03 } } } } },
 
     { when: { scene: 'camp' }, set: { scale: 'light', tempo: 0.8,
       parts: { ...all('camp'), perc: { on: false } } } },
@@ -325,9 +337,12 @@ const def = {
     hit_taken: { start: 'now', gain: 0.35, octave: -1,
       voice: { wave: 'triangle', attack: 0.003, decay: 0.16, sustain: 0, release: 0.05 },
       notes: [{ at: 0, degree: 1, len: 0.18 }, { at: 0, hit: 'low' }] },
-    crit: { start: 'now', gain: 0.22, octave: 1,
-      voice: { wave: 'square', lowpass: 2600, attack: 0.002, decay: 0.1, sustain: 0, release: 0.06 },
-      notes: [{ at: 0, hit: 'mid' }, { at: 0, degree: [1, 8], len: 0.12 }, { at: 0.07, hit: 'high' }] },
+    crit_dealt: { start: 'now', gain: 0.24, octave: 1,
+      voice: { wave: 'square', lowpass: 2600, attack: 0.002, decay: 0.12, sustain: 0.2, release: 0.1 },
+      notes: [{ at: 0, hit: 'mid' }, { at: 0, degree: 8, len: 0.07 }, { at: 0.07, degree: 12, len: 0.18 }, { at: 0.07, hit: 'high' }] },
+    crit_taken: { start: 'now', gain: 0.36, octave: -1,
+      voice: { wave: 'triangle', attack: 0.003, decay: 0.2, sustain: 0.2, release: 0.1 },
+      notes: [{ at: 0, hit: 'low' }, { at: 0, hit: 'mid' }, { at: 0, degree: 5, len: 0.1 }, { at: 0.1, degree: 1, len: 0.25 }] },
     kill: { start: 'now', gain: 0.32, octave: 1,
       voice: { wave: 'triangle', attack: 0.003, decay: 0.2, sustain: 0.3, release: 0.2 },
       notes: [{ at: 0, degree: 3, len: 0.12 }, { at: 0.12, degree: 1, len: 0.35 }] },
@@ -344,7 +359,9 @@ const def = {
 };
 
 // 読みやすい JSON にする（音は 1 行に 1 つ）。
-const one = (v) => JSON.stringify(v).replace(/([:,])(?=\S)/g, '$1 ').replace(/\{/g, '{ ').replace(/\}/g, ' }');
+const one = (v) => (Array.isArray(v) ? `[${v.map(one).join(', ')}]`
+  : v !== null && typeof v === 'object' ? `{ ${Object.entries(v).map(([k, x]) => `${JSON.stringify(k)}: ${one(x)}`).join(', ')} }`
+  : JSON.stringify(v));
 let text = JSON.stringify(def, (k, v) => ((k === 'notes' || k === 'rules') && Array.isArray(v) ? v.map((n) => `@@${one(n)}@@`) : (k === 'steps' || k === 'voice' || k === 'low' || k === 'mid' || k === 'high') ? `@@${one(v)}@@` : v), 2);
 text = text.replace(/"@@(.*?)@@"/g, (m, s) => JSON.parse(`"${s}"`));
 JSON.parse(text);

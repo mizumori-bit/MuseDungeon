@@ -14,6 +14,7 @@
   h2 { font-size:13px; color:var(--dim); margin:0 0 8px; font-weight:600; }
   .row { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-bottom:8px; }
   .row > span.lab { width:7.5em; color:var(--dim); }
+  p.hint { color:var(--dim); margin:4px 0 0; font-size:12px; }
   button { background:#272b33; color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:6px 10px; font:inherit; cursor:pointer; }
   button:hover { border-color:var(--dim); }
   button.on { background:var(--acc); color:#10201c; border-color:var(--acc); }
@@ -41,6 +42,7 @@
 <section>
   <h2>音の状態（仕様 §2.1）</h2>
   <div id="controls"></div>
+  <p class="hint">depth_tier は「階の深さ ÷ 5」（0＝地下 1〜4 階、3＝15〜19 階、4＝20〜24 階…）。depth_band はここから決まります（3 で頭打ち）。キャンプでは、ゲームの側が depth_tier 0・biome none・floor_kind other に固定します（このページでは手で合わせてください）。</p>
 </section>
 
 <section>
@@ -60,7 +62,8 @@ const INPUTS = {
   scene: ['camp', 'explore', 'alert', 'combat', 'guardian', 'warden', 'ended'],
   threat: [0, 1, 2, 3],
   hp: ['healthy', 'wounded', 'badly_wounded', 'near_death'],
-  depth_band: [0, 1, 2, 3],
+  depth_tier: [0, 1, 2, 3, 4, 5, 6, 7],
+  biome: ['none', 'core:stone_halls', 'core:damp_caves', 'core:overgrown_ruins', 'core:sunken_archive', 'core:unknown'],
   floor_kind: ['standard', 'sanctuary', 'warden_hall', 'other'],
   telegraph: [false, true],
   sense: ['none', 'far', 'near'],
@@ -68,8 +71,19 @@ const INPUTS = {
 const TICKS = 4; // 1 拍を 4 つに刻む（16 分）
 
 // ---- 定義の読み方（規則の解決） ----
+// 条件の値: 1 つの値、値の並び（どれか）、または { min, mod, rem }（min 以上で、mod で割った余りが rem）
+function matchOne(v, x) {
+  if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
+    if (typeof x !== 'number') return false;
+    if (v.min !== undefined && x < v.min) return false;
+    if (v.mod !== undefined && x % v.mod !== (v.rem ?? 0)) return false;
+    return true;
+  }
+  return (Array.isArray(v) ? v : [v]).includes(x);
+}
 function matches(when, s) {
-  return Object.entries(when).every(([k, v]) => (Array.isArray(v) ? v : [v]).includes(s[k]));
+  const full = { ...s, depth_band: Math.min(3, s.depth_tier ?? 0) }; // depth_band は depth_tier から決まる（仕様 §2.1）
+  return Object.entries(when).every(([k, v]) => matchOne(v, full[k]));
 }
 function resolve(def, s) {
   const out = { scale: null, tempo: 1, parts: {} };
@@ -77,7 +91,7 @@ function resolve(def, s) {
   for (const r of def.rules) {
     if (!matches(r.when ?? {}, s)) continue;
     for (const [k, v] of Object.entries(r.set ?? {})) {
-      if (k === 'parts') { for (const [id, pv] of Object.entries(v)) if (out.parts[id]) Object.assign(out.parts[id], pv); }
+      if (k === 'parts') { for (const [id, pv] of Object.entries(v)) if (out.parts[id]) { const voice = { ...out.parts[id].voice, ...pv.voice }; Object.assign(out.parts[id], pv, { voice }); } }
       else out[k] = v;
     }
   }
@@ -176,7 +190,7 @@ function makeEngine(ctx, def, getState) {
         const vel = n.vel ?? 1;
         if (n.hit) hit(n.hit, t, vel, partGain[p.id]);
         else for (const deg of [n.degree].flat())
-          tone(p.voice, degreeToFreq(cur.scaleDef, deg, (p.octave ?? 0) + (ps.octave ?? 0) + (n.oct ?? 0)), t, n.len * spb, vel / Math.sqrt([n.degree].flat().length), partGain[p.id]);
+          tone({ ...p.voice, ...ps.voice }, degreeToFreq(cur.scaleDef, deg, (p.octave ?? 0) + (ps.octave ?? 0) + (n.oct ?? 0)), t, n.len * spb, vel / Math.sqrt([n.degree].flat().length), partGain[p.id]);
       }
     }
     timeline.push({ t, tick, tempo: cur.tempo });
@@ -210,7 +224,7 @@ function makeEngine(ctx, def, getState) {
 }
 
 // ---- 画面 ----
-const state = { scene: 'explore', threat: 0, hp: 'healthy', depth_band: 0, floor_kind: 'standard', telegraph: false, sense: 'none' };
+const state = { scene: 'explore', threat: 0, hp: 'healthy', depth_tier: 0, biome: 'core:stone_halls', floor_kind: 'standard', telegraph: false, sense: 'none' };
 let def = null, ctx = null, engine = null, timer = null;
 const $ = (id) => document.getElementById(id);
 

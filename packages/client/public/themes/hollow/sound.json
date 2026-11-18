@@ -23,6 +23,18 @@
     "abyss": {
       "root": "Bb2",
       "steps": [0, 1, 4, 5, 7, 8, 10]
+    },
+    "abyss_b": {
+      "root": "C#3",
+      "steps": [0, 1, 3, 5, 7, 8, 10]
+    },
+    "abyss_c": {
+      "root": "B2",
+      "steps": [0, 1, 4, 5, 7, 8, 10]
+    },
+    "abyss_d": {
+      "root": "D3",
+      "steps": [0, 1, 3, 5, 7, 8, 10]
     }
   },
   "parts": [
@@ -850,6 +862,12 @@
     { "when": { "depth_band": 1 }, "set": { "scale": "dusk" } },
     { "when": { "depth_band": 2 }, "set": { "scale": "deep" } },
     { "when": { "depth_band": 3 }, "set": { "scale": "abyss" } },
+    { "when": { "depth_tier": { "min": 4, "mod": 4, "rem": 0 } }, "set": { "scale": "abyss_b" } },
+    { "when": { "depth_tier": { "min": 4, "mod": 4, "rem": 1 } }, "set": { "scale": "abyss_c" } },
+    { "when": { "depth_tier": { "min": 4, "mod": 4, "rem": 2 } }, "set": { "scale": "abyss_d" } },
+    { "when": { "biome": "core:damp_caves" }, "set": { "parts": { "pad": { "voice": { "lowpass": 700, "release": 0.3 } }, "lead": { "voice": { "release": 0.3 } } } } },
+    { "when": { "biome": "core:overgrown_ruins" }, "set": { "parts": { "lead": { "voice": { "wave": "triangle" }, "gain": 1.5 }, "pad": { "voice": { "lowpass": 1100 } } } } },
+    { "when": { "biome": "core:sunken_archive" }, "set": { "parts": { "pad": { "voice": { "wave": "triangle" }, "gain": 1.6 }, "lead": { "voice": { "lowpass": 1000, "attack": 0.03 } } } } },
     { "when": { "scene": "camp" }, "set": { "scale": "light", "tempo": 0.8, "parts": { "bass": { "on": true, "pattern": "bass_camp", "density": 2 }, "pad": { "on": true, "pattern": "pad_camp", "density": 2 }, "lead": { "on": true, "pattern": "lead_camp", "density": 2 }, "perc": { "on": false } } } },
     { "when": { "scene": "explore" }, "set": { "parts": { "bass": { "on": true, "pattern": "bass_explore", "density": 2 }, "pad": { "on": true, "pattern": "pad_explore", "density": 2 }, "lead": { "on": true, "pattern": "lead_explore", "density": 2 }, "perc": { "on": true, "pattern": "perc_explore", "density": 1 } } } },
     { "when": { "scene": "alert" }, "set": { "tempo": 1.1, "parts": { "bass": { "on": true, "pattern": "bass_alert", "density": 1 }, "pad": { "on": true, "pattern": "pad_alert", "density": 2 }, "lead": { "on": true, "pattern": "lead_alert", "density": 2 }, "perc": { "on": true, "pattern": "perc_alert", "density": 1 } } } },
@@ -883,15 +901,28 @@
         { "at": 0, "hit": "low" }
       ]
     },
-    "crit": {
+    "crit_dealt": {
       "start": "now",
-      "gain": 0.22,
+      "gain": 0.24,
       "octave": 1,
-      "voice": { "wave": "square", "lowpass": 2600, "attack": 0.002, "decay": 0.1, "sustain": 0, "release": 0.06 },
+      "voice": { "wave": "square", "lowpass": 2600, "attack": 0.002, "decay": 0.12, "sustain": 0.2, "release": 0.1 },
       "notes": [
         { "at": 0, "hit": "mid" },
-        { "at": 0, "degree": [1, 8], "len": 0.12 },
+        { "at": 0, "degree": 8, "len": 0.07 },
+        { "at": 0.07, "degree": 12, "len": 0.18 },
         { "at": 0.07, "hit": "high" }
+      ]
+    },
+    "crit_taken": {
+      "start": "now",
+      "gain": 0.36,
+      "octave": -1,
+      "voice": { "wave": "triangle", "attack": 0.003, "decay": 0.2, "sustain": 0.2, "release": 0.1 },
+      "notes": [
+        { "at": 0, "hit": "low" },
+        { "at": 0, "hit": "mid" },
+        { "at": 0, "degree": 5, "len": 0.1 },
+        { "at": 0.1, "degree": 1, "len": 0.25 }
       ]
     },
     "kill": {
