@@ -1,5 +1,5 @@
 // muse-server（常駐）: HTTP + WebSocket + MCP（Streamable HTTP /mcp）。既定で 127.0.0.1:7777。
-// MUSE_HOST はカンマで区切って複数書ける（例 127.0.0.1,100.110.38.53: この PC の中と Tailscale からだけ受け付ける）。
+// MUSE_HOST はカンマで区切って複数書ける（例 127.0.0.1,100.x.x.x: この PC の中と Tailscale からだけ受け付ける）。
 // 2 つ目からの待ち受けは、届いた要求をそのまま最初のサーバーへ渡す（同じ状態・同じ WebSocket）
 import { createServer, type Server } from 'node:http';
 import { loadContent } from '@muse/content';
