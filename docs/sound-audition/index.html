@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MuseDungeon 音の試聴</title>
+<style>
+  :root { color-scheme: dark; --bg:#14161a; --panel:#1d2026; --line:#30343c; --fg:#dcdfe4; --dim:#8b919c; --acc:#7fb4a8; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:16px; background:var(--bg); color:var(--fg); font:14px/1.5 system-ui, "Yu Gothic UI", sans-serif; }
+  h1 { font-size:18px; margin:0 0 4px; }
+  p.note { color:var(--dim); margin:0 0 12px; max-width:70ch; }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px; margin-bottom:12px; }
+  h2 { font-size:13px; color:var(--dim); margin:0 0 8px; font-weight:600; }
+  .row { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-bottom:8px; }
+  .row > span.lab { width:7.5em; color:var(--dim); }
+  button { background:#272b33; color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:6px 10px; font:inherit; cursor:pointer; }
+  button:hover { border-color:var(--dim); }
+  button.on { background:var(--acc); color:#10201c; border-color:var(--acc); }
+  button.big { padding:8px 18px; font-weight:600; }
+  input[type=range] { width:160px; }
+  pre { margin:0; white-space:pre-wrap; color:var(--dim); font:12px/1.5 ui-monospace, Consolas, monospace; }
+  #err { color:#e49a8a; }
+</style>
+</head>
+<body>
+<h1>MuseDungeon 音の試聴</h1>
+<p class="note">音のテーマの定義（sound.json）を読んで鳴らすだけのページです。音の担当が耳で確かめるためのもので、ゲームの再生の仕組みではありません。下の「音の状態」を手で切り替えると、次の拍で音が変わります。</p>
+
+<section>
+  <div class="row">
+    <button id="play" class="big">鳴らす</button>
+    <span class="lab" style="width:auto">音量</span><input id="vol" type="range" min="0" max="1" step="0.01" value="0.6">
+    <button id="reload">定義を読み直す</button>
+    <label><input id="file" type="file" accept=".json" style="display:none"><button id="pick" type="button">ファイルから読む</button></label>
+    <span id="src" style="color:var(--dim)"></span>
+  </div>
+  <div id="err"></div>
+</section>
+
+<section>
+  <h2>音の状態（仕様 §2.1）</h2>
+  <div id="controls"></div>
+</section>
+
+<section>
+  <h2>合図（仕様 §2.2）</h2>
+  <div class="row" id="cues"></div>
+</section>
+
+<section>
+  <h2>いま</h2>
+  <pre id="now">止まっています</pre>
+</section>
+
+<script>
+'use strict';
+const DEFAULT_URL = '/packages/client/public/themes/hollow/sound.json';
+const INPUTS = {
+  scene: ['camp', 'explore', 'alert', 'combat', 'guardian', 'warden', 'ended'],
+  threat: [0, 1, 2, 3],
+  hp: ['healthy', 'wounded', 'badly_wounded', 'near_death'],
+  depth_band: [0, 1, 2, 3],
+  floor_kind: ['standard', 'sanctuary', 'warden_hall', 'other'],
+  telegraph: [false, true],
+  sense: ['none', 'far', 'near'],
+};
+const TICKS = 4; // 1 拍を 4 つに刻む（16 分）
+
+// ---- 定義の読み方（規則の解決） ----
+function matches(when, s) {
+  return Object.entries(when).every(([k, v]) => (Array.isArray(v) ? v : [v]).includes(s[k]));
+}
+function resolve(def, s) {
+  const out = { scale: null, tempo: 1, parts: {} };
+  for (const p of def.parts) out.parts[p.id] = { on: false, density: 2, octave: 0, gain: 1 };
+  for (const r of def.rules) {
+    if (!matches(r.when ?? {}, s)) continue;
+    for (const [k, v] of Object.entries(r.set ?? {})) {
+      if (k === 'parts') { for (const [id, pv] of Object.entries(v)) if (out.parts[id]) Object.assign(out.parts[id], pv); }
+      else out[k] = v;
+    }
+  }
+  return out;
+}
+function noteToMidi(name) {
+  const m = /^([A-G])([#b]?)(-?\d)$/.exec(name);
+  const base = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 }[m[1]] + (m[2] === '#' ? 1 : m[2] === 'b' ? -1 : 0);
+  return base + 12 * (Number(m[3]) + 1);
+}
+function degreeToFreq(scale, degree, octave) {
+  const i = degree - 1, n = scale.steps.length;
+  const midi = noteToMidi(scale.root) + scale.steps[((i % n) + n) % n] + 12 * (Math.floor(i / n) + octave);
+  return 440 * Math.pow(2, (midi - 69) / 12);
+}
+
+// ---- 鳴らす仕組み（AudioContext でも OfflineAudioContext でも同じ） ----
+function makeEngine(ctx, def, getState) {
+  const master = ctx.createGain();
+  master.connect(ctx.destination); // 圧縮はかけない（定義の音量をそのまま確かめるため）
+  const musicBus = ctx.createGain(); musicBus.connect(master);
+  const cueBus = ctx.createGain(); cueBus.connect(master);
+  const partGain = {};
+  for (const p of def.parts) { const g = ctx.createGain(); g.gain.value = 0; g.connect(musicBus); partGain[p.id] = g; }
+  const noise = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
+  { const d = noise.getChannelData(0); let x = 12345; for (let i = 0; i < d.length; i++) { x = (x * 1103515245 + 12345) & 0x7fffffff; d[i] = x / 0x3fffffff - 1; } }
+  const kit = (def.parts.find((p) => p.kit) ?? {}).kit ?? {};
+
+  let tick = 0, nextTime = ctx.currentTime + 0.05, cur = null, voices = 0;
+  const timeline = [];
+
+  function tone(voice, freq, t, dur, level, dest) {
+    const o = ctx.createOscillator(); o.type = voice.wave; o.frequency.value = freq;
+    const g = ctx.createGain(); let node = o;
+    if (voice.lowpass) { const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = voice.lowpass; node.connect(f); node = f; }
+    node.connect(g); g.connect(dest);
+    const a = voice.attack ?? 0.01, d = voice.decay ?? 0.1, s = voice.sustain ?? 0.7, r = voice.release ?? 0.1;
+    const hold = Math.max(dur, 0.01);
+    g.gain.setValueAtTime(0, t);
+    if (hold <= a) { g.gain.linearRampToValueAtTime(level * hold / a, t + hold); }
+    else {
+      g.gain.linearRampToValueAtTime(level, t + a);
+      const sus = level * s;
+      if (hold <= a + d) g.gain.linearRampToValueAtTime(level + (sus - level) * (hold - a) / d, t + hold);
+      else { g.gain.linearRampToValueAtTime(sus, t + a + d); g.gain.setValueAtTime(sus, t + hold); }
+    }
+    g.gain.linearRampToValueAtTime(0, t + hold + r);
+    o.start(t); o.stop(t + hold + r + 0.02);
+    voices++; o.onended = () => { voices--; };
+  }
+  function hit(name, t, level, dest) {
+    const v = kit[name]; if (!v) return;
+    const g = ctx.createGain(); g.connect(dest);
+    const a = v.attack ?? 0.002, d = v.decay ?? 0.1;
+    g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(level, t + a); g.gain.exponentialRampToValueAtTime(0.0001, t + a + d);
+    let src;
+    if (v.wave === 'noise') {
+      src = ctx.createBufferSource(); src.buffer = noise; src.loop = true;
+      let node = src;
+      if (v.highpass) { const f = ctx.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = v.highpass; node.connect(f); node = f; }
+      if (v.lowpass) { const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = v.lowpass; node.connect(f); node = f; }
+      node.connect(g);
+    } else {
+      src = ctx.createOscillator(); src.type = v.wave; const f0 = v.freq ?? 80;
+      src.frequency.setValueAtTime(f0 * 2, t); src.frequency.exponentialRampToValueAtTime(f0, t + 0.03);
+      src.connect(g);
+    }
+    src.start(t); src.stop(t + a + d + 0.02);
+    voices++; src.onended = () => { voices--; };
+  }
+
+  function applyState(t) {
+    const r = resolve(def, getState());
+    r.scaleDef = def.scales[r.scale] ?? Object.values(def.scales)[0];
+    const fade = def.fade ?? 0.3;
+    for (const p of def.parts) {
+      const ps = r.parts[p.id];
+      const target = ps.on ? (p.gain ?? 1) * (ps.gain ?? 1) : 0;
+      const prev = cur ? (cur.parts[p.id].on ? (p.gain ?? 1) * (cur.parts[p.id].gain ?? 1) : 0) : -1;
+      if (target !== prev) { const g = partGain[p.id].gain; g.cancelScheduledValues(t); g.setTargetAtTime(target, t, fade / 3); }
+    }
+    cur = r;
+  }
+  function scheduleTick(t) {
+    if (tick % TICKS === 0 || !cur) applyState(t);
+    const spb = 60 / (def.tempo.bpm * cur.tempo);
+    for (const p of def.parts) {
+      const ps = cur.parts[p.id]; if (!ps.on) continue;
+      const pat = def.patterns[ps.pattern]; if (!pat) continue;
+      const total = pat.bars * def.tempo.beats * TICKS;
+      const pos = tick % total, rep = Math.floor(tick / total);
+      for (const n of pat.notes) {
+        if (Math.round(n.at * TICKS) !== pos) continue;
+        if ((n.lvl ?? 1) > ps.density) continue;
+        if (n.only && rep % n.only.every !== n.only.phase) continue;
+        const vel = n.vel ?? 1;
+        if (n.hit) hit(n.hit, t, vel, partGain[p.id]);
+        else for (const deg of [n.degree].flat())
+          tone(p.voice, degreeToFreq(cur.scaleDef, deg, (p.octave ?? 0) + (ps.octave ?? 0) + (n.oct ?? 0)), t, n.len * spb, vel / Math.sqrt([n.degree].flat().length), partGain[p.id]);
+      }
+    }
+    timeline.push({ t, tick, tempo: cur.tempo });
+    if (timeline.length > 64) timeline.shift();
+    nextTime = t + spb / TICKS; tick++;
+  }
+  return {
+    master,
+    advance(until) { while (nextTime < until) scheduleTick(nextTime); },
+    cue(name, at) {
+      const c = def.cues[name]; if (!c) return;
+      let t0 = at ?? ctx.currentTime + 0.02;
+      if (at === undefined && c.start === 'beat' && cur) {
+        const spt = 60 / (def.tempo.bpm * cur.tempo) / TICKS;
+        const future = timeline.filter((e) => e.tick % TICKS === 0 && e.t > t0);
+        t0 = future.length ? future[0].t : nextTime + ((TICKS - (tick % TICKS)) % TICKS) * spt;
+      }
+      const scale = cur ? cur.scaleDef : Object.values(def.scales)[0];
+      for (const n of c.notes) {
+        if (n.hit) hit(n.hit, t0 + n.at, c.gain ?? 0.4, cueBus);
+        else for (const deg of [n.degree].flat())
+          tone(c.voice, degreeToFreq(scale, deg, (c.octave ?? 0) + (n.oct ?? 0)), t0 + n.at, n.len, (c.gain ?? 0.4) / Math.sqrt([n.degree].flat().length), cueBus);
+      }
+    },
+    info() {
+      const now = ctx.currentTime; let e = timeline[0];
+      for (const x of timeline) if (x.t <= now) e = x;
+      return { cur, tick: e ? e.tick : 0, voices };
+    },
+  };
+}
+
+// ---- 画面 ----
+const state = { scene: 'explore', threat: 0, hp: 'healthy', depth_band: 0, floor_kind: 'standard', telegraph: false, sense: 'none' };
+let def = null, ctx = null, engine = null, timer = null;
+const $ = (id) => document.getElementById(id);
+
+function buildControls() {
+  const box = $('controls'); box.textContent = '';
+  for (const [key, values] of Object.entries(INPUTS)) {
+    const row = document.createElement('div'); row.className = 'row';
+    const lab = document.createElement('span'); lab.className = 'lab'; lab.textContent = key; row.append(lab);
+    for (const v of values) {
+      const b = document.createElement('button'); b.textContent = String(v); b.dataset.key = key;
+      b.className = state[key] === v ? 'on' : '';
+      b.onclick = () => { state[key] = v; for (const x of row.querySelectorAll('button')) x.className = x === b ? 'on' : ''; };
+      row.append(b);
+    }
+    box.append(row);
+  }
+}
+function buildCues() {
+  const box = $('cues'); box.textContent = '';
+  for (const name of Object.keys(def.cues ?? {})) {
+    const b = document.createElement('button'); b.textContent = name;
+    b.onclick = () => { if (engine) engine.cue(name); };
+    box.append(b);
+  }
+}
+function stop() {
+  if (timer) clearInterval(timer); timer = null;
+  if (ctx) ctx.close(); ctx = null; engine = null;
+  $('play').textContent = '鳴らす'; $('play').className = 'big'; $('now').textContent = '止まっています';
+}
+function start() {
+  if (!def) return;
+  ctx = new AudioContext();
+  engine = makeEngine(ctx, def, () => state);
+  engine.master.gain.value = Number($('vol').value);
+  timer = setInterval(() => {
+    engine.advance(ctx.currentTime + 0.2);
+    const i = engine.info(); if (!i.cur) return;
+    const beats = def.tempo.beats, beat = Math.floor(i.tick / TICKS);
+    const parts = def.parts.map((p) => { const s = i.cur.parts[p.id]; return s.on ? `${p.id}: ${s.pattern}（密度 ${s.density}${s.octave ? `、オクターブ ${s.octave}` : ''}${s.gain !== 1 ? `、音量 ×${s.gain}` : ''}）` : `${p.id}: —`; });
+    $('now').textContent = `小節 ${Math.floor(beat / beats) + 1}　拍 ${beat % beats + 1}　｜　音階 ${i.cur.scale}　テンポ ${Math.round(def.tempo.bpm * i.cur.tempo)} BPM（×${i.cur.tempo}）　鳴っている音 ${i.voices}\n` + parts.join('\n');
+  }, 50);
+  $('play').textContent = '止める'; $('play').className = 'big on';
+}
+async function load(text, label) {
+  try {
+    if (text === undefined) { const r = await fetch(DEFAULT_URL, { cache: 'no-store' }); if (!r.ok) throw new Error('読めません: ' + DEFAULT_URL); text = await r.text(); label = DEFAULT_URL; }
+    const d = JSON.parse(text);
+    const wasPlaying = !!engine; if (wasPlaying) stop();
+    def = d; $('src').textContent = label; $('err').textContent = ''; buildCues();
+    if (wasPlaying) start();
+  } catch (e) { $('err').textContent = '定義を読めませんでした（' + e.message + '）。「ファイルから読む」で sound.json を選んでください。'; }
+}
+$('play').onclick = () => (engine ? stop() : start());
+$('vol').oninput = () => { if (engine) engine.master.gain.value = Number($('vol').value); };
+$('reload').onclick = () => load();
+$('pick').onclick = () => $('file').click();
+$('file').onchange = async () => { const f = $('file').files[0]; if (f) load(await f.text(), f.name); };
+buildControls(); load();
+
+// ---- 音量を測る（音の担当の確認用。画面からは使わない） ----
+// 例: await measure({ scene: 'combat', threat: 2 }, 20) → { peak_db, rms_db }
+async function measure(partial, seconds = 20, cueName, fromSec = 2) {
+  const s = { ...state, ...partial };
+  const off = new OfflineAudioContext(1, Math.ceil(44100 * seconds), 44100);
+  const eng = makeEngine(off, def, () => s);
+  eng.master.gain.value = 1;
+  eng.advance(seconds);
+  if (cueName) eng.cue(cueName, 1);
+  const buf = (await off.startRendering()).getChannelData(0);
+  let peak = 0, sum = 0; const from = Math.floor(44100 * fromSec);
+  for (let i = from; i < buf.length; i++) { const a = Math.abs(buf[i]); if (a > peak) peak = a; sum += buf[i] * buf[i]; }
+  const db = (x) => Math.round(200 * Math.log10(Math.max(x, 1e-9))) / 10;
+  return { peak_db: db(peak), rms_db: db(Math.sqrt(sum / (buf.length - from))) };
+}
+</script>
+</body>
+</html>

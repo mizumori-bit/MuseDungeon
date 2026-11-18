@@ -4,8 +4,19 @@
     {
       "name": "muse-server",
       "runtimeExecutable": "npx",
-      "runtimeArgs": ["tsx", "packages/server/src/main.ts"],
+      "runtimeArgs": [
+        "tsx",
+        "packages/server/src/main.ts"
+      ],
       "port": 7777
+    },
+    {
+      "name": "sound-audition",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "docs/sound-audition/serve.mjs"
+      ],
+      "port": 7790
     }
   ]
 }
