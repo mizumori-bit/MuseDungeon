@@ -34,6 +34,18 @@
       "core:potion_look_01": {
         "file": "items/potion_01.png"
       }
+    },
+    "scene": {
+      "scene:camp": {
+        "file": "scenes/camp.png",
+        "fit": "cover",
+        "anim": {
+          "idle": {
+            "frames": 2,
+            "frameMs": 450
+          }
+        }
+      }
     }
   },
   "categoryFallbacks": {}

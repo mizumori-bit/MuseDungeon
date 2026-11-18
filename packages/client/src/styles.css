@@ -190,7 +190,7 @@ button.exit { border-color: #2e8a4e; background: #1f4a30; }
 .briefing { position: absolute; top: 44px; left: 50%; transform: translateX(-50%); width: min(560px, calc(100% - 32px)); background: rgba(14,16,22,0.95); border: 1px solid #2c7fa8; border-radius: 8px; padding: 10px 14px; font-size: 13px; z-index: 2; }
 .briefing .head { font-weight: 700; margin-bottom: 4px; }
 .row.end { justify-content: flex-end; margin-top: 6px; }
-.campwrap { position: absolute; inset: 0; background: rgba(6,8,12,0.88); display: flex; align-items: flex-start; justify-content: center; overflow-y: auto; padding: 24px 16px; z-index: 3; }
+.campwrap { position: absolute; inset: 0; background: rgba(6,8,12,0.35); display: flex; align-items: flex-start; justify-content: center; overflow-y: auto; padding: 24px 16px; z-index: 3; }
 .campbox { background: var(--panel); border: 1px solid #3f6a3a; border-radius: 10px; padding: 14px 18px; width: min(640px, 100%); }
 .campbox h2 { margin: 0 0 6px; }
 .campbox h3 { font-size: 13px; margin: 10px 0 2px; }
@@ -399,3 +399,9 @@ label.check { display: flex; gap: 0.4rem; align-items: center; }
 .soundctl { display: inline-flex; align-items: center; gap: 6px; }
 .soundctl input[type='range'] { width: 72px; }
 .soundctl small.error { color: #e49a8a; }
+
+/* キャンプの絵（docs/ASSET_SPEC.md §7.7）: 地図を隠す。キャンプのパネルや印はこの上に重なる */
+.campscene { position: absolute; inset: 0; overflow: hidden; animation: campfade 0.4s ease-out; }
+.campscene canvas { display: block; width: 100%; height: 100%; }
+.campscene .camplabel { position: absolute; left: 20px; bottom: 14px; font-size: 32px; letter-spacing: 0.2em; color: rgba(220, 210, 170, 0.55); }
+@keyframes campfade { from { opacity: 0; } to { opacity: 1; } }

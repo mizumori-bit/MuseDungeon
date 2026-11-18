@@ -17,6 +17,7 @@ import { clamp, getLocale, tr } from '../util';
 import { filterEventsForPlayer } from '@muse/shared';
 import { soundDirector } from '../sound/director';
 import { SoundControls } from '../ui/sound';
+import { CampScene } from '../ui/camp';
 
 const CHUNK = 5000;
 const SPEEDS = [0.25, 0.5, 1, 2, 4, 8, 16];
@@ -429,7 +430,8 @@ export function Replay({ runId }: { runId: string }) {
       </div>
       <div class="layout">
         <div class="main">
-          <MapView theme={th.theme} onReady={(r) => { rRef.current = r; render(); setTick((n) => n + 1); }} />
+          <MapView theme={th.theme} onReady={(r) => { rRef.current = r; render(); setTick((n) => n + 1); }}
+            overlay={mode === 'follow' && follow && w && w.status !== 'ended' && w.players[follow]?.state === 'at_camp' ? <CampScene theme={th.theme} /> : undefined} />
         </div>
         <aside class="side">
           <ExpeditionStatusPanel info={expInfo} />

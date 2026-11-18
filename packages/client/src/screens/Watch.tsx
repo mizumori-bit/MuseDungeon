@@ -11,6 +11,7 @@ import { directorFloor, sceneFromView, sceneFromWorld } from '../render/scene';
 import { soundDirector } from '../sound/director';
 import { ErrorBanner, Header, MapView, ThemePicker, useCatalog, useLocaleRefresh, useTheme } from '../ui/common';
 import { SoundControls } from '../ui/sound';
+import { CampScene } from '../ui/camp';
 import { AgentWaitBadge, directorExpInfo, ExpeditionStatusPanel, followExpInfo, type ExpInfo } from '../ui/expedition';
 import { narrateWorld, perceivedLines, thoughtsFrom } from '../ui/narration';
 import { AiPanel, MessageLog, PartyPanel, SummaryDialog, type LogLine, type ThoughtLine } from '../ui/panels';
@@ -311,6 +312,10 @@ export function Watch({ runId }: { runId: string }) {
   // 遠征の目的と状態: 俯瞰は World の最新の遠征、追従は射影した PlayerView
   let expInfo: ExpInfo | null = null;
   let campNote: string | null = null;
+  // 追従で見ている相手がキャンプにいれば、地図を隠してキャンプの絵（ASSET_SPEC §7.7）。俯瞰と終わったランは地図のまま
+  const followCamp = followOnly
+    ? viewRef.current?.status === 'at_camp'
+    : mode === 'follow' && !!follow && !!w && w.status !== 'ended' && w.players[follow]?.state === 'at_camp';
   try {
     if (followOnly) {
       const v = viewRef.current;
@@ -372,6 +377,7 @@ export function Watch({ runId }: { runId: string }) {
             onReady={(r) => { rRef.current = r; render(); }}
             overlay={
               <>
+                {followCamp && <CampScene theme={th.theme} />}
                 <AgentWaitBadge probe={agentTurn} lastRef={lastMsgRef} />
                 {campNote && <div class="macro">{campNote}</div>}
               </>

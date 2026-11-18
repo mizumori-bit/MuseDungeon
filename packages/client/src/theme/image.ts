@@ -3,7 +3,7 @@
 //   → categoryFallbacks（item:<category> → item）→ fallbackTheme（glyph）→ 組み込みの「不明」表示。
 // 画像は要求されたときに遅延読み込みし、読み込み中・失敗時は glyph で欠けずに描く。
 import { visualHash } from '@muse/shared';
-import type { AssetClass, AssetRef, Drawable, Theme } from './types';
+import type { AssetClass, AssetRef, Drawable, SceneArt, Theme } from './types';
 
 interface AnimDef { file?: string; frames?: number; frameMs?: number; loop?: boolean }
 interface AssetEntry {
@@ -17,6 +17,8 @@ interface AssetEntry {
   anim?: Record<string, AnimDef>;
   states?: Record<string, { file: string }>;
   orient?: 'rotate' | 'none';
+  /** 場面の 1 枚絵の合わせ方（scene 分類。既定 cover） */
+  fit?: 'cover' | 'contain';
 }
 
 export interface ThemeManifest {
@@ -141,6 +143,13 @@ export function createImageTheme(manifest: ThemeManifest, baseUrl: string, fallb
       listeners.add(cb);
       const unsub = fallback.onChange(cb);
       return () => { listeners.delete(cb); unsub(); };
+    },
+    sceneArt(id): SceneArt | null {
+      const e = assets.scene?.[id];
+      const a = e?.anim?.idle;
+      const file = a?.file ?? e?.file;
+      if (!e || !file) return null;
+      return { url: `${baseUrl}/${file}`, fit: e.fit === 'contain' ? 'contain' : 'cover', frames: Math.max(1, a?.frames ?? 1), frameMs: Math.max(16, a?.frameMs ?? 200) };
     },
   };
 }

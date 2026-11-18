@@ -4,7 +4,7 @@ import { generateFloor, validateContentHandlers } from '@muse/engine';
 import { loadConfig, SessionManager } from '@muse/server';
 import { runBot } from './bot';
 import type { BotKind } from './bot';
-import { assetsCheck, assetsChecklist } from './assets';
+import { assetsCheck, assetsChecklist, slotStatus } from './assets';
 import { commandInvoker, drive, dummyInvoker, httpInvoker } from './drive';
 import { formatPacing, pacingReport } from './pacing';
 import { choicesReport, formatChoices } from './choices';
@@ -133,8 +133,9 @@ async function main() {
       else {
         console.log('| class | key | name | required |');
         console.log('|---|---|---|---|');
-        for (const a of list) console.log(`| ${a.class} | ${a.key} | ${a.name} | ${a.required ? '必須' : '任意'} |`);
-        console.log(`\n${list.filter((a) => a.required).length} required / ${list.length} total`);
+        for (const a of list) console.log(`| ${a.class} | ${a.key} | ${a.name} | ${slotStatus(a)} |`);
+        const supported = list.filter((a) => a.supported);
+        console.log(`\n${supported.filter((a) => a.required).length} required / ${supported.length} total（ほかに未対応 ${list.length - supported.length}: fx・ui はレンダラーが図形で描くので作らない。ASSET_SPEC §6.4）`);
       }
       break;
     }

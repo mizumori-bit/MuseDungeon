@@ -1,5 +1,8 @@
 // テーマ: コンテンツ ID → 見た目。ゲーム側は見た目を知らない（docs/ASSET_SPEC.md）。
-export type AssetClass = 'terrain' | 'actor' | 'item' | 'appearance' | 'feature' | 'fx' | 'status' | 'affix' | 'ui';
+export type AssetClass = 'terrain' | 'actor' | 'item' | 'appearance' | 'feature' | 'fx' | 'status' | 'affix' | 'ui' | 'scene';
+
+/** 場面の 1 枚絵（ASSET_SPEC §7.7。scene:camp）。グリッドに乗らない。frames: 横に並べたフレームの数（1 フレームは絵全体と同じ大きさ） */
+export interface SceneArt { url: string; fit: 'cover' | 'contain'; frames: number; frameMs: number }
 export type Facing = 'n' | 'e' | 's' | 'w';
 
 export interface AssetRef {
@@ -58,4 +61,6 @@ export interface Theme {
   usesMask(terrainId: string, biome?: string): boolean;
   /** 画像の読み込み完了などで再描画が必要になったとき */
   onChange(cb: () => void): () => void;
+  /** 場面の 1 枚絵（scene 分類。ASSET_SPEC §7.7）。無ければ null（glyph には無い） */
+  sceneArt?(id: string): SceneArt | null;
 }

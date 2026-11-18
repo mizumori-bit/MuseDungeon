@@ -18,6 +18,7 @@ import {
 } from '../ui/panels';
 import { ErrorBanner, Header, MapView, ThemePicker, useCatalog, useLocaleRefresh, useTheme } from '../ui/common';
 import { SoundControls } from '../ui/sound';
+import { CampScene } from '../ui/camp';
 import { BriefingCard, CampPanel, completesOnExtract, ExpeditionPanel, extractConfirmText, lifelineConfirmText, RestEstimateLine, rulesOf, TurnBar } from '../ui/expedition';
 import { abilityDisplayName, AbilityBar, BoonChoicePanel, DirPad, PerkChoicePanel } from '../ui/build';
 import {
@@ -1123,6 +1124,8 @@ ${tr('それでも装備しますか？', 'Equip it anyway?')}`)) send({ ...last
                 )}
                 {macro?.state === 'running' && <div class="macro">{tr('自動行動中', 'Auto')}: {macro.kind} ({macro.steps})</div>}
                 {view && view.status === 'waiting_others' && <div class="macro">{tr('他のプレイヤーの手番を待っています…', 'Waiting for other players…')}</div>}
+                {/* キャンプにいる間は地図を隠してキャンプの絵（ASSET_SPEC §7.7）。パネルはその上 */}
+                {view && atCamp && <CampScene theme={th.theme} />}
                 {view && atCamp && <div class="campwrap"><CampPanel view={view} catalog={catalog} onStart={startExpedition} onRetire={retire} /></div>}
                 {exp && expActive && briefingNo === exp.no && <BriefingCard x={exp} catalog={catalog} onClose={() => setBriefingNo(null)} />}
                 {view && view.status === 'dead' && !summary && (

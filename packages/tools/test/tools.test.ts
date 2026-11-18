@@ -1,4 +1,4 @@
-import { mkdtempSync, existsSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { AddressInfo } from 'node:net';
@@ -11,7 +11,8 @@ import {
 } from '@muse/shared';
 import { createApp, loadConfig, RunSession, SessionManager } from '@muse/server';
 import type { PlayerPort } from '@muse/server';
-import { assetsCheck, assetsChecklist, drive, dummyInvoker, foldAll, greedyDecide, newMemo, playWithPort, runBot } from '../src/index';
+import { assetsCheck, assetsChecklist, drive, dummyInvoker, foldAll, greedyDecide, newMemo, playWithPort, runBot, slotStatus } from '../src/index';
+import { writePngRgb } from '../src/png';
 import { checkFloorForTest } from './genCheck';
 
 const content = loadContent();
@@ -186,6 +187,37 @@ describe('assets', () => {
     expect(list.some((a) => a.class === 'appearance' && a.key === 'core:potion_look_01')).toBe(true);
     const r = assetsCheck(content, resolve(__dirname, '..', '..', 'client', 'public', 'themes', 'sample'));
     expect(r.lines.filter((l) => l.startsWith('ERROR'))).toEqual([]);
+    expect(r.lines.filter((l) => l.startsWith('WARN'))).toEqual([]);
+  });
+
+  it('the camp picture is a required slot; fx and ui are marked unsupported; the validator checks scenes (ASSET_SPEC §7.7・§9.1)', () => {
+    const list = assetsChecklist(content, catalog);
+    const camp = list.find((a) => a.class === 'scene' && a.key === 'scene:camp')!;
+    expect(camp).toMatchObject({ required: true, supported: true });
+    expect(slotStatus(camp)).toBe('必須');
+    const fx = list.filter((a) => a.class === 'fx' || a.class === 'ui');
+    expect(fx.length).toBe(13);
+    expect(fx.every((a) => !a.supported && slotStatus(a) === '未対応（作らない）')).toBe(true);
+    // 検証: 1 フレームが 16:9 でない・フレーム数で割り切れない・fit の値・未対応の分類
+    const dir = mkdtempSync(join(tmpdir(), 'muse-theme-'));
+    mkdirSync(join(dir, 'scenes'));
+    writePngRgb(join(dir, 'scenes', 'camp.png'), 2560, 720, () => [20, 20, 40]);
+    writePngRgb(join(dir, 'scenes', 'square.png'), 301, 300, () => [20, 20, 40]);
+    const write = (scene: object, extra: object = {}) => writeFileSync(join(dir, 'theme.json'), JSON.stringify({ id: 't', formatVersion: 1, cellSize: 32, assets: { scene: { 'scene:camp': scene }, ...extra } }));
+    write({ file: 'scenes/camp.png', fit: 'cover', anim: { idle: { frames: 2, frameMs: 400 } } });
+    let r = assetsCheck(content, dir);
+    expect(r.errors).toBe(0);
+    expect(r.lines.some((l) => l.startsWith('WARN') && l.includes('scene'))).toBe(false);
+    expect(r.lines.some((l) => l.includes('missing scene'))).toBe(false);
+    write({ file: 'scenes/square.png', fit: 'stretch', anim: { idle: { frames: 2 } } }, { fx: { 'fx:hit': { file: 'fx/hit.png' } } });
+    r = assetsCheck(content, dir);
+    expect(r.lines.some((l) => l.startsWith('ERROR') && l.includes('割り切れない'))).toBe(true);
+    expect(r.lines.some((l) => l.startsWith('WARN') && l.includes('16:9'))).toBe(true);
+    expect(r.lines.some((l) => l.startsWith('WARN') && l.includes('cover か contain'))).toBe(true);
+    expect(r.lines.some((l) => l.startsWith('WARN') && l.includes('fx:hit') && l.includes('未対応'))).toBe(true);
+    // キャンプの絵が無ければ、無地と文字で代わると伝える
+    writeFileSync(join(dir, 'theme.json'), JSON.stringify({ id: 't', formatVersion: 1, cellSize: 32, assets: {} }));
+    expect(assetsCheck(content, dir).lines.some((l) => l.includes('missing scene scene:camp') && l.includes('無地'))).toBe(true);
   });
 });
 
