@@ -21,6 +21,7 @@ const browserHost = host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host;
 const base = `http://${browserHost}:${port}`;
 const win = process.platform === 'win32';
 const say = (s) => console.log(s);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function fail(msg) {
   console.error(`\n[MuseDungeon] ${msg}`);
@@ -54,11 +55,19 @@ function portBusy() {
   });
 }
 
+/**
+ * ブラウザで開く。開く命令が終わるまで待つ（待たずに終わると、ウィンドウと一緒に開く命令も消され、ブラウザが開かない）
+ */
 function openBrowser(url) {
   // MUSE_NO_BROWSER=1 なら開かない（確かめ用・自分で開きたいとき）
-  if (process.env.MUSE_NO_BROWSER === '1') { say(`（ブラウザは開きません: ${url}）`); return; }
+  if (process.env.MUSE_NO_BROWSER === '1') { say(`（ブラウザは開きません: ${url}）`); return Promise.resolve(); }
   const cmd = win ? `start "" "${url}"` : process.platform === 'darwin' ? `open "${url}"` : `xdg-open "${url}"`;
-  exec(cmd, (e) => { if (e) say(`ブラウザを開けませんでした。${url} を開いてください。`); });
+  return new Promise((done) => {
+    exec(cmd, (e) => {
+      if (e) say(`ブラウザを開けませんでした。${url} を開いてください。`);
+      done();
+    });
+  });
 }
 
 /** ディレクトリの中で最も新しいファイルの時刻 */
@@ -70,8 +79,6 @@ function newest(p) {
   for (const name of readdirSync(p)) m = Math.max(m, newest(join(p, name)));
   return m;
 }
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // 1. Node.js の版
 const major = Number(process.versions.node.split('.')[0]);
@@ -87,7 +94,9 @@ const needInstall = !existsSync(installed) || (existsSync(lock) && statSync(lock
 // 3. もう動いていれば開くだけ（依存を入れ直すと動いているサーバーを壊すので、先に見る）
 if (await healthy()) {
   say(`サーバーはもう動いています。ブラウザで ${base}/ を開きます。`);
-  openBrowser(`${base}/`);
+  await openBrowser(`${base}/`);
+  say('このウィンドウは数秒で閉じます（サーバーは、先に起動したほうのウィンドウや、AI のつなぐ口が動かしています）。');
+  await sleep(4000);
   process.exit(0);
 }
 if (await portBusy()) fail(`口 ${port} を別のプログラムが使っています。そのプログラムを止めるか、環境変数 MUSE_PORT で別の口を指定してください。`);
@@ -123,4 +132,4 @@ say(`遊ぶ・観戦する: ${base}/`);
 say(`AI（MCP）の接続先: ${base}/mcp`);
 say('このウィンドウを閉じると、サーバーが止まります。');
 say('');
-openBrowser(`${base}/`);
+await openBrowser(`${base}/`);
