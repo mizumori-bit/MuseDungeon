@@ -7,7 +7,7 @@ import { grantBoon } from './boons';
 import type { Ctx } from './ctx';
 import { rollWardenInfo } from './guardians';
 import { generateFloor } from './gen/generate';
-import { missingTerrain } from './floors';
+import { missingConceal, missingTerrain } from './floors';
 import { addDiceBonus, diceMax, floorDiv } from '@muse/shared';
 import { sumAffixMods } from './spawn';
 
@@ -138,4 +138,19 @@ export function chooseBoon(ctx: Ctx, pr: PlayerRecord, option: number | string):
   }
   grantBoon(ctx, me, id, 'warden', (b) => { delete b.boonChoice; });
   return null;
+}
+
+/**
+ * 続いているランの不整合（V4-0b §1.2。World は変えない）: 遠征の開始時の検査で直るもの。サーバーが起動時にログへ書く。
+ * 大守護者のいない倒していない節目の階・地形の表に無い地形・隠れる地形の番号が無い
+ */
+export function runGaps(ctx: Ctx): string[] {
+  const w = ctx.world;
+  const out: string[] = [];
+  const wardenless = Object.keys(w.floors).filter((k) => sealedFloor(ctx, k) && !livingWarden(ctx, k)).map((k) => w.floors[k].depth).sort((a, b) => a - b);
+  if (wardenless.length) out.push(`節目の階に大守護者がいない: ${wardenless.map((d) => `地下${d}階`).join('・')}（次の遠征の開始時に作り直す）`);
+  const mt = missingTerrain(ctx);
+  if (mt.length) out.push(`地形の表に無い地形: ${mt.join(', ')}（次に階を作るとき・遠征の開始時に足す）`);
+  if (missingConceal(ctx).length) out.push('隠れる地形（背の高い草）の番号が無い（遠征の開始時に足す）');
+  return out;
 }

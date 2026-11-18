@@ -3,6 +3,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Content } from '@muse/content';
 import { buildCatalog } from '@muse/content';
+import { checkRunGaps, compareVersions, ENGINE_VERSION } from '@muse/engine';
 import type {
   ActionError, AgentActivity, Catalog, Controller, ExpeditionOffer, JoinCommand, Locale, NewRunRequest, ObjectiveChoice, PlayerId, RunListing,
   RunListingPlayer,
@@ -45,6 +46,12 @@ export class SessionManager {
         const r = RunSession.recover(this.deps, runId);
         this.sessions.set(runId, r.session);
         log(r.message);
+        // 古い版で始まったラン（V4-0b §1.2。World は変えない。記録だけ）: 分かっている不整合（遠征の開始時の検査で直るもの）
+        const created = r.session.world.meta.engineVersion;
+        if (created && compareVersions(created, ENGINE_VERSION) < 0) {
+          const gaps = checkRunGaps(r.session.world, this.deps.content);
+          log(`  古い版で始まったラン ${runId}（engine ${created}。今は ${ENGINE_VERSION}）${gaps.length ? `: ${gaps.join(' / ')}` : '。分かっている不整合は無い'}`);
+        }
       } catch (e) {
         log(`failed to recover ${runId}: ${(e as Error).message}`);
       }

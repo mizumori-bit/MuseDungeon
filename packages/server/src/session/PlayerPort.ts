@@ -5,9 +5,10 @@ import type {
 } from '@muse/shared';
 import {
   actionError, briefingLines, briefingShort, buildObservation, buildTurnBlock, campLines, changesLine, compareLines, describeInventory, describeTarget, diffChanges, progressLines, reportLines,
-  formatObservationText, guardianDisplayName, kindName, MACRO_COMPLETED_STOPS, mapTextLines, memoryCombatText, memoryKey, mineCount, nameOf, pickableItems, progressText, renderAsciiMap, resultText, t,
+  cheb, compassDir, dirLabel, formatObservationText, guardianDisplayName, kindName, MACRO_COMPLETED_STOPS, mapTextLines, memoryCombatText, memoryKey, mineCount, nameOf, pickableItems, progressText, renderAsciiMap, resultText, t,
   turnLine, turnSnapshot, turnStateOf,
 } from '@muse/shared';
+import { compareVersions, ENGINE_VERSION } from '@muse/engine';
 import type { PlayerOptions } from './RunSession';
 import type { MacroStop } from '@muse/shared';
 import type { RunSession, SubmitOpts } from './RunSession';
@@ -117,6 +118,7 @@ const STOP_TEXT: Record<string, [string, string]> = {
   target_shooting: ['標的は離れたまま撃ってくる（その場で撃つ相手。射線を切るか、寄って殴る）', 'the target keeps shooting from where it stands (it does not close in: break its line of fire or close in yourself)'],
   target_not_hunting: ['相手はあなたを追っていない', 'the target is not hunting you'],
   collect_far: ['残りの品は within 歩より遠い（拾うなら within を大きくする）', 'the remaining items are farther than within steps (raise within to fetch them)'],
+  chaser_near: ['止まらずに探索を続けていた遅い追跡者が 2 マス以内に来た', 'a slow hunter you kept exploring ahead of came within 2 cells'],
   damage_taken: ['この呼び出しで受けた被害の合計が最大 HP の 4 分の 1 を超えた（steady）', 'the damage taken during this call passed a quarter of your max HP (steady)'],
   damaged: ['ダメージを受けた', 'you took damage'],
   item_seen: ['新しいアイテムを見つけた', 'you spotted a new item'],
@@ -292,12 +294,17 @@ export class SessionPlayerPort implements PlayerPort {
     // 加護の説明は、持っている加護が変わったときの 1 回だけ（V3-3c §44.6 は遠征ごとに 1 回。V3-8a §56.1 の 5 で、ランを通して 1 回に）
     const boonKey = [...(view.self.boons ?? [])].sort().join(',');
     const boonsShort = !!boonKey && prev?.boonKey === boonKey;
-    const observation = buildObservation(view, this.catalog, { detail: p.detail ?? 'brief', map: true, recent: p.recent.slice(-10), lifelineShort, boonsShort, campCompare: this.campCompare(view), offerNotes: this.offerNotes(view), records: this.campRecords(view) });
+    // 古い版で始まったラン（V4-0b §1.2）: キャンプの観測に 1 行、最初の 1 度だけ（覚えているのはサーバーのメモリ。再起動したら、もう 1 度だけ出る）
+    const created = this.session.world.meta.engineVersion;
+    const versionNote = view.status === 'at_camp' && !prev?.versionNoted && !!created && compareVersions(created, ENGINE_VERSION) < 0
+      ? t(L, `このランは古い版で始まった（engine ${created}）。階の一部が姿を変えることがある`, `This run began on an older version (engine ${created}). Some floors may change shape`) : undefined;
+    const observation = buildObservation(view, this.catalog, { detail: p.detail ?? 'brief', map: true, recent: p.recent.slice(-10), lifelineShort, boonsShort, campCompare: this.campCompare(view), offerNotes: this.offerNotes(view), records: this.campRecords(view), ...(versionNote ? { versionNote } : {}) });
     const state = turnStateOf(view, p.expeditionEndedNow ?? false).state;
     const cur = turnSnapshot(view, observation, state);
     const longLife = observation.valid_actions.some((a) => a.includes('次の遠征はこの遠征を始めた階段から') || a.includes('the next expedition starts from where this one began'));
     cur.lifeNo = lifelineShort ? prev?.lifeNo : longLife ? xNo : prev?.lifeNo;
     cur.boonKey = xNo !== undefined && boonKey ? boonKey : prev?.boonKey;
+    cur.versionNoted = prev?.versionNoted || !!versionNote;
     let changes: TurnBlock['changes'] = [];
     if (p.changes) {
       const events = prev ? this.session.messages(this.playerId).filter((m) => m.seq > prev.seq) : [];
@@ -396,6 +403,15 @@ export class SessionPlayerPort implements PlayerPort {
           const here = me ? view.entities.filter((e) => e.cat === 'item' && e.pos.x === me.x && e.pos.y === me.y) : [];
           if (here.length) outcome += ' ' + t(L, `足元の${here.map((e) => kindName(this.catalog, L, e.kind, e.appearanceId)).join('・')}はまだ拾っていない（pickup）。`, `You have not picked up the ${here.map((e) => kindName(this.catalog, L, e.kind, e.appearanceId)).join(', ')} under you yet (pickup).`);
         }
+        // 遅い追跡者に追われたまま探索した（V4-0b §1.4）
+        if (m?.slowChasers) outcome += ' ' + t(L, `遅い敵 ${m.slowChasers} 体に追われたまま探索した。`, `Explored with ${m.slowChasers} slow hunter${m.slowChasers > 1 ? 's' : ''} on your trail.`);
+        // fight で見失った・逃げられた: 最後に見た場所（V4-0b §1.4）
+        if (cmd.type === 'fight' && (r.interruptedBy === 'target_gone' || r.interruptedBy === 'target_fled')) {
+          const tgId = cmd.target;
+          const rm = view.memory.remembered.find((x) => x.id === tgId);
+          const me = view.self.pos;
+          if (rm && me) outcome += ' ' + t(L, `最後に見た場所: (${rm.pos.x},${rm.pos.y})・${dirLabel(L, compassDir(me, rm.pos))}${cheb(rm.pos, me)} マス。`, `Last seen at (${rm.pos.x},${rm.pos.y}), ${dirLabel(L, compassDir(me, rm.pos))} ${cheb(rm.pos, me)}.`);
+        }
         // hp_risk: 何にすれば、あと 1 回の最悪の被害まで続けられるか（V3-3a §35.6）
         if (r.interruptedBy === 'hp_risk' && cmd.type === 'fight') {
           const after = this.view();
@@ -445,10 +461,11 @@ export class SessionPlayerPort implements PlayerPort {
           const picked = r.events.filter((e) => e.type === 'item_picked_up' && e.actor === view.self.id).length;
           const remaining = (cmd.what ?? 'thrown') === 'items' ? pickableItems(view, this.catalog).length : mineCount(view);
           collected = { picked, remaining };
-          outcome += t(L, ` 回収 ${collected.picked} 個、残り ${remaining} 個。`, ` Recovered ${collected.picked}, ${remaining} left.`);
-          // 遺物は拾わない（拾うと階の敵が目を覚ます判断なので、マクロに任せない）。知っている遺物が床にあれば、拾い方を添える
-          const relic = view.entities.find((e) => e.cat === 'item' && e.role === 'relic') ?? view.memory.remembered.find((r) => r.cat === 'item' && r.kind === 'core:relic');
-          if ((cmd.what ?? 'thrown') === 'items' && relic) outcome += t(L, ` 遺物は数えていない（拾うと階の敵が目を覚ます）。拾うなら travel_to ${relic.id}。`, ` The relic is not counted (picking it up wakes the floor); to take it, travel_to ${relic.id}.`);
+          // 遺物は拾わない（拾うと階の敵が目を覚ます判断なので、マクロに任せない）。知っている遺物が床にあれば、「残り 0 個」ではなく対象外と書く（V4-0b §1.5）
+          const relic = view.entities.find((e) => e.cat === 'item' && e.role === 'relic') ?? view.memory.remembered.find((r) => r.cat === 'item' && (r.role === 'relic' || r.kind === 'core:relic'));
+          const relicNote = (cmd.what ?? 'thrown') === 'items' && relic
+            ? t(L, `遺物は対象外（拾うと階の敵が目を覚ます。拾うなら travel_to ${relic.id} で着いて pickup）`, `the relic is not included (picking it up wakes the floor; travel_to ${relic.id}, then pickup)`) : '';
+          outcome += t(L, ` 回収 ${collected.picked} 個、残り ${remaining} 個。${relicNote ? `${relicNote}。` : ''}`, ` Recovered ${collected.picked}, ${remaining} left.${relicNote ? ` ${relicNote[0].toUpperCase()}${relicNote.slice(1)}.` : ''}`);
         }
       }
       const notable = mine.filter((x) => x.type !== 'entity_moved' && x.type !== 'damaged' && x.type !== 'attack'

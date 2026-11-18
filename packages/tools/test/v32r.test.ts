@@ -90,7 +90,7 @@ describe('V3-2R crossing (§14.1)', () => {
     obs = t.r.port.observe({ map: false }).observation;
     expect(obs.expedition!.haul!.parts.overreach).toBe(content.balance.haul.overreachFirst);
     expect(obs.expedition!.haul!.next_overreach!.depth).toBe(4);
-    expect(w.ok && w.turn.changes.some((c) => c.text.includes('踏破'))).toBe(true);
+    expect(w.ok && w.turn.changes.some((c) => c.text.includes('深追い'))).toBe(true);
     // 目的の基礎点は踏破 2 階分以上（§14.1）
     const h = content.balance.haul;
     expect(t.world.expeditions![0].points).toBeGreaterThanOrEqual(h.overreachFirst * 2 + h.overreachStep);

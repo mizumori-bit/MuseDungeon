@@ -116,7 +116,8 @@ export type GameEvent =
    */
   /**
    * 地形の表に、今のコンテンツの地形を後ろに足す（V4-0a: 古い版で始まったランで、新しい地形を使う階を作る前）。
-   * 番号は後ろに足すだけなので、作り済みの階の地形は変わらない。concealAdded: 足した地形のうち、中にいる者を隠すものの番号（今までの分に足す）
+   * 番号は後ろに足すだけなので、作り済みの階の地形は変わらない。concealAdded: 中にいる者を隠す地形の番号のうち、meta.concealTerrain に無かったもの（今までの分に足す。
+   * V4-0b §1.2: 古い版で始まったランには concealTerrain が無く、背の高い草の中の敵が表示では見えていた）
    */
   | E<'terrain_table_extended', { added: string[]; concealAdded: number[] }>
   | E<'floor_reset', { floorKey: FloorKey; depth: number; reason: 'warden_missing'; /** その階の大守護者の名前（次の節目と同じ。シードと深さから決まる） */ guardianName?: Names }>

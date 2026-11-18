@@ -316,7 +316,7 @@ export function applyEvent(world: World, ev: GameEvent): void {
     }
     case 'terrain_table_extended':
       world.meta.terrainTable = [...world.meta.terrainTable, ...ev.added];
-      if (ev.concealAdded.length) world.meta.concealTerrain = [...(world.meta.concealTerrain ?? []), ...ev.concealAdded];
+      if (ev.concealAdded.length) world.meta.concealTerrain = [...new Set([...(world.meta.concealTerrain ?? []), ...ev.concealAdded])].sort((a, b) => a - b);
       break;
     case 'floor_reset': {
       // 階を捨てる（階のエンティティは ev.del で消える）。全員のその階の地図と記憶を消す（V4-0a §1.1）

@@ -7,7 +7,7 @@ import type {
 import { addDiceBonus, campDepthOf, cheb, currentExpedition, deepestGenerated, diceMax, diceMin, floorDiv, guardianDisplayName, haulTotal, isPursuing, killPoints, offerPoints, overreachPoints, payoutOf, Rng, actionError, t } from '@muse/shared';
 import { buildSummary, grantXp } from './combat';
 import type { Ctx } from './ctx';
-import { ensureFloor, findFreeCell } from './floors';
+import { ensureFloor, findFreeCell, syncTerrainTable } from './floors';
 import { hasLos, inCircle } from './geom';
 import { isOpaqueFn } from './perception';
 import { guardianCandidates, guardianSpec, pickGuardianKind, rollMonsterAffixes, selectBiome, selectFloorType } from './gen/generate';
@@ -989,11 +989,14 @@ export function startExpedition(ctx: Ctx, pr: PlayerRecord, offer: number | 'end
 }
 
 /**
- * 遠征の開始時の検査（V4-0a §1.1）: 大守護者のいない、倒した記録の無い節目の階を作り直す。
+ * 遠征の開始時の検査（V4-0a §1.1・V4-0b §1.2。いつでも成り立つべき条件を確かめて直す）: 地形の表を今のコンテンツに合わせ、
+ * 大守護者のいない、倒した記録の無い節目の階を作り直す。
  * キャンプから再開する地点がその階だった参加者は、作り直した階の上り階段から始める（その階はこの時点で作る）
  */
 function restoreForStart(ctx: Ctx): void {
   const w = ctx.world;
+  // 地形の表と隠れる地形を今のコンテンツに合わせる（古い版で始まったラン。V4-0b §1.2）
+  syncTerrainTable(ctx);
   const reset = restoreMilestoneFloors(ctx);
   if (!reset.length) return;
   for (const pid of w.playerOrder) {

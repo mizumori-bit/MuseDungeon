@@ -1364,3 +1364,14 @@ bot の計測（`bot --runs 10`・`npm run budget -- --runs 20`）は IMPROVEMEN
 - **地形の表**: `ensureFloor` は階を作る前に、今のコンテンツの地形のうちランの表に無いものを `terrain_table_extended { added, concealAdded }` で表の後ろに足す（古い版で始まったラン）。`wardenPreview` は階を作らないので、足した表で生成するだけ。
 - **伝える**: `floor_reset` の文「地下N階は姿を変えた。大守護者「名前」の間になっている（その階の地図と記憶は消え、床に残していた品は失われた）」は、開始の応答の outcome と、ターンの要約の changes（`floor_reset`。先頭）に出る。get_rules の節目の文にも 1 文。
 - **レポート**: `buildExpeditionReport` の大守護者との戦いは、`wardenIds`（呼び出し側が World の大守護者と履歴の `warden_slain` から渡す）と、その遠征の `warden_slain` の個体だけ。階の深さでは決めない。
+
+### 36.2 V4-0b（IMPROVEMENTS_V4 §1.2・§1.4・§1.5）
+
+実装メモは IMPROVEMENTS_V4 §3。`engineVersion` 0.26.0。テストは `packages/tools/test/v40b.test.ts`。
+
+- **版をまたぐラン**: サーバーは続いているランを読んだとき、作られた版が古ければログに不整合を書く（engine の `checkRunGaps`。World は変えない）。キャンプの観測に「このランは古い版で始まった（engine X）。階の一部が姿を変えることがある」を最初の 1 度だけ（`TurnSnapshot.versionNoted`。サーバーのメモリ）。遠征の開始時に `syncTerrainTable`（地形の表と `concealTerrain` を今のコンテンツに合わせる。`terrain_table_extended` の `concealAdded` は今までの番号も入れられ、reducer は重ねない）。
+- **explore の風の方角**: 新しい行き先を選ぶとき、風の方角の境界への道が、方角を問わない近くの境界への道より `DRAFT_DETOUR`（12）歩を超えて長ければ、近くを先に見る（立つ位置で方角が変わり、遠い 2 つの境界を往復していた）。
+- **explore の遅い追跡者**: careful の explore は、自分より遅く（`speed` が自分より小さい）3 マス以上離れた、射撃しない追跡中の敵の出現・追跡への変化では止まらない（`MacroState.slowChasers`）。その敵が 2 マスに来たら `chaser_near`。結果に「遅い敵 N 体に追われたまま探索した」（`MacroReport.slowChasers`）。
+- **fight の見失い**: 待つのは `fightLostWait`（5）手番まで。ほかに届く追跡中の敵が見えている手番・被害を受けた手番は待たずに `target_gone`。見失った・逃げられたときは、結果に最後に見た場所（記憶の位置）。
+- **断る文**: explore の `hostile_adjacent` は「振り切るなら flee、戦うなら fight」。fight の `target_moved`（始めた時点で標的が逃げている）は「見えているが、逃げている」。
+- **表示**: 会心のとどめの「倒した」の行（「会心 12。残り 5 を倒した」）。collect の「遺物は対象外」。深追いの文（「深追い: 地下N階の下り階段に着いた…次は地下N+1階の下り階段で +Y」）。推定残り HP（傷の無い相手は「体力の記録」、下限だけのときは根拠。`HpEstimate.untouched`）。種族の体力の記録は素の個体の範囲であることを添える。get_rules の shot は応答の時点の判定で、敵の射撃も同じ判定。

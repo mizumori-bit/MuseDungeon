@@ -151,6 +151,8 @@ describe('V4-0a milestone floors always hold a warden (§1.1)', () => {
     expect(w.floors['main:1'].terrain.includes(bi)).toBe(false);
     w.meta.terrainTable = w.meta.terrainTable.map((id) => (id === 'core:bookshelf' ? 'core:retired_terrain' : id));
     const len = w.meta.terrainTable.length;
+    // 遠征の開始時に足す（V4-0b §1.2。階を作る前にも足す）
+    const n = r.session.history.length;
     expect((await r.port.act({ type: 'start_expedition', offer: 1 }, { source: 'bot' })).ok).toBe(true);
     const pid = r.port.playerId;
     const meId = w.players[pid].entityId;
@@ -158,9 +160,10 @@ describe('V4-0a milestone floors always hold a warden (§1.1)', () => {
     const me = structuredClone(w.entities[meId]); me.pos = { floor: 'main:1', x: f1.stairs.down[0].x, y: f1.stairs.down[0].y };
     applyEvent(w, { type: 'thought', player: pid, text: '', seq: w.seq + 1, cause: null, floor: null, ft: 0, wall: 0, seenBy: [], put: [me], del: Object.values(w.entities).filter((e) => e.actor && !e.player && e.pos?.floor === 'main:1').map((e) => e.id) } as unknown as GameEvent);
     await r.port.act({ type: 'wait' }, { source: 'bot' });
-    const n = r.session.history.length;
     expect((await r.port.act({ type: 'stairs' }, { source: 'bot' })).ok).toBe(true);
-    const ext = r.session.history.slice(n).find((e) => e.type === 'terrain_table_extended') as unknown as { added: string[] };
+    const exts = r.session.history.slice(n).filter((e) => e.type === 'terrain_table_extended');
+    expect(exts.length).toBe(1);
+    const ext = exts[0] as unknown as { added: string[] };
     expect(ext.added).toEqual(['core:bookshelf']);
     // 後ろに足すだけ（作り済みの階の番号は変わらない）
     expect(w.meta.terrainTable.length).toBe(len + 1);

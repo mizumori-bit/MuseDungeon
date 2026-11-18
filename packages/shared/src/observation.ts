@@ -160,6 +160,8 @@ export interface ObsCamp {
   compare?: { no: number; lines: string[] } & ReportCompare;
   /** プロフィールの記録の要約と次の節目（1 行。V3-7 §7.2）・直前の遠征で取った実績 */
   records?: { line: string; feats_new?: string[] };
+  /** 古い版で始まったラン（V4-0b §1.2。最初の 1 度だけ） */
+  version_note?: string;
 }
 
 /** 節目の大守護者（V3-3 §3.2）。弱点と種族は伏せる */
@@ -185,7 +187,8 @@ export interface ItemStats {
 /** kind: 鑑定済みの品の種類 ID（fight の with に渡せる。スロット文字は拾い物で変わる。V3-7a 後の評価）。clue: 未鑑定の手がかり（V3-5 §5.4） */
 export interface ObsInvItem { slot: string; name: string; qty: number; category: string; identified: boolean; equipped: boolean; kind?: string; value?: number; stats?: ItemStats; curse?: 'unknown' | 'cursed'; clue?: string }
 /** 推定残り HP。record は記録した個体の体力の範囲（標本であって種族の範囲ではない） */
-export interface HpEstimate { min: number; max: number | null; samples: number; record: { min: number; max: number } }
+/** untouched: まだ誰からも傷を負わされていない（残り HP は最大 HP そのもの。文は「残り」と言わず記録の範囲を出す。V4-0b §1.5） */
+export interface HpEstimate { min: number; max: number | null; samples: number; record: { min: number; max: number }; untouched?: true }
 
 export interface Observation {
   seq: number;
@@ -261,6 +264,8 @@ export interface ObservationOptions {
   offerNotes?: Record<number, string>;
   /** キャンプ: プロフィールの記録の 1 行と、直前の遠征で取った実績（V3-7 §7.2・§7.4） */
   records?: { line: string; featsNew?: string[] };
+  /** キャンプ: 古い版で始まったランの 1 行（V4-0b §1.2。サーバーが版を比べて渡す） */
+  versionNote?: string;
 }
 
 const DIR_JA: Record<Dir, string> = { n: '北', ne: '北東', e: '東', se: '南東', s: '南', sw: '南西', w: '西', nw: '北西' };
@@ -330,7 +335,7 @@ export function hpLeftEstimate(mem: MonsterMemory | undefined, band: HpState, da
   const lo = Math.max(hs.min, damageSeen + 1);
   // まだ誰からも傷を負わされていない（見えている範囲で与ダメ 0・無傷の帯）なら、残り HP は最大 HP そのもの: 記録の範囲を出す
   // （「無傷の帯」の下限まで広げると、1 発も当てていない相手に「残り 3 以上」と出た。Muse の実プレイ、V3-4b §28.11）
-  if (damageSeen <= 0 && band === 'healthy') return { min: hs.min, max: hs.samples >= minSamples ? hs.max : null, samples: hs.samples, record };
+  if (damageSeen <= 0 && band === 'healthy') return { min: hs.min, max: hs.samples >= minSamples ? hs.max : null, samples: hs.samples, record, untouched: true };
   if (hs.samples < minSamples) {
     // 記録が少ない間は最大値を上限として使わない: 最大 HP が lo 以上のどれかとして、下限だけを出す
     for (let m = lo; m <= lo * 4 + 10; m++) {
@@ -359,9 +364,16 @@ export function hpLeftEstimate(mem: MonsterMemory | undefined, band: HpState, da
 /** 体力の記録を「確かな幅」として扱える標本の数（これ未満は上限を出さず、「個体差あり」を添える） */
 export const HP_RECORD_SURE = 5;
 
-export function hpEstimateText(locale: Locale, est: { min: number; max: number | null; samples: number; record?: { min: number; max: number } }): string {
+export function hpEstimateText(locale: Locale, est: { min: number; max: number | null; samples: number; record?: { min: number; max: number }; untouched?: boolean }): string {
   const rec = est.record ? (est.record.min === est.record.max ? `${est.record.min}` : t(locale, `${est.record.min}〜${est.record.max}`, `${est.record.min}-${est.record.max}`)) : '';
   const few = est.samples < HP_RECORD_SURE;
+  // まだ当てていない相手には「残り」と言わない（V4-0b §1.5）: 体力の記録の範囲をそのまま出す
+  if (est.untouched && rec) return t(locale, `体力の記録 ${rec}（まだ傷を負っていない。記録 ${est.samples} 体${few ? '。個体差あり' : ''}）`, `HP record ${rec} (unhurt so far; ${est.samples} recorded${few ? '; individuals vary' : ''})`);
+  // 上限を出さないとき（記録が少ない）は根拠を添える: 見えている傷の具合と、体力の記録の最小から
+  if (est.max === null && est.record) {
+    return t(locale, `記録どおりなら残り ${est.min} 以上（傷の具合と、体力の記録の最小 ${est.record.min} から。記録 ${est.samples} 体${few ? '。個体差あり' : ''}）`,
+      `if typical, >= ${est.min} left (from its wounds and the smallest HP on record, ${est.record.min}; ${est.samples} recorded${few ? '; individuals vary' : ''})`);
+  }
   const recText = t(locale, `（記録 ${est.samples} 体${rec ? `: 体力 ${rec}` : ''}${few ? '。個体差あり' : ''}）`, ` (${est.samples} recorded${rec ? `, HP ${rec}` : ''}${few ? '; individuals vary' : ''})`);
   const range = est.max === null ? t(locale, `${est.min} 以上`, `>= ${est.min}`) : est.min === est.max ? `${est.min}` : t(locale, `${est.min}〜${est.max}`, `${est.min}-${est.max}`);
   return t(locale, `記録どおりなら残り ${range}${recText}`, `if typical, ${range} left${recText}`);
@@ -476,11 +488,13 @@ export function memoryCombatText(locale: Locale, mem: MonsterMemory): string {
   const few = !!mem.hpSeen && mem.hpSeen.samples < HP_RECORD_SURE;
   const hp = mem.hpSeen ? t(L, `${mem.hpSeen.min === mem.hpSeen.max ? mem.hpSeen.min : `${mem.hpSeen.min}〜${mem.hpSeen.max}`}（${mem.hpSeen.samples} 体${few ? '。個体差あり' : ''}）`, `${mem.hpSeen.min === mem.hpSeen.max ? mem.hpSeen.min : `${mem.hpSeen.min}-${mem.hpSeen.max}`} (${mem.hpSeen.samples} seen${few ? '; individuals vary' : ''})`) : t(L, '記録なし', 'none');
   const ab = mem.abilities.filter((a) => a !== 'fast' && a !== 'slow' && a !== 'ranged').map((a) => abilityName(L, a));
+  // 種族の体力の記録は素の個体だけ（接辞付きは混ぜない）。守護者・強敵はこれより多い（V4-0b §1.5）
+  const hpNote = mem.hpSeen && !mem.guardian ? t(L, '（これまでに見た素の個体の範囲。守護者と強敵はこれより多い）', ' (plain individuals seen so far; guardians and elites have more)') : '';
   // 継承（V3-7 §7.3・§16.2）: 前の潜る者の覚え書きを含む（自分で確かめた記録と区別する）
   const legacy = mem.legacy ? t(L, `（覚え書きより: 前の潜る者が ${mem.legacy.kills} 体倒した記録を含む。能力・体力・受けた最大ダメージ）`, ` (from the notes: includes a previous delver's record of ${mem.legacy.kills} slain — abilities, HP, worst hit)`) : '';
   return legacy + t(L,
-    `遭遇${mem.encounters}回・撃破${mem.kills}回・速さ:${speed}・遠隔攻撃:${ranged}・受けた最大ダメージ${mem.maxDamageToYou}・与えた最大ダメージ${mem.maxDamageByYou}・体力の記録:${hp}${ab.length ? '・その他の能力:' + ab.join('、') : ''}`,
-    `met ${mem.encounters}, killed ${mem.kills}, speed: ${speed}, ranged: ${ranged}, max dmg to you ${mem.maxDamageToYou}, max dmg by you ${mem.maxDamageByYou}, HP record: ${hp}${ab.length ? ', other: ' + ab.join(', ') : ''}`);
+    `遭遇${mem.encounters}回・撃破${mem.kills}回・速さ:${speed}・遠隔攻撃:${ranged}・受けた最大ダメージ${mem.maxDamageToYou}・与えた最大ダメージ${mem.maxDamageByYou}・体力の記録:${hp}${hpNote}${ab.length ? '・その他の能力:' + ab.join('、') : ''}`,
+    `met ${mem.encounters}, killed ${mem.kills}, speed: ${speed}, ranged: ${ranged}, max dmg to you ${mem.maxDamageToYou}, max dmg by you ${mem.maxDamageByYou}, HP record: ${hp}${hpNote}${ab.length ? ', other: ' + ab.join(', ') : ''}`);
 }
 
 /** 通りの記録の文（「近接の通り 平均 2.5／13 回」） */
@@ -1209,6 +1223,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
     camp = {
       ...(view.camp.milestone ? { milestone: milestoneObs(L, catalog, view.camp.milestone, view.milestonesCleared ?? [], view.wardenIntel?.[String(view.camp.milestone.depth)], view) } : {}),
       ...(opts.campCompare && view.status === 'at_camp' ? { compare: { no: opts.campCompare.no, lines: opts.campCompare.lines.slice(0, 2), ...(opts.campCompare.compare ?? {}) } } : {}),
+      ...(opts.versionNote && view.status === 'at_camp' ? { version_note: opts.versionNote } : {}),
       ...(opts.records && view.status === 'at_camp' ? { records: { line: opts.records.line, ...(opts.records.featsNew?.length ? { feats_new: [...opts.records.featsNew] } : {}) } } : {}),
       // 記録庫に納めた欠片の数（V3-3a §35.7）
       archive: { delivered: view.archive?.length ?? 0, total: Object.values(catalog.items).filter((it) => it.category === 'relic' && it.boon).length },
@@ -1707,6 +1722,7 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
     // プロフィール（V3-7 §7.2・§7.4）: 記録の要約と次の節目、直前の遠征で取った実績
     if (obs.camp?.records?.feats_new?.length) lines.push(t(L, `新しい実績: ${obs.camp.records.feats_new.join('・')}`, `New feats: ${obs.camp.records.feats_new.join(', ')}`));
     if (obs.camp?.records) lines.push(obs.camp.records.line);
+    if (obs.camp?.version_note) lines.push(obs.camp.version_note);
     if (obs.alerts.length) lines.push('!! ' + obs.alerts.map((a) => a.text).join(' / '));
     if (obs.camp) {
       lines.push(t(L, `次の遠征の候補（遠征 ${obs.camp.next_no}）。start_expedition { offer } で始める:`, `Offers for expedition ${obs.camp.next_no} (start with start_expedition { offer }):`));

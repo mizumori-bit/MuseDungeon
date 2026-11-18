@@ -413,6 +413,13 @@ V3-2R で足した項目（同じく後方互換。会心と経験値のルー�
 - `player_state.reason: 'joined'`（キャンプから始まる参加）。参加コマンドの `atCamp`
 - プレイヤー向けの射影で、見えていた個体が視界の外へ動いた `entity_moved` に `dirOut`（向きだけ。行き先は伏せたまま）
 
+V4-0b で足した項目（`engineVersion` 0.26.0。出来事の種類は増やしていないので `eventVersion` は 20 のまま。DESIGN.md §36.2）:
+
+- マクロ: 止まり方 `chaser_near`（careful の explore が止まらずに続けた遅い追跡者が 2 マスに来た）。explore は、遅く 3 マス以上離れた射撃しない追跡中の敵では止まらず、結果に「遅い敵 N 体に追われたまま探索した」。fight の見失いは、ほかに届く追跡中の敵が見えている・被害を受けた手番には待たない。見失った・逃げられたときは結果に最後に見た場所。explore の `toward: 'draft'` は遠回りの風の方角より近くの境界を先に見る
+- 観測: `hp_left_est.untouched`（まだ傷を負っていない。文は「体力の記録 …」）。`camp.version_note`（古い版で始まったラン。最初の 1 度だけ）。ターンの要約の「倒した」の行に会心のとどめの値。深追いの文。collect の結果に「遺物は対象外」
+- エラーの文: fight の `no_target`（標的が見えているが逃げている）、explore の `hostile_adjacent` の hint
+- `terrain_table_extended.concealAdded` は、今までの表の番号（古い版のランに無かった背の高い草など）も入る。遠征の開始時にも出る
+
 V4-0a で足した項目（`engineVersion` 0.25.0、`eventVersion` 20。DESIGN.md §36.1）:
 
 - イベント: `floor_reset { floorKey, depth, reason: 'warden_missing', guardianName? }`（倒していない節目の階に大守護者がいなかったので、遠征の開始時に階を捨てた。全員に。階のエンティティは del で消え、その階の地図と記憶も消える。次に着いたとき大守護者の間として作られる）・`terrain_table_extended { added, concealAdded }`（古い版で始まったランの地形の表に、今の地形を後ろに足した。俯瞰専用）・`player_state.reason: 'floor_reset'`（再開する地点を、作り直した階の上り階段へ移した）

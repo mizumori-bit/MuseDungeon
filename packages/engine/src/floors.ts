@@ -14,22 +14,29 @@ export function missingTerrain(ctx: Ctx): string[] {
   return ctx.content.terrain.map((tr) => tr.id).filter((id) => !tt.has(id));
 }
 
+/** 中にいる者を隠す地形の番号のうち、meta.concealTerrain に無いもの（表に足す地形 added を含めて数える） */
+export function missingConceal(ctx: Ctx, added: readonly string[] = []): number[] {
+  const have = new Set(ctx.world.meta.concealTerrain ?? []);
+  return [...ctx.world.meta.terrainTable, ...added]
+    .map((id, i) => (ctx.content.terrain[ctx.content.terrainIndex[id]]?.tags.includes('conceal') && !have.has(i) ? i : -1)).filter((i) => i >= 0);
+}
+
 /**
- * 古い版で始まったランの地形の表に、今の地形を後ろに足す（V4-0a: 作り直した節目の階など、新しい階が新しい地形を使う）。
- * 階を作る前に呼ぶ。番号は後ろに足すだけなので、作り済みの階は変わらない
+ * 古い版で始まったランの地形の表を、今のコンテンツに合わせる（V4-0a・V4-0b §1.2）: 無い地形を表の後ろに足し、
+ * 中にいる者を隠す地形（背の高い草）の番号を concealTerrain に足す。番号は後ろに足すだけなので、作り済みの階は変わらない。
+ * 階を作る前と、遠征の開始時に呼ぶ
  */
-export function extendTerrainTable(ctx: Ctx): void {
+export function syncTerrainTable(ctx: Ctx): void {
   const added = missingTerrain(ctx);
-  if (!added.length) return;
-  const base = ctx.world.meta.terrainTable.length;
-  const concealAdded = added.map((id, i) => (ctx.content.terrain[ctx.content.terrainIndex[id]]?.tags.includes('conceal') ? base + i : -1)).filter((i) => i >= 0);
+  const concealAdded = missingConceal(ctx, added);
+  if (!added.length && !concealAdded.length) return;
   ctx.emit({ type: 'terrain_table_extended', added, concealAdded, seenBy: [], floor: null, ft: 0 });
 }
 
 export function ensureFloor(ctx: Ctx, key: FloorKey): Floor {
   const existing = ctx.world.floors[key];
   if (existing) return existing;
-  extendTerrainTable(ctx);
+  syncTerrainTable(ctx);
   const [branch, depthStr] = key.split(':');
   const depth = parseInt(depthStr, 10);
   // 遠征の目標階なら守護者・遺物を置く（生成の専用段。他の乱数ストリームはずれない）

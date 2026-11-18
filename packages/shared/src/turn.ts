@@ -5,7 +5,7 @@ import { endReasonText } from './expedition';
 import type { PerceivedEvent } from './filter';
 import type { Dir, Locale, Names } from './types';
 import type { Catalog } from './catalog';
-import { nameOf } from './catalog';
+import { nameOf, nextOverreach, overreachStepPoints } from './catalog';
 import { t } from './util';
 import { dirLabel } from './observation';
 import type { PlayerView } from './view';
@@ -59,6 +59,8 @@ export interface TurnSnapshot {
   /** 加護の説明を出した遠征（2 回目からは名前だけ。V3-3c §44.6） */
   /** 説明を出した加護の組（ID を並べたもの。V3-8a） */
   boonKey?: string;
+  /** 古い版で始まったランの 1 行を出した（V4-0b §1.2。最初の 1 度だけ） */
+  versionNoted?: boolean;
   state: TurnState | null;
   /** 既知のセル数（地図の変化の判定用） */
   knownCells: number;
@@ -183,7 +185,16 @@ export function diffChanges(prev: TurnSnapshot | null, cur: TurnSnapshot, view: 
       });
     }
     if (cur.reached && !prev.reached && view.expedition?.objective.type === 'reach_depth') out.push({ code: 'objective_progress', text: t(L, '目標の階を踏破した（下り階段に着いた）', 'Crossed the target depth (reached its down stairs)') });
-    if ((cur.crossed ?? 0) > (prev.crossed ?? 0)) out.push({ code: 'objective_progress', text: t(L, `地下${cur.crossed}階を踏破した（下り階段に着いた。戦利品に踏破の点）`, `Crossed depth ${cur.crossed} (reached its down stairs; crossing points added)`) });
+    if ((cur.crossed ?? 0) > (prev.crossed ?? 0)) {
+      // 深追い（目標より深い階の下り階段に立った）。目的の達成とは別で、次の点は次の階の下り階段で入る（V4-0b §1.5: 遺物の遠征で「目標の階を踏破」と読めた）
+      const xv = view.expedition;
+      const td = xv?.objective.targetDepth ?? null;
+      const got = xv && td !== null && catalog ? overreachStepPoints(catalog.rules, xv.points, (cur.crossed ?? 0) - td) : null;
+      const nx = xv && td !== null && catalog ? nextOverreach(catalog.rules, td, cur.crossed ?? 0, xv.points) : null;
+      out.push({ code: 'objective_progress', text: t(L,
+        `深追い: 地下${cur.crossed}階の下り階段に着いた（目標の地下${td ?? '?'}階より深い）。戦利品に深追いの点${got !== null ? ` +${got}` : ''}${nx ? `。次は地下${nx.depth}階の下り階段で +${nx.points}` : ''}`,
+        `Overreach: reached the down stairs of depth ${cur.crossed} (deeper than the target depth ${td ?? '?'}); overreach points${got !== null ? ` +${got}` : ''} added to the haul${nx ? `. Next: +${nx.points} on the down stairs of depth ${nx.depth}` : ''}`) });
+    }
     const nc = obs.expedition?.haul?.next_camp;
     if (nc && prev.nextCampMin != null && cur.nextCampMin != null && cur.nextCampMin !== prev.nextCampMin) {
       out.push({ code: 'next_camp', text: t(L, `今帰ると、次の候補は地下${nc.min_target_depth}階以上・推奨 Lv${nc.recommended_level} になった`, `If you extract now, next offers start at depth ${nc.min_target_depth} (recommended Lv${nc.recommended_level})`) });
@@ -213,8 +224,19 @@ export function diffChanges(prev: TurnSnapshot | null, cur: TurnSnapshot, view: 
   for (const [id, byYou] of dead) {
     const name = prev.hostiles[id] ?? cur.hostiles[id];
     if (!name) continue;
+    // 会心のとどめは、出た目のダメージと残りを添える（V4-0b §1.5: とどめでは残りの HP しか見えず、会心が効いたか確かめられなかった）
+    let finish = '';
+    if (byYou) {
+      const dmg = [...events].reverse().find((e) => e.type === 'damaged' && (e.event as { target?: string }).target === id && (e.event as { source?: string }).source === view.self.id);
+      const dv = dmg?.event as { amount?: number; dealt?: number } | undefined;
+      const crit = !!dmg && events.some((e) => e.type === 'attack' && e.seq < dmg.seq && dmg.seq - e.seq <= 3 && (e.event as { target?: string }).target === id
+        && (e.event as { attacker?: string }).attacker === view.self.id && !!(e.event as { crit?: boolean }).crit);
+      if (crit && dv?.amount !== undefined) finish = dv.dealt !== undefined && dv.dealt < dv.amount
+        ? t(L, `（会心 ${dv.amount}。残り ${dv.dealt} を倒した）`, ` (critical ${dv.amount}; it had ${dv.dealt} left)`)
+        : t(L, `（会心 ${dv.amount}）`, ` (critical ${dv.amount})`);
+    }
     out.push(byYou
-      ? { code: 'killed', text: t(L, `倒した: ${name}`, `Killed: ${name}`), entity: id }
+      ? { code: 'killed', text: t(L, `倒した: ${name}${finish}`, `Killed: ${name}${finish}`), entity: id }
       : { code: 'died_seen', text: t(L, `目の前で倒れた: ${name}`, `Died in front of you: ${name}`), entity: id });
   }
   // 報告済みの個体は階・遠征をまたいで引き継ぐ（一度見た個体が後の遠征で「新たな敵」にならない）

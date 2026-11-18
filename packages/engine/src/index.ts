@@ -29,6 +29,17 @@ export function previewOffers(world: World, content: Content, no: number): Exped
 }
 export { rollGuardianInfo, rollWardenInfo, weaknessHandlers } from './guardians';
 export { wardenHpRange } from './warden';
+import { runGaps } from './warden';
+/** 続いているランの不整合（World は変えない。サーバーの起動時のログ用。V4-0b §1.2） */
+export function checkRunGaps(world: World, content: Content): string[] {
+  return runGaps(new Ctx(world, content, null, 0));
+}
+/** 版の新旧（'0.8.0' と '0.25.0' を数で比べる。a が古ければ負） */
+export function compareVersions(a: string, b: string): number {
+  const pa = a.split('.').map((x) => parseInt(x, 10) || 0), pb = b.split('.').map((x) => parseInt(x, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) if ((pa[i] ?? 0) !== (pb[i] ?? 0)) return (pa[i] ?? 0) - (pb[i] ?? 0);
+  return 0;
+}
 export { actions, archetypes, effects, validators, layoutGenerators, statusHandlers, abilityHandlers, weaponTraits };
 
 /** コンテンツが参照するハンドラ ID が全てレジストリに登録されているか検証する */

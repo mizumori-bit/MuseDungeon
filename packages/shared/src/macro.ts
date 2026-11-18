@@ -32,6 +32,8 @@ export type MacroStop =
   | 'not_your_turn' | 'dead' | 'run_ended' | 'floor_changed' | 'blocked' | 'error'
   | 'target_hp' | 'max_turns' | 'left_board' | 'attacked' | 'collected' | 'hostile_adjacent' | 'sense_found' | 'hit_while_waiting'
   | 'hp_floor' | 'hp_threshold' | 'target_down' | 'target_gone' | 'target_moved' | 'hostile_alerted'
+  // explore が止まらずに続けた遅い追跡者が 2 マス以内に来た（V4-0b §1.4）
+  | 'chaser_near'
   // fight の拡張（V3-2R2 §18.5）
   | 'target_adjacent' | 'out_of_ammo' | 'no_line_of_sight' | 'target_not_approaching' | 'target_not_hunting' | 'not_throwable'
   // 被弾の前に止まる（V3-2R3 §20.4）: 次の手番に最悪の被害を受けると hp_floor を割る / 記録の無い種族から初めて被弾した
@@ -155,6 +157,8 @@ export interface MacroState {
   steps: number;
   /** explore: 選んだ行き先（到達するか、行き先でなくなるまで固定。同距離の振動を防ぐ） */
   goal?: number;
+  /** explore（careful）: 止まらずに続けた、遅く離れた追跡中の敵（V4-0b §1.4。結果の文に数を出す） */
+  slowChasers?: string[];
   /** 拾えなかったアイテム（同じ物を拾い直そうとしない） */
   skipItems: string[];
   /** fight（V3-4b §28.4）: until（clear なら標的を倒した後も続ける）、with の相手が隣に来たときの扱い */
@@ -365,6 +369,9 @@ function throwRangeOf(view: PlayerView, catalog: Catalog, slot: string): number 
 }
 
 /** その方角と隣り合う 2 方角 */
+/** explore の風の方角: 方角を問わない近くの境界より、これより多く遠回りになる風の方角の境界は後回し（V4-0b §1.4。計測で 8・12・20 を比べて 12） */
+const DRAFT_DETOUR = 12;
+
 function nearDirs(d: Dir): Dir[] {
   const i = DIRS.indexOf(d);
   return [d, DIRS[(i + 1) % DIRS.length], DIRS[(i + DIRS.length - 1) % DIRS.length]];
@@ -666,6 +673,11 @@ function macroStep(state: MacroState, view: PlayerView, catalog: Catalog, events
   // 自分に届く: 動かない種族は隣にいるときだけ
   const reaches = (h: EntityView) => !isStationary(catalog, h) || cheb(h.pos, pos) <= 1;
   const newKind = (h: EntityView) => !!h.kind && !state.knownKinds.includes(h.kind);
+  // 自分より遅く、射撃しない敵（V4-0b §1.4）
+  const slowChaser = (h: EntityView) => h.speed !== undefined && h.speed < view.self.speed && !(h.kind && catalog.monsters[h.kind]?.tags.includes('ranged'));
+  // 止まらずに続けた遅い追跡者が 2 マス以内に来たら止まる（隣なら hostile_adjacent）
+  if (kind === 'explore' && mode === 'careful' && state.slowChasers?.length
+    && hostiles.some((h) => state.slowChasers!.includes(h.id) && pursuing(h) && cheb(h.pos, pos) === 2)) return { stop: 'chaser_near' };
   for (const h of hostiles) {
     const isNew = !before.has(h.id);
     if (kind === 'rest') {
@@ -683,8 +695,13 @@ function macroStep(state: MacroState, view: PlayerView, catalog: Catalog, events
     } else if (mode === 'careful') {
       // 初見の種族、追跡中で届く敵の出現、見えている敵が追跡に変わった
       if (newKind(h)) return { stop: 'hostile_in_view' };
-      if (isNew && pursuing(h) && reaches(h)) return { stop: 'hostile_in_view' };
-      if (!isNew && state.aware[h.id] !== 'hunting' && pursuing(h) && reaches(h)) return { stop: 'hostile_alerted' };
+      // explore は、自分より遅く 3 マス以上離れた追跡中の敵（射撃しない）では止まらずに続ける（V4-0b §1.4: 遅い石皮の甲虫に追われているだけで止まった）
+      const slowFar = kind === 'explore' && slowChaser(h) && cheb(h.pos, pos) >= 3;
+      const appeared = isNew && pursuing(h) && reaches(h);
+      const alerted = !isNew && state.aware[h.id] !== 'hunting' && pursuing(h) && reaches(h);
+      if ((appeared || alerted) && slowFar) { if (!(state.slowChasers ?? []).includes(h.id)) state.slowChasers = [...(state.slowChasers ?? []), h.id]; continue; }
+      if (appeared) return { stop: 'hostile_in_view' };
+      if (alerted) return { stop: 'hostile_alerted' };
     } else if (mode === 'steady') {
       if (newKind(h)) return { stop: 'hostile_in_view' };
     }
@@ -729,7 +746,10 @@ function macroStep(state: MacroState, view: PlayerView, catalog: Catalog, events
       // 見失った（V3-4b §28.4）: 逃げて見えなくなったなら止まる。追跡中で逃げていなかったなら、物陰から出てくるまで待つ
       if (state.targetFleeing === true) return { stop: 'target_fled' };
       if (state.targetFleeing === undefined && !state.lostOk) return { stop: 'target_gone' };
+      // 待つのは最大 fightLostWait 手番（5）。ほかに届く追跡中の敵が見えている・この手番に被害を受けたなら待たない（V4-0b §1.4）
       if ((state.lostTurns ?? 0) >= (catalog.rules.fightLostWait ?? 5)) return { stop: 'target_gone' };
+      if (hostiles.some((h) => h.id !== state.fightTarget && pursuing(h) && reaches(h))) return { stop: 'target_gone' };
+      if (events.some((e) => e.type === 'damaged' && (e as unknown as { target?: string }).target === me.id)) return { stop: 'target_gone' };
       state.lostTurns = (state.lostTurns ?? 0) + 1;
       return wait();
     }
@@ -986,6 +1006,13 @@ function macroStep(state: MacroState, view: PlayerView, catalog: Catalog, events
     if (path === null) {
       const others = targets.filter((i) => i !== here);
       path = others.length ? route(others) : null;
+      // 風の方角の境界が遠回り（方角を問わない近くの境界より DRAFT_DETOUR 歩より遠い）なら、近くを先に見る（V4-0b §1.4: 風の方角は立つ位置で
+      // 変わるので、遠い 2 つの境界がかわるがわる風の方角に入り、その間を往復していた。聖域の階で 200 手を 5 回）
+      if (draft && path && fr !== allFrontiers) {
+        const any = [...new Set([...allFrontiers, ...itemCells])].filter((i) => i !== here);
+        const near = any.length ? route(any) : null;
+        if (near && near.length + DRAFT_DETOUR < path.length && !crossesTrap(near)) path = near;
+      }
       // 風の方角の境界へは、敵にふさがれた道か罠を通る道しか無い: ほかの境界へ回る（方角の優先は、行ける境界の中での優先）
       if (draft && (path === null || crossesTrap(path))) {
         const rest = [...new Set([...allFrontiers, ...itemCells])].filter((i) => i !== here && !others.includes(i));
@@ -1058,7 +1085,7 @@ export function macroStopError(L: Locale, stop: MacroStop, cmd: Command, dir?: D
         t(L, 'travel_to { to: <遺物・守護者の ID> } で向かう（get_map で場所を見られる）。', 'Head there with travel_to { to: <relic or guardian id> } (get_map shows where).'));
     case 'hostile_adjacent':
       return actionError('hostile_adjacent', t(L, '隣に起きている敵がいるので、マクロは 1 歩も進めない。', 'An awake enemy is adjacent, so the macro cannot take a step.'),
-        flee ? t(L, "mode: 'steady' なら、追跡中でない隣の敵を気にせず進める。mode: 'flee' なら追跡中の敵が隣にいても進める（攻撃は受ける）。戦うなら fight { target }。", "mode: 'steady' moves on past adjacent enemies that are not hunting you; mode: 'flee' moves even with a hunter adjacent (you will be attacked). To fight use fight { target }.")
+        flee ? t(L, "振り切るなら mode: 'flee'（追跡中の敵が隣にいても進む。攻撃は受ける）、戦うなら fight { target }。追跡中でない隣の敵なら mode: 'steady' でも進める。", "To shake it off use mode: 'flee' (moves even with a hunter adjacent; you will be attacked); to fight use fight { target }. mode: 'steady' moves on past adjacent enemies that are not hunting you.")
           : t(L, '戦うなら fight { target }、離れるなら move。', 'Use fight { target } to fight, or move to step away.'));
     case 'hostile_in_view':
       return actionError('hostile_in_view', t(L, '追跡中の敵が見えているので始められない。', 'A hunting enemy is in view, so this cannot start.'),
@@ -1081,8 +1108,11 @@ export function macroStopError(L: Locale, stop: MacroStop, cmd: Command, dir?: D
     case 'target_fled':
       return actionError('no_target', t(L, 'その相手は逃げて見えなくなった。', 'That target fled out of sight.'), t(L, '追うなら travel_to で最後に見た位置へ。ほかの相手なら visible.monsters の id を指定する。', 'To chase it, travel_to where you last saw it; otherwise give an id from visible.monsters.'));
     case 'target_gone':
+      return actionError('no_target', t(L, 'その相手は見えていない。', 'That target is not visible.'), t(L, 'visible.monsters の id を指定する。', 'Give an id from visible.monsters.'));
     case 'target_moved':
-      return actionError('no_target', t(L, 'その相手は見えていない（または逃げている）。', 'That target is not visible (or is fleeing).'), t(L, 'visible.monsters の id を指定する。', 'Give an id from visible.monsters.'));
+      // 見えているが逃げている相手（V4-0b §1.5: 直前の観測に見えていたのに「見えていない」と読めた）。fight の近接は逃げる相手を待たない
+      return actionError('no_target', t(L, 'その相手は見えているが、逃げている（近接の fight は逃げる相手を待たない）。', 'That target is in view but fleeing (melee fight does not wait for a fleeing target).'),
+        t(L, '追うなら travel_to { to: <id> }。投擲が届くなら fight { target, with }（逃げる相手にも投げる）。', 'Chase it with travel_to { to: <id> }, or if a throw reaches, fight { target, with } (throws at fleeing targets too).'));
     case 'target_not_hunting':
       return actionError('no_target', t(L, 'その相手はまだあなたを追っていない（眠っている・気付いていない）。fight は追跡中の相手を待つ。', 'That target is not hunting you yet (asleep or unaware). fight waits only for hunting targets.'),
         t(L, '近づくなら travel_to、先手を取るなら throw_item。隣に来れば fight で殴れる。', 'Approach with travel_to or open with throw_item. Once adjacent, fight works.'));

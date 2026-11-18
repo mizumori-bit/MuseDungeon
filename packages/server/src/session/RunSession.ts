@@ -60,6 +60,8 @@ export interface MacroReport {
   /** 経過したフロア時間（階を移った場合は null） */
   timeElapsed: number | null;
   hpGained: number;
+  /** explore（careful）が止まらずに続けた、遅く離れた追跡中の敵の数（V4-0b §1.4） */
+  slowChasers?: number;
 }
 
 export type SubmitResult =
@@ -597,6 +599,7 @@ export class RunSession {
       distance: cmd.type === 'rest' ? 0 : all.filter((e) => e.type === 'entity_moved' && e.id === end.self.id).length,
       timeElapsed: sameFloor && end.floor ? end.floor.time - state.startTime : null,
       hpGained: end.self.stats.hp - state.startHp,
+      ...(state.slowChasers?.length ? { slowChasers: state.slowChasers.length } : {}),
     };
     return { ok: true, events: all, startSeq, steps: state.steps, interruptedBy: stop, macro };
   }
