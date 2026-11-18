@@ -254,7 +254,7 @@ const SOFT = { wave: 'square', attack: 0.01, decay: 0.3, sustain: 0.5, release: 
 
 const def = {
   id: 'hollow',
-  formatVersion: 0,
+  formatVersion: 1,
   tempo: { bpm: 96, beats: BEATS },
   quantize: 'beat',
   fade: 0.4,

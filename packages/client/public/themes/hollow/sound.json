@@ -1,6 +1,6 @@
 {
   "id": "hollow",
-  "formatVersion": 0,
+  "formatVersion": 1,
   "tempo": {
     "bpm": 96,
     "beats": 4
