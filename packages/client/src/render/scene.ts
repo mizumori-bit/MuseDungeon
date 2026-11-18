@@ -63,7 +63,7 @@ function worstText(m: Pick<ObsMonster, 'worst_hit' | 'worst_turn'>): string {
 
 /**
  * ツールチップ用: 脅威・受けた最大の一撃と 1 手番あたりの最悪の被害・体格と速さと見れば分かる特徴・命中と通りの記録・
- * 自分が見た与ダメージの累計・推定残り HP・射線。
+ * 見た被害（見ている間にその個体が受けた被害の合計。V4-0e §8.4）・推定残り HP・射線。
  * 観測の monster があればその値を使う。無ければ PlayerView の知識だけから（観測と同じ shared の式。守護者は守護者の記録 memoryOf）
  */
 function monsterKnowledge(view: PlayerView, catalog: Catalog, e: EntityView, om?: ObsMonster): string {
@@ -80,7 +80,7 @@ function monsterKnowledge(view: PlayerView, catalog: Catalog, e: EntityView, om?
     if (hits) parts.push(hits);
     const dealt = dealtText(L, om.dealt);
     if (dealt) parts.push(dealt);
-    if (om.damage_seen) parts.push(tr(`与ダメ累計 ${om.damage_seen}`, `dmg seen ${om.damage_seen}`));
+    if (om.damage_seen) parts.push(tr(`見た被害 ${om.damage_seen}`, `dmg seen ${om.damage_seen}`));
     if (om.hp_left_est) parts.push(`${tr('推定残りHP', 'est. HP left')} ${hpEstimateText(L, om.hp_left_est)}`);
     if (om.shot === 'blocked') parts.push(tr('射線: 通らない', 'shot: blocked'));
     return ` (${parts.join(', ')})`;
@@ -107,7 +107,7 @@ function monsterKnowledge(view: PlayerView, catalog: Catalog, e: EntityView, om?
   if (looks) parts.push(looks);
   const dealt = dealtText(L, mem?.dmgByYou);
   if (dealt) parts.push(dealt);
-  if (e.damageSeen) parts.push(tr(`与ダメ累計 ${e.damageSeen}`, `dmg seen ${e.damageSeen}`));
+  if (e.damageSeen) parts.push(tr(`見た被害 ${e.damageSeen}`, `dmg seen ${e.damageSeen}`));
   // 推定残り HP（守護者は守護者の体力の記録から。観測の hp_left_est と同じ）
   const est = e.hp ? hpLeftEstimate(mem, e.hp, e.damageSeen ?? 0, catalog.rules?.estimateMinSamples ?? 5) : undefined;
   if (est) parts.push(`${tr('推定残りHP', 'est. HP left')} ${hpEstimateText(L, est)}`);

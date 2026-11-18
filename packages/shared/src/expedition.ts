@@ -106,6 +106,45 @@ export function multText(pct: number): string {
   return `×${(pct / 100).toFixed(pct % 10 === 0 ? 1 : 2)}`;
 }
 
+/** 階の性質の文（V4-0e §8.1）: 「群れている（敵と宝が多い）・泉が無い」。detail: 括弧の中を付けるか */
+export function floorTraitsText(L: Locale, rules: Pick<CatalogRules, 'traits'> | undefined, traits: readonly string[], detail = true): string {
+  return traits.map((id) => {
+    const f = rules?.traits[id]?.floor;
+    if (!f) return id;
+    const d = detail && f.detail ? t(L, `（${nameOf(f.detail, L, '')}）`, ` (${nameOf(f.detail, L, '')})`) : '';
+    return nameOf(f.name, L, id) + d;
+  }).join(t(L, '・', ', '));
+}
+
+/** 深さの並びを範囲で（14・15・16・18 → 「14〜16・18」） */
+function depthRanges(L: Locale, depths: readonly number[]): string {
+  const ds = [...new Set(depths)].sort((a, b) => a - b);
+  const out: string[] = [];
+  for (let i = 0; i < ds.length;) {
+    let j = i;
+    while (j + 1 < ds.length && ds[j + 1] === ds[j] + 1) j++;
+    out.push(j > i ? `${ds[i]}${t(L, '〜', '-')}${ds[j]}` : `${ds[i]}`);
+    i = j + 1;
+  }
+  return out.join(t(L, '・', ', '));
+}
+
+/**
+ * 候補の目的の階と通り道の階の性質（V4-0e §8.1）: 「通り道の地下 14〜16 階は群れている」。作られている階だけ（まだ作られていない階については何も言わない）
+ */
+export function offerFloorTraitsText(L: Locale, rules: Pick<CatalogRules, 'traits'> | undefined, o: { objective: { targetDepth: number | null }; floorTraits?: readonly { trait: string; depths: readonly number[] }[] }): string {
+  const td = o.objective.targetDepth;
+  return (o.floorTraits ?? []).map((g) => {
+    const name = floorTraitsText(L, rules, [g.trait], false);
+    const hasTarget = td !== null && g.depths.includes(td);
+    const way = g.depths.filter((d) => d !== td);
+    const ds = depthRanges(L, g.depths);
+    if (hasTarget && !way.length) return t(L, `目的の地下 ${ds} 階は${name}`, `the target depth ${ds} is ${name}`);
+    if (hasTarget) return t(L, `目的と通り道の地下 ${ds} 階は${name}`, `depths ${ds} (the target and on the way) are ${name}`);
+    return t(L, `通り道の地下 ${ds} 階は${name}`, `on the way, depth${way.length > 1 ? 's' : ''} ${ds} ${way.length > 1 ? 'are' : 'is'} ${name}`);
+  }).join(' / ');
+}
+
 export function traitsText(L: Locale, rules: Pick<CatalogRules, 'traits'> | undefined, traits: readonly string[]): string {
   if (!traits.length || !rules) return '';
   return traits.map((id) => {
@@ -197,7 +236,9 @@ export function offerText(L: Locale, o: ExpeditionOffer, ctx?: { rules: Pick<Cat
   const bt = o.bounty ? ` / ${bountyForecastText(L, o.bounty)}` : '';
   const vt = o.vault ? t(L, ' / 宝物庫: 鍵を持つ敵が階にいる', ' / vault: an enemy on the floor carries the key') : '';
   const sc = o.scar ? t(L, ` / 傷跡で体力 −${o.scar}`, ` / scars: −${o.scar} HP`) : '';
-  const gf = wd + rep + rc + sc + bt + vt + (o.guardian ? ` / ${guardianForecastText(L, o.guardian)}` : '') + (o.relic ? ` / ${relicText(L, o.relic)}` : '')
+  // 目的の階と通り道の階のうち、作られていて性質のある階（V4-0e §8.1）
+  const ft = offerFloorTraitsText(L, ctx?.rules, o);
+  const gf = (ft ? ` / ${ft}` : '') + wd + rep + rc + sc + bt + vt + (o.guardian ? ` / ${guardianForecastText(L, o.guardian)}` : '') + (o.relic ? ` / ${relicText(L, o.relic)}` : '')
     + (o.passesWarden ? t(L, ` / 途中の地下${o.passesWarden.depth}階で大守護者「${guardianDisplayName(L, o.passesWarden)}」を倒す必要がある（倒すまで下り階段が封じられている）`, ` / you must slay the warden "${guardianDisplayName(L, o.passesWarden)}" on depth ${o.passesWarden.depth} on the way (its stairs down are sealed until then)`) : '');
   return t(L, `${head} — 基礎 +${o.points} / 倍率 ${multText(mult)}${traits ? `（${traits}）` : ''}${danger}${gf}`,
     `${head} — base +${o.points} / multiplier ${multText(mult)}${traits ? ` (${traits})` : ''}${danger}${gf}`);

@@ -194,7 +194,7 @@ export function projectedScar(e: Entity): number {
 }
 
 /**
- * 守護者を落ち着かせる（全快・状態異常を消す・追跡をやめる・持ち場へ・怒りと呼んだ回数を戻す・見ていた与ダメの累計を戻す）。
+ * 守護者を落ち着かせる（全快・状態異常を消す・追跡をやめる・持ち場へ・怒りと呼んだ回数を戻す・見た被害の記憶を戻す）。
  * キャンプから遠征を始めるとき（全階）と、離れている間の回復で全快したとき（V3-3a §35.1）
  */
 export function settleGuardian(ctx: Ctx, m0: Entity, camp = false): { healed: number; dispersed: number } {

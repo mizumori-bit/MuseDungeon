@@ -1,13 +1,13 @@
 // 遠征（IMPROVEMENTS_V2 §2）: 候補の生成、開始、目的の進捗、extract、終了判定。
 // 状態は全てイベント（expedition_* / objective_* / player_state）で変わる。
 import type {
-  ActionError, Entity, Expedition, ExpeditionEndReason, FloorPos, Pos, ExpeditionHaul, ExpeditionOffer, ExpeditionResult, HaulParts, Objective,
-  BountyInfo, ObjectiveProgress, ObjectiveType, OfferSlot, PlayerId, PlayerRecord, GuardianInfo, Names,
+  ActionError, AiState, Entity, Expedition, ExpeditionEndReason, FloorPos, Pos, ExpeditionHaul, ExpeditionOffer, ExpeditionResult, HaulParts, Objective,
+  BountyInfo, Floor, ObjectiveProgress, ObjectiveType, OfferSlot, PlayerId, PlayerRecord, GuardianInfo, Names,
 } from '@muse/shared';
 import { addDiceBonus, campDepthOf, cheb, currentExpedition, deepestGenerated, diceMax, diceMin, floorDiv, guardianDisplayName, haulTotal, isPursuing, killPoints, offerPoints, overreachPoints, payoutOf, Rng, actionError, t } from '@muse/shared';
 import { buildSummary, grantXp } from './combat';
 import type { Ctx } from './ctx';
-import { ensureFloor, findFreeCell, syncTerrainTable } from './floors';
+import { ensureFloor, findFreeCell, floorOrder, noteFloorTraits, syncTerrainTable } from './floors';
 import { hasLos, inCircle } from './geom';
 import { isOpaqueFn } from './perception';
 import { deepTier, guardianCandidates, guardianSpec, pickGuardianKind, rollMonsterAffixes, selectBiome, selectFloorType } from './gen/generate';
@@ -43,6 +43,36 @@ export function traitEffects(ctx: Ctx, traits: readonly string[] | undefined): T
     if (e.noFountain) out.noFountain = true;
   }
   return out;
+}
+
+/** 階を作るときに効く効果（敵・アイテム・宝の数、泉なし）を持つ条件か（V4-0e §8.1。作った階に残る） */
+function genEffectTrait(ctx: Ctx, id: string): boolean {
+  const e = ctx.content.expeditionTraits[id]?.effects;
+  return !!e && (e.monstersPct !== undefined || e.itemsPct !== undefined || e.treasurePct !== undefined || !!e.noFountain);
+}
+
+/** 階を作るときだけに効く条件（遠征の間に効く効果が無い。群れる・乏しい）: 目的の階がもう作られている候補には付けない（V4-0e §8.2） */
+function genOnlyTrait(ctx: Ctx, id: string): boolean {
+  const e = ctx.content.expeditionTraits[id]?.effects;
+  return genEffectTrait(ctx, id) && !!e && e.wanderIntervalPct === undefined && e.sightDelta === undefined && !e.noWander;
+}
+
+/** 条件のうち、階を作るときに効くもの（作った階の性質。V4-0e §8.1）。条件の一覧の順 */
+export function floorGenTraits(ctx: Ctx, traits: readonly string[] | undefined): string[] {
+  const has = new Set(traits ?? []);
+  return ctx.content.lists.expeditionTraits.map((t) => t.id).filter((id) => has.has(id) && genEffectTrait(ctx, id));
+}
+
+/**
+ * 目的の階と通り道の階（再開する階 from から目的の階 to まで。目的の階が上なら上がっていく階）のうち、もう作られていて性質のある階
+ * （V4-0e §8.1。条件ごとに深さ。まだ作られていない階は入れない）
+ */
+function pathFloorTraits(ctx: Ctx, from: number, to: number): { trait: string; depths: number[] }[] {
+  const by = new Map<string, number[]>();
+  for (let d = Math.max(1, Math.min(from, to)); d <= Math.max(from, to); d++) {
+    for (const id of ctx.world.floors[`main:${d}`]?.genTraits ?? []) by.set(id, [...(by.get(id) ?? []), d]);
+  }
+  return ctx.content.lists.expeditionTraits.map((t) => t.id).filter((id) => by.has(id)).map((id) => ({ trait: id, depths: by.get(id)! }));
 }
 
 /** 進行中の遠征の条件の効果（遠征が無ければ効果なし） */
@@ -248,6 +278,9 @@ export function makeOffers(ctx: Ctx, no: number): ExpeditionOffer[] {
     if (branch === 'main') bountyLeft.set(Number(ds), e);
   }
   const lastObjective = (ctx.world.expeditions ?? []).at(-1)?.objective.type ?? null;
+  // 通り道の始まり（V4-0e §8.1）: キャンプから再開する階のうち最も浅いもの（キャンプに誰もいなければ地下 1 階）
+  const campers = ctx.world.playerOrder.filter((pid) => ctx.world.players[pid]?.state === 'at_camp');
+  const fromDepth = campers.length ? Math.min(...campers.map((pid) => ctx.world.floors[resumePointOf(ctx, pid).floor]?.depth ?? 1)) : 1;
   return SLOTS.map((slot, i) => {
     const s = b.slots[slot];
     let type = types[i % types.length];
@@ -276,8 +309,11 @@ export function makeOffers(ctx: Ctx, no: number): ExpeditionOffer[] {
     }
     const n = rng.range(s.traitsMin, s.traitsMax);
     const traits: string[] = [];
+    // 階を作るときだけに効く条件（群れる・乏しい）は、目的の階がまだ作られていない遠征にだけ付ける（V4-0e §8.2: 倍率だけ付くのを防ぐ）
+    const targetBuilt = !!ctx.world.floors[`main:${target}`];
     for (const id of rng.shuffle([...traitIds])) {
       if (traits.length >= n) break;
+      if (targetBuilt && genOnlyTrait(ctx, id)) continue;
       const ex = ctx.content.expeditionTraits[id]?.excludes ?? [];
       if (traits.some((x) => ex.includes(x) || (ctx.content.expeditionTraits[x]?.excludes ?? []).includes(id))) continue;
       traits.push(id);
@@ -304,6 +340,9 @@ export function makeOffers(ctx: Ctx, no: number): ExpeditionOffer[] {
     if (done > 0) offer.repeatNo = done + 1;
     // 目標が次の節目より深い: 途中で大守護者を倒す必要がある
     if (ms && target > ms.depth) offer.passesWarden = structuredClone(ms);
+    // 目的の階と通り道の階のうち、作られていて性質のある階（V4-0e §8.1。群れている階は危険度に入る）
+    const ft = pathFloorTraits(ctx, fromDepth, target);
+    if (ft.length) offer.floorTraits = ft;
     // 節目に挑む: 大守護者の名前と型（種族は会うまで伏せる。見れば分かる特徴だけ）
     if (type === 'slay_warden' && ms) {
       offer.warden = structuredClone(ms);
@@ -371,6 +410,8 @@ export function makeOffers(ctx: Ctx, no: number): ExpeditionOffer[] {
 }
 
 export function offerExpeditions(ctx: Ctx): void {
+  // 古い版で作った階の性質を足してから候補を作る（V4-0e §8.1）
+  noteFloorTraits(ctx);
   const no = (ctx.world.expeditions?.length ?? 0) + 1;
   const ms = nextMilestone(ctx);
   ctx.emit({ type: 'expedition_offered', camp: { nextNo: no, offers: makeOffers(ctx, no), ...(ms ? { milestone: ms } : {}) }, seenBy: 'all', floor: null });
@@ -958,19 +999,10 @@ export function startExpedition(ctx: Ctx, pr: PlayerRecord, offer: number | 'end
   ctx.emit({ type: 'expedition_started', expedition: exp, seenBy: 'all', floor: null });
   // 目的でなくなった守護者は階を去る（V3-3c §44.1）。再挑戦の守護者は残す
   departGuardians(ctx, rechallengeOf ?? null, participants);
-  // キャンプにいる間に、再開する階は落ち着く（V3-2R3a §22.1）: 追跡をやめて全快し、再開するマスが見える敵は離れた場所へ
-  const settleRng = Rng.fromSeed(`${w.secret.seed}|expedition|${exp.no}|settle`);
-  const settled = new Set<string>();
-  for (const pid of participants) {
-    if (w.players[pid].state !== 'at_camp') continue;
-    const at = resumePointOf(ctx, pid);
-    const k = `${at.floor}|${at.x}|${at.y}`;
-    if (settled.has(k)) continue;
-    settled.add(k);
-    settleFloor(ctx, at, settleRng);
-  }
-  // キャンプで休んでいる間に、すべての階の守護者も全快して落ち着く（V3-3a §35.1）
+  // キャンプで休んでいる間に、すべての階の守護者も全快して落ち着く（V3-3a §35.1）。傷跡を残すので、ほかの敵より先に落ち着かせる（V4-0e §8.3）
+  const settledAlready = new Set<string>();
   for (const e of Object.values(w.entities).filter((x) => x.guardian && x.pos && (x.stats?.hp ?? 0) > 0).sort((a, b) => a.sid - b.sid)) {
+    settledAlready.add(e.id);
     const r = settleGuardian(ctx, e, true);
     if (!r.healed && !r.dispersed) continue;
     // その階を知っている参加者に、戻ったときの変化として知らせる（V3-3b §40.3: 「ミセの手下は散っていた」）
@@ -989,6 +1021,23 @@ export function startExpedition(ctx: Ctx, pr: PlayerRecord, offer: number | 'end
     if (scar) body.scar = scar;
     if (body.actor!.ai) { body.actor!.ai = { ...body.actor!.ai, state: 'unaware', targetPos: null, lostTurns: 0 }; delete body.actor!.ai.intent; }
     ctx.emit({ type: 'guardian_state', id: kept.id, put: [body], seenBy: [], floor: key });
+    settledAlready.add(kept.id);
+  }
+  // 遠征と遠征の間に、すべての階の敵が落ち着く（V4-0e §8.3。今までは再開する階だけ。V3-2R3a §22.1）: 追跡をやめ、全快し、状態異常が消え、
+  // 見た被害の記憶も消える。守護者と再挑戦の賞金首は上で落ち着かせた（傷跡が残る）。盤面にいる参加者の階はそのまま。
+  // 再開する階では、再開するマスが見える敵を離れた場所へ（守護者は持ち場へ）
+  const settleRng = Rng.fromSeed(`${w.secret.seed}|expedition|${exp.no}|settle`);
+  const resumeAt = new Map<string, FloorPos[]>();
+  for (const pid of participants) {
+    if (w.players[pid].state !== 'at_camp') continue;
+    const at = resumePointOf(ctx, pid);
+    const list = resumeAt.get(at.floor) ?? [];
+    if (!list.some((p) => p.x === at.x && p.y === at.y)) list.push(at);
+    resumeAt.set(at.floor, list);
+  }
+  const onBoard = new Set(participants.filter((pid) => w.players[pid].state !== 'at_camp').map((pid) => w.entities[w.players[pid].entityId]?.pos?.floor).filter((k): k is string => !!k));
+  for (const key of Object.keys(w.floors).sort(floorOrder)) {
+    if (!onBoard.has(key)) settleFloor(ctx, key, resumeAt.get(key) ?? [], settleRng, settledAlready);
   }
   for (const pid of participants) if (w.players[pid].state === 'at_camp') returnFromCamp(ctx, pid);
   // キャンプが帰還の綱を 1 本持たせる
@@ -1015,6 +1064,8 @@ function restoreForStart(ctx: Ctx): void {
   const w = ctx.world;
   // 地形の表と隠れる地形を今のコンテンツに合わせる（古い版で始まったラン。V4-0b §1.2）
   syncTerrainTable(ctx);
+  // 古い版で作った階に、作ったときに効いた条件を足す（V4-0e §8.1）
+  noteFloorTraits(ctx);
   const reset = restoreMilestoneFloors(ctx);
   if (!reset.length) return;
   for (const pid of w.playerOrder) {
@@ -1036,34 +1087,55 @@ function resumePointOf(ctx: Ctx, pid: PlayerId): FloorPos {
 }
 
 /**
- * 再開する階を落ち着かせる（V3-2R3a §22.1）: その階の敵は追跡をやめ（眠っている者はそのまま）、体力は全快する。
- * 再開するマスが見える位置にいる敵は、転移の着地と同じ規則で動かす（12 マス以上離れ、そこから見えないマス。無ければ最も遠いマス）
+ * 階を落ち着かせる（V3-2R3a §22.1・V4-0e §8.3。遠征の開始時に、作られているすべての階）: 敵は追跡をやめ（眠っている者はそのまま。予備動作も消える）、
+ * 体力は全快し、状態異常が消え、プレイヤーが見た被害の記憶も消える。done（守護者・再挑戦の賞金首）は先に傷跡を残して落ち着かせたので、見た被害の記憶だけ消す。
+ * resume: この階から再開する地点。再開するマスが見える位置にいる敵は、転移の着地と同じ規則で動かす（12 マス以上離れ、そこから見えないマス。
+ * 無ければ最も遠いマス）。守護者は持ち場へ戻す
  */
-function settleFloor(ctx: Ctx, at: FloorPos, rng: Rng): void {
-  const key = at.floor;
+function settleFloor(ctx: Ctx, key: string, resume: readonly FloorPos[], rng: Rng, done: ReadonlySet<string>): void {
   const f = ctx.world.floors[key];
   if (!f) return;
-  const opaque = isOpaqueFn(ctx, key);
-  const minD = ctx.content.balance.teleport.minDistance;
   const prevFloor = ctx.curFloor;
   ctx.curFloor = key;
   const mons = ctx.entitiesOn(key).filter((m) => m.actor?.ai && !m.player && m.pos && (m.stats?.hp ?? 0) > 0).sort((a, b) => a.sid - b.sid);
+  const seenBySomeone = (id: string) => Object.values(ctx.world.players).some((p) => !!p.knowledge.damageSeen?.[id]);
   for (const m0 of mons) {
     let m = ctx.world.entities[m0.id];
-    const ai = m.actor!.ai!;
-    if (ai.state !== 'asleep' && ai.state !== 'unaware') {
-      ctx.emit({ type: 'ai_state_changed', id: m.id, ai: { ...ai, state: 'unaware', targetPos: null, lostTurns: 0 }, dormant: !!m.actor!.dormant, nextActAt: m.actor!.nextActAt, seenBy: [], floor: key });
+    if (!done.has(m.id)) {
+      const ai = m.actor!.ai!;
+      if ((ai.state !== 'asleep' && ai.state !== 'unaware') || ai.targetPos || ai.intent) {
+        const next: AiState = { ...ai, state: ai.state === 'asleep' ? 'asleep' : 'unaware', targetPos: null, lostTurns: 0 };
+        delete next.intent;
+        ctx.emit({ type: 'ai_state_changed', id: m.id, ai: next, dormant: !!m.actor!.dormant, nextActAt: m.actor!.nextActAt, seenBy: [], floor: key });
+      }
+      m = ctx.world.entities[m.id];
+      // 全快し、見ていた被害の記憶も戻す（V3-3 後の AI 評価: 前の遠征の累計が残って、体力を読み違えた）
+      if (m.stats && m.stats.hp < m.stats.maxHp) {
+        ctx.emit({ type: 'healed', target: m.id, targetKind: m.kind, amount: m.stats.maxHp - m.stats.hp, hpAfter: m.stats.maxHp, via: 'camp', resetSeen: true, seenBy: [], floor: key });
+      }
+      // 状態異常も消す（V3-3 後の AI 評価: 前の遠征の毒が残って、全快した大守護者を削っていた）
+      m = ctx.world.entities[m.id];
+      if (m.statuses?.length) ctx.emit({ type: 'status_ticked', target: m.id, statusesAfter: [], seenBy: [], floor: key });
     }
+    // 体力が減っていないのに見た被害の記憶が残っている（ほかの者に回復された・傷跡まで全快した守護者）: 記憶だけ消す
     m = ctx.world.entities[m.id];
-    // 全快し、見ていた与ダメの累計も戻す（V3-3 後の AI 評価: 前の遠征の累計が残って、体力を読み違えた）
-    if (m.stats && m.stats.hp < m.stats.maxHp) {
-      ctx.emit({ type: 'healed', target: m.id, targetKind: m.kind, amount: m.stats.maxHp - m.stats.hp, hpAfter: m.stats.maxHp, via: 'camp', resetSeen: true, seenBy: [], floor: key });
+    if (m.stats && seenBySomeone(m.id)) {
+      ctx.emit({ type: 'healed', target: m.id, targetKind: m.kind, amount: 0, hpAfter: m.stats.hp, via: 'camp', resetSeen: true, seenBy: [], floor: key });
     }
-    // 状態異常も消す（V3-3 後の AI 評価: 前の遠征の毒が残って、全快した大守護者を削っていた）
-    m = ctx.world.entities[m.id];
-    if (m.statuses?.length) ctx.emit({ type: 'status_ticked', target: m.id, statusesAfter: [], seenBy: [], floor: key });
-    m = ctx.world.entities[m.id];
-    // 守護者は離れた場所ではなく持ち場へ戻す（V3-2R3b §23.2）。持ち場がふさがっていれば範囲の中の近い空きマス
+  }
+  if (resume.length) {
+    const opaque = isOpaqueFn(ctx, key);
+    for (const at of resume) moveAwayFrom(ctx, f, key, at, opaque, rng);
+  }
+  ctx.curFloor = prevFloor;
+}
+
+/** 再開するマスが見える位置にいる敵を離す（V3-2R3a §22.1）。守護者は持ち場へ戻す（V3-2R3b §23.2。ふさがっていれば範囲の中の近い空きマス） */
+function moveAwayFrom(ctx: Ctx, f: Floor, key: string, at: FloorPos, opaque: ReturnType<typeof isOpaqueFn>, rng: Rng): void {
+  const minD = ctx.content.balance.teleport.minDistance;
+  const mons = ctx.entitiesOn(key).filter((m) => m.actor?.ai && !m.player && m.pos && (m.stats?.hp ?? 0) > 0).sort((a, b) => a.sid - b.sid);
+  for (const m0 of mons) {
+    const m = ctx.world.entities[m0.id];
     if (m.home) {
       const home = m.home;
       if (m.pos!.x === home.x && m.pos!.y === home.y) continue;
@@ -1105,7 +1177,6 @@ function settleFloor(ctx: Ctx, at: FloorPos, rng: Rng): void {
     if (!to) continue;
     ctx.emit({ type: 'entity_moved', id: m.id, kind: m.kind, from: { x: m.pos!.x, y: m.pos!.y }, to: { ...to }, mode: 'teleport', seenBy: [], floor: key });
   }
-  ctx.curFloor = prevFloor;
 }
 
 /** キャンプのプレイヤーを前回 extract した地点へ戻す */

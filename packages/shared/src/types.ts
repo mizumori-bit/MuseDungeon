@@ -186,6 +186,12 @@ export interface Floor {
   rules: { noWander: boolean };
   /** 階の異変（V3-5 §5.3）。arrival だけをプレイヤーに渡す（ID と中身は渡さない） */
   event?: { id: string; handler: string; arrival: Names };
+  /**
+   * この階を作ったときに効いた遠征の条件（V4-0e §8.1。階を作るときに効く条件だけ: 群れる・乏しい・静かの「泉なし」）。
+   * 作られた階にずっと残る性質で、階にいる者と候補に見せる（プレイヤーがその条件の遠征で作った階なので、知っている情報）。
+   * 古い版で作った階には無く、遠征の開始時に足す（floor_traits_noted）
+   */
+  genTraits?: string[];
 }
 
 export interface MonsterMemory {
@@ -372,6 +378,8 @@ export interface ExpeditionOffer {
   vault?: boolean;
   /** 傷跡（V3-8 §53.3）: 前の挑戦で与えたダメージのうち、次の挑戦に残る体力の減り（再挑戦の守護者・賞金首・大守護者） */
   scar?: number;
+  /** 目的の階と通り道の階のうち、もう作られていて性質のある階（V4-0e §8.1。条件の ID ごとに深さ。まだ作られていない階は入れない） */
+  floorTraits?: { trait: string; depths: number[] }[];
 }
 
 /** 賞金首（V3-8 §53.2。名前付きの強敵を遠征の目的にする） */

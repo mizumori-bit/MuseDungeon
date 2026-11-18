@@ -1,9 +1,9 @@
 // フロアの遅延生成（初めて入ったとき）。生成結果は floor_generated（地形 RLE）と entity_spawned で記録する。
 // リプレイは生成器を必要としない。
-import type { Entity, Floor, FloorKey, Pos } from '@muse/shared';
+import type { Entity, Expedition, Floor, FloorKey, Pos } from '@muse/shared';
 import { DIRS, DIR_VEC, rleEncode } from '@muse/shared';
 import type { Ctx } from './ctx';
-import { activeEffects, placementFor, recordTargets } from './expedition';
+import { activeEffects, floorGenTraits, placementFor, recordTargets } from './expedition';
 import { currentExpedition } from '@muse/shared';
 import { generateFloor } from './gen/generate';
 import { spawnFromSpec } from './spawn';
@@ -33,6 +33,44 @@ export function syncTerrainTable(ctx: Ctx): void {
   ctx.emit({ type: 'terrain_table_extended', added, concealAdded, seenBy: [], floor: null, ft: 0 });
 }
 
+/** 階の並び（枝・深さの順）。遠征の開始時に全部の階を順に扱うときに使う */
+export function floorOrder(a: string, b: string): number {
+  const [ba, da] = a.split(':');
+  const [bb, db] = b.split(':');
+  return ba < bb ? -1 : ba > bb ? 1 : parseInt(da, 10) - parseInt(db, 10);
+}
+
+/**
+ * 古い版で作った階に、作ったときに効いた条件を足す（V4-0e §8.1。V4-0b の syncTerrainTable と同じやり方）。階の性質（genTraits）を持たない階だけ。
+ * 作った遠征は、階に残っている者（モンスター・地物。生成時の seq が sid）のうち最も古いものの sid が入る遠征の期間で決める
+ * （モンスターは階を移らず、地物は動かない。アイテムは持ち運ばれるので数えない）。階に者が残っていなければ、その深さに初めて届いた遠征。
+ * 遠征の外（ランの開始・節目の作り直し）で作った階と、目標階より深い階は条件が効いていないので空。遠征の開始時と、候補を作るときに呼ぶ
+ */
+export function noteFloorTraits(ctx: Ctx): void {
+  const w = ctx.world;
+  const missing = Object.keys(w.floors).filter((k) => !w.floors[k].genTraits).sort(floorOrder);
+  if (!missing.length) return;
+  const exps: Expedition[] = w.expeditions ?? [];
+  const oldest = new Map<FloorKey, number>();
+  for (const e of Object.values(w.entities)) {
+    if (!e.pos || e.player || e.item || (!e.actor && !e.feature)) continue;
+    const k = e.pos.floor;
+    const cur = oldest.get(k);
+    if (cur === undefined || e.sid < cur) oldest.set(k, e.sid);
+  }
+  const traits: Record<FloorKey, string[]> = {};
+  for (const key of missing) {
+    const f = w.floors[key];
+    const sid = oldest.get(key);
+    const x = sid !== undefined
+      ? exps.find((e) => e.startSeq <= sid && (e.endSeq === null || sid <= e.endSeq))
+      : f.branch === 'main' ? exps.find((e) => (e.result?.deepest ?? e.progress.maxDepth ?? 0) >= f.depth) : undefined;
+    const inRange = !!x && (x.objective.targetDepth === null || f.depth <= x.objective.targetDepth);
+    traits[key] = inRange ? floorGenTraits(ctx, x!.traits) : [];
+  }
+  ctx.emit({ type: 'floor_traits_noted', traits, seenBy: [], floor: null });
+}
+
 export function ensureFloor(ctx: Ctx, key: FloorKey): Floor {
   const existing = ctx.world.floors[key];
   if (existing) return existing;
@@ -48,7 +86,9 @@ export function ensureFloor(ctx: Ctx, key: FloorKey): Floor {
   const mods = inRange && (x!.traits?.length ?? 0) > 0
     ? { monstersPct: fx.monstersPct, itemsPct: fx.itemsPct, treasurePct: fx.treasurePct, noFountain: fx.noFountain } : undefined;
   const gen = generateFloor(ctx.content, ctx.world.secret.seed, branch, depth, ctx.world.meta.terrainTable, objective ?? undefined, mods);
-  const { terrain, ...floorData } = gen.floor;
+  const { terrain, ...rest } = gen.floor;
+  // 階は作られたときの性質を覚える（V4-0e §8.1）: 階を作るときに効いた条件（群れる・乏しい・静かの「泉なし」）。条件の無い階は空
+  const floorData = { ...rest, genTraits: inRange ? floorGenTraits(ctx, x!.traits) : [] };
   const prevFloor = ctx.curFloor;
   const prevNow = ctx.now;
   ctx.curFloor = key;

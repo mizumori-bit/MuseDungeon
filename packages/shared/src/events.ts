@@ -7,7 +7,7 @@ import type {
 } from './types';
 
 /** 2: 遠征・実ダメージ・回復の蓄積値（IMPROVEMENTS_V2）。3: ビルド（特技・能動技・呪い。V3-4）。古いログもそのまま畳み込める */
-export const EVENT_VERSION = 20;
+export const EVENT_VERSION = 21;
 
 export interface EventBase {
   seq: number;
@@ -120,6 +120,8 @@ export type GameEvent =
    * V4-0b §1.2: 古い版で始まったランには concealTerrain が無く、背の高い草の中の敵が表示では見えていた）
    */
   | E<'terrain_table_extended', { added: string[]; concealAdded: number[] }>
+  /** 古い版で作った階に、作ったときに効いた条件を記録する（V4-0e §8.1。遠征の開始時と候補を作るとき。階の性質を持たない階だけ） */
+  | E<'floor_traits_noted', { traits: Record<FloorKey, string[]> }>
   | E<'floor_reset', { floorKey: FloorKey; depth: number; reason: 'warden_missing'; /** その階の大守護者の名前（次の節目と同じ。シードと深さから決まる） */ guardianName?: Names }>
   /** 遺物を記録庫に納めた。記録庫が次の節目の大守護者の記憶を 1 つ返す（V3-3a §35.7。本人に）。memory: weakness / vitals / none */
   | E<'archive_recalled', { player: PlayerId; relic: string; depth: number; guardianName: Names; memory: 'weakness' | 'vitals' | 'none'; weakness?: string; hp?: number; maxHit?: number; /** 素の装甲（V3-3b §40.1） */ armor?: number }>

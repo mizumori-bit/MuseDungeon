@@ -3,7 +3,7 @@
 import type { Catalog, CatalogEquipStats } from './catalog';
 import { abilityStatus, accBonuses, curseUnknown, isCursedItem, perkChoice, shortId, weaponReach } from './build';
 import { armorWithStatuses, boonHookSum, haulTotal, nameOf, nextCampOf, nextOverreach, offerGap, offerWardenExtra, overreachPoints, payoutOf, regenInterval, regenStep, restCapHp, stairsSealed } from './catalog';
-import { guardianDisplayName, multText, objectiveText, offerText, partsText, progressText, resultText } from './expedition';
+import { floorTraitsText, guardianDisplayName, multText, objectiveText, offerText, partsText, progressText, resultText } from './expedition';
 import { isStationary, pickableItems, sameOrWorseEquip, worseEquip } from './macro';
 import { attacksPerTurn, chaseAttacks, memoryOf, monsterSpeedOf, selfSpeed } from './danger';
 import type { PerceivedEvent } from './filter';
@@ -152,6 +152,8 @@ export interface ObsCamp {
     /** 賞金首の見込み（V3-8 §53.2）。hp_range: 体力の幅（V4-0d §6.1。古い候補には無い） */
     bounty?: { kind: string; name: string; hp: number; hp_range?: { min: number; max: number }; max_hit: number };
     vault?: boolean; scar?: number;
+    /** 目的の階と通り道の階のうち、作られていて性質のある階（V4-0e §8.1。条件の ID・性質の名前・深さ。まだ作られていない階は入らない） */
+    floor_traits?: { trait: string; name: string; depths: number[] }[];
     /** 遺物の名前と、持ち帰るとなる加護（V3-3 §3.3）。owned: もう持っている加護（新しくは付かない） */
     relic?: { kind: string; name: string; boon: string | null; boon_name?: string; boon_desc?: string; owned?: boolean };
   }[];
@@ -203,7 +205,8 @@ export interface Observation {
     hp: number; max_hp: number; statuses: { id: string; name: string; turns_left: number }[];
     /** draft: 下り階段が未発見のときの方角（下への風）。explored: 見た割合の 4 段階（1 約 1/4 … 4 ほぼ全て。V3-2R2 §18.4） */
     /** event_text: 階の異変の到着の文（V3-5 §5.3。ID と中身は出さない） */
-    pos: Pos | null; floor: { depth: number; biome_name: string; floor_type: string; floor_type_id?: string; time: number; draft?: Dir; explored?: 1 | 2 | 3 | 4; hint_text?: string; event_text?: string } | null;
+    /** traits・trait_text: この階を作ったときに効いた条件（V4-0e §8.1。作られた階に残る性質。「群れている（敵と宝が多い）」） */
+    pos: Pos | null; floor: { depth: number; biome_name: string; floor_type: string; floor_type_id?: string; time: number; draft?: Dir; explored?: 1 | 2 | 3 | 4; hint_text?: string; event_text?: string; traits?: string[]; trait_text?: string } | null;
     /** throws: 投げられる持ち物（命中は自分の命中値込み） */
     attack: { acc: number; dmg: string; throws?: { slot: string; kind?: string; name: string; dmg: string | null; acc: number; range: number }[] }; defense: { eva: number; armor: number };
     equipment: { weapon?: string; armor?: string; accessory?: string };
@@ -338,7 +341,7 @@ export function hpLeftEstimate(mem: MonsterMemory | undefined, band: HpState, da
   if (!hs) return undefined;
   const record = { min: hs.min, max: hs.max };
   const lo = Math.max(hs.min, damageSeen + 1);
-  // まだ誰からも傷を負わされていない（見えている範囲で与ダメ 0・無傷の帯）なら、残り HP は最大 HP そのもの: 記録の範囲を出す
+  // まだ誰からも傷を負わされていない（見た被害 0・無傷の帯）なら、残り HP は最大 HP そのもの: 記録の範囲を出す
   // （「無傷の帯」の下限まで広げると、1 発も当てていない相手に「残り 3 以上」と出た。Muse の実プレイ、V3-4b §28.11）
   if (damageSeen <= 0 && band === 'healthy') return { min: hs.min, max: hs.samples >= minSamples ? hs.max : null, samples: hs.samples, record, untouched: true };
   if (hs.samples < minSamples) {
@@ -1254,6 +1257,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
         ...(o.bounty ? { bounty: { kind: o.bounty.kind, name: nameOf(o.bounty.name, L, ''), hp: o.bounty.hp, ...(o.bounty.hpRange ? { hp_range: { ...o.bounty.hpRange } } : {}), max_hit: o.bounty.maxHit } } : {}),
         ...(o.vault ? { vault: true } : {}), ...(o.scar ? { scar: o.scar } : {}),
         ...(o.slot ? { slot: o.slot } : {}), ...(o.traits?.length ? { traits: [...o.traits] } : {}),
+        ...(o.floorTraits?.length ? { floor_traits: o.floorTraits.map((g) => ({ trait: g.trait, name: floorTraitsText(L, rules, [g.trait], false), depths: [...g.depths] })) } : {}),
         ...(o.guardian ? { guardian: {
           rank: o.guardian.rank, traits: [...o.guardian.traits], ...(o.guardian.armor !== undefined ? { armor: o.guardian.armor } : {}),
           ...(o.guardian.hp !== undefined ? { hp: o.guardian.hp } : {}), ...(o.guardian.hpRange ? { hp_range: { ...o.guardian.hpRange } } : {}),
@@ -1356,6 +1360,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       pos, floor: f ? {
         depth: f.depth, biome_name: biomeName, floor_type: nameOf(catalog.floorTypes[f.floorType]?.name, L, f.floorType), floor_type_id: f.floorType, time: f.time,
         ...(view.floorEvent ? { event_text: nameOf(view.floorEvent, L, '') } : {}),
+        ...(f.traits?.length ? { traits: [...f.traits], trait_text: floorTraitsText(L, catalog.rules, f.traits) } : {}),
         ...(view.floorHint?.draft ? { draft: view.floorHint.draft } : {}),
         ...(view.floorHint ? { explored: view.floorHint.explored } : {}),
         ...(view.floorHint ? {
@@ -1793,7 +1798,7 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
       const role = m.role === 'guardian' ? (m.guardian?.warden ? t(L, ` [大守護者・賞金 ${m.bounty ?? 0}]`, ` [warden, bounty ${m.bounty ?? 0}]`) : t(L, ` [守護者・賞金 ${m.bounty ?? 0}]`, ` [guardian, bounty ${m.bounty ?? 0}]`))
         : m.role === 'elite' ? t(L, ` [強敵「${m.named ?? '?'}」・賞金 ${m.bounty ?? 0}・宝を必ず落とす]`, ` [elite "${m.named ?? '?'}", bounty ${m.bounty ?? 0}, always drops treasure]`)
           : m.bounty ? t(L, ` [賞金 ${m.bounty}]`, ` [bounty ${m.bounty}]`) : '';
-      const dmg = m.damage_seen ? t(L, `  与ダメ累計:${m.damage_seen}`, ` dmg_seen:${m.damage_seen}`) : '';
+      const dmg = m.damage_seen ? t(L, `  見た被害:${m.damage_seen}`, ` dmg_seen:${m.damage_seen}`) : '';
       const est = m.hp_left_est ? t(L, `  推定残りHP:${hpEstimateText(L, m.hp_left_est)}`, ` hp_left_est:${hpEstimateText(L, m.hp_left_est)}`) : '';
       // 眠っている敵と 8 マスより遠い敵は、名前・位置・脅威・体力の目安だけ（命中と通りの記録・射線は省く。V3-4b §28.8）
       const brief = m.awareness === 'asleep' || m.dist > 8;
@@ -1834,7 +1839,9 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
   }
   if (alive) {
     lines.push(t(L, '足元: ', 'Here: ') + nav.here);
-    const hint = s.floor?.hint_text || s.floor?.event_text ? t(L, `（この階: ${[s.floor?.event_text, s.floor?.hint_text].filter(Boolean).join('・')}）`, ` (this floor: ${[s.floor?.event_text, s.floor?.hint_text].filter(Boolean).join(', ')})`) : '';
+    // この階の性質（V4-0e §8.1）・異変・手がかり
+    const fl = [s.floor?.trait_text, s.floor?.event_text, s.floor?.hint_text].filter(Boolean);
+    const hint = fl.length ? t(L, `（この階: ${fl.join('・')}）`, ` (this floor: ${fl.join(', ')})`) : '';
     if (nav.frontiers.length) {
       const mapped = obs.navigation.unsighted ? t(L, '（地形は判明・未見の区画あり）', ' (layout known, unseen areas remain)') : '';
       lines.push(t(L, '未探索: ', 'Unexplored: ') + nav.frontiers.map((fr) => `${dirLabel(L, fr.dir)}(${fr.pos.x},${fr.pos.y}) ${t(L, '距離', 'dist')}${fr.dist}`).join(' / ') + mapped + hint);
@@ -1915,7 +1922,7 @@ export function describeTarget(view: PlayerView, catalog: Catalog, target: Pos |
       const sturdy = e.role === 'guardian'
         ? t(L, '・守護者（通常の個体より大幅に頑丈）', ', guardian (far sturdier than a normal one)')
         : (e.affixes?.length || e.tier) ? t(L, '・接辞や深層強化があるので記録より頑丈なことがある', ', affixes/tier may make it sturdier than your records') : '';
-      const ds = e.damageSeen ? t(L, `・この個体への与ダメ累計 ${e.damageSeen}`, `, damage you saw it take ${e.damageSeen}`) : '';
+      const ds = e.damageSeen ? t(L, `・見た被害 ${e.damageSeen}`, `, damage you saw it take ${e.damageSeen}`) : '';
       const est = e.role === 'guardian' ? undefined : hpLeftEstimate(mem, e.hp ?? 'healthy', e.damageSeen ?? 0, catalog.rules?.estimateMinSamples ?? HP_RECORD_SURE);
       const estText = est ? t(L, `・推定残りHP ${hpEstimateText(L, est)}`, `, estimated HP left ${hpEstimateText(L, est)}`) : '';
       const shotText = e.shot === false ? t(L, '・射線: 通らない', ', shot: blocked') : '';

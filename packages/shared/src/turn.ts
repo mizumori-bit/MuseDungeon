@@ -171,7 +171,11 @@ export function diffChanges(prev: TurnSnapshot | null, cur: TurnSnapshot, view: 
   const L = view.locale;
   const out: Change[] = [];
   const sameFloor = prev.floorKey === cur.floorKey;
-  if (!sameFloor && cur.depth !== null) out.push({ code: 'floor_changed', text: t(L, `地下${cur.depth}階に移った`, `Now on depth ${cur.depth}`) });
+  if (!sameFloor && cur.depth !== null) {
+    // この階を作ったときに効いた条件（V4-0e §8.1）: 着いたときに 1 回
+    const tt = obs.self.floor?.trait_text;
+    out.push({ code: 'floor_changed', text: t(L, `地下${cur.depth}階に移った${tt ? `。この階は${tt}` : ''}`, `Now on depth ${cur.depth}${tt ? `. This floor: ${tt}` : ''}`) });
+  }
   if (cur.expNo !== null && cur.expNo === prev.expNo) {
     if (cur.expStatus === 'objective_complete' && prev.expStatus !== 'objective_complete') {
       const ot = view.expedition?.objective.type;

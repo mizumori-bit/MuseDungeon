@@ -507,6 +507,16 @@ export const ExpeditionTraitSchema = z.object({
   }).default({}),
   /** 同じ候補に付けない条件（V3-3 後の AI 評価: 静か＝徘徊なし と 騒がしい＝徘徊が早い が同時に付いた） */
   excludes: z.array(IdSchema).default([]),
+  /**
+   * 階を作るときに効く条件（敵・アイテム・宝の数、泉なし）が、作った階に残す性質（V4-0e §8.1）。
+   * name: 階の性質の短い名前（「この階は群れている」）、detail: 括弧の中、danger: その階を通る候補の危険度への加算（条件と同じだけ）
+   */
+  floor: z.object({ name: NamesSchema, detail: NamesSchema.optional(), danger: z.number().int().default(0) }).optional(),
+}).superRefine((t, c) => {
+  // 階を作るときに効く効果を持つ条件は、階の性質の名前を持つ（作った階に残るので、見せる名前が要る）
+  const gen = t.effects.monstersPct !== undefined || t.effects.itemsPct !== undefined || t.effects.treasurePct !== undefined || !!t.effects.noFountain;
+  if (gen && !t.floor) c.addIssue({ code: z.ZodIssueCode.custom, message: `${t.id}: an expedition trait with floor-generation effects needs "floor" (V4-0e §8.1)` });
+  if (!gen && t.floor) c.addIssue({ code: z.ZodIssueCode.custom, message: `${t.id}: "floor" is only for traits with floor-generation effects` });
 });
 
 export const FeatureSchema = z.object({

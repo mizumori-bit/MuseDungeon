@@ -176,7 +176,8 @@ export interface PlayerView {
   terrainTable: string[];
   self: SelfView;
   inventory: ItemView[];
-  floor: { key: FloorKey; depth: number; biome: string; floorType: string; width: number; height: number; time: number; noWander: boolean } | null;
+  /** traits: 今いる階を作ったときに効いた条件（V4-0e §8.1。群れる・乏しい・静かの「泉なし」。作られた階に残る性質） */
+  floor: { key: FloorKey; depth: number; biome: string; floorType: string; width: number; height: number; time: number; noWander: boolean; traits?: string[] } | null;
   visibleCells: number[];
   entities: EntityView[];
   /** unsighted: 地形は知っているが、まだ目で見ていないセル（地図の巻物で知った区画） */
@@ -516,6 +517,7 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
     floor: floor ? {
       key: floor.key, depth: floor.depth, biome: floor.biome, floorType: floor.floorType, width: floor.width, height: floor.height,
       time: floor.time, noWander: floor.rules.noWander,
+      ...(floor.genTraits?.length ? { traits: [...floor.genTraits] } : {}),
     } : null,
     visibleCells: [...k.visible],
     entities,

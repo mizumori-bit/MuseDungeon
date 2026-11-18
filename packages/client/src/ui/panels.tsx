@@ -1,7 +1,7 @@
 // 情報パネル（Preact）。表示名は公開カタログ、状態は PlayerView / World から。
 import type { AgentActivity, Alert, Catalog, CommandRecord, ObsMonster, Observation, PlayerView, RunSummary, World } from '@muse/shared';
 import {
-  abilityStatus, accBonuses, curseUnknown, dealtText, dirLabel, endReasonText, hitsText, hpEstimateText, hpState, isCursedItem, itemDisplayName, itemStats, itemStatsText, kindName, nameOf,
+  abilityStatus, accBonuses, curseUnknown, dealtText, dirLabel, endReasonText, floorTraitsText, hitsText, hpEstimateText, hpState, isCursedItem, itemDisplayName, itemStats, itemStatsText, kindName, nameOf,
   objectiveText, sameOrWorseEquip, shortId, xpForLevel,
 } from '@muse/shared';
 import { useEffect, useRef, useState } from 'preact/hooks';
@@ -59,10 +59,11 @@ export function StatusPanel({ view, catalog, speed, floor }: { view: PlayerView;
         </span>
         <span>XP</span><span>{s.xp} / {xpForLevel(s.level)}</span>
         <span>{tr('階層', 'Depth')}</span><span>{f ? `${tr('地下', 'B')}${f.depth}${tr('階', 'F')} ${nameOf(catalog.biomes[f.biome]?.name, L, f.biome)}` : '-'}</span>
-        {(explored || draft) && (
+        {(explored || draft || !!f?.traits?.length) && (
           <>
             <span>{tr('この階', 'This floor')}</span>
             <span class="floorhint">
+              {f?.traits?.length ? <span title={tr('この階を作ったときに効いた遠征の条件（作られた階に残る）', 'Expedition traits in effect when this floor was made (they stay with the floor)')}>{floorTraitsText(L, catalog.rules, f.traits)}</span> : null}
               {explored && <span title={tr('この階の通れるマスのうち、見た割合（4 段階）', 'Share of this floor\'s walkable cells you have seen (4 bands)')}>{tr(`探索 ${exploredLabel(explored)}`, `explored ${exploredLabel(explored)}`)}</span>}
               {draft && (
                 <span class="draft" title={tr('この階の下り階段の方角（まだ見ていないときだけ。遠近は分からない）。地図では自分の横に水色の矢印', 'Direction of this floor\'s down stairs (only until you see them; distance unknown). Shown as a cyan arrow next to you on the map')}>
@@ -380,7 +381,7 @@ export function MonstersPanel({ monsters, hp, onFight, throwSlotFor, reach, onRe
                 {hits && <span class="mhits" title={tr('記録した命中の回数（確率ではない）', 'Recorded hits / tries (not a probability)')}>{hits}</span>}
                 {dealt && <span class="mdealt" title={tr('通り: 自分の攻撃が当たったときの実ダメージの平均と回数（装甲の値は伏せたまま。近接と投擲を比べられる）', 'Your hits: average damage when they land, and how many (armor stays hidden; compare melee and throws)')}>{dealt}</span>}
                 {m.hp_left_est && <span>{hpEstimateText(L, m.hp_left_est)}</span>}
-                {m.damage_seen ? <span>{tr(`与ダメ累計 ${m.damage_seen}`, `dmg dealt ${m.damage_seen}`)}</span> : null}
+                {m.damage_seen ? <span>{tr(`見た被害 ${m.damage_seen}`, `dmg seen ${m.damage_seen}`)}</span> : null}
                 {shot && <span class={m.shot === 'blocked' ? 'mshot blocked' : 'mshot'}>{shot}</span>}
                 {m.bounty ? <span class="mbounty">{tr(`賞金 ${m.bounty}`, `bounty ${m.bounty}`)}</span> : null}
               </div>

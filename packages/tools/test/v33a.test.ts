@@ -88,14 +88,17 @@ describe('V3-3a guardians heal while you are away (§35.1)', () => {
     expect(after.statuses ?? []).toEqual([]);
     expect(after.actor!.ai!.state).not.toBe('hunting');
     expect(t.r.session.history.some((e) => e.type === 'guardian_rested' && (e as { full?: boolean }).full)).toBe(true);
-    // キャンプへ戻ると、どの階の守護者も全快する
+    // キャンプへ戻ると、どの階の守護者も全快する（最大体力 − 傷跡まで。V3-8 §53.3。
+    // 再開する階の大守護者も同じ: 今までは再開する階を先に全快させていたので、傷跡が消えていた。V4-0e §8.3）
     const g1 = structuredClone(t.world.entities[w.id]);
     g1.stats!.hp = 5;
     t.inject({ put: [g1] });
+    const scar = Math.min(Math.trunc(max / 2), (g1.scar ?? 0) + Math.trunc((max - (g1.scar ?? 0) - 5) / 4));
     await t.toUp();
     expect((await t.act({ type: 'extract', confirm: true })).ok).toBe(true);
     expect((await t.act({ type: 'start_expedition', offer: 1 })).ok).toBe(true);
-    expect(t.world.entities[w.id].stats!.hp).toBe(max);
+    expect(t.world.entities[w.id].scar).toBe(scar);
+    expect(t.world.entities[w.id].stats!.hp).toBe(max - scar);
     t.manager.closeAll();
   });
 });

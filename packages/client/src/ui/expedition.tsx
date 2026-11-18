@@ -6,7 +6,7 @@ import type {
 } from '@muse/shared';
 import {
   bountyForecastText, briefingLines, buildObservation, campDepthOf, gearVsArmorText, currentExpedition, dirLabel, endReasonText, guardianForecastText, haulTotal, latestExpedition, multText, nameOf,
-  nextCampOf, nextOverreach, objectiveText, offerGap, offerText, overreachPoints, partsText, progressText, recordsCampLine, resultText, slotName,
+  nextCampOf, nextOverreach, objectiveText, offerFloorTraitsText, offerGap, offerText, offerWardenExtra, overreachPoints, partsText, progressText, recordsCampLine, resultText, slotName,
 } from '@muse/shared';
 import { api } from '../api';
 import type { RefObject } from 'preact';
@@ -395,7 +395,9 @@ export function RestEstimateLine({ est }: { est: RestEstimate }) {
 
 function OfferCard({ o, rules, level, onStart, view, catalog }: { o: ExpeditionOffer; rules: CatalogRules | undefined; level: number; onStart: (offer: number) => void; view?: PlayerView; catalog?: Catalog | null }) {
   const L = getLocale();
-  const g = rules ? offerGap(rules, o.objective.targetDepth, o.traits ?? [], level) : null;
+  // 大守護者と、通り道の群れている階も危険度に入れる（AI の候補と同じ。V4-0e §8.1）
+  const g = rules ? offerGap(rules, o.objective.targetDepth, o.traits ?? [], level, offerWardenExtra(o)) : null;
+  const ft = offerFloorTraitsText(L, rules, o);
   const guarded = o.objective.type === 'retrieve_relic' && o.relicGuarded ? tr('（守護者付き）', ' (guarded)') : '';
   return (
     <li class={`offer ${o.slot ?? ''}`}>
@@ -424,6 +426,7 @@ function OfferCard({ o, rules, level, onStart, view, catalog }: { o: ExpeditionO
         )}
         {o.vault && <span class="oguard">{tr('宝物庫: 鍵を持つ敵が階にいる', 'vault: a monster on the floor carries the key')}</span>}
         {o.scar ? <span class="oguard" title={tr('前の挑戦で与えたダメージの 4 分の 1 が残っている', 'A quarter of the damage you dealt last time stays')}>{tr(`傷跡で体力 −${o.scar}`, `scars: −${o.scar} HP`)}</span> : null}
+        {ft ? <span class="oguard" title={tr('前の遠征の条件で作られた階は、その性質のまま残っている（まだ作られていない階については出ない）', 'Floors made under an earlier expedition\'s traits keep them (floors not made yet are not listed)')}>{ft}</span> : null}
       </div>
       {/* いまの持ち物で 1 回に通る目安（守護者・賞金首。AI の候補の文と同じ。V3-8a §56.1） */}
       {view && catalog && (o.bounty || (o.guardian?.armor !== undefined && o.objective.type !== 'slay_warden')) && (

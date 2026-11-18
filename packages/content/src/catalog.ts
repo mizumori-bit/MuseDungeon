@@ -155,7 +155,7 @@ export function buildCatalog(c: Content): Catalog {
       guardianRanks: c.balance.guardian.ranks.map((r) => ({ hpPct: r.hpPct, minHpBase: r.minHpBase, minHpPerDepth: r.minHpPerDepth })),
       perkOptions: c.balance.perks.options,
       curseChancePct: c.balance.curse.chancePct,
-      traits: Object.fromEntries(c.lists.expeditionTraits.map((t) => [t.id, { name: t.name, desc: t.desc, multiplierPct: t.multiplierPct, danger: t.danger }])),
+      traits: Object.fromEntries(c.lists.expeditionTraits.map((t) => [t.id, { name: t.name, desc: t.desc, multiplierPct: t.multiplierPct, danger: t.danger, ...(t.floor ? { floor: { name: t.floor.name, ...(t.floor.detail ? { detail: t.floor.detail } : {}), danger: t.floor.danger } } : {}) }])),
       expedition: {
         firstTargetDepth: { ...c.balance.expedition.firstTargetDepth },
         typePct: { ...c.balance.expedition.typePct }, depthPct: { ...c.balance.expedition.depthPct }, repeatPct: c.balance.expedition.repeatPct, repeatMinPct: c.balance.expedition.repeatMinPct,

@@ -178,7 +178,8 @@ export interface CatalogRules {
   perkOptions?: number;
   curseChancePct?: number;
   /** 遠征の条件（公開） */
-  traits: Record<string, { name: Names; desc: Names; multiplierPct: number; danger: number }>;
+  /** floor: 階を作るときに効く条件が作った階に残す性質（V4-0e §8.1。名前・括弧の中・その階を通る候補の危険度への加算） */
+  traits: Record<string, { name: Names; desc: Names; multiplierPct: number; danger: number; floor?: { name: Names; detail?: Names; danger: number } }>;
 }
 
 /**
@@ -259,10 +260,14 @@ export function stairsSealed(ms: { every: number; min: number } | null | undefin
   return isMilestoneOf(ms, depth) && !cleared.includes(depth);
 }
 
-/** 候補の難しさ（V3-2R §14.4）: 推奨レベルとの差と、条件の危険度の合計。段階に丸めない */
+/**
+ * 候補の難しさ（V3-2R §14.4）: 推奨レベルとの差と、条件の危険度の合計。段階に丸めない。
+ * extra.floorTraits: 目的の階と通り道の階のうち、作られている階の性質（V4-0e §8.1）。候補に同じ条件が無ければ、階の性質の危険度を 1 回だけ足す
+ */
 export function offerGap(rules: Pick<CatalogRules, 'recommendedLevel' | 'traits'> & Partial<Pick<CatalogRules, 'milestone'>>, targetDepth: number | null, traits: readonly string[], level: number,
-  extra?: { warden?: boolean; passesWarden?: number }): { recommendedLevel: number | null; levelGap: number | null; traitDanger: number } {
+  extra?: { warden?: boolean; passesWarden?: number; floorTraits?: readonly string[] }): { recommendedLevel: number | null; levelGap: number | null; traitDanger: number } {
   let traitDanger = traits.reduce((a, id) => a + (rules.traits[id]?.danger ?? 0), 0);
+  for (const id of new Set(extra?.floorTraits ?? [])) if (!traits.includes(id)) traitDanger += rules.traits[id]?.floor?.danger ?? 0;
   if (targetDepth === null) return { recommendedLevel: null, levelGap: null, traitDanger };
   let rec = recommendedLevel(rules, targetDepth);
   // 大守護者を推奨レベルと危険度に入れる（V3-3a §35.2）: 節目に挑む = その深さ + levelBonus、節目を越える = 目標と大守護者の大きいほう・危険度 +1
@@ -272,9 +277,12 @@ export function offerGap(rules: Pick<CatalogRules, 'recommendedLevel' | 'traits'
   return { recommendedLevel: rec, levelGap: rec - level, traitDanger };
 }
 
-/** 候補の大守護者の情報（offerGap の extra） */
-export function offerWardenExtra(o: { objective: { type: string }; passesWarden?: { depth: number } }): { warden?: boolean; passesWarden?: number } {
-  return { ...(o.objective.type === 'slay_warden' ? { warden: true } : {}), ...(o.passesWarden ? { passesWarden: o.passesWarden.depth } : {}) };
+/** 候補の大守護者と、通り道の階の性質（offerGap の extra。V4-0e §8.1） */
+export function offerWardenExtra(o: { objective: { type: string }; passesWarden?: { depth: number }; floorTraits?: readonly { trait: string }[] }): { warden?: boolean; passesWarden?: number; floorTraits?: string[] } {
+  return {
+    ...(o.objective.type === 'slay_warden' ? { warden: true } : {}), ...(o.passesWarden ? { passesWarden: o.passesWarden.depth } : {}),
+    ...(o.floorTraits?.length ? { floorTraits: o.floorTraits.map((f) => f.trait) } : {}),
+  };
 }
 
 /**

@@ -413,6 +413,14 @@ V3-2R で足した項目（同じく後方互換。会心と経験値のルー�
 - `player_state.reason: 'joined'`（キャンプから始まる参加）。参加コマンドの `atCamp`
 - プレイヤー向けの射影で、見えていた個体が視界の外へ動いた `entity_moved` に `dirOut`（向きだけ。行き先は伏せたまま）
 
+V4-0e で変えた項目（`engineVersion` 0.29.0、`eventVersion` 21。DESIGN.md §36.5）:
+
+- イベント: `floor_traits_noted { traits: Record<FloorKey, string[]> }`（古い版で作った階に、作ったときに効いた条件を記録した。遠征の開始時と候補を作るとき、性質を持たない階だけ。俯瞰専用）
+- `Floor.genTraits`（その階を作ったときに効いた条件のうち、階を作るときに効くもの。`floor_generated.floorData` に入る。条件が無ければ空）。`ExpeditionOffer.floorTraits: { trait, depths }[]`（目的の階と通り道の階のうち、作られていて性質のある階）
+- 規則: 群れる・乏しい（階を作るときだけに効く条件）は、目的の階がまだ作られていない候補にだけ付く。遠征の開始時に、作られているすべての階の敵が落ち着く（今までは再開する階だけ）。守護者と再挑戦の賞金首は先に落ち着かせるので、再開する階でも傷跡が残る
+- 観測: `self.floor.traits`・`trait_text`（状態の行の「この階:」にも）、ターンの要約の `floor_changed` に「この階は群れている（敵と宝が多い）」、`camp.offers[].floor_traits: { trait, name, depths }[]`、候補の文に「通り道の地下 13〜16 階は群れている」。候補の `trait_danger` は、群れている階があれば（候補に群れる階層が無いとき）+1。敵の行の「与ダメ累計:」は「見た被害:」に（`damage_seen` の名前は同じ）
+- get_rules: 条件の 2 種類と条件の文（「この遠征で初めて入る階は」）、階の性質と候補の通り道の行、キャンプですべての階が落ち着くこと、見た被害の説明
+
 V4-0d で変えた項目（`engineVersion` 0.28.0。出来事の種類は増やしていないので `eventVersion` は 20 のまま。DESIGN.md §36.4）:
 
 - `ExpeditionOffer.guardian.hpRange` を格 1〜3 の守護者にも持たせる（体力ダイスの最小と最大に、目安と同じ上乗せと下限。大守護者は今までどおり `hp` が無く `hpRange` だけ）。`ExpeditionOffer.bounty.hpRange`（古い候補には無い）

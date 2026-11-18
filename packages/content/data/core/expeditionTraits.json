@@ -1,7 +1,10 @@
 [
-  {"id": "core:crowded", "name": {"ja": "群れる階層", "en": "crowded"}, "desc": {"ja": "敵の数が 1.5 倍、宝も 1.5 倍", "en": "50% more monsters and treasure"}, "multiplierPct": 120, "danger": 1, "effects": {"monstersPct": 150, "treasurePct": 150}},
+  {"id": "core:crowded", "name": {"ja": "群れる階層", "en": "crowded"}, "desc": {"ja": "この遠征で初めて入る階は、敵の数が 1.5 倍、宝も 1.5 倍", "en": "floors you enter for the first time on this expedition have 50% more monsters and treasure"}, "multiplierPct": 120, "danger": 1, "effects": {"monstersPct": 150, "treasurePct": 150},
+    "floor": {"name": {"ja": "群れている", "en": "crowded"}, "detail": {"ja": "敵と宝が多い", "en": "more monsters and treasure"}, "danger": 1}},
   {"id": "core:restless", "excludes": ["core:quiet"], "name": {"ja": "騒がしい階層", "en": "restless"}, "desc": {"ja": "徘徊モンスターの湧く間隔が 4 割短い", "en": "wandering monsters arrive 40% sooner"}, "multiplierPct": 120, "danger": 1, "effects": {"wanderIntervalPct": 60}},
   {"id": "core:dim", "name": {"ja": "薄暗い階層", "en": "dim"}, "desc": {"ja": "自分の視界 -2", "en": "your sight -2"}, "multiplierPct": 125, "danger": 1, "effects": {"sightDelta": -2}},
-  {"id": "core:scarce", "name": {"ja": "乏しい階層", "en": "scarce"}, "desc": {"ja": "床のアイテムが半分", "en": "half the items on the floor"}, "multiplierPct": 120, "danger": 0, "effects": {"itemsPct": 50}},
-  {"id": "core:quiet", "excludes": ["core:restless"], "name": {"ja": "静かな階層", "en": "quiet"}, "desc": {"ja": "徘徊モンスターが出ない。泉も無い", "en": "no wandering monsters, no fountains"}, "multiplierPct": 90, "danger": -1, "effects": {"noWander": true, "noFountain": true}}
+  {"id": "core:scarce", "name": {"ja": "乏しい階層", "en": "scarce"}, "desc": {"ja": "この遠征で初めて入る階は、床のアイテムが半分", "en": "floors you enter for the first time on this expedition have half the items"}, "multiplierPct": 120, "danger": 0, "effects": {"itemsPct": 50},
+    "floor": {"name": {"ja": "乏しい", "en": "scarce"}, "detail": {"ja": "床のアイテムが少ない", "en": "fewer items on the floor"}}},
+  {"id": "core:quiet", "excludes": ["core:restless"], "name": {"ja": "静かな階層", "en": "quiet"}, "desc": {"ja": "徘徊モンスターが出ない。この遠征で初めて入る階には泉も無い", "en": "no wandering monsters; floors you enter for the first time on this expedition have no fountains"}, "multiplierPct": 90, "danger": -1, "effects": {"noWander": true, "noFountain": true},
+    "floor": {"name": {"ja": "泉が無い", "en": "no fountains"}}}
 ]

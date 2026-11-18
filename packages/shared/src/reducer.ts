@@ -210,7 +210,7 @@ export function applyEvent(world: World, ev: GameEvent): void {
       break;
     case 'healed':
       ent(world, ev.target).stats!.hp = ev.hpAfter;
-      // キャンプにいる間に落ち着いた（全快した）敵は、見ていた与ダメの累計も戻す（resetSeen の無い古いログは今までどおり）
+      // キャンプにいる間に落ち着いた（全快した）敵は、見た被害の記憶も戻す（resetSeen の無い古いログは今までどおり）
       if (ev.resetSeen) for (const pr of Object.values(world.players)) if (pr.knowledge.damageSeen) delete pr.knowledge.damageSeen[ev.target];
       break;
     case 'max_hp_changed': {
@@ -314,6 +314,9 @@ export function applyEvent(world: World, ev: GameEvent): void {
       }
       break;
     }
+    case 'floor_traits_noted':
+      for (const [key, tr] of Object.entries(ev.traits)) if (world.floors[key]) world.floors[key].genTraits = [...tr];
+      break;
     case 'terrain_table_extended':
       world.meta.terrainTable = [...world.meta.terrainTable, ...ev.added];
       if (ev.concealAdded.length) world.meta.concealTerrain = [...new Set([...(world.meta.concealTerrain ?? []), ...ev.concealAdded])].sort((a, b) => a - b);
