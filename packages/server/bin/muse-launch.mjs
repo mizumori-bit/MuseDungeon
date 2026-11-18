@@ -6,17 +6,44 @@
 //  3. サーバーがもう動いていれば、ブラウザを開くだけ
 //  4. 画面が古ければ組み立てる（npm run build）
 //  5. サーバーを起動し、起動を待ってブラウザを開く。このウィンドウを閉じるとサーバーも止まる
-// 環境変数: MUSE_PORT・MUSE_HOST・MUSE_RUNS_DIR（サーバーと同じ）、MUSE_NO_BROWSER=1（ブラウザを開かない）
+// --share（MuseDungeon-share.cmd）: この PC の中と、この PC の Tailscale のアドレスで待ち受ける（ほかの PC の AI・人がつなげる）。
+//   同じ Wi-Fi などには開かない。ブラウザはいつもどおり 127.0.0.1 で開く（ブラウザが覚えたプレイヤーのトークンがそのまま使える）
+// 環境変数: MUSE_PORT・MUSE_HOST・MUSE_RUNS_DIR（サーバーと同じ。MUSE_HOST はカンマ区切りで複数）、MUSE_NO_BROWSER=1（ブラウザを開かない）
 /* global console, process, fetch, setTimeout, AbortSignal */
 import { exec, spawn, spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import net from 'node:net';
+import { networkInterfaces } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
-const host = process.env.MUSE_HOST ?? '127.0.0.1';
+const share = process.argv.includes('--share');
 const port = Number(process.env.MUSE_PORT ?? '7777');
+
+/** この PC の Tailscale のアドレス（IPv4 の 100.64.0.0/10） */
+function tailscaleAddresses() {
+  const out = [];
+  for (const list of Object.values(networkInterfaces())) {
+    for (const a of list ?? []) {
+      if (a.family !== 'IPv4' || a.internal) continue;
+      const [x, y] = a.address.split('.').map(Number);
+      if (x === 100 && y >= 64 && y <= 127) out.push(a.address);
+    }
+  }
+  return out;
+}
+
+let shareHosts = [];
+if (share && !process.env.MUSE_HOST) {
+  shareHosts = tailscaleAddresses();
+  if (!shareHosts.length) {
+    console.error('\n[MuseDungeon] この PC の Tailscale のアドレスが見つかりません。Tailscale を起動してつないでから、もう一度押してください。');
+    process.exit(1);
+  }
+  process.env.MUSE_HOST = ['127.0.0.1', ...shareHosts].join(',');
+}
+const host = (process.env.MUSE_HOST ?? '127.0.0.1').split(',')[0].trim();
 const browserHost = host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host;
 const base = `http://${browserHost}:${port}`;
 const win = process.platform === 'win32';
@@ -34,9 +61,9 @@ function npm(args) {
   return r.status === 0;
 }
 
-async function healthy() {
+async function healthy(at = base) {
   try {
-    const r = await fetch(`${base}/api/health`, { signal: AbortSignal.timeout(1500) });
+    const r = await fetch(`${at}/api/health`, { signal: AbortSignal.timeout(1500) });
     if (!r.ok) return false;
     const j = await r.json();
     return j?.ok === true;
@@ -84,7 +111,19 @@ function newest(p) {
 const major = Number(process.versions.node.split('.')[0]);
 if (major < 22) fail(`Node.js 22 以上が要ります（いまは ${process.versions.node}）。https://nodejs.org/ から入れ直してください。`);
 
-say('MuseDungeon を起動します。');
+say(share ? 'MuseDungeon を起動します（ほかの PC からもつなげる形）。' : 'MuseDungeon を起動します。');
+
+/** ほかの PC からつなぐときの URL を出す */
+function sayShare() {
+  if (!shareHosts.length) return;
+  say('');
+  for (const h of shareHosts) {
+    say(`ほかの PC から遊ぶ・観戦する: http://${h}:${port}/`);
+    say(`ほかの PC の AI（MCP）の接続先: http://${h}:${port}/mcp`);
+  }
+  say('Tailscale でつながった端末からだけ届きます。このサーバーにはつなぐ相手を確かめる仕組みが無いので、その端末の誰でも入れます。');
+  say('Windows の「セキュリティの重要な警告」が出たら「アクセスを許可する」を押してください（出ないのに届かないときは、ファイアウォールで Node.js か口 ' + port + ' を許可します）。');
+}
 
 // 2. 依存のパッケージ（無い、または package-lock.json の方が新しい）
 const lock = join(root, 'package-lock.json');
@@ -93,9 +132,23 @@ const needInstall = !existsSync(installed) || (existsSync(lock) && statSync(lock
 
 // 3. もう動いていれば開くだけ（依存を入れ直すと動いているサーバーを壊すので、先に見る）
 if (await healthy()) {
+  // ほかの PC からつなぐ形で押したのに、動いているサーバーがこの PC の中だけなら、起動し直してもらう
+  const notShared = [];
+  for (const h of shareHosts) if (!(await healthy(`http://${h}:${port}`))) notShared.push(h);
+  if (notShared.length) fail(`サーバーはもう動いていますが、この PC の中だけで受け付けています（${notShared.join('・')} には開いていません）。そのサーバーのウィンドウを閉じてから、もう一度押してください。`);
   say(`サーバーはもう動いています。ブラウザで ${base}/ を開きます。`);
+  sayShare();
   await openBrowser(`${base}/`);
   say('このウィンドウは数秒で閉じます（サーバーは、先に起動したほうのウィンドウや、AI のつなぐ口が動かしています）。');
+  await sleep(4000);
+  process.exit(0);
+}
+// この PC の Tailscale のアドレスだけで動いているサーバー（MUSE_HOST を手で指定して起動したもの）があれば、それを開く（同じ記録を 2 つのサーバーで扱わない）
+for (const h of tailscaleAddresses()) {
+  if (!(await healthy(`http://${h}:${port}`))) continue;
+  say(`サーバーはもう動いています（${h} だけで受け付けています）。ブラウザで http://${h}:${port}/ を開きます。`);
+  await openBrowser(`http://${h}:${port}/`);
+  say('このウィンドウは数秒で閉じます。');
   await sleep(4000);
   process.exit(0);
 }
@@ -130,6 +183,8 @@ if (!(await healthy())) {
 say('');
 say(`遊ぶ・観戦する: ${base}/`);
 say(`AI（MCP）の接続先: ${base}/mcp`);
+sayShare();
+say('');
 say('このウィンドウを閉じると、サーバーが止まります。');
 say('');
 await openBrowser(`${base}/`);

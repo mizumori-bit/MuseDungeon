@@ -30,6 +30,7 @@ export function loadConfig(overrides: Partial<ServerConfig> = {}): ServerConfig 
   const env = process.env;
   const policy = (env.MUSE_SPECTATOR_POLICY as SpectatorPolicy | undefined) ?? 'omniscient';
   return {
+    // カンマで区切って複数書ける（main.ts がそれぞれで待ち受ける）
     host: env.MUSE_HOST ?? '127.0.0.1',
     port: env.MUSE_PORT ? parseInt(env.MUSE_PORT, 10) : 7777,
     runsDir: env.MUSE_RUNS_DIR ?? resolve(REPO_ROOT, 'runs'),

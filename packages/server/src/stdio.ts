@@ -7,7 +7,9 @@ import { fileURLToPath } from 'node:url';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
-const base = process.env.MUSE_URL ?? `http://${process.env.MUSE_HOST ?? '127.0.0.1'}:${process.env.MUSE_PORT ?? '7777'}`;
+// MUSE_HOST が複数（カンマ区切り）なら最初のもの。0.0.0.0 ならこの PC の中から
+const firstHost = (process.env.MUSE_HOST ?? '127.0.0.1').split(',')[0].trim();
+const base = process.env.MUSE_URL ?? `http://${firstHost === '0.0.0.0' || firstHost === '::' ? '127.0.0.1' : firstHost}:${process.env.MUSE_PORT ?? '7777'}`;
 const log = (...a: unknown[]) => process.stderr.write(`[muse-mcp-stdio] ${a.map(String).join(' ')}\n`);
 
 async function healthy(): Promise<boolean> {

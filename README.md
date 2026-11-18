@@ -26,6 +26,19 @@ Windows 11 / PowerShell（macOS・Linux でも可）、Node.js 22 以上、npm�
 
 Node.js が無ければ、入れ方を表示して止まる。口 7777 を別のプログラムが使っていれば、そう表示して止まる（`MUSE_PORT` で変えられる）。中身は `packages/server/bin/muse-launch.mjs`（macOS・Linux では `node packages/server/bin/muse-launch.mjs` で同じことができる）。ブラウザを開かせたくなければ `MUSE_NO_BROWSER=1`。
 
+### ほかの PC からもつなぐ（Tailscale）
+
+ほかの PC の AI（Muse など）や人がつなぐときは、**`MuseDungeon-share.cmd`** をダブルクリックする。動きは `MuseDungeon.cmd` と同じで、待ち受ける場所だけが違う。
+
+- この PC の中（127.0.0.1）と、**この PC の Tailscale のアドレス**（100.x.x.x）で待ち受ける。同じ Wi-Fi などには開かない。
+- ウィンドウに、ほかの PC からつなぐ URL が出る（例 `http://100.110.38.53:7777/`、AI は `http://100.110.38.53:7777/mcp`）。
+- この PC のブラウザは、いつもどおり `http://127.0.0.1:7777/` で開く（ブラウザが覚えたプレイヤーのトークンがそのまま使える）。
+- 初めてのときは Windows の「セキュリティの重要な警告」が出るので、「アクセスを許可する」を押す。
+- このサーバーには、つなぐ相手を確かめる仕組みが無い。Tailscale でつながった端末なら誰でも入れる。
+- Tailscale がつながっていなければ、そう表示して止まる。この PC の中だけで動いているサーバーがあれば、そのウィンドウを閉じてから押し直すよう表示して止まる。
+
+手で起動するときは、`MUSE_HOST` にカンマで区切って複数のアドレスを書ける（例 `$env:MUSE_HOST = '127.0.0.1,100.110.38.53'`）。
+
 ### 手で起動する
 
 ```powershell
@@ -40,7 +53,7 @@ npm run server     # http://127.0.0.1:7777
 - MCP（Streamable HTTP）: http://127.0.0.1:7777/mcp
 - 記録: `runs/<runId>/`（`MUSE_RUNS_DIR` で変更可）
 
-環境変数: `MUSE_PORT`（既定 7777）、`MUSE_HOST`（既定 127.0.0.1）、`MUSE_RUNS_DIR`、`MUSE_SPECTATOR_POLICY`（`omniscient` 既定 / `follow_only` / `delayed`）。
+環境変数: `MUSE_PORT`（既定 7777）、`MUSE_HOST`（既定 127.0.0.1。カンマ区切りで複数）、`MUSE_RUNS_DIR`、`MUSE_SPECTATOR_POLICY`（`omniscient` 既定 / `follow_only` / `delayed`）。
 
 ## MetaMuse（MCP クライアント）の接続
 
