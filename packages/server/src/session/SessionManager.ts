@@ -14,6 +14,11 @@ import { RunStore } from '../log/RunStore';
 import { SessionPlayerPort } from './PlayerPort';
 import type { PlayerPort } from './PlayerPort';
 import { RunSession } from './RunSession';
+
+/** 知らないプロフィールのトークン（V3-7 §7.1。黙って別のプロフィールに積まない） */
+function unknownProfileError(): ActionError {
+  return actionError('no_session', 'そのプロフィールのトークンは見つからない / unknown profile_token', 'profile_token を省くと新しいプロフィールを作る / omit profile_token to create a new profile');
+}
 import type { SessionDeps } from './RunSession';
 import { ProfilePort, ProfileService, ProfileStore } from './profiles';
 
@@ -64,12 +69,15 @@ export class SessionManager {
 
   /** 新しいラン: 作成 → 参加 → 最初の遠征の開始（start_expedition をコマンドとして記録する） */
   async createRun(req: NewRunRequest & { controller: Controller }): Promise<Joined | { error: ActionError }> {
+    // 知らないプロフィールのトークンは、ランを作る前に断る（断った後に、誰もいないランが残らない）
+    if (req.profileToken && !this.profiles.store.resolve(req.profileToken)) return { error: unknownProfileError() };
     const session = RunSession.create(this.deps, { seed: req.seed, mode: req.mode ?? 'solo' });
     this.sessions.set(session.runId, session);
     // objective を省くとキャンプから始まる（最初の遠征も候補 3 つから選ぶ。V3-2R §14.4）
     const atCamp = req.objective === undefined;
     const joined = await this.joinSession(session, { name: req.name, classId: req.classId, locale: req.locale, controller: req.controller, atCamp, profileToken: req.profileToken, legacy: req.legacy }, req.controller.kind === 'agent' ? 'mcp' : 'ws');
-    if ('error' in joined) return joined;
+    // 参加が断られた（知らない職業など）: 作ったばかりのランは捨てる（一覧にも記録のフォルダにも残さない）
+    if ('error' in joined) { this.sessions.delete(session.runId); session.discard(); return joined; }
     if (atCamp) return joined;
     const offer = firstOffer(joined.port.view().camp?.offers ?? [], req.objective ?? 'auto');
     if (offer !== null) {
@@ -90,7 +98,7 @@ export class SessionManager {
     let profile: { id: string; token?: string };
     if (req.profileToken) {
       const p = this.profiles.store.resolve(req.profileToken);
-      if (!p) return { error: actionError('no_session', 'そのプロフィールのトークンは見つからない / unknown profile_token', 'profile_token を省くと新しいプロフィールを作る / omit profile_token to create a new profile') };
+      if (!p) return { error: unknownProfileError() };
       profile = { id: p.id };
     } else {
       const c = this.profiles.store.create(req.name, Date.now());

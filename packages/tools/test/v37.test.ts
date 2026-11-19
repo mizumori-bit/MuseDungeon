@@ -65,6 +65,26 @@ describe('V3-7 profiles (§7.1・§16.3)', () => {
     expect(m2.profilePortForToken(tok)?.id).toBe(a.profile.id);
     m2.closeAll();
   });
+
+  it('a refused new run leaves no run behind: an unknown profile token is refused before the run is made; a run whose join fails (unknown class) is thrown away with its folder', async () => {
+    const dir = join(runsDir, 'refused');
+    const m = new SessionManager(content, loadConfig({ runsDir: dir, waitOthersMs: 50 }));
+    const runDirs = () => (existsSync(dir) ? readdirSync(dir).filter((f) => f.startsWith('run_')) : []);
+    const bad = await m.createRun({ name: 'X', seed: 'v37-r1', controller: agent, profileToken: 'nope' });
+    expect('error' in bad && bad.error.code).toBe('no_session');
+    expect(m.listRuns()).toEqual([]);
+    expect(runDirs()).toEqual([]);
+    const cls = await m.createRun({ name: 'Y', seed: 'v37-r2', controller: agent, classId: 'core:nope' });
+    expect('error' in cls && cls.error.code).toBe('bad_request');
+    expect(m.listRuns()).toEqual([]);
+    expect(runDirs()).toEqual([]);
+    // 断られなければ今までどおり
+    const ok = await m.createRun({ name: 'Z', seed: 'v37-r3', controller: agent });
+    if ('error' in ok) throw new Error(ok.error.message);
+    expect(m.listRuns().map((r) => r.runId)).toEqual([ok.session.runId]);
+    expect(runDirs()).toEqual([ok.session.runId]);
+    m.closeAll();
+  });
 });
 
 describe('V3-7 legacy (§7.3)', () => {

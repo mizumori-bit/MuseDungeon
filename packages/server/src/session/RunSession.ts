@@ -19,7 +19,7 @@ import { readJsonl } from '../log/RunStore';
 import { summaryMarkdown } from './summary';
 import type { ProfileHooks } from './profiles';
 import { join } from 'node:path';
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 
 export interface SessionDeps {
   content: Content;
@@ -670,6 +670,12 @@ export class RunSession {
     for (const t0 of this.timeoutTimers.values()) clearTimeout(t0.timer);
     this.timeoutTimers.clear();
     for (const w of [...this.waiters]) w();
+  }
+
+  /** 作ったばかりで誰も参加しなかったランを捨てる（このランの記録のフォルダも消す。SessionManager.createRun で参加が断られたとき） */
+  discard(): void {
+    this.close();
+    if (this.log) rmSync(this.log.dir, { recursive: true, force: true });
   }
 }
 
