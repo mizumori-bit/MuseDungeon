@@ -5,11 +5,12 @@ import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
 import { loadContent } from '@muse/content';
-import type { ObsItem, ObsMonster, Observation } from '@muse/shared';
+import type { Entity, ObsItem, ObsMonster, Observation } from '@muse/shared';
 import { createApp, loadConfig, SessionManager } from '@muse/server';
 import { afterAction, decide, DEFAULT_POLICY, defaultOrders, parseOrders, PILOT_TOOLS, retreat, runPilot } from '../src/index';
 import type { DecideContext, PilotOrders, WakeEvent } from '../src/index';
 import { simpleResponder } from '../src/pilot/responder';
+import { arena } from './v33duel';
 
 const content = loadContent();
 
@@ -90,6 +91,28 @@ describe('pilot の判断の表（§10.4〜§10.6）', () => {
     expect(r3.decision.kind).toBe('act');
     expect(r3.notify.map((n) => `${n.level}:${n.key}`)).toEqual(['notify:relic_seen:e_oldrl1']);
     expect(r3.notify[0]!.also).toEqual(['relic_seen:e_oldrl2']);
+  });
+
+  it('移動が断られて何も残らないときは refused_<code> で起こし、じゃまをしている敵（blocked_by）の観測の行を detail の先頭に添える（自分からは戦わない）', async () => {
+    const { obs } = await expeditionObs();
+    obs.alerts = [];
+    obs.visible.items = [];
+    obs.self.hp = obs.self.max_hp;
+    obs.navigation.collectable = { count: 0, ids: [] };
+    obs.navigation.known_stairs = [];
+    obs.visible.monsters = [monster({ id: 'e_near01', dist: 1, awareness: 'unaware' }), monster({ id: 'e_block1', dist: 3, awareness: 'asleep' })];
+    const text = [obs.summary, '- 近くの敵 e_near01 (1,1) 東1', '- ふさぐ敵 e_block1 (3,1) 東3'].join('\n');
+    const r = decide(obs, ctxOf(defaultOrders(), { text, refused: new Set(['explore']), refusal: { code: 'blocked', text: 'blocked: 既知の経路が敵にふさがれていて進めない', blockedBy: ['e_block1'] } }));
+    expect(r.decision.kind).toBe('wake');
+    if (r.decision.kind === 'wake') {
+      expect(r.decision.wake.reason).toBe('refused_blocked');
+      const lines = r.decision.wake.detail.split('\n');
+      expect(lines[0]).toBe('- ふさぐ敵 e_block1 (3,1) 東3');
+      expect(lines[1]).toBe(obs.summary);
+      // ほかの見えている者は後ろに（じゃまをしている敵は二度書かない）
+      expect(lines.filter((l) => l.includes('e_block1'))).toHaveLength(1);
+      expect(lines.at(-1)).toContain('e_near01');
+    }
   });
 
   it('封じられた下り階段へは下りに行かない。拾える品は navigation.collectable で見る。方針の approach を fight に渡す', async () => {
@@ -292,6 +315,38 @@ describe('pilot をサーバーにつないで動かす（§10.8）', () => {
     await p.stop();
     await h.close();
   }, 40000);
+
+  it('じゃまをされて起こすとき: 断りのエラーの blocked_by の敵の行が wake.detail の先頭に来る。その敵には自分から挑まない', async () => {
+    // 隣に動かない敵（気づいていない毒カビ）。部屋の右の壁を知らないことにして、探索できる所を残す
+    const a = await arena('pilot-blocked-by', { map: ['P.......', '........'], guardian: { kind: 'core:goblin', hp: 50, dmg: '1d1', types: [], state: 'asleep' } });
+    a.inject({ del: [a.gId] });
+    const me = a.world.entities[a.meId];
+    const mold = { id: 'e_mold01', kind: 'core:spore_mold', sid: 999401, pos: { floor: a.key, x: a.ox + 1, y: a.oy }, actor: { speed: 100, nextActAt: 0, faction: 'monster', turns: 0, ai: { archetype: 'stationary', state: 'unaware', targetPos: null, lostTurns: 0, params: {} } }, stats: { hp: 12, maxHp: 12, acc: 3, eva: 0, might: 0, armor: 0, sight: 4, dmg: '1d1' }, base: { maxHp: 12, acc: 3, eva: 0, might: 0, armor: 0, sight: 4, dmg: '1d1' }, statuses: [] } as unknown as Entity;
+    a.inject({ put: [mold] });
+    expect(me.pos).toBeTruthy();
+    await a.r.port.act({ type: 'wait' }, { source: 'bot' });
+    // 視界の更新の後に、部屋の右の壁を知らないことにする（探索できる所が残る）
+    const f = a.world.floors[a.key];
+    const fk = a.world.players[a.pid].knowledge.floors[a.key];
+    for (const y of [a.oy, a.oy + 1]) fk.seen[y * f.width + a.ox + a.W] = 0;
+    const config = loadConfig({ port: 0, runsDir: null, profilesDir: null, waitOthersMs: 100 });
+    const app = createApp(a.manager, config);
+    await new Promise<void>((r) => app.server.listen(0, '127.0.0.1', () => r()));
+    const h: Harness = { base: `http://127.0.0.1:${(app.server.address() as AddressInfo).port}`, token: a.r.token, dir: mkdtempSync(join(tmpdir(), 'muse-pilot-test-')), wakes: [], close: async () => { a.manager.closeAll(); await new Promise<void>((r2) => app.server.close(() => r2())); } };
+    const p = start(h);
+    await until(() => h.wakes.some((w) => w.reason.startsWith('refused_')));
+    const w = h.wakes.find((x) => x.reason.startsWith('refused_'))!;
+    expect(w.reason).toBe('refused_hostile_adjacent');
+    const first = w.detail.split('\n')[0];
+    expect(first).toContain('e_mold01');
+    expect(first).toContain(content.monsters['core:spore_mold'].name.ja);
+    // state.json の wake.detail も同じ
+    expect(JSON.parse(readFileSync(join(h.dir, 'state.json'), 'utf-8')).wake.detail.split('\n')[0]).toBe(first);
+    // じゃまをしている敵に、自分から fight を仕掛けていない
+    expect(rows(h.dir).some((r) => r.tool === 'fight' || r.tool === 'attack')).toBe(false);
+    await p.stop();
+    await h.close();
+  }, 30000);
 
   it('mode: stop で終える', async () => {
     const h = await harness('solo', { rev: 1, mode: 'stop' });

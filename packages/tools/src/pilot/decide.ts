@@ -31,8 +31,8 @@ export interface DecideContext {
   text: string;
   /** この手番で断られた移動の道具（collect・explore・travel_to・use_stairs）。表の次の行へ進む */
   refused?: ReadonlySet<string>;
-  /** 最後に断られたときのエラーの code と文（何も残っていないとき、#18 の理由と detail に使う） */
-  refusal?: { code: string; text: string } | null;
+  /** 最後に断られたときのエラーの code と文と、じゃまをしている見えている敵（details.blocked_by。何も残っていないとき、#18 の理由と detail に使う） */
+  refusal?: { code: string; text: string; blockedBy?: readonly string[] } | null;
   /** この遠征のこの階で、もう知らせた鍵（目的でない遺物・役割のある敵は 1 回だけ知らせる。V4-1a §12.6） */
   notified?: ReadonlySet<string>;
 }
@@ -214,11 +214,13 @@ export function decide(obs: Observation, ctx: DecideContext): DecideResult {
     const toward = (targetDepth === null || depth < targetDepth) && !down && obs.self.floor?.draft ? { toward: 'draft' } : {};
     return act('explore', { pickup: p.collect ? 'useful' : false, ...toward });
   }
-  // 18. 何も残っていない。移動の道具が断られて残らなかったなら、その理由（refused_<code>）で起こし、見えている者の行を近い順に添える
+  // 18. 何も残っていない。移動の道具が断られて残らなかったなら、その理由（refused_<code>）で起こす。
+  //     じゃまをしている敵（エラーの blocked_by）の観測の行を detail の先頭に、ほかの見えている者の行を近い順に後ろに添える（V4-1a §13.8。pilot は自分からは戦わない）
   const rf = ctx.refusal;
   if (rf && rf.code !== 'nothing_to_do') {
-    const near = [...obs.visible.monsters].sort((a, b) => a.dist - b.dist).map((m) => lineWith(ctx.text, m.id));
-    return wake(W(`refused_${rf.code}`, `refused:${rf.code}:${depth}:${obs.self.pos ? `${obs.self.pos.x},${obs.self.pos.y}` : ''}`, [obs.summary, rf.text, ...near].filter(Boolean).join('\n')));
+    const blockers = (rf.blockedBy ?? []).map((id) => lineWith(ctx.text, id));
+    const near = [...obs.visible.monsters].filter((m) => !rf.blockedBy?.includes(m.id)).sort((a, b) => a.dist - b.dist).map((m) => lineWith(ctx.text, m.id));
+    return wake(W(`refused_${rf.code}`, `refused:${rf.code}:${depth}:${obs.self.pos ? `${obs.self.pos.x},${obs.self.pos.y}` : ''}`, [...blockers, obs.summary, rf.text, ...near].filter(Boolean).join('\n')));
   }
   return wake(W('nothing_to_do', `nothing_to_do:${depth}`, rf ? `${obs.summary}\n${rf.text}` : obs.summary));
 }

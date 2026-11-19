@@ -9,7 +9,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { Observation, TurnBlock } from '@muse/shared';
 import { readFeed } from '../drive';
-import { afterAction, decide, holdAction, MOVE_TOOLS, type Wake, type WakeLevel } from './decide';
+import { afterAction, decide, holdAction, lineWith, MOVE_TOOLS, type Wake, type WakeLevel } from './decide';
 import { defaultOrders, parseOrders, type PilotOrders, type QueuedCommand, writeJsonAtomic } from './orders';
 
 export interface PilotOptions {
@@ -66,8 +66,10 @@ export interface PilotResult {
 interface CallResult { ok: boolean; data: Record<string, unknown>; text: string }
 
 /** 命令の結果から観測・turn・止まった理由を取り出す */
-function payload(r: CallResult): { obs?: Observation; turn?: TurnBlock; stop?: string; outcome?: string; error?: { code: string; message: string } } {
-  const d = r.data as { observation?: Observation; turn?: TurnBlock; interrupted_by?: string; outcome?: string; error?: { code: string; message: string } };
+/** 断りのエラー（details.blocked_by: じゃまをしている見えている敵。V4-1a §12.3） */
+type CallError = { code: string; message: string; details?: { blocked_by?: string[] } };
+function payload(r: CallResult): { obs?: Observation; turn?: TurnBlock; stop?: string; outcome?: string; error?: CallError } {
+  const d = r.data as { observation?: Observation; turn?: TurnBlock; interrupted_by?: string; outcome?: string; error?: CallError };
   return { obs: d.observation, turn: d.turn, stop: d.interrupted_by, outcome: d.outcome, error: d.error };
 }
 
@@ -146,7 +148,9 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
   /** pilot の同じ命令が、同じ止まり方で止まった回数（返事をもらっても同じことをくり返すなら、4 回目は stuck で起こす。階が変わったら数え直す） */
   let sameStop = { sig: '', count: 0 };
   /** この手番で断られた移動の道具（手番が進んだら空にする） */
-  const refused = { turn: -1, tools: new Set<string>(), last: null as { code: string; text: string } | null };
+  const refused = { turn: -1, tools: new Set<string>(), last: null as { code: string; text: string; blockedBy?: string[] } | null };
+  /** 断りのエラーの blocked_by の敵の、観測の文の行（起こすときに detail の先頭に添える。V4-1a §12.3。pilot は自分からは戦わない） */
+  const blockedLines = (e?: CallError) => (e?.details?.blocked_by ?? []).map((id) => lineWith(text, id)).filter(Boolean);
   let lastNotify = turn.turn_no;
   let last: PilotState['last'] = null;
   let lastOutcome = '';
@@ -229,7 +233,7 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
   };
 
   /** 1 つの命令を出して、観測を新しくする。失敗（拒否）は観測を取り直す */
-  const act = async (tool: string, args: Record<string, unknown>, source: 'pilot' | 'queue'): Promise<{ ok: boolean; stop?: string; error?: { code: string; message: string } }> => {
+  const act = async (tool: string, args: Record<string, unknown>, source: 'pilot' | 'queue'): Promise<{ ok: boolean; stop?: string; error?: CallError }> => {
     const before = turn.turn_no;
     let r: CallResult;
     try {
@@ -298,7 +302,7 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
     if (queue.length) {
       const q = queue.shift()!;
       const r = await act(q.tool, q.args ?? {}, 'queue');
-      if (!r.ok) { queue = []; wakeNow({ level: 'wake', reason: 'queue_failed', key: `queue_failed:${orders.rev}`, detail: `${q.tool}: ${r.error?.code ?? ''} ${r.error?.message ?? ''}`.trim() }); continue; }
+      if (!r.ok) { queue = []; wakeNow({ level: 'wake', reason: 'queue_failed', key: `queue_failed:${orders.rev}`, detail: [...blockedLines(r.error), `${q.tool}: ${r.error?.code ?? ''} ${r.error?.message ?? ''}`.trim()].join('\n') }); continue; }
       const aa = afterAction(q.tool, r.stop);
       if (aa.wake) { queue = []; wakeNow({ level: 'wake', reason: aa.reason, key: `${aa.reason}:${turn.turn_no}`, detail: lastOutcome || obs.summary }); }
       else writeState();
@@ -354,10 +358,10 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
         refused.tools.add(decision.tool);
         // 「何も無い」より、ふさがれた・隣に敵がいる等の理由を残す
         const code = r.error?.code ?? 'unknown';
-        if (!refused.last || refused.last.code === 'nothing_to_do') refused.last = { code, text: lastOutcome };
+        if (!refused.last || refused.last.code === 'nothing_to_do') refused.last = { code, text: lastOutcome, ...(r.error?.details?.blocked_by?.length ? { blockedBy: [...r.error.details.blocked_by] } : {}) };
         continue;
       }
-      wakeNow({ level: 'wake', reason: `refused_${r.error?.code ?? 'unknown'}`, key: `refused:${decision.tool}:${r.error?.code ?? ''}:${turn.turn_no}`, detail: lastOutcome });
+      wakeNow({ level: 'wake', reason: `refused_${r.error?.code ?? 'unknown'}`, key: `refused:${decision.tool}:${r.error?.code ?? ''}:${turn.turn_no}`, detail: [...blockedLines(r.error), lastOutcome].join('\n') });
       continue;
     }
     // 手番が進まない命令が続いたら起こす（同じ所で止まり続けない）

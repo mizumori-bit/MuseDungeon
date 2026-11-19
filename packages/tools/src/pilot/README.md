@@ -147,10 +147,10 @@ npm.cmd run pilot -- --token <player_token> --wake-cmd "node my-ai.mjs"
 | `too_many` / `chased` | 追ってくる敵が多い／戦わない方針で追われている |
 | `fight_<止まり方>` | pilot の `fight` が倒す前に止まった（`fight_hp_risk`・`fight_target_shooting`・`fight_target_moved` など。止まり方の名前はマクロのもの） |
 | `<止まり方>` | ほかのマクロが、表を見直すだけでは済まない止まり方で止まった（`blocked`・`no_progress`・`unreachable`・`target_gone`・`trap_ahead` など） |
-| `refused_<code>` | 命令が断られた（`refused_hp_floor`: 戦う前に hp_floor を割る見込み、`refused_hostile_adjacent`: 隣に起きている敵がいて動けない、`refused_blocked`: 経路が敵にふさがれている、など。見えている者の行を添える） |
+| `refused_<code>` | 命令が断られた（`refused_hp_floor`: 戦う前に hp_floor を割る見込み、`refused_hostile_adjacent`: 隣に起きている敵がいて動けない、`refused_blocked`: 経路が敵にふさがれている、など）。じゃまをしている敵（エラーの `details.blocked_by`）の観測の行を `detail` の先頭に、ほかの見えている者の行を後ろに添える。pilot はその敵に自分からは挑まない（戦うかは表の #9〜#12 のとおり） |
 | `objective_done` | 遠征の目的を果たした（`after_objective: "wake"` のとき） |
 | `nothing_to_do` | 表に当てはまるものが何も残っていない |
-| `queue_failed` | `queue` の命令が失敗した（残りは捨てた） |
+| `queue_failed` | `queue` の命令が失敗した（残りは捨てた。敵にじゃまされて断られたなら、その敵の行を `detail` の先頭に） |
 | `orders_invalid` | `orders.json` が壊れている（前の方針のまま） |
 | `stuck` | 同じことで何度起こしても手番が進まない／同じ命令が同じ止まり方で 4 回止まった |
 | `still_waiting` | 協力プレイで、起こしてから `hold_max_turns` 手番が過ぎても返事が無い |

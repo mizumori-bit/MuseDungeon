@@ -421,7 +421,8 @@ ${tr('それでも装備しますか？', 'Equip it anyway?')}`)) send({ ...last
     const adj = o.visible.monsters.filter((m) => m.dist === 1);
     const hov = rRef.current?.hover;
     const at = (ms: ObsMonster[]) => (hov ? ms.find((m) => m.pos.x === hov.x && m.pos.y === hov.y) : undefined);
-    const comers = o.visible.monsters.filter((m) => m.dist > 1 && isApproaching(m));
+    // 寄るなら、動かない追跡中の敵（その場から撃つ・届かない所にいる）も相手にする（V4-1a §12.5）
+    const comers = o.visible.monsters.filter((m) => m.dist > 1 && (isApproaching(m) || (fightApproachRef.current === 'advance' && m.awareness === 'hunting' && !m.fleeing)));
     const tgt = at(adj)
       ?? [...adj].sort((a, b) => Number(b.awareness === 'hunting') - Number(a.awareness === 'hunting') || (HP_ORDER[a.hp_state] ?? 9) - (HP_ORDER[b.hp_state] ?? 9) || (a.id < b.id ? -1 : 1))[0]
       ?? at(comers) ?? comers[0];
@@ -971,7 +972,7 @@ ${tr('それでも装備しますか？', 'Equip it anyway?')}`)) send({ ...last
   const adjAwake = adjacentAwake(obs);
   const adjacent = obs ? obs.visible.monsters.filter((m) => m.dist === 1) : [];
   // 追ってくる（隣に来るまで待って迎え撃てる）敵
-  const comers = obs ? obs.visible.monsters.filter((m) => m.dist > 1 && isApproaching(m)) : [];
+  const comers = obs ? obs.visible.monsters.filter((m) => m.dist > 1 && (isApproaching(m) || (fightApproach === 'advance' && m.awareness === 'hunting' && !m.fleeing))) : [];
   const flee = adjAwake.length ? fleeActions(obs) : [];
   const lifeSlot = lifelineSlot(view, catalog);
   const lifePts = obs?.expedition?.haul?.if_lifeline_now;
