@@ -400,11 +400,17 @@ const actor = (a: Ar, id: string, kind: string, x: number, y: number, o: { arche
 const shooter = (a: Ar, id: string, x: number, y: number) => actor(a, id, 'core:bone_archer', x, y, { archetype: 'ranged_stand', hp: 400, dmg: '1d1' });
 const weakFoe = (a: Ar, id: string, x: number, y: number) => actor(a, id, 'core:goblin', x, y, { archetype: 'melee_chaser', hp: 3, dmg: '1d1' });
 /** 決まった形の部屋に置いた場面に pilot をつなぐ（守護者は消す。部屋の右の壁を知らないことにして、探索できる所を残す） */
-async function arenaHarness(seed: string, map: string[], put: (a: Ar) => Entity[], orders?: unknown | ((a: Ar) => unknown), o: { rubbleX?: number; unknown?: 'left' | 'right' } = {}): Promise<{ h: Harness; a: Ar }> {
-  const a = await arena(seed, { map, guardian: { kind: 'core:goblin', hp: 50, dmg: '1d1', types: [], state: 'asleep' }, player: { hp: 400 } });
+async function arenaHarness(seed: string, map: string[], put: (a: Ar) => Entity[], orders?: unknown | ((a: Ar) => unknown), o: { rubbleX?: number; unknown?: 'left' | 'right'; hp?: number; stairs?: [number, number] } = {}): Promise<{ h: Harness; a: Ar }> {
+  const a = await arena(seed, { map, guardian: { kind: 'core:goblin', hp: 50, dmg: '1d1', types: [], state: 'asleep' }, player: { hp: o.hp ?? 400 } });
   a.inject({ del: [a.gId] });
   const f = a.world.floors[a.key];
   const fk = a.world.players[a.pid].knowledge.floors[a.key];
+  // 上り階段（帰る側へ倒すときの行き先）
+  if (o.stairs) {
+    const st = a.world.meta.terrainTable.indexOf('core:stairs_up');
+    const i = (a.oy + o.stairs[1]) * f.width + a.ox + o.stairs[0];
+    f.terrain[i] = st; fk.seen[i] = st;
+  }
   // 瓦礫の列（見通せるが通れない）
   if (o.rubbleX !== undefined) {
     const rb = a.world.meta.terrainTable.indexOf('core:rubble');
@@ -596,6 +602,24 @@ describe('pilot をサーバーにつないで動かす（§10.8）', () => {
     await p.stop();
     await h.close();
   }, 30000);
+
+  it('起こして待つ間に隣でない相手から撃たれ続けたら（最大 HP の 4 分の 1 を超えたら）、hold_max_turns を待たずに under_fire を知らせて階段へ向かう（§17.4）', async () => {
+    // 壊れた方針で起こし、返事はしない。離れた所から撃つ射手。協力プレイの持ち場の動き（毎手番すぐに答える）
+    const { h } = await arenaHarness('pilot-underfire', ['....P.....', '..........'], (ar) => [shooter(ar, 'e_arch02', 8, 0)], 'broken', { hp: 40, stairs: [0, 1] });
+    const p = start(h, { mode: 'coop' });
+    await until(() => h.wakes.some((w) => w.reason === 'orders_invalid'));
+    await until(() => h.wakes.some((w) => w.reason === 'under_fire'), 20000);
+    const uf = h.wakes.find((w) => w.reason === 'under_fire')!;
+    expect(uf.level).toBe('notify');
+    // hold_max_turns（既定 40）より前: no_reply ではない
+    expect(h.wakes.some((w) => w.reason === 'no_reply')).toBe(false);
+    // 帰る側へ: 階段へ向かう（着いたら帰る）
+    await until(() => rows(h.dir).some((r) => (r.tool === 'travel_to' && String((r.args as { to: unknown }).to).startsWith('stairs_')) || r.tool === 'extract'), 20000);
+    // 起こしたのは orders_invalid の 1 回だけ（撃たれても起こし直さない）
+    expect(h.wakes.filter((w) => w.level === 'wake').map((w) => w.reason)).toEqual(['orders_invalid']);
+    await p.stop();
+    await h.close();
+  }, 40000);
 
   it("mode: stop_at_camp は帰ってから終える（§14.7）", async () => {
     const h = await harness('solo', { rev: 1, queue: [{ tool: 'start_expedition', args: { offer: 1 } }] });

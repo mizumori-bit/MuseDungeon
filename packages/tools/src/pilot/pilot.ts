@@ -146,16 +146,20 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
   // ---- 方針 ----
   let orders: PilotOrders;
   let ordersError: string | null = null;
+  /** 起動の時点で壊れていた orders.json の中身（同じ中身で起こし直さない） */
+  let startBadText = '';
   if (!existsSync(ordersPath)) { orders = defaultOrders(); writeJsonAtomic(ordersPath, orders); }
   else {
-    try { orders = parseOrders(JSON.parse(readFileSync(ordersPath, 'utf-8'))); } catch (e) { orders = defaultOrders(); ordersError = (e as Error).message; }
+    const raw0 = readFileSync(ordersPath, 'utf-8');
+    try { orders = parseOrders(JSON.parse(raw0)); } catch (e) { orders = defaultOrders(); ordersError = (e as Error).message; startBadText = raw0; }
   }
   let queue: QueuedCommand[] = [...orders.queue];
   /** queue の先頭の命令を、敵のせいで断られてやり直した回数（3 回まで。§14.5） */
   let queueRetries = 0;
-  let lastBadText = '';
+  let lastBadText = startBadText;
   /** 起こして返事を待っている（rev が変わるまで）。homeward: hold_max_turns が過ぎて帰る側へ倒した */
-  let waiting = null as { key: string; also: string[]; reason: string; sinceTurn: number; cond: boolean; homeward: boolean; wake: Wake } | null;
+  /** farDamage: 起こしてから、隣でない相手から受けた被害の合計（最大 HP の 4 分の 1 を超えたら帰る側へ倒す。V4-1c §17.4） */
+  let waiting = null as { key: string; also: string[]; reason: string; sinceTurn: number; cond: boolean; homeward: boolean; wake: Wake; farDamage: number } | null;
   /** AI が返事をした、観測の条件からの起こし方（条件が続く間は、同じことで起こさない） */
   const acked = new Set<string>();
   /** 遺物・役割のある敵への返事は、同じ遠征の同じ階にいる間は覚えておく */
@@ -254,7 +258,7 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
       }
     }
     raise(w);
-    if (w.level === 'wake') waiting = { key: w.key, also: w.also ?? [], reason: w.reason, sinceTurn: turn.turn_no, cond, homeward: false, wake: w };
+    if (w.level === 'wake') waiting = { key: w.key, also: w.also ?? [], reason: w.reason, sinceTurn: turn.turn_no, cond, homeward: false, wake: w, farDamage: 0 };
   };
 
   /** rev が変わっていれば読み直す（壊れた JSON は読まず、前の方針のまま起こす）。変わったら true */
@@ -303,7 +307,11 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
     // 隣でない相手から被害を受けた: HP が減ったのに、前にも今にも起きている敵が隣にいない（観測の構造化された項目だけで決める。§14.9）
     const adjAwake = obs.visible.monsters.some((m) => m.dist <= 1 && m.awareness !== 'asleep');
     const passed = turn.turn_no - prev.turn;
-    if (scope === prev.scope && obs.self.hp < prev.hp && !adjAwake && !prev.adjAwake) mem.hurtFarAgo = 0;
+    if (scope === prev.scope && obs.self.hp < prev.hp && !adjAwake && !prev.adjAwake) {
+      mem.hurtFarAgo = 0;
+      // 起こして返事を待つ間に受けた、隣でない相手からの被害を数える（数え始めは起こした時点）
+      if (waiting && obs.status !== 'at_camp') waiting.farDamage += prev.hp - obs.self.hp;
+    }
     else if (mem.hurtFarAgo !== null && passed > 0) mem.hurtFarAgo += passed;
     prev = { hp: obs.self.hp, turn: turn.turn_no, adjAwake, scope };
     mem.ignored = ignoredNow();
@@ -447,6 +455,12 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
     if (waiting && obs.status !== 'at_camp' && !waiting.homeward && turn.turn_no - waiting.sinceTurn >= orders.policy.hold_max_turns) {
       waiting.homeward = true;
       note('no_reply', `${waiting.reason}（${turn.turn_no - waiting.sinceTurn} 手番返事が無い）。階段へ行き、帰る側へ倒す`, `no_reply:${waiting.key}`);
+    }
+    // 起こして待つ間に撃たれ続けた（隣でない相手からの被害の合計が最大 HP の 4 分の 1 を超えた。ゲームの steady が止まる線と同じ）:
+    // hold_max_turns を待たずに、帰る側へ倒す（V4-1c §17.4。no_reply と分けて under_fire で知らせる）
+    if (waiting && obs.status !== 'at_camp' && !waiting.homeward && waiting.farDamage * 4 > obs.self.max_hp) {
+      waiting.homeward = true;
+      note('under_fire', `${waiting.reason} の返事を待つ間に、隣でない相手から ${waiting.farDamage} の被害を受けた（最大 HP の 4 分の 1 を超えた）。階段へ行き、帰る側へ倒す`, `under_fire:${waiting.key}`);
     }
     // 経過を知らせる
     const every = orders.policy.notify_every_turns;

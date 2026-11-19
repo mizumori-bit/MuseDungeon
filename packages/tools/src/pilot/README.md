@@ -177,6 +177,8 @@ npm.cmd run pilot -- --token <player_token> --wake-cmd "node my-ai.mjs"
 
 起こしてから `hold_max_turns` 手番が過ぎても返事が無ければ、`no_reply` を 1 回知らせ、知っている階段へ行きます。`allow_extract` なら帰り、帰れなければ階段の上で待ちます。くり返し起こすことはしません。
 
+起こしてから、隣でない相手から受けた被害の合計が最大 HP の 4 分の 1 を超えたとき（撃たれ続けている。ゲームの `steady` が止まる線と同じ）も、`hold_max_turns` を待たずに同じく帰る側へ倒します（`under_fire` を知らせる）。
+
 ## 起こす理由・知らせる理由
 
 `level` は 2 段です。`notify` は知らせるだけで、pilot は止まりません。`wake` は AI の判断が要るときだけです。
@@ -199,7 +201,7 @@ npm.cmd run pilot -- --token <player_token> --wake-cmd "node my-ai.mjs"
 | `orders_invalid` | `orders.json` が壊れている（前の方針のまま） |
 | `safety` / `ended` | 安全装置に達した／ランが終わった（pilot を終える） |
 
-**知らせる（`notify`）**: `healed`（回復の手段を使った。品なら残りの数）・`fight_<止まり方>`（倒す前に止まった）・`refused_<code>`（fight・殴るなどが断られた）・`gave_up`（目的でない相手を諦めた）・`recovering`（立て直しの段に入った）・`danger`（退いた）・`too_many`・`chased`・`queue_retry`・`queue_failed`・`no_reply`・目的でない役割のある敵と遺物（`guardian_seen` など）・`blocked`・`no_progress` などの移動の止まり方・`periodic`（`notify_every_turns` ごとの経過）。
+**知らせる（`notify`）**: `healed`（回復の手段を使った。品なら残りの数）・`fight_<止まり方>`（倒す前に止まった）・`refused_<code>`（fight・殴るなどが断られた）・`gave_up`（目的でない相手を諦めた）・`recovering`（立て直しの段に入った）・`danger`（退いた）・`too_many`・`chased`・`queue_retry`・`queue_failed`・`no_reply`・`under_fire`（返事を待つ間に撃たれ続けたので、帰る側へ倒した）・目的でない役割のある敵と遺物（`guardian_seen` など）・`blocked`・`no_progress` などの移動の止まり方・`periodic`（`notify_every_turns` ごとの経過）。
 
 ## 起こされたときの返事の例
 
