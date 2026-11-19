@@ -1434,3 +1434,13 @@ pilot を作って分かった、構造化された項目だけでは決めら�
 - **封じられた階段**: `known_stairs[].sealed`（`stairsSealed`）。
 - **寄っていく fight**: `fight { approach: 'advance' }`（既定 `wait`）。歩く間に撃たれても止まらず、hp_floor・hp_risk などはそのまま。人間の画面に「戦う: 待つ／寄る」。
 - pilot: 方針の `approach` を fight に渡す。目的でない遺物・役割のある敵は 1 回知らせるだけ。封じられた下り階段へは下りない。拾う品は `collectable`。
+
+### 38.2 V4-1b: pilot の見直し（IMPROVEMENTS_V4 §14・§15）
+
+§10 の「判断しない。迷ったら起こす」を改め、決められることは pilot が決めて知らせ（notify）、AI にしか決められないこと（キャンプ・目的の相手・退く手の無い危険・行き詰まりなど）だけ起こす（wake）。規則の知識は持たないまま（観測の構造化された項目と、pilot 自身の記録だけ）。ゲームの側は変えていない。
+
+- **決着しない戦い**: 相手ごとに「決着しない」止まり方を数え、`approach: "auto"`（既定）なら寄ってやり直し、`give_up_after`（既定 2）回でその階では相手にしない（目的の相手は起こす）。相手にしない敵がいる間は `steady` で進む。探索も撃破も進まない命令が 8 回続いたら `stuck`。
+- **立て直しの段**: HP が減ったら起こさずに、休む → 階段へ行って階を移って休む（同じ階で 2 回まで）→ 隣の追跡中の敵を殴る → 仲間へ寄る → 来た道を戻る → 退く → 起こす。逃げる間の HP の下限は、見えている敵の最悪の被害から決める。
+- **起こして待つ間**: ソロでも協力プレイでも、隣の追跡中の敵を殴る・隣でない相手から撃たれたら留まらない。`hold_max_turns` の後は `no_reply` を 1 回知らせて、階段へ行って帰る側へ。
+- 方針に `approach: auto`・`give_up_after`・`engage_objective`・`perk`・`after_objective: extract`（既定）/`continue`・`retreat_via_stairs`・`queue_on_fail`・`ignore`・`unignore`、`mode: stop_at_camp`。state.json に `hostiles`・`stairs`・`target`・`ignored`・`recovering`・`camp`（候補）。queue は敵のせいの拒否をやり直し、失敗は知らせるだけ。
+- テストは `packages/tools/test/pilot.test.ts`。計測（ソロ 10 本で起こす回数はキャンプを除き遠征 1 回あたり 1.13、協力プレイ 5 本で 1 本倒れた）と、設計で決めてほしいこと（返事が無いときの回復）は IMPROVEMENTS_V4 §15.2・§15.3。

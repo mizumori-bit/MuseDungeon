@@ -115,7 +115,7 @@ MCP は「AI が呼んだら返す」方式なので、ゲーム側から AI を
 
 ### 代行 bot（pilot）
 
-AI の応答が遅い（1 手に数十秒）と、協力プレイで人間の速さと合わない。作例の **pilot**（`npm run pilot`）を AI とゲームの間に置くと、pilot が方針（`orders.json`）の範囲で 1 手ずつ速く動かし、判断が要るとき（守護者・遺物が見えた、HP が減った、キャンプ、知らない止まり方など）だけ AI を起こす。AI は要約（`state.json`）を読んで方針を書き直すだけで、ゲームに直接命令を出さない。pilot は規則の知識を持たず、判断もしない（迷ったら起こす）。
+AI の応答が遅い（1 手に数十秒）と、協力プレイで人間の速さと合わない。作例の **pilot**（`npm run pilot`）を AI とゲームの間に置くと、pilot が方針（`orders.json`）の範囲で 1 手ずつ速く動かす。決められること（決着しない戦いを諦める、HP が減ったら立て直す、目的を果たしたら帰る）は pilot が決めて知らせ、AI にしか決められないこと（キャンプでの遠征の選択、目的の相手が見えた、退く手の無い危険、行き詰まりなど）だけ AI を起こす。起こして待つ間も、身を守る動きは pilot がやる。AI は要約（`state.json`）を読んで方針を書き直すだけで、ゲームに直接命令を出さない。pilot は規則の知識を持たない（観測の構造化された項目と、自分の記録だけで決める）。
 
 - 例（PowerShell）: `npm.cmd run pilot -- --new-run Pilot` / `npm.cmd run pilot -- --token <player_token> --wake-cmd "node my-ai.mjs"`
 - 使い方・3 つのファイル・起こす理由・`orders.json` の例・AI への渡し方: [packages/tools/src/pilot/README.md](packages/tools/src/pilot/README.md)

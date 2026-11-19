@@ -1,4 +1,4 @@
-// V4-1（IMPROVEMENTS_V4 §10.8）: 代行 bot の作例 pilot。判断の表（純粋な関数）と、プロセスの中に立てたサーバーで動かした確認。
+// V4-1（IMPROVEMENTS_V4 §10.8）・V4-1b（§14.8）: 代行 bot の作例 pilot。判断の表（純粋な関数）と、プロセスの中に立てたサーバーで動かした確認。
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,8 +7,8 @@ import { describe, expect, it } from 'vitest';
 import { loadContent } from '@muse/content';
 import type { Entity, ObsItem, ObsMonster, Observation } from '@muse/shared';
 import { createApp, loadConfig, SessionManager } from '@muse/server';
-import { afterAction, decide, DEFAULT_POLICY, defaultOrders, parseOrders, PILOT_TOOLS, retreat, runPilot } from '../src/index';
-import type { DecideContext, PilotOrders, WakeEvent } from '../src/index';
+import { afterAction, decide, DEFAULT_POLICY, defaultOrders, holdAction, newMemory, parseOrders, PILOT_TOOLS, retreat, runPilot } from '../src/index';
+import type { DecideContext, PilotMemory, PilotOrders, WakeEvent } from '../src/index';
 import { simpleResponder } from '../src/pilot/responder';
 import { arena } from './v33duel';
 
@@ -147,7 +147,11 @@ describe('pilot の判断の表（§10.4〜§10.6）', () => {
     o.policy.approach = 'advance';
     const r5 = decide(obs, ctxOf(o));
     expect(r5.decision.kind === 'act' && r5.decision.args.approach).toBe('advance');
-    expect(parseOrders({ rev: 1, policy: { approach: 'x' } }).policy.approach).toBe('wait');
+    expect(parseOrders({ rev: 1, policy: { approach: 'x' } }).policy.approach).toBe('auto');
+    // auto: 寄ってやり直すと決めた相手（pilot の記録）だけ advance
+    const mem: PilotMemory = { ...newMemory(), advance: ['e_foe002'] };
+    const r6 = decide(obs, ctxOf(defaultOrders(), { mem }));
+    expect(r6.decision.kind === 'act' && r6.decision.args.approach).toBe('advance');
   });
 
   it('自分から使う道具は §10.4 の一覧の中。既定の方針では綱を使わず、遠征を選ばない', async () => {
@@ -165,19 +169,131 @@ describe('pilot の判断の表（§10.4〜§10.6）', () => {
     const d = parseOrders({ rev: 1 });
     expect(d.policy.allow_lifeline).toBe(false);
     expect(d.camp.auto_start).toBeNull();
-    expect(d.policy.after_objective).toBe('wake');
-    for (const t of PILOT_TOOLS) expect(['observe', 'explore', 'travel_to', 'collect', 'fight', 'wait', 'use_stairs', 'extract', 'use_item', 'attack', 'move', 'start_expedition']).toContain(t);
+    // §14.1: 目的を果たしたら帰る・目的の相手と特技では起こす・決着しない戦いは 2 回で諦める・寄り方は auto
+    expect(d.policy.after_objective).toBe('extract');
+    expect(d.policy.engage_objective).toBe(false);
+    expect(d.policy.perk).toBe('wake');
+    expect(d.policy.give_up_after).toBe(2);
+    expect(d.policy.approach).toBe('auto');
+    expect(d.policy.queue_on_fail).toBe('discard');
+    expect(d.policy.retreat_via_stairs).toBeNull();
+    expect(parseOrders({ rev: 1, mode: 'stop_at_camp' }).mode).toBe('stop_at_camp');
+    for (const t of PILOT_TOOLS) expect(['observe', 'explore', 'travel_to', 'collect', 'fight', 'wait', 'rest', 'use_stairs', 'extract', 'use_item', 'attack', 'move', 'start_expedition', 'choose_perk', 'choose_boon']).toContain(t);
   });
 
-  it('知らない止まり方は unknown_stop。fight は倒した以外で止まったら起こす', () => {
-    expect(afterAction('explore', 'brand_new_stop')).toEqual({ wake: true, reason: 'unknown_stop' });
-    expect(afterAction('fight', 'brand_new_stop')).toEqual({ wake: true, reason: 'unknown_stop' });
-    expect(afterAction('fight', 'target_down')).toEqual({ wake: false });
-    expect(afterAction('fight', 'cleared')).toEqual({ wake: false });
-    expect(afterAction('fight', 'target_shooting')).toEqual({ wake: true, reason: 'fight_target_shooting' });
-    expect(afterAction('explore', 'hostile_in_view')).toEqual({ wake: false });
-    expect(afterAction('travel_to', 'blocked')).toEqual({ wake: true, reason: 'blocked' });
-    expect(afterAction('explore', undefined)).toEqual({ wake: false });
+  it('止まり方の扱い（§14.1）: 知らない止まり方だけ起こす。fight が倒す前に止まった・移動が止まったは知らせて続ける', () => {
+    expect(afterAction('explore', 'brand_new_stop')).toEqual({ kind: 'wake', reason: 'unknown_stop' });
+    expect(afterAction('fight', 'brand_new_stop')).toEqual({ kind: 'wake', reason: 'unknown_stop' });
+    expect(afterAction('fight', 'target_down')).toEqual({ kind: 'ok', killed: true });
+    expect(afterAction('fight', 'cleared')).toEqual({ kind: 'ok', killed: true });
+    expect(afterAction('fight', 'target_shooting')).toEqual({ kind: 'fight', reason: 'fight_target_shooting', recover: false, advance: true, count: true });
+    // HP の止まり方は立て直しへ（諦める回数に数えない）。割り込み（状態異常など）も数えない
+    expect(afterAction('fight', 'hp_risk')).toEqual({ kind: 'fight', reason: 'fight_hp_risk', recover: true, advance: false, count: false });
+    expect(afterAction('fight', 'status_changed')).toEqual({ kind: 'fight', reason: 'fight_status_changed', recover: false, advance: false, count: false });
+    expect(afterAction('fight', 'waiting_others')).toEqual({ kind: 'ok' });
+    expect(afterAction('explore', 'hostile_in_view')).toEqual({ kind: 'ok' });
+    expect(afterAction('travel_to', 'blocked')).toEqual({ kind: 'notify', reason: 'blocked' });
+    expect(afterAction('explore', 'damage_taken')).toEqual({ kind: 'recover', reason: 'damage_taken' });
+    expect(afterAction('explore', undefined)).toEqual({ kind: 'ok' });
+  });
+
+  it('特技は perk: first なら起こさずに最初の候補を選ぶ。目的の相手は engage_objective なら起こさずに挑む・拾う', async () => {
+    const { obs } = await expeditionObs();
+    obs.alerts = [{ code: 'perk_pending', text: '特技を選べる', data: { level: 2, options: ['a', 'b'] } } as unknown as Observation['alerts'][number]];
+    obs.visible.monsters = [];
+    expect(decide(obs, ctxOf()).decision.kind).toBe('wake');
+    const o = defaultOrders(); o.policy.perk = 'first';
+    const r = decide(obs, ctxOf(o));
+    expect(r.decision.kind === 'act' && `${r.decision.tool}:${r.decision.args.option}`).toBe('choose_perk:1');
+    obs.alerts = [];
+    obs.visible.monsters = [monster({ id: 'e_goal01', role: 'guardian', guardian: { name: '守', types: [] }, dist: 4, objective: true })];
+    expect(decide(obs, ctxOf()).decision.kind).toBe('wake');
+    const e = defaultOrders(); e.policy.engage_objective = true;
+    const r2 = decide(obs, ctxOf(e));
+    expect(r2.decision.kind === 'act' && r2.decision.tool).toBe('fight');
+    if (r2.decision.kind === 'act') { expect(r2.decision.args.target).toBe('e_goal01'); expect(r2.decision.args.hp_floor).toBe(Math.floor(obs.self.max_hp / 2)); }
+    obs.visible.monsters = [];
+    obs.visible.items = [{ id: 'e_relic9', name: '欠片', pos: { x: 2, y: 2 }, dir: 'e', dist: 3, qty: 1, role: 'relic', objective: true }];
+    const r3 = decide(obs, ctxOf(e));
+    expect(r3.decision.kind === 'act' && `${r3.decision.tool}:${r3.decision.args.to}`).toBe('travel_to:e_relic9');
+  });
+
+  it('HP が減ったら起こさずに立て直しの段を上から試す（§14.3）: 休む → 階段へ行って階を移る → 仲間へ寄る → 来た道を戻る → 退く・起こす', async () => {
+    const { obs } = await expeditionObs();
+    obs.alerts = [];
+    obs.visible.items = [];
+    obs.self.hp = Math.floor(obs.self.max_hp * 0.3);
+    obs.visible.monsters = [];
+    obs.navigation.known_stairs = [];
+    // 1) 追ってくる敵がいない: 休む（知らせるだけ）
+    const r1 = decide(obs, ctxOf());
+    expect(r1.decision.kind === 'act' && r1.decision.tool).toBe('rest');
+    expect(r1.notify.map((n) => `${n.level}:${n.reason}`)).toEqual(['notify:recovering']);
+    expect(r1.update?.recovering).toBe(true);
+    const mem: PilotMemory = { ...newMemory(), recovering: true, trail: [{ x: 1, y: 1 }, { x: 9, y: 9 }, { x: obs.self.pos!.x + 8, y: obs.self.pos!.y }] };
+    // 2) 追ってくる敵がいて、階段へ「着ける」: 階段へ（追われたまま、flee）
+    obs.visible.monsters = [monster({ id: 'e_chase1', dist: 3 })];
+    obs.alerts = [{ code: 'escape', text: '階段まで 4 歩', data: { stairs: 'up', path_len: 4, worst_if_chased: 3, hp: obs.self.hp } } as unknown as Observation['alerts'][number]];
+    const r2 = decide(obs, ctxOf(defaultOrders(), { mem }));
+    expect(r2.decision.kind === 'act' && `${r2.decision.tool}:${r2.decision.args.to}:${r2.decision.args.mode}`).toBe('travel_to:stairs_up:flee');
+    // 逃げる間の HP の下限: 見えている追跡中の敵の最悪の被害の 2 倍（最大 HP の 4 分の 1 より下げない・今の HP より 1 少ない所まで）
+    if (r2.decision.kind === 'act') expect(r2.decision.args.hp_floor).toBe(Math.min(obs.self.hp - 1, Math.max(Math.floor(obs.self.max_hp / 4), 3 * 2)));
+    // 階段の上: 階を移る（戻る階段を覚える）
+    obs.navigation.known_stairs = [{ type: 'up', pos: obs.self.pos!, dist: 0, reachable: true, path_len: 0 }];
+    const r3 = decide(obs, ctxOf(defaultOrders(), { mem }));
+    expect(r3.decision.kind === 'act' && r3.decision.tool).toBe('use_stairs');
+    expect(r3.update).toMatchObject({ crossed: 'down', stairRetreats: 1 });
+    // 同じ階で 2 回退いた・協力プレイ（既定では階段を使わない）: 仲間の隣へ
+    obs.navigation.known_stairs = [];
+    obs.visible.players = [{ id: 'e_ally01', name: 'B', pos: { x: 0, y: 0 }, dir: 'w', dist: 5, hp_state: 'healthy' }];
+    const r4 = decide(obs, ctxOf(defaultOrders(), { mem, coop: true }));
+    expect(r4.decision.kind === 'act' && `${r4.decision.tool}:${r4.decision.args.to}`).toBe('travel_to:e_ally01');
+    // 4) ソロで階段が無い: 来た道を戻る（6 マス以上離れた、歩いた跡のいちばん新しいマス）
+    obs.visible.players = [];
+    obs.alerts = [];
+    const r5 = decide(obs, ctxOf(defaultOrders(), { mem }));
+    expect(r5.decision.kind === 'act' && r5.decision.tool).toBe('travel_to');
+    if (r5.decision.kind === 'act') expect(r5.decision.args.to).toEqual({ x: obs.self.pos!.x + 8, y: obs.self.pos!.y });
+    // 隣に起きている敵がいて、階段にも仲間にも行けない: 殴る
+    obs.visible.monsters = [monster({ id: 'e_chase1', dist: 1 })];
+    const r6 = decide(obs, ctxOf(defaultOrders(), { mem }));
+    expect(r6.decision.kind === 'act' && `${r6.decision.tool}:${r6.decision.args.target}`).toBe('attack:e_chase1');
+    // 5) どれもできない: 起こす（danger）
+    obs.visible.monsters = [monster({ id: 'e_chase1', dist: 3 })];
+    const r7 = decide(obs, ctxOf(defaultOrders(), { mem: { ...mem, trail: [] } }));
+    expect(r7.decision.kind === 'wake' && r7.decision.wake.reason).toBe('danger');
+    // 休んで戻った: 立て直しは終わり、階を移っていたら戻る
+    obs.self.hp = obs.self.max_hp;
+    obs.visible.monsters = [];
+    obs.navigation.known_stairs = [{ type: 'down', pos: obs.self.pos!, dist: 0, reachable: true, path_len: 0 }];
+    const r8 = decide(obs, ctxOf(defaultOrders(), { mem: { ...mem, crossed: 'down' } }));
+    expect(r8.update).toMatchObject({ recovering: false, crossed: null });
+    expect(r8.decision.kind === 'act' && r8.decision.tool).toBe('use_stairs');
+  });
+
+  it('起こして待つ間（§14.4）: 隣でない相手から被害を受けたら留まらない。追ってくる敵がいなければソロは何もしない。hold_max_turns の後は階段へ', async () => {
+    const { obs } = await expeditionObs();
+    obs.alerts = [];
+    obs.visible.monsters = [];
+    obs.navigation.known_stairs = [];
+    const far = { x: obs.self.pos!.x + 7, y: obs.self.pos!.y };
+    const mem: PilotMemory = { ...newMemory(), trail: [far] };
+    expect(holdAction(obs, ctxOf(defaultOrders(), { waiting: true, mem }))).toBeNull();
+    expect(holdAction(obs, ctxOf(defaultOrders(), { waiting: true, mem, coop: true }))?.tool).toBe('wait');
+    const hurt = holdAction(obs, ctxOf(defaultOrders(), { waiting: true, mem: { ...mem, hurtFarAgo: 0 } }));
+    expect(hurt?.tool).toBe('travel_to');
+    expect(hurt?.args.to).toEqual(far);
+    // 隣に起きている敵: 殴る
+    obs.visible.monsters = [monster({ id: 'e_adj002', dist: 1 })];
+    expect(holdAction(obs, ctxOf(defaultOrders(), { waiting: true, mem }))).toEqual({ tool: 'attack', args: { target: 'e_adj002' } });
+    // hold_max_turns の後: 知っている階段へ。階段の上なら帰る
+    obs.visible.monsters = [];
+    obs.navigation.known_stairs = [{ type: 'up', pos: { x: 1, y: 1 }, dist: 6, reachable: true, path_len: 6 }];
+    expect(holdAction(obs, ctxOf(defaultOrders(), { waiting: true, homeward: true, mem }))).toEqual({ tool: 'travel_to', args: { to: 'stairs_up', mode: 'flee', hp_floor: Math.min(obs.self.hp - 1, Math.floor(obs.self.max_hp / 4)) } });
+    obs.navigation.known_stairs = [{ type: 'up', pos: obs.self.pos!, dist: 0, reachable: true, path_len: 0 }];
+    obs.alerts = [{ code: 'on_stairs', text: '階段の上' } as unknown as Observation['alerts'][number]];
+    obs.expedition = { ...obs.expedition!, can_extract: true, extract_outcome: 'withdraw' };
+    expect(holdAction(obs, ctxOf(defaultOrders(), { waiting: true, homeward: true, mem }))).toEqual({ tool: 'extract', args: { confirm: true } });
   });
 
   it('壊れた orders.json は Error（pilot は読まずに前の方針のまま起こす）。知らない項目は無視、型の違う項目は既定値', () => {
@@ -223,22 +339,60 @@ function start(h: Harness, opts: { responder?: (ev: WakeEvent) => void; mode?: '
   return { stop: async () => { ac.abort(); return done; }, done };
 }
 const writeOrders = (h: Harness, o: unknown) => writeFileSync(join(h.dir, 'orders.json'), JSON.stringify(o));
+type Ar = Awaited<ReturnType<typeof arena>>;
+let esid = 999500;
+const actor = (a: Ar, id: string, kind: string, x: number, y: number, o: { archetype: string; hp: number; dmg: string; state?: string }): Entity => ({
+  id, kind, sid: ++esid, pos: { floor: a.key, x: a.ox + x, y: a.oy + y },
+  actor: { speed: 100, nextActAt: 0, faction: 'monster', turns: 0, ai: { archetype: o.archetype, state: o.state ?? 'hunting', targetPos: { x: a.ox, y: a.oy }, lostTurns: 0, params: {} } },
+  stats: { hp: o.hp, maxHp: o.hp, acc: 3, eva: 0, might: 0, armor: 0, sight: 9, dmg: o.dmg }, base: { maxHp: o.hp, acc: 3, eva: 0, might: 0, armor: 0, sight: 9, dmg: o.dmg }, statuses: [],
+} as unknown as Entity);
+/** その場で撃つ骨の射手（体力は多め: 寄って殴っても 2 回のうちには倒れない） */
+const shooter = (a: Ar, id: string, x: number, y: number) => actor(a, id, 'core:bone_archer', x, y, { archetype: 'ranged_stand', hp: 400, dmg: '1d1' });
+const weakFoe = (a: Ar, id: string, x: number, y: number) => actor(a, id, 'core:goblin', x, y, { archetype: 'melee_chaser', hp: 3, dmg: '1d1' });
+/** 決まった形の部屋に置いた場面に pilot をつなぐ（守護者は消す。部屋の右の壁を知らないことにして、探索できる所を残す） */
+async function arenaHarness(seed: string, map: string[], put: (a: Ar) => Entity[], orders?: unknown | ((a: Ar) => unknown), o: { rubbleX?: number; unknown?: 'left' | 'right' } = {}): Promise<{ h: Harness; a: Ar }> {
+  const a = await arena(seed, { map, guardian: { kind: 'core:goblin', hp: 50, dmg: '1d1', types: [], state: 'asleep' }, player: { hp: 400 } });
+  a.inject({ del: [a.gId] });
+  const f = a.world.floors[a.key];
+  const fk = a.world.players[a.pid].knowledge.floors[a.key];
+  // 瓦礫の列（見通せるが通れない）
+  if (o.rubbleX !== undefined) {
+    const rb = a.world.meta.terrainTable.indexOf('core:rubble');
+    for (let y = a.oy; y < a.oy + a.H; y++) { const i = y * f.width + a.ox + o.rubbleX; f.terrain[i] = rb; fk.seen[i] = rb; }
+  }
+  a.inject({ put: put(a) });
+  await a.r.port.act({ type: 'wait' }, { source: 'bot' });
+  // left: 部屋の左の 3 列を知らないことにする（視界の外なので、近づくまで知らないまま）。right: 部屋の右の壁を知らないことにする
+  const cols = o.unknown === 'left' ? [a.ox, a.ox + 1, a.ox + 2] : [a.ox + a.W];
+  for (let y = a.oy; y < a.oy + a.H; y++) for (const x of cols) fk.seen[y * f.width + x] = 0;
+  const config = loadConfig({ port: 0, runsDir: null, profilesDir: null, waitOthersMs: 100 });
+  const app = createApp(a.manager, config);
+  await new Promise<void>((r) => app.server.listen(0, '127.0.0.1', () => r()));
+  const dir = mkdtempSync(join(tmpdir(), 'muse-pilot-test-'));
+  if (orders !== undefined) writeFileSync(join(dir, 'orders.json'), JSON.stringify(typeof orders === 'function' ? (orders as (a: Ar) => unknown)(a) : orders));
+  const h: Harness = { base: `http://127.0.0.1:${(app.server.address() as AddressInfo).port}`, token: a.r.token, dir, wakes: [], close: async () => { a.manager.closeAll(); await new Promise<void>((r2) => app.server.close(() => r2())); } };
+  return { h, a };
+}
 
 describe('pilot をサーバーにつないで動かす（§10.8）', () => {
-  it('簡単な返事の相手と組ませる: pilot が自分から出す命令は既定の方針の道具だけ（綱・遠征の選択・1 手の攻撃と移動は出さない）', async () => {
+  it('簡単な返事の相手と組ませる: pilot が自分から出す命令は既定の方針の道具だけ（綱・遠征の選択・特技の選択は出さない）。state.json に敵・階段・相手にしない敵', async () => {
     const h = await harness();
     const p = start(h, { responder: simpleResponder, maxActions: 250 });
     const res = await p.done;
     expect(res.outcome).toBe('safety');
     const own = rows(h.dir).filter((r) => r.source === 'pilot').map((r) => r.tool as string);
     expect(own.length).toBeGreaterThan(20);
-    for (const t of own) expect(['explore', 'travel_to', 'collect', 'fight', 'wait', 'use_stairs', 'extract']).toContain(t);
+    for (const t of own) expect(['explore', 'travel_to', 'collect', 'fight', 'wait', 'rest', 'use_stairs', 'extract', 'attack']).toContain(t);
     // 遠征は返事の相手が queue で選ぶ
     expect(rows(h.dir).some((r) => r.source === 'queue' && r.tool === 'start_expedition')).toBe(true);
     // state.json と命令ごとの記録
     const st = JSON.parse(readFileSync(join(h.dir, 'state.json'), 'utf-8'));
     expect(st.run_id).toMatch(/.+/);
     expect(typeof st.summary).toBe('string');
+    expect(Array.isArray(st.hostiles)).toBe(true);
+    expect(Array.isArray(st.stairs)).toBe(true);
+    expect(Array.isArray(st.ignored)).toBe(true);
+    expect('target' in st).toBe(true);
     for (const r of rows(h.dir).filter((x) => x.tool)) expect(typeof r.turn).toBe('number');
     await h.close();
   }, 60000);
@@ -261,15 +415,22 @@ describe('pilot をサーバーにつないで動かす（§10.8）', () => {
     await h.close();
   }, 30000);
 
-  it('queue は方針より先に実行し、失敗したら残りを捨てて起こす', async () => {
+  it('queue は方針より先に実行し、失敗したら残りを捨てて知らせる（止まらない）。skip ならその命令だけ捨てる', async () => {
     const h = await harness('solo', { rev: 1, queue: [{ tool: 'start_expedition', args: { offer: 1 } }, { tool: 'use_item', args: { slot: 'z' } }, { tool: 'wait', args: {} }] });
     const p = start(h);
     await until(() => h.wakes.some((w) => w.reason === 'queue_failed'));
-    await new Promise((r) => setTimeout(r, 200));
+    await until(() => rows(h.dir).some((r) => r.source === 'pilot'));
     const cmds = rows(h.dir).filter((r) => r.tool);
-    expect(cmds.map((r) => `${r.source}:${r.tool}:${r.ok}`)).toEqual(['queue:start_expedition:true', 'queue:use_item:false']);
+    expect(cmds.slice(0, 2).map((r) => `${r.source}:${r.tool}:${r.ok}`)).toEqual(['queue:start_expedition:true', 'queue:use_item:false']);
+    expect(cmds.some((r) => r.source === 'queue' && r.tool === 'wait')).toBe(false);
+    expect(h.wakes.find((w) => w.reason === 'queue_failed')?.level).toBe('notify');
     await p.stop();
     await h.close();
+    const h2 = await harness('solo', { rev: 1, policy: { queue_on_fail: 'skip' }, queue: [{ tool: 'start_expedition', args: { offer: 1 } }, { tool: 'use_item', args: { slot: 'z' } }, { tool: 'wait', args: {} }] });
+    const p2 = start(h2);
+    await until(() => rows(h2.dir).some((r) => r.source === 'queue' && r.tool === 'wait'));
+    await p2.stop();
+    await h2.close();
   }, 30000);
 
   it('壊れた orders.json は読まずに起こす（orders_invalid）。前の方針のまま、直ったら続ける', async () => {
@@ -295,23 +456,24 @@ describe('pilot をサーバーにつないで動かす（§10.8）', () => {
     await h.close();
   }, 30000);
 
-  it('協力プレイ: 起こして待っている間も、毎手番すぐに持ち場の動きで答え、hold_max_turns ごとに起こし直す', async () => {
-    // wake_hp_pct 101: 遠征が始まるとすぐ low_hp で起こす。返事はしない
-    const h = await harness('coop', { rev: 1, queue: [{ tool: 'start_expedition', args: { offer: 1 } }], policy: { wake_hp_pct: 101, hold_max_turns: 5 } });
+  it('起こして返事が無いとき（協力プレイ）: 毎手番すぐに持ち場の動きで答え、hold_max_turns の後は still_waiting をくり返さずに階段へ向かう', async () => {
+    const h = await harness('coop', { rev: 1, queue: [{ tool: 'start_expedition', args: { offer: 1 } }], policy: { hold_max_turns: 4 } });
     const p = start(h);
-    await until(() => h.wakes.some((w) => w.reason === 'low_hp'));
+    await until(() => rows(h.dir).some((r) => r.source === 'pilot'));
+    // 壊れた方針で起こす（返事はしない）
+    writeFileSync(join(h.dir, 'orders.json'), '{ broken');
+    await until(() => h.wakes.some((w) => w.reason === 'orders_invalid'));
     const t0 = Date.now();
-    const after = () => { const rs = rows(h.dir); const i = rs.findIndex((r) => r.wake === 'low_hp'); return rs.slice(i + 1).filter((r) => r.tool); };
-    await until(() => after().length >= 12, 20000);
-    const elapsed = Date.now() - t0;
-    // 1 手番あたり、時間切れ（30 秒）より十分に早い
-    expect(elapsed / 12).toBeLessThan(1500);
-    for (const r of after()) {
-      expect(r.source).toBe('pilot');
-      expect(['wait', 'attack', 'move', 'extract', 'travel_to']).toContain(r.tool);
-    }
-    expect(JSON.parse(readFileSync(join(h.dir, 'state.json'), 'utf-8')).status).toBe('holding');
-    expect(h.wakes.some((w) => w.reason === 'still_waiting')).toBe(true);
+    await until(() => h.wakes.some((w) => w.reason === 'no_reply'), 20000);
+    const after = () => { const rs = rows(h.dir); const i = rs.findIndex((r) => r.wake === 'no_reply'); return rs.slice(i + 1).filter((r) => r.tool); };
+    await until(() => after().length >= 1 || h.wakes.some((w) => w.reason === 'camp'), 20000);
+    expect(Date.now() - t0).toBeLessThan(15000);
+    expect(h.wakes.filter((w) => w.reason === 'no_reply')).toHaveLength(1);
+    expect(h.wakes.find((w) => w.reason === 'no_reply')?.level).toBe('notify');
+    expect(h.wakes.some((w) => w.reason === 'still_waiting')).toBe(false);
+    // 帰る側へ: 階段へ向かう（着いていれば帰る）
+    const first = after()[0];
+    if (first) expect(first.tool === 'extract' || (first.tool === 'travel_to' && String((first.args as { to: unknown }).to).startsWith('stairs_')) || first.tool === 'attack').toBe(true);
     await p.stop();
     await h.close();
   }, 40000);
@@ -325,6 +487,8 @@ describe('pilot をサーバーにつないで動かす（§10.8）', () => {
     a.inject({ put: [mold] });
     expect(me.pos).toBeTruthy();
     await a.r.port.act({ type: 'wait' }, { source: 'bot' });
+    // 待つ間に気づかれていたら、気づいていないことに戻す（追ってくる敵なら、身を守るために殴るのは正しい。§14.4）
+    const m2 = structuredClone(a.world.entities['e_mold01']); m2.actor!.ai!.state = 'unaware'; m2.actor!.ai!.targetPos = null; a.inject({ put: [m2] });
     // 視界の更新の後に、部屋の右の壁を知らないことにする（探索できる所が残る）
     const f = a.world.floors[a.key];
     const fk = a.world.players[a.pid].knowledge.floors[a.key];
@@ -345,6 +509,51 @@ describe('pilot をサーバーにつないで動かす（§10.8）', () => {
     // じゃまをしている敵に、自分から fight を仕掛けていない
     expect(rows(h.dir).some((r) => r.tool === 'fight' || r.tool === 'attack')).toBe(false);
     await p.stop();
+    await h.close();
+  }, 30000);
+
+  it('fight が倒す前に止まっても起こさずに続け（§14.2）、auto なら寄ってやり直し、同じ相手に 2 回で諦めて steady で探索へ戻る', async () => {
+    const { h, a } = await arenaHarness('pilot-giveup', ['....................P.....', '..........................'], (ar) => [shooter(ar, 'e_arch01', 24, 0)], undefined, { rubbleX: 22, unknown: 'left' });
+    const p = start(h);
+    await until(() => h.wakes.some((w) => w.reason === 'gave_up'), 20000);
+    const fights = rows(h.dir).filter((r) => r.tool === 'fight' && (r.args as { target?: string }).target === 'e_arch01');
+    // 最初は待ち受け、離れて撃ってくるので寄ってやり直す
+    expect((fights[0]!.args as { approach?: string }).approach).toBeUndefined();
+    expect(fights.some((r) => (r.args as { approach?: string }).approach === 'advance')).toBe(true);
+    // どの止まり方でも起こさない
+    expect(h.wakes.filter((w) => w.level === 'wake').map((w) => w.reason).filter((r) => r.startsWith('fight_') || r.startsWith('refused_'))).toEqual([]);
+    expect(h.wakes.find((w) => w.reason === 'gave_up')?.level).toBe('notify');
+    await until(() => JSON.parse(readFileSync(join(h.dir, 'state.json'), 'utf-8')).ignored.includes('e_arch01'));
+    // 相手にしない敵がいる間は steady で探索
+    await until(() => rows(h.dir).some((r) => r.tool === 'explore' && (r.args as { mode?: string }).mode === 'steady'), 20000);
+    await p.stop();
+    await h.close();
+    expect(a).toBeTruthy();
+  }, 40000);
+
+  it('queue の命令が敵のせいで断られたら、敵に対応してからやり直す（§14.5）', async () => {
+    const { h } = await arenaHarness('pilot-qretry', ['P......', '.......'], (ar) => [weakFoe(ar, 'e_foe901', 1, 0)], (ar: Ar) => ({ rev: 1, queue: [{ tool: 'travel_to', args: { to: { x: ar.ox + 6, y: ar.oy + 1 } } }] }));
+    const p = start(h);
+    await until(() => rows(h.dir).some((r) => r.source === 'queue' && r.tool === 'travel_to' && r.ok === true), 20000);
+    const rs = rows(h.dir).filter((r) => r.tool);
+    const firstQ = rs.findIndex((r) => r.source === 'queue' && r.tool === 'travel_to');
+    expect(rs[firstQ]!.ok).toBe(false);
+    expect(rs.slice(firstQ).some((r) => r.source === 'pilot' && (r.tool === 'fight' || r.tool === 'attack'))).toBe(true);
+    expect(h.wakes.some((w) => w.reason === 'queue_retry' && w.level === 'notify')).toBe(true);
+    expect(h.wakes.some((w) => w.reason === 'queue_failed')).toBe(false);
+    await p.stop();
+    await h.close();
+  }, 30000);
+
+  it("mode: stop_at_camp は帰ってから終える（§14.7）", async () => {
+    const h = await harness('solo', { rev: 1, queue: [{ tool: 'start_expedition', args: { offer: 1 } }] });
+    const p = start(h);
+    await until(() => rows(h.dir).some((r) => r.source === 'pilot'));
+    writeOrders(h, { rev: 2, mode: 'stop_at_camp', policy: { allow_lifeline: true } });
+    const res = await p.done;
+    expect(res).toMatchObject({ outcome: 'stopped', reason: 'stop_at_camp' });
+    expect(rows(h.dir).some((r) => (r.tool === 'use_item' || r.tool === 'extract') && r.ok === true)).toBe(true);
+    expect(JSON.parse(readFileSync(join(h.dir, 'state.json'), 'utf-8')).status).toBe('ended');
     await h.close();
   }, 30000);
 
