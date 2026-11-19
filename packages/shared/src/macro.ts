@@ -586,7 +586,10 @@ function resolveTravelGoal(view: PlayerView, catalog: Catalog, target: TravelTar
 
 /** dir: trap_ahead のとき、罠のマスの方角（踏むなら move { dir }） */
 /** blockedBy: じゃまをしている見えている敵（hostile_adjacent・blocked。V4-1a §12.3。拒否のエラーの details.blocked_by と hint の名前） */
-export type MacroDecision = { command: Command } | { stop: MacroStop; dir?: Dir; blockedBy?: { id: string; name: string }[] };
+/** traps: trap_ahead のとき、道の上の発見済みの罠（近い順。V4-1d §18.1。拒否のエラーの details.blocked_by_traps と hint の名前・位置） */
+export type MacroDecision = { command: Command } | { stop: MacroStop; dir?: Dir; blockedBy?: { id: string; name: string }[]; traps?: MacroTrap[] };
+/** 道をふさいでいる発見済みの罠（V4-1d §18.1） */
+export interface MacroTrap { id: string; kind: string; name: string; pos: Pos }
 
 /**
  * 次の基本行動を決める。events は直前の手で知覚したイベント（中断判定用）。
@@ -1004,11 +1007,21 @@ function macroStep(state: MacroState, view: PlayerView, catalog: Catalog, events
   state.stationary = routing.stationary;
   const here = pos.y * grid.width + pos.x;
   const route = routing.route;
-  // 発見済みの罠のマス（マクロは踏まない）
-  const trapCells = new Set<number>([
-    ...view.entities.filter((e) => e.cat === 'trap').map((e) => e.pos.y * grid.width + e.pos.x),
-    ...view.memory.remembered.filter((r) => r.cat === 'trap').map((r) => r.pos.y * grid.width + r.pos.x),
-  ]);
+  // 発見済みの罠のマス（マクロは踏まない）。射影はそのプレイヤーが見つけた罠しか渡さない（見つけていない罠は view に無い）
+  const knownTraps = [
+    ...view.entities.filter((e) => e.cat === 'trap').map((e) => ({ id: e.id, kind: e.kind, pos: e.pos })),
+    ...view.memory.remembered.filter((r) => r.cat === 'trap').map((r) => ({ id: r.id, kind: r.kind, pos: r.pos })),
+  ];
+  const trapCells = new Set<number>(knownTraps.map((tr) => tr.pos.y * grid.width + tr.pos.x));
+  /** 道の上の発見済みの罠（近い順。同じマスは 1 つ） */
+  const trapsOn = (cells: readonly Pos[]): MacroTrap[] => {
+    const out: MacroTrap[] = [];
+    for (const c of cells) {
+      const tr = knownTraps.find((k) => k.pos.x === c.x && k.pos.y === c.y);
+      if (tr && !out.some((o) => o.id === tr.id)) out.push({ id: tr.id, kind: tr.kind ?? 'trap', name: kindName(catalog, view.locale, tr.kind), pos: { x: tr.pos.x, y: tr.pos.y } });
+    }
+    return out;
+  };
   const crossesTrap = (p: Pos[] | null) => !!p && p.some((c) => trapCells.has(c.y * grid.width + c.x));
   // 見えて「拾わない」と分かった品（同じか劣る装備・有害品）は、視界を出て記憶に戻っても、この呼び出しの間は行き先にしない
   // （記憶の中の品は接辞が分からないので拾える側に数えられ、見える・見えないの間を往復しないように）
@@ -1135,7 +1148,7 @@ function macroStep(state: MacroState, view: PlayerView, catalog: Catalog, events
     else if ((state.sinceBest = (state.sinceBest ?? 0) + 1) >= TRAVEL_NO_PROGRESS) return { stop: 'no_progress' };
   }
   // マクロは発見済みの罠を踏まない: ほかに道が無く、次のマスが罠なら止まる（踏むなら move で）
-  if (trapCells.has(path[0].y * grid.width + path[0].x)) return { stop: 'trap_ahead', dir: dirBetween(pos, path[0]) ?? undefined };
+  if (trapCells.has(path[0].y * grid.width + path[0].x)) return { stop: 'trap_ahead', dir: dirBetween(pos, path[0]) ?? undefined, traps: trapsOn(path) };
   // マクロは攻撃しない: 次のマスに敵がいたら止まる。ただし steady・flee で、ふさいでいる相手が逃走中なら攻撃して進む（V3-2R3 §20.6）
   const blocker = hostiles.find((h) => h.pos.x === path[0].x && h.pos.y === path[0].y);
   if (blocker) {
@@ -1157,8 +1170,19 @@ function macroStep(state: MacroState, view: PlayerView, catalog: Catalog, events
  * 1 歩も進めないと分かったマクロの拒否（手番を使わない。V3-2R §14.2「0 歩で終わる呼び出しを作らない」）。
  * 最初の判断が停止なら、その理由をゲームのエラー形式で返す。
  */
-export function macroStopError(L: Locale, stop: MacroStop, cmd: Command, dir?: Dir, blockedBy?: readonly { id: string; name: string }[]): ActionError {
+export function macroStopError(L: Locale, stop: MacroStop, cmd: Command, dir?: Dir, blockedBy?: readonly { id: string; name: string }[], traps?: readonly MacroTrap[]): ActionError {
   const e = macroStopErrorBase(L, stop, cmd, dir);
+  // 道をふさいでいる発見済みの罠（V4-1d §18.1）: details.blocked_by_traps と hint の名前・位置
+  if (traps?.length && stop === 'trap_ahead') {
+    const first = traps[0];
+    const more = traps.length > 1 ? t(L, `（この道の先にも ${traps.slice(1).map((tr) => `${tr.name} (${tr.pos.x},${tr.pos.y})`).join('、')}）`, ` (further along: ${traps.slice(1).map((tr) => `${tr.name} (${tr.pos.x},${tr.pos.y})`).join(', ')})`) : '';
+    const step = dir ? t(L, `踏むなら move { dir: '${dir}' }。`, `Step on it with move { dir: '${dir}' } if you mean to, `) : t(L, '踏むなら move。', 'Step on it with move if you mean to, ');
+    return {
+      ...e,
+      hint: `${t(L, `${first.name} (${first.pos.x},${first.pos.y}) が道をふさいでいる${more}。`, `The ${first.name} at (${first.pos.x},${first.pos.y}) blocks the way${more}. `)}${step}${t(L, 'ほかの道を探すなら explore。', 'or explore for another way.')}`,
+      details: { blocked_by_traps: traps.map((tr) => ({ id: tr.id, kind: tr.kind, pos: { x: tr.pos.x, y: tr.pos.y } })) },
+    };
+  }
   // じゃまをしている見えている敵（V4-1a §12.3）: details.blocked_by と hint の名前
   if (blockedBy?.length && (stop === 'hostile_adjacent' || stop === 'blocked')) {
     const names = blockedBy.map((b) => `${b.name} ${b.id}`).join(t(L, '、', ', '));

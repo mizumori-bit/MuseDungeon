@@ -16,8 +16,21 @@ export interface PilotPolicy {
   fight: boolean;
   /** pilot の fight の寄り方（V4-1a §12.5・§14.2）: auto＝最初は待ち、離れて撃ってくる・寄ってこない相手には寄ってやり直す（既定）/ wait / advance＝固定 */
   approach: 'auto' | 'wait' | 'advance';
-  /** 同じ相手に、倒す前にこの回数止まったら、その階にいる間は相手にしない（§14.2） */
+  /**
+   * 同じ相手に、倒す前にこの回数止まったら、その階にいる間は相手にしない（§14.2）。既定 3（V4-1d §18.2: 離れたままの相手に
+   * 待つ → 寄る → 投げる、の 3 回目を数に入れる）
+   */
   give_up_after: number;
+  /**
+   * 離れたままの相手（fight が target_shooting・target_not_approaching で止まった）への、諦める前の最後のやり直しで、
+   * 分類が「投げる武器」の品を with に渡してよいか（V4-1d §18.2。既定 true。投げた品は床に落ち、collect が拾う。薬は投げない）
+   */
+  allow_throw: boolean;
+  /**
+   * 道をふさいでいる罠（断りのエラーの details.blocked_by_traps）を踏んで通ってよいか（V4-1d §18.1。既定 false＝踏まずに知らせる・起こす）。
+   * pilot は罠の種類を見分けないので、true はどの罠でも踏む。隣の罠は 1 歩の move で踏み、stepped_on_trap で知らせる
+   */
+  step_on_traps: boolean;
   /** この遠征の目的の相手・品が見えたら、起こさずに挑む・拾う（§14.1。既定 false＝起こす） */
   engage_objective: boolean;
   /** 特技・加護の選択: wake＝起こす（既定）/ first＝起こさずに最初の候補を選ぶ（§14.1） */
@@ -48,12 +61,25 @@ export interface PilotPolicy {
   notify_every_turns: number;
   /** 起こしてから、この手番が過ぎても返事が無ければ、帰る側へ倒す（§14.4: 階段へ行き、allow_extract なら帰る） */
   hold_max_turns: number;
+  /**
+   * 節目の大守護者（V4-1e §19.2）: escalate＝その大守護者につき 1 回、AI か人間に上げる（既定）/ engage＝起こさずに挑む /
+   * avoid＝挑まない（節目の先が要る候補は選ばない。選べる候補が尽きたら空回りとして上げて止まる）
+   */
+  warden: 'escalate' | 'engage' | 'avoid';
+  /** 直近のこの回数の遠征が、どれも「確定が 0」か「10 手番以内に終わった」なら空回り: 次を始めずにキャンプで上げる（V4-1e §19.3。0＝見ない） */
+  stall_after: number;
+  /** 目的でない遺物も、追ってくる敵が見えていないときに拾う（V4-1e §19.5。既定 false: 拾うと階が起きる） */
+  pick_relics: boolean;
 }
 
 export interface PilotOrders {
   rev: number;
-  /** auto＝方針どおり動く / hold＝持ち場の動きだけ / stop＝その場で pilot を終える / stop_at_camp＝帰ってから終える（§14.7） */
-  mode: 'auto' | 'hold' | 'stop' | 'stop_at_camp';
+  /**
+   * auto＝方針どおり動く / hold＝持ち場の動きだけ / stop＝その場で pilot を終える / stop_at_camp＝帰ってから終える（§14.7）/
+   * return＝階段へ行って帰り、キャンプに着いたら auto に戻る（V4-1e §19.4。綱は階段へ着けないときだけ。orders.json は書き換えず、
+   * 同じ rev の間は auto として扱う）
+   */
+  mode: 'auto' | 'hold' | 'stop' | 'stop_at_camp' | 'return';
   /** 先にやる 1 回きりの命令。上から順に 1 つずつ。空になったら方針に戻る */
   queue: QueuedCommand[];
   policy: PilotPolicy;
@@ -67,7 +93,9 @@ export const DEFAULT_POLICY: PilotPolicy = {
   max_chasers: 2,
   fight: true,
   approach: 'auto',
-  give_up_after: 2,
+  give_up_after: 3,
+  allow_throw: true,
+  step_on_traps: false,
   engage_objective: false,
   perk: 'wake',
   collect: true,
@@ -82,6 +110,9 @@ export const DEFAULT_POLICY: PilotPolicy = {
   unignore: [],
   notify_every_turns: 100,
   hold_max_turns: 40,
+  warden: 'escalate',
+  stall_after: 3,
+  pick_relics: false,
 };
 
 export function defaultOrders(): PilotOrders {
@@ -111,7 +142,7 @@ export function parseOrders(raw: unknown): PilotOrders {
   const camp = (r.camp && typeof r.camp === 'object' ? r.camp : {}) as Record<string, unknown>;
   return {
     rev: r.rev,
-    mode: r.mode === 'hold' || r.mode === 'stop' || r.mode === 'stop_at_camp' ? r.mode : 'auto',
+    mode: r.mode === 'hold' || r.mode === 'stop' || r.mode === 'stop_at_camp' || r.mode === 'return' ? r.mode : 'auto',
     queue,
     policy: {
       wake_hp_pct: num(p.wake_hp_pct, d.wake_hp_pct),
@@ -120,6 +151,8 @@ export function parseOrders(raw: unknown): PilotOrders {
       fight: bool(p.fight, d.fight),
       approach: p.approach === 'wait' || p.approach === 'advance' ? p.approach : 'auto',
       give_up_after: num(p.give_up_after, d.give_up_after, 1),
+      allow_throw: bool(p.allow_throw, d.allow_throw),
+      step_on_traps: bool(p.step_on_traps, d.step_on_traps),
       engage_objective: bool(p.engage_objective, d.engage_objective),
       perk: p.perk === 'first' ? 'first' : 'wake',
       collect: bool(p.collect, d.collect),
@@ -134,6 +167,9 @@ export function parseOrders(raw: unknown): PilotOrders {
       unignore: ids(p.unignore),
       notify_every_turns: num(p.notify_every_turns, d.notify_every_turns),
       hold_max_turns: num(p.hold_max_turns, d.hold_max_turns, 1),
+      warden: p.warden === 'engage' || p.warden === 'avoid' ? p.warden : 'escalate',
+      stall_after: num(p.stall_after, d.stall_after),
+      pick_relics: bool(p.pick_relics, d.pick_relics),
     },
     camp: { auto_start: typeof camp.auto_start === 'string' && camp.auto_start ? camp.auto_start : null },
   };

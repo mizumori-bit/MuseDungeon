@@ -147,7 +147,8 @@ export interface ActionError {
   /** 次に何をすればよいか */
   hint: string;
   /** blocked_by: じゃまをしている敵の ID（hostile_adjacent・blocked。そのプレイヤーに見えている敵だけ。V4-1a §12.3） */
-  details?: { blocked_by?: string[] };
+  /** blocked_by_traps: 道をふさいでいる罠（マクロの blocked。そのプレイヤーが見つけている罠だけ。経路の上で近い順。V4-1d §18.1） */
+  details?: { blocked_by?: string[]; blocked_by_traps?: { id: string; kind: string; pos: { x: number; y: number } }[] };
 }
 
 export function actionError(code: ActionErrorCode, message: string, hint: string): ActionError {

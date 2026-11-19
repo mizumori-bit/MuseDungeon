@@ -26,7 +26,10 @@ ActionError {
       | 'hostile_adjacent' | 'hostile_in_view' | 'hp_floor' | 'nothing_to_do'   // マクロが 1 歩も進めない（V3-2R。手番を使わない）
   message: string      // 何が起きたか
   hint: string         // 次に何をすればよいか
-  details?: { blocked_by?: EntityId[] }   // V4-1a: じゃまをしている敵（hostile_adjacent・blocked。そのプレイヤーに見えている敵だけ。hint にも名前）
+  details?: {
+    blocked_by?: EntityId[]   // V4-1a: じゃまをしている敵（hostile_adjacent・blocked。そのプレイヤーに見えている敵だけ。hint にも名前）
+    blocked_by_traps?: { id: EntityId; kind: string; pos: Pos }[]   // V4-1d: 道をふさいでいる罠（マクロの blocked。そのプレイヤーが見つけている罠だけ。経路の上で近い順。hint にも名前と位置）
+  }
 }
 ```
 
@@ -155,7 +158,7 @@ ActionResult {
   - `careful`（既定）: 初見の**種族**・追跡中（逃走中を除く）で自分に届く敵の出現・見えている敵が追跡に変わった・攻撃を受けた（外れも含む、`attacked`）・毒以外のダメージ・状態異常・HP が 50%／25% をまたいだ（`hp_threshold`）・階段の発見（explore）で止まる。既知の種族の眠っている・気づいていない個体、隣にいない動かない敵、毒の継続ダメージ、アイテムの発見では止まらない（`changes` には出る）。隣に起きている敵（逃走中を除く）がいれば動かない
   - `steady`: 追跡中の敵が隣接した・初見の種族・HP が `hp_floor`（既定 最大 HP の 50%）未満・その階の下り階段を初めて見た（`stairs_seen`。V3-2R2）で止まる
   - `flee`: 到着・進路をふさがれた・HP が `hp_floor`（既定 25%）未満で止まる。隣に敵がいても動く（退却）
-  - どの mode も 1 歩ずつ通常の `move` として記録し、敵は通常どおり攻撃する。マクロは攻撃しない（次のマスに敵がいれば `blocked`。steady・flee は、ふさいでいる相手が逃走中なら攻撃して進み、ほかに道が無いときは逃走中の敵のマスを通る経路を引く）。発見済みの罠は踏まない（罠を通る道しか無ければ罠の手前で `trap_ahead`。始める前なら `blocked` で拒否し、ヒントに `move { dir: '<罠の方角>' }`）。経路探索で避ける「見えている動かない敵の隣」は、その呼び出しの間に一度見た動かない敵も含む。`rest` は敵が視界に入ると状態によらず止まる（動かない敵は隣にいなければ休息を妨げない。V3-2R2: すでに見た個体が逃げながら視界を出入りしても止まらない）
+  - どの mode も 1 歩ずつ通常の `move` として記録し、敵は通常どおり攻撃する。マクロは攻撃しない（次のマスに敵がいれば `blocked`。steady・flee は、ふさいでいる相手が逃走中なら攻撃して進み、ほかに道が無いときは逃走中の敵のマスを通る経路を引く）。発見済みの罠は踏まない（罠を通る道しか無ければ罠の手前で `trap_ahead`。始める前なら `blocked` で拒否し、`details.blocked_by_traps` にその道の上の罠、ヒントに罠の名前と位置と `move { dir: '<罠の方角>' }`。V4-1d）。経路探索で避ける「見えている動かない敵の隣」は、その呼び出しの間に一度見た動かない敵も含む。`rest` は敵が視界に入ると状態によらず止まる（動かない敵は隣にいなければ休息を妨げない。V3-2R2: すでに見た個体が逃げながら視界を出入りしても止まらない）
   - careful と steady は、その階の下り階段を初めて見たときにも止まる（`stairs_seen`。flee は止まらない。V3-2R2）。止まる前に足元の拾える品を 1 つ拾う。経路探索は、見えている動かない敵の隣のマスを罠と同じく避ける（ほかに道が無ければ通る）
   - `valid_actions` の `fight` と `mode:steady` の行には、既定の `hp_floor` の実数を書く（「HP 24 未満で止まる」）
 - **0 歩で終わる呼び出しは作らない**: 実行前に 1 歩も進めないと分かれば、手番を使わずに理由付きのエラー（`hostile_adjacent`・`hostile_in_view`・`hp_floor`・`blocked`・`unreachable`・`unknown_destination`・`nothing_to_do`）で返す。`valid_actions` にはその場で進める mode だけを出す（隣に敵がいれば `travel_to stairs_up mode:flee` と `fight <id>`）。
@@ -419,6 +422,10 @@ V3-2R で足した項目（同じく後方互換。会心と経験値のルー�
 - `StatusInst.source`（状態異常を与えた者。毒で倒したときの撃破者になる）、`status_applied.targetAffixes`
 - `player_state.reason: 'joined'`（キャンプから始まる参加）。参加コマンドの `atCamp`
 - プレイヤー向けの射影で、見えていた個体が視界の外へ動いた `entity_moved` に `dirOut`（向きだけ。行き先は伏せたまま）
+
+V4-1d で足した項目（`engineVersion` 0.32.0。出来事の種類は増やしていないので `eventVersion` は 21 のまま。IMPROVEMENTS_V4 §18、DESIGN.md §38.4）:
+
+- エラー: `details.blocked_by_traps: { id, kind, pos }[]`（マクロが発見済みの罠の手前で 1 歩も進めないときの `blocked`。そのプレイヤーが見つけている罠だけで、経路の上で近い順。`kind` は種類 ID（`core:trap_dart`））。hint の文に罠の名前と位置（「毒矢の罠 (13,13) が道をふさいでいる。踏むなら move { dir: 'e' }。ほかの道を探すなら explore。」）。マクロは今までどおり罠を踏まない
 
 V4-1c で足した項目（`engineVersion` 0.31.0。出来事の種類は増やしていないので `eventVersion` は 21 のまま。IMPROVEMENTS_V4 §16、DESIGN.md §38.3）:
 

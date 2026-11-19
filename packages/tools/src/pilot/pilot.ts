@@ -10,8 +10,14 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { Observation, TurnBlock } from '@muse/shared';
 import { readFeed } from '../drive';
-import { afterAction, decide, isRoleEnemy, lineWith, MOVE_TOOLS, newMemory, type PilotMemory, type Wake, type WakeLevel } from './decide';
+import { afterAction, decide, fightArgs, isRoleEnemy, lineWith, MOVE_TOOLS, newMemory, NOTIFY_STOPS, type PilotMemory, type TrapBlock, type TrapRef, trapLines, type Wake, type WakeLevel } from './decide';
 import { defaultOrders, parseOrders, type PilotOrders, type QueuedCommand, writeJsonAtomic } from './orders';
+
+/** 遠征ごとの結果（--dir の history.jsonl。1 遠征 1 行。V4-1e §19.3） */
+/** banked: 確定した点（遠征の結果の payout。ソロなら自分の分、協力プレイなら参加者の合計）。result.points（達成したときの基礎点）ではない */
+export interface HistoryRow { no: number; slot: string | null; objective: { type: string; target_depth: number | null }; turns: number; banked: number; end: string; last_wake: string | null }
+/** 同じ理由の wake に、返事役が同じ返事を続けた回数を数えない理由（1 回きりの選択。§19.3） */
+const STREAK_SKIP = new Set(['camp', 'perk_pending', 'boon_pending', 'orders_invalid']);
 
 export interface PilotOptions {
   /** サーバーの起点 URL（例 http://127.0.0.1:7777。別の機械なら Tailscale の番地など） */
@@ -42,7 +48,10 @@ export interface PilotState {
   turn: number;
   orders_rev: number;
   status: 'running' | 'waiting' | 'holding' | 'camp' | 'ended';
+  /** level: notify / wake（返事役が答えてよい）/ escalate（返事役は答えない。AI か人間へ回す。V4-1e §19.1） */
   wake: { reason: string; level: WakeLevel; turn: number; detail: string } | null;
+  /** いま効いている mode（return は、キャンプに着いたら同じ rev の間 auto。V4-1e §19.4） */
+  mode: PilotOrders['mode'];
   self: { level: number; hp: number; max_hp: number; floor: number | null; pos: [number, number] | null };
   /** 観測の遠征の目的をそのまま */
   objective: NonNullable<Observation['expedition']>['objective'] | null;
@@ -52,6 +61,8 @@ export interface PilotState {
   hostiles: { id: string; name: string; pos: [number, number]; dist: number; hp_state: string; hunting: boolean; role: string | null; objective: boolean; ignored: boolean }[];
   /** 知っている階段（観測の navigation.known_stairs そのまま） */
   stairs: Observation['navigation']['known_stairs'];
+  /** 今の階で見つけている罠（観測の visible.features のうち、公開カタログの分類が罠のもの。見えている罠と覚えている罠。V4-1d §18.1） */
+  traps: { id: string; name: string; pos: [number, number]; dist: number }[];
   /** いま戦っている相手と、倒す前に止まった回数（pilot の記録） */
   target: { id: string; stops: number } | null;
   /** 相手にしないと決めた敵の ID（pilot の記録。方針 ignore・unignore で書き換えられる） */
@@ -59,7 +70,7 @@ export interface PilotState {
   /** 立て直しの段の途中か（pilot の記録） */
   recovering: boolean;
   /** キャンプにいる間: 次の遠征の番号と候補（観測の camp の写し。start_expedition の offer に index を書く） */
-  camp?: { next_no: number; offers: { index: number; slot: string | null; type: string; target_depth: number | null; points: number; recommended_level: number | null; text: string }[] };
+  camp?: { next_no: number; offers: { index: number; slot: string | null; type: string; target_depth: number | null; points: number; recommended_level: number | null; text: string }[]; milestone?: { depth: number; name: string; cleared: boolean } };
   summary: string;
 }
 
@@ -71,6 +82,8 @@ export interface PilotResult {
   reason: string;
   actions: number;
   wakes: Record<string, number>;
+  /** 上げた（escalate）理由ごとの回数（V4-1e §19.1） */
+  escalates: Record<string, number>;
   notifies: number;
   /** 知らせた理由ごとの回数 */
   notified: Record<string, number>;
@@ -80,8 +93,8 @@ export interface PilotResult {
 
 interface CallResult { ok: boolean; data: Record<string, unknown>; text: string }
 
-/** 断りのエラー（details.blocked_by: じゃまをしている見えている敵。V4-1a §12.3） */
-type CallError = { code: string; message: string; details?: { blocked_by?: string[] } };
+/** 断りのエラー（details.blocked_by: じゃまをしている見えている敵。V4-1a §12.3。blocked_by_traps: 道をふさいでいる罠。V4-1d §18.1） */
+type CallError = { code: string; message: string; details?: { blocked_by?: string[]; blocked_by_traps?: TrapRef[] } };
 /** 命令の結果から観測・turn・止まった理由を取り出す */
 function payload(r: CallResult): { obs?: Observation; turn?: TurnBlock; stop?: string; outcome?: string; error?: CallError } {
   const d = r.data as { observation?: Observation; turn?: TurnBlock; interrupted_by?: string; outcome?: string; error?: CallError };
@@ -101,7 +114,7 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
   const maxMs = opts.maxMs ?? 6 * 60 * 60 * 1000;
   const maxErrors = opts.maxErrors ?? 5;
   const t0 = Date.now();
-  const result: PilotResult = { outcome: 'stopped', reason: '', actions: 0, wakes: {}, notifies: 0, notified: {}, turns: { pilot: 0, queue: 0 } };
+  const result: PilotResult = { outcome: 'stopped', reason: '', actions: 0, wakes: {}, escalates: {}, notifies: 0, notified: {}, turns: { pilot: 0, queue: 0 } };
 
   // ---- ゲームへの口（MCP）。表示の文は短く、所持品はいつも構造化して受け取る ----
   const client = new Client({ name: 'muse-pilot', version: '0' });
@@ -115,6 +128,16 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
   const resumed = await call('resume_run', { player_token: opts.token, map: 'never', inventory: 'always' });
   if (!resumed.ok) { await client.close(); throw new Error(`resume_run failed: ${resumed.text}`); }
   const runId = String((resumed.data as { run_id?: string }).run_id ?? '');
+  // 公開カタログ（GET /api/content/catalog）の分類: 投げる武器の品の種類と、罠の地物の種類（V4-1d §18.1・§18.2。品や罠の名前では探さない）
+  const throwKinds = new Set<string>();
+  const trapKinds = new Set<string>();
+  try {
+    const res = await fetch(new URL('/api/content/catalog', opts.baseUrl));
+    const cat = (await res.json()) as { items?: Record<string, { category?: string }>; features?: Record<string, { category?: string }> };
+    const short = (id: string) => id.split(':')[1] ?? id;
+    for (const [id, it] of Object.entries(cat.items ?? {})) if (it.category === 'throwing') { throwKinds.add(id); throwKinds.add(short(id)); }
+    for (const [id, f] of Object.entries(cat.features ?? {})) if (f.category === 'trap') trapKinds.add(id);
+  } catch (e) { log(`[pilot] catalog failed (no throwing, traps only from refusals): ${(e as Error).message}`); }
   let obs = (resumed.data as { observation: Observation }).observation;
   let turn = (resumed.data as { turn: TurnBlock }).turn;
   let text = resumed.text;
@@ -123,6 +146,21 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
   const ordersPath = join(dir, 'orders.json');
   const statePath = join(dir, 'state.json');
   const logPath = join(dir, 'log.jsonl');
+  // pilot 自身の記録で、起動し直しても残すもの（V4-1e §19.2・§19.3・§19.5）: ランを通して 1 回だけの鍵と、遠征ごとの結果
+  const memoryPath = join(dir, 'memory.json');
+  const historyPath = join(dir, 'history.jsonl');
+  const onceKeys = new Set<string>();
+  /** queue の命令のうち、済ませた数（その rev の。起動し直したときに、済ませた命令をくり返さない） */
+  let savedQueue: { rev: number; done: number } | null = null;
+  try {
+    const m = JSON.parse(readFileSync(memoryPath, 'utf-8')) as { once?: string[]; queue?: { rev: number; done: number } };
+    for (const k of m.once ?? []) onceKeys.add(k);
+    if (m.queue && typeof m.queue.rev === 'number' && typeof m.queue.done === 'number') savedQueue = m.queue;
+  } catch { /* 無い・壊れている */ }
+  let queueMark: { rev: number; done: number } | null = savedQueue;
+  const saveMemory = () => writeJsonAtomic(memoryPath, { run_id: runId, once: [...onceKeys], ...(queueMark ? { queue: queueMark } : {}) });
+  const history: HistoryRow[] = [];
+  try { for (const l of readFileSync(historyPath, 'utf-8').split('\n')) if (l.trim()) history.push(JSON.parse(l) as HistoryRow); } catch { /* 無い */ }
   log(`[pilot] run ${runId}, files in ${dir}`);
   let coop = opts.mode === 'coop';
   if (!opts.mode) {
@@ -153,13 +191,23 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
     const raw0 = readFileSync(ordersPath, 'utf-8');
     try { orders = parseOrders(JSON.parse(raw0)); } catch (e) { orders = defaultOrders(); ordersError = (e as Error).message; startBadText = raw0; }
   }
-  let queue: QueuedCommand[] = [...orders.queue];
+  // 起動し直した: 同じ rev の queue の、済ませた命令は飛ばす（V4-1e の確かめで分かった: 起動し直すと、済んだ start_expedition をもう一度出していた）
+  let queue: QueuedCommand[] = savedQueue && savedQueue.rev === orders.rev ? orders.queue.slice(savedQueue.done) : [...orders.queue];
+  /** queue の済ませた数を memory.json に残す */
+  const markQueue = () => { queueMark = { rev: orders.rev, done: orders.queue.length - queue.length }; saveMemory(); };
   /** queue の先頭の命令を、敵のせいで断られてやり直した回数（3 回まで。§14.5） */
   let queueRetries = 0;
   let lastBadText = startBadText;
   /** 起こして返事を待っている（rev が変わるまで）。homeward: hold_max_turns が過ぎて帰る側へ倒した */
   /** farDamage: 起こしてから、隣でない相手から受けた被害の合計（最大 HP の 4 分の 1 を超えたら帰る側へ倒す。V4-1c §17.4） */
   let waiting = null as { key: string; also: string[]; reason: string; sinceTurn: number; cond: boolean; homeward: boolean; wake: Wake; farDamage: number } | null;
+  /** mode: return でキャンプに着いた rev（同じ rev の間は auto として扱う。V4-1e §19.4） */
+  let returnDoneRev: number | null = null;
+  const effOrders = (): PilotOrders => (orders.mode === 'return' && returnDoneRev === orders.rev ? { ...orders, mode: 'auto' } : orders);
+  /** 同じ理由の wake に、返事役が同じ返事をした回数（遠征ごと。3 回を超えたら、次は stalled で上げる。V4-1e §19.3） */
+  let streak = null as { exp: number | null; reason: string; sig: string; count: number } | null;
+  /** 遠征ごとの、最後に起こした理由（history.jsonl に残す） */
+  const lastWakeOf = new Map<number, string>();
   /** AI が返事をした、観測の条件からの起こし方（条件が続く間は、同じことで起こさない） */
   const acked = new Set<string>();
   /** 遺物・役割のある敵への返事は、同じ遠征の同じ階にいる間は覚えておく */
@@ -174,9 +222,12 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
   /** 同じ命令が同じ止まり方で止まった回数（移動のマクロ。4 回目は stuck） */
   let sameStop = { sig: '', count: 0 };
   /** この手番で断られた道具と fight の相手（手番が進んだら空にする） */
-  const refused = { turn: -1, tools: new Set<string>(), targets: new Set<string>(), last: null as { code: string; text: string; blockedBy?: string[] } | null };
-  /** 断りのエラーの blocked_by の敵の、観測の文の行（起こす・知らせるときに detail の先頭に添える。V4-1a §13.8。pilot は自分からは戦わない） */
-  const blockedLines = (e?: CallError) => (e?.details?.blocked_by ?? []).map((id) => lineWith(text, id)).filter(Boolean);
+  /** trap: この手番に、罠にふさがれて断られた最初の道具と、その罠（V4-1d §18.1） */
+  const refused = { turn: -1, tools: new Set<string>(), targets: new Set<string>(), last: null as { code: string; text: string; blockedBy?: string[]; traps?: TrapRef[] } | null, trap: null as TrapBlock | null };
+  /** 断りのエラーの blocked_by_traps の罠（位置と方角）と blocked_by の敵の、観測の文の行（起こす・知らせるときに detail の先頭に添える。V4-1a §13.8・V4-1d §18.1。pilot は自分からは戦わない） */
+  const blockedLines = (e?: CallError) => [...trapLines(obs, text, e?.details?.blocked_by_traps ?? []), ...(e?.details?.blocked_by ?? []).map((id) => lineWith(text, id))].filter(Boolean);
+  /** 今の階で見つけている罠（観測の写し） */
+  const trapsNow = () => obs.visible.features.filter((f) => f.id && trapKinds.has(f.type));
   // ---- pilot 自身の記録（§14.2〜§14.4） ----
   let mem: PilotMemory = newMemory();
   /** AI が ignore に書いた敵（unignore まで、遠征の間は相手にしない） */
@@ -202,30 +253,47 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
   const stateOf = (status: PilotState['status'], w0: Wake | null): PilotState => { const w = w0 ?? waiting?.wake ?? null; return {
     run_id: runId, expedition_no: obs.expedition?.no ?? null, turn: turn.turn_no, orders_rev: orders.rev, status,
     wake: w ? { reason: w.reason, level: w.level, turn: turn.turn_no, detail: w.detail } : null,
+    mode: effOrders().mode,
     self: { level: obs.self.level, hp: obs.self.hp, max_hp: obs.self.max_hp, floor: obs.self.floor?.depth ?? null, pos: obs.self.pos ? [obs.self.pos.x, obs.self.pos.y] : null },
     objective: obs.expedition?.objective ?? null,
     last,
     hostiles: obs.visible.monsters.map((m) => ({ id: m.id, name: m.name, pos: [m.pos.x, m.pos.y] as [number, number], dist: m.dist, hp_state: m.hp_state, hunting: m.awareness === 'hunting' && !m.fleeing, role: m.role ?? (isRoleEnemy(m) ? 'elite' : null), objective: !!m.objective, ignored: ignoredNow().includes(m.id) })),
     stairs: obs.navigation.known_stairs,
+    traps: trapsNow().map((f) => ({ id: f.id!, name: f.name, pos: [f.pos.x, f.pos.y] as [number, number], dist: f.dist })),
     target: lastTarget && obs.visible.monsters.some((m) => m.id === lastTarget) ? { id: lastTarget, stops: mem.stops[lastTarget] ?? 0 } : null,
     ignored: ignoredNow(),
     recovering: mem.recovering,
-    ...(obs.status === 'at_camp' && obs.camp ? { camp: { next_no: obs.camp.next_no, offers: obs.camp.offers.map((o) => ({ index: o.index, slot: o.slot ?? null, type: o.type, target_depth: o.target_depth, points: o.points, recommended_level: o.recommended_level, text: o.text })) } } : {}),
+    ...(obs.status === 'at_camp' && obs.camp ? { camp: { next_no: obs.camp.next_no, offers: obs.camp.offers.map((o) => ({ index: o.index, slot: o.slot ?? null, type: o.type, target_depth: o.target_depth, points: o.points, recommended_level: o.recommended_level, text: o.text })),
+      ...(obs.camp.milestone ? { milestone: { depth: obs.camp.milestone.depth, name: obs.camp.milestone.name, cleared: obs.camp.milestone.cleared } } : {}) } } : {}),
     // 観測の文の行をそのまま（pilot は言い換えない）: 状態の 1 行・直前の結果・起こした理由の行
     summary: [obs.summary, lastOutcome, w?.detail ?? ''].filter(Boolean).join('\n'),
   }; };
   const statusNow = (): PilotState['status'] => obs.status === 'at_camp' ? 'camp' : waiting ? (coop ? 'holding' : 'waiting') : 'running';
-  const writeState = () => writeJsonAtomic(statePath, stateOf(statusNow(), null));
+  /** state.json は、中身が変わったときだけ書き直す（返事を待つ間に毎回書き直すと、Windows で、読みに来た相手や相手の orders.json の置き換えとぶつかる。V4-1e の --wake-cmd のテストで分かった） */
+  let lastStateJson = '';
+  const writeState = () => {
+    const st = stateOf(statusNow(), null);
+    const j = JSON.stringify(st);
+    if (j === lastStateJson) return;
+    lastStateJson = j;
+    writeJsonAtomic(statePath, st);
+  };
   const appendLog = (row: Record<string, unknown>) => appendFileSync(logPath, `${JSON.stringify({ t: Date.now(), turn: turn.turn_no, ...row })}\n`);
 
   /** 起こす・知らせる: state.json を書いてから経路を呼ぶ。相手の終了は待たない */
   const raise = (w: Wake, status?: PilotState['status']) => {
     const st = stateOf(status ?? statusNow(), w);
     writeJsonAtomic(statePath, st);
+    lastStateJson = JSON.stringify(st);
     appendLog({ wake: w.reason, level: w.level, detail: w.detail });
     if (w.level === 'wake') result.wakes[w.reason] = (result.wakes[w.reason] ?? 0) + 1;
+    else if (w.level === 'escalate') result.escalates[w.reason] = (result.escalates[w.reason] ?? 0) + 1;
     else { result.notifies++; result.notified[w.reason] = (result.notified[w.reason] ?? 0) + 1; }
     log(`[pilot] ${w.level} ${w.reason}: ${w.detail.split('\n')[0]}`);
+    // ランを通して 1 回だけの鍵（目的でない遺物・守護者・強敵の知らせ、上げた大守護者）は、起動し直しても残す
+    const keys = [w.key, ...(w.also ?? [])].filter((k) => (w.level === 'notify' && /^(relic_seen|seen):/.test(k)) || (w.level === 'escalate' && k.startsWith('warden_decision:')));
+    if (keys.length) { for (const k of keys) onceKeys.add(k); saveMemory(); }
+    if (w.level !== 'notify' && obs.expedition && obs.status !== 'at_camp') lastWakeOf.set(obs.expedition.no, w.reason);
     const env = { ...process.env, MUSE_PILOT_STATE: statePath, MUSE_PILOT_ORDERS: ordersPath, MUSE_PILOT_LEVEL: w.level, MUSE_PILOT_REASON: w.reason };
     if (opts.wakeCmd) {
       try {
@@ -246,6 +314,10 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
   const note = (reason: string, detail: string, key = `${reason}:${turn.turn_no}`) => raise({ level: 'notify', reason, key, detail });
   /** 起こす。手番が進まないまま同じ起こし方が 3 回を超えたら stuck に、stuck もくり返したら終える */
   const wakeNow = (w: Wake, cond = false) => {
+    // 同じ理由の wake に、返事役が同じ返事を 3 回続けた（この遠征の中で）: 4 回目は返事役に渡さず、上げる（V4-1e §19.3）
+    if (w.level === 'wake' && streak && streak.count >= 3 && streak.reason === w.reason && streak.exp === (obs.expedition?.no ?? null)) {
+      w = { level: 'escalate', reason: 'stalled', key: `stalled:streak:${turn.turn_no}`, detail: `${w.reason} で起こし、返事役が同じ返事を ${streak.count} 回続けた（同じやり取りが回り続けている）。返事: ${streak.sig}\n${w.detail}` };
+    }
     if (w.level === 'wake') {
       const r = repeats.get(w.key);
       const count = r && r.turn === turn.turn_no ? r.count + 1 : 1;
@@ -260,7 +332,7 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
       }
     }
     raise(w);
-    if (w.level === 'wake') waiting = { key: w.key, also: w.also ?? [], reason: w.reason, sinceTurn: turn.turn_no, cond, homeward: false, wake: w, farDamage: 0 };
+    if (w.level !== 'notify') waiting = { key: w.key, also: w.also ?? [], reason: w.reason, sinceTurn: turn.turn_no, cond, homeward: false, wake: w, farDamage: 0 };
   };
 
   /** rev が変わっていれば読み直す（壊れた JSON は読まず、前の方針のまま起こす）。変わったら true */
@@ -274,6 +346,12 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
     }
     lastBadText = '';
     if (next.rev === orders.rev) return false;
+    // 返事役の返事を数える（同じ理由の wake に同じ返事。上げた後の返事は数え直す。V4-1e §19.3）
+    if (waiting && waiting.wake.level === 'wake' && !STREAK_SKIP.has(waiting.reason)) {
+      const sig = JSON.stringify({ mode: next.mode, queue: next.queue, policy: { ...next.policy, ignore: [], unignore: [] }, camp: next.camp });
+      const exp = obs.expedition?.no ?? null;
+      streak = streak && streak.exp === exp && streak.reason === waiting.reason && streak.sig === sig ? { ...streak, count: streak.count + 1 } : { exp, reason: waiting.reason, sig, count: 1 };
+    } else if (waiting && waiting.wake.level === 'escalate') streak = null;
     orders = next;
     queue = [...next.queue];
     queueRetries = 0;
@@ -330,6 +408,8 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
   /** 1 つの命令を出して、観測を新しくする。失敗（拒否）は観測を取り直す */
   const act = async (tool: string, args: Record<string, unknown>, source: 'pilot' | 'queue'): Promise<{ ok: boolean; stop?: string; error?: CallError }> => {
     const before = turn.turn_no;
+    // 記録用: fight の標的が、見れば分かる特徴「飛び道具」を持つか（離れて撃つ敵の計測。V4-1d §18.3）
+    const ranged = tool === 'fight' && !!obs.visible.monsters.find((m) => m.id === args.target)?.traits?.includes('ranged');
     let r: CallResult;
     try {
       r = await call(tool, { ...args, thought: `[pilot] ${source === 'queue' ? 'queue: ' : ''}${tool}` });
@@ -354,7 +434,7 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
     lastOutcome = p.outcome ?? (p.error ? `${p.error.code}: ${p.error.message}` : '');
     last = { tool, args, stopped: p.stop ?? (r.ok ? null : p.error?.code ?? 'error'), turns: steps, source };
     if (tool === 'fight' && typeof args.target === 'string') lastTarget = args.target;
-    appendLog({ source, tool, args, ok: r.ok, stopped: last.stopped, steps, hp: obs.self.hp, max_hp: obs.self.max_hp });
+    appendLog({ source, tool, args, ok: r.ok, stopped: last.stopped, steps, hp: obs.self.hp, max_hp: obs.self.max_hp, ...(ranged ? { ranged: true } : {}) });
     observeMemory();
     return { ok: r.ok, stop: p.stop, error: p.error };
   };
@@ -365,11 +445,24 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
    */
   const fightStopped = (target: string | undefined, reason: string, detail: string, o: { recover: boolean; advance: boolean; count: boolean }) => {
     if (o.recover) mem.recovering = true;
+    // 待つ間に標的でない相手に撃たれた（V4-1d §18.2）: 撃ってきた相手（見えていて追跡中の、飛び道具の特徴を持つ、隣でない、役割の無い敵。
+    // 射線の通る相手を先に、近い順）が見えていれば、次の fight の標的にする。見えていなければ、1 回来た道を戻る
+    if (reason === 'fight_shot_while_waiting') {
+      const ignoredSet = new Set(ignoredNow());
+      const shooter = obs.visible.monsters
+        .filter((m) => m.id !== target && m.awareness === 'hunting' && !m.fleeing && m.dist > 1 && m.traits?.includes('ranged') && !isRoleEnemy(m) && !ignoredSet.has(m.id))
+        .sort((a, b) => (a.shot === 'clear' ? 0 : 1) - (b.shot === 'clear' ? 0 : 1) || a.dist - b.dist)[0];
+      if (shooter) { mem.shotBy = shooter.id; note(reason, [lineWith(text, shooter.id), `${detail}`, `撃ってきた ${shooter.name} ${shooter.id} に標的を替える`].filter(Boolean).join('\n')); }
+      else { mem.backOff = true; note(reason, `${detail}\n撃ってきた相手が見えないので、来た道を戻る`); }
+      return;
+    }
     // 目的の相手は、HP の止まり方も数える（勝てない相手かを AI に決めてもらう。V4-1c の計測: 挑み直し続けて倒れた）
     const isObjective = !!target && !!obs.visible.monsters.find((x) => x.id === target)?.objective;
     if (!target || !(o.count || (isObjective && o.recover))) { note(reason, detail); return; }
     mem.stops[target] = (mem.stops[target] ?? 0) + 1;
     if (o.advance && orders.policy.approach === 'auto' && !mem.advance.includes(target)) mem.advance.push(target);
+    // 離れたままの相手（諦める前の最後のやり直しで、投げる品を使う。V4-1d §18.2）
+    if (o.advance && !mem.away.includes(target)) mem.away.push(target);
     const m = obs.visible.monsters.find((x) => x.id === target);
     if (mem.stops[target]! >= orders.policy.give_up_after) {
       if (m?.objective) { wakeNow({ level: 'wake', reason: 'gave_up', key: `gave_up:${target}:${mem.stops[target]}`, detail: [lineWith(text, target), detail].filter(Boolean).join('\n') }); return; }
@@ -399,7 +492,8 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
     // 安全装置（参照ドライバと同じ）: 遠征は終わらせない
     if (result.actions >= maxActions || Date.now() - t0 > maxMs || errors >= maxErrors || stuckOut) {
       const reason = result.actions >= maxActions ? 'max_actions' : errors >= maxErrors ? 'errors' : stuckOut ? 'stuck' : 'max_time';
-      raise({ level: 'wake', reason: 'safety', key: 'safety', detail: reason }, 'ended');
+      // 黙って終えずに上げる（V4-1e §19.3）
+      raise({ level: 'escalate', reason: 'safety', key: 'safety', detail: `安全装置（${reason}）に達したので pilot を終える。${obs.summary}` }, 'ended');
       return finish('safety', reason);
     }
     // 3. rev が変わったら読み直す
@@ -412,6 +506,17 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
     }
     // 帰ってから終える（§14.7）: キャンプに着いたら終える
     if (orders.mode === 'stop_at_camp' && obs.status === 'at_camp') { writeJsonAtomic(statePath, stateOf('ended', null)); return finish('stopped', 'stop_at_camp'); }
+    // 帰ってから続ける（V4-1e §19.4）: キャンプに着いたら、同じ rev の間は auto
+    if (orders.mode === 'return' && obs.status === 'at_camp' && returnDoneRev !== orders.rev) { returnDoneRev = orders.rev; appendLog({ mode_return_done: orders.rev }); }
+    // キャンプに着いた: 終えた遠征の結果を history.jsonl に残す（V4-1e §19.3）
+    if (obs.status === 'at_camp' && obs.expedition?.result && !history.some((h) => h.no === obs.expedition!.no)) {
+      const x = obs.expedition;
+      const pay = (x.result as { payout?: { banked: number; players: { banked: number }[] } }).payout;
+      const banked = pay ? (pay.players.length === 1 ? pay.players[0]!.banked : pay.banked) : 0;
+      const row: HistoryRow = { no: x.no, slot: x.slot ?? null, objective: { type: x.objective.type, target_depth: x.objective.target_depth }, turns: x.result!.turns, banked, end: x.result!.reason, last_wake: lastWakeOf.get(x.no) ?? null };
+      history.push(row);
+      appendFileSync(historyPath, `${JSON.stringify(row)}\n`);
+    }
     // 他の人の番（協力プレイ）: 次の手番を待つ
     if (turn.state === 'waiting_others') {
       await waitFeed(1000);
@@ -422,13 +527,16 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
       observeMemory();
       continue;
     }
-    if (refused.turn !== turn.turn_no) { refused.turn = turn.turn_no; refused.tools.clear(); refused.targets.clear(); refused.last = null; }
+    if (refused.turn !== turn.turn_no) { refused.turn = turn.turn_no; refused.tools.clear(); refused.targets.clear(); refused.last = null; refused.trap = null; }
     // 4. queue（AI が明示した 1 回きりの命令。キャンプでも先に実行する。§14.5）
     if (queue.length && !refused.tools.has('queue')) {
       const q = queue[0]!;
       // queue の fight に hp_floor が無ければ、方針の値（wake_hp_pct）を使う
       const args: Record<string, unknown> = q.tool === 'fight' && q.args?.hp_floor === undefined ? { ...(q.args ?? {}), hp_floor: Math.floor((obs.self.max_hp * orders.policy.wake_hp_pct) / 100) } : { ...(q.args ?? {}) };
+      const haulBefore = obs.expedition?.haul?.text ?? '';
       const r = await act(q.tool, args, 'queue');
+      // queue の命令で綱を使った（AI か返事役が書いた。V4-1e §19.4: どちらが綱を選んだかを記録に残す）
+      if (r.ok && q.tool === 'use_item' && args.slot === 'lifeline') note('lifeline_used', ['queue の命令で使った（AI か返事役が書いた）', haulBefore ? `持ち帰っていない戦利品: ${haulBefore}` : ''].filter(Boolean).join('\n'));
       // 敵のせいで断られた: 失敗にしない。この手番は表のとおりに敵へ対応し、次の手番でやり直す（3 回まで）
       if (!r.ok && r.error && ENEMY_REFUSALS.has(r.error.code) && queueRetries < 3) {
         queueRetries++;
@@ -443,12 +551,13 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
         if (failed || stoppedShort) {
           // 失敗（または倒す前に止まった）: discard は残りを捨て、skip はその命令だけ捨てる。どちらも知らせるだけ（§14.5）
           if (orders.policy.queue_on_fail === 'skip') queue.shift(); else queue = [];
+          markQueue();
           queueRetries = 0;
           if (failed) {
             if (args.target && q.tool === 'fight' && r.error?.code === 'hp_floor') fightStopped(String(args.target), `refused_${r.error.code}`, lastOutcome, { recover: true, advance: false, count: false });
             note('queue_failed', [...blockedLines(r.error), `${q.tool}: ${r.error?.code ?? ''} ${r.error?.message ?? ''}`.trim()].join('\n'));
           } else if (aa?.kind === 'wake') wakeNow({ level: 'wake', reason: aa.reason, key: `${aa.reason}:${turn.turn_no}`, detail: lastOutcome || obs.summary });
-        } else { queue.shift(); queueRetries = 0; }
+        } else { queue.shift(); markQueue(); queueRetries = 0; }
         writeState();
         continue;
       }
@@ -473,9 +582,19 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
     const scope = scopeNow();
     for (const [k, sc] of [...notified]) if (sc !== scope) notified.delete(k);
     mem.ignored = ignoredNow();
+    // 空回り（V4-1e §19.3）: キャンプで、直近の stall_after 回の遠征がどれも「確定 0」か「10 手番以内」
+    const n = orders.policy.stall_after;
+    const recent = history.slice(-n);
+    const stalled = obs.status === 'at_camp' && n > 0 && recent.length >= n && recent.every((h) => h.banked === 0 || h.turns <= 10)
+      ? [`直近 ${n} 回の遠征が、どれも確定 0 か 10 手番以内に終わった（空回り）。次の遠征を自動で始めずに止まる。続けるなら queue に start_expedition を書く（方針を変えるなら policy も）:`,
+        ...recent.map((h) => `遠征 ${h.no}（${h.slot ?? '-'}・${h.objective.type}${h.objective.target_depth !== null ? ` 地下 ${h.objective.target_depth} 階` : ''}）: ${h.turns} 手番・確定 ${h.banked}・${h.end}・最後に起こした理由 ${h.last_wake ?? 'なし'}`)].join('\n')
+      : null;
+    const wardenTries: Record<string, number> = {};
+    for (const h of history) if (h.objective.type === 'slay_warden' && h.objective.target_depth !== null) wardenTries[String(h.objective.target_depth)] = (wardenTries[String(h.objective.target_depth)] ?? 0) + 1;
     const { decision, active, notify, update } = decide(obs, {
-      orders, coop, waiting: !!waiting, homeward: !!waiting?.homeward, acked, text,
+      orders: effOrders(), coop, waiting: !!waiting, homeward: !!waiting?.homeward, acked, text, once: onceKeys, stalled, wardenTries,
       refused: refused.tools, refusedTargets: refused.targets, refusal: refused.last, notified: new Set(notified.keys()), mem,
+      trapBlock: refused.trap, throwKinds,
     });
     if (update) {
       Object.assign(mem, update);
@@ -509,14 +628,23 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
       continue;
     }
     const before = turn.turn_no;
+    const relicLine = decision.relic ? lineWith(text, decision.relic) : '';
     const r = await act(decision.tool, decision.args, 'pilot');
+    // 目的でない遺物を拾いに行った（pick_relics。V4-1e §19.5）: 着いて見えなくなった（拾った）なら知らせる。道が無い等なら、この階ではもう行かない
+    if (decision.relic) {
+      if (r.ok && !obs.visible.items.some((i) => i.id === decision.relic) && (!r.stop || r.stop === 'arrived')) note('relic_picked', relicLine || decision.relic, `relic_picked:${decision.relic}`);
+      else if (!r.ok || (r.stop && NOTIFY_STOPS.has(r.stop))) mem.relicFailed.push(decision.relic);
+    }
     if (!r.ok) {
       if (r.error?.code === 'call_failed') continue;
       const code = r.error?.code ?? 'unknown';
       // fight が断られた（hp_floor など）: 相手ごとに数え、この手番はその相手を外して表の次の行へ（§14.2・§14.3）
       if (decision.tool === 'fight' && typeof decision.args.target === 'string') {
-        refused.targets.add(decision.args.target);
-        fightStopped(decision.args.target, `refused_${code}`, [...blockedLines(r.error), lastOutcome].join('\n'), { recover: code === 'hp_floor', advance: false, count: code !== 'hp_floor' });
+        const tgt = decision.args.target;
+        fightStopped(tgt, `refused_${code}`, [...blockedLines(r.error), lastOutcome].join('\n'), { recover: code === 'hp_floor', advance: false, count: code !== 'hp_floor' });
+        // 寄るやり直しが断られ（届かない等）、次が投げる品での最後のやり直しなら、この手番のうちに投げる（V4-1d §18.2）。ほかは、この手番はその相手を外す
+        const throwNext = !decision.args.with && !gaveUp.has(tgt) && !waiting && 'with' in fightArgs(obs, orders.policy, mem, tgt, throwKinds);
+        if (!throwNext) refused.targets.add(tgt);
         continue;
       }
       // 休めない（回復の上限など）: 立て直しは終わり
@@ -527,10 +655,15 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
       refused.tools.add(decision.tool);
       if (MOVE_TOOLS.has(decision.tool)) {
         // 「何も無い」より、ふさがれた・隣に敵がいる等の理由を残す
-        if (!refused.last || refused.last.code === 'nothing_to_do') refused.last = { code, text: lastOutcome, ...(r.error?.details?.blocked_by?.length ? { blockedBy: [...r.error.details.blocked_by] } : {}) };
+        const traps = r.error?.details?.blocked_by_traps ?? [];
+        if (!refused.last || refused.last.code === 'nothing_to_do') refused.last = { code, text: lastOutcome, ...(r.error?.details?.blocked_by?.length ? { blockedBy: [...r.error.details.blocked_by] } : {}), ...(traps.length ? { traps: [...traps] } : {}) };
+        // 罠にふさがれた（V4-1d §18.1）: step_on_traps なら、表の行で踏む
+        if (traps.length && !refused.trap) refused.trap = { tool: decision.tool, traps: [...traps] };
       } else note(`refused_${code}`, [...blockedLines(r.error), `${decision.tool}: ${lastOutcome}`].join('\n'));
       continue;
     }
+    // うまくいった後に知らせる（綱を使った。V4-1e §19.4）
+    if (decision.done) raise(decision.done);
     // 回復の品を使った後に起こす（§16.3）
     if (decision.then) { wakeNow(decision.then, true); continue; }
     // 手番が進まない命令が続いたら起こす（同じ所で止まり続けない）
@@ -544,7 +677,7 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
       if (noProgress >= NO_PROGRESS_MAX) { noProgress = 0; wakeNow({ level: 'wake', reason: 'stuck', key: `stuck:progress:${turn.turn_no}`, detail: `階の探索も撃破も進まない命令が ${NO_PROGRESS_MAX} 回続いた: ${lastOutcome}` }); continue; }
     }
     if (aa.kind === 'ok') {
-      if (aa.killed && typeof decision.args.target === 'string') delete mem.stops[decision.args.target];
+      if (aa.killed && typeof decision.args.target === 'string') { delete mem.stops[decision.args.target]; if (mem.shotBy === decision.args.target) mem.shotBy = null; }
       writeState();
       continue;
     }
@@ -557,7 +690,11 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
       if (sameStop.count > 3) {
         sameStop = { sig: '', count: 0 };
         wakeNow({ level: 'wake', reason: 'stuck', key: `stuck:${turn.turn_no}`, detail: `同じ命令（${decision.tool}）が同じ止まり方（${aa.reason}）で 4 回止まった: ${lastOutcome}` });
-      } else note(aa.reason, lastOutcome || obs.summary);
+      } else {
+        // マクロが罠の手前で止まった（trap_ahead）: 隣の見つけている罠の行と方角を先頭に（V4-1d §18.1。次の同じ命令は断られ、エラーに罠が入る）
+        const near = aa.reason === 'trap_ahead' && obs.self.pos ? trapsNow().filter((f) => f.dist <= 1).map((f) => ({ id: f.id!, kind: f.type, pos: f.pos })) : [];
+        note(aa.reason, [...trapLines(obs, text, near), lastOutcome || obs.summary].join('\n'));
+      }
       writeState();
       continue;
     }
