@@ -6,6 +6,7 @@ import { runBot } from './bot';
 import type { BotKind } from './bot';
 import { assetsCheck, assetsChecklist, slotStatus } from './assets';
 import { commandInvoker, drive, dummyInvoker, httpInvoker } from './drive';
+import { runPilot } from './pilot';
 import { formatPacing, pacingReport } from './pacing';
 import { choicesReport, formatChoices } from './choices';
 import { buildsReport, formatBuilds } from './builds';
@@ -223,8 +224,34 @@ async function main() {
       }
       break;
     }
+    case 'pilot': {
+      // 代行 bot の作例（IMPROVEMENTS_V4 §10・packages/tools/src/pilot/README.md）:
+      // npm run pilot -- --token <player_token> [--dir <フォルダ>] [--wake-cmd "<コマンド>" | --wake-url <URL>] [--mode solo|coop] [--server <URL>] [--new-run <名前>]
+      const base = flag('server', flag('base', `http://127.0.0.1:${process.env.MUSE_PORT ?? 7777}`))!;
+      let token = flag('token');
+      if (!token && flag('new-run')) {
+        const r = await fetch(new URL('/api/runs', base), {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name: flag('new-run'), classId: flag('class') ? `core:${flag('class')}` : undefined, objective: flag('objective'), ...(flag('mode') === 'coop' ? { mode: 'coop' } : {}), controller: { kind: 'agent', label: 'pilot' }, ...(flag('profile-token') ? { profileToken: flag('profile-token') } : {}) }),
+        });
+        const j = await r.json() as { runId?: string; token?: string; error?: { message: string } };
+        if (!j.token) throw new Error(`new run failed: ${j.error?.message ?? r.status}`);
+        console.log(`new run ${j.runId} player_token=${j.token}`);
+        token = j.token;
+      }
+      if (!token) throw new Error('usage: pilot --token <player_token> | --new-run <name> [--dir <folder>] [--wake-cmd "<cmd>" | --wake-url <url>] [--mode solo|coop] [--server <url>]');
+      const mode = flag('mode');
+      const r = await runPilot({
+        baseUrl: base, token, dir: flag('dir'), wakeCmd: flag('wake-cmd'), wakeUrl: flag('wake-url'),
+        ...(mode === 'solo' || mode === 'coop' ? { mode } : {}),
+        maxActions: Number(flag('max-actions', '5000')), maxMs: Number(flag('max-minutes', '360')) * 60000, maxErrors: Number(flag('max-errors', '5')),
+        log: (m) => console.log(m),
+      });
+      console.log(`pilot: ${r.outcome} (${r.reason}) after ${r.actions} commands; turns pilot ${r.turns.pilot} / queue ${r.turns.queue}; wakes ${JSON.stringify(r.wakes)}`);
+      break;
+    }
     default:
-      console.log('usage: tsx packages/tools/src/cli.ts <bot|seed|gen-check|replay-verify|golden|assets-checklist|assets-check|validate|pacing|choices|budget|drive> [options]');
+      console.log('usage: tsx packages/tools/src/cli.ts <bot|seed|gen-check|replay-verify|golden|assets-checklist|assets-check|validate|pacing|choices|budget|drive|pilot> [options]');
   }
 }
 

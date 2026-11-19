@@ -113,6 +113,13 @@ MCP は「AI が呼んだら返す」方式なので、ゲーム側から AI を
 - プロフィール: `--new-run <name> --profile-token <profile_token>` で同じプロフィールに積む（省くと新しく作り、トークンを表示する）。`--continue` を付けると、ランが終わったら同じプロフィールで次のランを始める（`--max-runs` 既定 10。`--no-legacy` で継承しない）
 - 上限（`--max-turns` など）で止めても遠征は終わらない。もう一度実行すると続きから進む
 
+### 代行 bot（pilot）
+
+AI の応答が遅い（1 手に数十秒）と、協力プレイで人間の速さと合わない。作例の **pilot**（`npm run pilot`）を AI とゲームの間に置くと、pilot が方針（`orders.json`）の範囲で 1 手ずつ速く動かし、判断が要るとき（守護者・遺物が見えた、HP が減った、キャンプ、知らない止まり方など）だけ AI を起こす。AI は要約（`state.json`）を読んで方針を書き直すだけで、ゲームに直接命令を出さない。pilot は規則の知識を持たず、判断もしない（迷ったら起こす）。
+
+- 例（PowerShell）: `npm.cmd run pilot -- --new-run Pilot` / `npm.cmd run pilot -- --token <player_token> --wake-cmd "node my-ai.mjs"`
+- 使い方・3 つのファイル・起こす理由・`orders.json` の例・AI への渡し方: [packages/tools/src/pilot/README.md](packages/tools/src/pilot/README.md)
+
 観測の例（テキスト。同じ内容が `structuredContent` に JSON で入る）:
 
 ```
@@ -162,6 +169,7 @@ PowerShell では `npm run <script> -- --flag` の `--` が npm に届かずオ�
 | `npm run budget -- --runs 30` | V3-2R〜V3-2R3b の計測（踏破 1 階あたりの「綱か死」の率・踏破の期待値の比・深度ごとのレベルと推奨・枠と種類ごとの達成率・全部と戦う bot と直行 bot の比較（点の割合・呼び出しあたりの確定点・キャンプでの推奨との差）・推奨レベルの表の作り直し・呼び出しの予算・斥候の投擲の割合）。`--slot-runs 40` で枠ごとのランだけ増やせる |
 | `npm run builds -- --runs 20` | V3-4 の計測（特技の系統ごとに取り続ける bot の到達深度と、職業ごとの撃破に占める投擲の割合） |
 | `npm run drive -- --token <player_token>` / `--new-run <name>` | 参照ドライバ（ターンフィードを購読してエージェントを呼ぶ） |
+| `npm run pilot -- --token <player_token>` / `--new-run <name>` | 代行 bot の作例（方針の範囲で速く動かし、判断が要るときに AI を起こす。`packages/tools/src/pilot/README.md`） |
 | `npm run assets:checklist` / `npm run assets:check -- <themeDir>` | 画像アセットの発注表 / テーマの検証 |
 | `npm run dev:client` | クライアントの開発サーバー（Vite。API は 7777 へプロキシ） |
 

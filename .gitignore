@@ -3,3 +3,5 @@ dist/
 runs/
 *.tmp.ts
 .claude/settings.local.json
+# pilot の 3 つのファイル（orders.json・state.json・log.jsonl。IMPROVEMENTS_V4 §10.2）
+pilot-data/

@@ -25,6 +25,7 @@
     "seed": "tsx packages/tools/src/cli.ts seed",
     "gen:check": "tsx packages/tools/src/cli.ts gen-check",
     "replay:verify": "tsx packages/tools/src/cli.ts replay-verify",
+    "pilot": "tsx packages/tools/src/cli.ts pilot",
     "assets:checklist": "tsx packages/tools/src/cli.ts assets-checklist",
     "assets:check": "tsx packages/tools/src/cli.ts assets-check",
     "golden": "tsx packages/tools/src/cli.ts golden",

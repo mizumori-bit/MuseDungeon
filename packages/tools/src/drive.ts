@@ -133,7 +133,7 @@ export interface DriveResult {
 }
 
 /** SSE を読んでイベントを順に返す */
-async function* readFeed(res: Response): AsyncGenerator<FeedEvent> {
+export async function* readFeed(res: Response): AsyncGenerator<FeedEvent> {
   const reader = res.body!.getReader();
   const dec = new TextDecoder();
   let buf = '';
