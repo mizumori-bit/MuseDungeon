@@ -229,7 +229,9 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
     const env = { ...process.env, MUSE_PILOT_STATE: statePath, MUSE_PILOT_ORDERS: ordersPath, MUSE_PILOT_LEVEL: w.level, MUSE_PILOT_REASON: w.reason };
     if (opts.wakeCmd) {
       try {
-        const child = spawn(opts.wakeCmd, { shell: true, detached: true, stdio: ['pipe', 'ignore', 'ignore'], env });
+        // 相手の終了は待たない（unref）。Windows では detached にすると、起動したコマンドが動かないまま残る（--wake-cmd のテストで分かった）ので、
+        // Windows では detached にせず、窓も出さない
+        const child = spawn(opts.wakeCmd, { shell: true, detached: process.platform !== 'win32', windowsHide: true, stdio: ['pipe', 'ignore', 'ignore'], env });
         child.on('error', (e) => log(`[pilot] wake command failed: ${e.message}`));
         child.stdin?.end(`${st.summary}\n`);
         child.unref();

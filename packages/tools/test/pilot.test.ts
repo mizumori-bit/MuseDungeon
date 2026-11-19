@@ -1,5 +1,6 @@
 // V4-1（IMPROVEMENTS_V4 §10.8）・V4-1b（§14.8）: 代行 bot の作例 pilot。判断の表（純粋な関数）と、プロセスの中に立てたサーバーで動かした確認。
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
@@ -380,10 +381,11 @@ async function until(cond: () => boolean, ms = 15000): Promise<void> {
     await new Promise((r) => setTimeout(r, 20));
   }
 }
-function start(h: Harness, opts: { responder?: (ev: WakeEvent) => void; mode?: 'solo' | 'coop'; maxActions?: number } = {}) {
+function start(h: Harness, opts: { responder?: (ev: WakeEvent) => void; mode?: 'solo' | 'coop'; maxActions?: number; wakeCmd?: string; wakeUrl?: string } = {}) {
   const ac = new AbortController();
   const done = runPilot({
     baseUrl: h.base, token: h.token, dir: h.dir, pollMs: 20, log: () => {}, signal: ac.signal, maxActions: opts.maxActions ?? 5000, ...(opts.mode ? { mode: opts.mode } : {}),
+    ...(opts.wakeCmd ? { wakeCmd: opts.wakeCmd } : {}), ...(opts.wakeUrl ? { wakeUrl: opts.wakeUrl } : {}),
     onWake: (ev) => { h.wakes.push(ev); opts.responder?.(ev); },
   });
   return { stop: async () => { ac.abort(); return done; }, done };
@@ -632,6 +634,78 @@ describe('pilot をサーバーにつないで動かす（§10.8）', () => {
     expect(JSON.parse(readFileSync(join(h.dir, 'state.json'), 'utf-8')).status).toBe('ended');
     await h.close();
   }, 30000);
+
+  it('--wake-cmd: 起こすたびにコマンドを起動する（標準入力に summary、環境変数に state.json・orders.json のパスと段と理由）。コマンドが書いた orders.json の返事で動き出す', async () => {
+    const h = await harness();
+    // 別の機械の AI の代わり: 起こされたら記録を残し、キャンプなら orders.json に出発の命令を書く（rev を上げる。別の名前で書いてから置き換える）
+    const tools = mkdtempSync(join(tmpdir(), 'muse-pilot-wake-'));
+    const script = join(tools, 'ai.mjs');
+    const marker = join(tools, 'calls.jsonl');
+    writeFileSync(script, [
+      "import { appendFileSync, readFileSync, renameSync, writeFileSync } from 'node:fs';",
+      "let input = '';",
+      "process.stdin.setEncoding('utf8');",
+      "process.stdin.on('data', (d) => { input += d; });",
+      "process.stdin.on('end', () => {",
+      "  const e = process.env;",
+      "  appendFileSync(process.argv[2], JSON.stringify({ level: e.MUSE_PILOT_LEVEL, reason: e.MUSE_PILOT_REASON, state: e.MUSE_PILOT_STATE, orders: e.MUSE_PILOT_ORDERS, stdin: input }) + '\\n');",
+      "  if (e.MUSE_PILOT_LEVEL !== 'wake' || e.MUSE_PILOT_REASON !== 'camp') return;",
+      "  const st = JSON.parse(readFileSync(e.MUSE_PILOT_STATE, 'utf8'));",
+      "  const cur = JSON.parse(readFileSync(e.MUSE_PILOT_ORDERS, 'utf8'));",
+      "  const next = { ...cur, rev: cur.rev + 1, queue: [{ tool: 'start_expedition', args: { offer: st.camp.offers[0].index } }] };",
+      "  writeFileSync(e.MUSE_PILOT_ORDERS + '.ai.tmp', JSON.stringify(next));",
+      "  renameSync(e.MUSE_PILOT_ORDERS + '.ai.tmp', e.MUSE_PILOT_ORDERS);",
+      "});",
+    ].join('\n'));
+    const p = start(h, { wakeCmd: `node ${JSON.stringify(script)} ${JSON.stringify(marker)}` });
+    // コマンドの返事（orders.json）で、遠征を始めて動き出す
+    await until(() => rows(h.dir).some((r) => r.source === 'queue' && r.tool === 'start_expedition' && r.ok === true), 20000);
+    await until(() => rows(h.dir).some((r) => r.source === 'pilot'), 20000);
+    const calls = readFileSync(marker, 'utf-8').trim().split('\n').map((l) => JSON.parse(l) as { level: string; reason: string; state: string; orders: string; stdin: string });
+    const camp = calls.find((c) => c.reason === 'camp')!;
+    expect(camp).toBeTruthy();
+    expect(camp.level).toBe('wake');
+    expect(camp.state).toBe(join(h.dir, 'state.json'));
+    expect(camp.orders).toBe(join(h.dir, 'orders.json'));
+    // 標準入力の summary は state.json の summary と同じ形（観測の要約の行から始まる）
+    expect(camp.stdin.trim().length).toBeGreaterThan(0);
+    expect(camp.stdin).toContain('キャンプ');
+    await p.stop();
+    await h.close();
+  }, 40000);
+
+  it('--wake-url: 起こすたびに JSON を POST する（段・理由・summary・2 つのファイルのパス・state）。受け口が書いた orders.json の返事で動き出す', async () => {
+    const h = await harness();
+    const got: { level: string; reason: string; summary: string; state_path: string; orders_path: string; state: { run_id: string; status: string; camp?: { offers: { index: number }[] } } }[] = [];
+    const server = createServer((req, res) => {
+      let body = '';
+      req.on('data', (d) => { body += d; });
+      req.on('end', () => {
+        const j = JSON.parse(body) as (typeof got)[number];
+        got.push(j);
+        // AI の代わり: キャンプで起こされたら、出発の命令を書く
+        if (j.level === 'wake' && j.reason === 'camp') {
+          const cur = JSON.parse(readFileSync(j.orders_path, 'utf-8'));
+          writeFileSync(j.orders_path, JSON.stringify({ ...cur, rev: cur.rev + 1, queue: [{ tool: 'start_expedition', args: { offer: j.state.camp!.offers[0]!.index } }] }));
+        }
+        res.writeHead(204).end();
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/wake`;
+    const p = start(h, { wakeUrl: url });
+    await until(() => rows(h.dir).some((r) => r.source === 'queue' && r.tool === 'start_expedition' && r.ok === true), 20000);
+    const camp = got.find((g) => g.reason === 'camp')!;
+    expect(camp).toMatchObject({ level: 'wake', reason: 'camp', state_path: join(h.dir, 'state.json'), orders_path: join(h.dir, 'orders.json') });
+    expect(camp.summary.length).toBeGreaterThan(0);
+    expect(camp.state.status).toBe('camp');
+    expect(camp.state.run_id).toMatch(/^run_/);
+    // 知らせ（notify）も同じ受け口に届く（段で見分ける）
+    await until(() => rows(h.dir).some((r) => r.source === 'pilot'), 20000);
+    await p.stop();
+    await new Promise<void>((r) => server.close(() => r()));
+    await h.close();
+  }, 40000);
 
   it('mode: stop で終える', async () => {
     const h = await harness('solo', { rev: 1, mode: 'stop' });
