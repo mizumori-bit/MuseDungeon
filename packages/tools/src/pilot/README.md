@@ -67,6 +67,7 @@ npm.cmd run pilot -- --token <player_token> --wake-cmd "node my-ai.mjs"
     "after_objective": "extract",  // 目的を果たした後: "extract"（階段へ戻って帰る）/ "wake"（起こす）/ "continue"（そのまま先へ）
     "allow_extract": true,         // 危ないとき・返事が無いとき、階段の上なら帰ってよいか
     "allow_lifeline": false,       // 危ないとき・stop_at_camp のとき、帰還の綱を使ってよいか
+    "allow_heal": true,            // 回復の手段（観測の self.recovery）を使ってよいか: 能動技は立て直しの最初に、品は倒されうるのに退く手が無いときだけ
     "retreat_via_stairs": null,    // 立て直しで階を移って休んでよいか（null＝ソロは使う・協力プレイは仲間が見えている間は使わない）
     "queue_on_fail": "discard",    // queue の命令が失敗したとき: "discard"＝残りを捨てる / "skip"＝その命令だけ捨てる
     "ignore": [], "unignore": [],  // 相手にしない敵の ID を足す・外す（rev を上げたときに一度だけ効く）
@@ -78,7 +79,7 @@ npm.cmd run pilot -- --token <player_token> --wake-cmd "node my-ai.mjs"
 ```
 
 - 書くときは、別の名前で書いてから置き換えてください（書きかけを読ませないため）。壊れた JSON は読まずに、前の方針のまま起こします（理由 `orders_invalid`）。
-- 知らない項目は無視します。無い項目・型の違う項目は既定値です。綱は使わない・遠征と特技は選ばない・目的の相手では起こす、が既定です。
+- 知らない項目は無視します。無い項目・型の違う項目は既定値です。綱は使わない・遠征と特技は選ばない・目的の相手では起こす、が既定です。回復の手段は使います（`allow_heal`）。
 - `queue` には、手番を使うすべての行動を書けます（装備の付け替え、薬・巻物、投擲、地物、特技・加護の選択、`start_expedition` など）。AI が明示した命令だからです。
   - **`fight` に `hp_floor` を書かなければ、方針の `wake_hp_pct` の値を使います**（ゲームの既定と同じく、最大 HP の半分）。死んでも挑むなら `"hp_floor": 0` と書きます。
   - 敵のせいで断られたとき（隣に起きている敵がいる・追跡中の敵が見えている）は、失敗にしません。その手番は表のとおりに敵へ対応し、次の手番で同じ命令をやり直します（3 回まで。`queue_retry` を知らせる）。
@@ -127,7 +128,7 @@ npm.cmd run pilot -- --token <player_token> --wake-cmd "node my-ai.mjs"
 | 4 | `queue` に命令がある | 先頭を 1 つ実行する |
 | 5 | 起こして返事を待っている・`mode: "hold"` | 持ち場の動き（下） |
 | 6 | 特技・加護の選択が待っている | 起こす。`perk: "first"` なら最初の候補を選ぶ |
-| 7 | `lethal_range` か `critical_hp` | 退いて知らせる（`danger`）。退く手が無ければ起こす |
+| 7 | `lethal_range` か `critical_hp` | 退いて知らせる（`danger`）。退く手が無ければ回復の手段（能動技を先に、品は最後の手）を使って知らせ（`healed`）、品を使ったら起こす（`danger`）。それも無ければ起こす |
 | 8 | HP が `wake_hp_pct` を切った・fight が HP の下限で止まった・断られた・`steady` が被害で止まった | 立て直しの段（下）。知らせる（`recovering`） |
 | 9 | 役割のある敵（守護者・大守護者・名前付きの強敵・賞金首）が見えている | この遠征の目的の相手（観測の `objective`）なら起こす。`engage_objective` なら起こさずに挑む。目的でなければ同じ階で 1 回知らせて続ける（挑まない） |
 | 10 | 遺物が見えている | 目的の遺物なら起こす。`engage_objective` なら拾いに行く。目的でない遺物は同じ階で 1 回知らせる |
@@ -143,7 +144,7 @@ npm.cmd run pilot -- --token <player_token> --wake-cmd "node my-ai.mjs"
 
 - 相手にしない敵が見えている間は、`explore`・`travel_to`・`collect` を被害を受けても止まらない進み方（`mode: steady`）で使います。1 回の呼び出しの被害が最大 HP の 4 分の 1 を超えると止まり、立て直しの段へ移ります。
 - 移動・休む・殴るが断られたら、その手番の間は外して表の次の行へ進みます（経路がふさがれている、遠すぎて拾えない、など）。何も残らなかったら、断られた理由で起こします。
-- pilot が自分から使う道具は、`explore`・`travel_to`・`collect`・`fight`・`rest`・`wait`・`use_stairs`・`extract`・1 手の攻撃（`attack`）・（`allow_lifeline` のときだけ）帰還の綱・（`camp.auto_start` のときだけ）`start_expedition`・（`perk: "first"` のときだけ）特技・加護の選択だけです。装備の付け替え、薬や巻物を使う、品を投げる、祭壇やレバーなどの地物を使うことはしません（AI が `queue` に書いたときだけ）。
+- pilot が自分から使う道具は、`explore`・`travel_to`・`collect`・`fight`・`rest`・`wait`・`use_stairs`・`extract`・1 手の攻撃（`attack`）・（`allow_heal` のときだけ）回復の手段（観測の `self.recovery` にある能動技と品だけ）・（`allow_lifeline` のときだけ）帰還の綱・（`camp.auto_start` のときだけ）`start_expedition`・（`perk: "first"` のときだけ）特技・加護の選択だけです。装備の付け替え、回復でない薬や巻物を使う、未鑑定の品を使う、品を投げる、祭壇やレバーなどの地物を使うことはしません（AI が `queue` に書いたときだけ）。
 - 命令の `thought` には `[pilot] explore` のように書きます（観戦している人に、bot が動かしていると分かるように）。
 
 **決着しない戦い**: 相手ごとに、決着しないまま止まった回数を数えます（相手が離れる・撃ってくる・寄ってこない・見えなくなる・届かない。HP の止まり方は立て直しへ回し、新しい敵・予備動作・状態異常での止まり方は数えません。階を移るか、相手を倒したら 0 に戻す）。
@@ -154,19 +155,22 @@ npm.cmd run pilot -- --token <player_token> --wake-cmd "node my-ai.mjs"
 
 **立て直しの段**（起こさずに `recovering` を知らせる。上から順に、できる最初のもの）:
 
+0. HP が `wake_hp_pct` を切っていて、回復の能動技（観測の `self.recovery` の `kind: "ability"`）が使える → 使う（使っても減らない。`healed` を知らせる）。
 1. 追ってくる敵が見えていない → 休む（`rest_below_pct` まで）。
 2. 追ってくる敵がいて、知っている階段へ「着ける」（観測の `escape`）→ 階段へ行き、**階を移って**休む。休んだら戻る（モンスターは階を移らない）。同じ階で 2 回まで。`retreat_via_stairs` が使えるときだけ。
-3. 追ってくる敵が隣にいて、階段にも仲間にも行けない → 殴る（離れても付いてくるので）。
+3. 追ってくる役割の無い敵が隣にいて、階段にも仲間にも行けない → 殴る（離れても付いてくるので。守護者などとは HP が減ったまま殴り合わない）。
 4. 協力プレイで仲間が見えている → 仲間の隣へ寄る。そうでなければ → 来た道を戻る（自分が歩いた跡の、6 マス以上離れた所へ）。
 5. どれもできない → 退く（下）。それもできなければ起こす（`danger`）。
 
 逃げる・寄るときは `mode: flee` で進みます。HP の下限は、見えている追跡中の敵の 1 手番の最悪の被害（観測の `worst_turn`）の合計の 2 倍です（何体にも撃たれながら逃げて、1 回の呼び出しの中で倒れないように）。
 
-**退く**（`danger` のとき。上から順）: 階段の上で `allow_extract` なら帰る → `allow_lifeline` で綱を持っていれば綱 → 階段の上なら階を移る → 知っている階段まで「着ける」見込みなら階段へ → どれもできなければ起こす。
+**退く**（`danger` のとき。上から順）: 階段の上で `allow_extract` なら帰る → `allow_lifeline` で綱を持っていれば綱 → 階段の上なら階を移る → 知っている階段まで「着ける」見込みなら階段へ → どれもできなければ、回復の手段（`allow_heal`。能動技を先に。品は使った後に起こす）→ それも無ければ起こす。
+
+**回復の手段**（V4-1c）: 使うのは、観測の `self.recovery` にあるものだけです（使うと HP が回復する能動技と、正体の分かっている品。未鑑定の品は入らないので触れません）。品は使うと減るので、倒されうるのに退く手が無いときだけ使います。
 
 **起こして待つ間の持ち場の動き**（ソロでも協力プレイでも。`mode: "hold"` も同じ。毎手番すぐに、上から順）:
 
-1. `lethal_range`・`critical_hp` → 退く。
+1. `lethal_range`・`critical_hp` → 退く。退く手が無ければ回復の手段（能動技を先に、品は最後の手）。
 2. 追ってきている敵が隣にいる → 1 回殴る（気づいていない敵には、自分からは挑まない）。
 3. この数手番に、隣でない相手から被害を受けた・追ってくる敵が見えている → 仲間の隣へ寄る。仲間がいなければ来た道を戻る（同じ場所に立って撃たれ続けない）。
 4. それ以外 → 協力プレイは 1 手番待つ。ソロは何もせずに返事を待つ（ソロは手番の制限時間がありません）。
@@ -186,7 +190,7 @@ npm.cmd run pilot -- --token <player_token> --wake-cmd "node my-ai.mjs"
 | `relic_seen` | この遠征の目的の遺物が見えた（鍵に遺物の ID） |
 | `perk_pending` / `boon_pending` | 特技・加護を選べる（`perk: "wake"` のとき） |
 | `danger` | 危ないのに、退く手も立て直す手も無い |
-| `gave_up` | この遠征の目的の相手と、決着しないまま `give_up_after` 回止まった |
+| `gave_up` | この遠征の目的の相手と、決着しないまま（または HP の下限で）`give_up_after` 回止まった |
 | `objective_done` | 遠征の目的を果たした（`after_objective: "wake"` のとき） |
 | `nothing_to_do` | 表に当てはまるものが何も残っていない（探索し終えたのに目的の相手が見つからない、など） |
 | `refused_<code>` | 命令が断られて、表に残るものが無い（`refused_hostile_adjacent`: 隣の起きている敵がじゃまで動けない、`refused_blocked`: 経路が敵にふさがれている、など）。じゃまをしている敵（エラーの `details.blocked_by`）の観測の行を `detail` の先頭に、ほかの見えている者の行を後ろに添える。pilot はその敵に自分からは挑まない |
@@ -195,7 +199,7 @@ npm.cmd run pilot -- --token <player_token> --wake-cmd "node my-ai.mjs"
 | `orders_invalid` | `orders.json` が壊れている（前の方針のまま） |
 | `safety` / `ended` | 安全装置に達した／ランが終わった（pilot を終える） |
 
-**知らせる（`notify`）**: `fight_<止まり方>`（倒す前に止まった）・`refused_<code>`（fight・殴るなどが断られた）・`gave_up`（目的でない相手を諦めた）・`recovering`（立て直しの段に入った）・`danger`（退いた）・`too_many`・`chased`・`queue_retry`・`queue_failed`・`no_reply`・目的でない役割のある敵と遺物（`guardian_seen` など）・`blocked`・`no_progress` などの移動の止まり方・`periodic`（`notify_every_turns` ごとの経過）。
+**知らせる（`notify`）**: `healed`（回復の手段を使った。品なら残りの数）・`fight_<止まり方>`（倒す前に止まった）・`refused_<code>`（fight・殴るなどが断られた）・`gave_up`（目的でない相手を諦めた）・`recovering`（立て直しの段に入った）・`danger`（退いた）・`too_many`・`chased`・`queue_retry`・`queue_failed`・`no_reply`・目的でない役割のある敵と遺物（`guardian_seen` など）・`blocked`・`no_progress` などの移動の止まり方・`periodic`（`notify_every_turns` ごとの経過）。
 
 ## 起こされたときの返事の例
 

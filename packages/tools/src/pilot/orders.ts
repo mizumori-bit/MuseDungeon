@@ -32,6 +32,11 @@ export interface PilotPolicy {
   allow_extract: boolean;
   /** 危ないとき、帰還の綱を使ってよいか（綱は遠征を終わらせる取り消せない手） */
   allow_lifeline: boolean;
+  /**
+   * 回復の手段（観測の self.recovery）を使ってよいか（V4-1c §16.3。既定 true）。能動技は立て直しの最初に、
+   * 品（使うと減る）は倒されうるのに退く手が無いときだけ。未鑑定の品には触れない
+   */
+  allow_heal: boolean;
   /** 立て直しで、階段を使って階を移って休んでよいか（§14.3）。null＝ソロは true・協力プレイは false（仲間を置いていかない） */
   retreat_via_stairs: boolean | null;
   /** queue の命令が失敗したとき: discard＝残りを捨てる（既定）/ skip＝失敗した命令だけ捨てて次へ。どちらも知らせるだけ（§14.5） */
@@ -70,6 +75,7 @@ export const DEFAULT_POLICY: PilotPolicy = {
   after_objective: 'extract',
   allow_extract: true,
   allow_lifeline: false,
+  allow_heal: true,
   retreat_via_stairs: null,
   queue_on_fail: 'discard',
   ignore: [],
@@ -121,6 +127,7 @@ export function parseOrders(raw: unknown): PilotOrders {
       after_objective: p.after_objective === 'wake' || p.after_objective === 'continue' ? p.after_objective : 'extract',
       allow_extract: bool(p.allow_extract, d.allow_extract),
       allow_lifeline: bool(p.allow_lifeline, d.allow_lifeline),
+      allow_heal: bool(p.allow_heal, d.allow_heal),
       retreat_via_stairs: typeof p.retreat_via_stairs === 'boolean' ? p.retreat_via_stairs : null,
       queue_on_fail: p.queue_on_fail === 'skip' ? 'skip' : 'discard',
       ignore: ids(p.ignore),

@@ -36,6 +36,8 @@ export interface CatalogItem {
   treasure: boolean;
   /** 手放せない品（帰還の綱）。捨てる・投げることができず、所持数に数えない */
   bound?: boolean;
+  /** 使うと自分の HP が回復する（効果の定義 onUse の heal から。V4-1c §16.2）: 回復量（ダイスか数）と、最大 HP に対する下限の割合 */
+  heal?: { amount: string; minPct?: number };
   /** 自分の持ち物の性能（鑑定済みなら定義の値をそのまま見せる。V3-2R §14.3） */
   weapon?: { dmg: string; acc: number };
   armorStats?: { armor: number; eva: number };
@@ -73,7 +75,13 @@ export interface CatalogPerk {
 }
 
 /** 能動技（V3-4 §4.2） */
-export interface CatalogAbility { name: Names; desc: Names; target: 'adjacent' | 'throw' | 'dir' | 'none'; cooldown: number; perExpedition?: number; /** 振る舞いの種類（strike / cleave / heal_pct / aimed_throw / slip） */ handler: string }
+export interface CatalogAbility {
+  name: Names; desc: Names; target: 'adjacent' | 'throw' | 'dir' | 'none'; cooldown: number; perExpedition?: number;
+  /** 振る舞いの種類（strike / cleave / heal_pct / aimed_throw / slip） */
+  handler: string;
+  /** 使うと自分の HP が最大 HP のこの割合（%）だけ回復する（効果の定義から。V4-1c §16.2） */
+  heal?: { pct: number };
+}
 
 export interface CatalogClass {
   name: Names;

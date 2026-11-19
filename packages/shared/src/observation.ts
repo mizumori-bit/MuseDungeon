@@ -25,6 +25,32 @@ export type MonsterTrait = 'pack' | 'ranged' | 'stationary' | 'armored' | 'rusti
 /** 錆びさせる・装甲を抜く（V3-5a §35.10）も種族の公開タグから */
 const OBVIOUS_TRAITS: readonly MonsterTrait[] = ['pack', 'ranged', 'stationary', 'rusting', 'pierce', 'drain', 'heavy_swing'];
 
+/** 回復の手段（V4-1c §16.2）。ability: use_ability の id で使う。item: use_item の slot で使う */
+export type ObsRecovery =
+  | { kind: 'ability'; id: string; name: string; ready: boolean; amount: string }
+  | { kind: 'item'; slot: string; name: string; qty: number; amount: string };
+
+/**
+ * そのプレイヤーがいま知っている回復の手段（V4-1c §16.2）。能動技は効果（handler）が最大 HP の割合の回復のもの、
+ * 品は効果の定義に HP の回復（catalog の heal）があるもの。品の種類は視界の投影で、鑑定するまで伏せられている（kind が null）ので、未鑑定の品は入らない
+ */
+export function recoveryOf(view: PlayerView, catalog: Catalog, L: Locale): ObsRecovery[] {
+  const out: ObsRecovery[] = [];
+  for (const a of view.self.build.abilities) {
+    const def = catalog.abilities[a.id];
+    if (!def?.heal) continue;
+    const st = abilityStatus(view, catalog, a.id);
+    out.push({ kind: 'ability', id: shortId(a.id), name: nameOf(def.name, L, shortId(a.id)), ready: st.cooldownLeft === 0 && st.usesLeft !== 0, amount: t(L, `最大 HP の ${def.heal.pct}%`, `${def.heal.pct}% of max HP`) });
+  }
+  for (const it of view.inventory) {
+    const heal = it.kind ? catalog.items[it.kind]?.heal : undefined;
+    if (!heal) continue;
+    const min = heal.minPct ? t(L, `（最大 HP の ${heal.minPct}% を下回らない）`, ` (at least ${heal.minPct}% of max HP)`) : '';
+    out.push({ kind: 'item', slot: it.slot, name: itemDisplayName(catalog, L, it.kind, it.appearanceId, it.affixes), qty: it.qty, amount: `${heal.amount}${min}` });
+  }
+  return out;
+}
+
 export interface ObsMonster {
   id: string; name: string; pos: Pos; dir: Dir | null; dist: number;
   /** 持っている品（倒すと落とす。宝物庫の鍵。V3-5 §5.1）と、その名前 */
@@ -226,6 +252,11 @@ export interface Observation {
     /** ビルド（V3-4）: 取った特技（ranks は段階）・覚えた能動技（cooldown_left 0 なら使える。uses_left は遠征ごとの回数の残り） */
     perks: { id: string; name: string; ranks: number }[];
     abilities: { id: string; name: string; cooldown_left: number; uses_left?: number; target: 'adjacent' | 'throw' | 'dir' | 'none' }[];
+    /**
+     * 回復の手段（V4-1c §16.2）: 使うと自分の HP が回復する能動技と、正体の分かっている品。効果の定義から決める（未鑑定の品は入らない）。
+     * ability の ready は abilities の「使える」と同じ。amount は説明の文。無ければ空
+     */
+    recovery: ObsRecovery[];
     /** 選べる特技の候補（choose_perk { option }）。more は後に控えている候補の数 */
     perk_choice?: { level: number; options: { option: number; id: string; name: string; desc: string; lineage: string }[]; more: number };
     /** 加護（V3-3 §3.3）: 持ち帰った遺物から。ランの終わりまで残る */
@@ -1394,6 +1425,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       score: { banked: view.record.banked, expeditions_completed: view.record.expeditions },
       perks: perksList,
       abilities: abilitiesList,
+      recovery: recoveryOf(view, catalog, L),
       ...(perkChoiceObs ? { perk_choice: perkChoiceObs } : {}),
       boons: boonsOf(view, catalog, L),
       ...(opts.boonsShort ? { boons_brief: true } : {}),

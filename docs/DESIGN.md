@@ -1444,3 +1444,9 @@ pilot を作って分かった、構造化された項目だけでは決めら�
 - **起こして待つ間**: ソロでも協力プレイでも、隣の追跡中の敵を殴る・隣でない相手から撃たれたら留まらない。`hold_max_turns` の後は `no_reply` を 1 回知らせて、階段へ行って帰る側へ。
 - 方針に `approach: auto`・`give_up_after`・`engage_objective`・`perk`・`after_objective: extract`（既定）/`continue`・`retreat_via_stairs`・`queue_on_fail`・`ignore`・`unignore`、`mode: stop_at_camp`。state.json に `hostiles`・`stairs`・`target`・`ignored`・`recovering`・`camp`（候補）。queue は敵のせいの拒否をやり直し、失敗は知らせるだけ。
 - テストは `packages/tools/test/pilot.test.ts`。計測（ソロ 10 本で起こす回数はキャンプを除き遠征 1 回あたり 1.13、協力プレイ 5 本で 1 本倒れた）と、設計で決めてほしいこと（返事が無いときの回復）は IMPROVEMENTS_V4 §15.2・§15.3。
+
+### 38.3 V4-1c: 回復の手段（IMPROVEMENTS_V4 §16・§17）
+
+- **観測 `self.recovery[]`**（すべてのプレイヤーに同じに渡る。`engineVersion` 0.31.0）: 使うと自分の HP が回復する能動技と、正体の分かっている品。効果の定義から決める（品は `onUse` の `heal`、能動技は最大 HP の割合の回復。公開のカタログの `heal`）。未鑑定の品は、視界の投影で種類が伏せられているので入らない。`ready` は能動技の「使える」と同じ、`amount` は説明の文。
+- **pilot の `allow_heal`**（既定 true）: 能動技は立て直しの最初に、品は倒されうるのに退く手が無いときだけ使い（`healed` を知らせる）、品を使ったら起こす。目的の相手は HP の止まり方も数えて 2 回で起こす。立て直しで守護者と殴り合わない。
+- 測り直し（協力プレイ 5 本で 1 本倒れた・品を 4 回使った）と、設計で決めてほしいこと（返事を待つ間に撃ってくる相手から離れきれない）は IMPROVEMENTS_V4 §17.3・§17.4。

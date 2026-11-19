@@ -292,6 +292,6 @@ describe('V4-1a fight approach (§12.5)', () => {
   it('get_rules mentions approach; the engine version is raised', () => {
     expect(rulesText('all', 'ja', catalog)).toContain("approach（with なし）: 'wait'（既定）");
     expect(rulesText('all', 'en', catalog)).toContain("approach (no with): 'wait' (default)");
-    expect(ENGINE_VERSION).toBe('0.30.0');
+    expect(ENGINE_VERSION >= '0.30.0').toBe(true);
   });
 });

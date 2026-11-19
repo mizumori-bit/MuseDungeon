@@ -162,7 +162,11 @@ describe('pilot の判断の表（§10.4〜§10.6）', () => {
     const rt = retreat(obs, DEFAULT_POLICY);
     expect(rt?.tool).not.toBe('use_item');
     const r = decide(obs, ctxOf());
-    expect(r.decision.kind === 'act' && r.decision.tool === 'use_item').toBe(false);
+    // 回復の品（最初の所持品の薬。観測の self.recovery）は使ってよいが、綱は使わない
+    expect(r.decision.kind === 'act' && r.decision.tool === 'use_item' && r.decision.args.slot === 'lifeline').toBe(false);
+    obs.self.recovery = [];
+    const r0 = decide(obs, ctxOf());
+    expect(r0.decision.kind === 'act' && r0.decision.tool === 'use_item').toBe(false);
     // 許したときだけ綱
     expect(retreat(obs, { ...DEFAULT_POLICY, allow_lifeline: true })?.tool).toBe('use_item');
     // 既定の方針: 綱は使わない・キャンプでは起こす
@@ -178,7 +182,8 @@ describe('pilot の判断の表（§10.4〜§10.6）', () => {
     expect(d.policy.queue_on_fail).toBe('discard');
     expect(d.policy.retreat_via_stairs).toBeNull();
     expect(parseOrders({ rev: 1, mode: 'stop_at_camp' }).mode).toBe('stop_at_camp');
-    for (const t of PILOT_TOOLS) expect(['observe', 'explore', 'travel_to', 'collect', 'fight', 'wait', 'rest', 'use_stairs', 'extract', 'use_item', 'attack', 'move', 'start_expedition', 'choose_perk', 'choose_boon']).toContain(t);
+    expect(d.policy.allow_heal).toBe(true);
+    for (const t of PILOT_TOOLS) expect(['observe', 'explore', 'travel_to', 'collect', 'fight', 'wait', 'rest', 'use_stairs', 'extract', 'use_item', 'use_ability', 'attack', 'move', 'start_expedition', 'choose_perk', 'choose_boon']).toContain(t);
   });
 
   it('止まり方の扱い（§14.1）: 知らない止まり方だけ起こす。fight が倒す前に止まった・移動が止まったは知らせて続ける', () => {
@@ -269,6 +274,51 @@ describe('pilot の判断の表（§10.4〜§10.6）', () => {
     const r8 = decide(obs, ctxOf(defaultOrders(), { mem: { ...mem, crossed: 'down' } }));
     expect(r8.update).toMatchObject({ recovering: false, crossed: null });
     expect(r8.decision.kind === 'act' && r8.decision.tool).toBe('use_stairs');
+  });
+
+  it('回復の手段（§16.3）: 退く手が無く倒されうるときだけ、鑑定済みの回復の品を使ってから起こす。能動技は品より先・立て直しの最初。未鑑定・allow_heal: false では使わない', async () => {
+    const { obs } = await expeditionObs();
+    obs.visible.items = [];
+    obs.navigation.known_stairs = [];
+    obs.self.hp = Math.floor(obs.self.max_hp * 0.2);
+    obs.visible.monsters = [monster({ id: 'e_biter1', dist: 1, worst_turn: 99 })];
+    obs.alerts = [{ code: 'lethal_range', text: '1 手で倒されうる', level: 'danger' } as unknown as Observation['alerts'][number]];
+    const potion = { kind: 'item' as const, slot: 'c', name: '回復の薬', qty: 2, amount: '2d8+4' };
+    const wind = { kind: 'ability' as const, id: 'second_wind', name: '立て直し', ready: true, amount: '最大 HP の 25%' };
+    // 観測に回復の手段が無い（未鑑定の品は観測に入らない）: 使わずに起こす
+    obs.self.recovery = [];
+    expect(decide(obs, ctxOf()).decision.kind === 'wake' && (decide(obs, ctxOf()).decision as { wake: { reason: string } }).wake.reason).toBe('danger');
+    // 鑑定済みの回復の品: 使って知らせ、使った後に起こす
+    obs.self.recovery = [potion];
+    const r1 = decide(obs, ctxOf());
+    expect(r1.decision.kind === 'act' && `${r1.decision.tool}:${r1.decision.args.slot}`).toBe('use_item:c');
+    expect(r1.decision.kind === 'act' && r1.decision.then?.reason).toBe('danger');
+    expect(r1.notify.find((n) => n.reason === 'healed')?.detail).toBe('回復の薬 を使った（残り 1）');
+    // allow_heal: false: 使わない
+    const off = defaultOrders(); off.policy.allow_heal = false;
+    expect(decide(obs, ctxOf(off)).decision.kind).toBe('wake');
+    // 能動技は品より先（使っても減らない。使った後は起こさない）
+    obs.self.recovery = [potion, wind];
+    const r2 = decide(obs, ctxOf());
+    expect(r2.decision.kind === 'act' && `${r2.decision.tool}:${r2.decision.args.id}`).toBe('use_ability:second_wind');
+    expect(r2.decision.kind === 'act' && r2.decision.then).toBeUndefined();
+    // 持ち場の動き（起こして待つ間）の 1 も同じ
+    obs.self.recovery = [potion];
+    expect(holdAction(obs, ctxOf(defaultOrders(), { waiting: true }))).toEqual({ tool: 'use_item', args: { slot: 'c' } });
+    // 退く手があれば、品は使わない（階段の上: 階を移る）
+    obs.navigation.known_stairs = [{ type: 'up', pos: obs.self.pos!, dist: 0, reachable: true, path_len: 0 }];
+    const r3 = decide(obs, ctxOf());
+    expect(r3.decision.kind === 'act' && r3.decision.tool).toBe('use_stairs');
+    // 立て直しの最初（倒されうるほどでない）: 能動技だけ使う。品は使わない
+    obs.navigation.known_stairs = [];
+    obs.alerts = [];
+    obs.visible.monsters = [monster({ id: 'e_biter1', dist: 3 })];
+    obs.self.recovery = [potion, wind];
+    const r4 = decide(obs, ctxOf());
+    expect(r4.decision.kind === 'act' && r4.decision.tool).toBe('use_ability');
+    obs.self.recovery = [potion];
+    const r5 = decide(obs, ctxOf(defaultOrders(), { mem: { ...newMemory(), recovering: true } }));
+    expect(r5.decision.kind === 'act' && r5.decision.tool === 'use_item').toBe(false);
   });
 
   it('起こして待つ間（§14.4）: 隣でない相手から被害を受けたら留まらない。追ってくる敵がいなければソロは何もしない。hold_max_turns の後は階段へ', async () => {
@@ -382,7 +432,9 @@ describe('pilot をサーバーにつないで動かす（§10.8）', () => {
     expect(res.outcome).toBe('safety');
     const own = rows(h.dir).filter((r) => r.source === 'pilot').map((r) => r.tool as string);
     expect(own.length).toBeGreaterThan(20);
-    for (const t of own) expect(['explore', 'travel_to', 'collect', 'fight', 'wait', 'rest', 'use_stairs', 'extract', 'attack']).toContain(t);
+    for (const t of own) expect(['explore', 'travel_to', 'collect', 'fight', 'wait', 'rest', 'use_stairs', 'extract', 'attack', 'use_ability', 'use_item']).toContain(t);
+    // 綱は使わない（既定の allow_lifeline: false）。品は回復の手段だけ（観測の self.recovery。V4-1c）
+    for (const r of rows(h.dir).filter((x) => x.source === 'pilot' && x.tool === 'use_item')) expect((r.args as { slot?: string }).slot).not.toBe('lifeline');
     // 遠征は返事の相手が queue で選ぶ
     expect(rows(h.dir).some((r) => r.source === 'queue' && r.tool === 'start_expedition')).toBe(true);
     // state.json と命令ごとの記録

@@ -37,9 +37,11 @@ export function simpleResponder(ev: WakeEvent): void {
       next.policy.engage_objective = true;
       break;
     case 'refused_hostile_adjacent': case 'refused_blocked': {
-      // じゃまをしている敵（blocked_by の行が detail の先頭）と戦う（倒したら、届く追跡中の敵も片付ける）
+      // じゃまをしている敵（blocked_by の行が detail の先頭）と戦う（倒したら、届く追跡中の敵も片付ける）。
+      // 守護者・大守護者など役割のある敵なら戦わずに帰る（state.json の hostiles の role で見る）
       const id = /\be_[0-9a-z]{6}\b/.exec(ev.detail)?.[0];
-      next.queue = id ? [{ tool: 'fight', args: { target: id, until: 'clear' } }] : HOME;
+      const h = id ? ev.state.hostiles.find((x) => x.id === id) : undefined;
+      next.queue = id && !h?.role ? [{ tool: 'fight', args: { target: id, until: 'clear' } }] : HOME;
       break;
     }
     case 'danger': case 'nothing_to_do': case 'stuck': case 'gave_up':

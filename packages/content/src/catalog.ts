@@ -58,6 +58,13 @@ export function buildCatalog(c: Content): Catalog {
       ...(it.throw ? { throwStats: { dmg: it.throw.dmg, acc: it.throw.acc ?? 0, range: it.throw.range } } : {}),
       ...(it.equip ? { equipStats: equipStats(it) } : {}),
       ...(it.boon ? { boon: it.boon } : {}),
+      // 使うと HP が回復する（V4-1c §16.2）: 効果の定義から（品の ID を並べない。データで増えたら自動で入る）
+      ...((() => {
+        const h = it.onUse.find((e) => e.effect === 'heal');
+        if (!h) return {};
+        const amount = typeof h.amount === 'string' || typeof h.amount === 'number' ? String(h.amount) : '';
+        return { heal: { amount, ...(typeof h.minPct === 'number' ? { minPct: h.minPct } : {}) } };
+      })()),
       // 未鑑定の手がかり（V3-5 §5.4。2〜3 種で共有する公開の表）
       ...(it.clue ? { clue: it.clue } : {}),
     };
@@ -108,6 +115,8 @@ export function buildCatalog(c: Content): Catalog {
     }])),
     abilities: Object.fromEntries(c.lists.abilities.map((ab) => [ab.id, {
       name: ab.name, desc: ab.desc, target: ab.target, cooldown: ab.cooldown, handler: ab.handler, ...(ab.perExpedition ? { perExpedition: ab.perExpedition } : {}),
+      // 最大 HP の割合の回復（V4-1c §16.2）
+      ...(ab.handler === 'heal_pct' && typeof (ab.params as { pct?: unknown } | undefined)?.pct === 'number' ? { heal: { pct: (ab.params as { pct: number }).pct } } : {}),
     }])),
     guardianTypes: Object.fromEntries(c.lists.guardianTypes.map((g) => [g.id, { name: g.name, desc: g.desc, strongVs: g.strongVs, handler: g.handler }])),
     guardianWeaknesses: Object.fromEntries(c.lists.guardianWeaknesses.map((w) => [w.id, { name: w.name, desc: w.desc, handler: w.handler, ...(w.short ? { short: w.short } : {}) }])),

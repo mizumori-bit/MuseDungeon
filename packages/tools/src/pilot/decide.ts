@@ -14,8 +14,8 @@ export interface Wake {
 }
 
 export type Decision =
-  /** 道具を 1 つ使う */
-  | { kind: 'act'; tool: string; args: Record<string, unknown> }
+  /** 道具を 1 つ使う。then があれば、使った後に起こす（回復の品を使った後の danger。§16.3） */
+  | { kind: 'act'; tool: string; args: Record<string, unknown>; then?: Wake }
   /** 起こす（返事を待つ間は持ち場の動き。§14.4） */
   | { kind: 'wake'; wake: Wake }
   /** 何もしない（ソロで起こして待つ間、追ってくる敵も被害も無い） */
@@ -79,7 +79,7 @@ export interface DecideResult { decision: Decision; active: string[]; notify: Wa
 export const MOVE_TOOLS = new Set(['collect', 'explore', 'travel_to', 'use_stairs', 'rest', 'move', 'attack']);
 
 /** pilot が自分から使う道具（§10.4・§14。queue は除く） */
-export const PILOT_TOOLS = new Set(['observe', 'explore', 'travel_to', 'collect', 'fight', 'wait', 'rest', 'use_stairs', 'extract', 'use_item', 'attack', 'move', 'start_expedition', 'choose_perk', 'choose_boon']);
+export const PILOT_TOOLS = new Set(['observe', 'explore', 'travel_to', 'collect', 'fight', 'wait', 'rest', 'use_stairs', 'extract', 'use_item', 'use_ability', 'attack', 'move', 'start_expedition', 'choose_perk', 'choose_boon']);
 
 const hpPct = (obs: Observation) => Math.floor((obs.self.hp * 100) / Math.max(1, obs.self.max_hp));
 const alert = (obs: Observation, code: string) => obs.alerts.find((a) => a.code === code);
@@ -134,7 +134,7 @@ export function retreat(obs: Observation, p: PilotPolicy): { tool: string; args:
   // 階段の上なら、階を移る（モンスターは階を移らない。§14.3）
   if (onStairs(obs)) return { tool: 'use_stairs', args: {} };
   const esc = escapeStairs(obs);
-  if (esc) return { tool: 'travel_to', args: { to: `stairs_${esc}`, mode: 'flee' } };
+  if (esc) return { tool: 'travel_to', args: { to: `stairs_${esc}`, ...fleeArgs(obs) } };
   return null;
 }
 
@@ -147,6 +147,21 @@ export function backtrackTarget(obs: Observation, mem: PilotMemory): Pos | null 
   for (const t of mem.trail) if (cheb(t, here) >= 2 && (!best || cheb(t, here) > cheb(best, here))) best = t;
   return best;
 }
+
+/**
+ * 回復の手段（観測の self.recovery。V4-1c §16.3）: 使える能動技を先に、無ければ品（使うと減る）。allow_heal: false なら無し。
+ * 観測にあるものだけを使う（未鑑定の品は観測に入らないので、触れない）
+ */
+export function healAction(obs: Observation, p: PilotPolicy, o: { items: boolean }): { tool: string; args: Record<string, unknown>; name: string; item: boolean; left?: number } | null {
+  if (!p.allow_heal) return null;
+  const rec = obs.self.recovery ?? [];
+  const ab = rec.find((r) => r.kind === 'ability' && r.ready);
+  if (ab && ab.kind === 'ability') return { tool: 'use_ability', args: { id: ab.id }, name: ab.name, item: false };
+  const it = o.items ? rec.find((r) => r.kind === 'item' && r.qty > 0) : undefined;
+  if (it && it.kind === 'item') return { tool: 'use_item', args: { slot: it.slot }, name: it.name, item: true, left: it.qty - 1 };
+  return null;
+}
+const healedText = (h: { name: string; item: boolean; left?: number }) => (h.item ? `${h.name} を使った（残り ${h.left}）` : `${h.name} を使った`);
 
 /** 見えている仲間のうち、いちばん近い隣でない者 */
 function farAlly(obs: Observation) {
@@ -184,6 +199,9 @@ export function holdAction(obs: Observation, ctx: DecideContext): { tool: string
   if (alert(obs, 'lethal_range') || alert(obs, 'critical_hp')) {
     const r = retreat(obs, p);
     if (r && can(r.tool)) return r;
+    // 退く手が無い: 回復の手段（能動技を先に、品は最後の手。§16.3）
+    const h = healAction(obs, p, { items: true });
+    if (h && can(h.tool)) return { tool: h.tool, args: h.args };
   }
   const adj = adjacentHunting(obs)[0];
   if (adj && can('attack')) return { tool: 'attack', args: { target: adj.id } };
@@ -220,7 +238,7 @@ export function decide(obs: Observation, ctx: DecideContext): DecideResult {
   let update: Partial<PilotMemory> | undefined;
   const upd = (u: Partial<PilotMemory>) => { update = { ...(update ?? {}), ...u }; };
   const out = (decision: Decision): DecideResult => ({ decision, active, notify, ...(update ? { update } : {}) });
-  const act = (tool: string, args: Record<string, unknown>) => out({ kind: 'act', tool, args });
+  const act = (tool: string, args: Record<string, unknown>, then?: Wake) => out({ kind: 'act', tool, args, ...(then ? { then } : {}) });
   const wake = (w: Wake) => { if (!active.includes(w.key)) active.push(w.key); return out({ kind: 'wake', wake: w }); };
   /** 同じ階にいる間に 1 回だけ知らせる */
   const noteOnce = (w: Wake) => { if (!ctx.notified?.has(w.key)) notify.push(w); };
@@ -248,6 +266,10 @@ export function decide(obs: Observation, ctx: DecideContext): DecideResult {
   // 5. 起こして待っている・mode: hold: 持ち場の動き（§14.4）
   if (ctx.orders.mode === 'hold' || ctx.waiting) {
     const h = holdAction(obs, ctx);
+    if (h && (h.tool === 'use_item' || h.tool === 'use_ability')) {
+      const r = (obs.self.recovery ?? []).find((x) => (x.kind === 'item' && x.slot === h.args.slot) || (x.kind === 'ability' && x.id === h.args.id));
+      if (r) notify.push(W('healed', `healed:${obs.seq}`, healedText(r.kind === 'item' ? { name: r.name, item: true, left: r.qty - 1 } : { name: r.name, item: false }), 'notify'));
+    }
     return h ? act(h.tool, h.args) : out({ kind: 'idle' });
   }
   // 6. 特技・加護の選択: perk: first なら最初の候補を選ぶ（手番を使わない）。そうでなければ起こす
@@ -269,6 +291,13 @@ export function decide(obs: Observation, ctx: DecideContext): DecideResult {
       if (r.tool === 'use_stairs') upd({ crossed: onStairs(obs)?.type === 'up' ? 'down' : 'up' });
       return act(r.tool, r.args);
     }
+    // 退く手がどれも無い: 回復の手段（能動技を先に。品は使ってから起こす。§16.3）
+    const h = healAction(obs, p, { items: true });
+    if (h && can(h.tool)) {
+      notify.push(W('healed', `healed:${obs.seq}`, healedText(h), 'notify'));
+      fresh(key);
+      return act(h.tool, h.args, h.item ? W('danger', key, danger.text) : undefined);
+    }
     fresh(key);
     return wake(W('danger', key, danger.text));
   }
@@ -280,6 +309,9 @@ export function decide(obs: Observation, ctx: DecideContext): DecideResult {
     if (mem.recovering && pct >= p.rest_below_pct && !activeCh.length) upd({ recovering: false });
     else {
       if (!mem.recovering) { upd({ recovering: true }); notify.push(W('recovering', `recovering:${obs.seq}`, alert(obs, 'low_hp')?.text ?? obs.summary, 'notify')); }
+      // 0) HP が wake_hp_pct を切っていて、回復の能動技が使える: 使う（使っても減らない。追ってくる敵がいてもいなくても。§16.3）
+      const hab = pct < p.wake_hp_pct ? healAction(obs, p, { items: false }) : null;
+      if (hab && can(hab.tool)) { notify.push(W('healed', `healed:${obs.seq}`, healedText(hab), 'notify')); return act(hab.tool, hab.args); }
       // 1) 追ってくる敵が見えていない: 休む
       if (!ch.length && can('rest')) return act('rest', {});
       // 2) 知っている階段へ「着ける」: 階段へ行き、階を移って休む（モンスターは階を移らない）。同じ階で 2 回まで。
@@ -292,7 +324,8 @@ export function decide(obs: Observation, ctx: DecideContext): DecideResult {
         if (esc && can('travel_to')) return act('travel_to', { to: `stairs_${esc}`, ...fleeArgs(obs) });
       }
       // 隣に起きている敵がいて、階段へも仲間へも行けない: 殴る（離れても付いてくる。来た道を戻るのは、離れて撃たれているとき）
-      const adj = adjacentHunting(obs).filter((m) => !isRoleEnemy(m) || m.objective)[0];
+      // 役割のある敵（目的の相手も）とは、HP が減ったまま殴り合わない（離れる・退く・起こす）
+      const adj = adjacentHunting(obs).filter((m) => !isRoleEnemy(m))[0];
       const ally = ctx.coop ? farAlly(obs) : undefined;
       if (adj && !ally && can('attack')) return act('attack', { target: adj.id });
       // 3) 4) 仲間の隣へ寄る・来た道を戻る

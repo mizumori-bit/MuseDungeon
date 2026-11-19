@@ -190,6 +190,10 @@ Observation {
     rest_estimate?: { hp_to_full, turns, time, wander_expected: string /* 例 "0〜1" */, blocked_by?: 'poisoned', lowest_hp?: number /* 毒のとき、抜けるまでの最低 HP（V3-2R2） */ }  // HP が減っていて、休めるときのみ（追跡中の敵が見えている間は出さない。V3-2R）
     perks: { id, name, ranks }[]                                 // 取った特技（V3-4）
     abilities: { id /* 短い ID */, name, cooldown_left, uses_left?, target: 'adjacent'|'throw'|'dir'|'none' }[]   // 覚えた能動技。cooldown_left 0 なら使える。uses_left は遠征ごとの回数の残り（立て直し）
+    recovery: ({ kind: 'ability', id, name, ready, amount } | { kind: 'item', slot, name, qty, amount })[]
+        // V4-1c: いま知っている回復の手段（使うと自分の HP が回復する能動技と、正体の分かっている品。効果の定義から決める。未鑑定の品は入らない）。
+        // ability の id は use_ability の短い ID、ready は abilities の「使える」と同じ（cooldown_left 0 で回数が残っている）。item の slot は use_item の slot。
+        // amount は説明の文（例「2d8+4（最大 HP の 30% を下回らない）」「最大 HP の 25%」）。無ければ空の配列
     perk_choice?: { level, options: { option, id, name, desc, lineage }[], more }   // 選べる特技の候補（choose_perk）。more は後に控えている候補の数
   }
   visible: {
@@ -415,6 +419,10 @@ V3-2R で足した項目（同じく後方互換。会心と経験値のルー�
 - `StatusInst.source`（状態異常を与えた者。毒で倒したときの撃破者になる）、`status_applied.targetAffixes`
 - `player_state.reason: 'joined'`（キャンプから始まる参加）。参加コマンドの `atCamp`
 - プレイヤー向けの射影で、見えていた個体が視界の外へ動いた `entity_moved` に `dirOut`（向きだけ。行き先は伏せたまま）
+
+V4-1c で足した項目（`engineVersion` 0.31.0。出来事の種類は増やしていないので `eventVersion` は 21 のまま。IMPROVEMENTS_V4 §16、DESIGN.md §38.3）:
+
+- 観測: `self.recovery[]`（回復の手段。能動技は効果が HP の回復のもの、品は鑑定済みで使うと HP が回復するもの。未鑑定の品は入れない。文の表示と人間の画面は変えない）
 
 V4-1a で足した項目（`engineVersion` 0.30.0。出来事の種類は増やしていないので `eventVersion` は 21 のまま。IMPROVEMENTS_V4 §12、DESIGN.md §38.1）:
 

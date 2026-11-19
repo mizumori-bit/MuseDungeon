@@ -355,7 +355,9 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
    */
   const fightStopped = (target: string | undefined, reason: string, detail: string, o: { recover: boolean; advance: boolean; count: boolean }) => {
     if (o.recover) mem.recovering = true;
-    if (!target || !o.count) { note(reason, detail); return; }
+    // 目的の相手は、HP の止まり方も数える（勝てない相手かを AI に決めてもらう。V4-1c の計測: 挑み直し続けて倒れた）
+    const isObjective = !!target && !!obs.visible.monsters.find((x) => x.id === target)?.objective;
+    if (!target || !(o.count || (isObjective && o.recover))) { note(reason, detail); return; }
     mem.stops[target] = (mem.stops[target] ?? 0) + 1;
     if (o.advance && orders.policy.approach === 'auto' && !mem.advance.includes(target)) mem.advance.push(target);
     const m = obs.visible.monsters.find((x) => x.id === target);
@@ -513,6 +515,8 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
       } else note(`refused_${code}`, [...blockedLines(r.error), `${decision.tool}: ${lastOutcome}`].join('\n'));
       continue;
     }
+    // 回復の品を使った後に起こす（§16.3）
+    if (decision.then) { wakeNow(decision.then, true); continue; }
     // 手番が進まない命令が続いたら起こす（同じ所で止まり続けない）
     stuck = turn.turn_no === before ? stuck + 1 : 0;
     if (stuck >= 3) { stuck = 0; wakeNow({ level: 'wake', reason: 'stuck', key: `stuck:${turn.turn_no}`, detail: lastOutcome }); continue; }
