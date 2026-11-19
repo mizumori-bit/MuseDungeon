@@ -33,10 +33,15 @@ export interface DecideContext {
   refused?: ReadonlySet<string>;
   /** 最後に断られたときのエラーの code と文（何も残っていないとき、#18 の理由と detail に使う） */
   refusal?: { code: string; text: string } | null;
+  /** この遠征のこの階で、もう知らせた鍵（目的でない遺物・役割のある敵は 1 回だけ知らせる。V4-1a §12.6） */
+  notified?: ReadonlySet<string>;
 }
 
-/** decide の結果と、いま成り立っている起こし方の鍵（成り立たなくなった鍵は、返事をした記録から外す） */
-export interface DecideResult { decision: Decision; active: string[] }
+/**
+ * decide の結果と、いま成り立っている起こし方の鍵（成り立たなくなった鍵は、返事をした記録から外す）。
+ * notify: 止まらずに知らせるもの（目的でない遺物・役割のある敵。V4-1a §12.6）。decision の前に知らせる
+ */
+export interface DecideResult { decision: Decision; active: string[]; notify: Wake[] }
 
 /** 断られたら、起こさずに表の次の行へ進む道具（その手番の間だけ外す） */
 export const MOVE_TOOLS = new Set(['collect', 'explore', 'travel_to', 'use_stairs']);
@@ -98,13 +103,14 @@ export function decide(obs: Observation, ctx: DecideContext): DecideResult {
   const W = (reason: string, key: string, detail: string, level: WakeLevel = 'wake'): Wake => ({ level, reason, key, detail });
   /** 起こし方の鍵が、まだ返事をもらっていないか（成り立っている鍵は active に積む） */
   const fresh = (key: string) => { if (!active.includes(key)) active.push(key); return !ctx.acked.has(key); };
-  const act = (tool: string, args: Record<string, unknown>, then?: Wake): DecideResult => ({ decision: { kind: 'act', tool, args, ...(then ? { then } : {}) }, active });
-  const wake = (w: Wake): DecideResult => { if (!active.includes(w.key)) active.push(w.key); return { decision: { kind: 'wake', wake: w }, active }; };
+  const notify: Wake[] = [];
+  const act = (tool: string, args: Record<string, unknown>, then?: Wake): DecideResult => ({ decision: { kind: 'act', tool, args, ...(then ? { then } : {}) }, active, notify });
+  const wake = (w: Wake): DecideResult => { if (!active.includes(w.key)) active.push(w.key); return { decision: { kind: 'wake', wake: w }, active, notify }; };
   const x = obs.expedition;
   const can = (tool: string) => !ctx.refused?.has(tool);
 
   // 1. ランが終わった
-  if (obs.status === 'ended' || obs.status === 'dead') return { decision: { kind: 'end', wake: W('ended', 'ended', obs.summary) }, active };
+  if (obs.status === 'ended' || obs.status === 'dead') return { decision: { kind: 'end', wake: W('ended', 'ended', obs.summary) }, active, notify };
   // 2. キャンプ: その枠の候補で自動で出発するか、起こす（遠征のレポートの要点を添える）
   if (obs.status === 'at_camp') {
     const slot = ctx.orders.camp.auto_start;
@@ -143,15 +149,26 @@ export function decide(obs: Observation, ctx: DecideContext): DecideResult {
   }
   // 8. HP が wake_hp_pct を切った
   if (hpPct(obs) < p.wake_hp_pct && fresh('low_hp')) return wake(W('low_hp', 'low_hp', alert(obs, 'low_hp')?.text ?? obs.summary));
-  // 9. 役割のある敵が見えている（挑まない）
+  // 9. 役割のある敵が見えている（挑まない）。この遠征の目的の相手なら起こし、目的でなければ同じ階にいる間に 1 回だけ知らせる（V4-1a §12.6）
   for (const m of obs.visible.monsters.filter(isRoleEnemy).sort((a, b) => a.dist - b.dist)) {
     const reason = roleReason(m);
     const key = `${reason}:${m.id}`;
+    if (!m.objective) {
+      if (!ctx.notified?.has(key)) notify.push(W(reason, key, lineWith(ctx.text, m.id, m.name), 'notify'));
+      continue;
+    }
     if (fresh(key)) return wake(W(reason, key, lineWith(ctx.text, m.id, m.name)));
   }
   // 10. 遺物（遠征の目的の品）が見えている（拾わない）
-  // いっぺんに見えた遺物は、まとめて 1 回で起こす（鍵は近い順の最初の遺物。ほかの遺物の鍵も一緒に返事をもらったことにする）
-  const relics = obs.visible.items.filter((i) => i.role === 'relic').sort((a, b) => a.dist - b.dist).filter((it) => fresh(`relic_seen:${it.id}`));
+  // いっぺんに見えた遺物は、まとめて 1 回で起こす（鍵は近い順の最初の遺物。ほかの遺物の鍵も一緒に返事をもらったことにする）。
+  // この遠征の目的でない遺物（前の遠征の遺物など）は、同じ階にいる間に 1 回だけ知らせる（V4-1a §12.6）
+  const others = obs.visible.items.filter((i) => i.role === 'relic' && !i.objective && !ctx.notified?.has(`relic_seen:${i.id}`)).sort((a, b) => a.dist - b.dist);
+  if (others.length) {
+    const n = W('relic_seen', `relic_seen:${others[0]!.id}`, others.map((it) => lineWith(ctx.text, it.id, it.name)).join('\n'), 'notify');
+    if (others.length > 1) n.also = others.slice(1).map((it) => `relic_seen:${it.id}`);
+    notify.push(n);
+  }
+  const relics = obs.visible.items.filter((i) => i.role === 'relic' && i.objective).sort((a, b) => a.dist - b.dist).filter((it) => fresh(`relic_seen:${it.id}`));
   if (relics.length) {
     const w = W('relic_seen', `relic_seen:${relics[0]!.id}`, relics.map((it) => lineWith(ctx.text, it.id, it.name)).join('\n'));
     if (relics.length > 1) w.also = relics.slice(1).map((it) => `relic_seen:${it.id}`);
@@ -162,13 +179,14 @@ export function decide(obs: Observation, ctx: DecideContext): DecideResult {
   if (!p.fight && ch.length && fresh('chased')) return wake(W('chased', 'chased', alert(obs, 'enemy_in_view')?.text ?? obs.summary));
   // 12. 追ってくる役割の無い敵と戦う（hp_floor は wake_hp_pct の値）
   const target = p.fight ? ch.filter((m) => !isRoleEnemy(m)).sort((a, b) => a.dist - b.dist)[0] : undefined;
-  if (target) return act('fight', { target: target.id, hp_floor: Math.floor((obs.self.max_hp * p.wake_hp_pct) / 100) });
+  if (target) return act('fight', { target: target.id, hp_floor: Math.floor((obs.self.max_hp * p.wake_hp_pct) / 100), ...(p.approach === 'advance' ? { approach: 'advance' } : {}) });
   // 13. 敵がいなくて HP が rest_below_pct を切っている: 10 手番待つ（休息）
   if (!ch.length && hpPct(obs) < p.rest_below_pct) return act('wait', { turns: 10 });
   const depth = obs.self.floor?.depth ?? 0;
   const targetDepth = x?.objective.target_depth ?? null;
   const stairs = obs.navigation.known_stairs.filter((s) => s.reachable);
-  const down = stairs.find((s) => s.type === 'down');
+  // 封じられた下り階段（大守護者を倒していない節目の階。V4-1a §12.4）へは下りに行かない
+  const down = stairs.find((s) => s.type === 'down' && !s.sealed);
   // 14. 遠征の目的を果たした
   if (x && x.status === 'objective_complete') {
     if (p.after_objective === 'wake') {
@@ -189,8 +207,8 @@ export function decide(obs: Observation, ctx: DecideContext): DecideResult {
       if (down.dist > 0 && can('travel_to')) return act('travel_to', { to: 'stairs_down' });
     }
   }
-  // 16. 拾える品が見えている（遺物は collect が拾わない）
-  if (p.collect && can('collect') && obs.valid_actions.some((v) => v.startsWith('collect what:items'))) return act('collect', { what: 'items' });
+  // 16. 引数なしの collect が拾いに行く品がある（観測の navigation.collectable。遺物は collect が拾わない。V4-1a §12.1）
+  if (p.collect && can('collect') && (obs.navigation.collectable?.count ?? 0) > 0) return act('collect', { what: 'items' });
   // 17. 探索できる所が残っている（目的の階より浅く、下り階段を知らなければ、下への風の方角へ）
   if (can('explore') && (obs.navigation.frontiers.length || (obs.navigation.unsighted ?? 0) > 0)) {
     const toward = (targetDepth === null || depth < targetDepth) && !down && obs.self.floor?.draft ? { toward: 'draft' } : {};

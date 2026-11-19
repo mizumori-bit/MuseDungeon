@@ -138,6 +138,8 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
   const ackedScope = new Map<string, string>();
   const scopeNow = () => `${obs.expedition?.no ?? ''}:${obs.status === 'at_camp' ? 'camp' : obs.self.floor?.depth ?? ''}`;
   const ENTITY_KEY = /^(relic_seen|guardian_seen|warden_seen|elite_seen)(_hunting)?:/;
+  /** 知らせた鍵（目的でない遺物・役割のある敵）と、知らせたときの遠征と階 */
+  const notified = new Map<string, string>();
   /** 手番が進まないまま同じ起こし方をくり返した回数（3 回を超えたら stuck、stuck もくり返したら安全装置で終える） */
   const repeats = new Map<string, { turn: number; count: number }>();
   let stuckOut = false;
@@ -318,8 +320,14 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
       raise({ level: 'notify', reason: 'periodic', key: `periodic:${turn.turn_no}`, detail: obs.summary });
     }
     if (refused.turn !== turn.turn_no) { refused.turn = turn.turn_no; refused.tools.clear(); refused.last = null; }
-    const { decision, active } = decide(obs, { orders, coop, waiting: !!waiting, acked, text, refused: refused.tools, refusal: refused.last });
     const scope = scopeNow();
+    for (const [k, sc] of [...notified]) if (sc !== scope) notified.delete(k);
+    const { decision, active, notify } = decide(obs, { orders, coop, waiting: !!waiting, acked, text, refused: refused.tools, refusal: refused.last, notified: new Set(notified.keys()) });
+    // 目的でない遺物・役割のある敵: 同じ遠征の同じ階にいる間に 1 回だけ知らせる（止まらない。V4-1a §12.6）
+    for (const n of notify) {
+      raise(n);
+      for (const k of [n.key, ...(n.also ?? [])]) notified.set(k, scope);
+    }
     for (const k of [...acked]) {
       if (active.includes(k) || ackedScope.get(k) === scope) continue;
       acked.delete(k);

@@ -563,7 +563,7 @@ export class RunSession {
     {
       const probe = macroStart(startView, cmd, this.deps.catalog);
       const d0 = macroNext(probe, startView, this.deps.catalog, []);
-      if ('stop' in d0) return { ok: false, error: macroStopError(startView.locale, d0.stop, cmd, d0.dir) };
+      if ('stop' in d0) return { ok: false, error: macroStopError(startView.locale, d0.stop, cmd, d0.dir, d0.blockedBy) };
     }
     // 元の呼び出し 1 件（イベント無し）を記録
     const parent = await this.enqueue(() => {

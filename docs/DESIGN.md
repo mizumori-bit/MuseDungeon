@@ -1423,3 +1423,14 @@ AI のプレイヤーとゲームの間に置く常駐のプログラムの作�
 - **判断の表**（`decide.ts`。観測の `alerts`・マクロの止まった理由・構造化された項目だけから決める純粋な関数。規則の知識は持たない）: 役割のある敵・遺物・特技と加護・HP・追ってくる敵の数で起こし、追ってくる役割の無い敵とだけ戦い、目的の階へ下り、拾い、探索する。移動の道具が断られたら、その手番は表の次の行へ。何も残らなければ起こす。
 - **くり返しの上限**: 同じ手番に同じ起こし方が続く・同じ命令が同じ止まり方で 4 回止まると `stuck`。`stuck` も続けば安全装置で終える。
 - 置き場所は `packages/tools/src/pilot/`（文書は同じフォルダの `README.md`）。起動は `npm run pilot`。テストは `packages/tools/test/pilot.test.ts`。計測と、観測に足りない項目の報告は IMPROVEMENTS_V4 §11.2・§11.3。
+
+### 38.1 V4-1a: 観測の足りない所（IMPROVEMENTS_V4 §12・§13）
+
+pilot を作って分かった、構造化された項目だけでは決められない所を、すべてのプレイヤーに同じに渡る形で足した（`engineVersion` 0.30.0）。
+
+- **拾える品**: 観測 `navigation.collectable { count, ids }`（引数なしの collect が拾いに行く品。collect と同じ経路・既定の範囲 15 歩。数え方は shared の `collectTargets` 1 つ）。`valid_actions` の collect の件数もこれ。
+- **目的の印**: 視界の投影で、この遠征の目的の守護者・大守護者・賞金首・遺物に `objective: true`（`objectiveEntityIds`）。文と人間の名札に「［目的］」。
+- **じゃまをしている敵**: マクロの拒否（`hostile_adjacent`・`blocked`）の `details.blocked_by`（見えている敵だけ）と hint の名前。
+- **封じられた階段**: `known_stairs[].sealed`（`stairsSealed`）。
+- **寄っていく fight**: `fight { approach: 'advance' }`（既定 `wait`）。歩く間に撃たれても止まらず、hp_floor・hp_risk などはそのまま。人間の画面に「戦う: 待つ／寄る」。
+- pilot: 方針の `approach` を fight に渡す。目的でない遺物・役割のある敵は 1 回知らせるだけ。封じられた下り階段へは下りない。拾う品は `collectable`。

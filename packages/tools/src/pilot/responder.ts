@@ -1,5 +1,6 @@
 // 自動で返事をする簡単な相手（IMPROVEMENTS_V4 §10.8 の計測用。AI の代わり）。起こされたら orders.json を書くだけ:
-// 目的の敵（守護者を倒す遠征の守護者・節目の大守護者・賞金首）には挑む（倒す前に止まったら挑み直す）、目的の遺物は拾いに行く、
+// 目的の敵（守護者を倒す遠征の守護者・節目の大守護者・賞金首）には挑む（HP の下限は最大 HP の 30%。倒す前に止まったら挑み直し、下限なら帰る）、目的の遺物は拾いに行く、
+// 撃ってくる・寄ってこない相手には寄って戦う（fight の approach: 'advance'）、動けなければ添えられた最初の者と戦う、
 // 危ないときは帰る（帰還の綱）、キャンプでは候補を 1・2・3 の順に回して出発（同じ遠征をくり返さない。無い番号なら 1）、
 // 特技・加護は最初の候補、目的を果たしたら帰る。
 // それ以外は「わかった」とだけ返す（rev を上げる）。
@@ -17,6 +18,8 @@ function idOf(key: string): string | null {
 const HOME: QueuedCommand[] = [{ tool: 'use_item', args: { slot: 'lifeline' } }];
 /** orders.json ごとの、キャンプで起こされた回数 */
 const camps = new Map<string, number>();
+/** orders.json ごとの、目的の相手として fight を書いた相手の ID */
+const objectiveFoe = new Map<string, string>();
 
 export function simpleResponder(ev: WakeEvent): void {
   if (ev.level !== 'wake' || ev.reason === 'ended' || ev.reason === 'safety') return;
@@ -27,17 +30,21 @@ export function simpleResponder(ev: WakeEvent): void {
   const target = idOf(ev.key);
   const role = ev.reason.replace(/_hunting$/, '');
   const last = ev.state.last;
-  // 撃ってくる相手（その場から撃つ）・寄ってこない相手: 寄ってから戦う（観測の文の助言「射線を切るか、寄って殴る」の後者）
-  if ((role === 'fight_target_shooting' || role === 'fight_target_not_approaching') && last?.tool === 'fight' && typeof last.args.target === 'string') {
-    // travel_to は撃たれるたびに止まる（attacked）ので 3 回重ねる。先に隣に着いたら残りは断られて（queue_failed）、pilot の fight に戻る
-    const go = { tool: 'travel_to', args: { to: last.args.target } };
-    next.queue = [go, go, go, { tool: 'fight', args: last.args }];
+  // 目的の相手に挑む fight（HP の下限は最大 HP の 30%。下回る見込みなら止まって、帰る）
+  const challenge = (id: string): QueuedCommand[] => {
+    objectiveFoe.set(ev.ordersPath, id);
+    return [{ tool: 'fight', args: { target: id, hp_floor: Math.floor(ev.state.self.max_hp * 0.3) } }];
+  };
+  // 撃ってくる相手（その場から撃つ）・寄ってこない相手: 寄って戦う（fight の approach: 'advance'。V4-1a §12.5）
+  if ((role === 'fight_target_shooting' || role === 'fight_target_not_approaching') && last?.tool === 'fight' && typeof last.args.target === 'string' && last.args.approach !== 'advance') {
+    next.queue = [{ tool: 'fight', args: { ...last.args, approach: 'advance' } }];
     if (ev.state.objective) next.policy.after_objective = 'extract';
     writeJsonAtomic(ev.ordersPath, next);
     return;
   }
-  // 自分で queue に書いた fight が、倒す前に止まった: HP の下限なら帰る、見失ったらそのまま、ほかは挑み直す
-  if (role.startsWith('fight_') && last?.source === 'queue' && last.tool === 'fight' && typeof last.args.target === 'string') {
+  // 目的の相手に書いた fight が、倒す前に止まった: HP の下限なら帰る、見失ったらそのまま、ほかは挑み直す
+  // （寄っていく fight が下がる相手を追えなかったときなど、目的でない相手は、そのまま pilot に戻す）
+  if (role.startsWith('fight_') && last?.source === 'queue' && last.tool === 'fight' && typeof last.args.target === 'string' && last.args.target === objectiveFoe.get(ev.ordersPath)) {
     if (/hp_floor|hp_risk/.test(role)) next.queue = HOME;
     else if (!/target_gone|target_fled/.test(role)) next.queue = [{ tool: 'fight', args: last.args }];
     if (ev.state.objective) next.policy.after_objective = 'extract';
@@ -55,9 +62,9 @@ export function simpleResponder(ev: WakeEvent): void {
     case 'perk_pending': next.queue = [{ tool: 'choose_perk', args: { option: 1 } }]; break;
     case 'boon_pending': next.queue = [{ tool: 'choose_boon', args: { option: 1 } }]; break;
     case 'objective_done': next.policy.after_objective = 'extract'; break;
-    case 'guardian_seen': if (objective === 'slay_guardian' && target) next.queue = [{ tool: 'fight', args: { target, hp_floor: 0 } }]; break;
-    case 'warden_seen': if (objective === 'slay_warden' && target) next.queue = [{ tool: 'fight', args: { target, hp_floor: 0 } }]; break;
-    case 'elite_seen': if (objective === 'slay_bounty' && target) next.queue = [{ tool: 'fight', args: { target, hp_floor: 0 } }]; break;
+    case 'guardian_seen': if (objective === 'slay_guardian' && target) next.queue = challenge(target); break;
+    case 'warden_seen': if (objective === 'slay_warden' && target) next.queue = challenge(target); break;
+    case 'elite_seen': if (objective === 'slay_bounty' && target) next.queue = challenge(target); break;
     case 'relic_seen': if (objective === 'retrieve_relic' && target) next.queue = [{ tool: 'travel_to', args: { to: target } }]; break;
     case 'refused_hostile_adjacent': case 'refused_blocked': {
       // 隣に起きている敵がいる・経路が敵にふさがれていて動けない: 添えられた者の行（近い順）の、最初の ID と戦う（倒したら、届く追跡中の敵も片付ける）

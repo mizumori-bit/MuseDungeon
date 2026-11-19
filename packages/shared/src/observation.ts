@@ -4,7 +4,7 @@ import type { Catalog, CatalogEquipStats } from './catalog';
 import { abilityStatus, accBonuses, curseUnknown, isCursedItem, perkChoice, shortId, weaponReach } from './build';
 import { armorWithStatuses, boonHookSum, haulTotal, nameOf, nextCampOf, nextOverreach, offerGap, offerWardenExtra, overreachPoints, payoutOf, regenInterval, regenStep, restCapHp, stairsSealed } from './catalog';
 import { floorTraitsText, guardianDisplayName, multText, objectiveText, offerText, partsText, progressText, resultText } from './expedition';
-import { isStationary, pickableItems, sameOrWorseEquip, worseEquip } from './macro';
+import { COLLECT_WITHIN, collectTargets, isStationary, pickableItems, sameOrWorseEquip, worseEquip } from './macro';
 import { attacksPerTurn, chaseAttacks, memoryOf, monsterSpeedOf, selfSpeed } from './danger';
 import type { PerceivedEvent } from './filter';
 import type { ReportCompare } from './expeditionStats';
@@ -53,6 +53,8 @@ export interface ObsMonster {
   hits?: { your_melee?: [number, number]; your_thrown?: [number, number]; theirs?: [number, number] };
   /** 遠征の守護者 */
   role?: EntityRole;
+  /** この遠征の目的の相手（目的の守護者・大守護者・賞金首。V4-1a §12.2。文は名前の後ろに「［目的］」） */
+  objective?: true;
   /** 名前付きの強敵の名前（V3-5 §5.4。role: elite） */
   named?: string;
   /** 手負いで逃げている（追跡中でも extract・休息を妨げない） */
@@ -77,7 +79,7 @@ export interface ObsMonster {
   intent?: { code: 'winding_up' | 'summoning' | 'enraging' | 'swinging'; dir?: Dir; pos?: Pos; on_line?: boolean; text: string };
 }
 /** 同じセルの同種の物は 1 行にまとめる（ids に全て。id は先頭） */
-export interface ObsItem { id: string; ids?: string[]; name: string; pos: Pos; dir: Dir | null; dist: number; qty: number; remembered?: boolean; role?: EntityRole; mine?: boolean; value?: number; /** まとめた「自分が投げた物」の、最寄りのマスの本数 */ near_qty?: number }
+export interface ObsItem { id: string; ids?: string[]; name: string; pos: Pos; dir: Dir | null; dist: number; qty: number; remembered?: boolean; role?: EntityRole; /** この遠征の目的の遺物（V4-1a §12.2） */ objective?: true; mine?: boolean; value?: number; /** まとめた「自分が投げた物」の、最寄りのマスの本数 */ near_qty?: number }
 
 export interface RestEstimate {
   /** 休憩で戻る HP（上限 cap_hp まで。V3-4b §28.3） */
@@ -241,7 +243,10 @@ export interface Observation {
     frontiers: { pos: Pos; dir: Dir | null; dist: number }[];
     /** path_len: 既知地図上の経路長（不明なら null） */
     /** occupied_by: 階段の上に見えている敵の ID（travel_to はふさがれて止まる。V3-7a 後の評価） */
-    known_stairs: { type: 'down' | 'up'; pos: Pos; dist: number; reachable: boolean; path_len: number | null; occupied_by?: string }[];
+    /** sealed: 大守護者を倒していない節目の下り階段（V4-1a §12.4） */
+    known_stairs: { type: 'down' | 'up'; pos: Pos; dist: number; reachable: boolean; path_len: number | null; occupied_by?: string; sealed?: true }[];
+    /** 引数なしの collect（what: items）が拾いに行く品（V4-1a §12.1）: 既定の範囲（15 歩）の内側で、collect と同じ経路で着ける品。valid_actions の件数はこれ */
+    collectable: { count: number; ids: string[] };
     /** 地形は判明しているが、まだ見ていないセルの数（地図の巻物の後。explore はそこへ向かう） */
     unsighted?: number;
   };
@@ -871,6 +876,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
         };
       }
       if (e.role) m.role = e.role;
+      if (e.objective) m.objective = true;
       if (e.named) m.named = nameOf(e.named, L, '?');
       if (e.bounty) m.bounty = e.bounty;
       if (e.fleeing) m.fleeing = true;
@@ -903,6 +909,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       }
       const it: ObsItem = { id: e.id, name, pos: e.pos, ...rel(e.pos), qty: e.qty ?? 1 };
       if (e.role) it.role = e.role;
+      if (e.objective) it.objective = true;
       if (e.mine) it.mine = true;
       if (e.value !== undefined) it.value = e.value;
       items.push(it);
@@ -922,6 +929,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
     if (r.cat === 'item') {
       const it: ObsItem = { id: r.id, name: itemDisplayName(catalog, L, r.kind, r.appearanceId), pos: r.pos, ...rel(r.pos), qty: r.qty, remembered: true };
       if (r.role) it.role = r.role;
+      if (r.objective) it.objective = true;
       if (r.mine) it.mine = true;
       if (r.value !== undefined) it.value = r.value;
       rememberedItems.push(it);
@@ -985,6 +993,8 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       if (nx < 0 || ny < 0 || nx >= f.width || ny >= f.height) continue;
       if (grid.passable[ny * f.width + nx]) passable_dirs.push(d);
     }
+    // 封じられた下り階段（大守護者を倒していない節目の階。V4-1a §12.4。判定は stairsSealed 1 つ）
+    const sealedDown = stairsSealed(catalog.rules?.milestone, view.floor?.depth ?? 0, view.milestonesCleared ?? []);
     for (let i = 0; i < view.memory.terrain.length; i++) {
       const tid = view.terrainTable[view.memory.terrain[i]];
       const st = catalog.terrain[tid]?.stairs;
@@ -992,7 +1002,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       const p = { x: i % f.width, y: Math.trunc(i / f.width) };
       const dd = pathDist(p);
       const occ = view.entities.find((e) => e.cat === 'monster' && e.pos.x === p.x && e.pos.y === p.y && e.id !== view.self.id);
-      known_stairs.push({ type: st, pos: p, dist: dd >= 0 ? dd : cheb(pos, p), reachable: dd >= 0, path_len: dd >= 0 ? dd : null, ...(occ ? { occupied_by: occ.id } : {}) });
+      known_stairs.push({ type: st, pos: p, dist: dd >= 0 ? dd : cheb(pos, p), reachable: dd >= 0, path_len: dd >= 0 ? dd : null, ...(occ ? { occupied_by: occ.id } : {}), ...(st === 'down' && sealedDown ? { sealed: true as const } : {}) });
     }
     known_stairs.sort((a, b) => a.dist - b.dist);
     const fr = findFrontiers(grid)
@@ -1327,10 +1337,11 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
   }
   const mineCount = items.filter((i) => i.mine).reduce((a, i) => a + i.qty, 0);
   const pickables = pickableItems(view, catalog).length;
+  const collectIds = collectTargets(view, catalog);
   const valid_actions = buildValidActions(view, catalog, {
     passable_dirs, onStairs, itemsHere: itemsHere.length > 0, relicHere: itemsHere.some((i) => i.role === 'relic'), hostiles, frontiers: frontiers.length, known_stairs, grid,
     canExtract: expedition?.can_extract ?? false, objectiveComplete: expedition?.extract_outcome === 'complete', restTurns: rest && !rest.blocked_by ? rest.turns : null,
-    attackers, mineCount, pickables, huntingReach, worstSum, unrecorded, chaseOf, lifelineShort: !!opts.lifelineShort,
+    attackers, mineCount, pickables, collectable: collectIds.length, huntingReach, worstSum, unrecorded, chaseOf, lifelineShort: !!opts.lifelineShort,
     draft: view.floorHint?.draft ?? null,
     ifLifeline: expedition?.haul?.if_lifeline_now,
     perkChoice: perkChoiceObs, boonChoice: boonChoiceObs, abilities: abilitiesList, bonuses,
@@ -1389,7 +1400,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       ...(boonChoiceObs ? { boon_choice: boonChoiceObs } : {}),
     },
     visible: { monsters, items, players, features, ...(itemsOmitted ? { items_omitted: itemsOmitted } : {}) },
-    navigation: { here, passable_dirs, frontiers, known_stairs, ...(view.memory.unsighted?.length ? { unsighted: view.memory.unsighted.length } : {}) },
+    navigation: { here, passable_dirs, frontiers, known_stairs, collectable: { count: collectIds.length, ids: collectIds }, ...(view.memory.unsighted?.length ? { unsighted: view.memory.unsighted.length } : {}) },
     recent_events: (opts.recent ?? []).map((e) => e.text).filter((s) => s.length > 0).slice(-10),
     valid_actions,
   };
@@ -1411,6 +1422,8 @@ const EXTRACT_BLOCK_JA: Record<string, string> = { not_on_stairs: '階段の上�
 interface VAInput {
   lifelineShort?: boolean;
   passable_dirs: Dir[]; onStairs: 'up' | 'down' | null; itemsHere: boolean; relicHere?: boolean; hostiles: ObsMonster[]; pickables: number;
+  /** 引数なしの collect が拾いに行く品の数（V4-1a §12.1） */
+  collectable: number;
   frontiers: number; known_stairs: Observation['navigation']['known_stairs']; grid: NavGrid | null;
   canExtract: boolean; objectiveComplete: boolean; restTurns: number | null;
   /** 自分を攻撃している相手 */
@@ -1616,7 +1629,7 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
     : `use_stairs (${x.onStairs === 'down' ? t(L, '降りる', 'descend') : t(L, '上る', 'ascend')}${guardWatch}${x.mineCount > 0 ? t(L, `・投げた物が ${x.mineCount} 個、この階の床に残っている`, `; ${x.mineCount} of your thrown items are still on this floor`) : ''})`);
   if (x.itemsHere) out.push(x.relicHere ? `pickup (${t(L, '遺物を拾うと階が目覚める: 眠っている敵がすべて起き、遺物の場所へ向かう', 'picking up the relic wakes the floor: every sleeping enemy wakes and heads for it')})` : 'pickup');
   if (x.mineCount > 0 && !adjAwake.length) out.push(`collect (${t(L, `自分が投げた物 ${x.mineCount} 個を回収`, `pick up ${x.mineCount} thrown items`)})`);
-  if (x.pickables > 0 && !adjAwake.length) out.push(`collect what:items (${t(L, `見えている・記憶したアイテム ${x.pickables} 個を拾って回る（遺物は除く）`, `pick up ${x.pickables} known items (not the relic)`)})`);
+  if (x.collectable > 0 && !adjAwake.length) out.push(`collect what:items (${t(L, `見えている・記憶したアイテム ${x.collectable} 個を拾って回る（${COLLECT_WITHIN} 歩以内。遺物は除く）`, `pick up ${x.collectable} known items (within ${COLLECT_WITHIN} steps; not the relic)`)})`);
   const throwGroups: { key: string; slots: string[]; targets: ObsMonster[] }[] = [];
   const lifelineLines: string[] = [];
   for (const it of view.inventory) {
@@ -1820,15 +1833,15 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
       // 持っている品（宝物庫の鍵。V3-5 §5.1）
       const carry = m.carries ? t(L, ` [${m.carries_name ?? m.carries}を持っている]`, ` [carries the ${m.carries_name ?? m.carries}]`) : '';
       lines.push(L === 'en'
-        ? `- ${m.name}${role}${carry}${gtext} ${m.id} (${m.pos.x},${m.pos.y}) ${relLabel(L, from, m.pos)} hp:${m.hp_state} ${m.awareness}${m.fleeing ? '(fleeing)' : ''}${looksText} threat:${threat}${worst}${hits}${dmg}${est}${shot}${m.statuses.length ? ' ' + m.statuses.join(',') : ''}${itext}`
-        : `- ${m.name}${role}${carry}${gtext} ${m.id} (${m.pos.x},${m.pos.y}) ${relLabel(L, from, m.pos)}  負傷:${HP_JA[m.hp_state]}  状態:${AW_JA[m.awareness] ?? m.awareness}${m.fleeing ? '(逃走中)' : ''}${looksText}  脅威:${threat}${worst}${hits}${dmg}${est}${shot}${m.statuses.length ? '  ' + m.statuses.join(',') : ''}${itext}`);
+        ? `- ${m.name}${m.objective ? ' [objective]' : ''}${role}${carry}${gtext} ${m.id} (${m.pos.x},${m.pos.y}) ${relLabel(L, from, m.pos)} hp:${m.hp_state} ${m.awareness}${m.fleeing ? '(fleeing)' : ''}${looksText} threat:${threat}${worst}${hits}${dmg}${est}${shot}${m.statuses.length ? ' ' + m.statuses.join(',') : ''}${itext}`
+        : `- ${m.name}${m.objective ? '［目的］' : ''}${role}${carry}${gtext} ${m.id} (${m.pos.x},${m.pos.y}) ${relLabel(L, from, m.pos)}  負傷:${HP_JA[m.hp_state]}  状態:${AW_JA[m.awareness] ?? m.awareness}${m.fleeing ? '(逃走中)' : ''}${looksText}  脅威:${threat}${worst}${hits}${dmg}${est}${shot}${m.statuses.length ? '  ' + m.statuses.join(',') : ''}${itext}`);
     }
     for (const p of vis.players) lines.push(`- ${t(L, '味方', 'ally')} ${p.name} (${p.pos.x},${p.pos.y}) ${relLabel(L, from, p.pos)} ${L === 'en' ? p.hp_state : HP_JA[p.hp_state]}`);
     for (const it of vis.items) {
       const tags = `${it.role === 'relic' ? t(L, ' [遺物]', ' [relic]') : ''}${it.mine ? t(L, ' [自分が投げた]', ' [yours]') : ''}${it.value !== undefined ? t(L, ` [宝・価値 ${it.value}]`, ` [treasure ${it.value}]`) : ''}`;
       // まとめた「自分が投げた物」は合計の本数と、最寄りのマスの本数
       const qtyText = it.near_qty !== undefined ? t(L, ` 合計${it.qty}（最寄りのマスに${it.near_qty}）`, ` ${it.qty} in all (${it.near_qty} at the nearest)`) : it.qty > 1 ? ` x${it.qty}` : '';
-      lines.push(`- ${it.name}${qtyText}${tags} ${it.id} (${it.pos.x},${it.pos.y}) ${relLabel(L, from, it.pos)}${it.remembered ? t(L, ' (記憶)', ' (remembered)') : ''}`);
+      lines.push(`- ${it.name}${it.objective ? t(L, '［目的］', ' [objective]') : ''}${qtyText}${tags} ${it.id} (${it.pos.x},${it.pos.y}) ${relLabel(L, from, it.pos)}${it.remembered ? t(L, ' (記憶)', ' (remembered)') : ''}`);
     }
     if (vis.items_omitted) lines.push(`- ${t(L, `ほかに記憶しているアイテム ${vis.items_omitted} 件（get_map の注目点）`, `${vis.items_omitted} more remembered items (see get_map)`)}`);
     for (const ft of vis.features) lines.push(`- ${ft.name}${ft.lair ? t(L, `（${ft.lair}の棲み処）`, ` (${ft.lair}'s lair)`) : ''}${ft.id ? ` ${ft.id}` : ''} (${ft.pos.x},${ft.pos.y}) ${relLabel(L, from, ft.pos)}${ft.state && ft.state !== 'idle' ? ` [${featureStateText(L, ft.state)}]` : ''}`);

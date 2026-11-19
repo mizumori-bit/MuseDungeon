@@ -13,6 +13,8 @@ export interface PilotPolicy {
   max_chasers: number;
   /** 役割の無い敵（守護者・強敵でない敵）と戦ってよいか */
   fight: boolean;
+  /** pilot の fight にそのまま渡す approach（V4-1a §12.5）: wait＝隣に来るまで待つ（既定）/ advance＝寄っていく。pilot は自分で切り替えない */
+  approach: 'wait' | 'advance';
   /** 品を拾ってよいか（遺物は拾わない） */
   collect: boolean;
   /** 目的の階へ向けて階段を下りてよいか */
@@ -45,6 +47,7 @@ export const DEFAULT_POLICY: PilotPolicy = {
   rest_below_pct: 70,
   max_chasers: 2,
   fight: true,
+  approach: 'wait',
   collect: true,
   descend: true,
   after_objective: 'wake',
@@ -87,6 +90,7 @@ export function parseOrders(raw: unknown): PilotOrders {
       rest_below_pct: num(p.rest_below_pct, d.rest_below_pct),
       max_chasers: num(p.max_chasers, d.max_chasers),
       fight: bool(p.fight, d.fight),
+      approach: p.approach === 'advance' ? 'advance' : 'wait',
       collect: bool(p.collect, d.collect),
       descend: bool(p.descend, d.descend),
       after_objective: p.after_objective === 'extract' ? 'extract' : 'wake',

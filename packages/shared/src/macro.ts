@@ -15,6 +15,8 @@ function abilityReady(view: PlayerView, catalog: Catalog, id: string): boolean {
   return s.cooldownLeft === 0 && s.usesLeft !== 0;
 }
 import { buildNavGrid, dirBetween, findFrontiers, findPath } from './nav';
+import type { NavGrid } from './nav';
+import { kindName } from './narrate';
 import type { Dir, Pos } from './types';
 import { DIRS, DIR_VEC } from './types';
 import { cheb, compassDir, t } from './util';
@@ -164,6 +166,8 @@ export interface MacroState {
   /** fight（V3-4b §28.4）: until（clear なら標的を倒した後も続ける）、with の相手が隣に来たときの扱い */
   fightUntil?: 'target' | 'clear';
   fightAdjacent?: 'throw' | 'melee' | 'stop';
+  /** fight（V4-1a §12.5）: 追跡中で届かない相手を、隣に来るまで待つ（wait・既定）か、寄っていく（advance） */
+  fightApproach?: 'wait' | 'advance';
   /** 標的が見えない手番の数（追跡中で逃げていない標的を見失ったら rules.fightLostWait まで待つ） */
   lostTurns?: number;
   /** 標的を最後に見たときに逃走中だったか（この呼び出しで見ていなければ undefined） */
@@ -311,6 +315,74 @@ function pickable(view: PlayerView, catalog: Catalog, it: { kind: string | null;
 export const COLLECT_WITHIN = 15;
 
 /**
+ * マクロの経路の地図と経路の引き方（V4-1a §12.1 で collect の件数と共有する）。
+ * 気づいていない守護者の 2 マス以内（travel・collect・explore）と動かない敵の隣を避け、steady・flee は逃走中の敵のマスも最後に通れるものとする。
+ * stationaryMem: この呼び出しの間に一度見た動かない敵（見えなくなっても避け続ける）
+ */
+function macroRouting(view: PlayerView, catalog: Catalog, kind: MacroState['kind'], mode: MacroMode, stationaryMem: readonly Pos[] | undefined): { grid: NavGrid; route: (goals: readonly number[]) => Pos[] | null; stationary: Pos[] } {
+  const pos = view.self.pos!;
+  const hostiles = view.entities.filter((e) => e.cat === 'monster');
+  const grid = buildNavGrid(view, catalog)!;
+  // 気づいていない・眠っている守護者の 2 マス以内は、ほかに道があれば通らない（V3-3b §40.7: flee の経路が大守護者のそばを通った）
+  if (kind === 'travel' || kind === 'collect' || kind === 'explore') {
+    const quiet = hostiles.filter((h) => h.role === 'guardian' && h.awareness !== 'hunting');
+    if (quiet.length) {
+      const hazard = grid.hazard.slice();
+      for (const h of quiet) for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+        const x = h.pos.x + dx, y = h.pos.y + dy;
+        if (x >= 0 && y >= 0 && x < grid.width && y < grid.height) hazard[y * grid.width + x] = 1;
+      }
+      grid.hazard = hazard;
+    }
+  }
+  // 動かない敵の隣は罠と同じく避ける（V3-2R2 §18.5）。この呼び出しの間に一度見た敵は、見えなくなっても避け続ける
+  // （見えると遠回り・見えないと近道、を繰り返して 2 マスの間を往復した。AI 評価 2026-11-17 の後の bot の計測）
+  const vis = new Set(view.visibleCells);
+  const seenNow = view.entities.filter((e) => e.cat === 'monster' && isStationary(catalog, e)).map((e) => e.pos);
+  // 見えているマスに、もういない（倒した）なら忘れる
+  const kept = (stationaryMem ?? []).filter((q) => !vis.has(q.y * grid.width + q.x) || seenNow.some((s) => s.x === q.x && s.y === q.y)).map((q) => ({ x: q.x, y: q.y }));
+  for (const s of seenNow) if (!kept.some((q) => q.x === s.x && q.y === s.y)) kept.push({ x: s.x, y: s.y });
+  for (const q of kept) for (const d of DIRS) {
+    const nx = q.x + DIR_VEC[d][0], ny = q.y + DIR_VEC[d][1];
+    if (nx >= 0 && ny >= 0 && nx < grid.width && ny < grid.height) grid.hazard[ny * grid.width + nx] = 1;
+  }
+  // steady・flee は、ほかに道が無ければ逃走中の敵のマスも通れるものとして経路を引く（ふさいでいれば攻撃して進む。V3-2R3 §20.6）
+  const fleeGrid = (() => {
+    if (mode !== 'steady' && mode !== 'flee') return null;
+    const fl = hostiles.filter((h) => h.fleeing);
+    if (!fl.length) return null;
+    const occupied = grid.occupied.slice();
+    for (const h of fl) occupied[h.pos.y * grid.width + h.pos.x] = 0;
+    return { ...grid, occupied };
+  })();
+  const route = (goals: readonly number[]): Pos[] | null =>
+    findPath(grid, pos, goals, 'strict') ?? findPath(grid, pos, goals, 'actors')
+    ?? (fleeGrid ? findPath(fleeGrid, pos, goals, 'strict') ?? findPath(fleeGrid, pos, goals, 'actors') : null);
+  return { grid, route, stationary: kept };
+}
+
+/**
+ * 引数なしの collect（what: items）が拾いに行く品の ID（V4-1a §12.1）: collect の既定の範囲（COLLECT_WITHIN 歩・既定の種類）の内側で、
+ * collect と同じ経路で着ける品（足元の見えている品を含む。敵や仲間が乗っている品は、乗っている間は拾えないので数えない）。
+ * 観測の navigation.collectable と、valid_actions の collect の件数に使う（出ているのに collect が断る、を無くす）
+ */
+export function collectTargets(view: PlayerView, catalog: Catalog): string[] {
+  if (!view.floor || !view.self.pos) return [];
+  const list = collectableItems(view, catalog, { skipItems: [], pickUseful: true });
+  if (!list.length) return [];
+  const { grid, route } = macroRouting(view, catalog, 'collect', 'careful', undefined);
+  const here = view.self.pos.y * grid.width + view.self.pos.x;
+  const out: string[] = [];
+  for (const x of list) {
+    if (x.cell === here) { if (view.entities.some((e) => e.id === x.id)) out.push(x.id); continue; }
+    if (grid.occupied[x.cell]) continue;
+    const path = route([x.cell]);
+    if (path && path.length <= COLLECT_WITHIN) out.push(x.id);
+  }
+  return out;
+}
+
+/**
  * collect what=items の拾う品（V3-8 §53.4）: 種類の絞り込み（種類 ID か区分）と、鑑定済みで今の装備より劣る装備を飛ばす
  * （記憶の品は種類の素の性能で比べる。all なら劣る装備も拾う）
  */
@@ -446,7 +518,7 @@ export function macroStart(view: PlayerView, cmd: Command, catalog: Catalog): Ma
     ...(cmd.type === 'collect' ? { collectWithin: cmd.within ?? COLLECT_WITHIN, ...(cmd.kinds?.length ? { collectKinds: cmd.kinds.map((k) => k.replace(/^core:/, '')) } : {}), ...(cmd.all ? { collectAll: true } : {}) } : {}),
     ...(cmd.type === 'fight' ? {
       fightTarget: cmd.target, engaged: false, waits: 0, apart: 0, blocked: 0,
-      fightUntil: cmd.until ?? 'target', fightAdjacent: cmd.adjacent ?? 'stop', lostTurns: 0, cleared: 0,
+      fightUntil: cmd.until ?? 'target', fightAdjacent: cmd.adjacent ?? 'stop', fightApproach: cmd.approach ?? 'wait', lostTurns: 0, cleared: 0,
       ...(cmd.lostOk ? { lostOk: true } : {}),
       ...(() => { const tg = view.entities.find((e) => e.id === cmd.target); return tg ? { targetFleeing: !!tg.fleeing, targetSeenAt: { x: tg.pos.x, y: tg.pos.y } } : {}; })(),
     } : {}),
@@ -513,7 +585,8 @@ function resolveTravelGoal(view: PlayerView, catalog: Catalog, target: TravelTar
 }
 
 /** dir: trap_ahead のとき、罠のマスの方角（踏むなら move { dir }） */
-export type MacroDecision = { command: Command } | { stop: MacroStop; dir?: Dir };
+/** blockedBy: じゃまをしている見えている敵（hostile_adjacent・blocked。V4-1a §12.3。拒否のエラーの details.blocked_by と hint の名前） */
+export type MacroDecision = { command: Command } | { stop: MacroStop; dir?: Dir; blockedBy?: { id: string; name: string }[] };
 
 /**
  * 次の基本行動を決める。events は直前の手で知覚したイベント（中断判定用）。
@@ -666,6 +739,9 @@ function macroStep(state: MacroState, view: PlayerView, catalog: Catalog, events
   if ((kind === 'fight' || mode === 'steady' || mode === 'flee') && kind !== 'rest' && hp <= state.hpFloor) return { stop: 'hp_floor' };
 
   const hostiles = view.entities.filter((e) => e.cat === 'monster');
+  // じゃまをしている敵（V4-1a §12.3）: 見えている敵だけ（view.entities は視界の判定を通った者だけ）
+  const blockersOf = (hs: readonly EntityView[]) => hs.map((h) => ({ id: h.id, name: kindName(catalog, view.locale, h.kind) }));
+  const blockersOn = (cells: readonly Pos[] | null) => blockersOf(cells ? hostiles.filter((h) => cells.some((c) => c.x === h.pos.x && c.y === h.pos.y)) : []);
   // 予備動作（V3-3 §3.1）: 見えている敵が新しく予備動作を見せたら、どのマクロも止まる（次の手番に大きな行動が来る）
   const intents = intentKeys(view);
   const newIntent = state.steps > 0 && intents.some((k) => !(state.intents ?? []).includes(k));
@@ -825,7 +901,7 @@ function macroStep(state: MacroState, view: PlayerView, catalog: Catalog, events
       state.steps += 1;
       return { command: { type: 'attack', target: tg.id } };
     }
-    if (state.engaged) {
+    if (state.engaged && state.fightApproach !== 'advance') {
       // 当てて逃げる相手: 追跡中で 2 マス以内なら 2 手番まで待つ（追わない）
       if (hunting && !tg.fleeing && d <= 2 && (state.apart ?? 0) < FIGHT_APART_MAX) { state.apart = (state.apart ?? 0) + 1; return wait(); }
       return { stop: 'target_moved' };
@@ -833,6 +909,28 @@ function macroStep(state: MacroState, view: PlayerView, catalog: Catalog, events
     // 迎え撃つ: 追跡中の相手が隣に来るまで待つ（最大 FIGHT_WAIT_MAX 手番。3 回続けて近づかなければ止まる）
     if (!hunting) return { stop: 'target_not_hunting' };
     if (tg.fleeing) return { stop: 'target_moved' };
+    // 寄っていく（approach: 'advance'。V4-1a §12.5）: 相手の隣のマスへ歩き、着いたら殴る。歩く間に撃たれても止まらない
+    // （hp_risk・hp_floor・新しい敵・予備動作・状態異常・見失いの止まり方は上で効く）。3 手番続けて近づけなければ target_moved
+    if (state.fightApproach === 'advance') {
+      state.noCloser = state.lastDist !== undefined && d >= state.lastDist ? (state.noCloser ?? 0) + 1 : 0;
+      state.lastDist = d;
+      if (state.noCloser >= FIGHT_NO_CLOSER_MAX) return { stop: 'target_moved' };
+      const g = buildNavGrid(view, catalog)!;
+      const goals: number[] = [];
+      for (const dd of DIRS) {
+        const nx = tg.pos.x + DIR_VEC[dd][0], ny = tg.pos.y + DIR_VEC[dd][1];
+        if (nx >= 0 && ny >= 0 && nx < g.width && ny < g.height && g.passable[ny * g.width + nx]) goals.push(ny * g.width + nx);
+      }
+      const path = findPath(g, pos, goals, 'strict') ?? findPath(g, pos, goals, 'actors');
+      if (!path || !path.length) {
+        const loose = findPath(g, pos, goals, 'none');
+        return loose ? { stop: 'blocked', blockedBy: blockersOn(loose) } : { stop: 'unreachable' };
+      }
+      const dir = dirBetween(pos, path[0]);
+      if (!dir) return { stop: 'error' };
+      state.steps += 1;
+      return { command: { type: 'move', dir } };
+    }
     if ((state.waits ?? 0) >= FIGHT_WAIT_MAX || isStationary(catalog, tg)) return { stop: 'target_not_approaching' };
     state.noCloser = state.lastDist !== undefined && d >= state.lastDist ? (state.noCloser ?? 0) + 1 : 0;
     state.lastDist = d;
@@ -862,8 +960,10 @@ function macroStep(state: MacroState, view: PlayerView, catalog: Catalog, events
     return { command: { type: 'pickup', item: it.id } };
   };
   if (kind !== 'rest') {
-    if (mode === 'careful' && hostiles.some((h) => cheb(h.pos, pos) <= 1 && h.awareness !== 'asleep' && !h.fleeing)) return feetPick() ?? { stop: 'hostile_adjacent' };
-    if (mode === 'steady' && hostiles.some((h) => cheb(h.pos, pos) <= 1 && pursuing(h))) return feetPick() ?? { stop: 'hostile_adjacent' };
+    const adjCareful = hostiles.filter((h) => cheb(h.pos, pos) <= 1 && h.awareness !== 'asleep' && !h.fleeing);
+    if (mode === 'careful' && adjCareful.length) return feetPick() ?? { stop: 'hostile_adjacent', blockedBy: blockersOf(adjCareful) };
+    const adjSteady = hostiles.filter((h) => cheb(h.pos, pos) <= 1 && pursuing(h));
+    if (mode === 'steady' && adjSteady.length) return feetPick() ?? { stop: 'hostile_adjacent', blockedBy: blockersOf(adjSteady) };
   }
   // 休憩: 自分に届く追跡中の敵（動かない敵は隣接していなければ妨げない）
   if (kind === 'rest' && hostiles.some((h) => pursuing(h) && reaches(h))) return { stop: 'hostile_in_view' };
@@ -899,46 +999,11 @@ function macroStep(state: MacroState, view: PlayerView, catalog: Catalog, events
   }
   if (state.steps >= state.limit) return { stop: 'step_limit' };
 
-  const grid = buildNavGrid(view, catalog)!;
-  // 気づいていない・眠っている守護者の 2 マス以内は、ほかに道があれば通らない（V3-3b §40.7: flee の経路が大守護者のそばを通った）
-  if (kind === 'travel' || kind === 'collect' || kind === 'explore') {
-    const quiet = hostiles.filter((h) => h.role === 'guardian' && h.awareness !== 'hunting');
-    if (quiet.length) {
-      const hazard = grid.hazard.slice();
-      for (const h of quiet) for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
-        const x = h.pos.x + dx, y = h.pos.y + dy;
-        if (x >= 0 && y >= 0 && x < grid.width && y < grid.height) hazard[y * grid.width + x] = 1;
-      }
-      grid.hazard = hazard;
-    }
-  }
+  const routing = macroRouting(view, catalog, kind, mode, state.stationary);
+  const grid = routing.grid;
+  state.stationary = routing.stationary;
   const here = pos.y * grid.width + pos.x;
-  // 動かない敵の隣は罠と同じく避ける（V3-2R2 §18.5）。この呼び出しの間に一度見た敵は、見えなくなっても避け続ける
-  // （見えると遠回り・見えないと近道、を繰り返して 2 マスの間を往復した。AI 評価 2026-11-17 の後の bot の計測）
-  {
-    const vis = new Set(view.visibleCells);
-    const seenNow = view.entities.filter((e) => e.cat === 'monster' && isStationary(catalog, e)).map((e) => e.pos);
-    // 見えているマスに、もういない（倒した）なら忘れる
-    const kept = (state.stationary ?? []).filter((q) => !vis.has(q.y * grid.width + q.x) || seenNow.some((s) => s.x === q.x && s.y === q.y));
-    for (const s of seenNow) if (!kept.some((q) => q.x === s.x && q.y === s.y)) kept.push({ x: s.x, y: s.y });
-    state.stationary = kept;
-    for (const q of kept) for (const d of DIRS) {
-      const nx = q.x + DIR_VEC[d][0], ny = q.y + DIR_VEC[d][1];
-      if (nx >= 0 && ny >= 0 && nx < grid.width && ny < grid.height) grid.hazard[ny * grid.width + nx] = 1;
-    }
-  }
-  // steady・flee は、ほかに道が無ければ逃走中の敵のマスも通れるものとして経路を引く（ふさいでいれば攻撃して進む。V3-2R3 §20.6）
-  const fleeGrid = (() => {
-    if (mode !== 'steady' && mode !== 'flee') return null;
-    const fl = hostiles.filter((h) => h.fleeing);
-    if (!fl.length) return null;
-    const occupied = grid.occupied.slice();
-    for (const h of fl) occupied[h.pos.y * grid.width + h.pos.x] = 0;
-    return { ...grid, occupied };
-  })();
-  const route = (goals: readonly number[]): Pos[] | null =>
-    findPath(grid, pos, goals, 'strict') ?? findPath(grid, pos, goals, 'actors')
-    ?? (fleeGrid ? findPath(fleeGrid, pos, goals, 'strict') ?? findPath(fleeGrid, pos, goals, 'actors') : null);
+  const route = routing.route;
   // 発見済みの罠のマス（マクロは踏まない）
   const trapCells = new Set<number>([
     ...view.entities.filter((e) => e.cat === 'trap').map((e) => e.pos.y * grid.width + e.pos.x),
@@ -1031,7 +1096,10 @@ function macroStep(state: MacroState, view: PlayerView, catalog: Catalog, events
       const last = path && path.length ? path[path.length - 1] : null;
       state.goal = last ? last.y * grid.width + last.x : undefined;
     }
-    if (path === null || path.length === 0) return { stop: findPath(grid, pos, targets.filter((i) => i !== here), 'none') ? 'blocked' : 'explored' };
+    if (path === null || path.length === 0) {
+      const loose = findPath(grid, pos, targets.filter((i) => i !== here), 'none');
+      return loose ? { stop: 'blocked', blockedBy: blockersOn(loose) } : { stop: 'explored' };
+    }
   } else if (kind === 'collect') {
     const goals = (state.collectWhat === 'items' ? collectableItems(view, catalog, state).map((x) => x.cell) : mineCells(view)).filter((i) => i !== here);
     // 決着の後に拾っていた（fight の collect_after）: 拾い終えたら決着の理由で止まる
@@ -1039,7 +1107,10 @@ function macroStep(state: MacroState, view: PlayerView, catalog: Catalog, events
     // 敵が乗っている品は後回し（経路探しは行き先のマスの敵を通すので、いちばん近い品が敵の足元だと 1 歩目でふさがれた。V3-5a 後の AI 評価）
     const free = goals.filter((i) => !grid.occupied[i]);
     path = route(free.length ? free : goals);
-    if (path === null) return { stop: findPath(grid, pos, goals, 'none') ? 'blocked' : 'unreachable' };
+    if (path === null) {
+      const loose = findPath(grid, pos, goals, 'none');
+      return loose ? { stop: 'blocked', blockedBy: blockersOn(loose) } : { stop: 'unreachable' };
+    }
     if (path.length === 0) return { stop: 'collected' };
     // 歩数の上限（V3-8 §53.4。いちばん近い品が上限より遠ければ、残りも遠い）
     if (state.collectWithin !== undefined && path.length > state.collectWithin) return { stop: state.fightDone ?? 'collect_far' };
@@ -1055,7 +1126,7 @@ function macroStep(state: MacroState, view: PlayerView, catalog: Catalog, events
     path = route(goal.goals);
     if (path === null) {
       const loose = findPath(grid, pos, goal.goals, 'none');
-      return { stop: loose ? 'blocked' : 'unreachable' };
+      return loose ? { stop: 'blocked', blockedBy: blockersOn(loose) } : { stop: 'unreachable' };
     }
     if (path.length === 0) return { stop: 'arrived' };
     if (goal.adjacentOk && path.length === 1) return { stop: 'arrived' };
@@ -1074,7 +1145,7 @@ function macroStep(state: MacroState, view: PlayerView, catalog: Catalog, events
       state.steps += 1;
       return { command: { type: 'move', dir: d } };
     }
-    return { stop: 'blocked' };
+    return { stop: 'blocked', blockedBy: blockersOf([blocker]) };
   }
   const dir = dirBetween(pos, path[0]);
   if (!dir) return { stop: 'error' };
@@ -1086,7 +1157,17 @@ function macroStep(state: MacroState, view: PlayerView, catalog: Catalog, events
  * 1 歩も進めないと分かったマクロの拒否（手番を使わない。V3-2R §14.2「0 歩で終わる呼び出しを作らない」）。
  * 最初の判断が停止なら、その理由をゲームのエラー形式で返す。
  */
-export function macroStopError(L: Locale, stop: MacroStop, cmd: Command, dir?: Dir): ActionError {
+export function macroStopError(L: Locale, stop: MacroStop, cmd: Command, dir?: Dir, blockedBy?: readonly { id: string; name: string }[]): ActionError {
+  const e = macroStopErrorBase(L, stop, cmd, dir);
+  // じゃまをしている見えている敵（V4-1a §12.3）: details.blocked_by と hint の名前
+  if (blockedBy?.length && (stop === 'hostile_adjacent' || stop === 'blocked')) {
+    const names = blockedBy.map((b) => `${b.name} ${b.id}`).join(t(L, '、', ', '));
+    return { ...e, hint: `${t(L, `じゃまをしている敵: ${names}。`, `In the way: ${names}. `)}${e.hint}`, details: { blocked_by: blockedBy.map((b) => b.id) } };
+  }
+  return e;
+}
+
+function macroStopErrorBase(L: Locale, stop: MacroStop, cmd: Command, dir?: Dir): ActionError {
   const flee = cmd.type === 'travel' || cmd.type === 'explore' || cmd.type === 'collect';
   switch (stop) {
     case 'sense_found':

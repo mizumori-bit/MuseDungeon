@@ -17,7 +17,7 @@ import { updateKnowledge } from './perception';
 import { advance, endTurn } from './scheduler';
 import { recomputeStats } from './stats';
 
-export const ENGINE_VERSION = '0.29.0';
+export const ENGINE_VERSION = '0.30.0';
 
 export interface CreateRunParams {
   runId: string;

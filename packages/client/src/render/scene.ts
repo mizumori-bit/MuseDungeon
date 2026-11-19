@@ -37,6 +37,11 @@ export function roleLabel(role: 'guardian' | 'relic' | 'elite' | undefined, boun
   return '';
 }
 
+/** 名札用: この遠征の目的の相手・品の印（観測の文と同じ「［目的］」。V4-1a §12.2） */
+export function objectiveTag(objective?: boolean): string {
+  return objective ? tr('［目的］', ' [objective]') : '';
+}
+
 /** ツールチップ用: 宝の価値と、自分が投げた物の印 */
 export function itemTags(p: { value?: number; mine?: boolean }): string {
   return (p.value !== undefined ? tr(` ［宝・価値 ${p.value}］`, ` [treasure ${p.value}]`) : '')
@@ -142,7 +147,7 @@ export function sceneFromView(view: PlayerView, catalog: Catalog, extras: SceneE
     if (r.cat === 'item') {
       ents.push({
         id: r.id, layer: 'item', ref: { ...itemRef(catalog, r.kind, r.appearanceId), x: r.pos.x, y: r.pos.y }, x: r.pos.x, y: r.pos.y,
-        label: itemDisplayName(catalog, L, r.kind, r.appearanceId) + (r.qty > 1 ? ` x${r.qty}` : '') + roleLabel(r.role) + itemTags(r),
+        label: itemDisplayName(catalog, L, r.kind, r.appearanceId) + objectiveTag(r.objective) + (r.qty > 1 ? ` x${r.qty}` : '') + roleLabel(r.role) + itemTags(r),
         statuses: [], affixes: [], remembered: true, role: r.role, treasure: r.value !== undefined,
       });
     } else {
@@ -154,7 +159,7 @@ export function sceneFromView(view: PlayerView, catalog: Catalog, extras: SceneE
     if (e.cat === 'item') {
       ents.push({
         ...base, layer: 'item', ref: { ...itemRef(catalog, e.kind, e.appearanceId), x: e.pos.x, y: e.pos.y },
-        label: itemDisplayName(catalog, L, e.kind, e.appearanceId, e.affixes ?? []) + ((e.qty ?? 1) > 1 ? ` x${e.qty}` : '') + roleLabel(e.role) + itemTags(e),
+        label: itemDisplayName(catalog, L, e.kind, e.appearanceId, e.affixes ?? []) + objectiveTag(e.objective) + ((e.qty ?? 1) > 1 ? ` x${e.qty}` : '') + roleLabel(e.role) + itemTags(e),
         treasure: e.value !== undefined,
       });
     } else if (e.cat === 'feature' || e.cat === 'trap') {
@@ -162,7 +167,7 @@ export function sceneFromView(view: PlayerView, catalog: Catalog, extras: SceneE
     } else if (e.cat === 'monster') {
       ents.push({
         ...base, layer: 'actor', ref: { cls: 'actor', id: e.kind ?? 'unknown' },
-        label: monsterDisplayName(catalog, L, e) + roleLabel(e.role, e.bounty) + monsterKnowledge(view, catalog, e, extras.monsters?.find((m) => m.id === e.id)),
+        label: monsterDisplayName(catalog, L, e) + objectiveTag(e.objective) + roleLabel(e.role, e.bounty) + monsterKnowledge(view, catalog, e, extras.monsters?.find((m) => m.id === e.id)),
         hpBucket: e.hp, hostile: true, asleep: e.awareness === 'asleep',
       });
     } else {

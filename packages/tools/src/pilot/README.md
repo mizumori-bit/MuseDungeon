@@ -56,6 +56,7 @@ npm.cmd run pilot -- --token <player_token> --wake-cmd "node my-ai.mjs"
     "rest_below_pct": 70,          // 敵がいなくて HP がこの割合を切っていたら休む（10 手番の wait）
     "max_chasers": 2,              // 追ってくる敵がこの数を超えたら起こす
     "fight": true,                 // 役割の無い敵（守護者・強敵・賞金首でない敵）と戦ってよいか
+    "approach": "wait",            // pilot の fight にそのまま渡す: "wait"＝隣に来るまで待つ / "advance"＝寄っていく（pilot は自分で切り替えない）
     "collect": true,               // 品を拾ってよいか（遺物は拾わない）
     "descend": true,               // 目的の階へ向けて階段を下りてよいか
     "after_objective": "wake",     // 目的を果たした後: "wake" / "extract"（階段へ戻って帰る）
@@ -110,14 +111,14 @@ npm.cmd run pilot -- --token <player_token> --wake-cmd "node my-ai.mjs"
 | 6 | 特技・加護の選択が待っている | 起こす（選ばない） |
 | 7 | `lethal_range` か `critical_hp` | 退いてから起こす（`danger`） |
 | 8 | HP が `wake_hp_pct` を切った | 起こす（`low_hp`） |
-| 9 | 役割のある敵（守護者・大守護者・名前付きの強敵・賞金首）が見えている | 起こす（挑まない） |
-| 10 | 遺物が見えている | 起こす（拾わない。いっぺんに見えた遺物はまとめて 1 回） |
+| 9 | この遠征の目的の役割のある敵（守護者・大守護者・名前付きの強敵・賞金首。観測の `objective`）が見えている | 起こす（挑まない）。目的でない役割のある敵は、同じ階にいる間に 1 回だけ知らせて（`notify`）続ける。挑まないのは同じ |
+| 10 | この遠征の目的の遺物（`objective`）が見えている | 起こす（拾わない。いっぺんに見えた遺物はまとめて 1 回）。前の遠征の遺物など目的でない遺物は、同じ階にいる間に 1 回だけ知らせて続ける |
 | 11 | 追ってくる敵が `max_chasers` を超えた／`fight: false` で追われている | 起こす（`too_many`／`chased`） |
-| 12 | 追ってくる敵（追跡中・逃げていない・「動かない」でない）がいる | いちばん近い敵に `fight`。倒した以外で止まったら起こす |
+| 12 | 追ってくる敵（追跡中・逃げていない・「動かない」でない）がいる | いちばん近い敵に `fight`（方針の `approach` を渡す）。倒した以外で止まったら起こす |
 | 13 | 敵がいなくて HP が `rest_below_pct` を切っている | `wait`（10 手番） |
 | 14 | 遠征の目的を果たした | `after_objective` のとおり（起こす／階段へ行って帰る） |
-| 15 | 目的の階より浅く、下り階段を知っている | 階段へ行って下りる（踏破の目的なら、目的の階の下り階段まで） |
-| 16 | 拾える品がある | `collect` |
+| 15 | 目的の階より浅く、封じられていない下り階段を知っている | 階段へ行って下りる（踏破の目的なら、目的の階の下り階段まで）。封じられた下り階段（`known_stairs[].sealed`。大守護者を倒していない節目の階）へは行かない |
+| 16 | 引数なしの `collect` が拾いに行く品がある（観測の `navigation.collectable`） | `collect` |
 | 17 | 探索できる所が残っている | `explore`（目的の階より浅くて下り階段を知らなければ、下への風の方角へ） |
 | 18 | 何も残っていない | 起こす（`nothing_to_do`。移動が断られて残らなかったなら `refused_<code>`） |
 
@@ -133,7 +134,7 @@ npm.cmd run pilot -- --token <player_token> --wake-cmd "node my-ai.mjs"
 
 ## 起こす理由
 
-`level` は 2 段です。`notify` は知らせるだけで pilot は止まりません（`periodic`: `notify_every_turns` ごとの経過）。ほかはすべて `wake`（AI の判断が要る）です。
+`level` は 2 段です。`notify` は知らせるだけで pilot は止まりません（`periodic`: `notify_every_turns` ごとの経過、目的でない遺物・役割のある敵が見えた）。ほかはすべて `wake`（AI の判断が要る）です。
 
 | 理由 | いつ |
 |---|---|
@@ -141,8 +142,8 @@ npm.cmd run pilot -- --token <player_token> --wake-cmd "node my-ai.mjs"
 | `perk_pending` / `boon_pending` | 特技・加護を選べる |
 | `danger` | `lethal_range`・`critical_hp`（退いてから起こす） |
 | `low_hp` | HP が `wake_hp_pct` を切った |
-| `guardian_seen` / `warden_seen` / `elite_seen` | 守護者・大守護者・名前付きの強敵か賞金首が見えた（追ってきていれば `_hunting` が付く。鍵に相手の ID） |
-| `relic_seen` | 遺物が見えた（鍵に遺物の ID） |
+| `guardian_seen` / `warden_seen` / `elite_seen` | この遠征の目的の守護者・大守護者・名前付きの強敵か賞金首が見えた（追ってきていれば `_hunting` が付く。鍵に相手の ID）。目的でなければ同じ理由の `notify` を 1 回 |
+| `relic_seen` | この遠征の目的の遺物が見えた（鍵に遺物の ID）。目的でない遺物は同じ理由の `notify` を 1 回 |
 | `too_many` / `chased` | 追ってくる敵が多い／戦わない方針で追われている |
 | `fight_<止まり方>` | pilot の `fight` が倒す前に止まった（`fight_hp_risk`・`fight_target_shooting`・`fight_target_moved` など。止まり方の名前はマクロのもの） |
 | `<止まり方>` | ほかのマクロが、表を見直すだけでは済まない止まり方で止まった（`blocked`・`no_progress`・`unreachable`・`target_gone`・`trap_ahead` など） |
@@ -175,13 +176,13 @@ npm.cmd run pilot -- --token <player_token> --wake-cmd "node my-ai.mjs"
 { "rev": 9, "mode": "auto", "queue": [{ "tool": "use_item", "args": { "slot": "lifeline" } }] }
 ```
 
-**撃ってくる相手に寄ってから戦う**（`fight_target_shooting` で起こされたとき。`travel_to` は撃たれるたびに止まるので重ねる）:
+**撃ってくる相手に寄って戦う**（`fight_target_shooting` で起こされたとき。`approach: "advance"` の fight は、歩く間に撃たれても止まらない）:
 
 ```json
-{ "rev": 10, "mode": "auto",
-  "queue": [{ "tool": "travel_to", "args": { "to": "e_1vc5a5" } }, { "tool": "travel_to", "args": { "to": "e_1vc5a5" } },
-            { "tool": "fight", "args": { "target": "e_1vc5a5" } }] }
+{ "rev": 10, "mode": "auto", "queue": [{ "tool": "fight", "args": { "target": "e_1vc5a5", "approach": "advance" } }] }
 ```
+
+いつも寄って戦わせるなら、方針に `"approach": "advance"` を書きます。
 
 **いったん任せるのをやめる**（`"hold"` なら持ち場の動きだけ続ける。`"stop"` なら pilot が終わるので、その後は AI が直接ゲームに命令を出せる）:
 

@@ -34,10 +34,10 @@ function ctxOf(orders: PilotOrders = defaultOrders(), over: Partial<DecideContex
 }
 
 describe('pilot の判断の表（§10.4〜§10.6）', () => {
-  it('役割のある敵が見えたら、挑まずに起こす（返事の後は、役割の無い追ってくる敵とだけ戦う）', async () => {
+  it('目的の役割のある敵が見えたら、挑まずに起こす（返事の後は、役割の無い追ってくる敵とだけ戦う）。目的でなければ 1 回知らせて続ける', async () => {
     const { obs } = await expeditionObs();
     obs.alerts = obs.alerts.filter((a) => a.code !== 'perk_pending' && a.code !== 'boon_pending');
-    const g = monster({ id: 'e_guard1', role: 'guardian', guardian: { name: '荒ぶる者', types: [] }, dist: 1 });
+    const g = monster({ id: 'e_guard1', role: 'guardian', guardian: { name: '荒ぶる者', types: [] }, dist: 1, objective: true });
     const foe = monster({ id: 'e_foe001', dist: 2 });
     obs.visible.monsters = [g, foe];
     const r1 = decide(obs, ctxOf());
@@ -47,20 +47,32 @@ describe('pilot の判断の表（§10.4〜§10.6）', () => {
     const r2 = decide(obs, ctxOf(defaultOrders(), { acked: new Set(['guardian_seen_hunting:e_guard1']) }));
     expect(r2.decision.kind).toBe('act');
     if (r2.decision.kind === 'act') { expect(r2.decision.tool).toBe('fight'); expect(r2.decision.args.target).toBe('e_foe001'); }
-    // 賞金首・名前付きの強敵・大守護者も役割のある敵
-    for (const [m, reason] of [[monster({ id: 'e_boun01', bounty: 300 }), 'elite_seen_hunting'], [monster({ id: 'e_name01', role: 'elite', named: '名' }), 'elite_seen_hunting'],
-      [monster({ id: 'e_ward01', guardian: { name: '番人', types: [], warden: true }, awareness: 'unaware' }), 'warden_seen']] as const) {
+    // 賞金首・名前付きの強敵・大守護者も役割のある敵（目的なら起こす）
+    for (const [m, reason] of [[monster({ id: 'e_boun01', bounty: 300, objective: true }), 'elite_seen_hunting'], [monster({ id: 'e_name01', role: 'elite', named: '名', objective: true }), 'elite_seen_hunting'],
+      [monster({ id: 'e_ward01', guardian: { name: '番人', types: [], warden: true }, awareness: 'unaware', objective: true }), 'warden_seen']] as const) {
       obs.visible.monsters = [m];
       const r = decide(obs, ctxOf());
       expect(r.decision.kind === 'wake' && r.decision.wake.reason).toBe(reason);
     }
+    // 目的でない守護者（V4-1a §12.6）: 止まらずに 1 回知らせ、挑まない（役割の無い敵と戦う）
+    const other = monster({ id: 'e_guard2', role: 'guardian', guardian: { name: '別の守護者', types: [] }, dist: 1 });
+    obs.visible.monsters = [other, foe];
+    const r3 = decide(obs, ctxOf());
+    expect(r3.decision.kind === 'act' && r3.decision.tool === 'fight' && r3.decision.args.target).toBe('e_foe001');
+    expect(r3.notify.map((n) => `${n.level}:${n.reason}:${n.key}`)).toEqual(['notify:guardian_seen_hunting:guardian_seen_hunting:e_guard2']);
+    // 知らせた後は、同じ階にいる間は知らせない
+    expect(decide(obs, ctxOf(defaultOrders(), { notified: new Set(['guardian_seen_hunting:e_guard2']) })).notify).toEqual([]);
+    // 守護者しかいなければ、挑まずに表の先へ（fight を出さない）
+    obs.visible.monsters = [other];
+    const r4 = decide(obs, ctxOf());
+    expect(r4.decision.kind === 'act' && r4.decision.tool === 'fight').toBe(false);
   });
 
-  it('遺物が見えたら、拾わずに起こす（いっぺんに見えた遺物はまとめて 1 回）', async () => {
+  it('目的の遺物が見えたら、拾わずに起こす（いっぺんに見えた遺物はまとめて 1 回）。目的でない遺物は 1 回知らせて続ける', async () => {
     const { obs } = await expeditionObs();
     obs.alerts = obs.alerts.filter((a) => a.code !== 'perk_pending' && a.code !== 'boon_pending');
     obs.visible.monsters = [];
-    const relic = (id: string, dist: number): ObsItem => ({ id, name: '欠片', pos: { x: 2, y: 2 }, dir: 'e', dist, qty: 1, role: 'relic' });
+    const relic = (id: string, dist: number, objective = true): ObsItem => ({ id, name: '欠片', pos: { x: 2, y: 2 }, dir: 'e', dist, qty: 1, role: 'relic', ...(objective ? { objective: true as const } : {}) });
     obs.visible.items = [relic('e_relic2', 5), relic('e_relic1', 2)];
     const r = decide(obs, ctxOf());
     expect(r.decision.kind).toBe('wake');
@@ -72,6 +84,47 @@ describe('pilot の判断の表（§10.4〜§10.6）', () => {
     // 返事の後も、遺物は拾いに行かない（collect は遺物を拾わない。探索などの表の次の行へ）
     const r2 = decide(obs, ctxOf(defaultOrders(), { acked: new Set(['relic_seen:e_relic1', 'relic_seen:e_relic2']) }));
     expect(r2.decision.kind === 'act' && r2.decision.tool === 'travel_to' && String(r2.decision.args.to).startsWith('e_relic')).toBe(false);
+    // 前の遠征の遺物（目的でない）: 起こさずに 1 回知らせる（V4-1a §12.6）
+    obs.visible.items = [relic('e_oldrl1', 3, false), relic('e_oldrl2', 6, false)];
+    const r3 = decide(obs, ctxOf());
+    expect(r3.decision.kind).toBe('act');
+    expect(r3.notify.map((n) => `${n.level}:${n.key}`)).toEqual(['notify:relic_seen:e_oldrl1']);
+    expect(r3.notify[0]!.also).toEqual(['relic_seen:e_oldrl2']);
+  });
+
+  it('封じられた下り階段へは下りに行かない。拾える品は navigation.collectable で見る。方針の approach を fight に渡す', async () => {
+    const { obs } = await expeditionObs();
+    obs.alerts = obs.alerts.filter((a) => a.code !== 'perk_pending' && a.code !== 'boon_pending');
+    obs.visible.monsters = [];
+    obs.visible.items = [];
+    obs.self.hp = obs.self.max_hp;
+    obs.navigation.frontiers = [];
+    obs.navigation.unsighted = 0;
+    obs.navigation.collectable = { count: 0, ids: [] };
+    obs.expedition = { ...obs.expedition!, status: 'in_progress', objective: { ...obs.expedition!.objective, type: 'slay_guardian', target_depth: 5 } };
+    obs.self.floor = { ...obs.self.floor!, depth: 3 };
+    const st = { type: 'down' as const, pos: { x: 9, y: 9 }, dist: 4, reachable: true, path_len: 4 };
+    obs.navigation.known_stairs = [st];
+    const r1 = decide(obs, ctxOf());
+    expect(r1.decision.kind === 'act' && r1.decision.tool).toBe('travel_to');
+    obs.navigation.known_stairs = [{ ...st, sealed: true }];
+    const r2 = decide(obs, ctxOf());
+    expect(r2.decision.kind === 'act' && r2.decision.tool === 'travel_to').toBe(false);
+    // collect は collectable の数だけで決める（valid_actions の文字列は見ない）
+    obs.valid_actions = [...obs.valid_actions, 'collect what:items (x)'];
+    expect(decide(obs, ctxOf()).decision.kind === 'act' && (decide(obs, ctxOf()).decision as { tool: string }).tool === 'collect').toBe(false);
+    obs.navigation.collectable = { count: 2, ids: ['e_a', 'e_b'] };
+    const r3 = decide(obs, ctxOf());
+    expect(r3.decision.kind === 'act' && r3.decision.tool).toBe('collect');
+    // approach: 方針のまま fight に渡す（pilot は自分で切り替えない）
+    obs.visible.monsters = [monster({ id: 'e_foe002', dist: 4 })];
+    const r4 = decide(obs, ctxOf());
+    expect(r4.decision.kind === 'act' && r4.decision.args.approach).toBeUndefined();
+    const o = defaultOrders();
+    o.policy.approach = 'advance';
+    const r5 = decide(obs, ctxOf(o));
+    expect(r5.decision.kind === 'act' && r5.decision.args.approach).toBe('advance');
+    expect(parseOrders({ rev: 1, policy: { approach: 'x' } }).policy.approach).toBe('wait');
   });
 
   it('自分から使う道具は §10.4 の一覧の中。既定の方針では綱を使わず、遠征を選ばない', async () => {

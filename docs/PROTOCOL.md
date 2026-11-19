@@ -26,6 +26,7 @@ ActionError {
       | 'hostile_adjacent' | 'hostile_in_view' | 'hp_floor' | 'nothing_to_do'   // マクロが 1 歩も進めない（V3-2R。手番を使わない）
   message: string      // 何が起きたか
   hint: string         // 次に何をすればよいか
+  details?: { blocked_by?: EntityId[] }   // V4-1a: じゃまをしている敵（hostile_adjacent・blocked。そのプレイヤーに見えている敵だけ。hint にも名前）
 }
 ```
 
@@ -117,7 +118,7 @@ turn: {
 | `explore` | `mode?`, `hp_floor?`, `pickup?`（既定 true）, `toward?: 'draft'` | マクロ。未見の区画（地図の巻物で地形だけ知った区画を含む）へ自動移動。pickup（既定 'useful'。V3-4b）なら通り道と見えている・記憶したアイテムも拾う（'useful' は、鑑定済みで接辞の無い武器・防具のうち公開の数字が装備中の品以下のものを種類が違っても拾わない。true は全部。遺物・鑑定済みの有害品・装備中の品と同じ種類で接辞が含まれる＝同じか劣る装備は拾わない。V3-2R3）。`toward: 'draft'` は下への風の方角、`'sense'`（V3-4b）は遺物・守護者の気配の方角（と隣り合う方角）の未探索を優先する（V3-2R3）。決めた行き先は境界である間は追い続け、見えて消えたらそのすぐ近くの境界を追う（風の方角が歩くたびに変わっても往復しない。2026-11-17） |
 | `travel_to` | `to: {x,y} | 'stairs_down' | 'stairs_up' | entity_id`, `mode?`, `hp_floor?`, `pickup?` | マクロ。既知地図上のみ。目的地がアイテムなら着いて拾う |
 | `collect` | `what?: 'thrown'|'items'`, `within?: 1..200`, `kinds?: string[]`, `all?: boolean`, `mode?`, `hp_floor?` | マクロ（v3）。`thrown`（既定）は既知の自分が投げた物、`items` は見えている・記憶したアイテムを近い順に回って拾う。結果に `collected: { picked, remaining }`。V3-8: `within` は歩数の上限（既定 15。残りがどれも遠ければ `collect_far`）、`kinds` は種類 ID か区分、`items` は鑑定済みで今の装備より劣る装備を飛ばす（`all: true` で拾う） |
-| `fight` | `target: entity_id`, `with?: slot`, `hp_floor?`, `abilities?: string[]`, `until?: 'target'\|'clear'`, `adjacent?: 'throw'\|'melee'\|'stop'` | マクロ（V3-2R、V3-2R2 で拡張）。`until: 'clear'`（V3-4b）: 標的を倒した後も、隣の追跡中の敵、いなければ最も近い追跡中の敵へ続け、いなくなれば `cleared`。`adjacent`（V3-4b、with のとき）: 相手が隣に来たら stop（既定）／throw（投げ続ける）／melee（近接に切り替える）。新しく見えた追跡中の敵で止まるのは被弾の記録の無い種族だけ。追跡中で逃げていない標的が見えなくなったら `fight.lostWait`（5）手番まで待つ（逃げて見えなくなったら `target_fled`）。待つ手番に標的以外の射撃で被弾したら `shot_while_waiting`。`abilities`（V3-4a）: 並べた能動技を使える手番ごとに使う。強打は標的が隣、なぎ払いは起きている敵が隣に 2 体以上、狙い撃ちは `with` の品で射程と射線が通るとき（それ以外の手番は通常の攻撃）。立て直し・身をかわすは載せられない、覚えていない、`with` の無い狙い撃ちは手番を使わずに `cannot_use`。結果の文に使った能動技と回数。その相手と決着を付ける。`with` なし: 隣なら近接攻撃を繰り返す。相手が追跡中で届かない間は隣に来るまで待つ（最大 10 手番、`target_not_approaching`）。当てて逃げる相手は追跡中で 2 マス以内なら 2 手番まで待つ（追わない）。`with`: そのスロットの品を投げて戦う（射程と射線が通るまで待つ）。止まるのは: 相手が倒れた（`target_down`）・離れた／逃げて射程を出た（`target_moved`）・見えなくなった（`target_gone`）・（`with`）隣に来た（`target_adjacent`）・品が尽きた（`out_of_ammo`）・射線が 3 手番続けて通らない（`no_line_of_sight`）・HP が `hp_floor`（既定 50%）以下・**次の手番に、届く追跡中の敵（隣・飛び道具）から 1 手の最悪の被害（`worst_turn` の合計）を受けると `hp_floor` を割る（`hp_risk`。被弾の前に止まる。始める前なら `hp_floor` のエラーで拒否）**・被弾の記録の無い種族から初めて被弾した（`first_hit`。一度だけ）・追跡中の別の敵・状態異常（V3-2R3）。眠っている・気付いていない相手は待たない（`target_not_hunting` で拒否）。結果の `outcome` に与えた攻撃（投げた）回数・命中・合計・待った手番 |
+| `fight` | `target: entity_id`, `with?: slot`, `hp_floor?`, `abilities?: string[]`, `until?: 'target'\|'clear'`, `adjacent?: 'throw'\|'melee'\|'stop'`, `approach?: 'wait'\|'advance'` | マクロ（V3-2R、V3-2R2 で拡張）。`approach`（V4-1a、`with` なし）: `wait`（既定）は相手が隣に来るのを待つ。`advance` は相手へ向かって歩き、隣に着いたら殴る（歩く間に撃たれても止まらない。`hp_floor`・`hp_risk`・新しい敵・予備動作・見失いなどの止まり方はそのまま。経路がふさがれていれば `blocked`）。`until: 'clear'`（V3-4b）: 標的を倒した後も、隣の追跡中の敵、いなければ最も近い追跡中の敵へ続け、いなくなれば `cleared`。`adjacent`（V3-4b、with のとき）: 相手が隣に来たら stop（既定）／throw（投げ続ける）／melee（近接に切り替える）。新しく見えた追跡中の敵で止まるのは被弾の記録の無い種族だけ。追跡中で逃げていない標的が見えなくなったら `fight.lostWait`（5）手番まで待つ（逃げて見えなくなったら `target_fled`）。待つ手番に標的以外の射撃で被弾したら `shot_while_waiting`。`abilities`（V3-4a）: 並べた能動技を使える手番ごとに使う。強打は標的が隣、なぎ払いは起きている敵が隣に 2 体以上、狙い撃ちは `with` の品で射程と射線が通るとき（それ以外の手番は通常の攻撃）。立て直し・身をかわすは載せられない、覚えていない、`with` の無い狙い撃ちは手番を使わずに `cannot_use`。結果の文に使った能動技と回数。その相手と決着を付ける。`with` なし: 隣なら近接攻撃を繰り返す。相手が追跡中で届かない間は隣に来るまで待つ（最大 10 手番、`target_not_approaching`）。当てて逃げる相手は追跡中で 2 マス以内なら 2 手番まで待つ（追わない）。`with`: そのスロットの品を投げて戦う（射程と射線が通るまで待つ）。止まるのは: 相手が倒れた（`target_down`）・離れた／逃げて射程を出た（`target_moved`）・見えなくなった（`target_gone`）・（`with`）隣に来た（`target_adjacent`）・品が尽きた（`out_of_ammo`）・射線が 3 手番続けて通らない（`no_line_of_sight`）・HP が `hp_floor`（既定 50%）以下・**次の手番に、届く追跡中の敵（隣・飛び道具）から 1 手の最悪の被害（`worst_turn` の合計）を受けると `hp_floor` を割る（`hp_risk`。被弾の前に止まる。始める前なら `hp_floor` のエラーで拒否）**・被弾の記録の無い種族から初めて被弾した（`first_hit`。一度だけ）・追跡中の別の敵・状態異常（V3-2R3）。眠っている・気付いていない相手は待たない（`target_not_hunting` で拒否）。結果の `outcome` に与えた攻撃（投げた）回数・命中・合計・待った手番 |
 | `pickup` | `item?: entity_id` | 省略時は足元の全て（入る分だけ） |
 | `drop` | `slot`, `qty?` | |
 | `equip` / `unequip` | `slot`, `confirm?`（equip のみ） | 呪いと分かっている品の equip は `confirm: true` が要る（無ければ `confirm_required`。V3-8）。装備すると、未鑑定の種類（装飾品）は正体が、装備品は呪いの有無が分かる（V3-4）。呪われた装備は外せない・同じ場所に別の品を付けられない・捨てられない（`cannot_use`） |
@@ -203,6 +204,7 @@ Observation {
                 first_seen?: true,                            // 本当に初めて見た種族（threat null の文が「不明（初見）」になる）
                 hits?: { your_melee?: [hits, tries], your_thrown?: [hits, tries], theirs?: [hits, tries] },   // 命中の記録（種族ごと。確率は出さない）
                 role?: 'guardian', fleeing?: true,            // 守護者 / 手負いで逃走中
+                objective?: true,                             // この遠征の目的の相手（目的の守護者・大守護者・賞金首。V4-1a。文は名前の後ろに「［目的］」）
                 damage_seen?: number,                         // 見ている間にこの個体が受けた実ダメージの合計
                 hp_left_est?: { min, max: number | null, samples, record: { min, max } },   // 体力の記録がある種族のみ。記録が estimateMinSamples（5）体未満は max: null。record は記録した個体の体力の範囲（標本）
                 shot: 'clear' | 'blocked',                    // 自分のセルから投擲の経路が通るか（v3）
@@ -210,7 +212,7 @@ Observation {
                 bounty?: number,                              // 倒すと戦利品に入る賞金（v3）
                 guardian?: { name, types: { id, name }[], weakness?: { id, name } },   // 守護者の「称号＋名前」・型・分かった弱点（知るまで無い。V3-3）
                 intent?: { code: 'winding_up'|'summoning'|'enraging', dir?, on_line?, text } }[]   // 予備動作（見えている間だけ。on_line = 突進の直線の上に自分がいる。V3-3）
-    items:    { id, ids?, name, pos, dir, dist, qty, role?: 'relic', remembered?, mine?: true, value? }[]
+    items:    { id, ids?, name, pos, dir, dist, qty, role?: 'relic', objective?: true, remembered?, mine?: true, value? }[]   // objective: この遠征の目的の遺物（V4-1a）
               // 同じセルの同種は 1 行（ids に全て）。mine = 自分が投げた物、value = 宝の価値（v3）
               // 自分が投げた物は見えている・記憶したものを全部で 1 行にまとめる（qty = 本数、pos = 最寄り、ids = 全て、near_qty = 最寄りのマスの本数。V3-2R2）
     items_omitted?: number          // 記憶の中の遠いアイテムのうち省いた件数
@@ -221,7 +223,8 @@ Observation {
     here: string                         // 足元の地形・アイテム
     passable_dirs: Dir[]
     frontiers: { pos, dir, dist }[]      // 未探索との境界（近い順、上限 5）
-    known_stairs: { type:'down'|'up', pos, dist, reachable, path_len: number | null }[]   // path_len: 既知地図上の経路長
+    known_stairs: { type:'down'|'up', pos, dist, reachable, path_len: number | null, occupied_by?, sealed?: true }[]   // path_len: 既知地図上の経路長。sealed: 大守護者を倒していない節目の下り階段（V4-1a）
+    collectable: { count, ids }          // 引数なしの collect（what: items）が拾いに行く品: 既定の範囲（15 歩）の内側で、collect と同じ経路で着ける品（V4-1a）。valid_actions の collect の件数はこれ
     unsighted?: number                   // 地形は判明しているが、まだ見ていないセルの数（地図の巻物の後。frontiers はそこへの境界を含む）
   }
   expedition?: {                       // 遠征の事実（次の一手の指示ではない）
@@ -412,6 +415,14 @@ V3-2R で足した項目（同じく後方互換。会心と経験値のルー�
 - `StatusInst.source`（状態異常を与えた者。毒で倒したときの撃破者になる）、`status_applied.targetAffixes`
 - `player_state.reason: 'joined'`（キャンプから始まる参加）。参加コマンドの `atCamp`
 - プレイヤー向けの射影で、見えていた個体が視界の外へ動いた `entity_moved` に `dirOut`（向きだけ。行き先は伏せたまま）
+
+V4-1a で足した項目（`engineVersion` 0.30.0。出来事の種類は増やしていないので `eventVersion` は 21 のまま。IMPROVEMENTS_V4 §12、DESIGN.md §38.1）:
+
+- 観測: `navigation.collectable: { count, ids }`（引数なしの collect が拾いに行く品。見えている品と覚えている品の両方）。`valid_actions` の `collect what:items` の件数をこれに合わせた（出ているのに collect が断る、を無くす。範囲の外の品は今までどおり品の一覧にあり、件数に入らない）
+- 観測: `visible.monsters[].objective`・`visible.items[].objective`（この遠征の目的の守護者・大守護者・賞金首・遺物。前の遠征の遺物には付かない）。文は名前の後ろに「［目的］」、人間の画面の名札にも同じ印。`EntityView.objective`・`RememberedView.objective`
+- 観測: `navigation.known_stairs[].sealed`（大守護者を倒していない節目の下り階段。判定は `stairsSealed`）
+- エラー: `details.blocked_by`（`hostile_adjacent`・`blocked` で、じゃまをしている見えている敵の ID。hint に名前）
+- 命令: `fight { approach: 'wait' | 'advance' }`（既定 `wait`）。`shot_while_waiting`・`target_shooting` で止まったときの文と get_rules に「approach: 'advance' で寄って戦える」。人間の画面の「戦う」にも同じ切り替え
 
 V4-0e で変えた項目（`engineVersion` 0.29.0、`eventVersion` 21。DESIGN.md §36.5）:
 

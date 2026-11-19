@@ -49,6 +49,8 @@ interface AbPick { id: string; name: string; target: 'adjacent' | 'throw' | 'dir
 
 /** 移動マクロ（explore / travel / collect）の慎重さ。flee は退くときの専用ボタンで使う */
 type MoveMode = 'careful' | 'steady';
+/** 戦う（fight の近接）で、追跡中で届かない相手を待つか寄っていくか（V4-1a §12.5。AI の approach と同じ命令） */
+type FightApproach = 'wait' | 'advance';
 
 /** 手番を消費しないコマンド（いつでも送れる。特技の選択はキャンプでも・手番でなくても） */
 const FREE: ReadonlySet<Command['type']> = new Set<Command['type']>(['say', 'note', 'retire', 'choose_perk', 'choose_boon']);
@@ -168,6 +170,7 @@ export function Play({ runId }: { runId: string }) {
   const [briefingNo, setBriefingNo] = useState<number | null>(null);
   const [restHp, setRestHp] = useState('');
   const [moveMode, setMoveModeState] = useState<MoveMode>(getPref('moveMode', 'careful') === 'steady' ? 'steady' : 'careful');
+  const [fightApproach, setFightApproachState] = useState<FightApproach>(getPref('fightApproach', 'wait') === 'advance' ? 'advance' : 'wait');
   /** 鑑定の巻物の対象の候補（pick モードの間だけ） */
   const [pick, setPickState] = useState<{ slot: string; options: { slot: string; name: string }[] } | null>(null);
   /** 能動技の対象の候補（abtarget モードの間だけ） */
@@ -189,6 +192,7 @@ export function Play({ runId }: { runId: string }) {
   const pathRef = useRef<Pos[] | null>(null);
   const throwSlotRef = useRef<string | null>(null);
   const moveModeRef = useRef<MoveMode>(moveMode);
+  const fightApproachRef = useRef<FightApproach>(fightApproach);
   const pickRef = useRef<typeof pick>(null);
   const abPickRef = useRef<AbPick | null>(null);
   const perkSentRef = useRef<string | null>(null);
@@ -219,6 +223,11 @@ export function Play({ runId }: { runId: string }) {
     moveModeRef.current = m;
     setPref('moveMode', m);
     setMoveModeState(m);
+  };
+  const setFightApproach = (a: FightApproach) => {
+    fightApproachRef.current = a;
+    setPref('fightApproach', a);
+    setFightApproachState(a);
   };
   /** 移動マクロに付ける mode（careful は既定なので省く）。steady を渡すとその場だけ強行 */
   const modeArg = (force?: MoveMode): { mode?: 'steady' } => ((force ?? moveModeRef.current) === 'steady' ? { mode: 'steady' } : {});
@@ -403,7 +412,7 @@ ${tr('それでも装備しますか？', 'Equip it anyway?')}`)) send({ ...last
     const v = viewRef.current;
     const o = obsNow();
     if (!v || !o) return;
-    const w = { ...(withSlot ? { with: withSlot } : {}), ...fightAbilities(v, withSlot) };
+    const w = { ...(withSlot ? { with: withSlot } : {}), ...fightAbilities(v, withSlot), ...(!withSlot && fightApproachRef.current === 'advance' ? { approach: 'advance' as const } : {}) };
     if (id) {
       if (!o.visible.monsters.some((m) => m.id === id)) { flash(tr('その敵は見えていない。', 'That enemy is not in view.')); return; }
       send({ type: 'fight', target: id, ...w });
@@ -1144,6 +1153,12 @@ ${tr('それでも装備しますか？', 'Equip it anyway?')}`)) send({ ...last
               <button class={`tiny ${moveMode === 'careful' ? 'on' : ''}`} onClick={() => setMoveMode('careful')}>{tr('慎重', 'Careful')}</button>
               <button class={`tiny ${moveMode === 'steady' ? 'on' : ''}`} onClick={() => setMoveMode('steady')}>{tr('強行', 'Steady')}</button>
             </span>
+            <span class="seg mmode" title={tr('戦う（F）で、追ってくるが隣にいない相手を: 待つ＝隣に来るまで待つ（最大 10 手番）／寄る＝寄っていき、隣に着いたら殴る（歩く間に撃たれても止まらない。動かずに撃ってくる相手に）',
+              'Fight (F) against a hunter that is not adjacent: Wait = wait until it comes adjacent (up to 10 turns) / Close in = walk up to it and attack once adjacent (getting shot on the way does not stop it; for enemies that stand and shoot)')}>
+              <span class="lbl">{tr('戦う', 'Fight')}</span>
+              <button class={`tiny ${fightApproach === 'wait' ? 'on' : ''}`} onClick={() => setFightApproach('wait')}>{tr('待つ', 'Wait')}</button>
+              <button class={`tiny ${fightApproach === 'advance' ? 'on' : ''}`} onClick={() => setFightApproach('advance')}>{tr('寄る', 'Close in')}</button>
+            </span>
             <button class="small" onClick={() => doExplore()} title={tr('x（Shift+X: 強行で探索・Shift+D: 風の方へ探索）', 'x (Shift+X: explore steadily, Shift+D: explore toward the draft)')}>{tr('探索', 'Explore')} (x)</button>
             {draft && !atCamp && adjAwake.length === 0 && (
               <button class="small draft" onClick={doExploreDraft}
@@ -1156,12 +1171,17 @@ ${tr('それでも装備しますか？', 'Equip it anyway?')}`)) send({ ...last
               <button class="small fight" onClick={() => doFight()} title={tr('隣の敵を、倒れる・離れる・HP が半分を下回るまで殴り続ける（F）', 'Keep attacking the adjacent enemy until it falls, moves away, or your HP drops below half (F)')}>
                 {tr('戦う', 'Fight')} (F)
               </button>
-            ) : comers.length > 0 && (
+            ) : comers.length > 0 && (fightApproach === 'advance' ? (
+              <button class="small fight" onClick={() => doFight()}
+                title={tr(`追ってくる敵（${comers[0].name}）へ寄っていき、隣に着いたら殴り続ける（F）。歩く間に撃たれても止まらない。HP が半分を下回る・別の追跡中の敵で止まる`, `Walk up to the enemy hunting you (${comers[0].name}) and keep attacking once adjacent (F). Getting shot on the way does not stop it. Stops below half HP or on another hunting enemy`)}>
+                {tr('寄って戦う', 'Close in')} (F)
+              </button>
+            ) : (
               <button class="small fight" onClick={() => doFight()}
                 title={tr(`追ってくる敵（${comers[0].name}）が隣に来るまで待ち（最大 10 手番）、来たら殴り続ける（F）。HP が半分を下回る・別の追跡中の敵で止まる`, `Wait until the enemy hunting you (${comers[0].name}) comes adjacent (up to 10 turns), then keep attacking (F). Stops below half HP or on another hunting enemy`)}>
                 {tr('迎え撃つ', 'Meet')} (F)
               </button>
-            )}
+            ))}
             {reach.map((m) => (
               <button key={`reach-${m.id}`} class="small fight" onClick={() => doReach(m.id)} title={reachAttackTitle()}>{reachAttackLabel(m.name)} (A)</button>
             ))}

@@ -49,6 +49,8 @@ export const CommandSchema = z.discriminatedUnion('type', [
   // with: スロット文字か、品の種類（'throwing_knife'・'core:javelin'。V3-3b §40.1）。retrieve: 投げる物が尽きたら自分の投擲物を拾いに行く（既定 true）
   z.object({ type: z.literal('fight'), target: EntityRefSchema, with: z.union([SlotSchema, z.string().regex(/^(core:)?[a-z][a-z0-9_]+$/)]).optional(), hpFloor: HpFloorSchema.optional(), abilities: z.array(z.string().min(1)).max(4).optional(),
     until: z.enum(['target', 'clear']).optional(), adjacent: z.enum(['throw', 'melee', 'stop']).optional(), lostOk: z.boolean().optional(), retrieve: z.boolean().optional(),
+    /** approach（V4-1a §12.5。with なしの近接）: wait＝追跡中で届かない相手が隣に来るまで待つ（既定）/ advance＝相手へ寄っていき、隣に着いたら殴る */
+    approach: z.enum(['wait', 'advance']).optional(),
     /** alsoWith: with の品が尽きて拾い直せる物も無くなったら、次に投げる品（V3-3c §44.6）。collectAfter: 決着の後に自分の投擲物を拾う */
     alsoWith: z.array(z.union([SlotSchema, z.string().regex(/^(core:)?[a-z][a-z0-9_]+$/)])).max(3).optional(), collectAfter: z.boolean().optional() }),
   /** 近接攻撃（V3-4）。隣の敵か、長柄の武器なら直線で 2 マス先の敵（間のマスが通れて誰もいない） */
@@ -144,6 +146,8 @@ export interface ActionError {
   message: string;
   /** 次に何をすればよいか */
   hint: string;
+  /** blocked_by: じゃまをしている敵の ID（hostile_adjacent・blocked。そのプレイヤーに見えている敵だけ。V4-1a §12.3） */
+  details?: { blocked_by?: string[] };
 }
 
 export function actionError(code: ActionErrorCode, message: string, hint: string): ActionError {

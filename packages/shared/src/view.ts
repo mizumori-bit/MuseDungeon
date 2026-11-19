@@ -74,6 +74,8 @@ export interface EntityView {
   carries?: string;
   /** 名前付きの強敵の名前（V3-5 §5.4） */
   named?: Names;
+  /** この遠征の目的の相手・品（目的の守護者・大守護者・賞金首・遺物。V4-1a §12.2） */
+  objective?: true;
 }
 
 export interface RememberedView {
@@ -91,6 +93,8 @@ export interface RememberedView {
   value?: number;
   /** 棲み処の地物の持ち主の守護者（V3-3c §44.6） */
   lair?: { name: Names; title?: Names };
+  /** この遠征の目的の遺物（V4-1a §12.2） */
+  objective?: true;
 }
 
 /** 護りの火の手がかり（V3-3c §44.6）: 同じ守護者の火を 1 基でも見ていれば、まだ見ていない灯っている火の方角と遠さ（気配と同じ形） */
@@ -232,6 +236,25 @@ export function currentExpedition(world: World): Expedition | null {
   return last.status === 'ended' ? null : last;
 }
 
+/**
+ * この遠征の目的の相手・品の ID（V4-1a §12.2）: 目的の守護者・賞金首・遺物と、目的の節目の階の大守護者。
+ * プレイヤーは目的（種類・階・名前）を知っているので、照らし合わせを観測の側で済ませるだけ。参加していない遠征なら空
+ */
+export function objectiveEntityIds(world: World, playerId: PlayerId): Set<EntityId> {
+  const out = new Set<EntityId>();
+  const x = currentExpedition(world);
+  if (!x || !x.participants.includes(playerId)) return out;
+  const t = x.objective.type;
+  if (t === 'slay_guardian' && x.targets.guardian) out.add(x.targets.guardian);
+  if (t === 'retrieve_relic' && x.targets.relic) out.add(x.targets.relic);
+  if (t === 'slay_bounty' && x.targets.bounty) out.add(x.targets.bounty);
+  if (t === 'slay_warden' && x.objective.targetDepth !== null) {
+    const fk = `main:${x.objective.targetDepth}`;
+    for (const e of Object.values(world.entities)) if (e.guardian?.warden && e.pos?.floor === fk) out.add(e.id);
+  }
+  return out;
+}
+
 /** 最新の遠征（終了済みを含む） */
 export function latestExpedition(world: World): Expedition | null {
   const list = world.expeditions;
@@ -353,6 +376,7 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
 
   const visibleSet = new Set(k.visible);
   const shots = new Set(k.shots ?? []);
+  const objectiveIds = objectiveEntityIds(world, playerId);
   const entities: EntityView[] = [];
   if (floor && floorKey) {
     const ordered: Entity[] = [];
@@ -371,6 +395,7 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
         const mk = maskKind(world, k.identified, e.kind);
         const iv: EntityView = { id: e.id, cat, kind: mk.kind, appearanceId: mk.appearanceId, pos, qty: e.item!.qty, affixes: [...e.item!.affixes] };
         if (e.role) iv.role = e.role;
+        if (objectiveIds.has(e.id)) iv.objective = true;
         if (e.item!.thrownBy === playerId) iv.mine = true;
         if (e.item!.value !== undefined) iv.value = e.item!.value;
         entities.push(iv);
@@ -388,6 +413,7 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
             if (e.scale.tier > 0) v.tier = e.scale.tier;
           }
           if (e.role) v.role = e.role;
+          if (objectiveIds.has(e.id)) v.objective = true;
           if (e.bounty) v.bounty = e.bounty;
           const ds = k.damageSeen?.[e.id];
           if (ds) v.damageSeen = ds;
@@ -433,6 +459,7 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
     // 役割は見た時点で分かる不変の性質
     const we = world.entities[r.id];
     if (we?.role) rv.role = we.role;
+    if (objectiveIds.has(r.id)) rv.objective = true;
     if (r.cat === 'item' && we?.item?.thrownBy === playerId && !we.item.heldBy) rv.mine = true;
     if (r.cat === 'item' && we?.item?.value !== undefined) rv.value = we.item.value;
     const lg = we?.lairOf ? world.entities[we.lairOf]?.guardian : undefined;
