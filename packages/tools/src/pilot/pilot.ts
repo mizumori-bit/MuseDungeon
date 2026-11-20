@@ -292,6 +292,8 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
   /** この遠征で、相手にしない敵に撃たれて出た階（V4-1g §24.2 の 2） */
   let avoidDepths = new Set<number>();
   let avoidExp: number | null = null;
+  /** 遠征ごとの、相手にしない敵に撃たれて出た階と、その相手（V4-1h §26.3: 同じ相手にまた撃たれたら戻らない） */
+  let leftBy = new Map<number, Set<string>>();
   /** 安全装置に達したが、協力プレイで迷宮にいるので、帰ってから終える（V4-1g §24.4。猶予は実時間で 3 分） */
   let closing = null as { reason: string; until: number } | null;
   /** 仲間の観測の写し（状態・階・見えていれば位置と HP）と、それが最後に変わった実時間（party_idle。§23.8） */
@@ -527,17 +529,20 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
       for (const m of obs.visible.monsters.filter((mm) => mm.objective)) { expTrack.met = true; expTrack.dealt = Math.max(expTrack.dealt, m.damage_seen ?? 0); }
       if (prev.scope.split(':')[0] === String(xno) && obs.self.hp < prev.hp) expTrack.taken += prev.hp - obs.self.hp;
     }
-    // 相手にしないと決めた敵に撃たれた（V4-1g §24.2 の 2）: HP が減り、追ってくる相手にしない敵が見えていて、隣に相手にしない敵以外の起きている敵がいない。
-    // 階段で階を出る。この遠征では、その階に戻らない
-    if (xno !== avoidExp) { avoidExp = xno; avoidDepths = new Set(); }
+    // 相手にしないと決めた敵に撃たれた（V4-1g §24.2 の 2・V4-1h §26.3）: HP が減り、追ってくる相手にしない敵が見えていて、隣に相手にしない敵以外の起きている敵がいない。
+    // 階段で階を出る。1 回目は、休んだ後に 1 回戻る。戻って同じ相手にまた撃たれたら、この遠征では、その階に戻らない
+    if (xno !== avoidExp) { avoidExp = xno; avoidDepths = new Set(); leftBy = new Map(); }
     if (scope === prev.scope && obs.self.hp < prev.hp && !mem.leaveFloor && obs.self.floor) {
       const ig = new Set(ignoredNow());
       const shooter = obs.visible.monsters.find((m) => ig.has(m.id) && m.awareness === 'hunting' && !m.fleeing);
       const adjOther = obs.visible.monsters.some((m) => m.dist <= 1 && m.awareness !== 'asleep' && !ig.has(m.id));
       if (shooter && !adjOther) {
+        const d = obs.self.floor.depth;
+        const again = leftBy.get(d)?.has(shooter.id) ?? false;
+        leftBy.set(d, new Set([...(leftBy.get(d) ?? []), shooter.id]));
         mem.leaveFloor = true;
-        avoidDepths.add(obs.self.floor.depth);
-        note('leave_floor', [lineWith(text, shooter.id), `相手にしないと決めた ${shooter.name} に撃たれた（HP ${prev.hp}→${obs.self.hp}）。階段でこの階（地下 ${obs.self.floor.depth} 階）を出て、この遠征では戻らない`].filter(Boolean).join('\n'));
+        if (again) avoidDepths.add(d);
+        note('leave_floor', [lineWith(text, shooter.id), `相手にしないと決めた ${shooter.name} に撃たれた（HP ${prev.hp}→${obs.self.hp}）。階段でこの階（地下 ${d} 階）を出る。${again ? '戻ってまた撃たれたので、この遠征では戻らない' : '休んだ後に 1 回戻る'}`].filter(Boolean).join('\n'));
       }
     }
     // 仲間の動き（§23.8）: 観測の party に出る項目が変わったら、その時刻を覚える。party_idle で上げて待っている間に動いたら、待つのをやめて知らせる
@@ -921,8 +926,11 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
     if (stuck >= 3) { stuck = 0; wakeNow({ level: 'wake', reason: 'stuck', key: `stuck:${turn.turn_no}`, detail: lastOutcome }); continue; }
     if (waiting || orders.mode === 'hold') { writeState(); continue; }
     const aa = afterAction(decision.tool, r.stop);
-    // 進み具合（§14.2 の 4）: 新しいマスに立った・倒した、が 8 回続けて無ければ stuck
-    if (PROGRESS_TOOLS.has(decision.tool)) {
+    // 進み具合（§14.2 の 4）: 新しいマスに立った・倒した、が 8 回続けて無ければ stuck。
+    // 協力プレイで仲間についていく命令（待つ・寄る・助けに行く・立て直しで仲間の所へ）は、進み具合とみなす（相手が先を決める。
+    // V4-1h の測り直しで分かった: ゆっくり進む相手について同じマスを行き来するうちに stuck になり、見本が「帰る」と答えて仲間を置いて帰った）
+    if (decision.why === 'follow' || decision.why === 'assist' || decision.why === 'recover_ally') noProgress = 0;
+    else if (PROGRESS_TOOLS.has(decision.tool)) {
       noProgress = progressed(aa.kind === 'ok' && !!aa.killed) ? 0 : noProgress + 1;
       if (noProgress >= NO_PROGRESS_MAX) { noProgress = 0; wakeNow({ level: 'wake', reason: 'stuck', key: `stuck:progress:${turn.turn_no}`, detail: `階の探索も撃破も進まない命令が ${NO_PROGRESS_MAX} 回続いた: ${lastOutcome}` }); continue; }
     }

@@ -275,17 +275,24 @@ describe('pilot の判断の表（§10.4〜§10.6）', () => {
     const r5 = decide(obs, ctxOf(defaultOrders(), { mem }));
     expect(r5.decision.kind === 'act' && r5.decision.tool).toBe('travel_to');
     if (r5.decision.kind === 'act') expect(r5.decision.args.to).toEqual({ x: obs.self.pos!.x + 8, y: obs.self.pos!.y });
-    // 隣に起きている敵がいても、立て直しの間は殴らない（来た道を戻る。V4-1g §24.2 の 1）
+    // 3) 隣で追ってくる役割の無い敵がいて、階段にも仲間にも行けない: 殴る（撃ってくる相手がいない。V4-1h §26.1）
     obs.visible.monsters = [monster({ id: 'e_chase1', dist: 1 })];
     const r6 = decide(obs, ctxOf(defaultOrders(), { mem }));
-    expect(r6.decision.kind === 'act' && r6.decision.tool).toBe('travel_to');
-    // 道をふさいでいる（断りの blocked_by）ときだけ殴る
-    const r6b = decide(obs, ctxOf(defaultOrders(), { mem, refused: new Set(['travel_to']), refusal: { code: 'blocked', text: 'x', blockedBy: ['e_chase1'] } }));
+    expect(r6.decision.kind === 'act' && `${r6.decision.tool}:${r6.decision.args.target}`).toBe('attack:e_chase1');
+    // この数手番に隣でない相手から被害を受けている（撃たれている）: 殴らずに離れる（来た道を戻る）
+    const r6s = decide(obs, ctxOf(defaultOrders(), { mem: { ...mem, hurtFarAgo: 0 } }));
+    expect(r6s.decision.kind === 'act' && r6s.decision.tool).toBe('travel_to');
+    // 帰ると決めた後（mode: return）: 殴らない
+    const r6r = decide(obs, ctxOf({ ...defaultOrders(), mode: 'return' }, { mem }));
+    expect(r6r.decision.kind === 'act' && r6r.decision.tool).toBe('travel_to');
+    // 道をふさいでいる（断りの blocked_by）なら、撃たれていても殴る
+    const r6b = decide(obs, ctxOf(defaultOrders(), { mem: { ...mem, hurtFarAgo: 0 }, refused: new Set(['travel_to']), refusal: { code: 'blocked', text: 'x', blockedBy: ['e_chase1'] } }));
     expect(r6b.decision.kind === 'act' && `${r6b.decision.tool}:${r6b.decision.args.target}`).toBe('attack:e_chase1');
-    // 5) どれもできない: 起こす（danger）
+    // 5) 手が尽きた（まだ倒されうる状態ではない）: 帰らずに起こす（recover_failed。V4-1h §26.2）
     obs.visible.monsters = [monster({ id: 'e_chase1', dist: 3 })];
     const r7 = decide(obs, ctxOf(defaultOrders(), { mem: { ...mem, trail: [] } }));
-    expect(r7.decision.kind === 'wake' && r7.decision.wake.reason).toBe('danger');
+    expect(r7.decision.kind === 'wake' && `${r7.decision.wake.level}:${r7.decision.wake.reason}`).toBe('wake:recover_failed');
+    if (r7.decision.kind === 'wake') expect(r7.decision.wake.detail).toContain('試した手');
     // 休んで戻った: 立て直しは終わり、階を移っていたら戻る
     obs.self.hp = obs.self.max_hp;
     obs.visible.monsters = [];
@@ -700,16 +707,17 @@ describe('pilot をサーバーにつないで動かす（§10.8）', () => {
 
   it('V4-1e §19.3: 確定 0 の遠征が 3 回続いたら、次を始めずにキャンプで stalled を上げて待つ（返事役の見本は escalate に答えない）。history.jsonl に 1 遠征 1 行', async () => {
     const h = await harness();
-    // 返事役: キャンプでは出発してすぐ（入口の階段の上で）帰る。ほかは見本のまま
+    // 返事役: キャンプでは出発してすぐ（入口の階段の上で）帰る。危ない（danger。V4-1g から上げる段）は AI の代わりに帰ると答える。ほかは見本のまま
     const responder = (ev: WakeEvent) => {
+      if (ev.level === 'escalate' && ev.reason === 'danger') { simpleResponder({ ...ev, level: 'wake' }); return; }
       if (ev.level !== 'wake' || ev.reason !== 'camp') { simpleResponder(ev); return; }
       const cur = readOrders(ev.ordersPath) ?? defaultOrders();
       const offer = ev.state.camp!.offers.find((o) => o.type !== 'slay_warden')!;
       writeOrders(h, { ...cur, rev: cur.rev + 1, queue: [{ tool: 'start_expedition', args: { offer: offer.index } }, { tool: 'extract', args: { confirm: true } }] });
     };
     const p = start(h, { responder });
-    await until(() => h.wakes.some((w) => w.level === 'escalate'), 30000);
-    const esc = h.wakes.find((w) => w.level === 'escalate')!;
+    await until(() => h.wakes.some((w) => w.level === 'escalate' && w.reason !== 'danger'), 30000);
+    const esc = h.wakes.find((w) => w.level === 'escalate' && w.reason !== 'danger')!;
     expect(esc.reason).toBe('stalled');
     expect(esc.detail).toContain('直近 3 回の遠征');
     const starts = () => rows(h.dir).filter((r) => r.source === 'queue' && r.tool === 'start_expedition' && r.ok === true).length;
@@ -736,7 +744,7 @@ describe('pilot をサーバーにつないで動かす（§10.8）', () => {
     const rev = readOrders(join(h.dir, 'orders.json'))!.rev;
     await new Promise((r) => setTimeout(r, 600));
     expect(starts()).toBe(hist.length);
-    expect(h.wakes.filter((w) => w.level === 'escalate')).toHaveLength(1);
+    expect(h.wakes.filter((w) => w.level === 'escalate' && w.reason !== 'danger')).toHaveLength(1);
     expect(readOrders(join(h.dir, 'orders.json'))!.rev).toBe(rev);
     const st = JSON.parse(readFileSync(join(h.dir, 'state.json'), 'utf-8'));
     expect(st.status).toBe('camp');
@@ -744,7 +752,7 @@ describe('pilot をサーバーにつないで動かす（§10.8）', () => {
     await p.stop();
     // 起動し直しても、記録から空回りと分かる（すぐに上げる）
     const n0 = h.wakes.filter((w) => w.level === 'escalate').length;
-    const p2 = start(h);
+    const p2 = start(h, { responder });
     await until(() => h.wakes.filter((w) => w.level === 'escalate').length > n0, 20000);
     expect(h.wakes.filter((w) => w.level === 'escalate').at(-1)!.reason).toBe('stalled');
     expect(starts()).toBe(hist.length);
@@ -908,12 +916,19 @@ describe('pilot をサーバーにつないで動かす（§10.8）', () => {
     // B の state.json: ついていく相手は A
     expect(JSON.parse(readFileSync(join(hb.dir, 'state.json'), 'utf-8')).follow).toBe(a.port.playerId);
     expect(JSON.parse(readFileSync(join(ha.dir, 'state.json'), 'utf-8')).follow).toBeNull();
-    // 両方が迷宮にいた間、B が A より深い階にいたことはほとんど無い（A が上った直後だけ）
+    // B は自分から A より深い階へ進まない: B が迷宮の中で深い階へ移って A より深くなったのは、B の立て直しで階段を移ったときだけ。
+    // （ほかに B が A より深くなるのは、A が立て直しで上の階へ移ったとき（V4-1h §26.2）と、遠征の始まりにそれぞれの再開する場所から出るとき（§26.5）。
+    //  V4-1g までは「B が深い手番が 1 割未満」を見ていたが、A が立て直しで撤退せずに階段で上へ移るようになり、この 2 つで 1 割を超えた）
     const both = samples.filter((x) => x.a !== null && x.b !== null);
     const deeper = both.filter((x) => x.b! > x.a!).length;
-    const info = `B の手番 ${samples.length}、両方が迷宮 ${both.length}、B が深い ${deeper}`;
+    const wentDeeper = samples.filter((x, i) => i > 0 && samples[i - 1]!.b !== null && x.b !== null && x.a !== null && x.b > samples[i - 1]!.b! && x.b > x.a).length;
+    const recoverCross = rows(hb.dir).filter((r) => r.tool === 'use_stairs' && (r.why === 'recover' || r.why === 'recover_return')).length;
+    const followDeeper = rows(hb.dir).filter((r) => r.tool === 'use_stairs' && (r.why === 'descend' || r.why === 'explore')).length;
+    const info = `B の手番 ${samples.length}、両方が迷宮 ${both.length}、B が深い ${deeper}、B が A より深くへ移った ${wentDeeper}（B の立て直しで階段を移った ${recoverCross}）`;
     expect(both.length, info).toBeGreaterThan(10);
-    expect(deeper / both.length, info).toBeLessThan(0.1);
+    expect(wentDeeper, info).toBeLessThanOrEqual(recoverCross);
+    // ついていく間、B は自分の判断で下りない（下りる use_stairs は、ついていく行か立て直しの行だけ）
+    expect(followDeeper, info).toBe(0);
     manager.closeAll();
     await new Promise<void>((r2) => app.server.close(() => r2()));
   }, 60000);

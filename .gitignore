@@ -5,3 +5,6 @@ runs/
 .claude/settings.local.json
 # pilot の 3 つのファイル（orders.json・state.json・log.jsonl。IMPROVEMENTS_V4 §10.2）
 pilot-data/
+# 手元の試験用（プレイヤーのトークンと pilot の記録。コミットしない）
+token.txt
+bot-test-pilot/

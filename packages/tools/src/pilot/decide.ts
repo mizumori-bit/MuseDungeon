@@ -336,6 +336,32 @@ export function fleeArgs(obs: Observation): { mode: 'flee'; hp_floor: number } {
 }
 
 /** 離れる（§14.3 の 3・4）: 協力プレイで仲間が見えていれば仲間の隣へ、そうでなければ来た道を戻る */
+function stairsOf(obs: Observation) {
+  return obs.navigation.known_stairs ?? [];
+}
+
+/**
+ * ついていく相手の所へ行く（立て直しの手が尽きたとき。V4-1h §26.2）: 見えていれば相手へ、別の階なら相手の階への階段へ（上なら上る）、
+ * 見えていなければ最後に見た位置へ。行けなければ null
+ */
+function toLeader(obs: Observation, leader: ObsPartyMember, fm: PilotMemory['follow'] | null, stairs: Observation['navigation']['known_stairs'], depth: number, can: (tool: string) => boolean): { tool: string; args: Record<string, unknown> } | null {
+  if (!obs.self.pos) return null;
+  if (leader.pos && leader.floor === depth) {
+    const lp = { x: leader.pos[0], y: leader.pos[1] };
+    if (cheb(obs.self.pos, lp) > 1 && can('travel_to')) return { tool: 'travel_to', args: { to: leader.entity ?? lp, ...fleeArgs(obs) } };
+    return null;
+  }
+  if (leader.floor !== undefined && leader.floor !== depth) {
+    const way = leader.floor > depth ? 'down' : 'up';
+    const st = stairs.find((s) => s.type === way && s.reachable && !(way === 'down' && s.sealed));
+    if (st?.dist === 0 && can('use_stairs')) return { tool: 'use_stairs', args: {} };
+    if (st && can('travel_to')) return { tool: 'travel_to', args: { to: `stairs_${way}`, ...fleeArgs(obs) } };
+    return null;
+  }
+  if (fm?.lastPos && cheb(obs.self.pos, fm.lastPos) > 1 && can('travel_to')) return { tool: 'travel_to', args: { to: { x: fm.lastPos.x, y: fm.lastPos.y }, ...fleeArgs(obs) } };
+  return null;
+}
+
 function moveAway(obs: Observation, ctx: DecideContext, mem: PilotMemory): { tool: string; args: Record<string, unknown> } | null {
   const ally = ctx.coop ? farAlly(obs) : undefined;
   if (ally) return { tool: 'travel_to', args: { to: ally.id, ...fleeArgs(obs) } };
@@ -555,11 +581,16 @@ export function decide(obs: Observation, ctx: DecideContext): DecideResult {
     why = 'leave_floor';
     if (blockerAdj && can('attack')) return act('attack', { target: blockerAdj.id });
     const st0 = onStairs(obs);
-    if (st0 && can('use_stairs')) { upd({ crossed: null }); return act('use_stairs', {}); }
+    // 1 回目は、休んだ後に戻る（crossed）。同じ相手にまた撃たれた 2 回目（avoidDepths に入った）は戻らない（V4-1h §26.3）
+    if (st0 && can('use_stairs')) { upd({ crossed: ctx.avoidDepths?.has(depthNow) ? null : st0.type === 'up' ? 'down' : 'up' }); return act('use_stairs', {}); }
     const to = escapeStairs(obs) ?? nearestStairs(obs)?.type;
     if (to && can('travel_to')) return act('travel_to', { to: `stairs_${to}`, ...fleeArgs(obs) });
   }
   why = 'recover';
+  /** 帰ると決めた後（V4-1h §26.1）: mode return・stop_at_camp、相手が帰った・倒れたので帰る、目的の後の帰還 */
+  const decidedHome = leaving || followHome || (!following && x?.status === 'objective_complete' && p.after_objective === 'extract');
+  /** この数手番に、隣でない相手から被害を受けている（撃たれている） */
+  const shotAt = mem.hurtFarAgo !== null && mem.hurtFarAgo <= 2;
   // 8. 立て直しの段（§14.3）: HP が wake_hp_pct を切った、または fight が hp_floor で止まった・断られた、steady が被害で止まった
   const needRecovery = pct < p.wake_hp_pct || mem.recovering;
   if (needRecovery) {
@@ -580,26 +611,47 @@ export function decide(obs: Observation, ctx: DecideContext): DecideResult {
         const esc = escapeStairs(obs);
         if (esc && can('travel_to')) return act('travel_to', { to: `stairs_${esc}`, ...fleeArgs(obs) });
       }
-      // 立て直しの間は、隣の敵を殴らない（逃げると決めたら殴らない。V4-1g §24.2 の 1）。殴るのは、道をふさいでいる敵（断りの blocked_by）だけ
+      // 道をふさいでいる敵（断りの blocked_by）は、どの場面でも殴る
       if (blockerAdj && can('attack')) return act('attack', { target: blockerAdj.id });
-      // 3) 4) 仲間の隣へ寄る・来た道を戻る
+      // 3) 隣で追ってくる役割の無い敵がいて、階段へも仲間へも行けない: 殴る（逃げても追ってくる。V4-1h §26.1）。
+      //    ただし、帰ると決めた後と、この数手番に隣でない相手から被害を受けている（撃たれている）ときは殴らない（離れるのが先）。
+      //    役割のある敵（目的の相手も）とは、HP が減ったまま殴り合わない
+      const adjR = adjacentHunting(obs).filter((m) => !isRoleEnemy(m))[0];
+      if (adjR && !decidedHome && !shotAt && !(ctx.coop && farAlly(obs)) && can('attack')) return act('attack', { target: adjR.id });
+      // 4) 仲間の隣へ寄る・来た道を戻る
       if (can('travel_to')) {
         const m = moveAway(obs, ctx, mem);
         if (m) return act(m.tool, m.args);
       }
-      // 5) どれもできない: 退く。それもできなければ、追い詰められた（逃げる手が無い）: 隣で追ってくる敵は、道をふさいでいるのと同じなので殴る（cornered を知らせる。
-      //    V4-1g の測り直しで分かった: 殴らずに上げると、返事が来ても同じ手番で上げ直すだけで、ソロでは手番が進まなかった）。それも無ければ上げる
-      const r = retreat(obs, p);
-      if (r && can(r.tool)) return actR(r);
-      const corner = adjacentHunting(obs)[0];
+      // 5) 手が尽きた。手が尽きただけでは帰らない（自分から帰るのは lethal_range・critical_hp の「退く」だけ。V4-1h §26.2）。
+      //    帰ると決めた後なら、帰る順のとおりに帰る
+      if (decidedHome) {
+        const h = homewardAction(obs, p, can, fleeArgs(obs));
+        if (h) { why = 'return'; return actR(h); }
+        why = 'recover';
+      }
+      //    協力プレイで、ついていく相手が迷宮にいる: 相手の所へ行く（仲間を置いて帰らない）
+      const tl = following && leader ? toLeader(obs, leader, fm, stairsOf(obs), depthNow, can) : null;
+      if (tl) { why = 'recover_ally'; return act(tl.tool, tl.args); }
+      //    追い詰められた（逃げる手がまったく無い）: 隣で追ってくる敵は、道をふさいでいるのと同じなので殴る（cornered を知らせる）。
+      //    階段の上にいる・着ける階段がある（この階で階を移る回数を使い切っただけ）なら、逃げ道はある: 殴らずに起こす（V4-1h の測り直しで分かった:
+      //    回数を使い切った後に、隣の守護者と HP が減ったまま殴り合っていた）
+      const corner = !onStairs(obs) && !escapeStairs(obs) ? adjacentHunting(obs)[0] : undefined;
       if (corner && can('attack')) {
         why = 'cornered';
         notify.push(W('cornered', `cornered:${corner.id}:${obs.seq}`, [lineWith(ctx.text, corner.id), `逃げる手が無い（階段へも、来た道へも行けない）。隣で追ってくる ${corner.name} を殴る`].filter(Boolean).join('\n'), 'notify'));
         return act('attack', { target: corner.id });
       }
-      const key = `danger:recovery:${obs.self.hp}:${obs.seq}`;
-      fresh(key);
-      return wake(W('danger', key, alert(obs, 'low_hp')?.text ?? obs.summary, 'escalate'));
+      //    それ以外: 起こす（recover_failed）。帰るかどうかは返事役か AI が決める。今の HP・追ってくる敵・試した手を添える
+      const key = `recover_failed:${x?.no ?? 0}:${depthNow}`;
+      if (fresh(key)) {
+        const tried = [
+          `HP ${obs.self.hp}/${obs.self.max_hp}（立て直しの線 ${p.wake_hp_pct}%）`,
+          `試した手: 休む（追ってくる敵がいてできない）・階段で階を移る（この階で ${mem.stairRetreats} 回${mem.stairRetreats >= 2 ? '。使い切った' : viaStairs ? '。着ける階段が無い' : '。仲間が見えているので使わない'}）・来た道を戻る（行ける所が無い）`,
+          ...activeCh.map((m) => lineWith(ctx.text, m.id) || `- ${m.name} ${m.id}`),
+        ];
+        return wake(W('recover_failed', key, [`立て直しの手が尽きた（まだ倒されうる状態ではない）。帰るか、続けるかを決めてほしい`, ...tried].join('\n')));
+      }
     }
   }
   // 立て直しで階を移って休んだ: 戻る（相手にしない敵に撃たれて出た階には戻らない。V4-1g §24.2 の 2）

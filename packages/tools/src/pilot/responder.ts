@@ -5,7 +5,7 @@
 //   目的の相手・品 → engage_objective: true（以後は pilot が挑む・拾う）
 //   特技・加護   → 最初の候補
 //   動けない（refused_hostile_adjacent・refused_blocked） → じゃまをしている敵（detail の先頭の行）と戦う。罠にふさがれていたら帰る
-//   行き詰まり・やることが無い・目的の相手を諦めた・目的の相手が見つからない（target_not_found）・目的の階へ行けない（target_blocked） → 帰る
+//   行き詰まり・やることが無い・目的の相手を諦めた・目的の相手が見つからない（target_not_found）・目的の階へ行けない（target_blocked）・立て直しの手が尽きた（recover_failed） → 帰る
 //   （危ない（danger）は V4-1g から escalate なので、見本は答えない。pilot は自分で退く）
 //   同じ理由に同じ返事を 2 回続けない: 2 回目は「帰る」にする（V4-1g §24.3。返事役の記録は orders.json の隣の responder.json）（mode: return。階段から帰り、綱は階段へ着けないとき・途中で危ないときだけ。
 //                  そのために allow_lifeline: true にする。V4-1e §19.4。今までは綱を queue に書いていた）
@@ -61,7 +61,7 @@ export function simpleResponder(ev: WakeEvent): void {
       else home();
       break;
     }
-    case 'danger': case 'nothing_to_do': case 'stuck': case 'gave_up': case 'target_not_found': case 'target_blocked':
+    case 'danger': case 'nothing_to_do': case 'stuck': case 'gave_up': case 'target_not_found': case 'target_blocked': case 'recover_failed':
       home();
       break;
     default:
