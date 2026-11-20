@@ -528,7 +528,7 @@ function viewOf(x: Expedition): ExpeditionView {
   return {
     no: x.no, objective: x.objective, points: x.points, relicGuarded: x.relicGuarded, status: x.status, endReason: x.endReason,
     progress: { reached: x.progress.reached, guardianSlain: x.progress.guardianSlain, relicHeld: x.progress.relicHeldBy !== null, relicHeldByYou: false, ...(x.progress.vaultOpened ? { vaultOpened: true } : {}) },
-    extracted: false, result: x.result, startSeq: x.startSeq, endSeq: x.endSeq,
+    extracted: false, returns: x.extracted.map((r) => ({ player: r.player, completed: r.completed, lifeline: !!r.lifeline })), result: x.result, startSeq: x.startSeq, endSeq: x.endSeq,
     slot: x.slot ?? null, traits: [...(x.traits ?? [])], multiplierPct: x.multiplierPct ?? 100,
     haul: { ...(x.haul ?? { bounty: 0, discovery: 0, kills: 0 }) }, maxDepth: x.progress.maxDepth ?? 0, crossedDepth: x.progress.crossedDepth ?? 0,
   };

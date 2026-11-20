@@ -135,6 +135,8 @@ export interface PartyMemberView {
   controller: Controller;
   state: PlayerState;
   depth: number | null;
+  /** 迷宮にいる仲間の HP の段階（見えていなくても・別の階でも。V4-1g G3）。迷宮にいなければ null */
+  hp: HpState | null;
 }
 
 /** 遠征の事実（目的・進捗）。守護者や遺物の居場所は含まない */
@@ -148,6 +150,8 @@ export interface ExpeditionView {
   progress: { reached: boolean; guardianSlain: boolean; relicHeld: boolean; relicHeldByYou: boolean; vaultOpened?: boolean };
   /** 自分が extract 済みか */
   extracted: boolean;
+  /** 帰った参加者と帰り方（V4-1g G4: 協力プレイの確定の、だれの分か） */
+  returns: { player: PlayerId; completed: boolean; lifeline: boolean }[];
   result: ExpeditionResult | null;
   startSeq: number;
   endSeq: number | null;
@@ -497,6 +501,7 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
       status: latest.status, endReason: latest.endReason,
       progress: { reached: latest.progress.reached, guardianSlain: latest.progress.guardianSlain, relicHeld: held !== null, relicHeldByYou: held === me.id, ...(latest.progress.vaultOpened ? { vaultOpened: true } : {}) },
       extracted: latest.extracted.some((x) => x.player === playerId),
+      returns: latest.extracted.map((r) => ({ player: r.player, completed: r.completed, lifeline: !!r.lifeline })),
       result: latest.result ? structuredClone(latest.result) : null,
       startSeq: latest.startSeq, endSeq: latest.endSeq,
       slot: latest.slot ?? null, traits: [...(latest.traits ?? [])], multiplierPct: latest.multiplierPct ?? 100,
@@ -515,7 +520,8 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
     const p = world.players[pid];
     const pe = world.entities[p.entityId];
     const depth = pe?.pos ? world.floors[pe.pos.floor]?.depth ?? null : null;
-    return { playerId: pid, entityId: p.entityId, name: p.name, classId: p.classId, controller: { ...p.controller }, state: p.state, depth };
+    const hp = p.state === 'alive' && pe?.pos && pe.stats ? hpState(pe.stats.hp, pe.stats.maxHp) : null;
+    return { playerId: pid, entityId: p.entityId, name: p.name, classId: p.classId, controller: { ...p.controller }, state: p.state, depth, hp };
   });
 
   return {

@@ -227,10 +227,14 @@ describe('logs, recovery, determinism', () => {
 describe('two players in one run (coop)', () => {
   it('both bots can act in the same run without deadlock', async () => {
     const manager = new SessionManager(content, loadConfig({ runsDir: null, waitOthersMs: 300 }));
-    const a = await manager.createRun({ name: 'A', mode: 'coop', seed: 'coop-1', controller: { kind: 'agent', label: 'a' }, objective: 'auto' });
+    // キャンプから作り、2 人目が入ってから遠征を始める（V4-1g G1: 途中で入った者はキャンプから）
+    const a = await manager.createRun({ name: 'A', mode: 'coop', seed: 'coop-1', controller: { kind: 'agent', label: 'a' } });
     if ('error' in a) throw new Error(a.error.message);
     const b = await manager.joinRun(a.session.runId, { name: 'B', classId: 'core:scout', controller: { kind: 'human', label: 'b' } });
     if ('error' in b) throw new Error(b.error.message);
+    expect(b.port.view().status).toBe('at_camp');
+    expect((await a.port.act({ type: 'start_expedition', offer: 1 }, { source: 'bot' })).ok).toBe(true);
+    expect(b.port.view().status).not.toBe('at_camp');
     // 両者が規定回数（時間を進める行動）を終えるまで、手番が来たら行動し続ける（先に終わった側も待機で手番を回す）
     const counts = { a: 0, b: 0 };
     const target = 8;

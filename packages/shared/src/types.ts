@@ -298,7 +298,8 @@ export interface PlayerStats {
   lost?: number;
 }
 
-export interface Controller { kind: 'agent' | 'human'; label: string }
+/** kind: agent（AI）/ human（人間）/ unknown（参加のときに言わなかった。V4-1g G2: HTTP で controller を省いたとき） */
+export interface Controller { kind: 'agent' | 'human' | 'unknown'; label: string }
 
 export interface PlayerRecord {
   id: PlayerId;

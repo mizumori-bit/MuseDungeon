@@ -41,8 +41,8 @@ function classesText(c: Catalog, locale: 'ja' | 'en'): string {
   for (const [lid, list] of byLineage) lines.push(`- ${lineageName(lid)}: ${list.join(ja ? '／' : ' / ')}`);
   // 能動技（V3-4 §4.2）
   lines.push(ja
-    ? `\n# 能動技（use_ability { id, target?, slot? }）\n- 資源は使わず、再使用までの手番（cooldown）だけで管理する。使うと 1 手番。self.abilities に cooldown_left（0 なら使える）と、遠征ごとの回数があれば uses_left。valid_actions に使えるものは対象付き（use_ability bash -> e_xxx）、使えないものは残りの手番付きで出る。使えない・対象が無いときは手番を使わずに拒否される。`
-    : `\n# Abilities (use_ability { id, target?, slot? })\n- No resource: only a cooldown in turns. Using one takes a turn. self.abilities shows cooldown_left (0 = ready) and uses_left when limited per expedition. valid_actions lists ready ones with targets (use_ability bash -> e_xxx) and the others with turns left. If unusable or without a target it is refused without spending a turn.`);
+    ? `\n# 能動技（use_ability { ability, target?, slot? }。ability は id でもよい）\n- 資源は使わず、再使用までの手番（cooldown）だけで管理する。使うと 1 手番。self.abilities に cooldown_left（0 なら使える）と、遠征ごとの回数があれば uses_left。valid_actions に使えるものは対象付き（use_ability bash target:e_xxx。書いてある形のまま呼べる）、使えないものは「不可」と残りの手番付きで出る。使えない・対象が無いときは手番を使わずに拒否される。`
+    : `\n# Abilities (use_ability { ability, target?, slot? }; ability may also be given as id)\n- No resource: only a cooldown in turns. Using one takes a turn. self.abilities shows cooldown_left (0 = ready) and uses_left when limited per expedition. valid_actions lists ready ones with targets (use_ability bash target:e_xxx, callable as written) and the others as unavailable with turns left. If unusable or without a target it is refused without spending a turn.`);
   for (const [aid, ab] of Object.entries(c.abilities)) {
     const tg = ja ? { adjacent: '対象: 隣の敵（ID か方向。隣に 1 体なら省略可）', throw: '対象: 投擲の射程と射線が通る敵の ID（slot で投げる品。省略時は投擲用の品の最初のスロット）', dir: '対象: 方向', none: '対象なし' }[ab.target]
       : { adjacent: 'target: an adjacent enemy (id or direction; may be omitted if only one)', throw: 'target: an enemy id in throwing range with a clear line (slot picks the item; default the first throwing item)', dir: 'target: a direction', none: 'no target' }[ab.target];
@@ -76,6 +76,7 @@ function ja(r: CatalogRules): Record<Topic, string> {
 - あなたが知り得るのは、自分の視界（半径 8 前後）と記憶した地図だけ。未探索の地形や視界外の敵は観測に含まれない。
 - 手番は速度ベース（標準 100）。速い敵はあなたより多く動く。プレイヤーがいない階は時間が止まる。ただし守護者と大守護者は、あなたを追っていない間（階を離れている間と、同じ階で見失って探すのをやめた後）、手番 1 つにつき最大体力の ${r.guardianAwayHealPct ?? 2}% を回復する（次に見たとき・追跡を再開したとき・階に戻ったときに一度に。物陰に入った数手番では始まらない）。全快すれば落ち着く: 持ち場へ戻り、追跡をやめ、状態異常・怒りが消え、呼んだ手下は去る。眠りが深い守護者は眠りに戻る。キャンプへ戻ると、すべての守護者が全快して落ち着く。退いてすぐ薬や泉で戻して戻るのは今までどおり効く（通常の敵は回復しない）。
 - 不正な行動は状態を変えず時間も消費しない。エラーには code / message / hint と valid_actions が付く。
+- valid_actions の 1 行は「<ツール> [<主な引数>] [<名前>:<値> ...] (<説明>)」で、書いてある形のまま呼べる。主な引数はツールごとに 1 つ（move・interact の dir、fight・attack の target、travel_to の to、use_item・equip・throw_item の slot、use_ability の ability）。<a|b> はどれか 1 つを選ぶ。値の [a,b] と a,b は並べたもの（配列。書いてある文字列のままでもよい）。説明が「不可」で始まる行は、今は使えない知らせ。
 - 長いプレイでは notes ツールで自分用メモを残せる（ゲームに影響しない）。行動ツールの thought 引数は観戦者に表示される。
 - 同じ階に長く留まると徘徊モンスターが湧く（フロア時間 ${r.wander.intervalMin}〜${r.wander.intervalMax} ごと。次に湧く正確な時刻は分からない）。
 - 階の種類によっては敵がいない（聖域: 深い所に一定の間隔で現れる、敵も徘徊も出ない休息の階）。
@@ -149,7 +150,7 @@ ${traitsLines(r, true)}
 - 方向は n ne e se s sw w nw。座標は左上原点、x は東、y は南へ増える。
 - move: 敵がいれば近接攻撃（バンプ攻撃）、閉じた扉なら開ける（その手番は移動しない）、味方なら位置交換。
 - attack{target}: 近接攻撃。隣の敵か、長柄の武器（槍）なら縦・横・斜めの直線で 2 マス先の敵（間のマスが通れて誰もいないこと）。fight も長柄なら 2 マス先から突く。
-- use_ability{id,target?,slot?}: 能動技（get_rules classes）。choose_perk{option}: レベルアップの特技を選ぶ（手番を消費しない）。
+- use_ability{ability,target?,slot?}: 能動技（get_rules classes。ability は id でもよい）。choose_perk{option}: レベルアップの特技を選ぶ（手番を消費しない）。
 - 原則: 1 回の呼び出しは 1 つの判断に対応する。マクロが 1 歩も進めないと分かるときは、手番を使わずに理由付きのエラー（hostile_adjacent / hostile_in_view / hp_floor / blocked / nothing_to_do など）で拒否される。
 - 移動マクロ（explore・travel_to・collect）は、同じ 2 マスを往復したら no_progress で止まる（行き先か道を変える）。travel_to は、目的地までの道のりが 20 手のあいだ一度も縮まなくても no_progress で止まる。
 - explore: 未見の区画へ自動移動するマクロ（最大 ${r.macroStepLimit} 手）。pickup（既定 'useful'）なら通り道と見えている・記憶したアイテムのうち使える物を拾う（遺物・鑑定済みの有害品（投げて使える毒薬などは拾う）・装備中の品と同じ種類で性能が同じか下の装備は拾わない。'useful' はさらに、鑑定済みで接辞の無い武器・防具のうち、公開の数字が装備中の品以下のもの（防具は装甲、武器はダメージのダイスの平均。種類が違っても比べる）を拾わない。true は全部、false は拾わない。所持品が一杯なら拾わない）。toward: 'draft' なら下への風の方角、'sense' なら遺物・守護者の気配の方角の未探索を優先する（'sense' はこの遠征の目的の遺物・守護者が見えたか覚えていれば止まる。そこへは travel_to）。steady・flee では、1 マス幅の通路をふさぐ逃走中の敵を攻撃して進む。地図の巻物で地形だけ知った区画も「未見」として行き先になる。
@@ -255,6 +256,7 @@ function en(r: CatalogRules): Record<Topic, string> {
 - You only know your field of view (~radius 8) and the map you remember. Unexplored terrain and unseen monsters are never included.
 - Speed-based turns (normal 100). Floors without players are frozen in time, except that guardians and wardens heal ${r.guardianAwayHealPct ?? 2}% of their max HP per turn while they are not chasing you (while you are off the floor, and on the same floor once they lose you and give up the search; applied at once when you next see them, when they resume the hunt, or when you return; a few turns behind cover do not count). At full they settle: back to their post, no hunting, statuses and rage gone, summoned minions leave, and a deep sleeper goes back to sleep. Going back to camp heals and settles every guardian. Stepping away briefly to drink a potion or use a fountain still works (ordinary enemies do not heal).
 - Invalid actions change nothing and cost no time; errors include code/message/hint and valid_actions.
+- Each valid_actions line reads "<tool> [<main arg>] [<name>:<value> ...] (<note>)" and can be called as written. The main arg is one per tool (dir for move/interact, target for fight/attack, to for travel_to, slot for use_item/equip/throw_item, ability for use_ability). <a|b> means pick one; [a,b] and a,b are lists (arrays, or the string as written). A note starting with "unavailable" means not usable now.
 - Use the notes tool for your own memos. The optional thought argument on action tools is shown to spectators.
 - Lingering on a floor attracts wandering monsters (every ${r.wander.intervalMin}-${r.wander.intervalMax} floor time; the exact next time is hidden).
 - Some floor types have no monsters (sanctuary: a resting floor that appears at intervals in the depths, with no monsters or wanderers).
@@ -327,7 +329,7 @@ Free: choose_perk{option} / observe / wait_for_turn / expedition / review / reco
 - Directions: n ne e se s sw w nw. Origin is top-left; x grows east, y grows south.
 - move attacks a hostile in that cell, opens a closed door (without moving), or swaps with an ally.
 - attack{target}: melee an adjacent enemy, or with a reach weapon (spear) one 2 cells away in a straight line (the cell between must be open and empty). fight also strikes from 2 cells with a reach weapon.
-- use_ability{id,target?,slot?}: abilities (get_rules classes). choose_perk{option}: pick your level-up perk (takes no turn).
+- use_ability{ability,target?,slot?}: abilities (get_rules classes; ability may also be given as id). choose_perk{option}: pick your level-up perk (takes no turn).
 - Principle: one call, one decision. When a macro cannot take a single step it is refused without spending a turn, with a reason (hostile_adjacent / hostile_in_view / hp_floor / blocked / nothing_to_do ...).
 - explore: macro that walks to the nearest unseen area (max ${r.macroStepLimit} steps). With pickup (default 'useful') it also picks up the useful items on the way and known items (not the relic, not identified harmful items except those you can throw such as poison, not same-kind gear that is no better; 'useful' also skips identified gear without affixes whose public number is no better than what you wear: armor value for armor, average damage for weapons, compared across kinds; true picks up everything else too, false nothing; not when full). toward: 'draft' prefers unexplored areas in the draft's direction, 'sense' in the direction of the relic or guardian you sense ('sense' stops once this expedition's relic or guardian is in view or remembered; go there with travel_to). Areas known only from a mapping scroll still count as unseen.
 - Movement macros (explore, travel_to, collect) stop with no_progress when they bounce between the same two cells (change the goal or the route). travel_to also stops with no_progress when the way to its goal has not got shorter for 20 steps.

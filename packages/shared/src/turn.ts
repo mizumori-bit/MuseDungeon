@@ -303,9 +303,9 @@ export function diffChanges(prev: TurnSnapshot | null, cur: TurnSnapshot, view: 
   for (const [s, n] of perkCount) out.push({ code: 'perk', text: n > 1 ? `${s} ×${n}` : s });
   for (const s of cur.statuses) if (!prev.statuses.includes(s)) out.push({ code: 'status_gained', text: t(L, `状態異常: ${statusName(obs, s)}`, `Status: ${statusName(obs, s)}`) });
   for (const s of prev.statuses) if (!cur.statuses.includes(s)) out.push({ code: 'status_lost', text: t(L, `状態異常が解けた: ${prev.statusNames?.[s] ?? s.split(':')[1] ?? s}`, `Status ended: ${prev.statusNames?.[s] ?? s.split(':')[1] ?? s}`) });
-  out.push(...firsts);
+  // 初めて見たときの 1 行（最大 3 件）は、上限の外で必ず渡す（「見た」と記録した後に上限で切ると、二度と出なかった。V4-1g G6）
   out.sort((a, b) => PRIORITY.indexOf(a.code) - PRIORITY.indexOf(b.code));
-  return out.slice(0, MAX_CHANGES);
+  return [...out.slice(0, MAX_CHANGES), ...firsts];
 }
 
 function statusName(obs: Observation, id: string): string {

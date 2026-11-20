@@ -72,7 +72,7 @@ turn: {
 | `get_rules` | `topic?: 'overview'|'expedition'|'actions'|'combat'|'items'|'classes'|'observation'|'all'`, `locale?` | ルールブック。式・操作・遠征（戦利品・確定点・候補の枠と条件・危険度）・観測の読み方のみで、個別のモンスター数値は含めない。数値は `balance.json`（公開カタログの `rules`）から生成。`classes` は職業ごとの初期値・初期装備・成長（v3）と、習熟・特技の系統・特技の一覧・能動技の一覧（V3-4） |
 | `list_runs` | – | 参加可能・再開可能なラン一覧 |
 | `new_run` | `character_name`, `class?`（`warrior`/`scout`）, `mode?: 'solo'|'coop'`, `seed?`, `locale?`, `objective?: 'auto'|'reach_depth'|'slay_guardian'|'retrieve_relic'|'endless'`, `brief_map?`, `map?`, `inventory?`, `status_line?` | `objective` を省くと**キャンプから始まる**（`at_camp`・`awaiting: 'camp_choice'`。最初の遠征も 3 候補から `start_expedition` で選ぶ。V3-2R）。`objective` を渡せば従来どおり最初の遠征まで始める（`auto` は 1 番目の候補 = 堅実・到達）。`{ run_id, player_token, player_id, briefing, observation, turn }`。`seed` を指定しても結果には返さない。`map` 以下は `set_options` と同じ（`brief_map: false` は `map: 'never'`）。不明な `class` のエラーは職業の一覧を返す |
-| `join_run` | `run_id`, `character_name`, `class?` | 同上（COOP。進行中の遠征に加わる） |
+| `join_run` | `run_id`, `character_name`, `class?` | 同上（COOP。キャンプから始まる。進んでいる遠征には入らず、次の遠征から一緒に出る。V4-1g） |
 | `resume_run` | `player_token`, `map?`, `inventory?`, `status_line?` | 現在の MCP 接続にプレイヤーを再束縛する。**再開ブリーフィング**（遠征の目的と進捗、現在地、直近の節目 最大 10 件、自分のメモ）＋ `observation` ＋ `turn` |
 | `retire` | `confirm: true` | ランを終了する（キャラクターは戻らない）。スコアを記録。遠征中なら、その遠征の戦利品は失う（キャンプで引退すれば確定点はそのまま） |
 
@@ -116,7 +116,7 @@ turn: {
 |---|---|---|
 | `move` | `dir` | 敵対者がいれば近接攻撃、閉じた扉は開ける。近接の手番コストは武器の「速い」で 70、歩く手番のコストは重い鎧で 110・125（V3-4） |
 | `attack` | `target: entity_id` | 近接攻撃（V3-4）。隣の敵か、長柄の武器（槍）なら縦・横・斜めの直線で 2 マス先の敵（間のマスが通れて誰もいない）。届かなければ `out_of_range`（手番を使わない）。`fight` も長柄なら 2 マス先から突く |
-| `use_ability` | `id`, `target?: dir | entity_id`, `slot?` | 能動技（V3-4 §4.2）。`id` は `self.abilities` の短い ID（`bash`）か完全な ID（`core:bash`）。資源は無く、再使用までの手番（`cooldown`）と、立て直しだけ遠征ごとの回数で管理する。覚えていない・残りの手番がある・回数を使い切った・対象が無いときは手番を使わずに拒否（`cannot_use` / `no_target` / `invalid_direction` / `blocked`）。対象: 隣の敵（強打。ID か方向、隣に 1 体なら省略可）、投擲の対象（狙い撃ち。射程と射線は `throw_item` と同じ検証、`slot` 省略時は投擲用の品の最初のスロット）、方向（身をかわす）、なし（なぎ払い・立て直し）。結果のイベントに `ability_used`（`cooldownLeft` はこの手番の後の残り） |
+| `use_ability` | `ability`（または `id`）, `target?: dir | entity_id`, `slot?` | 能動技（V3-4 §4.2。V4-1g で `ability` を足した。どちらも無ければ、要る引数の名前を言うエラー）。`id` は `self.abilities` の短い ID（`bash`）か完全な ID（`core:bash`）。資源は無く、再使用までの手番（`cooldown`）と、立て直しだけ遠征ごとの回数で管理する。覚えていない・残りの手番がある・回数を使い切った・対象が無いときは手番を使わずに拒否（`cannot_use` / `no_target` / `invalid_direction` / `blocked`）。対象: 隣の敵（強打。ID か方向、隣に 1 体なら省略可）、投擲の対象（狙い撃ち。射程と射線は `throw_item` と同じ検証、`slot` 省略時は投擲用の品の最初のスロット）、方向（身をかわす）、なし（なぎ払い・立て直し）。結果のイベントに `ability_used`（`cooldownLeft` はこの手番の後の残り） |
 | `wait` | `turns?: 1..10` | 追跡中の敵が見えなければ休息（回復が `restMultiplier` 倍）。`turns` が 2 以上ならマクロ（V3-2R2）: 敵が新たに見えた（`hostile_in_view`）・起きている敵が隣に来た（`hostile_adjacent`）・攻撃や毒以外の被害・状態異常で止まり、指定の手数で `max_turns` |
 | `rest` | `until_hp?`, `max_turns?` | マクロ。全快（かつ毒が抜ける）か、指定の HP・手数か、中断まで（上限 `rest.maxTurns`） |
 | `explore` | `mode?`, `hp_floor?`, `pickup?`（既定 true）, `toward?: 'draft'` | マクロ。未見の区画（地図の巻物で地形だけ知った区画を含む）へ自動移動。pickup（既定 'useful'。V3-4b）なら通り道と見えている・記憶したアイテムも拾う（'useful' は、鑑定済みで接辞の無い武器・防具のうち公開の数字が装備中の品以下のものを種類が違っても拾わない。true は全部。遺物・鑑定済みの有害品・装備中の品と同じ種類で接辞が含まれる＝同じか劣る装備は拾わない。V3-2R3）。`toward: 'draft'` は下への風の方角、`'sense'`（V3-4b）は遺物・守護者の気配の方角（と隣り合う方角）の未探索を優先する（V3-2R3）。決めた行き先は境界である間は追い続け、見えて消えたらそのすぐ近くの境界を追う（風の方角が歩くたびに変わっても往復しない。2026-11-17） |
@@ -225,13 +225,14 @@ Observation {
               // 自分が投げた物は見えている・記憶したものを全部で 1 行にまとめる（qty = 本数、pos = 最寄り、ids = 全て、near_qty = 最寄りのマスの本数。V3-2R2）
     items_omitted?: number          // 記憶の中の遠いアイテムのうち省いた件数
     players:  { id, name, pos, dir, dist, hp_state }[]
-    features: { type, pos, dir, dist, state? }[]   // 階段・扉・泉・発見済みの罠 など
+    features: { type, pos, dir, dist, state?, desc? }[]   // 階段・扉・泉・発見済みの罠 など。desc: 何であるか・どう使うかの 1 行（V4-1g。すべての地物にある）
   }
   party: {                             // V4-1f: 自分以外の参加者（参加の順）。ソロのランでは空の配列
-    id: PlayerId, name, controller: 'human' | 'agent', order: number   // order: 参加の順（1 から。自分の番号は、抜けている番号）
+    id: PlayerId, name, controller: 'human' | 'agent' | 'unknown', order: number   // order: 参加の順（1 から。自分の番号は、抜けている番号）。unknown: 参加のときに人間か AI かを言わなかった（V4-1g）
     status: 'in_dungeon' | 'at_camp' | 'down' | 'left'                 // 迷宮にいる・キャンプにいる・倒れている・ランを抜けた
     floor?: number                       // 迷宮にいるときの階（見えていなくても出す）
-    pos?: [x, y], hp?: HpState, entity?: EntityId   // 同じ階にいて、見えているときだけ（entity は visible.players の id と同じ）
+    hp?: HpState                         // 迷宮にいる仲間の HP の段階（V4-1g から、見えていなくても・別の階でも出す）
+    pos?: [x, y], entity?: EntityId      // 同じ階にいて、見えているときだけ（entity は visible.players の id と同じ）
   }[]
   navigation: {
     here: string                         // 足元の地形・アイテム
@@ -249,7 +250,8 @@ Observation {
     extract_blocked_by?: 'not_on_stairs' | 'not_your_turn' | 'ended'   // V3-2R2: 追跡中の敵が見えていても止めない
     extract_outcome: 'complete' | 'withdraw'   // 今 extract したら達成か撤退か
     text: string                       // 1 行の要約
-    result?: { reason, points, deepest, kills, turns, text }   // 終了した遠征
+    result?: { reason, points, deepest, kills, turns, text,   // 終了した遠征
+               banked, party_banked?, shares?: { id, name, banked, lost, how }[] }   // V4-1g: banked はあなたの確定、party_banked は全員の合計（協力プレイ）。shares はだれの分か（how: completed / withdrawn / lifeline / lost）
     slot?: 'safe'|'standard'|'ambitious', traits?: string[]    // v3
     haul?: {                           // 未確定の戦利品（v3）
       total, multiplier_pct, parts: { objective, overreach, treasure, bounty, discovery, kills }
@@ -265,7 +267,9 @@ Observation {
            slot?, traits?, multiplier_pct, recommended_level: number | null, level_gap: number | null, trait_danger: number }[] }   // キャンプ（遠征と遠征の間）のみ
   recent_events: string[]              // 前回の行動結果以降に知覚した出来事の文章（最大 10）
   map?: { origin:{x,y}, rows: string[], legend: Record<string,string> }  // 自分中心の局所 ASCII（既定 21×15。フロア外は出さない）
-  valid_actions: string[]              // 例 "move e (attack ゴブリン)", "use_item a (回復の薬)", "use_stairs"
+  valid_actions: string[]              // 例 "move e (attack ゴブリン)", "use_item a (回復の薬)", "use_stairs"、"use_ability bash target:e_xxxxxx (強打: …)"
+                                       // 1 行の形（V4-1g）: `<ツール> [<主な引数>] [<名前>:<値> ...] (<説明>)`。主な引数はツールごとに 1 つ（move・interact の dir、fight・attack の target、
+                                       // travel_to の to、use_item・equip・throw_item の slot、use_ability の ability）。`<a|b>` はどれか 1 つ。値の `[a,b]`・`a,b` は並べたもの（`fight` の `with`・`abilities`。配列でも、書いてある文字列のままでもよい）。説明が「不可」で始まる行は、今は使えない知らせ
 }
 ```
 
@@ -429,6 +433,15 @@ V3-2R で足した項目（同じく後方互換。会心と経験値のルー�
 - `StatusInst.source`（状態異常を与えた者。毒で倒したときの撃破者になる）、`status_applied.targetAffixes`
 - `player_state.reason: 'joined'`（キャンプから始まる参加）。参加コマンドの `atCamp`
 - プレイヤー向けの射影で、見えていた個体が視界の外へ動いた `entity_moved` に `dirOut`（向きだけ。行き先は伏せたまま）
+
+V4-1g で変えた項目（`engineVersion` 0.34.0。出来事の種類は増やしていないので `eventVersion` は 21 のまま。IMPROVEMENTS_V4 §24、DESIGN.md §38.7）:
+
+- 参加（G1）: 協力プレイのランに入った者は、遠征が進んでいても、キャンプに置く（`join_run`・`POST /api/runs/:id/join`）。進んでいる遠征には入らず、次の遠征から一緒に出る（次の遠征の始まりは、その者の再開地点＝地下 1 階の入口）。キャンプで待つ間の文に「遠征 N が進んでいる（仲間がまだ迷宮にいる）。全員が戻ったら、次の遠征を選べる」
+- 参加者の種類（G2）: `Controller.kind` に `unknown`。HTTP の作成・参加で `controller` を省くと `unknown`（今までは `human`）。MCP の `new_run`・`join_run` は `agent`。`party[].controller` は 3 つ
+- 仲間の HP（G3）: `party[].hp` を、迷宮にいる仲間については、見えていなくても・別の階でも出す（位置は今までどおり見えているときだけ）。人間の画面の「仲間」の欄にも
+- 確定の表示（G4）: `expedition.result` に `banked`（あなたの分）・`party_banked`（全員の合計。協力プレイ）・`shares`（だれの分か）。文は「確定 +128（あなたの分 +64）」と、だれの分か。綱の見込みの文（`haul.text`・`valid_actions` の綱の行）に、協力プレイでは確定が遠征の終わり（全員が戻ったとき）で、共有の分はそのときの値で数えること
+- 能動技の引数（G5）: MCP の `use_ability` に `ability`（`id` と同じ）。`valid_actions` の行を、書いてある形のまま呼べる形にした（`use_ability <ability> target:<id>`・`use_ability slip target:<n|ne>`・`throw_item <slot> target:<id>`）。1 行の形は上の `valid_actions` の注。`explore` の行の「拾えるアイテム N 個」は、辿り着ける所の品だけを数える（壁の向こうに覚えている品で行を出し、呼ぶと `nothing_to_do` になっていた。全部の行を呼ぶテストで見つけた）
+- 地物の説明（G6）: `visible.features[].desc`（何であるか・どう使うかの 1 行。すべての地物にあり、内容のデータに無ければ起動時の検査で落とす）。初めて見たときの 1 行（`turn.changes` の `first_seen`）が、変化の多い応答で落ちて二度と出なかったのを直した
 
 V4-1f で足した項目（`engineVersion` 0.33.0。出来事の種類は増やしていないので `eventVersion` は 21 のまま。IMPROVEMENTS_V4 §22、DESIGN.md §38.6）:
 
@@ -788,7 +801,7 @@ CommandRecord {
 | `GET /api/player/feed` | **ターンフィード**（SSE、v2）。`Authorization: Bearer <player_token>` か `?token=`。下記 |
 | `GET /api/health` / `GET /api/config` | 生存確認 / `spectatorPolicy` |
 | `GET /api/content/catalog` | 公開カタログ |
-| `POST /api/runs` / `POST /api/runs/:id/join` | ランを開始・参加（`{ name, classId?, seed?, mode?, locale?, objective?, controller? }` → `{ runId, playerId, token }`）。開始時は最初の遠征まで始める |
+| `POST /api/runs` / `POST /api/runs/:id/join` | ランを開始・参加（`{ name, classId?, seed?, mode?, locale?, objective?, controller? }` → `{ runId, playerId, token }`。`controller` を省くと `{ kind: 'unknown' }`。V4-1g。ブラウザの画面は `human` を送る。参加はキャンプから始まる）。開始時は最初の遠征まで始める |
 | `GET /api/runs/:id/commands` | commands.jsonl（AI パネルのツール呼び出し・thought 表示用） |
 | `GET /api/runs/:id/summary` | 終了時サマリー |
 

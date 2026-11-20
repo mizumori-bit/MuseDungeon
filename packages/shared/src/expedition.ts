@@ -263,10 +263,27 @@ export function partsText(L: Locale, p: { objective: number; overreach: number; 
   return (L === 'en' ? en : ja).filter(([v]) => v > 0).map(([v, n]) => (L === 'en' ? `${n} ${v}` : `${n}${v}`)).join(L === 'en' ? ', ' : '・');
 }
 
-export function resultText(L: Locale, x: ExpeditionView, rules?: Partial<Pick<CatalogRules, 'haul' | 'lifeline'>>): string {
+/**
+ * 遠征の終わりの文。me: 読む人のプレイヤー ID と、参加者の名前（協力プレイで「確定 +合計（あなたの分 +N）」と、だれの分かを書く。V4-1g G4）
+ */
+export function resultText(L: Locale, x: ExpeditionView, rules?: Partial<Pick<CatalogRules, 'haul' | 'lifeline'>>, me?: { id: string; names: Readonly<Record<string, string>> }): string {
   const r = x.result;
   if (!r) return '';
   const pay = r.payout;
+  if (pay && pay.players.length > 1) {
+    // 協力プレイ: 全員の合計と、自分の分。だれの分かと帰り方
+    const mine = me ? pay.players.find((p) => p.player === me.id) : undefined;
+    const how = (pid: string, lost: number) => {
+      if (lost > 0) return t(L, '失った', 'lost');
+      const ret = x.returns?.find((q) => q.player === pid);
+      return ret?.lifeline ? t(L, `綱 ${rules?.lifeline?.pct ?? 50}%`, `lifeline ${rules?.lifeline?.pct ?? 50}%`) : ret?.completed ? t(L, '帰還', 'returned') : t(L, `撤退 ${rules?.haul?.withdrawPct ?? 50}%`, `withdrew ${rules?.haul?.withdrawPct ?? 50}%`);
+    };
+    const shares = pay.players.map((p) => `${me?.names[p.player] ?? p.player} ${p.lost > 0 ? `-${p.lost}` : `+${p.banked}`}（${how(p.player, p.lost)}）`).join(t(L, '・', ', '));
+    const mineText = mine ? t(L, `（あなたの分 +${mine.banked}${mine.lost ? `・失った ${mine.lost}` : ''}）`, ` (yours +${mine.banked}${mine.lost ? `, lost ${mine.lost}` : ''})`) : '';
+    return t(L,
+      `遠征 ${x.no} は終了した（${endReasonText(L, r.reason)}）。確定 +${pay.banked}${mineText}${pay.lost ? `（失った戦利品 ${pay.lost}）` : ''}。だれの分: ${shares}。内訳（共有の分は全員に同じ・宝は持ち帰った人の分）: ${partsText(L, pay.parts) || 'なし'}、倍率 ${multText(pay.multiplierPct)}（帰還のみ）。この遠征: 最深 地下${r.deepest}階、撃破 ${r.kills}、手番 ${r.turns}`,
+      `Expedition ${x.no} ended (${endReasonText(L, r.reason)}). Banked +${pay.banked}${mineText}${pay.lost ? ` (lost ${pay.lost})` : ''}. Shares: ${shares}. Parts (shared parts are the same for everyone, treasure goes to who carried it): ${partsText(L, pay.parts) || 'none'}, multiplier ${multText(pay.multiplierPct)} (returns only). Deepest ${r.deepest}, kills ${r.kills}, turns ${r.turns}`);
+  }
   if (pay) {
     const mine = pay.players.length === 1 ? pay.players[0] : null;
     const banked = mine ? mine.banked : pay.banked;

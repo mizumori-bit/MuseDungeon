@@ -17,6 +17,15 @@ export interface McpContext {
 }
 
 const DirZ = z.enum(['n', 'ne', 'e', 'se', 's', 'sw', 'w', 'nw']);
+/** fight の with の 1 つ（スロットか品の種類）と、valid_actions の書き方で並べたもの（"[a,b]"・"a,b"。V4-1g G5） */
+const WITH_ONE = /^([a-z]|(core:)?[a-z][a-z0-9_]+)$/;
+const WITH_LIST = /^\[?([a-z]|(core:)?[a-z][a-z0-9_]+)(,([a-z]|(core:)?[a-z][a-z0-9_]+)){0,3}\]?$/;
+/** 並べた値を配列にする: 配列はそのまま、"[a,b]"・"a,b"・"a" は分ける */
+function listArg(v: string | string[] | undefined): string[] | undefined {
+  if (v === undefined) return undefined;
+  const list = Array.isArray(v) ? v : v.replace(/^\[|\]$/g, '').split(',').map((x) => x.trim()).filter(Boolean);
+  return list.length ? list : undefined;
+}
 const PosZ = z.object({ x: z.number().int(), y: z.number().int() });
 const SlotZ = z.string().regex(/^[a-z]$/).describe('所持品のスロット文字 a〜z / inventory slot letter');
 const TargetZ = z.union([DirZ, PosZ, z.string().regex(/^e_[0-9a-z]{6}$/)]).describe('方向 | {x,y} | エンティティ ID');
@@ -110,6 +119,18 @@ export function createMcpServer(ctx: McpContext): McpServer {
     record(port, tool, args, text);
     if (!r.ok) return errOut(r.error, r.valid_actions, { block: r.turn, line: port.turnLine(r.turn) });
     return out(text, r as unknown as Record<string, unknown>);
+  };
+
+  /** 要る引数が無い（V4-1g G5）: 引数の名前と、呼び方の例を言う。手番は使わない */
+  const missingArg = (tool: string, args: Record<string, unknown>, name: string, example: string) => {
+    const port = portOf(args.player_token as string | undefined);
+    if (!port) return noSession();
+    const L = port.locale();
+    const err = actionError('bad_request', t(L, `${tool} には ${name} が要る`, `${tool} needs ${name}`), t(L, `例: ${example}（valid_actions の行は、書いてある形のまま呼べる）`, `e.g. ${example} (valid_actions lines can be called as written)`));
+    const tb = port.turnBlock('action_rejected');
+    const va = port.observe({ map: false }).observation.valid_actions;
+    record(port, tool, args, `${err.code} ${err.message}`);
+    return errOut(err, va, { block: tb, line: port.turnLine(tb) });
   };
 
   // ---------------- セッション ----------------
@@ -439,24 +460,33 @@ export function createMcpServer(ctx: McpContext): McpServer {
     title: '戦う', description: 'マクロ: その相手と決着を付ける。with なしは近接（追跡中の相手が隣に来るまで待つ。最大 10 手番。approach: advance なら寄っていき、隣に着いたら殴る）、with にスロットか品の種類を渡すとその品を投げて戦う（射程と射線が通るまで待つ。品が尽きたら、追跡中の敵の隣を通らずに届く自分の投擲物を拾いに行って続ける。retrieve: false で切れる）。相手が倒れた・離れた・逃げて見えなくなった、（with）隣に来た・品が尽きた、HP が hp_floor（既定 50%）を下回った、被弾の記録の無い種族の追跡中の敵が現れた、待つ間に別の敵に撃たれた、状態異常を受けたら止まる（記録のある種族が新しく見えても止まらない）。物陰に入った相手は数手番待つ。眠っている・気付いていない相手は待たない。until: clear なら、標的を倒した後も届く追跡中の敵（隣の敵、いなければ最も近い敵）へ続ける。adjacent は with の相手が隣に来たとき（stop: 止まる・既定 / throw: 投げ続ける / melee: 近接に切り替える）。abilities に能動技（強打・なぎ払い・狙い撃ち）を並べると、使える手番ごとに使う（強打は標的が隣、なぎ払いは起きている敵が隣に 2 体以上、狙い撃ちは with の品で射程と射線が通るとき。それ以外の手番は通常の攻撃）。結果に与えた・受けた攻撃の回数と合計、使った能動技の回数。',
     inputSchema: {
       ...actionCommon, target: z.string().regex(/^e_[0-9a-z]{6}$/),
-      with: z.union([z.string().regex(/^([a-z]|(core:)?[a-z][a-z0-9_]+)$/), z.array(z.string().regex(/^([a-z]|(core:)?[a-z][a-z0-9_]+)$/)).min(1).max(4)]).optional().describe('投げて戦う品の所持品スロット（self.attack.throws）か品の種類（javelin・throwing_knife など。拾ってスロットが変わっても同じ種類を投げる）。配列なら前の品が尽きて拾い直せる物も無くなったら次の品へ（["javelin", "throwing_knife"]）'),
+      with: z.union([z.string().regex(WITH_LIST), z.array(z.string().regex(WITH_ONE)).min(1).max(4)]).optional().describe('投げて戦う品の所持品スロット（self.attack.throws）か品の種類（javelin・throwing_knife など。拾ってスロットが変わっても同じ種類を投げる）。配列なら前の品が尽きて拾い直せる物も無くなったら次の品へ（["javelin", "throwing_knife"]。valid_actions の書き方の "[javelin,throwing_knife]" や "javelin,throwing_knife" の文字列でもよい）'),
       collect_after: z.boolean().optional().describe('決着の後（倒した・until: clear で片付いた）、追跡中の敵が見えていなければ自分の投擲物を拾う（collect と同じ止まり方）'),
       hp_floor: z.number().int().min(0).optional(),
       retrieve: z.boolean().optional().describe('with の品が尽きたら、追跡中の敵の隣を通らずに届く自分の投擲物を拾いに行く（既定 true）'),
       until: z.enum(['target', 'clear']).optional().describe('clear: 標的を倒した後も、届く追跡中の敵へ続ける（既定 target: 標的 1 体）'),
       adjacent: z.enum(['throw', 'melee', 'stop']).optional().describe('with の相手が隣に来たとき（既定 stop）'),
       approach: z.enum(['wait', 'advance']).optional().describe('with なしの近接で、追跡中で届かない相手を: wait＝隣に来るまで待つ（既定）/ advance＝寄っていき、隣に着いたら殴る（歩く間に撃たれても止まらない。動かずに撃ってくる相手に）'),
-      abilities: z.array(z.string().min(1)).max(4).optional().describe('使える手番ごとに使う能動技（bash・cleave・aimed_throw。aimed_throw は with と一緒に。second_wind・slip は載せられない）'),
+      abilities: z.union([z.array(z.string().min(1)).max(4), z.string().min(1)]).optional().describe('使える手番ごとに使う能動技（bash・cleave・aimed_throw。aimed_throw は with と一緒に。second_wind・slip は載せられない）。valid_actions の書き方の "bash,cleave" の文字列でもよい'),
     },
-  }, async (a) => act('fight', a, { type: 'fight', target: a.target, ...(a.with ? (Array.isArray(a.with) ? { with: a.with[0], ...(a.with.length > 1 ? { alsoWith: a.with.slice(1) } : {}) } : { with: a.with }) : {}), ...(a.collect_after ? { collectAfter: true } : {}), hpFloor: a.hp_floor, ...(a.abilities?.length ? { abilities: a.abilities } : {}), ...(a.until ? { until: a.until } : {}), ...(a.adjacent ? { adjacent: a.adjacent } : {}), ...(a.approach ? { approach: a.approach } : {}), ...(a.retrieve === false ? { retrieve: false } : {}) }));
+  }, async (a0) => {
+    // valid_actions の行を書いてある形のまま呼べるように、並べた値（"[a,b]"・"a,b"）は配列にする（V4-1g G5）
+    const a = { ...a0, with: listArg(a0.with), abilities: listArg(a0.abilities) };
+    return act('fight', a, { type: 'fight', target: a.target, ...(a.with ? (a.with.length > 1 ? { with: a.with[0]!, alsoWith: a.with.slice(1) } : { with: a.with[0]! }) : {}), ...(a.collect_after ? { collectAfter: true } : {}), hpFloor: a.hp_floor, ...(a.abilities?.length ? { abilities: a.abilities } : {}), ...(a.until ? { until: a.until } : {}), ...(a.adjacent ? { adjacent: a.adjacent } : {}), ...(a.approach ? { approach: a.approach } : {}), ...(a.retrieve === false ? { retrieve: false } : {}) });
+  });
   server.registerTool('attack', {
     title: '攻撃', description: '近接攻撃。隣の敵か、長柄の武器（槍）なら縦・横・斜めの直線で 2 マス先の敵（間のマスが通れて誰もいないこと）。隣の敵なら move でも攻撃できる。',
     inputSchema: { ...actionCommon, target: z.string().regex(/^e_[0-9a-z]{6}$/) },
   }, async (a) => act('attack', a, { type: 'attack', target: a.target }));
   server.registerTool('use_ability', {
     title: '能動技', description: '能動技を使う（self.abilities。再使用までの手番 cooldown だけで管理）。target: 隣の敵・投擲の対象なら ID、身をかわすなら方向。slot: 狙い撃ちで投げる品（省略時は投擲用の品の最初のスロット）。使えない・対象が無いときは手番を使わずに拒否する。',
-    inputSchema: { ...actionCommon, id: z.string().min(1).describe('能動技の ID（bash / cleave / second_wind / aimed_throw / slip など。self.abilities の id）'), target: z.string().optional().describe('敵の ID（e_xxxxxx）か方向（n ne e se s sw w nw）'), slot: z.string().regex(/^[a-z]$/).optional() },
-  }, async (a) => act('use_ability', a, { type: 'ability', id: a.id, ...(a.target ? { target: a.target as never } : {}), ...(a.slot ? { slot: a.slot } : {}) }));
+    inputSchema: { ...actionCommon, ability: z.string().min(1).optional().describe('能動技の ID（bash / cleave / second_wind / aimed_throw / slip など。self.abilities の id。valid_actions の「use_ability <ability> target:<…>」の <ability>）'), id: z.string().min(1).optional().describe('ability と同じ（前からの名前）'), target: z.string().optional().describe('敵の ID（e_xxxxxx）か方向（n ne e se s sw w nw）'), slot: z.string().regex(/^[a-z]$/).optional() },
+  }, async (a) => {
+    // ability（V4-1g G5）か id。どちらも無ければ、要る引数の名前を言う
+    const id = a.ability ?? a.id;
+    if (!id) return missingArg('use_ability', a, 'ability', "use_ability { ability: 'bash', target: 'e_xxxxxx' }");
+    return act('use_ability', a, { type: 'ability', id, ...(a.target ? { target: a.target as never } : {}), ...(a.slot ? { slot: a.slot } : {}) });
+  });
   server.registerTool('choose_perk', {
     title: '特技を選ぶ', description: 'レベルアップの特技の候補から 1 つ選ぶ（self.perk_choice。手番を消費しない。選ぶまで進行は止まらない）。option は候補の番号（1 から）か特技の ID。',
     inputSchema: { ...common, option: z.union([z.number().int().min(1).max(9), z.string().min(1)]) },

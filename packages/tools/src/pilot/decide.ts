@@ -22,13 +22,17 @@ export type Decision =
    * 道具を 1 つ使う。then があれば、使った後に起こす（回復の品を使った後の danger。§16.3）。done があれば、うまくいった後に知らせる
    * （綱を使った lifeline_used。V4-1e §19.4）。relic: 拾いに行く目的でない遺物（pick_relics。着いて拾えたら relic_picked。§19.5）。
    * seek: 目的の相手・品を探す手（V4-1f §22.1。使った手番を seek_max_turns に数える）。
-   * partyWait: 仲間を待つ手（follow: ついていく相手の近くで待つ / start: 遠征の最初に相手が同じ階に来るのを待つ）。待つ命令は命令の上限に数えない（§23.8）
+   * partyWait: 仲間を待つ手（follow: ついていく相手の近くで待つ / start: 遠征の最初に相手が同じ階に来るのを待つ）。待つ命令は命令の上限に数えない（§23.8）。
+   * why: どの決まりで出した命令か（log.jsonl に残す。V4-1g §24.5）
    */
-  | { kind: 'act'; tool: string; args: Record<string, unknown>; then?: Wake; done?: Wake; relic?: string; seek?: boolean; partyWait?: 'follow' | 'start' }
+  | { kind: 'act'; tool: string; args: Record<string, unknown>; then?: Wake; done?: Wake; relic?: string; seek?: boolean; partyWait?: 'follow' | 'start'; why?: string }
   /** 起こす（返事を待つ間は持ち場の動き。§14.4） */
   | { kind: 'wake'; wake: Wake }
-  /** 何もしない（ソロで起こして待つ間、追ってくる敵も被害も無い）。wait: party＝キャンプで、仲間が迷宮から戻るのを待つ（V4-1f §22.5） */
-  | { kind: 'idle'; wait?: 'party' }
+  /**
+   * 何もしない（ソロで起こして待つ間、追ってくる敵も被害も無い）。wait: party＝キャンプで、仲間が迷宮から戻るのを待つ（V4-1f §22.5）/
+   * join＝協力プレイのランに、ほかの参加者がまだいない（V4-1g §24.4 wait_for_join）
+   */
+  | { kind: 'idle'; wait?: 'party' | 'join' }
   /** pilot を終える（ランが終わった） */
   | { kind: 'end'; wake: Wake };
 
@@ -64,6 +68,11 @@ export interface PilotMemory {
   patrolFailed: Pos[];
   /** ついていく相手の記録（V4-1f §22.5。遠征ごと。階を移っても残す） */
   follow: FollowMemory | null;
+  /** 相手にしないと決めた敵に撃たれた: 階段で階を出る（V4-1g §24.2 の 2。階を移ったら消える） */
+  leaveFloor: boolean;
+  /** 相手を助けに行っている・着いた（V4-1g §24.4 assist。知らせを 1 回にするため。階を移っても残す） */
+  assisting: boolean;
+  assistArrived: boolean;
 }
 
 /**
@@ -73,7 +82,7 @@ export interface PilotMemory {
 export interface FollowMemory { id: string; exp: number | null; met: boolean; inDungeon: boolean; lastPos: Pos | null; lastFloor: number | null; floorAtStart: number | null; startTurn: number }
 
 export function newMemory(): PilotMemory {
-  return { trail: [], stops: {}, advance: [], ignored: [], recovering: false, crossed: null, stairRetreats: 0, hurtFarAgo: null, away: [], shotBy: null, backOff: false, relicFailed: [], seekTurns: 0, seekVisited: [], patrolFailed: [], follow: null };
+  return { trail: [], stops: {}, advance: [], ignored: [], recovering: false, crossed: null, stairRetreats: 0, hurtFarAgo: null, away: [], shotBy: null, backOff: false, relicFailed: [], seekTurns: 0, seekVisited: [], patrolFailed: [], follow: null, leaveFloor: false, assisting: false, assistArrived: false };
 }
 
 /** 道をふさいでいる罠（断りのエラーの details.blocked_by_traps。V4-1d §18.1） */
@@ -114,6 +123,8 @@ export interface DecideContext {
   walked?: readonly Pos[];
   /** いまの手番の通番（遠征の最初に仲間を待つ長さ。V4-1f §22.5） */
   turnNo?: number;
+  /** この遠征で、相手にしない敵に撃たれて出た階（戻らない。V4-1g §24.2 の 2） */
+  avoidDepths?: ReadonlySet<number>;
   /** この遠征のこの階で、もう知らせた鍵（目的でない遺物・役割のある敵・追ってくる敵が多い は 1 回だけ知らせる） */
   notified?: ReadonlySet<string>;
   /** pilot 自身の記録（省くと空） */
@@ -349,12 +360,18 @@ export function holdAction(obs: Observation, ctx: DecideContext): { tool: string
     const h = healAction(obs, p, { items: true });
     if (h && can(h.tool)) return { tool: h.tool, args: h.args };
   }
+  // 帰る途中は、隣の敵を殴らない。殴るのは道をふさいでいる敵（断りの blocked_by）だけ（V4-1g §24.2 の 1）
+  const blocker = (ctx.refusal?.blockedBy ?? []).map((id) => obs.visible.monsters.find((m) => m.id === id && m.dist <= 1)).find((m) => !!m);
+  if (ctx.homeward && blocker && can('attack')) return { tool: 'attack', args: { target: blocker.id } };
   const adj = adjacentHunting(obs)[0];
-  if (adj && can('attack')) return { tool: 'attack', args: { target: adj.id } };
+  if (adj && can('attack') && !ctx.homeward) return { tool: 'attack', args: { target: adj.id } };
   if (ctx.homeward) {
     // 帰る順は §19.4 で共通（階段が先、綱は着けないときだけ）。allow_extract: false なら、階段の上で待つ
     const h = homewardAction(obs, p, (tool) => can(tool) && (tool !== 'extract' || p.allow_extract), fleeArgs(obs));
-    return h ?? idle();
+    if (h) return h;
+    // 帰る手が無い（追い詰められた）: 隣で追ってくる敵は、道をふさいでいるのと同じなので殴る（V4-1g の測り直しで分かった: 待つだけで撃たれ続けた）
+    if (adj && can('attack')) return { tool: 'attack', args: { target: adj.id }, why: 'cornered' };
+    return idle();
   }
   // この数手番に隣でない相手から被害を受けた・追ってくる敵が見えている: 同じ場所に留まらない
   const hurtFar = mem.hurtFarAgo !== null && mem.hurtFarAgo <= 2;
@@ -389,7 +406,12 @@ export function decide(obs: Observation, ctx: DecideContext): DecideResult {
   const notify: Wake[] = [];
   let update: Partial<PilotMemory> | undefined;
   const upd = (u: Partial<PilotMemory>) => { update = { ...(update ?? {}), ...u }; };
-  const out = (decision: Decision): DecideResult => ({ decision, active, notify, ...(update ? { update } : {}) });
+  /** いまの行の名前（act の命令の why。V4-1g §24.5） */
+  let why = 'start';
+  const out = (decision: Decision): DecideResult => {
+    if (decision.kind === 'act' && !decision.why) decision.why = why;
+    return { decision, active, notify, ...(update ? { update } : {}) };
+  };
   const act = (tool: string, args: Record<string, unknown>, then?: Wake) => out({ kind: 'act', tool, args, ...(then ? { then } : {}) });
   const wake = (w: Wake) => { if (!active.includes(w.key)) active.push(w.key); return out({ kind: 'wake', wake: w }); };
   /** 同じ階にいる間に 1 回だけ知らせる */
@@ -414,17 +436,23 @@ export function decide(obs: Observation, ctx: DecideContext): DecideResult {
   const can = (tool: string) => !ctx.refused?.has(tool);
   const ignored = new Set(mem.ignored);
   const pct = hpPct(obs);
+  const depthNow = obs.self.floor?.depth ?? 0;
 
   // 1. ランが終わった
-  if (obs.status === 'ended' || obs.status === 'dead') return out({ kind: 'end', wake: W('ended', 'ended', obs.summary) });
+  // ランが終わった（死んだ・引退した）: AI か人間に届ける（V4-1g §24.2 の 4）
+  if (obs.status === 'ended' || obs.status === 'dead') return out({ kind: 'end', wake: W('ended', 'ended', obs.summary, 'escalate') });
   // 2. キャンプ: その枠の候補で自動で出発するか、起こす（遠征のレポートの要点を添える）。起こして返事を待っている間は、何もしない
   // 起こして返事を待つ間も、遠征の途中で仲間が迷宮にいれば、仲間を待つ（観測を取り直して、仲間が戻ったのに気づく。§23.8）
-  if (obs.status === 'at_camp' && ctx.waiting) return out({ kind: 'idle', ...(x && x.status !== 'ended' && (obs.party ?? []).some((m) => m.status === 'in_dungeon') ? { wait: 'party' as const } : {}) });
+  why = 'camp';
+  // 協力プレイのランに、ほかの参加者がまだいない（V4-1g §24.4 wait_for_join）: 遠征を始めずに待つ（空回り・行き詰まりに数えない）
+  const noOneJoined = ctx.coop && p.coop.wait_for_join && !(obs.party ?? []).some((m) => m.status !== 'left');
+  if (obs.status === 'at_camp' && ctx.waiting) return out({ kind: 'idle', ...(x && x.status !== 'ended' && (obs.party ?? []).some((m) => m.status === 'in_dungeon') ? { wait: 'party' as const } : noOneJoined ? { wait: 'join' as const } : {}) });
   if (obs.status === 'at_camp') {
     const nextNo = obs.camp?.next_no ?? '';
     // 遠征の途中で、仲間がまだ迷宮にいる（V4-1f §22.5）: 遠征を始めようとせずに待つ（行き詰まりにも空回りにも数えない）。
     // 遠征が進んでいないとき（終わった・まだ無い）は、始められるので待たない
     if (x && x.status !== 'ended' && (obs.party ?? []).some((m) => m.status === 'in_dungeon')) return out({ kind: 'idle', wait: 'party' });
+    if (noOneJoined) return out({ kind: 'idle', wait: 'join' });
     // 空回り（§19.3）: 直近の遠征がどれも空だった。遠征を自動で始めずに上げる（返事の後は、いつもどおり）
     if (ctx.stalled && fresh(`stalled:${nextNo}`)) return wake(W('stalled', `stalled:${nextNo}`, ctx.stalled, 'escalate'));
     // 節目の大守護者（§19.2）: 大守護者に挑む候補と、節目の先（封じられた階段の先）が要る候補
@@ -460,6 +488,7 @@ export function decide(obs: Observation, ctx: DecideContext): DecideResult {
   for (const it of obs.visible.items.filter((i) => i.role === 'relic')) active.push(`relic_seen:${it.id}`);
   if (x?.status === 'objective_complete') active.push(`objective_done:${x.no}`);
   // 5. 起こして待っている・mode: hold: 持ち場の動き（§14.4）
+  why = 'hold';
   if (ctx.orders.mode === 'hold' || ctx.waiting) {
     const h = holdAction(obs, ctx);
     if (h && (h.tool === 'use_item' || h.tool === 'use_ability')) {
@@ -469,6 +498,7 @@ export function decide(obs: Observation, ctx: DecideContext): DecideResult {
     // 綱を使ったら、待つ間でも lifeline_used で知らせる（V4-1e §19.4）
     return h ? actR(h) : out({ kind: 'idle' });
   }
+  why = 'perk';
   // 6. 特技・加護の選択: perk: first なら最初の候補を選ぶ（手番を使わない）。そうでなければ起こす
   for (const code of ['perk_pending', 'boon_pending'] as const) {
     const a = alert(obs, code);
@@ -478,7 +508,8 @@ export function decide(obs: Observation, ctx: DecideContext): DecideResult {
     const key = `${code}:${JSON.stringify(a.data ?? '')}`;
     if (fresh(key)) return wake(W(code, key, a.text));
   }
-  // 7. 危ない（lethal_range・critical_hp）: 退いて知らせる。退く手が無ければ起こす（§14.3 の 5）
+  why = 'danger';
+  // 7. 危ない（lethal_range・critical_hp）: 退いて知らせる。退く手が無ければ上げる（§14.3 の 5。V4-1g §24.2 の 3: danger は AI か人間に届ける）
   const danger = alert(obs, 'lethal_range') ?? alert(obs, 'critical_hp');
   if (danger) {
     const r = retreat(obs, p);
@@ -493,13 +524,42 @@ export function decide(obs: Observation, ctx: DecideContext): DecideResult {
     if (h && can(h.tool)) {
       notify.push(W('healed', `healed:${obs.seq}`, healedText(h), 'notify'));
       fresh(key);
-      return act(h.tool, h.args, h.item ? W('danger', key, danger.text) : undefined);
+      return act(h.tool, h.args, h.item ? W('danger', key, danger.text, 'escalate') : undefined);
     }
     fresh(key);
-    return wake(W('danger', key, danger.text));
+    return wake(W('danger', key, danger.text, 'escalate'));
   }
   const ch = chasers(obs);
   const activeCh = ch.filter((m) => !ignored.has(m.id));
+  // 協力プレイ（V4-1f §22.5・V4-1g §24.4）: ついていく相手の状態を先に決める（帰るかどうかは、戦う行より前に要る）
+  const leader = x && x.status !== 'ended' ? leaderOf(obs, p) : null;
+  const fm = mem.follow && leader && mem.follow.id === leader.id ? mem.follow : null;
+  const leaving = ctx.orders.mode === 'stop_at_camp' || ctx.orders.mode === 'return';
+  const following = !!leader && leader.status === 'in_dungeon' && !!obs.self.pos && !leaving;
+  /** ついていった相手が倒れた（on_party_down） */
+  const downLeader = mem.follow && x && x.status !== 'ended' ? (obs.party ?? []).find((m) => m.id === mem.follow!.id && m.status === 'down') : undefined;
+  if (downLeader) noteOnce(W('party_down', `party_down:${downLeader.id}:${x?.no ?? ''}`, [lineWith(ctx.text, '仲間: '), `${downLeader.name} が倒れた（on_party_down: ${p.coop.on_party_down}）`].filter(Boolean).join('\n'), 'notify'));
+  /** 相手がキャンプに帰った（この遠征で迷宮にいた後）・倒れた（on_party_down: return）: 自分も帰る */
+  const followHome = (!!leader && leader.status === 'at_camp' && !!fm?.inDungeon) || (!!downLeader && p.coop.on_party_down === 'return');
+  /** 相手を助けに行く（V4-1g §24.4 assist）: ついていく相手の HP が重傷以下 */
+  const assisting = following && p.coop.assist && (leader!.hp === 'badly_wounded' || leader!.hp === 'near_death');
+  if (assisting && !mem.assisting) { upd({ assisting: true, assistArrived: false }); notify.push(W('assist', `assist:${leader!.id}:${obs.seq}`, [lineWith(ctx.text, '仲間: '), `${leader!.name} の HP が ${leader!.hp === 'near_death' ? '瀕死' : '重傷'}: 助けに行く`].filter(Boolean).join('\n'), 'notify')); }
+  if (!assisting && mem.assisting) upd({ assisting: false, assistArrived: false });
+  // 着いた（相手が見えていて 2 マス以内）: どの行の命令を出すかにかかわらず、1 回知らせる（隣の敵と戦う行が先に来ても数える。V4-1g の測り直しで分かった）
+  const assistDist = assisting && leader!.pos && obs.self.pos ? cheb(obs.self.pos, { x: leader!.pos[0], y: leader!.pos[1] }) : null;
+  if (assistDist !== null && assistDist <= 2 && !mem.assistArrived && !(update?.assistArrived)) { upd({ assistArrived: true }); notify.push(W('assist_arrived', `assist_arrived:${leader!.id}:${obs.seq}`, `${leader!.name} の所に着いた（${assistDist} マス）`, 'notify')); }
+  /** 道をふさいでいる隣の敵（断りの blocked_by）: 逃げる途中でも、この敵だけは殴る（V4-1g §24.2 の 1） */
+  const blockerAdj = (ctx.refusal?.blockedBy ?? []).map((id) => obs.visible.monsters.find((m) => m.id === id && m.dist <= 1)).find((m): m is ObsMonster => !!m);
+  // 相手にしないと決めた敵に撃たれた（V4-1g §24.2 の 2）: 立て直しの段の 2 へ直に行く（階段で階を出る）。この遠征では、この階に戻らない
+  if (mem.leaveFloor) {
+    why = 'leave_floor';
+    if (blockerAdj && can('attack')) return act('attack', { target: blockerAdj.id });
+    const st0 = onStairs(obs);
+    if (st0 && can('use_stairs')) { upd({ crossed: null }); return act('use_stairs', {}); }
+    const to = escapeStairs(obs) ?? nearestStairs(obs)?.type;
+    if (to && can('travel_to')) return act('travel_to', { to: `stairs_${to}`, ...fleeArgs(obs) });
+  }
+  why = 'recover';
   // 8. 立て直しの段（§14.3）: HP が wake_hp_pct を切った、または fight が hp_floor で止まった・断られた、steady が被害で止まった
   const needRecovery = pct < p.wake_hp_pct || mem.recovering;
   if (needRecovery) {
@@ -520,32 +580,39 @@ export function decide(obs: Observation, ctx: DecideContext): DecideResult {
         const esc = escapeStairs(obs);
         if (esc && can('travel_to')) return act('travel_to', { to: `stairs_${esc}`, ...fleeArgs(obs) });
       }
-      // 隣に起きている敵がいて、階段へも仲間へも行けない: 殴る（離れても付いてくる。来た道を戻るのは、離れて撃たれているとき）
-      // 役割のある敵（目的の相手も）とは、HP が減ったまま殴り合わない（離れる・退く・起こす）
-      const adj = adjacentHunting(obs).filter((m) => !isRoleEnemy(m))[0];
-      const ally = ctx.coop ? farAlly(obs) : undefined;
-      if (adj && !ally && can('attack')) return act('attack', { target: adj.id });
+      // 立て直しの間は、隣の敵を殴らない（逃げると決めたら殴らない。V4-1g §24.2 の 1）。殴るのは、道をふさいでいる敵（断りの blocked_by）だけ
+      if (blockerAdj && can('attack')) return act('attack', { target: blockerAdj.id });
       // 3) 4) 仲間の隣へ寄る・来た道を戻る
       if (can('travel_to')) {
         const m = moveAway(obs, ctx, mem);
         if (m) return act(m.tool, m.args);
       }
-      // 5) どれもできない: 退く。それもできなければ起こす
+      // 5) どれもできない: 退く。それもできなければ、追い詰められた（逃げる手が無い）: 隣で追ってくる敵は、道をふさいでいるのと同じなので殴る（cornered を知らせる。
+      //    V4-1g の測り直しで分かった: 殴らずに上げると、返事が来ても同じ手番で上げ直すだけで、ソロでは手番が進まなかった）。それも無ければ上げる
       const r = retreat(obs, p);
       if (r && can(r.tool)) return actR(r);
+      const corner = adjacentHunting(obs)[0];
+      if (corner && can('attack')) {
+        why = 'cornered';
+        notify.push(W('cornered', `cornered:${corner.id}:${obs.seq}`, [lineWith(ctx.text, corner.id), `逃げる手が無い（階段へも、来た道へも行けない）。隣で追ってくる ${corner.name} を殴る`].filter(Boolean).join('\n'), 'notify'));
+        return act('attack', { target: corner.id });
+      }
       const key = `danger:recovery:${obs.self.hp}:${obs.seq}`;
       fresh(key);
-      return wake(W('danger', key, alert(obs, 'low_hp')?.text ?? obs.summary));
+      return wake(W('danger', key, alert(obs, 'low_hp')?.text ?? obs.summary, 'escalate'));
     }
   }
-  // 立て直しで階を移って休んだ: 戻る
-  if (mem.crossed && !activeCh.length && pct >= p.rest_below_pct) {
+  // 立て直しで階を移って休んだ: 戻る（相手にしない敵に撃たれて出た階には戻らない。V4-1g §24.2 の 2）
+  why = 'recover_return';
+  if (mem.crossed && ctx.avoidDepths?.has(mem.crossed === 'up' ? depthNow - 1 : depthNow + 1)) upd({ crossed: null });
+  else if (mem.crossed && !activeCh.length && pct >= p.rest_below_pct) {
     if (onStairs(obs, mem.crossed) && can('use_stairs')) { upd({ crossed: null }); return act('use_stairs', {}); }
     if (can('travel_to') && obs.navigation.known_stairs.some((s) => s.type === mem.crossed && s.reachable)) return act('travel_to', { to: `stairs_${mem.crossed}` });
     upd({ crossed: null });
   }
-  const depth = obs.self.floor?.depth ?? 0;
+  const depth = depthNow;
   const targetDepth = x?.objective.target_depth ?? null;
+  why = 'warden';
   // 節目の大守護者（V4-1e §19.2）: この階に大守護者が見えている・目的の階が封じられた下り階段の先にある・目的が大守護者
   const wardenM = obs.visible.monsters.find((m) => m.guardian?.warden);
   const sealedHere = obs.navigation.known_stairs.some((st) => st.type === 'down' && st.sealed);
@@ -558,6 +625,11 @@ export function decide(obs: Observation, ctx: DecideContext): DecideResult {
   }
   /** 大守護者が要るのに、挑むと決まっていない（avoid・上げた後も escalate のまま）: 帰る */
   const avoidWarden = wardenNeeded && p.warden !== 'engage';
+  const complete = x?.status === 'objective_complete';
+  // 帰る（mode: return・stop_at_camp・目的を果たした後の既定・大守護者に挑まない・相手が帰った・倒れた）。帰ると決めたら戦わない（V4-1g §24.2 の 1）。
+  // ついていく間は、目的を果たした・大守護者に挑まない、では帰らない（相手が帰ったら帰る）
+  const homeward = leaving || followHome || (!following && ((complete && p.after_objective === 'extract') || avoidWarden));
+  why = 'objective';
   // 9. 役割のある敵が見えている。この遠征の目的の相手なら起こす（engage_objective なら起こさずに挑む）。目的でなければ同じ個体で 1 回だけ知らせる（V4-1e §19.5）
   //    大守護者は warden の方針で決める（engage: 目的か、先へ行くのに要るなら起こさずに挑む。ほかは挑まずに 1 回知らせる）
   for (const m of obs.visible.monsters.filter(isRoleEnemy).sort((a, b) => a.dist - b.dist)) {
@@ -579,6 +651,7 @@ export function decide(obs: Observation, ctx: DecideContext): DecideResult {
     }
     if (fresh(key)) return wake(W(reason, key, lineWith(ctx.text, m.id, m.name)));
   }
+  why = 'relic';
   // 10. 遺物。目的の遺物なら起こす（engage_objective なら起こさずに拾いに行く）。目的でない遺物は、同じ遺物につきランを通して 1 回だけ知らせる（V4-1e §19.5）
   const others = obs.visible.items.filter((i) => i.role === 'relic' && !i.objective && !ctx.notified?.has(`relic_seen:${i.id}`) && !ctx.once?.has(`relic_seen:${i.id}`)).sort((a, b) => a.dist - b.dist);
   if (others.length) {
@@ -608,7 +681,9 @@ export function decide(obs: Observation, ctx: DecideContext): DecideResult {
   if (!p.fight && activeCh.length) noteOnce(W('chased', 'chased', alert(obs, 'enemy_in_view')?.text ?? obs.summary, 'notify'));
   // 相手にしない敵でも、起きていて隣にいるなら殴る（§14.2）
   const adjIgnored = adjacentAwake(obs).find((m) => ignored.has(m.id));
-  if (adjIgnored && can('attack')) return act('attack', { target: adjIgnored.id });
+  why = 'defend';
+  if (adjIgnored && can('attack') && !homeward) return act('attack', { target: adjIgnored.id });
+  why = 'back_off';
   // fight を待つ間に、見えない相手に撃たれた: 1 回、来た道を戻る（立て直しの段の 4。V4-1d §18.2）
   if (mem.backOff) {
     upd({ backOff: false });
@@ -616,9 +691,12 @@ export function decide(obs: Observation, ctx: DecideContext): DecideResult {
     if (back && can('travel_to')) return act('travel_to', { to: { x: back.x, y: back.y }, ...fleeArgs(obs) });
   }
   // 12. 追ってくる役割の無い敵と戦う（相手にしない敵・この手番に断られた相手を除く）。fight を待つ間に撃ってきた見えている相手がいれば、その相手から（V4-1d §18.2）
-  const fightable = activeCh.filter((m) => !isRoleEnemy(m) && !ctx.refusedTargets?.has(m.id));
-  const target = p.fight ? fightable.find((m) => m.id === mem.shotBy) ?? fightable.sort((a, b) => a.dist - b.dist)[0] : undefined;
+  //     帰ると決めたら戦わない（道をふさぐ敵は帰る行で殴る）。仲間を助けに行く間は、隣の敵とだけ戦う（V4-1g §24.2・§24.4）
+  why = assisting ? 'assist' : 'fight';
+  const fightable = activeCh.filter((m) => !isRoleEnemy(m) && !ctx.refusedTargets?.has(m.id) && (!assisting || m.dist <= 1));
+  const target = p.fight && !homeward ? fightable.find((m) => m.id === mem.shotBy) ?? fightable.sort((a, b) => a.dist - b.dist)[0] : undefined;
   if (target) return act('fight', fightArgs(obs, p, mem, target.id, ctx.throwKinds));
+  why = 'trap';
   // 罠にふさがれて断られた（V4-1d §18.1）: step_on_traps なら、隣の罠は 1 歩で踏む（知らせる）。隣でなければ罠の隣まで行く。
   // 立て直しの段の途中（HP が減っている）では踏まない（立て直しの表のほかの手へ進む）
   const tb = ctx.trapBlock;
@@ -638,12 +716,7 @@ export function decide(obs: Observation, ctx: DecideContext): DecideResult {
   // 相手にしない敵が見えている間は、被害を受けても止まらない進み方（§14.2）
   const steady = obs.visible.monsters.some((m) => ignored.has(m.id)) ? { mode: 'steady' } : {};
   // 協力プレイで、仲間についていく（V4-1f §22.5）。危ない・HP・敵への対応（上の行）が先。following の間は、自分から階を移らない（#15 を飛ばす）
-  const leader = x && x.status !== 'ended' ? leaderOf(obs, p) : null;
-  const fm = mem.follow && leader && mem.follow.id === leader.id ? mem.follow : null;
-  let following = false;
-  /** 相手がキャンプに帰った（この遠征で迷宮にいた後）: 自分も帰る */
-  let followHome = false;
-  if (leader && leader.status === 'at_camp' && fm?.inDungeon) followHome = true;
+  why = assisting ? 'assist' : 'follow';
   /** 仲間を待つ（持ち場の動き。待つ命令には partyWait の印を付ける） */
   const partyWait = (kind: 'follow' | 'start') => {
     const h = holdAction(obs, { ...ctx, homeward: false });
@@ -651,12 +724,13 @@ export function decide(obs: Observation, ctx: DecideContext): DecideResult {
     if (r.decision.kind === 'act') r.decision.partyWait = kind;
     return r;
   };
-  if (leader && leader.status === 'in_dungeon' && obs.self.pos && !(ctx.orders.mode === 'stop_at_camp' || ctx.orders.mode === 'return')) {
-    following = true;
+  if (following && leader && obs.self.pos && !homeward) {
     if (leader.floor !== undefined && leader.floor !== depth) {
-      // 遠征の最初に、相手がまだ同じ階にいない: その場で待つ（持ち場の動き）。相手が階を移るか、hold_max_turns が過ぎたら、相手の階へ向かう
-      const waitStart = p.coop.wait_for_party && !!fm && !fm.met && fm.lastFloor === fm.floorAtStart && (ctx.turnNo ?? 0) - fm.startTurn < p.hold_max_turns;
+      // 遠征の最初に、相手がまだ同じ階にいない: その場で待つ（持ち場の動き）。相手が階を移るか、hold_max_turns が過ぎたら、相手の階へ向かう（助けに行くときは待たない）
+      const waitStart = !assisting && p.coop.wait_for_party && !!fm && !fm.met && fm.lastFloor === fm.floorAtStart && (ctx.turnNo ?? 0) - fm.startTurn < p.hold_max_turns;
       if (waitStart) return partyWait('start');
+      // 相手にしない敵に撃たれて出た階には戻らない（相手がその階にいる間は、待つ。V4-1g §24.2 の 2）
+      if (ctx.avoidDepths?.has(leader.floor)) return partyWait('follow');
       // 相手のいる階へ行く（深ければ下りる、浅ければ上る。階段を知らなければ探索する）
       const way = leader.floor > depth ? 'down' : 'up';
       const st = stairs.find((x2) => x2.type === way && !(way === 'down' && x2.sealed));
@@ -668,29 +742,43 @@ export function decide(obs: Observation, ctx: DecideContext): DecideResult {
         return act('explore', { pickup: p.collect ? 'useful' : false, ...(way === 'down' && obs.self.floor?.draft ? { toward: 'draft' } : {}), ...steady });
       }
     } else if (leader.pos) {
+      const lp = { x: leader.pos[0], y: leader.pos[1] };
+      const ld = cheb(obs.self.pos, lp);
+      if (assisting) {
+        // 助けに行く（V4-1g §24.4）: 2 マス以内まで寄る（撃たれても止まらない）。着いたら、相手を追っている敵（相手に近い順）と戦う
+        if (ld > 2 && can('travel_to')) return act('travel_to', { to: leader.entity ?? lp, ...fleeArgs(obs) });
+        const foe = activeCh.filter((m) => !isRoleEnemy(m) && !ctx.refusedTargets?.has(m.id)).sort((a, b) => cheb(a.pos, lp) - cheb(b.pos, lp))[0];
+        if (foe && p.fight) return act('fight', fightArgs(obs, p, mem, foe.id, ctx.throwKinds));
+      }
       // 同じ階で見えていて、follow_distance より離れている: 相手の隣へ
-      if (cheb(obs.self.pos, { x: leader.pos[0], y: leader.pos[1] }) > p.coop.follow_distance && can('travel_to')) return act('travel_to', { to: leader.entity ?? { x: leader.pos[0], y: leader.pos[1] }, ...steady });
+      if (ld > p.coop.follow_distance && can('travel_to')) return act('travel_to', { to: leader.entity ?? lp, ...steady });
     } else if (fm?.lastPos) {
       // 同じ階で見えていない: 最後に見た位置へ（着いても見えなければ、記録を消して探索へ）
-      if (cheb(obs.self.pos, fm.lastPos) > 1 && can('travel_to')) return act('travel_to', { to: { x: fm.lastPos.x, y: fm.lastPos.y }, ...steady });
+      if (cheb(obs.self.pos, fm.lastPos) > 1 && can('travel_to')) return act('travel_to', { to: { x: fm.lastPos.x, y: fm.lastPos.y }, ...(assisting ? fleeArgs(obs) : steady) });
       upd({ follow: { ...fm, lastPos: null } });
     }
   }
   // 13. 敵がいなくて HP が rest_below_pct を切っている: 休む
+  why = 'rest';
   if (!ch.length && pct < p.rest_below_pct && can('rest')) return act('rest', {});
-  // 14. 帰る（mode: return・stop_at_camp・目的を果たした後の既定・大守護者に挑まないと決めた）。after_objective: wake なら起こす、continue なら先へ。
-  //     帰る順は §19.4（階段が先、綱は階段へ着けないときだけ）
-  const complete = x?.status === 'objective_complete';
-  const leaving = ctx.orders.mode === 'stop_at_camp' || ctx.orders.mode === 'return';
-  // ついていく間は、目的を果たした・大守護者に挑まない、では帰らない（相手が帰ったら帰る。mode の return・stop_at_camp は帰る）
-  const homeward = leaving || followHome || (!following && ((complete && p.after_objective === 'extract') || avoidWarden));
+  // 14. 帰る（homeward は上で決めた）。after_objective: wake なら起こす、continue なら先へ。帰る順は §19.4（階段が先、綱は階段へ着けないときだけ）
+  why = 'return';
   if (complete && p.after_objective === 'wake' && !leaving) {
     const key = `objective_done:${x!.no}`;
     if (fresh(key)) return wake(W('objective_done', key, x!.text));
   }
   if (homeward && x) {
-    const h = homewardAction(obs, p, can, steady);
+    // 道をふさいでいる敵だけは殴る。移動は撃たれても止まらない進み方（flee。V4-1g §24.2 の 1）
+    if (blockerAdj && can('attack')) return act('attack', { target: blockerAdj.id });
+    const h = homewardAction(obs, p, can, fleeArgs(obs));
     if (h) return actR(h);
+    // 帰る手が無い（追い詰められた）: 隣で追ってくる敵は殴る（上の立て直しの段の終わりと同じ）
+    const corner = adjacentHunting(obs)[0];
+    if (corner && can('attack') && !can('travel_to')) {
+      why = 'cornered';
+      notify.push(W('cornered', `cornered:${corner.id}:${obs.seq}`, [lineWith(ctx.text, corner.id), `帰る道が無い。隣で追ってくる ${corner.name} を殴る`].filter(Boolean).join('\n'), 'notify'));
+      return act('attack', { target: corner.id });
+    }
   }
   // 帰りたいのに、着ける階段をまだ知らない: 階段を探して探索する（#17）
   const seekStairs = homeward && !stairs.length;
@@ -700,6 +788,7 @@ export function decide(obs: Observation, ctx: DecideContext): DecideResult {
   const seekObjective = !!x && inProgress && SEEK_TYPES.has(x.objective.type) && depth === targetDepth && !objSeen;
   const seekWarden = wardenNeeded && p.warden === 'engage' && !wardenM;
   const seeking = !homeward && !following && (seekObjective || seekWarden);
+  why = 'seek';
   if (seeking && mem.seekTurns >= p.seek_max_turns) {
     const key = `target_not_found:${x!.no}:${depth}`;
     if (fresh(key)) return wake(W('target_not_found', key, [`目的の相手・品を ${mem.seekTurns} 手番探したが見つからない（seek_max_turns ${p.seek_max_turns}）`, x!.objective.text, x!.sense?.text ?? '', obs.summary].filter(Boolean).join('\n')));
@@ -710,7 +799,17 @@ export function decide(obs: Observation, ctx: DecideContext): DecideResult {
     return out({ kind: 'act', tool: 'travel_to', args: { to: { x: sealedSt.pos.x, y: sealedSt.pos.y }, ...steady }, seek: true });
   }
   // 15. 目的の階へ向かう。目的の階より深い所から始まった遠征（前の遠征で止まった階段から再開する）なら、上り階段で上がる
-  if (p.descend && x && !homeward && !following && x.status === 'in_progress' && targetDepth !== null && depth > targetDepth) {
+  why = 'descend';
+  // 目的の階（か、そこまでの道の階）が、相手にしない敵に撃たれて出た階（V4-1g §24.2 の 2）: 起こす
+  if (p.descend && x && !homeward && !following && x.status === 'in_progress' && targetDepth !== null && targetDepth !== depth && ctx.avoidDepths?.size) {
+    const lo = Math.min(depth, targetDepth), hi = Math.max(depth, targetDepth);
+    const blocked = [...ctx.avoidDepths].filter((d) => d >= lo && d <= hi && d !== depth);
+    if (blocked.length) {
+      const key = `target_blocked:${x.no}`;
+      if (fresh(key)) return wake(W('target_blocked', key, [`目的の階（地下 ${targetDepth} 階）へは、相手にしない敵に撃たれて出た階（地下 ${blocked.join('・')} 階）を通る。この遠征では、その階に戻らない`, x.objective.text, obs.summary].join('\n')));
+    }
+  }
+  if (p.descend && x && !homeward && !following && x.status === 'in_progress' && targetDepth !== null && depth > targetDepth && !ctx.avoidDepths?.has(depth - 1)) {
     const up = stairs.find((s) => s.type === 'up');
     if (up) {
       if (up.dist === 0 && can('use_stairs')) return act('use_stairs', {});
@@ -721,13 +820,15 @@ export function decide(obs: Observation, ctx: DecideContext): DecideResult {
   if (p.descend && x && !homeward && !following && (x.status === 'in_progress' || (complete && p.after_objective === 'continue'))) {
     const below = targetDepth === null || depth < targetDepth || complete;
     const crossing = x.objective.type === 'reach_depth' && targetDepth !== null && depth === targetDepth;
-    if ((below || crossing) && down) {
+    if ((below || crossing) && down && !ctx.avoidDepths?.has(depth + 1)) {
       if (down.dist === 0 && below && can('use_stairs')) return act('use_stairs', {});
       if (down.dist > 0 && can('travel_to')) return act('travel_to', { to: 'stairs_down', ...steady });
     }
   }
+  why = 'collect';
   // 16. 引数なしの collect が拾いに行く品がある（観測の navigation.collectable。遺物は collect が拾わない。V4-1a §12.1）
   if (!homeward && p.collect && can('collect') && (obs.navigation.collectable?.count ?? 0) > 0) return act('collect', { what: 'items', ...steady });
+  why = seeking ? 'seek' : 'explore';
   // 17. 探索できる所が残っている（目的の階より浅く、下り階段を知らなければ、下への風の方角へ。探す間は、気配の方角へ: §22.1 の 2）
   if ((!homeward || seekStairs) && can('explore') && (obs.navigation.frontiers.length || (obs.navigation.unsighted ?? 0) > 0)) {
     const toward = seeking && x?.sense ? { toward: 'sense' } : (targetDepth === null || depth < targetDepth) && !down && obs.self.floor?.draft ? { toward: 'draft' } : {};
@@ -743,7 +844,14 @@ export function decide(obs: Observation, ctx: DecideContext): DecideResult {
   // 帰りたいのに、知っている階段が無く、探索できる所も残っていない: 綱（allow_lifeline のとき。§19.4）
   if (homeward && x && p.allow_lifeline && hasLifeline(obs) && can('use_item')) return actR({ tool: 'use_item', args: { slot: 'lifeline' }, why: '帰りたいが、知っている階段が無く、探索できる所も残っていない' });
   // ついていく間に、やることが残っていない（相手が同じ階で見えない・相手の階への階段も探索できる所も無い）: 起こさずに待つ（持ち場の動き。V4-1f §22.5）
+  // 助けに行く相手が同じ階で見えず、最後に見た位置にも行った: 歩いた所の遠い所から見回って探す（V4-1g の測り直しで分かった: 相手が物陰にいる間、その場で待ち続けた）
+  if (assisting && leader?.floor === depth && !leader.pos && can('travel_to')) {
+    const t2 = patrolTarget(obs, mem, ctx.walked ?? []);
+    if (t2) { why = 'assist'; return act('travel_to', { to: { x: t2.x, y: t2.y }, ...fleeArgs(obs) }); }
+  }
+  why = 'follow';
   if (following) return partyWait('follow');
+  why = 'none';
   // 18. 何も残っていない。命令が断られて残らなかったなら、その理由（refused_<code>）で起こす。
   //     じゃまをしている敵（エラーの blocked_by）の観測の行を detail の先頭に、ほかの見えている者の行を近い順に後ろに添える（V4-1a §13.8。pilot は自分からは戦わない）
   const rf = ctx.refusal;

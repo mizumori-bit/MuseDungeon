@@ -141,7 +141,10 @@ export interface ObsExpedition {
   /** 1 行の要約 */
   text: string;
   /** 終了した遠征の結果 */
-  result?: { reason: string; points: number; deepest: number; kills: number; turns: number; text: string };
+  /**
+   * banked: あなたの確定、party_banked: 全員の合計（協力プレイ）、shares: だれの分か（how: completed / withdrawn / lifeline / lost。V4-1g G4）
+   */
+  result?: { reason: string; points: number; deepest: number; kills: number; turns: number; text: string; banked?: number; party_banked?: number; shares?: { id: string; name: string; banked: number; lost: number; how: 'completed' | 'withdrawn' | 'lifeline' | 'lost' }[] };
   slot?: OfferSlot;
   traits?: string[];
   /** 目標の気配（目標階にいる間。方角と 10 マス以内かどうか。V3-2R §14.2） */
@@ -209,13 +212,14 @@ export interface ObsPlayer { id: string; name: string; pos: Pos; dir: Dir | null
  * 仲間のいる階の地形・敵は渡さない
  */
 export interface ObsPartyMember {
-  id: string; name: string; controller: 'human' | 'agent'; order: number;
+  id: string; name: string; controller: 'human' | 'agent' | 'unknown'; order: number;
   status: 'in_dungeon' | 'at_camp' | 'down' | 'left';
   floor?: number; pos?: [number, number]; hp?: HpState; entity?: string;
 }
 /** lair: 棲み処の地物（護りの火）の持ち主の守護者の呼び名（V3-3c §44.6） */
 /** id: travel_to で指せる（V3-8a §56.1 の 5） */
-export interface ObsFeature { id?: string; type: string; name: string; pos: Pos; dir: Dir | null; dist: number; state?: string; lair?: string }
+/** desc: 何であるか・どう使うかの 1 行（V4-1g G6。すべての地物にある） */
+export interface ObsFeature { id?: string; type: string; name: string; pos: Pos; dir: Dir | null; dist: number; state?: string; lair?: string; desc?: string }
 /**
  * 自分の持ち物の性能（鑑定済みのみ。接辞込み）。weapon.traits は武器の特性（V3-4）、armor の move_cost / wake_pct は重い鎧、
  * mods は装飾品の修正と、接辞による追加の修正（最大 HP・視界など）
@@ -366,9 +370,11 @@ export function partyOf(view: PlayerView): ObsPartyMember[] {
     const status: ObsPartyMember['status'] = p.state === 'alive' ? 'in_dungeon' : p.state === 'at_camp' ? 'at_camp' : p.state === 'dead' ? 'down' : 'left';
     const seen = status === 'in_dungeon' ? view.entities.find((e) => e.cat === 'player' && e.id === p.entityId) : undefined;
     out.push({
-      id: p.playerId, name: p.name, controller: p.controller.kind === 'human' ? 'human' : 'agent', order: i + 1, status,
+      id: p.playerId, name: p.name, controller: p.controller.kind, order: i + 1, status,
       ...(status === 'in_dungeon' && p.depth !== null ? { floor: p.depth } : {}),
-      ...(seen ? { pos: [seen.pos.x, seen.pos.y] as [number, number], hp: seen.hp ?? 'healthy', entity: seen.id } : {}),
+      // HP の段階は、迷宮にいれば見えていなくても（V4-1g G3）。位置とエンティティは見えているときだけ
+      ...(status === 'in_dungeon' && (p.hp ?? seen?.hp) ? { hp: (p.hp ?? seen?.hp)! } : {}),
+      ...(seen ? { pos: [seen.pos.x, seen.pos.y] as [number, number], entity: seen.id } : {}),
     });
   });
   return out;
@@ -380,8 +386,9 @@ export function partyText(L: Locale, party: readonly ObsPartyMember[]): string {
   const one = (m: ObsPartyMember) => {
     const where = m.status === 'in_dungeon' ? (m.floor !== undefined ? t(L, `地下 ${m.floor} 階`, `depth ${m.floor}`) : t(L, '迷宮', 'in the dungeon'))
       : m.status === 'at_camp' ? t(L, 'キャンプ', 'at camp') : m.status === 'down' ? t(L, '倒れている', 'down') : t(L, 'ランを抜けた', 'left the run');
-    const seen = m.pos ? t(L, `・見えている (${m.pos[0]},${m.pos[1]}) ${HP_JA[m.hp ?? 'healthy']}`, `, in view (${m.pos[0]},${m.pos[1]}) ${m.hp ?? 'healthy'}`) : '';
-    return `${m.name}${m.controller === 'human' ? t(L, '［人間］', ' [human]') : ''}（${where}${seen}）`;
+    const hp = m.hp ? t(L, `・${HP_JA[m.hp]}`, `, ${m.hp}`) : '';
+    const seen = m.pos ? t(L, `・見えている (${m.pos[0]},${m.pos[1]})`, `, in view (${m.pos[0]},${m.pos[1]})`) : '';
+    return `${m.name}${m.controller === 'human' ? t(L, '［人間］', ' [human]') : m.controller === 'unknown' ? t(L, '［不明］', ' [unknown]') : ''}（${where}${hp}${seen}）`;
   };
   return t(L, `仲間: ${party.map(one).join('、')}`, `Party: ${party.map(one).join(', ')}`);
 }
@@ -903,6 +910,8 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
   const items: ObsItem[] = [];
   const players: ObsPlayer[] = [];
   const features: ObsFeature[] = [];
+  /** 地物の 1 行の説明（V4-1g G6。内容のデータの desc） */
+  const featureDesc = (kind: string | null | undefined) => { const d = kind ? catalog.features[kind]?.desc : undefined; return d ? { desc: nameOf(d, L, '') } : {}; };
   const rel = (p: Pos) => ({ dir: pos ? compassDir(pos, p) : null, dist: pos ? cheb(pos, p) : 0 });
   // 敵の速さの表示は、加速・減速を除いた自分の速さと比べる（V3-3a §35.8: 加速中は普通のゴブリンが「遅い」と出た）
   const mySpeed = view.self.speed;
@@ -987,7 +996,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
     } else if (e.cat === 'player') {
       players.push({ id: e.id, name: e.name ?? '?', pos: e.pos, ...rel(e.pos), hp_state: e.hp ?? 'healthy' });
     } else {
-      features.push({ id: e.id, type: e.kind ?? 'feature', name: kindName(catalog, L, e.kind), pos: e.pos, ...rel(e.pos), state: e.state, ...(e.lair ? { lair: guardianDisplayName(L, e.lair) } : {}) });
+      features.push({ id: e.id, type: e.kind ?? 'feature', name: kindName(catalog, L, e.kind), pos: e.pos, ...rel(e.pos), state: e.state, ...(e.lair ? { lair: guardianDisplayName(L, e.lair) } : {}), ...featureDesc(e.kind) });
     }
   }
   monsters.sort((a, b) => a.dist - b.dist || (a.id < b.id ? -1 : 1));
@@ -1005,7 +1014,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       if (r.value !== undefined) it.value = r.value;
       rememberedItems.push(it);
     }
-    if (r.cat !== 'item') features.push({ id: r.id, type: r.kind ?? 'feature', name: kindName(catalog, L, r.kind), pos: r.pos, ...rel(r.pos), state: r.state, ...(r.lair ? { lair: guardianDisplayName(L, r.lair) } : {}) });
+    if (r.cat !== 'item') features.push({ id: r.id, type: r.kind ?? 'feature', name: kindName(catalog, L, r.kind), pos: r.pos, ...rel(r.pos), state: r.state, ...(r.lair ? { lair: guardianDisplayName(L, r.lair) } : {}), ...featureDesc(r.kind) });
   }
   // 記憶の中のアイテムは近い順に 3 件まで（遺物は常に出す）。戦闘中（追跡中の敵が見えている間）は出さない。残りは件数だけ（V3-2R §14.2）
   rememberedItems.sort((a, b) => a.dist - b.dist || (a.id < b.id ? -1 : 1));
@@ -1250,7 +1259,21 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       expedition.milestone = milestoneObs(L, catalog, xv.milestone, view.milestonesCleared ?? [], view.wardenIntel?.[String(xv.milestone.depth)], view);
       if (active) expedition.text += ` | ${expedition.milestone.cleared ? t(L, `節目: 地下${expedition.milestone.depth}階 踏破済み`, `milestone: depth ${expedition.milestone.depth} cleared`) : t(L, `次の節目: 地下${expedition.milestone.depth}階の大守護者「${expedition.milestone.name}」（未踏破）`, `next milestone: warden "${expedition.milestone.name}" on depth ${expedition.milestone.depth} (not cleared)`)}`;
     }
-    if (xv.result) expedition.result = { ...xv.result, text: resultText(L, xv, catalog.rules) };
+    if (xv.result) {
+      // あなたの分・全員の合計・だれの分か（V4-1g G4）
+      const names = Object.fromEntries(view.party.map((p) => [p.playerId, p.name]));
+      const pay = xv.result.payout;
+      const mine = pay ? (pay.players.find((p) => p.player === view.playerId) ?? (pay.players.length === 1 ? pay.players[0] : undefined)) : undefined;
+      const shares = pay && pay.players.length > 1 ? pay.players.map((p) => {
+        const ret = xv.returns?.find((q) => q.player === p.player);
+        const how: 'completed' | 'withdrawn' | 'lifeline' | 'lost' = p.lost > 0 ? 'lost' : ret?.lifeline ? 'lifeline' : ret?.completed ? 'completed' : 'withdrawn';
+        return { id: p.player, name: names[p.player] ?? p.player, banked: p.banked, lost: p.lost, how };
+      }) : undefined;
+      expedition.result = {
+        ...xv.result, text: resultText(L, xv, catalog.rules, { id: view.playerId, names }),
+        ...(pay ? { banked: mine?.banked ?? 0 } : {}), ...(shares ? { party_banked: pay!.banked, shares } : {}),
+      };
+    }
     if (xv.slot) expedition.slot = xv.slot;
     if (xv.traits.length) expedition.traits = [...xv.traits];
     // 護りの火の手がかり（V3-3c §44.6）
@@ -1302,12 +1325,16 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       // 綱は目的の点を運ばない。遺物を持っていれば失う（V3-4b §28.1）
       const relicNote = xv.objective.type === 'retrieve_relic' && xv.progress.relicHeldByYou ? t(L, '（遺物は失う）', ' (the relic is lost)') : '';
       const lifeText = ifLifeline !== undefined ? t(L, `・綱なら +${ifLifeline}${relicNote}`, `, lifeline +${ifLifeline}${relicNote}`) : '';
+      // 協力プレイ: 帰った者の点は、遠征の終わり（全員が戻ったとき）に確定する。共有の分はそのときの値で数える（帰った後に仲間が稼いだ分も入る）。V4-1g G4
+      const coopNote = view.runMode === 'coop' && view.party.length > 1
+        ? t(L, '（協力プレイ: 帰った者の点は、全員が戻って遠征が終わったときに確定する。目的・踏破・発見・撃破・賞金の分はそのときの値で数え、宝は持ち帰った人の分）', ' (co-op: what you bring back is banked when everyone is back and the expedition ends; objective, overreach, discovery, kills and bounty count at that time, treasure goes to who carried it)')
+        : '';
       expedition.haul = {
         total, multiplier_pct: xv.multiplierPct, parts, if_extract_now: ifNow, ...(ifLifeline !== undefined ? { if_lifeline_now: ifLifeline } : {}), next_overreach: next,
         next_camp: nc ? { min_target_depth: nc.minTargetDepth, recommended_level: nc.recommendedLevel } : null,
         text: t(L,
-          `戦利品 ${total}（${partsText(L, parts) || 'なし'}）${expedition.extract_outcome === 'complete' ? multText(xv.multiplierPct) : `撤退なら ${catalog.rules.haul.withdrawPct}%（目的を除く）`} → 今帰れば +${ifNow}${lifeText}${nextText}${campText} / 確定済み ${view.record.banked}`,
-          `haul ${total} (${partsText(L, parts) || 'none'}) ${expedition.extract_outcome === 'complete' ? multText(xv.multiplierPct) : `withdraw ${catalog.rules.haul.withdrawPct}% without objective`} → extract now +${ifNow}${lifeText}${nextText}${campText} / banked ${view.record.banked}`),
+          `戦利品 ${total}（${partsText(L, parts) || 'なし'}）${expedition.extract_outcome === 'complete' ? multText(xv.multiplierPct) : `撤退なら ${catalog.rules.haul.withdrawPct}%（目的を除く）`} → 今帰れば +${ifNow}${lifeText}${coopNote}${nextText}${campText} / 確定済み ${view.record.banked}`,
+          `haul ${total} (${partsText(L, parts) || 'none'}) ${expedition.extract_outcome === 'complete' ? multText(xv.multiplierPct) : `withdraw ${catalog.rules.haul.withdrawPct}% without objective`} → extract now +${ifNow}${lifeText}${coopNote}${nextText}${campText} / banked ${view.record.banked}`),
       };
     }
   }
@@ -1407,7 +1434,8 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
     });
   }
   const mineCount = items.filter((i) => i.mine).reduce((a, i) => a + i.qty, 0);
-  const pickables = pickableItems(view, catalog).length;
+  // 拾えるアイテムは、辿り着ける所のものだけ数える（V4-1g G5: 壁の向こうに覚えている品で explore の行を出し、呼ぶと nothing_to_do になっていた）
+  const pickables = pickableItems(view, catalog).filter((x) => !dist || dist[x.cell]! >= 0).length;
   const collectIds = collectTargets(view, catalog);
   const valid_actions = buildValidActions(view, catalog, {
     passable_dirs, onStairs, itemsHere: itemsHere.length > 0, relicHere: itemsHere.some((i) => i.role === 'relic'), hostiles, frontiers: frontiers.length, known_stairs, grid,
@@ -1653,20 +1681,20 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
     const def = Object.entries(catalog.abilities).find(([k]) => k === a.id || k.endsWith(`:${a.id}`))?.[1];
     // 使い切った能動技は出さない（V3-3b §40.7。self.abilities の uses_left で分かる）
     if (a.uses_left === 0) continue;
-    if (a.cooldown_left > 0) { out.push(`use_ability ${a.id} (${t(L, `${a.name}: あと ${a.cooldown_left} 手番`, `${a.name}: ready in ${a.cooldown_left} turns`)})`); continue; }
+    if (a.cooldown_left > 0) { out.push(`use_ability ${a.id} (${t(L, `不可: ${a.name}はあと ${a.cooldown_left} 手番`, `unavailable: ${a.name} is ready in ${a.cooldown_left} turns`)})`); continue; }
     const desc = def ? nameOf(def.desc, L, '') : '';
     if (a.target === 'adjacent') {
-      for (const m of adjFoes.slice(0, 2)) out.push(`use_ability ${a.id} -> ${m.id} (${a.name}: ${m.name}・${desc})`);
+      for (const m of adjFoes.slice(0, 2)) out.push(`use_ability ${a.id} target:${m.id} (${a.name}: ${m.name}・${desc})`);
     } else if (a.target === 'throw') {
       const tg = x.hostiles.filter((m) => m.shots.some((s) => s.state === 'clear')).sort((p1, p2) => Number(x.attackers.has(p2.id)) - Number(x.attackers.has(p1.id)) || p1.dist - p2.dist).slice(0, 2);
-      for (const m of tg) out.push(`use_ability ${a.id} -> ${m.id} (${a.name}: ${m.name}${m.awareness !== 'hunting' ? t(L, '・気づいていないので会心', ', unaware: a critical hit') : ''}・${desc})`);
+      for (const m of tg) out.push(`use_ability ${a.id} target:${m.id} (${a.name}: ${m.name}${m.awareness !== 'hunting' ? t(L, '・気づいていないので会心', ', unaware: a critical hit') : ''}・${desc})`);
     } else if (a.target === 'dir') {
       // 身をかわす: 隣に起きている敵がいるときだけ、離れる向きを例に出す
       const near = adjFoes.find((m) => m.awareness !== 'asleep');
       if (near) {
         // 離れる向きはすべて 1 行に（V3-3 後の AI 評価: 2 つだけ出していたので、ほかの向きは使えないと読めた）
         const away = x.passable_dirs.filter((d) => { const v = DIR_VEC[d]; return cheb({ x: pos.x + v[0], y: pos.y + v[1] }, near.pos) > 1; });
-        if (away.length) out.push(`use_ability ${a.id} <${away.join('|')}> (${a.name}: ${desc})`);
+        if (away.length) out.push(`use_ability ${a.id} target:${away.length > 1 ? `<${away.join('|')}>` : away[0]} (${a.name}: ${desc})`);
       }
     } else if (def && a.target === 'none') {
       if (def.handler === 'cleave') { if (adjFoes.length) out.push(`use_ability ${a.id} (${t(L, `${a.name}: 隣の ${adjFoes.length} 体`, `${a.name}: ${adjFoes.length} adjacent`)})`); }
@@ -1705,6 +1733,10 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
   if (x.collectable > 0 && !adjAwake.length) out.push(`collect what:items (${t(L, `見えている・記憶したアイテム ${x.collectable} 個を拾って回る（${COLLECT_WITHIN} 歩以内。遺物は除く）`, `pick up ${x.collectable} known items (within ${COLLECT_WITHIN} steps; not the relic)`)})`);
   const throwGroups: { key: string; slots: string[]; targets: ObsMonster[] }[] = [];
   const lifelineLines: string[] = [];
+  /** 綱の確定（協力プレイでは、全員が戻ったときに確定し、共有の分はそのときの値。V4-1g G4） */
+  const lifeBank = (n: number) => (view.runMode === 'coop' && view.party.length > 1
+    ? t(L, `・+${n}（協力プレイ: 全員が戻ったときに確定。共有の分はそのときの値）`, `, +${n} (co-op: banked when everyone is back; shared parts count then)`)
+    : t(L, `・+${n} 確定`, `, banks +${n}`));
   for (const it of view.inventory) {
     const name = itemDisplayName(catalog, L, it.kind, it.appearanceId, it.affixes);
     const cat = itemCategory(catalog, it.kind, it.appearanceId);
@@ -1713,7 +1745,7 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
     if (ci?.bound && ci.usable) {
       // 帰還の綱: 手番の数・今の群れの被害見込み・確定点（V3-2R2 §18.1）。危なくないとき（追跡中の敵がおらず HP が半分超）は短い行だけ
       if (!x.huntingReach.length && view.self.stats.hp * 2 > view.self.stats.maxHp) {
-        out.push(`use_item ${it.slot} (${name}${x.ifLifeline !== undefined ? t(L, `・+${x.ifLifeline} 確定`, `, banks +${x.ifLifeline}`) : ''})`);
+        out.push(`use_item ${it.slot} (${name}${x.ifLifeline !== undefined ? lifeBank(x.ifLifeline) : ''})`);
         continue;
       }
       const turns = catalog.rules?.lifeline?.turns ?? 0;
@@ -1722,7 +1754,7 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
       const how = x.lifelineShort ? t(L, 'キャンプへ戻る', 'back to camp') : (turns > 0 ? t(L, `${turns} 手番動けずにキャンプへ戻る`, `${turns} turns helpless, then back to camp`) : t(L, 'その場でキャンプへ戻る（命と、目的を除く戦利品の半分を持ち帰る）', 'back to camp at once (you keep your life and half the haul without the objective)'))
         + (x.lifelineShort ? '' : t(L, '・次の遠征はこの遠征を始めた階段から', '; the next expedition starts from where this one began'));
       const left = x.mineCount > 0 ? t(L, `・投げた物が ${x.mineCount} 個、この階の床に残っている`, `; ${x.mineCount} of your thrown items are still on this floor`) : '';
-      const line = `use_item ${it.slot} (${t(L, `${name}: ${how}${x.ifLifeline !== undefined ? `・+${x.ifLifeline} 確定` : ''}${risk}${left}`, `${name}: ${how}${x.ifLifeline !== undefined ? `, banks +${x.ifLifeline}` : ''}${risk}${left}`)})`;
+      const line = `use_item ${it.slot} (${t(L, `${name}: ${how}${x.ifLifeline !== undefined ? lifeBank(x.ifLifeline) : ''}${risk}${left}`, `${name}: ${how}${x.ifLifeline !== undefined ? lifeBank(x.ifLifeline) : ''}${risk}${left}`)})`;
       out.push(line);
       lifelineLines.push(line);
       continue;
@@ -1747,7 +1779,10 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
     }
   }
   for (const g of throwGroups) {
-    out.push(`throw_item ${g.slots.join('|')} -> ${g.targets.map((m) => `${m.id}${x.attackers.has(m.id) && !m.fleeing ? t(L, '（あなたを攻撃中）', ' (attacking you)') : ''}`).join(', ')}`);
+    // 呼べる形（V4-1g G5）: throw_item <slot> target:<id>。どちらも <a|b> はどれか 1 つ
+    const alt = (xs: string[]) => (xs.length > 1 ? `<${xs.join('|')}>` : xs[0]!);
+    const attacking = g.targets.filter((m) => x.attackers.has(m.id) && !m.fleeing).map((m) => m.id);
+    out.push(`throw_item ${alt(g.slots)} target:${alt(g.targets.map((m) => m.id))}${attacking.length ? t(L, ` (${attacking.join('・')} はあなたを攻撃中)`, ` (${attacking.join(', ')} attacking you)`) : ''}`);
   }
   // 投擲で決着まで（相手が射程に入るまで待つ。V3-2R2 §18.5）。隣の相手には出さない（投擲の fight は隣に来ると止まる）
   const thrownProf = catalog.classes[view.self.classId]?.proficiency.thrown ?? 0;
@@ -1818,6 +1853,8 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
     lines.push(`[seq ${obs.seq} | ${t(L, 'キャンプ', 'Camp')} | HP ${s.hp}/${s.max_hp} | Lv${s.level} | ${statusText.at_camp[L === 'en' ? 1 : 0]}]`);
     const pt = partyText(L, obs.party ?? []);
     if (pt) lines.push(pt);
+    // 遠征が進んでいる（仲間がまだ迷宮にいる）: 全員が戻ったら、次の遠征を選べる（V4-1g G1）
+    if (obs.expedition && obs.expedition.status !== 'ended') lines.push(t(L, `遠征 ${obs.expedition.no} が進んでいる（仲間がまだ迷宮にいる）。全員が戻ったら、次の遠征を選べる`, `Expedition ${obs.expedition.no} is still under way (allies are still inside). You can choose the next one when everyone is back`));
     if (obs.expedition?.result) lines.push(obs.expedition.result.text);
     // 直前の遠征の比較（1 行。目標の宣言は V3-8 §53.5 で外した）
     if (obs.camp?.compare?.lines.length) lines.push(obs.camp.compare.lines[0]);

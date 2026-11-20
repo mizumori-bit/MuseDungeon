@@ -137,7 +137,7 @@ describe('V4-1e warden in the field (§19.2)', () => {
     const o = fieldObs({ stairs: [sealed, up], objective: { type: 'reach_depth', target_depth: 7 } });
     expect(summary(decide(o, ctx()))).toBe('escalate:warden_decision:warden_decision:5');
     // 挑まない: 帰る（いちばん近い階段へ。綱は使わない）
-    expect(summary(decide(o, ctx(withPolicy({ warden: 'avoid', allow_lifeline: true }, 'auto'), { once: new Set(['warden_decision:5']) })))).toBe('act:travel_to:{"to":"stairs_down"}');
+    expect(summary(decide(o, ctx(withPolicy({ warden: 'avoid', allow_lifeline: true }, 'auto'), { once: new Set(['warden_decision:5']) })))).toMatch(/^act:travel_to:\{"to":"stairs_down","mode":"flee"/);
   });
 });
 
@@ -153,7 +153,7 @@ describe('V4-1e going home: stairs first, the lifeline only when the stairs cann
     expect(r.decision.kind === 'act' && r.decision.args.to).toBe('stairs_up');
     // 追われていない・目的を果たした後: 階段へ
     const calm = fieldObs({ status: 'objective_complete', stairs: [up], lifeline: true });
-    expect(summary(decide(calm, ctx(p)))).toBe('act:travel_to:{"to":"stairs_up"}');
+    expect(summary(decide(calm, ctx(p)))).toMatch(/^act:travel_to:\{"to":"stairs_up","mode":"flee"/);
     // 階段の上: 帰る（全額）
     const onIt = fieldObs({ status: 'objective_complete', stairs: [{ ...up, dist: 0, path_len: 0 }], lifeline: true, alerts: [{ code: 'on_stairs', level: 'info', text: '上り階段の上' } as never] });
     onIt.expedition!.can_extract = true; onIt.expedition!.extract_outcome = 'complete';
@@ -163,7 +163,7 @@ describe('V4-1e going home: stairs first, the lifeline only when the stairs cann
     for (const mode of ['return', 'stop_at_camp'] as const) {
       const p = withPolicy({ allow_lifeline: true }, mode);
       // 着ける: 階段へ（以前の stop_at_camp は綱を先に使っていた）
-      expect(summary(decide(fieldObs({ stairs: [up], lifeline: true }), ctx(p)))).toBe('act:travel_to:{"to":"stairs_up"}');
+      expect(summary(decide(fieldObs({ stairs: [up], lifeline: true }), ctx(p)))).toMatch(/^act:travel_to:\{"to":"stairs_up","mode":"flee"/);
       // 追われていて着けない: 綱。使えたら理由と持ち帰っていない戦利品を知らせる
       const h = homewardAction(fieldObs({ stairs: [up], lifeline: true, monsters: [chaser], alerts: [escape(false)] }), p.policy, () => true);
       expect(h?.tool).toBe('use_item');

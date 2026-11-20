@@ -5,10 +5,14 @@
 //   目的の相手・品 → engage_objective: true（以後は pilot が挑む・拾う）
 //   特技・加護   → 最初の候補
 //   動けない（refused_hostile_adjacent・refused_blocked） → じゃまをしている敵（detail の先頭の行）と戦う。罠にふさがれていたら帰る
-//   危ない・行き詰まり・やることが無い・目的の相手を諦めた・目的の相手が見つからない（target_not_found） → 帰る（mode: return。階段から帰り、綱は階段へ着けないとき・途中で危ないときだけ。
+//   行き詰まり・やることが無い・目的の相手を諦めた・目的の相手が見つからない（target_not_found）・目的の階へ行けない（target_blocked） → 帰る
+//   （危ない（danger）は V4-1g から escalate なので、見本は答えない。pilot は自分で退く）
+//   同じ理由に同じ返事を 2 回続けない: 2 回目は「帰る」にする（V4-1g §24.3。返事役の記録は orders.json の隣の responder.json）（mode: return。階段から帰り、綱は階段へ着けないとき・途中で危ないときだけ。
 //                  そのために allow_lifeline: true にする。V4-1e §19.4。今までは綱を queue に書いていた）
 // それ以外は「わかった」とだけ返す（rev を上げる）。知らせる（notify）と上げる（escalate: AI か人間へ回すもの。V4-1e §19.1）には返事をしない。
 // 自分の返事の相手（--wake-cmd や --wake-url の先）を書くときの手本にもなる。
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import type { PilotOrders, QueuedCommand } from './orders';
 import { defaultOrders, readOrders, writeJsonAtomic } from './orders';
 import type { WakeEvent } from './pilot';
@@ -57,11 +61,18 @@ export function simpleResponder(ev: WakeEvent): void {
       else home();
       break;
     }
-    case 'danger': case 'nothing_to_do': case 'stuck': case 'gave_up': case 'target_not_found':
+    case 'danger': case 'nothing_to_do': case 'stuck': case 'gave_up': case 'target_not_found': case 'target_blocked':
       home();
       break;
     default:
       break;
   }
+  // 同じ理由に同じ返事を 2 回続けない（V4-1g §24.3）: 前の返事と同じなら、2 回目は「帰る」にする。--wake-cmd では毎回別のプロセスなので、ファイルに残す
+  const memPath = join(dirname(ev.ordersPath), 'responder.json');
+  const sigOf = (o: PilotOrders) => JSON.stringify({ mode: o.mode, queue: o.queue, policy: { ...o.policy, ignore: [], unignore: [] } });
+  let last: { reason?: string; sig?: string } = {};
+  try { if (existsSync(memPath)) last = JSON.parse(readFileSync(memPath, 'utf-8')) as typeof last; } catch { /* 壊れていれば無いものとする */ }
+  if (role !== 'camp' && role !== 'perk_pending' && role !== 'boon_pending' && last.reason === ev.reason && last.sig === sigOf(next) && next.mode !== HOME) home();
+  writeJsonAtomic(memPath, { reason: ev.reason, sig: sigOf(next) });
   writeJsonAtomic(ev.ordersPath, next);
 }

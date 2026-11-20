@@ -101,7 +101,7 @@ export const JoinSchema = z.object({
   type: z.literal('join'),
   name: z.string().min(1).max(32),
   classId: z.string().optional(),
-  controller: z.object({ kind: z.enum(['agent', 'human']), label: z.string().max(64) }),
+  controller: z.object({ kind: z.enum(['agent', 'human', 'unknown']), label: z.string().max(64) }),
   locale: z.enum(['ja', 'en']).default('ja'),
   /** 参加したらキャンプに入る（最初の遠征を候補から選ぶ。V3-2R §14.4） */
   atCamp: z.boolean().optional(),

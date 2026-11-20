@@ -61,12 +61,15 @@ export async function arena(seed: string, spec: DuelSpec) {
   if (spec.player?.acc !== undefined) me.stats!.acc = spec.player.acc;
   if (spec.player?.might !== undefined) me.stats!.might = spec.player.might;
   const put: Entity[] = [me];
+  // 足した品のスロットも使用中に数える（V4-1g: 2 個以上足すと同じスロットになっていた）
+  const given = new Map<string, string>();
   for (const it of spec.player?.items ?? []) {
-    const used = new Set(me.inv!.items.map((id) => world.entities[id]?.item?.slot));
+    const used = new Set(me.inv!.items.map((id) => world.entities[id]?.item?.slot ?? given.get(id)));
     let slot = 'a';
     for (let c = 97; c <= 122; c++) if (!used.has(String.fromCharCode(c))) { slot = String.fromCharCode(c); break; }
     const id = `e_d${(++sid).toString(36).padStart(5, '0')}`;
     put.push({ id, kind: it.kind, sid: ++sid, item: { qty: it.qty ?? 1, affixes: [], heldBy: meId, slot, inspected: true } });
+    given.set(id, slot);
     me.inv!.items.push(id);
     world.players[pid].knowledge.identified = [...new Set([...world.players[pid].knowledge.identified, it.kind])];
   }

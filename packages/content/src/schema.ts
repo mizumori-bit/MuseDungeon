@@ -537,7 +537,7 @@ export const FeatureSchema = z.object({
   depth: DepthSchema.default({ min: 1 }),
   rarity: z.number().int().min(1).default(1),
   /** 説明（look で読める。V3-5 §5.1） */
-  desc: NamesSchema.optional(),
+  desc: NamesSchema, // 何であるか・どう使うかの 1 行。すべての地物に要る（V4-1g G6。無ければ起動時の検査で落とす）
   /** レバー（V3-5 §5.2）: 操作するとつないだ格子扉を開け閉めする */
   lever: z.boolean().default(false),
   /** 脆い天井（V3-5 §5.2）: trigger マス以内で音量 loudness 以上の音がすると崩れ、radius マスの者に dmg を与え、その場は瓦礫になる */

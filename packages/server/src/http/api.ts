@@ -90,7 +90,8 @@ export function createApp(manager: SessionManager, config: ServerConfig): App {
     if (p === '/api/runs' && m === 'POST') {
       const body = (await readBody(req).catch(() => null)) as NewRunRequest | null;
       if (!body?.name) return fail(res, 400, actionError('bad_request', 'name is required', '{ name, classId?, seed?, mode?, locale? }'));
-      const controller: Controller = body.controller ?? { kind: 'human', label: 'browser' };
+      // controller を省いたら「分からない」（V4-1g G2。ブラウザの画面は human を送る）
+      const controller: Controller = body.controller ?? { kind: 'unknown', label: 'http' };
       const r = await manager.createRun({ ...body, controller });
       if ('error' in r) return fail(res, 400, r.error);
       return json(res, 200, { runId: r.session.runId, playerId: r.playerId, token: r.token, profileId: r.profile.id, ...(r.profile.token ? { profileToken: r.profile.token } : {}) });
@@ -116,7 +117,7 @@ export function createApp(manager: SessionManager, config: ServerConfig): App {
       if (sub === '/join' && m === 'POST') {
         const body = (await readBody(req).catch(() => null)) as JoinRunRequest | null;
         if (!body?.name) return fail(res, 400, actionError('bad_request', 'name is required', ''));
-        const r = await manager.joinRun(runId, { name: body.name, classId: body.classId, locale: body.locale, controller: body.controller ?? { kind: 'human', label: 'browser' }, profileToken: body.profileToken, legacy: body.legacy });
+        const r = await manager.joinRun(runId, { name: body.name, classId: body.classId, locale: body.locale, controller: body.controller ?? { kind: 'unknown', label: 'http' }, profileToken: body.profileToken, legacy: body.legacy });
         if ('error' in r) return fail(res, 400, r.error);
         return json(res, 200, { runId, playerId: r.playerId, token: r.token, profileId: r.profile.id, ...(r.profile.token ? { profileToken: r.profile.token } : {}) });
       }

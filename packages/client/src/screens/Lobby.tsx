@@ -87,7 +87,7 @@ export function Lobby() {
   const playersText = (r: RunListing) => r.players.map((p) => {
     const sp = r.summary?.players.find((x) => x.id === p.id);
     const banked = sp?.banked !== undefined ? tr(` 確定${sp.banked}`, ` banked ${sp.banked}`) : '';
-    return `${p.name}(${p.controller.kind === 'agent' ? 'AI' : tr('人', 'H')}${p.depth ? ` B${p.depth}` : ''} Lv${p.level}${p.state !== 'alive' ? ` ${playerStateLabel(p.state)}` : ''}${banked})`;
+    return `${p.name}(${p.controller.kind === 'agent' ? 'AI' : p.controller.kind === 'unknown' ? '?' : tr('人', 'H')}${p.depth ? ` B${p.depth}` : ''} Lv${p.level}${p.state !== 'alive' ? ` ${playerStateLabel(p.state)}` : ''}${banked})`;
   }).join(', ');
 
   // スコアの版ごとに別の表（版 2: 確定点 → 達成した遠征の数 → 最深。版 1 は旧スコア）
@@ -101,7 +101,7 @@ export function Lobby() {
     <tr key={`${b.runId}-${b.playerId}`} class={b.ongoing ? 'ongoing' : ''}>
       <td>{i + 1}</td>
       <td>
-        {b.name} <span class={`tag ${b.controller.kind}`}>{b.controller.kind === 'agent' ? 'AI' : tr('人間', 'human')}</span> <small>{catalog ? kindName(catalog, L, b.classId) : b.classId}</small>
+        {b.name} <span class={`tag ${b.controller.kind}`}>{b.controller.kind === 'agent' ? 'AI' : b.controller.kind === 'unknown' ? tr('不明', 'unknown') : tr('人間', 'human')}</span> <small>{catalog ? kindName(catalog, L, b.classId) : b.classId}</small>
         {b.ongoing && <span class="tag ongoing" title={tr('ランは終了していない（キャンプ中の記録）', 'The run has not ended (recorded at camp)')}>{tr('継続中', 'ongoing')}</span>}
       </td>
       {v2 && <td class="primary-col">{b.score}</td>}

@@ -20,10 +20,13 @@ const content = loadContent();
 
 async function coopRun(seed: string) {
   const manager = new SessionManager(content, loadConfig({ runsDir: null, waitOthersMs: 300 }));
-  const a = await manager.createRun({ name: 'A', mode: 'coop', seed, controller: { kind: 'agent', label: 'a' }, objective: 'auto' });
+  // キャンプから作り、2 人目が入ってから遠征を始める（V4-1g G1: 途中で入った者はキャンプから。次の遠征から一緒に出る）
+  const a = await manager.createRun({ name: 'A', mode: 'coop', seed, controller: { kind: 'agent', label: 'a' } });
   if ('error' in a) throw new Error(a.error.message);
   const b = await manager.joinRun(a.session.runId, { name: 'B', classId: 'core:scout', controller: { kind: 'human', label: 'b' } });
   if ('error' in b) throw new Error(b.error.message);
+  const started = await a.port.act({ type: 'start_expedition', offer: 1 }, { source: 'bot' });
+  if (!started.ok) throw new Error(started.error.message);
   const world = a.session.world;
   const inject = (p: { put?: Entity[]; del?: string[] }) => applyEvent(world, { type: 'thought', player: a.port.playerId, text: '', seq: world.seq + 1, cause: null, floor: null, ft: 0, wall: 0, seenBy: [], ...p } as unknown as GameEvent);
   /** どちらかの手番が来るまで、もう一方を待たせて回す */
@@ -61,7 +64,7 @@ describe('V4-1f party[] and still_inside (§22.4)', () => {
     expect(o.party).toHaveLength(1);
     expect(o.party[0]).toMatchObject({ id: bPid, name: 'B', controller: 'human', order: 2, status: 'in_dungeon', floor: w.floors[aE.pos!.floor]!.depth, pos: [aE.pos!.x + 1, aE.pos!.y], entity: bE0.id });
     expect(o.party[0]!.hp).toMatch(/healthy|wounded|badly_wounded|near_death/);
-    expect(t.a.port.observe({}).text).toContain('仲間: B［人間］（地下 1 階・見えている');
+    expect(t.a.port.observe({}).text).toContain('仲間: B［人間］（地下 1 階・健康・見えている');
     // B から見た A: 参加の順は 1
     expect(t.b.port.observe({}).observation.party[0]).toMatchObject({ id: aPid, controller: 'agent', order: 1 });
     // 下り階段の上に置いて、下の階へ移らせる
@@ -74,8 +77,9 @@ describe('V4-1f party[] and still_inside (§22.4)', () => {
     const bFloor = w.entities[bE0.id]!.pos!.floor;
     expect(w.floors[bFloor]!.depth).toBe(2);
     o = t.a.port.observe({}).observation;
-    expect(o.party[0]).toEqual({ id: bPid, name: 'B', controller: 'human', order: 2, status: 'in_dungeon', floor: 2 });
-    expect(t.a.port.observe({}).text).toContain('仲間: B［人間］（地下 2 階）');
+    // 見えていない仲間: 階と HP の段階は出る（V4-1g G3）。位置とエンティティは出ない
+    expect(o.party[0]).toEqual({ id: bPid, name: 'B', controller: 'human', order: 2, status: 'in_dungeon', floor: 2, hp: 'healthy' });
+    expect(t.a.port.observe({}).text).toContain('仲間: B［人間］（地下 2 階・健康）');
     // 漏洩テスト: 仲間のいる階の敵・地物・アイテムの ID も、仲間の位置も出ない
     const json = JSON.stringify(t.a.port.observe({}));
     const floor2Ids = Object.values(w.entities).filter((e) => e.pos?.floor === bFloor && !e.player).map((e) => e.id);
@@ -106,7 +110,7 @@ describe('V4-1f party[] and still_inside (§22.4)', () => {
       expect(res.error.details?.still_inside).toEqual([{ id: bPid, name: 'B', floor: 1 }]);
       expect(res.error.hint).toContain('Bがまだ地下 1 階にいる。遠征は全員が戻るまで続く。');
     }
-    expect(ENGINE_VERSION).toBe('0.33.0');
+    expect(ENGINE_VERSION >= '0.33.0').toBe(true);
     t.manager.closeAll();
   });
 
@@ -198,8 +202,8 @@ describe('V4-1f pilot: following an ally (§22.5)', () => {
     // 自分が参加の順で最初（相手は 2 番）: だれにもついていかない（pilot 2 体がお互いを追わない）
     expect(selfOrder([member({ order: 2 })])).toBe(1);
     expect(leaderOf(o([member({ order: 2 })]), defaultOrders().policy)).toBeNull();
-    expect(leaderOf(o([member({ id: 'p_h', controller: 'human' })]), withPolicy({ coop: { follow: 'none', follow_distance: 8, wait_for_party: true, idle_minutes: 10 } }).policy)).toBeNull();
-    expect(leaderOf(o([member({ id: 'p_a', order: 1 }), member({ id: 'p_c', name: 'C', order: 3 })]), withPolicy({ coop: { follow: 'C', follow_distance: 8, wait_for_party: true, idle_minutes: 10 } }).policy)?.id).toBe('p_c');
+    expect(leaderOf(o([member({ id: 'p_h', controller: 'human' })]), withPolicy({ coop: { follow: 'none', follow_distance: 8, wait_for_party: true, idle_minutes: 10, wait_for_join: true, assist: true, on_party_down: 'return' } }).policy)).toBeNull();
+    expect(leaderOf(o([member({ id: 'p_a', order: 1 }), member({ id: 'p_c', name: 'C', order: 3 })]), withPolicy({ coop: { follow: 'C', follow_distance: 8, wait_for_party: true, idle_minutes: 10, wait_for_join: true, assist: true, on_party_down: 'return' } }).policy)?.id).toBe('p_c');
     // 倒れた仲間にはついていかない
     expect(leaderOf(o([member({ id: 'p_h', controller: 'human', status: 'down' })]), defaultOrders().policy)).toBeNull();
   });
@@ -228,7 +232,8 @@ describe('V4-1f pilot: following an ally (§22.5)', () => {
     // キャンプに帰った（この遠征で迷宮にいた）: 帰る
     const home = member({ id: 'p_h', controller: 'human', status: 'at_camp', floor: undefined });
     const upSt = { type: 'up' as const, pos: { x: 5, y: 10 }, dist: 15, reachable: true, path_len: 15 };
-    expect(summary(decide(fieldObs({ party: [home], stairs: [upSt] }), ctx(defaultOrders(), { coop: true, mem: leaderMem() })))).toBe('act:travel_to:{"to":"stairs_up"}');
+    // 帰る途中は撃たれても止まらない進み方（flee。V4-1g §24.2）
+    expect(summary(decide(fieldObs({ party: [home], stairs: [upSt] }), ctx(defaultOrders(), { coop: true, mem: leaderMem() })))).toMatch(/^act:travel_to:\{"to":"stairs_up","mode":"flee"/);
   });
   it('wait_for_party: at the start, with the ally not yet on this floor, waits in place; after the ally moves floors (or hold_max_turns), heads there', () => {
     const p4 = member({ id: 'p_h', controller: 'human', floor: 4 });
@@ -240,7 +245,7 @@ describe('V4-1f pilot: following an ally (§22.5)', () => {
     expect(rw.decision.kind === 'act' && rw.decision.partyWait).toBe('start');
     expect(summary(decide(o, ctx(defaultOrders(), { coop: true, mem: startMem, turnNo: 60 })))).toBe('act:travel_to:{"to":"stairs_down"}');
     expect(summary(decide(o, ctx(defaultOrders(), { coop: true, mem: leaderMem({ met: false, lastFloor: 4, floorAtStart: 3 }), turnNo: 5 })))).toBe('act:travel_to:{"to":"stairs_down"}');
-    expect(summary(decide(o, ctx(withPolicy({ coop: { follow: 'auto', follow_distance: 8, wait_for_party: false, idle_minutes: 10 } }), { coop: true, mem: startMem, turnNo: 5 })))).toBe('act:travel_to:{"to":"stairs_down"}');
+    expect(summary(decide(o, ctx(withPolicy({ coop: { follow: 'auto', follow_distance: 8, wait_for_party: false, idle_minutes: 10, wait_for_join: true, assist: true, on_party_down: 'return' } }), { coop: true, mem: startMem, turnNo: 5 })))).toBe('act:travel_to:{"to":"stairs_down"}');
   });
   it('danger, HP and enemies come before following (an enemy next to me is fought first)', () => {
     const p4 = member({ id: 'p_h', controller: 'human', floor: 4 });

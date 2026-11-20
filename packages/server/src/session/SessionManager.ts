@@ -90,7 +90,8 @@ export class SessionManager {
   async joinRun(runId: string, req: { name: string; classId?: string; locale?: Locale; controller: Controller; profileToken?: string; legacy?: boolean }): Promise<Joined | { error: ActionError }> {
     const session = this.sessions.get(runId);
     if (!session) return { error: actionError('no_session', `run ${runId} is not active`, 'list_runs で参加可能なランを確認する / check list_runs') };
-    return this.joinSession(session, req, req.controller.kind === 'agent' ? 'mcp' : 'ws');
+    // 協力プレイのランに入った者は、遠征が進んでいても、キャンプから始める。進んでいる遠征には入らず、次の遠征から一緒に出る（V4-1g G1）
+    return this.joinSession(session, { ...req, atCamp: true }, req.controller.kind === 'agent' ? 'mcp' : 'ws');
   }
 
   private async joinSession(session: RunSession, req: { name: string; classId?: string; locale?: Locale; controller: Controller; atCamp?: boolean; profileToken?: string; legacy?: boolean }, source: 'mcp' | 'ws'): Promise<Joined | { error: ActionError }> {

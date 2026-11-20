@@ -395,7 +395,7 @@ export function MonstersPanel({ monsters, hp, onFight, throwSlotFor, reach, onRe
 
 /**
  * 遊ぶ人の画面の仲間（V4-1f §22.4。観測の party と同じ）: 名前・人間か AI か・どの階にいるか（キャンプ・倒れている）。
- * 位置と HP は、同じ階にいて見えているときだけ
+ * HP の段階は迷宮にいればいつも（V4-1g G3）。位置は、同じ階にいて見えているときだけ
  */
 export function ObsPartyPanel({ party }: { party: Observation['party'] }) {
   if (!party?.length) return null;
@@ -407,10 +407,10 @@ export function ObsPartyPanel({ party }: { party: Observation['party'] }) {
         {party.map((m) => (
           <li key={m.id}>
             <span class="dot" style={{ background: PLAYER_COLORS[(m.order - 1) % PLAYER_COLORS.length] }} />
-            <b>{m.name}</b> <span class={`tag ${m.controller}`}>{m.controller === 'agent' ? 'AI' : tr('人間', 'human')}</span>
+            <b>{m.name}</b> <span class={`tag ${m.controller}`}>{m.controller === 'agent' ? 'AI' : m.controller === 'unknown' ? tr('不明', 'unknown') : tr('人間', 'human')}</span>
             <div class="sub">
               {m.status === 'in_dungeon'
-                ? <>{m.floor !== undefined ? tr(`地下 ${m.floor} 階`, `B${m.floor}`) : ''}{m.pos ? <span class="muted"> {tr('見えている', 'in view')} ({m.pos[0]},{m.pos[1]}) {m.hp ? tr(HP[m.hp][0], HP[m.hp][1]) : ''}</span> : null}</>
+                ? <>{m.floor !== undefined ? tr(`地下 ${m.floor} 階`, `B${m.floor}`) : ''}{m.hp ? <> <span class={`mhp ${m.hp}`}>{tr(HP[m.hp][0], HP[m.hp][1])}</span></> : null}{m.pos ? <span class="muted"> {tr('見えている', 'in view')} ({m.pos[0]},{m.pos[1]})</span> : null}</>
                 : <span class={`pstate ${m.status}`}>{m.status === 'at_camp' ? tr('キャンプ', 'at camp') : m.status === 'down' ? tr('倒れている', 'down') : tr('ランを抜けた', 'left')}</span>}
             </div>
           </li>
@@ -435,7 +435,7 @@ export function PartyPanel({ world, catalog, follow, onFollow }: { world: World;
             <li key={pid} class={follow === pid ? 'sel' : ''} onClick={() => onFollow?.(pid)}>
               <span class="dot" style={{ background: PLAYER_COLORS[i % PLAYER_COLORS.length] }} />
               <b>{p.name}</b> <small>{kindName(catalog, L, p.classId)} Lv{e?.level?.level ?? 1}</small>
-              <span class={`tag ${p.controller.kind}`}>{p.controller.kind === 'agent' ? 'AI' : tr('人間', 'human')}</span>
+              <span class={`tag ${p.controller.kind}`}>{p.controller.kind === 'agent' ? 'AI' : p.controller.kind === 'unknown' ? tr('不明', 'unknown') : tr('人間', 'human')}</span>
               <div class="sub">
                 {p.state === 'alive'
                   ? <>{depth ? `${tr('地下', 'B')}${depth}` : ''} {e?.stats && <HpBar hp={e.stats.hp} max={e.stats.maxHp} />} {hs && <span class="muted">{hs}</span>}</>
