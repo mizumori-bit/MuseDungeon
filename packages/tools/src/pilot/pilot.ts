@@ -138,6 +138,27 @@ const ENEMY_REFUSALS = new Set(['hostile_adjacent', 'hostile_in_view']);
 /** 進み具合を数える命令（§14.2 の 4: 階の探索も撃破も進まない命令が 8 回続いたら stuck）。休む・待つ・帰るは数えない */
 const PROGRESS_TOOLS = new Set(['explore', 'travel_to', 'collect', 'fight', 'attack', 'move', 'use_stairs']);
 const NO_PROGRESS_MAX = 8;
+/** 手番が進まない命令が、1 つの手番にこの回数続いたら行き詰まり（V4-1i B1。決まりごとは 3 回で、その手番は使わない） */
+const NO_TURN_MAX = 6;
+/** 命令も知らせも出さないまま、この実時間が過ぎたら上げる（V4-1i B7） */
+const SILENT_MS = 2 * 60000;
+/** キャンプでも意味のある起こし方（キャンプに戻っても返事を待ち続ける）。ほかは迷宮でのことなので、キャンプに戻ったら待つのをやめる（V4-1i B7） */
+const CAMP_WAKES = new Set(['camp', 'warden_decision', 'stalled', 'party_down', 'party_idle', 'perk_pending', 'boon_pending', 'orders_invalid', 'safety']);
+
+/**
+ * pilot に渡すトークン（V4-1i §28.2 の 4）: --token-file（ファイルの 1 行目）、環境変数 MUSE_PLAYER_TOKEN、--token の順。
+ * --token はコマンドの記録（シェルの履歴・プロセスの一覧・起動したスクリプトのログ）に残るので、ファイルか環境変数で渡す。pilot 自身の記録・写し・知らせにはトークンを出さない
+ */
+export function pilotToken(o: { token?: string; tokenFile?: string; env?: Record<string, string | undefined> }): string | undefined {
+  if (o.tokenFile) {
+    const t = readFileSync(o.tokenFile, 'utf-8').split(/\r?\n/)[0]?.trim();
+    if (!t) throw new Error(`token file is empty: ${o.tokenFile}`);
+    return t;
+  }
+  const e = o.env?.MUSE_PLAYER_TOKEN?.trim();
+  if (e) return e;
+  return o.token?.trim() || undefined;
+}
 
 export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
   const log = opts.log ?? (() => undefined);
@@ -298,6 +319,8 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
   let closing = null as { reason: string; until: number } | null;
   /** 仲間の観測の写し（状態・階・見えていれば位置と HP）と、それが最後に変わった実時間（party_idle。§23.8） */
   let partySig = '';
+  /** 仲間ごとの、最後に見た状態・階・HP の段階・位置（見えていたときの）。V4-1i B5 */
+  const partyLast = new Map<string, { status: string; floor: number | null; hp: string | null; pos: [number, number] | null }>();
   let partyChangedAt = now();
   /** 上げた party_idle（仲間が最後に動いた時刻ごとに 1 回） */
   const partyIdleRaised = new Set<string>();
@@ -305,7 +328,10 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
   let expTrack = { no: null as number | null, met: false, dealt: 0, taken: 0 };
   /** mode: return でキャンプに着いた rev（同じ rev の間は auto として扱う。V4-1e §19.4） */
   let returnDoneRev: number | null = null;
-  const effOrders = (): PilotOrders => (closing ? { ...orders, mode: 'stop_at_camp' } : orders.mode === 'return' && returnDoneRev === orders.rev ? { ...orders, mode: 'auto' } : orders);
+  // danger を上げて「帰る」に切り替えた（V4-1i §28.2 の 1）: 同じ rev の間は return（AI が rev を上げたら、そちらに従う。キャンプに着いたら終わり）
+  const dangerHomeNow = () => mem.dangerHome !== null && mem.dangerHome === orders.rev && obs.status !== 'at_camp' && orders.mode === 'auto';
+  // 危ないときの「帰る」は、綱を使ってよい（§28.2 の 1「着けなければ綱」）
+  const effOrders = (): PilotOrders => (closing ? { ...orders, mode: 'stop_at_camp' } : dangerHomeNow() ? { ...orders, mode: 'return', policy: { ...orders.policy, allow_lifeline: true } } : orders.mode === 'return' && returnDoneRev === orders.rev ? { ...orders, mode: 'auto' } : orders);
   /** 同じ理由の wake に、返事役が同じ返事をした回数（遠征ごと。3 回を超えたら、次は stalled で上げる。V4-1e §19.3） */
   let streak = null as { exp: number | null; reason: string; sig: string; count: number } | null;
   /** 遠征ごとの、最後に起こした理由（history.jsonl に残す） */
@@ -351,6 +377,13 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
   let lastOutcome = '';
   let errors = 0;
   let stuck = 0;
+  /** 最後に命令を出した・知らせた実時間（V4-1i B7: 黙って 2 分過ぎたら上げる）と、その黙りでもう上げたか */
+  let lastActivity = now();
+  let silentRaised = false;
+  /** この手番で、手番が進まなかった命令の数（決まり why ごとと全部。V4-1i B1） */
+  const noTurn = { turn: -1, byWhy: new Map<string, number>(), total: 0, blocked: new Set<string>() };
+  /** キャンプで待つ理由を知らせたか（V4-1i B7: 待つ理由を知らせに出す） */
+  let waitNoted: string | null = null;
 
   const ignoredNow = () => [...new Set([...gaveUp, ...aiIgnored])];
   // 起こして返事を待つ間は、待っている起こし方を state.json に残す（持ち場の動きで書き直しても消えない）
@@ -387,10 +420,12 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
   const appendLog = (row: Record<string, unknown>) => appendFileSync(logPath, `${JSON.stringify({ t: Date.now(), turn: turn.turn_no, ...row })}\n`);
 
   /** 起こす・知らせる: state.json を書いてから経路を呼ぶ。相手の終了は待たない */
-  const raise = (w: Wake, status?: PilotState['status']) => {
+  /** at: 起こすと決めた時点の写し（命令の後に出す知らせでも、手番・HP・state は決めた時点のもの。V4-1i B4） */
+  const raise = (w: Wake, status?: PilotState['status'], at?: { turn: number; hp: number; max_hp: number; state: PilotState }) => {
     const st = stateOf(status ?? statusNow(), w);
     writeJsonAtomic(statePath, st);
     lastStateJson = JSON.stringify(st);
+    lastActivity = now();
     appendLog({ wake: w.reason, level: w.level, detail: w.detail });
     if (w.level === 'wake') result.wakes[w.reason] = (result.wakes[w.reason] ?? 0) + 1;
     else if (w.level === 'escalate') result.escalates[w.reason] = (result.escalates[w.reason] ?? 0) + 1;
@@ -403,7 +438,7 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
     // 起こした時点の写し（理由・段・手番・HP・detail・summary・state）。古い写しは 1000 件を超えたら消す
     const n = ++wakeSeq;
     const wakePath = join(wakesDir, `${String(n).padStart(6, '0')}.json`);
-    const snapshot = { n, level: w.level, reason: w.reason, key: w.key, turn: turn.turn_no, hp: obs.self.hp, max_hp: obs.self.max_hp, detail: w.detail, summary: st.summary, state: st };
+    const snapshot = { n, level: w.level, reason: w.reason, key: w.key, turn: at?.turn ?? turn.turn_no, hp: at?.hp ?? obs.self.hp, max_hp: at?.max_hp ?? obs.self.max_hp, detail: w.detail, summary: (at?.state ?? st).summary, state: at?.state ?? st };
     writeJsonAtomic(wakePath, snapshot);
     if (n > 1000) { try { rmSync(join(wakesDir, `${String(n - 1000).padStart(6, '0')}.json`), { force: true }); } catch { /* 消せなくてもよい */ } }
     const env = { ...process.env, MUSE_PILOT_STATE: statePath, MUSE_PILOT_ORDERS: ordersPath, MUSE_PILOT_WAKE: wakePath, MUSE_PILOT_LEVEL: w.level, MUSE_PILOT_REASON: w.reason };
@@ -426,7 +461,7 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
   };
   const note = (reason: string, detail: string, key = `${reason}:${turn.turn_no}`) => raise({ level: 'notify', reason, key, detail });
   /** 起こす。手番が進まないまま同じ起こし方が 3 回を超えたら stuck に、stuck もくり返したら終える */
-  const wakeNow = (w: Wake, cond = false) => {
+  const wakeNow = (w: Wake, cond = false, at?: { turn: number; hp: number; max_hp: number; state: PilotState }) => {
     // 同じ理由の wake に、返事役が同じ返事を 3 回続けた（この遠征の中で）: 4 回目は返事役に渡さず、上げる（V4-1e §19.3）
     if (w.level === 'wake' && streak && streak.count >= 3 && streak.reason === w.reason && streak.exp === (obs.expedition?.no ?? null)) {
       w = { level: 'escalate', reason: 'stalled', key: `stalled:streak:${turn.turn_no}`, detail: `${w.reason} で起こし、返事役が同じ返事を ${streak.count} 回続けた（同じやり取りが回り続けている）。返事: ${streak.sig}\n${w.detail}` };
@@ -459,7 +494,7 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
         if (c2 > 3) { stuckOut = true; return; }
       }
     }
-    raise(w);
+    raise(w, undefined, at);
     if (w.level !== 'notify') waiting = { key: w.key, also: w.also ?? [], reason: w.reason, sinceTurn: turn.turn_no, cond, homeward: false, wake: w, farDamage: 0 };
   };
 
@@ -502,7 +537,7 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
     const scope = scopeNow();
     if (scope !== memScope) {
       // 階を移っても、ついていく相手の記録は遠征の間残す
-      const keep = { recovering: mem.recovering, crossed: mem.crossed, follow: mem.follow, assisting: mem.assisting, assistArrived: mem.assistArrived };
+      const keep = { recovering: mem.recovering, crossed: mem.crossed, follow: mem.follow, assisting: mem.assisting, assistArrived: mem.assistArrived, dangerHome: mem.dangerHome, dangerJoin: mem.dangerJoin, dangerJoinHp: mem.dangerJoinHp };
       // 歩いたマスを残す（階を移るたび）
       saveMemory();
       mem = { ...newMemory(), ...keep };
@@ -510,7 +545,7 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
       visited = new Set();
       noProgress = 0;
       memScope = scope;
-      if (obs.expedition?.no !== Number(prev.scope.split(':')[0])) { aiIgnored.clear(); stairRetreats.clear(); mem.crossed = null; mem.recovering = false; }
+      if (obs.expedition?.no !== Number(prev.scope.split(':')[0])) { aiIgnored.clear(); stairRetreats.clear(); mem.crossed = null; mem.recovering = false; mem.dangerHome = null; mem.dangerJoin = 'none'; mem.dangerJoinHp = 0; }
     }
     mem.stairRetreats = stairRetreats.get(scope) ?? 0;
     const pos = obs.self.pos;
@@ -545,8 +580,20 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
         note('leave_floor', [lineWith(text, shooter.id), `相手にしないと決めた ${shooter.name} に撃たれた（HP ${prev.hp}→${obs.self.hp}）。階段でこの階（地下 ${d} 階）を出る。${again ? '戻ってまた撃たれたので、この遠征では戻らない' : '休んだ後に 1 回戻る'}`].filter(Boolean).join('\n'));
       }
     }
-    // 仲間の動き（§23.8）: 観測の party に出る項目が変わったら、その時刻を覚える。party_idle で上げて待っている間に動いたら、待つのをやめて知らせる
-    const sig = JSON.stringify((obs.party ?? []).map((m) => [m.id, m.status, m.floor ?? null, m.pos ?? null, m.hp ?? null]));
+    // 仲間の動き（§23.8）: 観測の party に出る項目が変わったら、その時刻を覚える。party_idle で上げて待っている間に動いたら、待つのをやめて知らせる。
+    // 位置は、前も今も見えているときだけ比べる（見え隠れは動きに数えない。V4-1i B5: pilot が探索している間も数えるようになったので、
+    // pilot の動きで仲間が見え隠れするたびに数え直さないようにした）。状態・階・HP の段階は、見えていなくても比べる
+    const moved = (obs.party ?? []).some((m) => {
+      const b0 = partyLast.get(m.id);
+      if (!b0) return true;
+      if (b0.status !== m.status || b0.floor !== (m.floor ?? null) || b0.hp !== (m.hp ?? null)) return true;
+      return !!m.pos && !!b0.pos && (b0.pos[0] !== m.pos[0] || b0.pos[1] !== m.pos[1]);
+    }) || partyLast.size !== (obs.party ?? []).length;
+    for (const m of obs.party ?? []) {
+      const b0 = partyLast.get(m.id);
+      partyLast.set(m.id, { status: m.status, floor: m.floor ?? null, hp: m.hp ?? null, pos: m.pos ?? b0?.pos ?? null });
+    }
+    const sig = moved ? `${partySig.length}:${now()}` : partySig;
     if (sig !== partySig) {
       partySig = sig;
       partyChangedAt = now();
@@ -593,6 +640,8 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
   /** count: false なら命令の上限に数えない（仲間を待つ待つ命令。§23.8） */
   const act = async (tool: string, args: Record<string, unknown>, source: 'pilot' | 'queue', count = true, why?: string): Promise<{ ok: boolean; stop?: string; error?: CallError }> => {
     const before = turn.turn_no;
+    lastActivity = now();
+    silentRaised = false;
     // 記録用: fight の標的が、見れば分かる特徴「飛び道具」を持つか（離れて撃つ敵の計測。V4-1d §18.3）
     const ranged = tool === 'fight' && !!obs.visible.monsters.find((m) => m.id === args.target)?.traits?.includes('ranged');
     let r: CallResult;
@@ -632,6 +681,8 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
    */
   const fightStopped = (target: string | undefined, reason: string, detail: string, o: { recover: boolean; advance: boolean; count: boolean }) => {
     if (o.recover) mem.recovering = true;
+    // 逃げた（V4-1i §28.2 の 3）: 次は投げる武器を持たせてやり直す（持っていなければ、今までどおり）
+    if (reason === 'fight_target_fled' && target && !mem.fled.includes(target)) mem.fled.push(target);
     // 待つ間に標的でない相手に撃たれた（V4-1d §18.2）: 撃ってきた相手（見えていて追跡中の、飛び道具の特徴を持つ、隣でない、役割の無い敵。
     // 射線の通る相手を先に、近い順）が見えていれば、次の fight の標的にする。見えていなければ、1 回来た道を戻る
     if (reason === 'fight_shot_while_waiting') {
@@ -701,6 +752,17 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
       raise({ level: 'escalate', reason: 'safety', key: 'safety', detail: `安全装置（${closing.reason}）に達したので pilot を終える。${home ? '帰ってから終えた（キャンプにいる）' : `帰る猶予（3 分）に間に合わず、迷宮（地下 ${obs.self.floor?.depth ?? '?'} 階）に残った`}\n${obs.summary}` }, 'ended');
       return finish('safety', closing.reason);
     }
+    // キャンプに戻ったのに、迷宮で起こした（キャンプでは意味の無い）返事を待っている: 待つのをやめて、キャンプの判断（camp で起こす・待つ理由を出す）へ（V4-1i B7:
+    // 迷宮で上げた escalate の返事を待ったまま、キャンプで 8 分、何も知らせずに止まった）
+    if (waiting && obs.status === 'at_camp' && !CAMP_WAKES.has(waiting.reason)) {
+      note('back_at_camp', `${waiting.reason} の返事を待っていたが、キャンプに戻った。待つのをやめて、キャンプの判断へ進む`, `back_at_camp:${waiting.key}`);
+      waiting = null;
+    }
+    // 黙って止まらない（V4-1i B7）: 命令も知らせも出さないまま実時間で 2 分過ぎたら、いまの状態を添えて上げる（pilot は止めない。黙りが続く間は 1 回だけ）
+    if (!silentRaised && now() - lastActivity >= SILENT_MS) {
+      silentRaised = true;
+      raise({ level: 'escalate', reason: 'safety', key: `safety:silent:${Math.floor(now() / 1000)}`, detail: [`${Math.round((now() - lastActivity) / 60000)} 分、命令も知らせも出していない（pilot は止まっていない）。いまの状態: ${statusNow()}${waiting ? `（${waiting.reason} の返事を待っている）` : ''}`, obs.summary].join('\n') });
+    }
     // 3. rev が変わったら読み直す
     reloadOrders();
     if (orders.mode === 'stop') { writeJsonAtomic(statePath, stateOf('ended', null)); return finish('stopped', 'mode_stop'); }
@@ -744,6 +806,7 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
       continue;
     }
     if (refused.turn !== turn.turn_no) { refused.turn = turn.turn_no; refused.tools.clear(); refused.targets.clear(); refused.last = null; refused.trap = null; }
+    if (noTurn.turn !== turn.turn_no) { noTurn.turn = turn.turn_no; noTurn.byWhy.clear(); noTurn.total = 0; noTurn.blocked.clear(); }
     // 4. queue（AI が明示した 1 回きりの命令。キャンプでも先に実行する。§14.5）
     if (queue.length && !refused.tools.has('queue') && !closing) {
       const q = queue[0]!;
@@ -813,7 +876,7 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
       orders: effOrders(), coop, waiting: !!waiting, homeward: !!waiting?.homeward || !!closing, acked, text, once: onceKeys, stalled, wardenTries,
       walked: walked.get(String(obs.self.floor?.depth ?? '')) ?? [], turnNo: turn.turn_no, avoidDepths,
       refused: refused.tools, refusedTargets: refused.targets, refusal: refused.last, notified: new Set(notified.keys()), mem,
-      trapBlock: refused.trap, throwKinds,
+      trapBlock: refused.trap, throwKinds, blockedWhys: noTurn.blocked,
     });
     if (update) {
       Object.assign(mem, update);
@@ -842,11 +905,18 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
     }
     waitingParty = decision.kind === 'idle' && decision.wait === 'party';
     waitingJoin = decision.kind === 'idle' && decision.wait === 'join';
+    // キャンプで待つ理由（waiting_join・waiting_party）を知らせに出す（待ち始めに 1 回。V4-1i B7）
+    const waitWhy = waitingJoin ? 'waiting_join' : waitingParty ? 'waiting_party' : null;
+    if (waitWhy && waitNoted !== waitWhy) {
+      note(waitWhy, [waitWhy === 'waiting_join' ? '協力プレイのランに、ほかの参加者がいない。だれかが入るまで、遠征を始めずに待つ' : '仲間がまだ迷宮にいる。全員が戻るまで、遠征を始めずに待つ', lineWith(text, '仲間: ')].filter(Boolean).join('\n'));
+    }
+    waitNoted = waitWhy;
     // 仲間を待つ（ついていく相手の近く・遠征の最初・キャンプ）間に、仲間が何もしないまま coop.idle_minutes が過ぎた: 上げる（§23.8）。
     // 上げた後も持ち場の動きを続ける（自分からは帰らない）
-    const waitingForParty = waitingParty || (decision.kind === 'act' && !!decision.partyWait);
+    // V4-1i B5: 待っている間に限らない（pilot が探索や戦いを続けていても上げる）。条件は「仲間（倒れた・抜けた者を除く）の観測の項目が idle_minutes の間変わらない」
     const idleMin = orders.policy.coop.idle_minutes;
-    if (waitingForParty && !waiting && idleMin > 0 && (obs.party ?? []).length && now() - partyChangedAt >= idleMin * 60000) {
+    const partyAlive = (obs.party ?? []).some((m) => m.status === 'in_dungeon' || m.status === 'at_camp');
+    if (coop && partyAlive && !waiting && idleMin > 0 && now() - partyChangedAt >= idleMin * 60000) {
       const key = `party_idle:${partyChangedAt}`;
       if (!partyIdleRaised.has(key)) {
         partyIdleRaised.add(key);
@@ -876,6 +946,8 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
       continue;
     }
     const before = turn.turn_no;
+    // 命令の後に出す知らせ（done・then）の写しは、決めた時点のもの（V4-1i B4）
+    const decidedAt = decision.done || decision.then ? { turn: turn.turn_no, hp: obs.self.hp, max_hp: obs.self.max_hp, state: stateOf(statusNow(), (decision.done ?? decision.then)!) } : undefined;
     const relicLine = decision.relic ? lineWith(text, decision.relic) : '';
     // 仲間を待つ待つ命令は、命令の上限に数えない（暴走ではないため。§23.8）
     const uncounted = decision.tool === 'wait' && (!!decision.partyWait || waiting?.reason === 'party_idle');
@@ -892,9 +964,29 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
       if (r.ok && !obs.visible.items.some((i) => i.id === decision.relic) && (!r.stop || r.stop === 'arrived')) note('relic_picked', relicLine || decision.relic, `relic_picked:${decision.relic}`);
       else if (!r.ok || (r.stop && NOTIFY_STOPS.has(r.stop))) mem.relicFailed.push(decision.relic);
     }
+    // 手番が進まない命令を数える（断られた命令も。V4-1i B1: 断られた命令は下の分かれ道で先へ進み、今までの数え（stuck）に届いていなかった）。
+    // 同じ決まり（why）で 3 回: その手番では、その決まりを使わない。全部で 6 回: 行き詰まり（stuck）
+    if (turn.turn_no === before && r.error?.code !== 'call_failed') {
+      const w = decision.why ?? decision.tool;
+      const c = (noTurn.byWhy.get(w) ?? 0) + 1;
+      noTurn.byWhy.set(w, c);
+      noTurn.total++;
+      if (c >= 3) noTurn.blocked.add(w);
+      if (noTurn.total >= NO_TURN_MAX) {
+        noTurn.total = 0;
+        wakeNow({ level: 'wake', reason: 'stuck', key: `stuck:noturn:${turn.turn_no}`, detail: `手番が進まない命令が、この手番に ${NO_TURN_MAX} 回続いた（${[...noTurn.byWhy].map(([k, v]) => `${k} ${v} 回`).join('・')}）: ${lastOutcome}` });
+        continue;
+      }
+    }
     if (!r.ok) {
       if (r.error?.code === 'call_failed') continue;
       const code = r.error?.code ?? 'unknown';
+      // 探す（toward: sense）が sense_found で断られた: 目的でない遺物を覚えているだけで止まる（マクロの判定。V4-1i B9）。この階では方角なしで探索する
+      if (decision.tool === 'explore' && decision.args.toward === 'sense' && code === 'nothing_to_do' && !mem.senseOff) {
+        mem.senseOff = true;
+        note('sense_off', `explore toward: sense が断られた（${lastOutcome.split('\n')[0]}）。目的の相手・品はまだ見えていないので、この階では方角を付けずに探索する`);
+        continue;
+      }
       // fight が断られた（hp_floor など）: 相手ごとに数え、この手番はその相手を外して表の次の行へ（§14.2・§14.3）
       if (decision.tool === 'fight' && typeof decision.args.target === 'string') {
         const tgt = decision.args.target;
@@ -902,6 +994,8 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
         // 寄るやり直しが断られ（届かない等）、次が投げる品での最後のやり直しなら、この手番のうちに投げる（V4-1d §18.2）。ほかは、この手番はその相手を外す
         const throwNext = !decision.args.with && !gaveUp.has(tgt) && !waiting && 'with' in fightArgs(obs, orders.policy, mem, tgt, throwKinds);
         if (!throwNext) refused.targets.add(tgt);
+        // 立て直しの 3 の fight が断られた（V4-1i B1）: その立て直しの間は、その相手と fight しない（段の次の手へ）
+        if (decision.why === 'recover' && !mem.recoverFought.includes(tgt)) mem.recoverFought.push(tgt);
         continue;
       }
       // 休めない（回復の上限など）: 立て直しは終わり
@@ -920,12 +1014,11 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
       continue;
     }
     // うまくいった後に知らせる（綱を使った。V4-1e §19.4）
-    if (decision.done) raise(decision.done);
+    if (decision.done) raise(decision.done, undefined, decidedAt);
     // 回復の品を使った後に起こす（§16.3）
-    if (decision.then) { wakeNow(decision.then, true); continue; }
+    if (decision.then) { wakeNow(decision.then, true, decidedAt); continue; }
     // 手番が進まない命令が続いたら起こす（同じ所で止まり続けない）
     stuck = turn.turn_no === before ? stuck + 1 : 0;
-    if (stuck >= 3) { stuck = 0; wakeNow({ level: 'wake', reason: 'stuck', key: `stuck:${turn.turn_no}`, detail: lastOutcome }); continue; }
     if (waiting || orders.mode === 'hold') { writeState(); continue; }
     const aa = afterAction(decision.tool, r.stop);
     // 進み具合（§14.2 の 4）: 新しいマスに立った・倒した、が 8 回続けて無ければ stuck。

@@ -168,21 +168,26 @@ describe('pilot の判断の表（§10.4〜§10.6）', () => {
     expect(r6.decision.kind === 'act' && r6.decision.args.approach).toBe('advance');
   });
 
-  it('自分から使う道具は §10.4 の一覧の中。既定の方針では綱を使わず、遠征を選ばない', async () => {
+  it('自分から使う道具は §10.4 の一覧の中。既定の方針では綱を使わず（危ないときの「帰る」を除く）、遠征を選ばない', async () => {
     const { obs } = await expeditionObs();
-    // 危ない（lethal_range）で綱を持っていても、既定の方針では綱を使わない
+    // 退く手（retreat）は方針の allow_lifeline を守る: 既定では綱を使わない（追われていて階段へ着けない場面）
     obs.alerts = [{ code: 'lethal_range', text: '危ない', level: 'danger' } as Observation['alerts'][number]];
     obs.self.inventory = [...(obs.self.inventory ?? []), { slot: 'z', kind: 'core:lifeline', name: '帰還の綱', qty: 1 } as never];
+    obs.visible.monsters = [monster({ id: 'e_lth001', dist: 1 })];
+    obs.navigation.known_stairs = [];
     const rt = retreat(obs, DEFAULT_POLICY);
     expect(rt?.tool).not.toBe('use_item');
-    const r = decide(obs, ctxOf());
-    // 回復の品（最初の所持品の薬。観測の self.recovery）は使ってよいが、綱は使わない
-    expect(r.decision.kind === 'act' && r.decision.tool === 'use_item' && r.decision.args.slot === 'lifeline').toBe(false);
-    obs.self.recovery = [];
-    const r0 = decide(obs, ctxOf());
-    expect(r0.decision.kind === 'act' && r0.decision.tool === 'use_item').toBe(false);
     // 許したときだけ綱
     expect(retreat(obs, { ...DEFAULT_POLICY, allow_lifeline: true })?.tool).toBe('use_item');
+    // 危ない（danger）で帰ると決めたときは、階段へ着けなければ、既定の方針でも綱を使う（V4-1i §28.2 の 1「着けなければ綱」。
+    // 測り直しで、綱を許していないまま追われて階段へ歩き、倒れた本が 2 本あった）
+    obs.self.recovery = [];
+    const r0 = decide(obs, ctxOf());
+    expect(r0.decision.kind === 'act' && `${r0.decision.tool}:${r0.decision.args.slot}`).toBe('use_item:lifeline');
+    // 危なくないとき（帰ると決めていない）は使わない
+    obs.alerts = [];
+    const r1 = decide(obs, ctxOf());
+    expect(r1.decision.kind === 'act' && r1.decision.tool === 'use_item' && r1.decision.args.slot === 'lifeline').toBe(false);
     // 既定の方針: 綱は使わない・キャンプでは起こす
     const d = parseOrders({ rev: 1 });
     expect(d.policy.allow_lifeline).toBe(false);
@@ -307,23 +312,30 @@ describe('pilot の判断の表（§10.4〜§10.6）', () => {
     const { obs } = await expeditionObs();
     obs.visible.items = [];
     obs.navigation.known_stairs = [];
+    // 綱を持っていない場面（危ないときの「帰る」は、着けなければ綱を回復の品より先に使う。V4-1i §28.2 の 1）
+    if (obs.expedition?.haul) delete (obs.expedition.haul as { if_lifeline_now?: number }).if_lifeline_now;
+    obs.self.inventory = (obs.self.inventory ?? []).filter((i) => (i as { kind?: string }).kind !== 'core:lifeline');
     obs.self.hp = Math.floor(obs.self.max_hp * 0.2);
     obs.visible.monsters = [monster({ id: 'e_biter1', dist: 1, worst_turn: 99 })];
     obs.alerts = [{ code: 'lethal_range', text: '1 手で倒されうる', level: 'danger' } as unknown as Observation['alerts'][number]];
     const potion = { kind: 'item' as const, slot: 'c', name: '回復の薬', qty: 2, amount: '2d8+4' };
     const wind = { kind: 'ability' as const, id: 'second_wind', name: '立て直し', ready: true, amount: '最大 HP の 25%' };
-    // 観測に回復の手段が無い（未鑑定の品は観測に入らない）: 使わずに起こす
+    // 観測に回復の手段が無い（未鑑定の品は観測に入らない）: 使わない。危ない（danger）は命令の前に上げる（V4-1i §28.2 の 1・B4: 返事は待たずに帰る側の手を出す）
     obs.self.recovery = [];
-    expect(decide(obs, ctxOf()).decision.kind === 'wake' && (decide(obs, ctxOf()).decision as { wake: { reason: string } }).wake.reason).toBe('danger');
-    // 鑑定済みの回復の品: 使って知らせ、使った後に起こす
+    const r0 = decide(obs, ctxOf());
+    expect(r0.notify.find((n) => n.reason === 'danger')?.level).toBe('escalate');
+    expect(r0.decision.kind === 'act' && r0.decision.tool).not.toBe('use_item');
+    // 鑑定済みの回復の品: 使って知らせる。上げるのは使う前（起こすと決めた時点の写しと説明。V4-1i B4）
     obs.self.recovery = [potion];
     const r1 = decide(obs, ctxOf());
     expect(r1.decision.kind === 'act' && `${r1.decision.tool}:${r1.decision.args.slot}`).toBe('use_item:c');
-    expect(r1.decision.kind === 'act' && r1.decision.then?.reason).toBe('danger');
+    expect(r1.decision.kind === 'act' && r1.decision.then).toBeUndefined();
+    expect(r1.notify.find((n) => n.reason === 'danger')?.level).toBe('escalate');
     expect(r1.notify.find((n) => n.reason === 'healed')?.detail).toBe('回復の薬 を使った（残り 1）');
     // allow_heal: false: 使わない
     const off = defaultOrders(); off.policy.allow_heal = false;
-    expect(decide(obs, ctxOf(off)).decision.kind).toBe('wake');
+    const roff = decide(obs, ctxOf(off));
+    expect(roff.decision.kind === 'act' && roff.decision.tool === 'use_item' && roff.decision.args.slot === 'c').toBe(false);
     // 能動技は品より先（使っても減らない。使った後は起こさない）
     obs.self.recovery = [potion, wind];
     const r2 = decide(obs, ctxOf());
@@ -467,7 +479,8 @@ describe('pilot をサーバーにつないで動かす（§10.8）', () => {
     const h = await harness();
     const p = start(h, { responder: simpleResponder, maxActions: 250 });
     // 返事役が答えない段（escalate: 安全装置・空回りなど。V4-1e §19.1）に上がるまで回す。上げたら pilot は返事を待つ
-    await until(() => h.wakes.some((w) => w.level === 'escalate'), 55000);
+    // danger は V4-1i から返事を待たない上げ方（帰る側へ進む）なので、それ以外の上げる段まで回す
+    await until(() => h.wakes.some((w) => w.level === 'escalate' && w.reason !== 'danger'), 55000);
     await p.stop();
     const own = rows(h.dir).filter((r) => r.source === 'pilot').map((r) => r.tool as string);
     expect(own.length).toBeGreaterThan(20);
@@ -1170,4 +1183,129 @@ describe('V4-1g: pilot の危ないときの順序・協力プレイ・記録・
     expect(safety.detail).toContain('つながらない');
     manager.closeAll();
   }, 60000);
+});
+
+// ---- V4-1i（IMPROVEMENTS_V4 §28）: サーバーにつないで ----
+describe('V4-1i: 黙って止まらない・危ないときは帰る・断られた命令をくり返さない', () => {
+  /** HP を変える（最大はそのまま） */
+  const setHp = (a: Ar, hp: number) => { const me = structuredClone(a.world.entities[a.meId]!); me.stats!.hp = hp; a.inject({ put: [me] }); };
+
+  it('B1: 立て直しの 3 の fight が hp_floor で断られたら、同じ手番に出し直さず、段の次の手へ移る（5 命令以内）', async () => {
+    const { h, a } = await arenaHarness('v41i-b1', ['P.........', '..........'], (ar) => [actor(ar, 'e_bru001', 'core:goblin', 1, 0, { archetype: 'melee_chaser', hp: 300, dmg: '1d10' })], undefined, { hp: 40 });
+    // fight が始める前に断る（hp_risk）のは、被弾の記録のある相手だけ: 先に 1 回は当たってもらう
+    for (let k = 0; k < 20 && a.world.entities[a.meId]!.stats!.hp >= 40; k++) await a.r.port.act({ type: 'wait' }, { source: 'bot' });
+    // 始める前に断られる HP: 立て直しの線（20）未満、危険域（10）以上、記録された最悪の 1 手を受けると fight の hp_floor（9）を割る
+    const worst = a.r.port.observe({}).observation.visible.monsters.find((m) => m.id === 'e_bru001')!.worst_turn ?? 0;
+    expect(worst).toBeGreaterThan(1);
+    setHp(a, Math.max(10, 8 + worst));
+    const p = start(h, { maxActions: 40 });
+    await until(() => rows(h.dir).filter((r) => r.source === 'pilot' && r.tool).length >= 5, 20000);
+    await p.stop();
+    const own = rows(h.dir).filter((r) => r.source === 'pilot' && r.tool).slice(0, 5);
+    const fights = own.filter((r) => r.tool === 'fight' && r.ok === false);
+    expect(fights.length, JSON.stringify(own.map((r) => `${r.tool}:${r.ok}:${r.why}`))).toBeLessThanOrEqual(2);
+    expect(own.some((r) => r.tool !== 'fight'), JSON.stringify(own.map((r) => `${r.tool}:${r.ok}:${r.why}`))).toBe(true);
+    await h.close();
+  }, 40000);
+
+  it('§28.2 の 1: danger を上げたら（escalate・返事は待たない）、HP が戻っても、その遠征は帰る（探索に戻らない）。写しの HP は起こすと決めた時点のもの（B4）', async () => {
+    const { h, a } = await arenaHarness('v41i-danger', ['........P.', '..........'], () => [], undefined, { hp: 60, stairs: [0, 1] });
+    setHp(a, 10);
+    let healed = false;
+    const p = start(h, { maxActions: 60, responder: (ev) => { if (ev.reason === 'danger' && !healed) { healed = true; setHp(a, 60); } } });
+    await until(() => rows(h.dir).some((r) => r.tool === 'extract' && r.ok === true), 30000);
+    await p.stop();
+    const all = rows(h.dir);
+    const di = all.findIndex((r) => r.wake === 'danger');
+    expect(all[di]!.level).toBe('escalate');
+    const after = all.slice(di).filter((r) => r.source === 'pilot' && r.tool);
+    expect(after.some((r) => r.tool === 'explore'), JSON.stringify(after.map((r) => `${r.tool}:${r.why}`))).toBe(false);
+    // 写し（wakes/）の HP と、説明（HP が危険域 (10/60)）は同じ時点
+    const snap = readdirSync(join(h.dir, 'wakes')).map((f) => JSON.parse(readFileSync(join(h.dir, 'wakes', f), 'utf-8')) as { reason: string; hp: number; detail: string }).find((s) => s.reason === 'danger')!;
+    expect(snap.hp).toBe(10);
+    expect(snap.detail).toContain('(10/60)');
+    await h.close();
+  }, 50000);
+
+  it('B4: 薬を使う前に上げる: danger の写しの HP は使う前のもの（説明と同じ時点）', async () => {
+    const { h, a } = await arenaHarness('v41i-b4', ['P.........', '..........'], () => [], undefined, { hp: 60, items: [{ kind: 'core:potion_healing', qty: 1 }] });
+    setHp(a, 10);
+    const p = start(h, { maxActions: 20 });
+    await until(() => rows(h.dir).some((r) => r.tool === 'use_item' && r.ok === true), 20000);
+    await p.stop();
+    const snaps = readdirSync(join(h.dir, 'wakes')).map((f) => JSON.parse(readFileSync(join(h.dir, 'wakes', f), 'utf-8')) as { reason: string; hp: number; detail: string; level: string });
+    const d = snaps.find((s) => s.reason === 'danger')!;
+    expect(d.level).toBe('escalate');
+    expect(d.hp).toBe(10);
+    expect(d.detail).toContain('(10/60)');
+    await h.close();
+  }, 40000);
+
+  it('B7: キャンプで返事を待ったまま 2 分黙ったら、いまの状態を添えて上げる（safety。pilot は止めない）', async () => {
+    const h = await harness();
+    let t = 1_000_000;
+    const p = start(h, { now: () => t });
+    await until(() => h.wakes.some((w) => w.reason === 'camp'), 20000);
+    t += 3 * 60000;
+    await until(() => h.wakes.some((w) => w.reason === 'safety'), 20000);
+    const s = h.wakes.find((w) => w.reason === 'safety')!;
+    expect(s.level).toBe('escalate');
+    expect(s.detail).toContain('命令も知らせも出していない');
+    expect(s.detail).toContain('camp の返事を待っている');
+    // 終えていない（上げるのは 1 回）
+    t += 3 * 60000;
+    await new Promise((r) => setTimeout(r, 300));
+    expect(h.wakes.filter((w) => w.reason === 'safety')).toHaveLength(1);
+    await p.stop();
+    await h.close();
+  }, 40000);
+
+  it('B7: 協力プレイで待つ理由（waiting_join）を知らせに出す', async () => {
+    const h = await harness('coop');
+    const p = start(h, { mode: 'coop' });
+    await until(() => h.wakes.some((w) => w.reason === 'waiting_join'), 20000);
+    expect(h.wakes.find((w) => w.reason === 'waiting_join')!.level).toBe('notify');
+    expect(JSON.parse(readFileSync(join(h.dir, 'state.json'), 'utf-8')).status).toBe('waiting_join');
+    await p.stop();
+    await h.close();
+  }, 30000);
+
+  it('B5: pilot が探索している間でも、仲間が idle_minutes 動かなければ party_idle を上げる', async () => {
+    const config = loadConfig({ port: 0, runsDir: null, profilesDir: null, waitOthersMs: 100 });
+    const manager = new SessionManager(content, config);
+    const app = createApp(manager, config);
+    await new Promise<void>((r) => app.server.listen(0, '127.0.0.1', () => r()));
+    const base = `http://127.0.0.1:${(app.server.address() as AddressInfo).port}`;
+    const r = await manager.createRun({ name: 'Pilot', seed: 'v41i-b5', classId: 'core:warrior', controller: { kind: 'agent', label: 'pilot' }, mode: 'coop' });
+    if ('error' in r) throw new Error(r.error.message);
+    r.session.world.meta.options.turnTimeoutMs = 50;
+    const b = await manager.joinRun(r.session.runId, { name: 'Idle', controller: { kind: 'human', label: 'idle' } });
+    if ('error' in b) throw new Error(b.error.message);
+    expect((await r.port.act({ type: 'start_expedition', offer: 1 }, { source: 'bot' })).ok).toBe(true);
+    const dir = mkdtempSync(join(tmpdir(), 'muse-pilot-test-'));
+    // ついていかずに自分で探索する（follow: none）
+    writeFileSync(join(dir, 'orders.json'), JSON.stringify({ rev: 1, policy: { coop: { follow: 'none', idle_minutes: 10 } } }));
+    const h: Harness = { base, token: r.token, dir, wakes: [], close: async () => { manager.closeAll(); await new Promise<void>((r2) => app.server.close(() => r2())); } };
+    let t = 5_000_000;
+    const p = start(h, { mode: 'coop', now: () => t });
+    await until(() => rows(dir).filter((x) => x.source === 'pilot' && (x.tool === 'explore' || x.tool === 'collect' || x.tool === 'fight')).length >= 2, 30000);
+    t += 11 * 60000;
+    await until(() => h.wakes.some((w) => w.reason === 'party_idle'), 20000);
+    expect(h.wakes.find((w) => w.reason === 'party_idle')!.level).toBe('escalate');
+    await p.stop();
+    await h.close();
+  }, 60000);
+
+  it('§28.2 の 4: トークンは pilot の記録・写し・知らせに出ない', async () => {
+    const h = await harness('solo', { rev: 1, queue: [{ tool: 'start_expedition', args: { offer: 1 } }] });
+    const p = start(h, { maxActions: 15, responder: simpleResponder });
+    await p.done;
+    const files: string[] = [];
+    const walk = (d: string) => { for (const f of readdirSync(d, { withFileTypes: true })) { const fp = join(d, f.name); if (f.isDirectory()) walk(fp); else files.push(fp); } };
+    walk(h.dir);
+    expect(files.length).toBeGreaterThan(3);
+    for (const f of files) expect(readFileSync(f, 'utf-8').includes(h.token), f).toBe(false);
+    for (const w of h.wakes) expect(JSON.stringify(w).includes(h.token)).toBe(false);
+    await h.close();
+  }, 40000);
 });

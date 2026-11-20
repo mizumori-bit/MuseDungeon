@@ -29,8 +29,13 @@ export function simpleResponder(ev: WakeEvent): void {
   if (ev.level !== 'wake' || ev.reason === 'ended' || ev.reason === 'safety') return;
   let cur;
   try { cur = readOrders(ev.ordersPath) ?? defaultOrders(); } catch { cur = defaultOrders(); }
-  const next: PilotOrders = { ...cur, rev: cur.rev + 1, mode: 'auto', queue: [] as QueuedCommand[], policy: { ...cur.policy, ignore: [], unignore: [] } };
-  const home = () => { next.mode = HOME; next.queue = []; next.policy.allow_lifeline = true; };
+  // 自分が変える項目だけを書き換える（V4-1i B8: 人や AI が書いた ignore が、見本の書き換えで消えていた）。ignore・unignore・方針はそのまま残す。
+  // queue は、pilot がもう読み込んだ rev（state.json の orders_rev）のものなら、済んだ（または進めている）ので空にする（残すと、rev を上げたときに
+  // もう一度出してしまう）。pilot がまだ読み込んでいない rev（AI が書いたばかり）なら、そのまま残し、見本の命令は後ろに足す
+  const pending: QueuedCommand[] = cur.rev !== ev.state.orders_rev ? [...cur.queue] : [];
+  const next: PilotOrders = { ...cur, rev: cur.rev + 1, mode: 'auto', queue: [...pending], policy: { ...cur.policy, ignore: [...cur.policy.ignore], unignore: [...cur.policy.unignore] } };
+  const addQueue = (...cmds: QueuedCommand[]) => { next.queue = [...pending, ...cmds]; };
+  const home = () => { next.mode = HOME; next.queue = [...pending]; next.policy.allow_lifeline = true; };
   const role = ev.reason.replace(/_hunting$/, '');
   const memPath = join(dirname(ev.ordersPath), 'responder.json');
   let last: { reason?: string; sig?: string; stuckExp?: number | null } = {};
@@ -43,7 +48,7 @@ export function simpleResponder(ev: WakeEvent): void {
     // 1 回目: いま戦っている相手（state.json の target。無ければ最後の命令の標的）を相手にしないと答えて続ける
     const lastTarget = ev.state.last && (ev.state.last.tool === 'fight' || ev.state.last.tool === 'attack') && typeof ev.state.last.args.target === 'string' ? ev.state.last.args.target : null;
     const target = ev.state.target?.id ?? lastTarget;
-    if (target) next.policy.ignore = [target];
+    if (target) next.policy.ignore = [...new Set([...next.policy.ignore, target])];
     writeJsonAtomic(memPath, { reason: ev.reason, sig: '', stuckExp: exp });
     writeJsonAtomic(ev.ordersPath, next);
     return;
@@ -58,13 +63,13 @@ export function simpleResponder(ev: WakeEvent): void {
       const offers = cur.policy.warden === 'engage' ? all : all.filter((o) => o.type !== 'slay_warden' && !(ms && !ms.cleared && o.target_depth !== null && o.target_depth > ms.depth));
       // 選べる候補が無ければ、何も書かない（pilot が上げる）
       if (!offers.length) return;
-      next.queue = [{ tool: 'start_expedition', args: { offer: offers[n % offers.length]!.index } }];
+      addQueue({ tool: 'start_expedition', args: { offer: offers[n % offers.length]!.index } });
       // 新しい遠征: 目的の相手は、見えたらまた起こしてもらう
       next.policy.engage_objective = false;
       break;
     }
-    case 'perk_pending': next.queue = [{ tool: 'choose_perk', args: { option: 1 } }]; break;
-    case 'boon_pending': next.queue = [{ tool: 'choose_boon', args: { option: 1 } }]; break;
+    case 'perk_pending': addQueue({ tool: 'choose_perk', args: { option: 1 } }); break;
+    case 'boon_pending': addQueue({ tool: 'choose_boon', args: { option: 1 } }); break;
     case 'guardian_seen': case 'warden_seen': case 'elite_seen': case 'relic_seen':
       next.policy.engage_objective = true;
       break;
@@ -75,7 +80,7 @@ export function simpleResponder(ev: WakeEvent): void {
       const id = /\be_[0-9a-z]{6}\b/.exec(ev.detail)?.[0];
       const h = id ? ev.state.hostiles.find((x) => x.id === id) : undefined;
       const trap = !!id && (ev.state.traps ?? []).some((x) => x.id === id);
-      if (id && !trap && !h?.role) next.queue = [{ tool: 'fight', args: { target: id, until: 'clear' } }];
+      if (id && !trap && !h?.role) addQueue({ tool: 'fight', args: { target: id, until: 'clear' } });
       else home();
       break;
     }

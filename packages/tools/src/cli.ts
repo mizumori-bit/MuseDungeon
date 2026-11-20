@@ -6,7 +6,7 @@ import { runBot } from './bot';
 import type { BotKind } from './bot';
 import { assetsCheck, assetsChecklist, slotStatus } from './assets';
 import { commandInvoker, drive, dummyInvoker, httpInvoker } from './drive';
-import { runPilot } from './pilot';
+import { pilotToken, runPilot } from './pilot';
 import { formatPacing, pacingReport } from './pacing';
 import { choicesReport, formatChoices } from './choices';
 import { buildsReport, formatBuilds } from './builds';
@@ -226,9 +226,10 @@ async function main() {
     }
     case 'pilot': {
       // 代行 bot の作例（IMPROVEMENTS_V4 §10・packages/tools/src/pilot/README.md）:
-      // npm run pilot -- --token <player_token> [--dir <フォルダ>] [--wake-cmd "<コマンド>" | --wake-url <URL>] [--mode solo|coop] [--server <URL>] [--new-run <名前>]
+      // npm run pilot -- --token-file <パス> [--dir <フォルダ>] [--wake-cmd "<コマンド>" | --wake-url <URL>] [--mode solo|coop] [--server <URL>] [--new-run <名前>]
+      // トークンは --token-file か環境変数 MUSE_PLAYER_TOKEN で渡す（--token はコマンドの記録に残る。V4-1i §28.2 の 4）
       const base = flag('server', flag('base', `http://127.0.0.1:${process.env.MUSE_PORT ?? 7777}`))!;
-      let token = flag('token');
+      let token = pilotToken({ token: flag('token'), tokenFile: flag('token-file'), env: process.env });
       if (!token && flag('new-run')) {
         const r = await fetch(new URL('/api/runs', base), {
           method: 'POST', headers: { 'content-type': 'application/json' },
@@ -239,7 +240,7 @@ async function main() {
         console.log(`new run ${j.runId} player_token=${j.token}`);
         token = j.token;
       }
-      if (!token) throw new Error('usage: pilot --token <player_token> | --new-run <name> [--dir <folder>] [--wake-cmd "<cmd>" | --wake-url <url>] [--mode solo|coop] [--server <url>]');
+      if (!token) throw new Error('usage: pilot --token-file <path> | (env MUSE_PLAYER_TOKEN) | --token <player_token> | --new-run <name> [--dir <folder>] [--wake-cmd "<cmd>" | --wake-url <url>] [--mode solo|coop] [--server <url>]');
       const mode = flag('mode');
       const r = await runPilot({
         baseUrl: base, token, dir: flag('dir'), wakeCmd: flag('wake-cmd'), wakeUrl: flag('wake-url'),

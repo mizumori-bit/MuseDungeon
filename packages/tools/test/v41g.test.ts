@@ -270,7 +270,10 @@ describe('V4-1g pilot: the order when it is dangerous (§24.2)', () => {
   });
   it('danger and the end of the run reach the AI (escalate); the pilot still retreats on its own', () => {
     const lethal = { code: 'lethal_range', level: 'danger', text: '1 手で倒されうる' } as unknown as Observation['alerts'][number];
-    expect(summary(decide(fieldObs({ alerts: [lethal], monsters: [mon({})] }), ctx()))).toBe('escalate:danger');
+    // V4-1i §28.2 の 1: 上げる（escalate。返事は待たない）。逃げ道が無いので、隣の敵を殴る（追い詰められた）
+    const rd = decide(fieldObs({ alerts: [lethal], monsters: [mon({})] }), ctx());
+    expect(rd.notify.find((n) => n.reason === 'danger')?.level).toBe('escalate');
+    expect(summary(rd)).toBe('act:attack:{"target":"e_aaaaaa"}');
     const ended = { ...fieldObs(), status: 'dead' } as unknown as Observation;
     expect(summary(decide(ended, ctx()))).toBe('end:escalate');
   });
@@ -432,7 +435,8 @@ describe('V4-1g sample responder (§24.3)', () => {
     const ordersPath = join(dir, 'orders.json');
     writeFileSync(ordersPath, JSON.stringify(defaultOrders()));
     const state = { hostiles: [{ id: 'e_foe001', name: '敵', pos: [1, 1], dist: 1, hp_state: 'healthy', hunting: true, role: null, objective: false, ignored: false }], traps: [] } as unknown as PilotState;
-    const ev = (): WakeEvent => ({ level: 'wake', reason: 'refused_blocked', key: 'k', detail: '- 敵 e_foe001 (1,1)', state, statePath: join(dir, 'state.json'), ordersPath });
+    // state.json の orders_rev は、pilot が読み込んだ rev（返事のたびに pilot が読み込んだものとする）
+    const ev = (): WakeEvent => ({ level: 'wake', reason: 'refused_blocked', key: 'k', detail: '- 敵 e_foe001 (1,1)', state: { ...state, orders_rev: readOrders(ordersPath)!.rev }, statePath: join(dir, 'state.json'), ordersPath });
     simpleResponder(ev());
     expect(readOrders(ordersPath)!.queue).toEqual([{ tool: 'fight', args: { target: 'e_foe001', until: 'clear' } }]);
     simpleResponder(ev());
