@@ -36,7 +36,8 @@ export function simpleResponder(ev: WakeEvent): void {
   const next: PilotOrders = { ...cur, rev: cur.rev + 1, mode: 'auto', queue: [...pending], policy: { ...cur.policy, ignore: [...cur.policy.ignore], unignore: [...cur.policy.unignore] } };
   const addQueue = (...cmds: QueuedCommand[]) => { next.queue = [...pending, ...cmds]; };
   const home = () => { next.mode = HOME; next.queue = [...pending]; next.policy.allow_lifeline = true; };
-  const role = ev.reason.replace(/_hunting$/, '');
+  // 通らない目的の相手から帰った（V4-1k §32.1）: キャンプの起こしと同じに答える（候補を選ぶ。戦い方を変えるのは AI の役目）
+  const role = ev.reason === 'not_getting_through' ? 'camp' : ev.reason.replace(/_hunting$/, '');
   const memPath = join(dirname(ev.ordersPath), 'responder.json');
   let last: { reason?: string; sig?: string; stuckExp?: number | null } = {};
   try { if (existsSync(memPath)) last = JSON.parse(readFileSync(memPath, 'utf-8')) as typeof last; } catch { /* 壊れていれば無いものとする */ }

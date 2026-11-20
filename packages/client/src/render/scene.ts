@@ -174,6 +174,15 @@ export function sceneFromView(view: PlayerView, catalog: Catalog, extras: SceneE
       ents.push({ ...base, layer: 'actor', ref: { cls: 'actor', id: e.kind ?? 'unknown' }, label: e.name ?? '?', hpBucket: e.hp, isPlayer: true, name: e.name, color: colorOf(e.playerId) });
     }
   }
+  // 同じ階で見えていない仲間（V4-1k §32.3）: 位置に仲間の印だけを出す（覚えている物と同じく暗く。その場所の地形・敵は渡されない）
+  for (const p of view.party) {
+    if (p.playerId === view.playerId || !p.pos || visibleIds.has(p.entityId)) continue;
+    ents.push({
+      id: p.entityId, layer: 'actor', ref: { cls: 'actor', id: p.classId }, x: p.pos.x, y: p.pos.y,
+      label: `${p.name}${L === 'ja' ? '（見えていない）' : ' (out of sight)'}`, isPlayer: true, name: p.name, color: colorOf(p.playerId),
+      statuses: [], affixes: [], remembered: true,
+    });
+  }
   const me = view.self;
   if (me.pos) {
     ents.push({

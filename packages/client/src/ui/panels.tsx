@@ -410,7 +410,7 @@ export function ObsPartyPanel({ party }: { party: Observation['party'] }) {
             <b>{m.name}</b> <span class={`tag ${m.controller}`}>{m.controller === 'agent' ? 'AI' : m.controller === 'unknown' ? tr('不明', 'unknown') : tr('人間', 'human')}</span>
             <div class="sub">
               {m.status === 'in_dungeon'
-                ? <>{m.floor !== undefined ? tr(`地下 ${m.floor} 階`, `B${m.floor}`) : ''}{m.hp ? <> <span class={`mhp ${m.hp}`}>{tr(HP[m.hp][0], HP[m.hp][1])}</span></> : null}{m.pos ? <span class="muted"> {tr('見えている', 'in view')} ({m.pos[0]},{m.pos[1]})</span> : null}</>
+                ? <>{m.floor !== undefined ? tr(`地下 ${m.floor} 階`, `B${m.floor}`) : ''}{m.hp ? <> <span class={`mhp ${m.hp}`}>{tr(HP[m.hp][0], HP[m.hp][1])}</span></> : null}{m.pos ? <span class="muted"> {m.entity ? tr('見えている', 'in view') : ''} ({m.pos[0]},{m.pos[1]})</span> : null}</>
                 : <span class={`pstate ${m.status}`}>{m.status === 'at_camp' ? tr('キャンプ', 'at camp') : m.status === 'down' ? tr('倒れている', 'down') : tr('ランを抜けた', 'left')}</span>}
             </div>
           </li>

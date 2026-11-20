@@ -367,7 +367,7 @@ export function relLabel(locale: Locale, from: Pos, to: Pos): string {
 
 const HP_JA: Record<HpState, string> = { healthy: '健康', wounded: '軽傷', badly_wounded: '重傷', near_death: '瀕死' };
 
-/** 自分以外の参加者（V4-1f §22.4）。階と状態は view.party（いつでも）、位置と HP は見えている者（view.entities）からだけ */
+/** 自分以外の参加者（V4-1f §22.4）。階・状態・HP の段階は view.party（いつでも）。位置は同じ階なら見えていなくても（V4-1k §32.3）。エンティティは見えている者（view.entities）からだけ */
 export function partyOf(view: PlayerView): ObsPartyMember[] {
   const out: ObsPartyMember[] = [];
   view.party.forEach((p, i) => {
@@ -379,7 +379,9 @@ export function partyOf(view: PlayerView): ObsPartyMember[] {
       ...(status === 'in_dungeon' && p.depth !== null ? { floor: p.depth } : {}),
       // HP の段階は、迷宮にいれば見えていなくても（V4-1g G3）。位置とエンティティは見えているときだけ
       ...(status === 'in_dungeon' && (p.hp ?? seen?.hp) ? { hp: (p.hp ?? seen?.hp)! } : {}),
-      ...(seen ? { pos: [seen.pos.x, seen.pos.y] as [number, number], entity: seen.id } : {}),
+      // 位置は同じ階なら見えていなくても（V4-1k §32.3）。エンティティ ID は見えているときだけ
+      ...(status === 'in_dungeon' && (seen?.pos ?? p.pos) ? { pos: [(seen?.pos ?? p.pos)!.x, (seen?.pos ?? p.pos)!.y] as [number, number] } : {}),
+      ...(seen ? { entity: seen.id } : {}),
       last_act: p.lastAct,
     });
   });
@@ -393,7 +395,8 @@ export function partyText(L: Locale, party: readonly ObsPartyMember[]): string {
     const where = m.status === 'in_dungeon' ? (m.floor !== undefined ? t(L, `地下 ${m.floor} 階`, `depth ${m.floor}`) : t(L, '迷宮', 'in the dungeon'))
       : m.status === 'at_camp' ? t(L, 'キャンプ', 'at camp') : m.status === 'down' ? t(L, '倒れている', 'down') : t(L, 'ランを抜けた', 'left the run');
     const hp = m.hp ? t(L, `・${HP_JA[m.hp]}`, `, ${m.hp}`) : '';
-    const seen = m.pos ? t(L, `・見えている (${m.pos[0]},${m.pos[1]})`, `, in view (${m.pos[0]},${m.pos[1]})`) : '';
+    // 見えている（entity がある）か、同じ階で見えていないか（位置だけ。V4-1k §32.3）
+    const seen = m.pos ? (m.entity ? t(L, `・見えている (${m.pos[0]},${m.pos[1]})`, `, in view (${m.pos[0]},${m.pos[1]})`) : t(L, `・(${m.pos[0]},${m.pos[1]})`, `, at (${m.pos[0]},${m.pos[1]})`)) : '';
     return `${m.name}${m.controller === 'human' ? t(L, '［人間］', ' [human]') : m.controller === 'unknown' ? t(L, '［不明］', ' [unknown]') : ''}（${where}${hp}${seen}）`;
   };
   return t(L, `仲間: ${party.map(one).join('、')}`, `Party: ${party.map(one).join(', ')}`);

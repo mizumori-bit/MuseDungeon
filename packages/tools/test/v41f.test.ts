@@ -235,14 +235,12 @@ describe('V4-1f pilot: following an ally (§22.5)', () => {
     // 帰る途中は撃たれても止まらない進み方（flee。V4-1g §24.2）
     expect(summary(decide(fieldObs({ party: [home], stairs: [upSt] }), ctx(defaultOrders(), { coop: true, mem: leaderMem() })))).toMatch(/^act:travel_to:\{"to":"stairs_up","mode":"flee"/);
   });
-  it('wait_for_party: at the start, with the ally not yet on this floor, waits in place; after the ally moves floors (or hold_max_turns), heads there', () => {
+  it('the ally already on another floor at the start: heads there without waiting (V4-1k §32.3 の 3; wait_for_party waits only while the ally is at camp)', () => {
     const p4 = member({ id: 'p_h', controller: 'human', floor: 4 });
     const startMem = leaderMem({ met: false, lastFloor: 4, floorAtStart: 4, startTurn: 0 });
     const o = fieldObs({ party: [p4], stairs: [downSt], objective: { type: 'reach_depth', target_depth: 6 } });
-    const rw = decide(o, ctx(defaultOrders(), { coop: true, mem: startMem, turnNo: 5 }));
-    expect(summary(rw)).toBe('act:wait:{}');
-    // 仲間を待つ待つ命令には印（命令の上限に数えない。§23.8）
-    expect(rw.decision.kind === 'act' && rw.decision.partyWait).toBe('start');
+    // V4-1f では、遠征の最初に hold_max_turns まで待っていた（Muse の協力で、40 手番ほど待ってから動いた）
+    expect(summary(decide(o, ctx(defaultOrders(), { coop: true, mem: startMem, turnNo: 5 })))).toBe('act:travel_to:{"to":"stairs_down"}');
     expect(summary(decide(o, ctx(defaultOrders(), { coop: true, mem: startMem, turnNo: 60 })))).toBe('act:travel_to:{"to":"stairs_down"}');
     expect(summary(decide(o, ctx(defaultOrders(), { coop: true, mem: leaderMem({ met: false, lastFloor: 4, floorAtStart: 3 }), turnNo: 5 })))).toBe('act:travel_to:{"to":"stairs_down"}');
     expect(summary(decide(o, ctx(withPolicy({ coop: { follow: 'auto', follow_distance: 8, wait_for_party: false, idle_minutes: 10, wait_for_join: true, assist: true, on_party_down: 'return' } }), { coop: true, mem: startMem, turnNo: 5 })))).toBe('act:travel_to:{"to":"stairs_down"}');

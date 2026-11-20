@@ -57,6 +57,11 @@ export interface PilotPolicy {
    * 同じ遠征で 2 回目の danger は帰る
    */
   on_danger: 'return' | 'recover';
+  /**
+   * 戦い方（V4-1k §32.1）: auto＝近接で戦い、通っていない（当てた回数が 6 回を超えても相手の HP の段階が下がらない）と分かったら投げる。
+   * 投げても通らなければやめる（既定）/ throw_first＝投げる武器があれば先に投げる（無くなったら近接）/ melee＝投げない
+   */
+  fight_with: 'auto' | 'throw_first' | 'melee';
   /** queue の命令が失敗したとき: discard＝残りを捨てる（既定）/ skip＝失敗した命令だけ捨てて次へ。どちらも知らせるだけ（§14.5） */
   queue_on_fail: 'discard' | 'skip';
   /** 相手にしない敵の ID を足す・外す（§14.6。rev を上げたときに一度だけ効く） */
@@ -124,6 +129,7 @@ export const DEFAULT_POLICY: PilotPolicy = {
   allow_heal: true,
   retreat_via_stairs: null,
   on_danger: 'return',
+  fight_with: 'auto',
   queue_on_fail: 'discard',
   ignore: [],
   unignore: [],
@@ -185,6 +191,7 @@ export function parseOrders(raw: unknown): PilotOrders {
       allow_heal: bool(p.allow_heal, d.allow_heal),
       retreat_via_stairs: typeof p.retreat_via_stairs === 'boolean' ? p.retreat_via_stairs : null,
       on_danger: p.on_danger === 'recover' ? 'recover' : 'return',
+      fight_with: p.fight_with === 'throw_first' || p.fight_with === 'melee' ? p.fight_with : 'auto',
       queue_on_fail: p.queue_on_fail === 'skip' ? 'skip' : 'discard',
       ignore: ids(p.ignore),
       unignore: ids(p.unignore),

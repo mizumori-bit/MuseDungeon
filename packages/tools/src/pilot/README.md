@@ -55,6 +55,8 @@ npm.cmd run pilot -- --token-file .\my-token.txt --wake-cmd "node my-ai.mjs"
 
 **だれが先頭になるか**（V4-1i で確かめた）: `coop.follow: "auto"` は、人間（`controller: human`）の仲間についていき、人間がいなければ参加がいちばん早い仲間についていきます。pilot がいちばん早く入ったなら、pilot が先頭になり、だれにもついていきません（自分の判断で階を移ります）。**AI 同士で組むとき（pilot と、手で遊ぶ AI など）は、`coop.follow` に相手の名前を書いてください。書かないと、先に入った者が先頭になります**（ゲームは、どちらが手で遊んでいるかを知りません）。pilot は、起動のときと、ついていく相手が決まった・変わったときに、`following`（「ついていく相手: ○○」か「自分が先頭」）を知らせ、`state.json` の `following` にも書きます（V4-1j）。先頭のときも、仲間の HP が重傷以下になれば助けに行きます（`assist`）。**先頭のときも、同じ階に仲間がいる間は、先に階段を移りません**: 階段の上で、仲間が隣に来るまで待ちます（`stairs_hold` を知らせる。`hold_max_turns` まで。過ぎたら移り、`moved_without_party` を知らせる。V4-1j）。
 
+協力プレイで同じ階にいると、1 手ごとに相手の手番を待ちます（相手が手で遊ぶ AI なら 1 手に 30 秒ほど）。その間 `state.json` は `status: "acting"` のまま更新が止まります（pilot では縮まりません。協力プレイの手番の決まりによる。V4-1k）。
+
 協力プレイでは、pilot が安全装置（命令の上限・最大の実時間・行き詰まり）で終えるとき、迷宮にいれば、終える前に帰ります（`closing` を知らせる。猶予は実時間で 3 分。迷宮に残ると、仲間が次の遠征を始められないため）。終えるときの `safety` の `detail` に、帰ってから終えたか、迷宮に残ったかを書きます。
 
 ## ファイル
@@ -90,6 +92,7 @@ npm.cmd run pilot -- --token-file .\my-token.txt --wake-cmd "node my-ai.mjs"
     "allow_lifeline": false,       // 帰還の綱を使ってよいか（使うのは、知っている階段へ着けないときだけ。綱は半分しか確定しない）
     "allow_heal": true,            // 回復の手段（観測の self.recovery）を使ってよいか: 能動技は立て直しの最初に、品は倒されうるのに退く手が無いときだけ
     "retreat_via_stairs": null,    // 立て直しで階を移って休んでよいか（null＝ソロは使う・協力プレイは同じ階に仲間が生きている間は使わない。見えていなくても。V4-1j）
+    "fight_with": "auto",          // 戦い方（V4-1k）: "auto"＝近接で戦い、通っていない（当てた回数が 6 回を超えても相手の HP の段階が下がらない）と分かったら投げる。投げても通らなければやめる / "throw_first"＝投げる武器があれば先に投げる（無くなったら近接）/ "melee"＝投げない。弱点を読んで決めるのは AI（warden_decision の返事に書ける）
     "on_danger": "return",         // 危ない（danger）を上げた後: "return"＝その遠征は帰る（既定）/ "recover"＝階を移るか回復の手段で立て直す（どちらも無ければ帰る）。倒されうる状態でなくなったら続ける。同じ遠征で 2 回目は帰る（V4-1j）
     "queue_on_fail": "discard",    // queue の命令が失敗したとき: "discard"＝残りを捨てる / "skip"＝その命令だけ捨てる
     "ignore": [], "unignore": [],  // 相手にしない敵の ID を足す・外す（rev を上げたときに一度だけ効く）
@@ -103,7 +106,7 @@ npm.cmd run pilot -- --token-file .\my-token.txt --wake-cmd "node my-ai.mjs"
     "coop": {                      // 協力プレイで仲間と一緒に動く
       "follow": "auto",            // "auto"＝人間の仲間、いなければ参加がいちばん早い者（自分がそれなら、だれにもついていかない）/ "none" / 仲間の名前か ID
       "follow_distance": 8,        // 同じ階で、これより離れたら寄る
-      "wait_for_party": true,      // 遠征の最初に、相手が同じ階に来るまで待つ
+      "wait_for_party": true,      // 相手がまだキャンプにいる間は待つ（V4-1k: 相手がもう迷宮の別の階にいれば、待たずにその階へ行く）
       "idle_minutes": 10,          // 仲間が自分で動かない（観測の party[].last_act が変わらない）まま、実時間でこの分数が過ぎたら上げる（party_idle。0＝切る）
       "wait_for_join": true,       // 協力プレイのランで、ほかの参加者が 1 人もいなければ、キャンプで遠征を始めずに待つ（waiting_join）
       "assist": true,              // ついていく相手の HP が「重傷」以下になったら、探索と隣でない敵との戦いをやめて、相手の所へ行く（assist・assist_arrived を知らせる）
@@ -132,7 +135,7 @@ npm.cmd run pilot -- --token-file .\my-token.txt --wake-cmd "node my-ai.mjs"
 ```jsonc
 {
   "run_id": "…", "expedition_no": 23, "turn": 1234, "orders_rev": 3,
-  "status": "running",             // "running" / "waiting"（起こして待っている）/ "holding"（協力プレイで持ち場）/ "camp" / "waiting_party"（キャンプで、仲間が迷宮から戻るのを待っている）/ "waiting_join"（協力プレイのランに、ほかの参加者がまだいない）/ "ended"
+  "status": "running",             // "running" / "acting"（命令を出して、結果を待っている。V4-1k。協力プレイでは、相手の手番を待つ間はこのまま更新が止まる）/ "waiting"（起こして待っている）/ "holding"（協力プレイで持ち場）/ "camp" / "waiting_party"（キャンプで、仲間が迷宮から戻るのを待っている）/ "waiting_join"（協力プレイのランに、ほかの参加者がまだいない）/ "ended"
   "wake": { "reason": "guardian_seen", "level": "wake", "turn": 1230, "detail": "- 守護者ゴブリン［目的］ [守護者] e_y04fyo (35,18) 東2南4 …" },   // level: "notify" / "wake" / "escalate"
   "mode": "auto",                   // いま効いている mode（"return" でキャンプに着いた後は "auto"）
   "self": { "level": 26, "hp": 213, "max_hp": 213, "floor": 16, "pos": [22, 4] },
@@ -141,7 +144,7 @@ npm.cmd run pilot -- --token-file .\my-token.txt --wake-cmd "node my-ai.mjs"
   "hostiles": [{ "id": "e_y04fyo", "name": "守護者ゴブリン", "pos": [35, 18], "dist": 4, "hp_state": "healthy", "hunting": true, "role": "guardian", "objective": true, "ignored": false }],
   "stairs": [{ "type": "up", "pos": { "x": 3, "y": 8 }, "dist": 12, "reachable": true, "path_len": 14 }],   // 観測の known_stairs そのまま（sealed も）
   "traps": [{ "id": "e_trp001", "name": "毒矢の罠", "pos": [13, 13], "dist": 1 }],   // 今の階で見つけている罠（見えている罠と覚えている罠。公開カタログの分類で罠と分かる地物）
-  "party": [{ "id": "p_u6ez", "name": "…", "controller": "human", "order": 1, "status": "in_dungeon", "floor": 1, "pos": [12, 8], "hp": "wounded", "entity": "e_…" }],   // 観測の party の写し（協力プレイの仲間。controller は human / agent / unknown。hp は迷宮にいればいつも。pos・entity は同じ階で見えているときだけ）
+  "party": [{ "id": "p_u6ez", "name": "…", "controller": "human", "order": 1, "status": "in_dungeon", "floor": 1, "pos": [12, 8], "hp": "wounded", "entity": "e_…" }],   // 観測の party の写し（協力プレイの仲間。controller は human / agent / unknown。hp は迷宮にいればいつも。pos は同じ階なら見えていなくても（V4-1k）、entity は同じ階で見えているときだけ）
   "follow": "p_u6ez",               // ついていく相手の ID（いなければ null）
   "following": { "id": "p_u6ez", "name": "…" },   // だれについていくか（V4-1j）: 相手、"self"（自分が先頭）、null（ソロ・まだ仲間がいない）
   "target": { "id": "e_1vc5a5", "stops": 1 },   // いま戦っている相手と、決着しないまま止まった回数
@@ -163,7 +166,9 @@ npm.cmd run pilot -- --token-file .\my-token.txt --wake-cmd "node my-ai.mjs"
 
 ### history.jsonl（pilot が追記する。1 遠征 1 行）
 
-キャンプに着くたびに、終えた遠征を 1 行足します: `{ "no", "slot", "objective": { "type", "target_depth" }, "turns", "banked"（確定した点）, "end"（終わり方）, "last_wake"（最後に起こした理由）, "slain"（目的の守護者を倒したか）, "met"（目的の相手に会えたか）, "dealt"（目的の相手に見た被害）, "taken"（受けた被害）}`。空回り（`stall_after`）と、大守護者に挑んだ回数・もう一度の相談（`warden_decision` の `detail`）に使います。
+キャンプに着くたびに、終えた遠征を 1 行足します: `{ "no", "slot", "objective": { "type", "target_depth" }, "turns", "banked"（確定した点）, "end"（終わり方）, "last_wake"（最後に起こした理由）, "slain"（目的の守護者を倒したか）, "met"（目的の相手に会えたか）, "dealt"（目的の相手に見た被害）, "taken"（受けた被害）}`。空回り（`stall_after`）と、大守護者に挑んだ回数・もう一度の相談（`warden_decision` の `detail`）に使います。遠征ごとの結果は、ここで見られます（キャンプの起こし `camp` は遠征の終わりにつき 1 回だけ。キャンプで別の理由で上げたときも、その遠征の結果を `detail` に入れます。V4-1k）。
+
+相手ごとの戦いの記録（近接・投擲の当てた回数と与えた被害、相手の HP の段階。`fight` の結果の文から数える）は `memory.json` の `fights` に残します（遠征と相手の組ごと。50 件まで。V4-1k）。大守護者の相談（`warden_decision`）に、前の戦いの数字として出します。
 
 ### memory.json（pilot が書く）
 
@@ -193,14 +198,14 @@ npm.cmd run pilot -- --token-file .\my-token.txt --wake-cmd "node my-ai.mjs"
 | — | 相手にしない敵が、起きていて隣にいる | 1 回殴る（帰る途中は殴らない。下） |
 | 12 | 追ってくる敵（追跡中・逃げていない・「動かない」でない。相手にしない敵を除く）がいる | いちばん近い敵に `fight`（寄り方は `approach`。待つ間に撃ってきた相手が見えていれば、その相手から）。倒す前に止まったら知らせて続ける（下の「決着しない戦い」）。帰る途中はしない（下）。助けに行く間（`assist`）は、隣の敵とだけ戦う |
 | — | 移動が、見つけている罠にふさがれて断られた（エラーの `details.blocked_by_traps`） | `step_on_traps: true` なら、隣の罠を 1 歩の `move` で踏む（`stepped_on_trap` を知らせる。隣でなければ罠の隣まで行く）。`false`（既定）なら踏まずに表の次の行へ（何も残らなければ、罠の行・位置・方角を添えて `refused_blocked` で起こす） |
-| — | 協力プレイで、ついていく相手がいる（`coop.follow`） | 相手が別の階: 自分からは先へ進まず、相手の階へ行く（遠征の最初は、相手が同じ階に来るまで待つ: `wait_for_party`。相手の階が出た階（`leave_floor`）なら、そこへは行かずに待つ）。同じ階で `follow_distance` より離れた: 相手の隣へ。見えない: 最後に見た位置へ。近い: いつもどおり（階段は相手が先に移ってから）。相手がキャンプに帰った: 自分も帰る。相手が倒れた: `on_party_down` のとおり（既定は帰る。`party_down` を知らせる）。やることが無ければ待つ |
+| — | 協力プレイで、ついていく相手がいる（`coop.follow`） | 相手が別の階: 自分からは先へ進まず、待たずに相手の階へ行く（V4-1k。相手の階が出た階（`leave_floor`）なら、そこへは行かずに待つ）。同じ階で `follow_distance` より離れた: 相手の今の位置へ（観測の `party[].pos`。見えていなくても出る。そのマスをまだ見ていなければ、覚えているいちばん近い所へ行き、着いたら探索で見に行く。V4-1k）。**相手が階段の上に立っている**: 移りたいという合図なので、`follow_distance` の内でも隣まで行き、探索と拾うのをやめて待つ（`leader_on_stairs` を知らせる。V4-1k）。近い: いつもどおり（階段は相手が先に移ってから）。**相手がキャンプに帰った: 戦わず休まずに、すぐ帰る**（道をふさぐ敵だけ殴る。V4-1k）。相手が倒れた: `on_party_down` のとおり（既定は帰る。`party_down` を知らせる）。やることが無ければ待つ |
 | — | 協力プレイで、ついていく相手（いなければ、迷宮にいる仲間。V4-1i）の HP が「重傷」以下（`party[].hp`。`assist`） | 自分の探索・拾うのと、隣でない敵との戦いをやめて、相手の所へ行く（相手を追っている敵がいなくても。`mode: flee`。別の階なら相手の階への階段へ、見えていなければ最後に見た位置へ、それでも見えなければこの階で歩いた所を見回って探す。`assist` を知らせる。命令の理由は `assist`）。着いたら（見えていて 2 マス以内）、相手にいちばん近い敵と戦う（`assist_arrived` を知らせる）。戦う相手がいなければ、相手のそばで待つ。自分が危ないとき・立て直しは、そちらが先 |
 | 13 | 敵がいなくて HP が `rest_below_pct` を切っている | 休む（`rest`） |
 | 14 | 目的を果たした（`after_objective: "extract"`）・`return`・`stop_at_camp`・大守護者に挑まない | 帰る（上の帰り方の順。階段を知らなければ探して探索する）。`"wake"` なら起こす、`"continue"` なら先へ |
 | 15 | 目的の階より深い所にいる／浅い所にいる | 上り階段で上がる／封じられていない下り階段で下りる（踏破の目的なら、目的の階の下り階段まで） |
 | 16 | 引数なしの `collect` が拾いに行く品がある（観測の `navigation.collectable`） | `collect` |
 | 17 | 探索できる所が残っている | `explore`（目的の階より浅くて下り階段を知らなければ、下への風の方角へ。目的の階で目的の相手・品を探している間は、気配の方角へ） |
-| — | 目的の階で、目的の相手（守護者・大守護者・賞金首）か目的の品が見えていない（探す） | 大守護者なら封じられた下り階段の広間へ。探索し終えた階は見回る（この階で立ったことのあるマスのうち、探し始めてから行っていない、いちばん遠い所。気配があればその方角を先に）。`seek_max_turns` を使っても見つからない・見回る所が無ければ起こす（`target_not_found`） |
+| — | 目的の階で、目的の相手（守護者・大守護者・賞金首）か目的の品が見えていない（探す） | 大守護者なら封じられた下り階段の広間へ。探索し終えた階は見回る（この階で立ったことのあるマスと、**覚えている地図の通れるマス**（`get_map`。今いる所からつながっている所だけ。V4-1k）のうち、探し始めてから行っていない、いちばん遠い所。気配があればその方角（8 方位。同じ方角を先に、無ければ両隣）を先に。見回り先へ行けないと断られたら、その手番のうちに別の見回り先を試す）。`seek_max_turns` を使っても見つからない・見回る所が無ければ起こす（`target_not_found`） |
 | 18 | 何も残っていない | 起こす（`nothing_to_do`。命令が断られて残らなかったなら `refused_<code>`） |
 
 - **帰ると決めた後は殴りません**（V4-1g・V4-1h）。帰ると決めた後（`mode: "return"`・`stop_at_camp`・目的を果たした後の帰還・`no_reply`・`under_fire`・協力プレイで終える前・仲間が帰った・倒れた）と、階を出る（`leave_floor`）間は、隣の敵を殴りません。立て直しの段の間は、隣でない相手から撃たれている間だけ殴りません（離れるのが先。撃ってくる相手がいなければ、隣の役割の無い敵は殴る: 下の 3）。どの場面でも、道をふさいでいる敵（断りの `blocked_by`）と、逃げる手がまったく無いとき（追い詰められた: `cornered`）の隣の敵は殴ります。移動には撃たれても止まらない進み方（`mode: flee`）を使います。
@@ -227,7 +232,7 @@ npm.cmd run pilot -- --token-file .\my-token.txt --wake-cmd "node my-ai.mjs"
 **立て直しの段**（起こさずに `recovering` を知らせる。上から順に、できる最初のもの）:
 
 0. HP が `wake_hp_pct` を切っていて、回復の能動技（観測の `self.recovery` の `kind: "ability"`）が使える → 使う（使っても減らない。`healed` を知らせる）。
-1. 追ってくる敵が見えていない → 休む（`rest_below_pct` まで）。**協力プレイで、ついていく相手（か、ついてくる相手）が重傷以下なら、休むより先に助けに行きます**（自分の HP が減っていても。離れて休むより、一緒にいるほうが両方にとって安全。V4-1j）。自分が倒されうるときだけ、危ないときの退く手が先です。回復の能動技は先に使います。
+1. 追ってくる敵が見えていない → 休む（`rest_below_pct` まで。休めるかはゲームの `rest` と同じに見る: 自分に届く追跡中の敵がいれば休まない。動かない敵も隣にいれば数える。V4-1k）。**協力プレイで、ついていく相手（か、ついてくる相手）が重傷以下なら、休むより先に助けに行きます**（自分の HP が減っていても。離れて休むより、一緒にいるほうが両方にとって安全。V4-1j）。自分が倒されうるときだけ、危ないときの退く手が先です。回復の能動技は先に使います。
 2. 追ってくる敵がいて、知っている階段へ「着ける」（観測の `escape`）→ 階段へ行き、**階を移って**休む。休んだら戻る（モンスターは階を移らない）。同じ階で 2 回まで。`retreat_via_stairs` が使えるときだけ。**協力プレイの既定では、同じ階に仲間（ついていく相手・自分についてくる相手）が生きている間は、見えていなくても使いません**（V4-1j。重傷の相方を置いて階を移り、その間に相方が倒れたため）。段は「休む → 仲間へ寄る → 来た道を戻る」になります。
 3. 道をふさいでいる敵（断りの `blocked_by`）が隣にいる → 殴る。追ってくる役割の無い敵が隣にいて、階段にも仲間にも行けない → `fight` で殴る（逃げても追ってくる。V4-1h。`hp_floor` は `critical_hp` の線: 最大 HP の 25% 未満になる手前。倒す前に止まったら、この立て直しの間はその相手と `fight` せず、続きへ進む）。ただし、帰ると決めた後と、この数手番に隣でない相手から被害を受けている（撃たれている）ときは殴らない。守護者などとは、HP が減ったまま殴り合わない。
 4. 協力プレイで仲間が見えている → 仲間の隣へ寄る。そうでなければ → 来た道を戻る（自分が歩いた跡の、6 マス以上離れた所へ）。
@@ -289,6 +294,7 @@ npm.cmd run pilot -- --token-file .\my-token.txt --wake-cmd "node my-ai.mjs"
 | `perk_pending` / `boon_pending` | 特技・加護を選べる（`perk: "wake"` のとき） |
 | `gave_up` | この遠征の目的の相手と、決着しないまま（または HP の下限で）`give_up_after` 回止まった |
 | `objective_done` | 遠征の目的を果たした（`after_objective: "wake"` のとき） |
+| `not_getting_through` | 目的の相手に通っていないので、戦いをやめて帰った（キャンプで、`camp` の代わりに上げる。V4-1k）。`detail` に、近接と投擲それぞれの当てた回数・1 回あたりの被害、相手の HP の段階、自分の HP の減り。戦い方を変えるなら `policy.fight_with`、挑み直さないなら別の候補を選ぶ |
 | `target_not_found` | 目的の階で目的の相手・品を探したが見つからない（`seek_max_turns` を使った・見回る所が残っていない） |
 | `target_blocked` | 目的の階が、相手にしない敵に撃たれて 2 回出た階（`leave_floor`）か、その先にある（この遠征では戻らない） |
 | `recover_failed` | 立て直しの手が尽きた（まだ倒されうる状態ではない）。`detail` に今の HP・試した手・追ってくる敵。帰るか続けるかを決めてほしい（V4-1h。今までは pilot が自分で階段の上で帰っていた） |
@@ -298,7 +304,7 @@ npm.cmd run pilot -- --token-file .\my-token.txt --wake-cmd "node my-ai.mjs"
 | `unknown_stop` | 知らない止まり方 |
 | `orders_invalid` | `orders.json` が壊れている（前の方針のまま） |
 
-**知らせる（`notify`）**: `healed`（回復の手段を使った。品なら残りの数）・`fight_<止まり方>`（倒す前に止まった）・`refused_<code>`（fight・殴るなどが断られた）・`gave_up`（目的でない相手を諦めた）・`recovering`（立て直しの段に入った）・`danger`（退いた）・`too_many`・`chased`・`queue_retry`・`queue_failed`・`no_reply`・`under_fire`（返事を待つ間に撃たれ続けたので、帰る側へ倒した）・`stepped_on_trap`（ふさいでいる罠を踏んだ。罠の行と位置・方角）・`lifeline_used`（綱を使った。なぜ階段へ行けなかったかと、持ち帰っていない戦利品。`queue` の綱でも）・`relic_picked`（目的でない遺物を拾った）・目的でない役割のある敵と遺物（`guardian_seen`・`relic_seen` など。同じ個体・同じ遺物につきランを通して 1 回。遺物は位置と「拾うなら `pick_relics` か `queue`」つき）・`blocked`・`trap_ahead`（隣の見つけている罠の行と方角つき）・`no_progress` などの移動の止まり方・`periodic`（`notify_every_turns` ごとの経過）・`leave_floor`（相手にしない敵に撃たれたので階を出る）・`assist`（仲間が重傷以下なので助けに行く）・`assist_arrived`（着いた）・`party_down`（ついていく相手が倒れた）・`closing`（協力プレイで、終える前に帰る）・`cornered`（逃げる手がまったく無いので、隣で追ってくる敵を殴る）・`waiting_join`・`waiting_party`（キャンプで待ち始めた。V4-1i）・`back_at_camp`（迷宮で起こした返事を待ったままキャンプに戻ったので、待つのをやめた。V4-1i）・`sense_off`（`explore toward: sense` が断られたので、この階は方角なしで探す。V4-1i。V4-1j でゲームの側の断りを直したので、目的でない遺物では出なくなった）・`following`（だれについていくか。起動のときと、決まった・変わったとき。V4-1j）・`stairs_hold`（先頭でも、仲間が隣に来るまで階段の上で待つ。V4-1j）・`moved_without_party`（`hold_max_turns` 待っても仲間が隣に来なかったので、1 人で階を移った。置いていったのか、待ったうえで進んだのかが記録で分かる。V4-1j）。
+**知らせる（`notify`）**: `healed`（回復の手段を使った。品なら残りの数）・`fight_<止まり方>`（倒す前に止まった）・`refused_<code>`（fight・殴るなどが断られた）・`gave_up`（目的でない相手を諦めた）・`recovering`（立て直しの段に入った）・`danger`（退いた）・`too_many`・`chased`・`queue_retry`・`queue_failed`・`no_reply`・`under_fire`（返事を待つ間に撃たれ続けたので、帰る側へ倒した）・`stepped_on_trap`（ふさいでいる罠を踏んだ。罠の行と位置・方角）・`lifeline_used`（綱を使った。なぜ階段へ行けなかったかと、持ち帰っていない戦利品。`queue` の綱でも）・`relic_picked`（目的でない遺物を拾った）・目的でない役割のある敵と遺物（`guardian_seen`・`relic_seen` など。同じ個体・同じ遺物につきランを通して 1 回。遺物は位置と「拾うなら `pick_relics` か `queue`」つき）・`blocked`・`trap_ahead`（隣の見つけている罠の行と方角つき）・`no_progress` などの移動の止まり方・`periodic`（`notify_every_turns` ごとの経過）・`leave_floor`（相手にしない敵に撃たれたので階を出る）・`assist`（仲間が重傷以下なので助けに行く）・`assist_arrived`（着いた）・`party_down`（ついていく相手が倒れた）・`closing`（協力プレイで、終える前に帰る）・`cornered`（逃げる手がまったく無いので、隣で追ってくる敵を殴る）・`waiting_join`・`waiting_party`（キャンプで待ち始めた。V4-1i）・`back_at_camp`（迷宮で起こした返事を待ったままキャンプに戻ったので、待つのをやめた。V4-1i）・`sense_off`（`explore toward: sense` が断られたので、この階は方角なしで探す。V4-1i。V4-1j でゲームの側の断りを直したので、目的でない遺物では出なくなった）・`following`（だれについていくか。起動のときと、決まった・変わったとき。V4-1j）・`not_getting_through`（通っていないので、その相手との戦いをやめた。近接・投擲の数字つき。目的の相手なら帰ってキャンプで起こす。V4-1k）・`leader_on_stairs`（ついていく相手が階段の上にいるので、隣まで行く。V4-1k）・`stairs_hold`（先頭でも、仲間が隣に来るまで階段の上で待つ。V4-1j）・`moved_without_party`（`hold_max_turns` 待っても仲間が隣に来なかったので、1 人で階を移った。置いていったのか、待ったうえで進んだのかが記録で分かる。V4-1j）。
 
 ## 起こされたときの返事の例
 

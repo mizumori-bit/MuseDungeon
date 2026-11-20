@@ -882,7 +882,8 @@ describe('pilot をサーバーにつないで動かす（§10.8）', () => {
     const e = h.wakes.find((w) => w.reason === 'party_idle')!;
     expect(e.level).toBe('escalate');
     expect(e.detail).toContain('仲間が 11 分、何もしていない');
-    expect(e.detail).toContain('仲間: Ally［人間］（地下 2 階・健康）');
+    // 同じ階の仲間は、見えていなくても位置が付く（V4-1k §32.3）
+    expect(e.detail).toMatch(/仲間: Ally［人間］（地下 2 階・健康(・[^）]*)?）/);
     expect(h.wakes.filter((w) => w.reason === 'party_idle')).toHaveLength(1);
     // 上げた後も、その場で待ち続ける（階段へ行かない・帰らない・返事が無くても no_reply で帰る側へ倒さない）
     const n = rows(h.dir).length;

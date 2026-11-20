@@ -42,7 +42,7 @@ async function coopRun(seed: string) {
 
 describe('V4-1j §30.6: party[].last_act（ゲームの側。すべてのプレイヤーに同じに渡す）', () => {
   it('last_act is the ally’s own action count: it rises when the ally acts, also out of sight; nothing else about the ally leaks', async () => {
-    expect(ENGINE_VERSION).toBe('0.35.0');
+    expect(ENGINE_VERSION >= '0.35.0').toBe(true);
     const t = await coopRun('v41j-last');
     const w = t.world;
     const bPid = t.b.port.playerId;

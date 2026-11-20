@@ -139,6 +139,8 @@ export interface PartyMemberView {
   hp: HpState | null;
   /** その仲間が自分で出した命令で最後に行動したときの手番数（V4-1j §30.6。時間切れの待機は数えない。見えていなくても・別の階・キャンプでも） */
   lastAct: number;
+  /** 同じ階にいる仲間の位置（見えていなくても。V4-1k §32.3）。別の階・迷宮にいなければ null。位置だけで、その場所の地形・敵は渡さない */
+  pos: Pos | null;
 }
 
 /** 遠征の事実（目的・進捗）。守護者や遺物の居場所は含まない */
@@ -523,7 +525,8 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
     const pe = world.entities[p.entityId];
     const depth = pe?.pos ? world.floors[pe.pos.floor]?.depth ?? null : null;
     const hp = p.state === 'alive' && pe?.pos && pe.stats ? hpState(pe.stats.hp, pe.stats.maxHp) : null;
-    return { playerId: pid, entityId: p.entityId, name: p.name, classId: p.classId, controller: { ...p.controller }, state: p.state, depth, hp, lastAct: p.lastAct ?? 0 };
+    const sameFloor = p.state === 'alive' && !!pe?.pos && !!floorKey && pe.pos.floor === floorKey;
+    return { playerId: pid, entityId: p.entityId, name: p.name, classId: p.classId, controller: { ...p.controller }, state: p.state, depth, hp, lastAct: p.lastAct ?? 0, pos: sameFloor ? { x: pe!.pos!.x, y: pe!.pos!.y } : null };
   });
 
   return {
