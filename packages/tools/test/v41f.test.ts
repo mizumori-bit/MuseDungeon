@@ -198,8 +198,8 @@ describe('V4-1f pilot: following an ally (§22.5)', () => {
     // 自分が参加の順で最初（相手は 2 番）: だれにもついていかない（pilot 2 体がお互いを追わない）
     expect(selfOrder([member({ order: 2 })])).toBe(1);
     expect(leaderOf(o([member({ order: 2 })]), defaultOrders().policy)).toBeNull();
-    expect(leaderOf(o([member({ id: 'p_h', controller: 'human' })]), withPolicy({ coop: { follow: 'none', follow_distance: 8, wait_for_party: true } }).policy)).toBeNull();
-    expect(leaderOf(o([member({ id: 'p_a', order: 1 }), member({ id: 'p_c', name: 'C', order: 3 })]), withPolicy({ coop: { follow: 'C', follow_distance: 8, wait_for_party: true } }).policy)?.id).toBe('p_c');
+    expect(leaderOf(o([member({ id: 'p_h', controller: 'human' })]), withPolicy({ coop: { follow: 'none', follow_distance: 8, wait_for_party: true, idle_minutes: 10 } }).policy)).toBeNull();
+    expect(leaderOf(o([member({ id: 'p_a', order: 1 }), member({ id: 'p_c', name: 'C', order: 3 })]), withPolicy({ coop: { follow: 'C', follow_distance: 8, wait_for_party: true, idle_minutes: 10 } }).policy)?.id).toBe('p_c');
     // 倒れた仲間にはついていかない
     expect(leaderOf(o([member({ id: 'p_h', controller: 'human', status: 'down' })]), defaultOrders().policy)).toBeNull();
   });
@@ -234,10 +234,13 @@ describe('V4-1f pilot: following an ally (§22.5)', () => {
     const p4 = member({ id: 'p_h', controller: 'human', floor: 4 });
     const startMem = leaderMem({ met: false, lastFloor: 4, floorAtStart: 4, startTurn: 0 });
     const o = fieldObs({ party: [p4], stairs: [downSt], objective: { type: 'reach_depth', target_depth: 6 } });
-    expect(summary(decide(o, ctx(defaultOrders(), { coop: true, mem: startMem, turnNo: 5 })))).toBe('act:wait:{}');
+    const rw = decide(o, ctx(defaultOrders(), { coop: true, mem: startMem, turnNo: 5 }));
+    expect(summary(rw)).toBe('act:wait:{}');
+    // 仲間を待つ待つ命令には印（命令の上限に数えない。§23.8）
+    expect(rw.decision.kind === 'act' && rw.decision.partyWait).toBe('start');
     expect(summary(decide(o, ctx(defaultOrders(), { coop: true, mem: startMem, turnNo: 60 })))).toBe('act:travel_to:{"to":"stairs_down"}');
     expect(summary(decide(o, ctx(defaultOrders(), { coop: true, mem: leaderMem({ met: false, lastFloor: 4, floorAtStart: 3 }), turnNo: 5 })))).toBe('act:travel_to:{"to":"stairs_down"}');
-    expect(summary(decide(o, ctx(withPolicy({ coop: { follow: 'auto', follow_distance: 8, wait_for_party: false } }), { coop: true, mem: startMem, turnNo: 5 })))).toBe('act:travel_to:{"to":"stairs_down"}');
+    expect(summary(decide(o, ctx(withPolicy({ coop: { follow: 'auto', follow_distance: 8, wait_for_party: false, idle_minutes: 10 } }), { coop: true, mem: startMem, turnNo: 5 })))).toBe('act:travel_to:{"to":"stairs_down"}');
   });
   it('danger, HP and enemies come before following (an enemy next to me is fought first)', () => {
     const p4 = member({ id: 'p_h', controller: 'human', floor: 4 });

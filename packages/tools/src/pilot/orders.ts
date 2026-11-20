@@ -76,9 +76,11 @@ export interface PilotPolicy {
   warden_retry_after: number;
   /**
    * 協力プレイで仲間と一緒に動く（V4-1f §22.5）。follow: auto＝人間の仲間、いなければ参加がいちばん早い者（自分がそれなら、だれにもついていかない）/
-   * none＝1 人のときと同じ / 仲間の名前か ID。follow_distance: 同じ階でこれより離れたら寄る。wait_for_party: 遠征の最初に、相手が同じ階に来るまで待つ
+   * none＝1 人のときと同じ / 仲間の名前か ID。follow_distance: 同じ階でこれより離れたら寄る。wait_for_party: 遠征の最初に、相手が同じ階に来るまで待つ。
+   * idle_minutes: 仲間を待つ間に、仲間が何もしないまま（観測の party の状態・階・見えていれば位置と HP が変わらないまま）この実時間（分）が過ぎたら
+   * party_idle で上げる（§23.8。0＝切る）
    */
-  coop: { follow: string; follow_distance: number; wait_for_party: boolean };
+  coop: { follow: string; follow_distance: number; wait_for_party: boolean; idle_minutes: number };
 }
 
 export interface PilotOrders {
@@ -124,7 +126,7 @@ export const DEFAULT_POLICY: PilotPolicy = {
   pick_relics: false,
   seek_max_turns: 150,
   warden_retry_after: 2,
-  coop: { follow: 'auto', follow_distance: 8, wait_for_party: true },
+  coop: { follow: 'auto', follow_distance: 8, wait_for_party: true, idle_minutes: 10 },
 };
 
 export function defaultOrders(): PilotOrders {
@@ -190,6 +192,7 @@ export function parseOrders(raw: unknown): PilotOrders {
           follow: typeof c.follow === 'string' && c.follow ? c.follow : d.coop.follow,
           follow_distance: num(c.follow_distance, d.coop.follow_distance, 1),
           wait_for_party: bool(c.wait_for_party, d.coop.wait_for_party),
+          idle_minutes: num(c.idle_minutes, d.coop.idle_minutes),
         };
       })(),
     },

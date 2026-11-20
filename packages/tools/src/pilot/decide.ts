@@ -21,9 +21,10 @@ export type Decision =
   /**
    * 道具を 1 つ使う。then があれば、使った後に起こす（回復の品を使った後の danger。§16.3）。done があれば、うまくいった後に知らせる
    * （綱を使った lifeline_used。V4-1e §19.4）。relic: 拾いに行く目的でない遺物（pick_relics。着いて拾えたら relic_picked。§19.5）。
-   * seek: 目的の相手・品を探す手（V4-1f §22.1。使った手番を seek_max_turns に数える）
+   * seek: 目的の相手・品を探す手（V4-1f §22.1。使った手番を seek_max_turns に数える）。
+   * partyWait: 仲間を待つ手（follow: ついていく相手の近くで待つ / start: 遠征の最初に相手が同じ階に来るのを待つ）。待つ命令は命令の上限に数えない（§23.8）
    */
-  | { kind: 'act'; tool: string; args: Record<string, unknown>; then?: Wake; done?: Wake; relic?: string; seek?: boolean }
+  | { kind: 'act'; tool: string; args: Record<string, unknown>; then?: Wake; done?: Wake; relic?: string; seek?: boolean; partyWait?: 'follow' | 'start' }
   /** 起こす（返事を待つ間は持ち場の動き。§14.4） */
   | { kind: 'wake'; wake: Wake }
   /** 何もしない（ソロで起こして待つ間、追ってくる敵も被害も無い）。wait: party＝キャンプで、仲間が迷宮から戻るのを待つ（V4-1f §22.5） */
@@ -417,7 +418,8 @@ export function decide(obs: Observation, ctx: DecideContext): DecideResult {
   // 1. ランが終わった
   if (obs.status === 'ended' || obs.status === 'dead') return out({ kind: 'end', wake: W('ended', 'ended', obs.summary) });
   // 2. キャンプ: その枠の候補で自動で出発するか、起こす（遠征のレポートの要点を添える）。起こして返事を待っている間は、何もしない
-  if (obs.status === 'at_camp' && ctx.waiting) return out({ kind: 'idle' });
+  // 起こして返事を待つ間も、遠征の途中で仲間が迷宮にいれば、仲間を待つ（観測を取り直して、仲間が戻ったのに気づく。§23.8）
+  if (obs.status === 'at_camp' && ctx.waiting) return out({ kind: 'idle', ...(x && x.status !== 'ended' && (obs.party ?? []).some((m) => m.status === 'in_dungeon') ? { wait: 'party' as const } : {}) });
   if (obs.status === 'at_camp') {
     const nextNo = obs.camp?.next_no ?? '';
     // 遠征の途中で、仲間がまだ迷宮にいる（V4-1f §22.5）: 遠征を始めようとせずに待つ（行き詰まりにも空回りにも数えない）。
@@ -642,15 +644,19 @@ export function decide(obs: Observation, ctx: DecideContext): DecideResult {
   /** 相手がキャンプに帰った（この遠征で迷宮にいた後）: 自分も帰る */
   let followHome = false;
   if (leader && leader.status === 'at_camp' && fm?.inDungeon) followHome = true;
+  /** 仲間を待つ（持ち場の動き。待つ命令には partyWait の印を付ける） */
+  const partyWait = (kind: 'follow' | 'start') => {
+    const h = holdAction(obs, { ...ctx, homeward: false });
+    const r = h ? actR(h) : act('wait', {});
+    if (r.decision.kind === 'act') r.decision.partyWait = kind;
+    return r;
+  };
   if (leader && leader.status === 'in_dungeon' && obs.self.pos && !(ctx.orders.mode === 'stop_at_camp' || ctx.orders.mode === 'return')) {
     following = true;
     if (leader.floor !== undefined && leader.floor !== depth) {
       // 遠征の最初に、相手がまだ同じ階にいない: その場で待つ（持ち場の動き）。相手が階を移るか、hold_max_turns が過ぎたら、相手の階へ向かう
       const waitStart = p.coop.wait_for_party && !!fm && !fm.met && fm.lastFloor === fm.floorAtStart && (ctx.turnNo ?? 0) - fm.startTurn < p.hold_max_turns;
-      if (waitStart) {
-        const h = holdAction(obs, { ...ctx, homeward: false });
-        return h ? actR(h) : act('wait', {});
-      }
+      if (waitStart) return partyWait('start');
       // 相手のいる階へ行く（深ければ下りる、浅ければ上る。階段を知らなければ探索する）
       const way = leader.floor > depth ? 'down' : 'up';
       const st = stairs.find((x2) => x2.type === way && !(way === 'down' && x2.sealed));
@@ -737,10 +743,7 @@ export function decide(obs: Observation, ctx: DecideContext): DecideResult {
   // 帰りたいのに、知っている階段が無く、探索できる所も残っていない: 綱（allow_lifeline のとき。§19.4）
   if (homeward && x && p.allow_lifeline && hasLifeline(obs) && can('use_item')) return actR({ tool: 'use_item', args: { slot: 'lifeline' }, why: '帰りたいが、知っている階段が無く、探索できる所も残っていない' });
   // ついていく間に、やることが残っていない（相手が同じ階で見えない・相手の階への階段も探索できる所も無い）: 起こさずに待つ（持ち場の動き。V4-1f §22.5）
-  if (following) {
-    const h = holdAction(obs, { ...ctx, homeward: false });
-    return h ? actR(h) : act('wait', {});
-  }
+  if (following) return partyWait('follow');
   // 18. 何も残っていない。命令が断られて残らなかったなら、その理由（refused_<code>）で起こす。
   //     じゃまをしている敵（エラーの blocked_by）の観測の行を detail の先頭に、ほかの見えている者の行を近い順に後ろに添える（V4-1a §13.8。pilot は自分からは戦わない）
   const rf = ctx.refusal;

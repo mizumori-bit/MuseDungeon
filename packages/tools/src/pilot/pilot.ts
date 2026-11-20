@@ -61,6 +61,8 @@ export interface PilotOptions {
   pollMs?: number;
   log?: (msg: string) => void;
   signal?: AbortSignal;
+  /** 実時間の時計（ミリ秒。テストで差し替える。既定 Date.now）。最大の実時間と、仲間が何もしない時間（party_idle）に使う */
+  now?: () => number;
 }
 
 export interface PilotState {
@@ -138,7 +140,8 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
   const maxActions = opts.maxActions ?? 5000;
   const maxMs = opts.maxMs ?? 6 * 60 * 60 * 1000;
   const maxErrors = opts.maxErrors ?? 5;
-  const t0 = Date.now();
+  const now = opts.now ?? Date.now;
+  const t0 = now();
   const result: PilotResult = { outcome: 'stopped', reason: '', actions: 0, wakes: {}, escalates: {}, notifies: 0, notified: {}, turns: { pilot: 0, queue: 0 } };
 
   // ---- ゲームへの口（MCP）。表示の文は短く、所持品はいつも構造化して受け取る ----
@@ -239,6 +242,11 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
   let waiting = null as { key: string; also: string[]; reason: string; sinceTurn: number; cond: boolean; homeward: boolean; wake: Wake; farDamage: number } | null;
   /** キャンプで、仲間が迷宮から戻るのを待っている（V4-1f §22.5） */
   let waitingParty = false;
+  /** 仲間の観測の写し（状態・階・見えていれば位置と HP）と、それが最後に変わった実時間（party_idle。§23.8） */
+  let partySig = '';
+  let partyChangedAt = now();
+  /** 上げた party_idle（仲間が最後に動いた時刻ごとに 1 回） */
+  const partyIdleRaised = new Set<string>();
   /** この遠征の記録（history.jsonl の met・dealt・taken。V4-1f §22.2） */
   let expTrack = { no: null as number | null, met: false, dealt: 0, taken: 0 };
   /** mode: return でキャンプに着いた rev（同じ rev の間は auto として扱う。V4-1e §19.4） */
@@ -443,6 +451,16 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
       for (const m of obs.visible.monsters.filter((mm) => mm.objective)) { expTrack.met = true; expTrack.dealt = Math.max(expTrack.dealt, m.damage_seen ?? 0); }
       if (prev.scope.split(':')[0] === String(xno) && obs.self.hp < prev.hp) expTrack.taken += prev.hp - obs.self.hp;
     }
+    // 仲間の動き（§23.8）: 観測の party に出る項目が変わったら、その時刻を覚える。party_idle で上げて待っている間に動いたら、待つのをやめて知らせる
+    const sig = JSON.stringify((obs.party ?? []).map((m) => [m.id, m.status, m.floor ?? null, m.pos ?? null, m.hp ?? null]));
+    if (sig !== partySig) {
+      partySig = sig;
+      partyChangedAt = now();
+      if (waiting?.reason === 'party_idle') {
+        waiting = null;
+        note('party_active', [lineWith(text, '仲間: '), '仲間が動いた。上げた party_idle の返事を待つのをやめて、続ける'].filter(Boolean).join('\n'));
+      }
+    }
     // ついていく相手（V4-1f §22.5）: 遠征ごとに記録し直す。同じ階で見えた位置、この遠征で迷宮にいたか、同じ階にいたことがあるか
     const leader = obs.status !== 'at_camp' ? leaderOf(obs, orders.policy) : null;
     if (!leader) mem.follow = null;
@@ -478,7 +496,8 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
   };
 
   /** 1 つの命令を出して、観測を新しくする。失敗（拒否）は観測を取り直す */
-  const act = async (tool: string, args: Record<string, unknown>, source: 'pilot' | 'queue'): Promise<{ ok: boolean; stop?: string; error?: CallError }> => {
+  /** count: false なら命令の上限に数えない（仲間を待つ待つ命令。§23.8） */
+  const act = async (tool: string, args: Record<string, unknown>, source: 'pilot' | 'queue', count = true): Promise<{ ok: boolean; stop?: string; error?: CallError }> => {
     const before = turn.turn_no;
     // 記録用: fight の標的が、見れば分かる特徴「飛び道具」を持つか（離れて撃つ敵の計測。V4-1d §18.3）
     const ranged = tool === 'fight' && !!obs.visible.monsters.find((m) => m.id === args.target)?.traits?.includes('ranged');
@@ -491,7 +510,7 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
       log(`[pilot] ${tool} failed (${errors}/${maxErrors}): ${(e as Error).message}`);
       return { ok: false, error: { code: 'call_failed', message: (e as Error).message } };
     }
-    result.actions++;
+    if (count) result.actions++;
     const p = payload(r);
     if (p.obs) { obs = p.obs; text = r.text; }
     if (p.turn) turn = p.turn;
@@ -562,7 +581,7 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
   for (;;) {
     if (opts.signal?.aborted) return finish('stopped', 'signal');
     // 安全装置（参照ドライバと同じ）: 遠征は終わらせない
-    if (result.actions >= maxActions || Date.now() - t0 > maxMs || errors >= maxErrors || stuckOut) {
+    if (result.actions >= maxActions || now() - t0 > maxMs || errors >= maxErrors || stuckOut) {
       const reason = result.actions >= maxActions ? 'max_actions' : errors >= maxErrors ? 'errors' : stuckOut ? 'stuck' : 'max_time';
       // 黙って終えずに上げる（V4-1e §19.3）
       raise({ level: 'escalate', reason: 'safety', key: 'safety', detail: `安全装置（${reason}）に達したので pilot を終える。${obs.summary}` }, 'ended');
@@ -645,7 +664,8 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
       }
     }
     // 起こして待っている（§14.4）: hold_max_turns が過ぎたら、帰る側へ倒す（くり返し起こさない）
-    if (waiting && obs.status !== 'at_camp' && !waiting.homeward && turn.turn_no - waiting.sinceTurn >= orders.policy.hold_max_turns) {
+    // party_idle（仲間が何もしない）で上げたときは、自分からは帰らない（置いて帰るかは AI が決める。§23.8）
+    if (waiting && waiting.reason !== 'party_idle' && obs.status !== 'at_camp' && !waiting.homeward && turn.turn_no - waiting.sinceTurn >= orders.policy.hold_max_turns) {
       waiting.homeward = true;
       note('no_reply', `${waiting.reason}（${turn.turn_no - waiting.sinceTurn} 手番返事が無い）。階段へ行き、帰る側へ倒す`, `no_reply:${waiting.key}`);
     }
@@ -705,6 +725,21 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
       continue;
     }
     waitingParty = decision.kind === 'idle' && decision.wait === 'party';
+    // 仲間を待つ（ついていく相手の近く・遠征の最初・キャンプ）間に、仲間が何もしないまま coop.idle_minutes が過ぎた: 上げる（§23.8）。
+    // 上げた後も持ち場の動きを続ける（自分からは帰らない）
+    const waitingForParty = waitingParty || (decision.kind === 'act' && !!decision.partyWait);
+    const idleMin = orders.policy.coop.idle_minutes;
+    if (waitingForParty && !waiting && idleMin > 0 && (obs.party ?? []).length && now() - partyChangedAt >= idleMin * 60000) {
+      const key = `party_idle:${partyChangedAt}`;
+      if (!partyIdleRaised.has(key)) {
+        partyIdleRaised.add(key);
+        wakeNow({ level: 'escalate', reason: 'party_idle', key, detail: [
+          `仲間が ${Math.floor((now() - partyChangedAt) / 60000)} 分、何もしていない（観測の party の状態・階・見えていれば位置と HP が変わらない）。pilot は待ち続ける（自分からは帰らない）。置いて帰るなら mode: "return"、待つのをやめて 1 人で動くなら policy.coop.follow: "none"`,
+          lineWith(text, '仲間: '), obs.summary,
+        ].filter(Boolean).join('\n') });
+        continue;
+      }
+    }
     if (decision.kind === 'idle') {
       writeState();
       // キャンプで仲間を待つ（V4-1f §22.5）: 仲間の動きを待って観測を取り直す（返事の orders.json も見る）
@@ -725,7 +760,9 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
     }
     const before = turn.turn_no;
     const relicLine = decision.relic ? lineWith(text, decision.relic) : '';
-    const r = await act(decision.tool, decision.args, 'pilot');
+    // 仲間を待つ待つ命令は、命令の上限に数えない（暴走ではないため。§23.8）
+    const uncounted = decision.tool === 'wait' && (!!decision.partyWait || waiting?.reason === 'party_idle');
+    const r = await act(decision.tool, decision.args, 'pilot', !uncounted);
     // 探す手（V4-1f §22.1）: 使った手番を数え、立ったマスを覚える。見回り先へ着けなかったら、この階ではもう行かない
     if (decision.seek) {
       mem.seekTurns += Math.max(1, turn.turn_no - before);

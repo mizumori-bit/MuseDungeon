@@ -396,11 +396,11 @@ async function until(cond: () => boolean, ms = 15000): Promise<void> {
     await new Promise((r) => setTimeout(r, 20));
   }
 }
-function start(h: Harness, opts: { responder?: (ev: WakeEvent) => void; mode?: 'solo' | 'coop'; maxActions?: number; wakeCmd?: string; wakeUrl?: string } = {}) {
+function start(h: Harness, opts: { responder?: (ev: WakeEvent) => void; mode?: 'solo' | 'coop'; maxActions?: number; wakeCmd?: string; wakeUrl?: string; now?: () => number } = {}) {
   const ac = new AbortController();
   const done = runPilot({
     baseUrl: h.base, token: h.token, dir: h.dir, pollMs: 20, log: () => {}, signal: ac.signal, maxActions: opts.maxActions ?? 5000, ...(opts.mode ? { mode: opts.mode } : {}),
-    ...(opts.wakeCmd ? { wakeCmd: opts.wakeCmd } : {}), ...(opts.wakeUrl ? { wakeUrl: opts.wakeUrl } : {}),
+    ...(opts.wakeCmd ? { wakeCmd: opts.wakeCmd } : {}), ...(opts.wakeUrl ? { wakeUrl: opts.wakeUrl } : {}), ...(opts.now ? { now: opts.now } : {}),
     onWake: (ev) => { h.wakes.push(ev); opts.responder?.(ev); },
   });
   return { stop: async () => { ac.abort(); return done; }, done };
@@ -795,6 +795,76 @@ describe('pilot をサーバーにつないで動かす（§10.8）', () => {
     await h.close();
   }, 60000);
 
+  /** 協力プレイ: pilot と、地下 2 階で何もしない人間の仲間（pilot は遠征の最初に、仲間が同じ階に来るのを待つ） */
+  async function waitingForAlly(seed: string, policy: Record<string, unknown>) {
+    const config = loadConfig({ port: 0, runsDir: null, profilesDir: null, waitOthersMs: 100 });
+    const manager = new SessionManager(content, config);
+    const app = createApp(manager, config);
+    await new Promise<void>((r) => app.server.listen(0, '127.0.0.1', () => r()));
+    const base = `http://127.0.0.1:${(app.server.address() as AddressInfo).port}`;
+    const r = await manager.createRun({ name: 'Pilot', seed, classId: 'core:warrior', controller: { kind: 'agent', label: 'pilot' }, mode: 'coop', objective: 'auto' });
+    if ('error' in r) throw new Error(r.error.message);
+    r.session.world.meta.options.turnTimeoutMs = 50;
+    const b = await manager.joinRun(r.session.runId, { name: 'Ally', controller: { kind: 'human', label: 'ally' } });
+    if ('error' in b) throw new Error(b.error.message);
+    // 仲間を下り階段の上に置いて、地下 2 階へ下ろす（その後は何もしない）
+    const w = r.session.world;
+    const bE = structuredClone(w.entities[w.players[b.port.playerId]!.entityId]!);
+    const f = w.floors[bE.pos!.floor]!;
+    const tv = w.meta.terrainTable.indexOf('core:stairs_down');
+    const i = f.terrain.findIndex((v) => v === tv);
+    bE.pos = { floor: bE.pos!.floor, x: i % f.width, y: Math.trunc(i / f.width) };
+    applyEvent(w, { type: 'thought', player: b.port.playerId, text: '', seq: w.seq + 1, cause: null, floor: null, ft: 0, wall: 0, seenBy: [], put: [bE] } as unknown as GameEvent);
+    for (let k = 0; k < 20 && b.port.view().status !== 'your_turn'; k++) {
+      if (r.port.view().status === 'your_turn') await r.port.act({ type: 'wait' }, { source: 'bot' });
+      else await new Promise((res) => setTimeout(res, 20));
+    }
+    expect((await b.port.act({ type: 'stairs' }, { source: 'bot' })).ok).toBe(true);
+    const dir = mkdtempSync(join(tmpdir(), 'muse-pilot-test-'));
+    writeFileSync(join(dir, 'orders.json'), JSON.stringify({ rev: 1, policy: { hold_max_turns: 1000, ...policy } }));
+    const h: Harness = { base, token: r.token, dir, wakes: [], close: async () => { manager.closeAll(); await new Promise<void>((r2) => app.server.close(() => r2())); } };
+    return h;
+  }
+
+  it('V4-1f §23.8: 遅い仲間を待つ間の「待つ」は命令の上限に数えない（上限 15 でも、待ち続けて safety で終わらない）', async () => {
+    const h = await waitingForAlly('pilot-wait-uncounted', {});
+    const p = start(h, { mode: 'coop', maxActions: 15 });
+    await until(() => rows(h.dir).filter((x) => x.source === 'pilot' && x.tool === 'wait').length >= 40, 30000);
+    expect(h.wakes.some((w) => w.reason === 'safety')).toBe(false);
+    const res = await p.stop();
+    expect(res.outcome).toBe('stopped');
+    expect(res.actions).toBeLessThan(15);
+    await h.close();
+  }, 40000);
+
+  it('V4-1f §23.8: 仲間が実時間で 10 分何もしなければ party_idle で上げる（時計を差し替えて確かめる）。上げた後も待ち続け、自分からは帰らない', async () => {
+    const h = await waitingForAlly('pilot-party-idle', {});
+    const clock = { t: 1_000_000 };
+    const p = start(h, { mode: 'coop', now: () => clock.t });
+    await until(() => rows(h.dir).filter((x) => x.source === 'pilot' && x.tool === 'wait').length >= 5, 20000);
+    // 9 分では上げない
+    clock.t += 9 * 60000;
+    const n9 = rows(h.dir).filter((x) => x.tool === 'wait').length;
+    await until(() => rows(h.dir).filter((x) => x.tool === 'wait').length >= n9 + 5, 20000);
+    expect(h.wakes.some((w) => w.reason === 'party_idle')).toBe(false);
+    // 10 分を過ぎた: 上げる（返事役は答えない段）
+    clock.t += 2 * 60000;
+    await until(() => h.wakes.some((w) => w.reason === 'party_idle'), 20000);
+    const e = h.wakes.find((w) => w.reason === 'party_idle')!;
+    expect(e.level).toBe('escalate');
+    expect(e.detail).toContain('仲間が 11 分、何もしていない');
+    expect(e.detail).toContain('仲間: Ally［人間］（地下 2 階）');
+    expect(h.wakes.filter((w) => w.reason === 'party_idle')).toHaveLength(1);
+    // 上げた後も、その場で待ち続ける（階段へ行かない・帰らない・返事が無くても no_reply で帰る側へ倒さない）
+    const n = rows(h.dir).length;
+    await until(() => rows(h.dir).slice(n).filter((x) => x.tool === 'wait').length >= 10, 20000);
+    expect(rows(h.dir).slice(n).some((x) => x.tool === 'travel_to' || x.tool === 'use_stairs' || x.tool === 'extract' || x.tool === 'use_item')).toBe(false);
+    expect(h.wakes.some((w) => w.reason === 'no_reply')).toBe(false);
+    expect(JSON.parse(readFileSync(join(h.dir, 'state.json'), 'utf-8')).wake).toMatchObject({ level: 'escalate', reason: 'party_idle' });
+    await p.stop();
+    await h.close();
+  }, 60000);
+
   it('V4-1f §22.5: 協力プレイの pilot 2 体（参加の順で 2 番目が 1 番目についていく）は、お互いを追って止まらず、後の者は先の階へ進まない', async () => {
     const config = loadConfig({ port: 0, runsDir: null, profilesDir: null, waitOthersMs: 100 });
     const manager = new SessionManager(content, config);
@@ -810,8 +880,15 @@ describe('pilot をサーバーにつないで動かす（§10.8）', () => {
     const ha = mk(a.token), hb = mk(b.token);
     const w = a.session.world;
     const depthOf = (pid: string) => { const e = w.entities[w.players[pid]!.entityId]; return w.players[pid]!.state === 'alive' && e?.pos ? w.floors[e.pos.floor]!.depth : null; };
+    // B の手番ごとに、A と B の階を見る（実時間の間隔で見ると、重いときに数が減る）
     const samples: { a: number | null; b: number | null }[] = [];
-    const timer = setInterval(() => samples.push({ a: depthOf(a.port.playerId), b: depthOf(b.port.playerId) }), 30);
+    let bTurns = -1;
+    const timer = setInterval(() => {
+      const t = w.entities[w.players[b.port.playerId]!.entityId]?.actor?.turns ?? -1;
+      if (t === bTurns) return;
+      bTurns = t;
+      samples.push({ a: depthOf(a.port.playerId), b: depthOf(b.port.playerId) });
+    }, 2);
     const pa = start(ha, { responder: simpleResponder, mode: 'coop', maxActions: 300 });
     const pb = start(hb, { responder: simpleResponder, mode: 'coop', maxActions: 300 });
     await until(() => rows(ha.dir).filter((x) => x.tool).length >= 60 && rows(hb.dir).filter((x) => x.tool).length >= 60, 50000);
@@ -823,8 +900,10 @@ describe('pilot をサーバーにつないで動かす（§10.8）', () => {
     expect(JSON.parse(readFileSync(join(ha.dir, 'state.json'), 'utf-8')).follow).toBeNull();
     // 両方が迷宮にいた間、B が A より深い階にいたことはほとんど無い（A が上った直後だけ）
     const both = samples.filter((x) => x.a !== null && x.b !== null);
-    expect(both.length).toBeGreaterThan(10);
-    expect(both.filter((x) => x.b! > x.a!).length / both.length).toBeLessThan(0.1);
+    const deeper = both.filter((x) => x.b! > x.a!).length;
+    const info = `B の手番 ${samples.length}、両方が迷宮 ${both.length}、B が深い ${deeper}`;
+    expect(both.length, info).toBeGreaterThan(10);
+    expect(deeper / both.length, info).toBeLessThan(0.1);
     manager.closeAll();
     await new Promise<void>((r2) => app.server.close(() => r2()));
   }, 60000);

@@ -36,7 +36,7 @@ npm.cmd run pilot -- --token <player_token> --wake-cmd "node my-ai.mjs"
 | `--wake-url <URL>` | 起こす・知らせるときに POST する先（本文は `{ level, reason, summary, state_path, orders_path, state }`） |
 | `--mode solo\|coop` | ソロか協力か（省くとランのモードから） |
 | `--server <URL>` | サーバーの番地（既定 `http://127.0.0.1:7777`。別の機械なら Tailscale の番地など） |
-| `--max-actions` / `--max-minutes` / `--max-errors` | 安全装置（既定 5000 命令・360 分・エラー 5 回の連続）。達したら `safety` で上げて（`escalate`）終える。遠征は終わらせない |
+| `--max-actions` / `--max-minutes` / `--max-errors` | 安全装置（既定 5000 命令・360 分・エラー 5 回の連続）。達したら `safety` で上げて（`escalate`）終える。遠征は終わらせない。仲間を待つ「待つ」（ついていく相手の近く・遠征の最初・キャンプ）は命令の数に入れない |
 
 `--wake-cmd` も `--wake-url` も無ければ、起こすのはファイルと画面の表示だけです（人間が `orders.json` を手で書くとき）。
 
@@ -87,7 +87,8 @@ npm.cmd run pilot -- --token <player_token> --wake-cmd "node my-ai.mjs"
     "coop": {                      // 協力プレイで仲間と一緒に動く
       "follow": "auto",            // "auto"＝人間の仲間、いなければ参加がいちばん早い者（自分がそれなら、だれにもついていかない）/ "none" / 仲間の名前か ID
       "follow_distance": 8,        // 同じ階で、これより離れたら寄る
-      "wait_for_party": true       // 遠征の最初に、相手が同じ階に来るまで待つ
+      "wait_for_party": true,      // 遠征の最初に、相手が同じ階に来るまで待つ
+      "idle_minutes": 10           // 仲間を待つ間に、仲間が何もしないまま実時間でこの分数が過ぎたら上げる（party_idle。0＝切る）
     }
   },
   "camp": { "auto_start": null }   // null＝キャンプでは必ず起こす / "safe"・"standard"・"ambitious"＝その枠で自動で出発
@@ -228,6 +229,7 @@ npm.cmd run pilot -- --token <player_token> --wake-cmd "node my-ai.mjs"
 |---|---|
 | `warden_decision` | 節目の大守護者に挑むかを決めてほしい（`warden: "escalate"` のとき、その大守護者につき 1 回）: キャンプで選べる候補が大守護者に挑むか節目の先へ行くものだけ・目的の階がこの階の封じられた階段の先・大守護者が見えた。`detail` に大守護者の名前と階、候補の見込みの文、レベル・推奨のレベル・HP・持ち物の行、それまでに挑んだ遠征の数。返事は `policy.warden` を `"engage"` か `"avoid"` に。`"engage"` にした後、倒さずに `warden_retry_after` 回の遠征が終わったときも、もう一度上げる（`detail` にその遠征の終わり方・相手に会えたか・相手に見た被害・受けた被害。返事が来るまでキャンプで待つ） |
 | `stalled` | 空回り（上の「空回り」）。`warden: "avoid"` のまま選べる候補が尽きたときも |
+| `party_idle` | 協力プレイで仲間を待つ間に、仲間が何もしないまま（観測の `party` の状態・階・見えていれば位置と HP が変わらないまま）`coop.idle_minutes` 分過ぎた。pilot は待ち続け、自分からは帰らない（置いて帰るなら `mode: "return"`）。仲間が動いたら、返事を待つのをやめて続ける（`party_active` を知らせる） |
 | `safety` | 安全装置に達した（pilot を終える） |
 
 **起こす（`wake`）**
