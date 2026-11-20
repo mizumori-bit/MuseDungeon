@@ -70,6 +70,8 @@ export interface PilotMemory {
   follow: FollowMemory | null;
   /** 相手にしないと決めた敵に撃たれた: 階段で階を出る（V4-1g §24.2 の 2。階を移ったら消える） */
   leaveFloor: boolean;
+  /** 立て直しの 3 で fight したが、倒す前に止まった相手（この立て直しの間は、もう fight しない。V4-1h の続き） */
+  recoverFought: string[];
   /** 相手を助けに行っている・着いた（V4-1g §24.4 assist。知らせを 1 回にするため。階を移っても残す） */
   assisting: boolean;
   assistArrived: boolean;
@@ -82,7 +84,7 @@ export interface PilotMemory {
 export interface FollowMemory { id: string; exp: number | null; met: boolean; inDungeon: boolean; lastPos: Pos | null; lastFloor: number | null; floorAtStart: number | null; startTurn: number }
 
 export function newMemory(): PilotMemory {
-  return { trail: [], stops: {}, advance: [], ignored: [], recovering: false, crossed: null, stairRetreats: 0, hurtFarAgo: null, away: [], shotBy: null, backOff: false, relicFailed: [], seekTurns: 0, seekVisited: [], patrolFailed: [], follow: null, leaveFloor: false, assisting: false, assistArrived: false };
+  return { trail: [], stops: {}, advance: [], ignored: [], recovering: false, crossed: null, stairRetreats: 0, hurtFarAgo: null, away: [], shotBy: null, backOff: false, relicFailed: [], seekTurns: 0, seekVisited: [], patrolFailed: [], follow: null, leaveFloor: false, recoverFought: [], assisting: false, assistArrived: false };
 }
 
 /** 道をふさいでいる罠（断りのエラーの details.blocked_by_traps。V4-1d §18.1） */
@@ -336,6 +338,11 @@ export function fleeArgs(obs: Observation): { mode: 'flee'; hp_floor: number } {
 }
 
 /** 離れる（§14.3 の 3・4）: 協力プレイで仲間が見えていれば仲間の隣へ、そうでなければ来た道を戻る */
+/** 立て直しの 3 の fight の hp_floor: critical_hp（HP が最大の 25% 未満。観測の判定は trunc(HP×100/最大) < 25）になる HP の上限 */
+export function criticalFloor(obs: Observation): number {
+  return Math.max(0, Math.ceil(obs.self.max_hp / 4) - 1);
+}
+
 function stairsOf(obs: Observation) {
   return obs.navigation.known_stairs ?? [];
 }
@@ -594,7 +601,7 @@ export function decide(obs: Observation, ctx: DecideContext): DecideResult {
   // 8. 立て直しの段（§14.3）: HP が wake_hp_pct を切った、または fight が hp_floor で止まった・断られた、steady が被害で止まった
   const needRecovery = pct < p.wake_hp_pct || mem.recovering;
   if (needRecovery) {
-    if (mem.recovering && pct >= p.rest_below_pct && !activeCh.length) upd({ recovering: false });
+    if (mem.recovering && pct >= p.rest_below_pct && !activeCh.length) upd({ recovering: false, recoverFought: [] });
     else {
       if (!mem.recovering) { upd({ recovering: true }); notify.push(W('recovering', `recovering:${obs.seq}`, alert(obs, 'low_hp')?.text ?? obs.summary, 'notify')); }
       // 0) HP が wake_hp_pct を切っていて、回復の能動技が使える: 使う（使っても減らない。追ってくる敵がいてもいなくても。§16.3）
@@ -616,8 +623,10 @@ export function decide(obs: Observation, ctx: DecideContext): DecideResult {
       // 3) 隣で追ってくる役割の無い敵がいて、階段へも仲間へも行けない: 殴る（逃げても追ってくる。V4-1h §26.1）。
       //    ただし、帰ると決めた後と、この数手番に隣でない相手から被害を受けている（撃たれている）ときは殴らない（離れるのが先）。
       //    役割のある敵（目的の相手も）とは、HP が減ったまま殴り合わない
-      const adjR = adjacentHunting(obs).filter((m) => !isRoleEnemy(m))[0];
-      if (adjR && !decidedHome && !shotAt && !(ctx.coop && farAlly(obs)) && can('attack')) return act('attack', { target: adjR.id });
+      //    殴るのはマクロの fight（決着まで。V4-1h の続き §27.5: 1 手ずつ殴ると命令が多く、行き詰まりに届きやすかった）。hp_floor は、1 手ずつ殴るのを
+      //    やめていた線（critical_hp: HP が最大の 25% 未満）と同じ。倒す前に止まったら、この立て直しの間はその相手と fight せず、続き（4 以降）へ進む
+      const adjR = adjacentHunting(obs).filter((m) => !isRoleEnemy(m) && !mem.recoverFought.includes(m.id))[0];
+      if (adjR && !decidedHome && !shotAt && !(ctx.coop && farAlly(obs)) && can('fight')) return act('fight', { target: adjR.id, hp_floor: criticalFloor(obs) });
       // 4) 仲間の隣へ寄る・来た道を戻る
       if (can('travel_to')) {
         const m = moveAway(obs, ctx, mem);
@@ -633,6 +642,16 @@ export function decide(obs: Observation, ctx: DecideContext): DecideResult {
       //    協力プレイで、ついていく相手が迷宮にいる: 相手の所へ行く（仲間を置いて帰らない）
       const tl = following && leader ? toLeader(obs, leader, fm, stairsOf(obs), depthNow, can) : null;
       if (tl) { why = 'recover_ally'; return act(tl.tool, tl.args); }
+      //    相手のそばにいる（または相手の所へ行く手が無い）: 起こさずに、相手のそばで持ち場の動き（隣で追ってくる敵は 1 回殴る・撃たれていれば離れる・
+      //    ほかは待つ）。§26.2 の協力プレイは「相手の所へ行く」までで、起こさない（V4-1h の続きの測り直しで分かった: 相手の隣で recover_failed を起こし、
+      //    見本が「帰る」と答えて仲間を置いて帰った）
+      if (following && leader) {
+        why = 'recover_ally';
+        const h = holdAction(obs, { ...ctx, homeward: false });
+        const r = h ? actR(h) : act('wait', {});
+        if (r.decision.kind === 'act' && r.decision.tool === 'wait') r.decision.partyWait = 'follow';
+        return r;
+      }
       //    追い詰められた（逃げる手がまったく無い）: 隣で追ってくる敵は、道をふさいでいるのと同じなので殴る（cornered を知らせる）。
       //    階段の上にいる・着ける階段がある（この階で階を移る回数を使い切っただけ）なら、逃げ道はある: 殴らずに起こす（V4-1h の測り直しで分かった:
       //    回数を使い切った後に、隣の守護者と HP が減ったまま殴り合っていた）

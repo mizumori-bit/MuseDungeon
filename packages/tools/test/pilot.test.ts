@@ -278,7 +278,8 @@ describe('pilot の判断の表（§10.4〜§10.6）', () => {
     // 3) 隣で追ってくる役割の無い敵がいて、階段にも仲間にも行けない: 殴る（撃ってくる相手がいない。V4-1h §26.1）
     obs.visible.monsters = [monster({ id: 'e_chase1', dist: 1 })];
     const r6 = decide(obs, ctxOf(defaultOrders(), { mem }));
-    expect(r6.decision.kind === 'act' && `${r6.decision.tool}:${r6.decision.args.target}`).toBe('attack:e_chase1');
+    // 殴るのはマクロの fight（hp_floor は critical_hp の線。V4-1h の続き §27.5）
+    expect(r6.decision.kind === 'act' && `${r6.decision.tool}:${r6.decision.args.target}:${r6.decision.args.hp_floor}`).toBe(`fight:e_chase1:${Math.ceil(obs.self.max_hp / 4) - 1}`);
     // この数手番に隣でない相手から被害を受けている（撃たれている）: 殴らずに離れる（来た道を戻る）
     const r6s = decide(obs, ctxOf(defaultOrders(), { mem: { ...mem, hurtFarAgo: 0 } }));
     expect(r6s.decision.kind === 'act' && r6s.decision.tool).toBe('travel_to');

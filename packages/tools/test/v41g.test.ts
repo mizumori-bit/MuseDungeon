@@ -312,13 +312,21 @@ describe('V4-1h pilot (§26)', () => {
     const up = decide(hurt([member({ floor: 2 })]), ctx(defaultOrders(), { coop: true, mem: m }));
     expect(summary(up)).toMatch(/^act:travel_to:\{"to":"stairs_up","mode":"flee"/);
     expect(up.decision.kind === 'act' && up.decision.why).toBe('recover_ally');
+    // 相手のそばにいる（同じ階で見えていて隣）: 起こさずに、相手のそばで待つ（recover_failed で起こすと、見本が帰ると答えて仲間を置いていく）
+    const near = decide(hurt([member({ floor: 3, pos: [21, 10], entity: 'e_h00001' })], []), ctx(defaultOrders(), { coop: true, mem: m }));
+    expect(summary(near)).toBe('act:wait:{}');
+    expect(near.decision.kind === 'act' && `${near.decision.why}:${near.decision.partyWait}`).toBe('recover_ally:follow');
     // ソロ（仲間がいない）: 起こす（recover_failed）。帰る（extract・綱）は選ばない
     const solo = decide(fieldObs({ hp: 12, stairs: [onUp], monsters: [mon({ id: 'e_far0a1', dist: 3 })] }), ctx(withPolicy({ allow_lifeline: true }), { mem: { ...newMemory(), stairRetreats: 2 } }));
     expect(summary(solo)).toBe('wake:recover_failed');
   });
   it('§26.1 recovery with no shooter hits the adjacent chaser without a role; a guardian only when cornered', () => {
+    // 殴るのはマクロの fight。hp_floor は critical_hp の線（最大 HP 40 なら HP 9 以下で止まる。V4-1h の続き §27.5）
     const r = decide(fieldObs({ hp: 12, monsters: [mon({ id: 'e_adj0b1' })] }), ctx(defaultOrders(), { mem: { ...newMemory(), stairRetreats: 2 } }));
-    expect(summary(r)).toBe('act:attack:{"target":"e_adj0b1"}');
+    expect(summary(r)).toBe('act:fight:{"target":"e_adj0b1","hp_floor":9}');
+    // 倒す前に止まった相手とは、この立て直しの間はもう fight しない（続きへ: ここでは逃げ道が無いので、追い詰められたとして 1 手殴る）
+    const r2 = decide(fieldObs({ hp: 12, monsters: [mon({ id: 'e_adj0b1' })] }), ctx(defaultOrders(), { mem: { ...newMemory(), stairRetreats: 2, recoverFought: ['e_adj0b1'] } }));
+    expect(r2.decision.kind === 'act' && `${r2.decision.tool}:${r2.decision.why}`).toBe('attack:cornered');
     const g = decide(fieldObs({ hp: 12, monsters: [mon({ id: 'e_adj0b2', role: 'guardian' } as Partial<ObsMonster>)] }), ctx(defaultOrders(), { mem: { ...newMemory(), stairRetreats: 2 } }));
     // 役割のある敵は立て直しの 3 では殴らない。逃げ道がまったく無いので、追い詰められたとして殴る（cornered。どの場面でも同じ）
     expect(g.decision.kind === 'act' && `${g.decision.tool}:${g.decision.why}`).toBe('attack:cornered');
@@ -328,6 +336,31 @@ describe('V4-1h pilot (§26)', () => {
     const esc = { code: 'escape', level: 'info', text: '逃げ道', data: { stairs: 'up', worst_if_chased: 4, hp: 12 } } as unknown as Observation['alerts'][number];
     const g = decide(fieldObs({ hp: 12, stairs: [upSt], alerts: [esc], monsters: [mon({ id: 'e_adj0c1', role: 'guardian' } as Partial<ObsMonster>)] }), ctx(defaultOrders(), { mem: { ...newMemory(), stairRetreats: 2 } }));
     expect(summary(g)).toBe('wake:recover_failed');
+  });
+  it('the sample responder and stuck (§27.5): with an ally in the dungeon, the first stuck of an expedition ignores the current target and carries on; the second is not answered; solo or ally at camp: home', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'muse-v41h-stuck-'));
+    const ordersPath = join(dir, 'orders.json');
+    const ev = (party: ObsPartyMember[], exp = 5): WakeEvent => ({ level: 'wake', reason: 'stuck', key: 'k', detail: 'x', state: { expedition_no: exp, hostiles: [], traps: [], party, target: { id: 'e_foe0d1', stops: 1 }, last: { tool: 'fight', args: { target: 'e_foe0d1' }, stopped: 'hp_risk', turns: 3, source: 'pilot' } } as unknown as PilotState, statePath: join(dir, 'state.json'), ordersPath });
+    writeFileSync(ordersPath, JSON.stringify(defaultOrders()));
+    simpleResponder(ev([member({ floor: 2 })]));
+    const o1 = readOrders(ordersPath)!;
+    expect(o1.mode).toBe('auto');
+    expect(o1.policy.ignore).toEqual(['e_foe0d1']);
+    // 同じ遠征の 2 回目: 答えない（rev は変わらない）
+    simpleResponder(ev([member({ floor: 2 })]));
+    expect(readOrders(ordersPath)!.rev).toBe(o1.rev);
+    // 次の遠征の 1 回目は、また答える
+    simpleResponder(ev([member({ floor: 2 })], 6));
+    expect(readOrders(ordersPath)!.rev).toBe(o1.rev + 1);
+    // 仲間がキャンプにいる・ソロ: 帰る
+    simpleResponder(ev([member({ status: 'at_camp', floor: undefined })], 7));
+    expect(readOrders(ordersPath)!.mode).toBe('return');
+    writeFileSync(ordersPath, JSON.stringify(defaultOrders()));
+    const dir2 = mkdtempSync(join(tmpdir(), 'muse-v41h-stuck-'));
+    const op2 = join(dir2, 'orders.json');
+    writeFileSync(op2, JSON.stringify(defaultOrders()));
+    simpleResponder({ ...ev([]), ordersPath: op2 });
+    expect(readOrders(op2)!.mode).toBe('return');
   });
   it('the sample responder answers recover_failed by going home (the responder decides, not the pilot)', () => {
     const dir = mkdtempSync(join(tmpdir(), 'muse-v41h-resp-'));
@@ -415,7 +448,7 @@ describe('V4-1g pilot: cornered (found by the measurement)', () => {
   it('recovering with no way to flee (no stairs, travel_to refused): hits the adjacent chaser instead of raising danger over and over', () => {
     // 役割の無い敵: 撃ってくる相手がいないので、立て直しの 3 で殴る（V4-1h §26.1）
     const r0 = decide(fieldObs({ hp: 10, monsters: [mon({ id: 'e_cor001' })] }), ctx(defaultOrders(), { refused: new Set(['travel_to']) }));
-    expect(summary(r0)).toBe('act:attack:{"target":"e_cor001"}');
+    expect(summary(r0)).toBe('act:fight:{"target":"e_cor001","hp_floor":9}');
     expect(r0.decision.kind === 'act' && r0.decision.why).toBe('recover');
     // 撃たれている間は 3 では殴らない。それでも逃げる手がまったく無ければ、追い詰められたとして殴る（cornered）
     const shot = newMemory(); shot.hurtFarAgo = 0;

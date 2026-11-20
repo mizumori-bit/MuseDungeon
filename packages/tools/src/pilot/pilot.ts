@@ -609,9 +609,11 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
     if (p.obs) { obs = p.obs; text = r.text; }
     if (p.turn) turn = p.turn;
     if (!r.ok || !p.obs) {
-      const o = await call('observe', {});
-      const op = o.data as { observation?: Observation; turn?: TurnBlock };
-      if (op.observation) { obs = op.observation; text = o.text; }
+      // 見直しの observe も、通信が切れて諦めた（connLost）ときは例外を外へ出さない（本体のループが safety で上げて終える。V4-1h の続きで見つけた:
+      // 断られた命令の直後に切れると、runPilot が例外で終わっていた）
+      const o = await call('observe', {}).catch(() => null);
+      const op = (o?.data ?? {}) as { observation?: Observation; turn?: TurnBlock };
+      if (op.observation && o) { obs = op.observation; text = o.text; }
       if (op.turn) turn = op.turn;
     }
     const steps = Math.max(0, turn.turn_no - before);
@@ -939,7 +941,11 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
       writeState();
       continue;
     }
-    if (aa.kind === 'fight') { fightStopped(typeof decision.args.target === 'string' ? decision.args.target : undefined, aa.reason, lastOutcome || obs.summary, aa); writeState(); continue; }
+    if (aa.kind === 'fight') {
+      // 立て直しの 3 の fight が倒す前に止まった: この立て直しの間は、その相手と fight しない（続きへ進む。V4-1h の続き）
+      if (decision.why === 'recover' && decision.tool === 'fight' && typeof decision.args.target === 'string' && !mem.recoverFought.includes(decision.args.target)) mem.recoverFought.push(decision.args.target);
+      fightStopped(typeof decision.args.target === 'string' ? decision.args.target : undefined, aa.reason, lastOutcome || obs.summary, aa); writeState(); continue;
+    }
     if (aa.kind === 'recover') { mem.recovering = true; note('recovering', lastOutcome || obs.summary); writeState(); continue; }
     if (aa.kind === 'notify') {
       // 同じ命令が同じ止まり方で 4 回止まったら stuck（階が変わったら数え直す）

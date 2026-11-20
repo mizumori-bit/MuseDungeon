@@ -6,6 +6,8 @@
 //   特技・加護   → 最初の候補
 //   動けない（refused_hostile_adjacent・refused_blocked） → じゃまをしている敵（detail の先頭の行）と戦う。罠にふさがれていたら帰る
 //   行き詰まり・やることが無い・目的の相手を諦めた・目的の相手が見つからない（target_not_found）・目的の階へ行けない（target_blocked）・立て直しの手が尽きた（recover_failed） → 帰る
+//   ただし行き詰まり（stuck）は、仲間が迷宮にいれば帰らない: その遠征の 1 回目は、いま戦っている相手を相手にしない（ignore）と答えて続ける。
+//   2 回目は答えない（同じやり取りが続けば、pilot の空回りの検知が上げる）。ソロと、仲間がキャンプにいるときは帰る（V4-1h の続き §27.5）
 //   （危ない（danger）は V4-1g から escalate なので、見本は答えない。pilot は自分で退く）
 //   同じ理由に同じ返事を 2 回続けない: 2 回目は「帰る」にする（V4-1g §24.3。返事役の記録は orders.json の隣の responder.json）（mode: return。階段から帰り、綱は階段へ着けないとき・途中で危ないときだけ。
 //                  そのために allow_lifeline: true にする。V4-1e §19.4。今までは綱を queue に書いていた）
@@ -30,6 +32,22 @@ export function simpleResponder(ev: WakeEvent): void {
   const next: PilotOrders = { ...cur, rev: cur.rev + 1, mode: 'auto', queue: [] as QueuedCommand[], policy: { ...cur.policy, ignore: [], unignore: [] } };
   const home = () => { next.mode = HOME; next.queue = []; next.policy.allow_lifeline = true; };
   const role = ev.reason.replace(/_hunting$/, '');
+  const memPath = join(dirname(ev.ordersPath), 'responder.json');
+  let last: { reason?: string; sig?: string; stuckExp?: number | null } = {};
+  try { if (existsSync(memPath)) last = JSON.parse(readFileSync(memPath, 'utf-8')) as typeof last; } catch { /* 壊れていれば無いものとする */ }
+  // 行き詰まり（stuck）で、仲間が迷宮にいる: 仲間を置いて帰らない（V4-1h の続き §27.5）
+  if (role === 'stuck' && (ev.state.party ?? []).some((m) => m.status === 'in_dungeon')) {
+    const exp = ev.state.expedition_no;
+    // この遠征で 2 回目: 答えない
+    if (last.stuckExp !== undefined && last.stuckExp === exp) return;
+    // 1 回目: いま戦っている相手（state.json の target。無ければ最後の命令の標的）を相手にしないと答えて続ける
+    const lastTarget = ev.state.last && (ev.state.last.tool === 'fight' || ev.state.last.tool === 'attack') && typeof ev.state.last.args.target === 'string' ? ev.state.last.args.target : null;
+    const target = ev.state.target?.id ?? lastTarget;
+    if (target) next.policy.ignore = [target];
+    writeJsonAtomic(memPath, { reason: ev.reason, sig: '', stuckExp: exp });
+    writeJsonAtomic(ev.ordersPath, next);
+    return;
+  }
   switch (role) {
     case 'camp': {
       const n = camps.get(ev.ordersPath) ?? 0;
@@ -68,11 +86,9 @@ export function simpleResponder(ev: WakeEvent): void {
       break;
   }
   // 同じ理由に同じ返事を 2 回続けない（V4-1g §24.3）: 前の返事と同じなら、2 回目は「帰る」にする。--wake-cmd では毎回別のプロセスなので、ファイルに残す
-  const memPath = join(dirname(ev.ordersPath), 'responder.json');
   const sigOf = (o: PilotOrders) => JSON.stringify({ mode: o.mode, queue: o.queue, policy: { ...o.policy, ignore: [], unignore: [] } });
-  let last: { reason?: string; sig?: string } = {};
-  try { if (existsSync(memPath)) last = JSON.parse(readFileSync(memPath, 'utf-8')) as typeof last; } catch { /* 壊れていれば無いものとする */ }
   if (role !== 'camp' && role !== 'perk_pending' && role !== 'boon_pending' && last.reason === ev.reason && last.sig === sigOf(next) && next.mode !== HOME) home();
-  writeJsonAtomic(memPath, { reason: ev.reason, sig: sigOf(next) });
+  // 行き詰まりに答えた遠征は覚えておく（キャンプを挟んでも、同じ遠征の中なら 2 回目に答えない）
+  writeJsonAtomic(memPath, { reason: ev.reason, sig: sigOf(next), stuckExp: role === 'camp' ? null : last.stuckExp ?? null });
   writeJsonAtomic(ev.ordersPath, next);
 }
