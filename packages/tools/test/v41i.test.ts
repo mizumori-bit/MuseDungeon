@@ -29,7 +29,7 @@ function mon(over: Partial<ObsMonster>): ObsMonster {
 }
 const ctx = (orders: PilotOrders = defaultOrders(), over: Partial<DecideContext> = {}): DecideContext => ({ orders, coop: false, waiting: false, acked: new Set(), text: '', ...over });
 const summary = (r: ReturnType<typeof decide>) => (r.decision.kind === 'wake' ? `${r.decision.wake.level}:${r.decision.wake.reason}` : r.decision.kind === 'act' ? `act:${r.decision.tool}:${JSON.stringify(r.decision.args)}` : r.decision.kind === 'end' ? `end:${r.decision.wake.level}` : `${r.decision.kind}${r.decision.kind === 'idle' && r.decision.wait ? `:${r.decision.wait}` : ''}`);
-const member = (o: Partial<ObsPartyMember>): ObsPartyMember => ({ id: 'p_h', name: 'H', controller: 'agent', order: 1, status: 'in_dungeon', floor: 3, hp: 'healthy', ...o });
+const member = (o: Partial<ObsPartyMember>): ObsPartyMember => ({ id: 'p_h', name: 'H', controller: 'agent', order: 1, status: 'in_dungeon', floor: 3, hp: 'healthy', last_act: 0, ...o });
 const lethal = { code: 'lethal_range', level: 'danger', text: '1 手で倒されうる: 追跡中の敵の 1 手の最悪の被害の合計 30 ≥ HP 12' } as unknown as Observation['alerts'][number];
 const upSt = { type: 'up' as const, pos: { x: 5, y: 10 }, dist: 15, reachable: true, path_len: 15 };
 const leaderMem = () => { const m = newMemory(); m.follow = { id: 'p_h', exp: 6, met: true, inDungeon: true, lastPos: null, lastFloor: 3, floorAtStart: 3, startTurn: 0 }; return m; };

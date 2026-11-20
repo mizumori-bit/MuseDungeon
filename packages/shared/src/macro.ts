@@ -1046,12 +1046,13 @@ function macroStep(state: MacroState, view: PlayerView, catalog: Catalog, events
   let path: Pos[] | null;
   if (kind === 'explore' && state.toward === 'sense') {
     // 気配の元（遠征の目的の遺物・守護者）が見えた・覚えている: 探索を続けずに止まる（travel_to で向かう。V3-5a 後の AI 評価）。
-    // 目的ではない守護者には反応しない（V3-7a 後の評価: 階に残っていた別の守護者で止まった）
+    // 目的ではない守護者には反応しない（V3-7a 後の評価: 階に残っていた別の守護者で止まった）。
+    // 目的でない遺物も数えない（V4-1j §30.5: 覚えているだけで断り、目的の守護者を探しに行けなかった）。目的かどうかは観測の objective（§12.2）
     const xo = view.expedition;
     const isObjectiveGuardian = (e: EntityView) => e.cat === 'monster' && e.role === 'guardian' && !!e.guardian
       && (xo?.objective.type === 'slay_warden' ? !!e.guardian.warden : !!xo?.guardian && e.guardian.name.ja === xo.guardian.name.ja && e.guardian.name.en === xo.guardian.name.en);
-    const found = view.entities.some((e) => (e.role === 'relic' && e.cat === 'item') || isObjectiveGuardian(e))
-      || view.memory.remembered.some((r) => r.role === 'relic');
+    const found = view.entities.some((e) => (e.cat === 'item' && e.role === 'relic' && !!e.objective) || (e.cat === 'monster' && !!e.objective) || isObjectiveGuardian(e))
+      || view.memory.remembered.some((r) => r.role === 'relic' && !!r.objective);
     if (found) return { stop: 'sense_found' };
   }
   if (kind === 'explore') {

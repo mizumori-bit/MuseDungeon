@@ -203,7 +203,7 @@ export class RunSession {
       if (r.ok) this.joinInfo.set(r.playerId, { ...(cmd.profile ? { profile: cmd.profile } : {}), ...(cmd.legacy ? { legacy: cmd.legacy.monsters } : {}) });
       return r.events;
     }
-    const r = step(this.world, this.deps.content, rec.player!, cmd, { cseq: rec.cseq, wall: rec.wall, thought: rec.thought });
+    const r = step(this.world, this.deps.content, rec.player!, cmd, { cseq: rec.cseq, wall: rec.wall, thought: rec.thought, auto: rec.source === 'timeout' || rec.source === 'system' });
     return r.events;
   }
 
@@ -540,7 +540,7 @@ export class RunSession {
     const startSeq = this.world.seq;
     const cseq = this.cseq + 1;
     const wall = Date.now();
-    const r = step(this.world, this.deps.content, pid, cmd, { cseq, wall, thought });
+    const r = step(this.world, this.deps.content, pid, cmd, { cseq, wall, thought, auto: source === 'timeout' || source === 'system' });
     if (!r.ok && !r.events.length) return { ok: false, error: r.error };
     this.cseq = cseq;
     // 呼び出しの記録は確定の前に（確定の中で遠征レポートが作られ、残る。V3-7 のプロフィールの更新）

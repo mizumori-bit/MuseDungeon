@@ -94,6 +94,8 @@ export interface PilotState {
   /** 仲間（観測の party の写し。V4-1f §22.4）と、ついていく相手の ID（§22.5。いなければ null） */
   party: ObsPartyMember[];
   follow: string | null;
+  /** だれについていくか（V4-1j §30.1）: ついていく相手、self（自分が先頭。だれにもついていかない）、null（ソロ・まだ仲間がいない） */
+  following: { id: string; name: string } | 'self' | null;
   /** いま戦っている相手と、倒す前に止まった回数（pilot の記録） */
   target: { id: string; stops: number } | null;
   /** 相手にしないと決めた敵の ID（pilot の記録。方針 ignore・unignore で書き換えられる） */
@@ -319,8 +321,10 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
   let closing = null as { reason: string; until: number } | null;
   /** 仲間の観測の写し（状態・階・見えていれば位置と HP）と、それが最後に変わった実時間（party_idle。§23.8） */
   let partySig = '';
-  /** 仲間ごとの、最後に見た状態・階・HP の段階・位置（見えていたときの）。V4-1i B5 */
-  const partyLast = new Map<string, { status: string; floor: number | null; hp: string | null; pos: [number, number] | null }>();
+  /** 仲間ごとの、最後に見た行動の数え（観測の party[].last_act。V4-1j §30.6） */
+  const partyLast = new Map<string, number>();
+  /** 知らせた「ついていく相手」（V4-1j §30.1。相手の ID か self） */
+  let followingNoted: string | null = null;
   let partyChangedAt = now();
   /** 上げた party_idle（仲間が最後に動いた時刻ごとに 1 回） */
   const partyIdleRaised = new Set<string>();
@@ -330,8 +334,9 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
   let returnDoneRev: number | null = null;
   // danger を上げて「帰る」に切り替えた（V4-1i §28.2 の 1）: 同じ rev の間は return（AI が rev を上げたら、そちらに従う。キャンプに着いたら終わり）
   const dangerHomeNow = () => mem.dangerHome !== null && mem.dangerHome === orders.rev && obs.status !== 'at_camp' && orders.mode === 'auto';
-  // 危ないときの「帰る」は、綱を使ってよい（§28.2 の 1「着けなければ綱」）
-  const effOrders = (): PilotOrders => (closing ? { ...orders, mode: 'stop_at_camp' } : dangerHomeNow() ? { ...orders, mode: 'return', policy: { ...orders.policy, allow_lifeline: true } } : orders.mode === 'return' && returnDoneRev === orders.rev ? { ...orders, mode: 'auto' } : orders);
+  // 危ないときの「帰る」（§28.2 の 1）。綱は、倒されうる間だけ、回復の手段の後に使う（判断の表の 7。V4-1j §30.2）。倒されうる状態でなくなった後の
+  // 帰り道は、方針の allow_lifeline のとおり（既定では綱を使わず、追われていても階段へ）
+  const effOrders = (): PilotOrders => (closing ? { ...orders, mode: 'stop_at_camp' } : dangerHomeNow() ? { ...orders, mode: 'return' } : orders.mode === 'return' && returnDoneRev === orders.rev ? { ...orders, mode: 'auto' } : orders);
   /** 同じ理由の wake に、返事役が同じ返事をした回数（遠征ごと。3 回を超えたら、次は stalled で上げる。V4-1e §19.3） */
   let streak = null as { exp: number | null; reason: string; sig: string; count: number } | null;
   /** 遠征ごとの、最後に起こした理由（history.jsonl に残す） */
@@ -387,6 +392,12 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
 
   const ignoredNow = () => [...new Set([...gaveUp, ...aiIgnored])];
   // 起こして返事を待つ間は、待っている起こし方を state.json に残す（持ち場の動きで書き直しても消えない）
+  /** だれについていくか（V4-1j §30.1）。協力プレイで、迷宮かキャンプに仲間がいるときだけ */
+  const followingNow = (): PilotState['following'] => {
+    if (!coop || !(obs.party ?? []).some((m) => m.status === 'in_dungeon' || m.status === 'at_camp')) return null;
+    const l = leaderOf(obs, orders.policy);
+    return l ? { id: l.id, name: l.name } : 'self';
+  };
   const stateOf = (status: PilotState['status'], w0: Wake | null): PilotState => { const w = w0 ?? waiting?.wake ?? null; return {
     run_id: runId, expedition_no: obs.expedition?.no ?? null, turn: turn.turn_no, orders_rev: orders.rev, status,
     wake: w ? { reason: w.reason, level: w.level, turn: turn.turn_no, detail: w.detail } : null,
@@ -399,6 +410,7 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
     traps: trapsNow().map((f) => ({ id: f.id!, name: f.name, pos: [f.pos.x, f.pos.y] as [number, number], dist: f.dist })),
     party: obs.party ?? [],
     follow: leaderOf(obs, orders.policy)?.id ?? null,
+    following: followingNow(),
     target: lastTarget && obs.visible.monsters.some((m) => m.id === lastTarget) ? { id: lastTarget, stops: mem.stops[lastTarget] ?? 0 } : null,
     ignored: ignoredNow(),
     recovering: mem.recovering,
@@ -537,7 +549,7 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
     const scope = scopeNow();
     if (scope !== memScope) {
       // 階を移っても、ついていく相手の記録は遠征の間残す
-      const keep = { recovering: mem.recovering, crossed: mem.crossed, follow: mem.follow, assisting: mem.assisting, assistArrived: mem.assistArrived, dangerHome: mem.dangerHome, dangerJoin: mem.dangerJoin, dangerJoinHp: mem.dangerJoinHp };
+      const keep = { recovering: mem.recovering, crossed: mem.crossed, follow: mem.follow, assisting: mem.assisting, assistArrived: mem.assistArrived, dangerHome: mem.dangerHome, dangerJoin: mem.dangerJoin, dangerJoinHp: mem.dangerJoinHp, dangerRecover: mem.dangerRecover };
       // 歩いたマスを残す（階を移るたび）
       saveMemory();
       mem = { ...newMemory(), ...keep };
@@ -545,7 +557,7 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
       visited = new Set();
       noProgress = 0;
       memScope = scope;
-      if (obs.expedition?.no !== Number(prev.scope.split(':')[0])) { aiIgnored.clear(); stairRetreats.clear(); mem.crossed = null; mem.recovering = false; mem.dangerHome = null; mem.dangerJoin = 'none'; mem.dangerJoinHp = 0; }
+      if (obs.expedition?.no !== Number(prev.scope.split(':')[0])) { aiIgnored.clear(); stairRetreats.clear(); mem.crossed = null; mem.recovering = false; mem.dangerHome = null; mem.dangerJoin = 'none'; mem.dangerJoinHp = 0; mem.dangerRecover = 'none'; }
     }
     mem.stairRetreats = stairRetreats.get(scope) ?? 0;
     const pos = obs.self.pos;
@@ -580,19 +592,10 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
         note('leave_floor', [lineWith(text, shooter.id), `相手にしないと決めた ${shooter.name} に撃たれた（HP ${prev.hp}→${obs.self.hp}）。階段でこの階（地下 ${d} 階）を出る。${again ? '戻ってまた撃たれたので、この遠征では戻らない' : '休んだ後に 1 回戻る'}`].filter(Boolean).join('\n'));
       }
     }
-    // 仲間の動き（§23.8）: 観測の party に出る項目が変わったら、その時刻を覚える。party_idle で上げて待っている間に動いたら、待つのをやめて知らせる。
-    // 位置は、前も今も見えているときだけ比べる（見え隠れは動きに数えない。V4-1i B5: pilot が探索している間も数えるようになったので、
-    // pilot の動きで仲間が見え隠れするたびに数え直さないようにした）。状態・階・HP の段階は、見えていなくても比べる
-    const moved = (obs.party ?? []).some((m) => {
-      const b0 = partyLast.get(m.id);
-      if (!b0) return true;
-      if (b0.status !== m.status || b0.floor !== (m.floor ?? null) || b0.hp !== (m.hp ?? null)) return true;
-      return !!m.pos && !!b0.pos && (b0.pos[0] !== m.pos[0] || b0.pos[1] !== m.pos[1]);
-    }) || partyLast.size !== (obs.party ?? []).length;
-    for (const m of obs.party ?? []) {
-      const b0 = partyLast.get(m.id);
-      partyLast.set(m.id, { status: m.status, floor: m.floor ?? null, hp: m.hp ?? null, pos: m.pos ?? b0?.pos ?? null });
-    }
+    // 仲間の動き（§23.8）: 仲間が行動したら（観測の party[].last_act が変わったら。V4-1j §30.6）、その時刻を覚える。party_idle で上げて待っている間に
+    // 動いたら、待つのをやめて知らせる。見えていない仲間・別の階の仲間も、last_act で分かる（V4-1i では状態・階・位置で代えていた）
+    const moved = (obs.party ?? []).some((m) => partyLast.get(m.id) !== m.last_act) || partyLast.size !== (obs.party ?? []).length;
+    for (const m of obs.party ?? []) partyLast.set(m.id, m.last_act);
     const sig = moved ? `${partySig.length}:${now()}` : partySig;
     if (sig !== partySig) {
       partySig = sig;
@@ -600,6 +603,20 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
       if (waiting?.reason === 'party_idle') {
         waiting = null;
         note('party_active', [lineWith(text, '仲間: '), '仲間が動いた。上げた party_idle の返事を待つのをやめて、続ける'].filter(Boolean).join('\n'));
+      }
+    }
+    // だれについていくかを知らせる（V4-1j §30.1）: 起動のときと、決まった・変わったとき。AI 同士の組では、先に入った者が先頭になる
+    {
+      const f = followingNow();
+      const fk = f === null ? null : f === 'self' ? 'self' : f.id;
+      if (fk !== null && fk !== followingNoted) {
+        followingNoted = fk;
+        const fl = orders.policy.coop.follow;
+        const ctl = (c: string) => (c === 'human' ? '人間' : c === 'agent' ? 'AI' : '不明');
+        const lm = f !== 'self' && f ? (obs.party ?? []).find((m) => m.id === f.id) : undefined;
+        note('following', f === 'self'
+          ? `自分が先頭（だれにもついていかない。coop.follow: ${fl}${fl === 'auto' ? '。auto は、人間の仲間がいなければ、参加がいちばん早い者を先頭にする' : ''}）。AI 同士で組むときは、手で遊ぶ側の名前を coop.follow に書く`
+          : `ついていく相手: ${f!.name}［${ctl(lm?.controller ?? 'unknown')}］（参加の順 ${lm?.order ?? '?'}。coop.follow: ${fl}）`, `following:${fk}:${turn.turn_no}`);
       }
     }
     // ついていく相手（V4-1f §22.5）: 遠征ごとに記録し直す。同じ階で見えた位置、この遠征で迷宮にいたか、同じ階にいたことがあるか
@@ -921,7 +938,7 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
       if (!partyIdleRaised.has(key)) {
         partyIdleRaised.add(key);
         wakeNow({ level: 'escalate', reason: 'party_idle', key, detail: [
-          `仲間が ${Math.floor((now() - partyChangedAt) / 60000)} 分、何もしていない（観測の party の状態・階・見えていれば位置と HP が変わらない）。pilot は待ち続ける（自分からは帰らない）。置いて帰るなら mode: "return"、待つのをやめて 1 人で動くなら policy.coop.follow: "none"`,
+          `仲間が ${Math.floor((now() - partyChangedAt) / 60000)} 分、何もしていない（観測の party[].last_act が変わらない）。pilot は待ち続ける（自分からは帰らない）。置いて帰るなら mode: "return"、待つのをやめて 1 人で動くなら policy.coop.follow: "none"`,
           lineWith(text, '仲間: '), obs.summary,
         ].filter(Boolean).join('\n') });
         continue;

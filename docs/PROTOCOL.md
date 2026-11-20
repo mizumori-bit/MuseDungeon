@@ -233,6 +233,7 @@ Observation {
     floor?: number                       // 迷宮にいるときの階（見えていなくても出す）
     hp?: HpState                         // 迷宮にいる仲間の HP の段階（V4-1g から、見えていなくても・別の階でも出す）
     pos?: [x, y], entity?: EntityId      // 同じ階にいて、見えているときだけ（entity は visible.players の id と同じ）
+    last_act: number                     // V4-1j: その仲間が自分で最後に行動した時点（その仲間の手番数で数える。ゲームの中の数えで、実時間ではない）。時間切れでゲームが代わりに待たせた手番は数えない。見えていなくても・別の階・キャンプでも出す。前の観測と同じなら、その間に自分では動いていない。何をしたか・どこにいるかは出さない
   }[]
   navigation: {
     here: string                         // 足元の地形・アイテム
@@ -376,7 +377,7 @@ EventBase {
 | | `entity_removed` | id, reason |
 | | `entity_moved` | id, from, to, mode: walk\|teleport\|swap\|knockback |
 | | `entity_changed_floor` | id, from, to |
-| | `actor_scheduled` | id, nextActAt（手番終了時） |
+| | `actor_scheduled` | id, nextActAt（手番終了時）, turns, acted?（V4-1j: 自分で出した命令で行動した） |
 | | `ai_state_changed` | id, state, targetPos |
 | 戦闘 | `attack` | attacker, target, roll, hit, crit（演出用。状態は変えない） |
 | | `damaged` / `healed` | target, amount, source, via（melee/ranged/thrown/poison/trap/effect）, hpAfter |
@@ -433,6 +434,12 @@ V3-2R で足した項目（同じく後方互換。会心と経験値のルー�
 - `StatusInst.source`（状態異常を与えた者。毒で倒したときの撃破者になる）、`status_applied.targetAffixes`
 - `player_state.reason: 'joined'`（キャンプから始まる参加）。参加コマンドの `atCamp`
 - プレイヤー向けの射影で、見えていた個体が視界の外へ動いた `entity_moved` に `dirOut`（向きだけ。行き先は伏せたまま）
+
+V4-1j で変えた項目（`engineVersion` 0.35.0。出来事の種類は増やしていないので `eventVersion` は 21 のまま。IMPROVEMENTS_V4 §30、DESIGN.md §38.10）:
+
+- 観測: `party[].last_act`（その仲間が自分で最後に行動した時点。その仲間の手番数で数え、World の状態（`PlayerRecord.lastAct`）から取る。見えていない仲間・別の階・キャンプの仲間にも出す。分かるのは「いつ動いたか」だけ）。文と人間の画面には出さない
+- 出来事: `actor_scheduled.acted?: true`（プレイヤーが自分で出した命令で行動した。時間切れの待機（`source: timeout`）と、サーバーが代わりに出した命令（`system`）には付かない）。`applyEvent` がこれで `PlayerRecord.lastAct` を書く。後方互換の項目（付いていない古い記録では、`last_act` は 0 のまま）。協力プレイで、離席した人間が同じ階にいると、時間切れで手番が進み続けるので、手番数そのものでは「動いていない」が分からなかった
+- マクロ: `explore toward: 'sense'` の `sense_found`（断る・止まる）は、この遠征の目的の相手・品（観測の `objective: true` の遺物・守護者・賞金首。守護者は名前が目的と同じものも）を見ている・覚えているときだけ。目的でない遺物を覚えているだけで断っていたのを直した（V3-7a 後の評価で決めた「目的の遺物・守護者だけ」のとおりにした）
 
 V4-1g で変えた項目（`engineVersion` 0.34.0。出来事の種類は増やしていないので `eventVersion` は 21 のまま。IMPROVEMENTS_V4 §24、DESIGN.md §38.7）:
 

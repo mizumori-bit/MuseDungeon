@@ -17,7 +17,7 @@ import { updateKnowledge } from './perception';
 import { advance, endTurn } from './scheduler';
 import { recomputeStats } from './stats';
 
-export const ENGINE_VERSION = '0.34.0';
+export const ENGINE_VERSION = '0.35.0';
 
 export interface CreateRunParams {
   runId: string;
@@ -166,13 +166,15 @@ function legacyMemory(content: Content, list: readonly LegacyMonster[]): Record<
   return out;
 }
 
-export function step(world: World, content: Content, playerId: PlayerId, cmd: Command, meta: { cseq: number | null; wall: number; thought?: string }): StepResult {
+/** meta.auto: 時間切れの待機・サーバーが代わりに出した命令（V4-1j §30.6。その手番は、仲間の last_act に数えない） */
+export function step(world: World, content: Content, playerId: PlayerId, cmd: Command, meta: { cseq: number | null; wall: number; thought?: string; auto?: boolean }): StepResult {
   const pr = world.players[playerId];
   if (!pr) return { ok: false, error: actionError('no_session', 'no such player', 'join_run / resume_run'), events: [] };
   const L = pr.locale;
   if (world.status === 'ended') return { ok: false, error: actionError('run_ended', t(L, 'ランは終了している。', 'The run has ended.'), t(L, 'new_run で新しいランを始める。', 'Start a new run with new_run.')), events: [] };
   if (MACRO_COMMANDS.has(cmd.type)) return { ok: false, error: actionError('bad_request', 'macro commands are expanded by the server', 'submit primitive commands'), events: [] };
   const ctx = new Ctx(world, content, meta.cseq, meta.wall);
+  if (!meta.auto) ctx.selfActor = pr.entityId;
   if (FREE_COMMANDS.has(cmd.type)) {
     const me = world.entities[pr.entityId];
     const fk = me.pos?.floor ?? null;

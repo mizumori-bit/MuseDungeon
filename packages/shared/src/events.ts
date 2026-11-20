@@ -50,7 +50,8 @@ export type GameEvent =
   | E<'entity_removed', { id: EntityId; kind: string; reason: string }>
   | E<'entity_moved', { id: EntityId; kind: string; from: Pos; to: Pos; mode: MoveMode }>
   | E<'entity_changed_floor', { id: EntityId; kind: string; from: FloorPos; to: FloorPos; nextActAt: number; dir: 'up' | 'down' }>
-  | E<'actor_scheduled', { id: EntityId; nextActAt: number; turns: number; regenAfter?: number }>
+  // acted: プレイヤーが自分で出した命令で行動した（V4-1j §30.6。時間切れの待機・サーバーが代わりに出した命令には付かない）
+  | E<'actor_scheduled', { id: EntityId; nextActAt: number; turns: number; regenAfter?: number; acted?: true }>
   | E<'ai_state_changed', { id: EntityId; ai: AiState; dormant: boolean; nextActAt: number }>
   // 戦闘
   | E<'attack', {

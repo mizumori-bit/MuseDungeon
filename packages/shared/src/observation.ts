@@ -215,6 +215,11 @@ export interface ObsPartyMember {
   id: string; name: string; controller: 'human' | 'agent' | 'unknown'; order: number;
   status: 'in_dungeon' | 'at_camp' | 'down' | 'left';
   floor?: number; pos?: [number, number]; hp?: HpState; entity?: string;
+  /**
+   * その仲間が自分で最後に行動した時点（V4-1j §30.6。その仲間の手番数で数える。ゲームの中の数えで、実時間ではない）。時間切れでゲームが代わりに
+   * 待たせた手番は数えない。見えていなくても出す。何をしたか・どこにいるかは出さない
+   */
+  last_act: number;
 }
 /** lair: 棲み処の地物（護りの火）の持ち主の守護者の呼び名（V3-3c §44.6） */
 /** id: travel_to で指せる（V3-8a §56.1 の 5） */
@@ -375,6 +380,7 @@ export function partyOf(view: PlayerView): ObsPartyMember[] {
       // HP の段階は、迷宮にいれば見えていなくても（V4-1g G3）。位置とエンティティは見えているときだけ
       ...(status === 'in_dungeon' && (p.hp ?? seen?.hp) ? { hp: (p.hp ?? seen?.hp)! } : {}),
       ...(seen ? { pos: [seen.pos.x, seen.pos.y] as [number, number], entity: seen.id } : {}),
+      last_act: p.lastAct,
     });
   });
   return out;

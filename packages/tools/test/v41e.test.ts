@@ -123,7 +123,10 @@ describe('V4-1e warden in the field (§19.2)', () => {
     const o = fieldObs({ monsters: [warden], objective: { type: 'slay_warden', target_depth: 5 } });
     expect(summary(decide(o, ctx()))).toBe('escalate:warden_decision:warden_decision:5');
     const e = decide(o, ctx(withPolicy({ warden: 'engage' })));
-    expect(e.decision.kind === 'act' && e.decision.tool === 'fight' && e.decision.args.target).toBe('e_ward01');
+    // 気付いていない大守護者が離れている: 先に隣へ寄る（fight は追ってくる相手を待つ手で、追っていない相手には始まらない。V4-1j の測り直しで直した）
+    expect(e.decision.kind === 'act' && `${e.decision.tool}:${String(e.decision.args.to)}`).toBe('travel_to:e_ward01');
+    const eh = decide(fieldObs({ monsters: [{ ...warden, awareness: 'hunting' }], objective: { type: 'slay_warden', target_depth: 5 } }), ctx(withPolicy({ warden: 'engage' })));
+    expect(eh.decision.kind === 'act' && eh.decision.tool === 'fight' && eh.decision.args.target).toBe('e_ward01');
     expect(e.notify.some((n) => n.level === 'wake' || n.level === 'escalate')).toBe(false);
     for (const c of [ctx(defaultOrders(), { once: new Set(['warden_decision:5']) }), ctx(withPolicy({ warden: 'avoid' }))]) {
       const r = decide(o, c);

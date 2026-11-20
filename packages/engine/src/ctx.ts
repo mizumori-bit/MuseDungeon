@@ -2,7 +2,7 @@
 // World を書き換えるのは applyEvent だけ（ここでも直接代入はしない）。
 import type { Content, TerrainDef } from '@muse/content';
 import type {
-  Entity, EventDraft, FloorKey, GameEvent, Locale, PlayerId, PlayerRecord, Pos, World,
+  Entity, EntityId, EventDraft, FloorKey, GameEvent, Locale, PlayerId, PlayerRecord, Pos, World,
 } from '@muse/shared';
 import { actorSeen, applyEvent, opaqueId, Rng } from '@muse/shared';
 
@@ -23,6 +23,8 @@ export class Ctx {
   readonly actsSeen = new Map<PlayerId, Map<string, number>>();
   /** フロアごとのエンティティ一覧（sid 順）。エンティティの増減・置換で無効化 */
   private floorEnts = new Map<FloorKey, Entity[]>();
+  /** この step で、自分で出した命令で行動するプレイヤーのエンティティ（V4-1j §30.6。時間切れ・サーバーが代わりに出した命令なら null） */
+  selfActor: EntityId | null = null;
 
   constructor(
     readonly world: World,
@@ -42,7 +44,13 @@ export class Ctx {
     return r;
   }
 
-  emit<D extends EventDraft>(draft: D): GameEvent {
+  emit<D extends EventDraft>(d0: D): GameEvent {
+    // 自分で出した命令で行動した（手番数が増えた）: actor_scheduled に acted を付ける（V4-1j §30.6。仲間の party[].last_act）
+    let draft = d0;
+    if (this.selfActor && d0.type === 'actor_scheduled') {
+      const a = d0 as unknown as { id: EntityId; turns: number };
+      if (a.id === this.selfActor && a.turns > (this.world.entities[a.id]?.actor?.turns ?? 0)) draft = { ...d0, acted: true };
+    }
     const floor = draft.floor !== undefined ? draft.floor : this.curFloor;
     const ft = draft.ft !== undefined ? draft.ft : this.now;
     const ev = { ...draft, seq: this.world.seq + 1, cause: this.cause, wall: this.wall, floor, ft } as unknown as GameEvent;

@@ -317,6 +317,11 @@ export interface PlayerRecord {
   legacy?: { kinds: number };
   /** 最後に extract した地点（次の遠征の再開地点） */
   extractPos?: FloorPos | null;
+  /**
+   * 自分で出した命令で最後に行動したときの手番数（V4-1j §30.6。actor_scheduled の acted から）。時間切れでゲームが代わりに待たせた手番
+   * （source: timeout）と、サーバーが代わりに出した命令（system）は数えない。まだ無ければ 0 とみなす
+   */
+  lastAct?: number;
 }
 
 export type PlayerState = 'alive' | 'dead' | 'left' | 'at_camp';

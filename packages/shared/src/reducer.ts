@@ -148,6 +148,7 @@ export function applyEvent(world: World, ev: GameEvent): void {
       e.actor!.nextActAt = ev.nextActAt;
       e.actor!.turns = ev.turns;
       if (ev.regenAfter !== undefined) e.actor!.regen = ev.regenAfter;
+      if (ev.acted && e.player && world.players[e.player]) world.players[e.player]!.lastAct = ev.turns;
       if (ev.floor && world.floors[ev.floor]?.currentActor === ev.id) world.floors[ev.floor].currentActor = null;
       break;
     }

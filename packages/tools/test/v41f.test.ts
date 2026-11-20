@@ -78,7 +78,7 @@ describe('V4-1f party[] and still_inside (§22.4)', () => {
     expect(w.floors[bFloor]!.depth).toBe(2);
     o = t.a.port.observe({}).observation;
     // 見えていない仲間: 階と HP の段階は出る（V4-1g G3）。位置とエンティティは出ない
-    expect(o.party[0]).toEqual({ id: bPid, name: 'B', controller: 'human', order: 2, status: 'in_dungeon', floor: 2, hp: 'healthy' });
+    expect(o.party[0]).toEqual({ id: bPid, name: 'B', controller: 'human', order: 2, status: 'in_dungeon', floor: 2, hp: 'healthy', last_act: w.entities[bE0.id]!.actor!.turns });
     expect(t.a.port.observe({}).text).toContain('仲間: B［人間］（地下 2 階・健康）');
     // 漏洩テスト: 仲間のいる階の敵・地物・アイテムの ID も、仲間の位置も出ない
     const json = JSON.stringify(t.a.port.observe({}));
@@ -144,7 +144,7 @@ function fieldObs(o: Over = {}): Observation {
 const ctx = (orders: PilotOrders = defaultOrders(), over: Partial<DecideContext> = {}): DecideContext => ({ orders, coop: false, waiting: false, acked: new Set(), text: '', ...over });
 const withPolicy = (p: Partial<PilotOrders['policy']>): PilotOrders => { const o = defaultOrders(); return { ...o, policy: { ...o.policy, ...p } }; };
 const summary = (r: ReturnType<typeof decide>) => (r.decision.kind === 'wake' ? `${r.decision.wake.level}:${r.decision.wake.reason}` : r.decision.kind === 'act' ? `act:${r.decision.tool}:${JSON.stringify(r.decision.args)}${r.decision.seek ? ':seek' : ''}` : `${r.decision.kind}${r.decision.kind === 'idle' && r.decision.wait ? `:${r.decision.wait}` : ''}`);
-const member = (o: Partial<ObsPartyMember>): ObsPartyMember => ({ id: 'p_b', name: 'B', controller: 'agent', order: 2, status: 'in_dungeon', floor: 3, ...o });
+const member = (o: Partial<ObsPartyMember>): ObsPartyMember => ({ id: 'p_b', name: 'B', controller: 'agent', order: 2, status: 'in_dungeon', floor: 3, last_act: 0, ...o });
 
 describe('V4-1f pilot: seeking the objective (§22.1)', () => {
   const up = { type: 'up' as const, pos: { x: 3, y: 10 }, dist: 17, reachable: true, path_len: 17 };

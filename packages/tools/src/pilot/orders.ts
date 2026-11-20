@@ -50,8 +50,13 @@ export interface PilotPolicy {
    * 品（使うと減る）は倒されうるのに退く手が無いときだけ。未鑑定の品には触れない
    */
   allow_heal: boolean;
-  /** 立て直しで、階段を使って階を移って休んでよいか（§14.3）。null＝ソロは true・協力プレイは false（仲間を置いていかない） */
+  /** 立て直しで、階段を使って階を移って休んでよいか（§14.3）。null＝ソロは true・協力プレイは false（同じ階に仲間が生きている間は移らない。V4-1j §30.4） */
   retreat_via_stairs: boolean | null;
+  /**
+   * 危ない（danger）を上げた後（V4-1j §30.3）: return＝その遠征は帰る（既定）/ recover＝立て直しの段へ。倒されうる状態でなくなったら続ける。
+   * 同じ遠征で 2 回目の danger は帰る
+   */
+  on_danger: 'return' | 'recover';
   /** queue の命令が失敗したとき: discard＝残りを捨てる（既定）/ skip＝失敗した命令だけ捨てて次へ。どちらも知らせるだけ（§14.5） */
   queue_on_fail: 'discard' | 'skip';
   /** 相手にしない敵の ID を足す・外す（§14.6。rev を上げたときに一度だけ効く） */
@@ -118,6 +123,7 @@ export const DEFAULT_POLICY: PilotPolicy = {
   allow_lifeline: false,
   allow_heal: true,
   retreat_via_stairs: null,
+  on_danger: 'return',
   queue_on_fail: 'discard',
   ignore: [],
   unignore: [],
@@ -178,6 +184,7 @@ export function parseOrders(raw: unknown): PilotOrders {
       allow_lifeline: bool(p.allow_lifeline, d.allow_lifeline),
       allow_heal: bool(p.allow_heal, d.allow_heal),
       retreat_via_stairs: typeof p.retreat_via_stairs === 'boolean' ? p.retreat_via_stairs : null,
+      on_danger: p.on_danger === 'recover' ? 'recover' : 'return',
       queue_on_fail: p.queue_on_fail === 'skip' ? 'skip' : 'discard',
       ignore: ids(p.ignore),
       unignore: ids(p.unignore),
