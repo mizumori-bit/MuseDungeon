@@ -6,7 +6,8 @@ import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
 import { loadContent } from '@muse/content';
-import type { Entity, ObsItem, ObsMonster, Observation } from '@muse/shared';
+import type { Entity, GameEvent, ObsItem, ObsMonster, Observation } from '@muse/shared';
+import { applyEvent } from '@muse/shared';
 import { createApp, loadConfig, SessionManager } from '@muse/server';
 import { afterAction, decide, DEFAULT_POLICY, defaultOrders, holdAction, newMemory, parseOrders, PILOT_TOOLS, retreat, runPilot } from '../src/index';
 import type { DecideContext, PilotMemory, PilotOrders, WakeEvent } from '../src/index';
@@ -141,6 +142,11 @@ describe('pilot の判断の表（§10.4〜§10.6）', () => {
     expect(r2.decision.kind === 'wake' && `${r2.decision.wake.level}:${r2.decision.wake.reason}:${r2.decision.wake.key}`).toBe('escalate:warden_decision:warden_decision:3');
     // 以下は挑むと決めた後（warden: engage）: 封じられた階段へは下りに行かず、表の先へ
     const ctxOfE = (o: PilotOrders = defaultOrders(), over: Partial<DecideContext> = {}) => ctxOf({ ...o, policy: { ...o.policy, warden: 'engage' } }, over);
+    // 挑むと決めた後、大守護者が見えていない: 封じられた階段のある広間へ向かう（V4-1f §22.1 の 3）
+    const rs = decide(obs, ctxOfE());
+    expect(rs.decision.kind === 'act' && `${rs.decision.tool}:${JSON.stringify(rs.decision.args.to)}:${rs.decision.seek}`).toBe('travel_to:{"x":9,"y":9}:true');
+    // 以下は広間の近くに着いた後
+    obs.navigation.known_stairs = [{ ...st, dist: 2, path_len: 2, sealed: true }];
     // collect は collectable の数だけで決める（valid_actions の文字列は見ない）
     obs.valid_actions = [...obs.valid_actions, 'collect what:items (x)'];
     expect(decide(obs, ctxOfE()).decision.kind === 'act' && (decide(obs, ctxOfE()).decision as { tool: string }).tool === 'collect').toBe(false);
@@ -739,8 +745,88 @@ describe('pilot をサーバーにつないで動かす（§10.8）', () => {
     await until(() => h.wakes.filter((w) => w.level === 'escalate').length > n0, 20000);
     expect(h.wakes.filter((w) => w.level === 'escalate').at(-1)!.reason).toBe('stalled');
     expect(starts()).toBe(hist.length);
+    // 再開は rev を上げるだけ（V4-1f §22.3）: queue を書かなくても、camp.auto_start のとおりに pilot が出発する。空回りの数えは 0 に戻る
+    const cur = readOrders(join(h.dir, 'orders.json'))!;
+    writeOrders(h, { ...cur, rev: cur.rev + 1, queue: [], camp: { auto_start: 'safe' } });
+    await until(() => rows(h.dir).some((r) => r.source === 'pilot' && r.tool === 'start_expedition' && r.ok === true), 20000);
+    expect(JSON.parse(readFileSync(join(h.dir, 'memory.json'), 'utf-8')).stall_base).toBe(hist.length);
     await p2.stop();
     await h.close();
+  }, 60000);
+
+  it('V4-1f §22.5: キャンプで仲間がまだ迷宮にいる間は、遠征を始めずに waiting_party で待つ（stuck・stalled にしない）。仲間が戻ったら camp で起こす', async () => {
+    const config = loadConfig({ port: 0, runsDir: null, profilesDir: null, waitOthersMs: 100 });
+    const manager = new SessionManager(content, config);
+    const app = createApp(manager, config);
+    await new Promise<void>((r) => app.server.listen(0, '127.0.0.1', () => r()));
+    const base = `http://127.0.0.1:${(app.server.address() as AddressInfo).port}`;
+    const r = await manager.createRun({ name: 'Pilot', seed: 'pilot-wait-party', classId: 'core:warrior', controller: { kind: 'agent', label: 'pilot' }, mode: 'coop', objective: 'auto' });
+    if ('error' in r) throw new Error(r.error.message);
+    r.session.world.meta.options.turnTimeoutMs = 200;
+    const b = await manager.joinRun(r.session.runId, { name: 'Ally', controller: { kind: 'human', label: 'ally' } });
+    if ('error' in b) throw new Error(b.error.message);
+    const dir = mkdtempSync(join(tmpdir(), 'muse-pilot-test-'));
+    // pilot は最初から帰る（mode: return）。仲間は迷宮に残る
+    writeFileSync(join(dir, 'orders.json'), JSON.stringify({ rev: 1, mode: 'return', policy: { allow_lifeline: true } }));
+    const h: Harness = { base, token: r.token, dir, wakes: [], close: async () => { manager.closeAll(); await new Promise<void>((r2) => app.server.close(() => r2())); } };
+    const p = start(h, { mode: 'coop' });
+    const w = r.session.world;
+    await until(() => w.players[r.port.playerId]!.state === 'at_camp', 30000);
+    await until(() => JSON.parse(readFileSync(join(h.dir, 'state.json'), 'utf-8')).status === 'waiting_party', 10000);
+    const st = JSON.parse(readFileSync(join(h.dir, 'state.json'), 'utf-8'));
+    expect(st.summary).toContain('仲間: Ally［人間］（地下 1 階）');
+    expect(st.party[0]).toMatchObject({ name: 'Ally', status: 'in_dungeon', floor: 1 });
+    const n0 = h.wakes.length;
+    await new Promise((res) => setTimeout(res, 800));
+    // 待つ間: 遠征を始めない・起こさない（camp・stuck・stalled も無い）
+    expect(rows(h.dir).some((x) => x.tool === 'start_expedition')).toBe(false);
+    expect(h.wakes.slice(n0).filter((x) => x.level !== 'notify')).toEqual([]);
+    // 仲間が戻る（階段の上で帰る）: 遠征が終わり、キャンプの候補で起こす
+    const bE = structuredClone(w.entities[w.players[b.port.playerId]!.entityId]!);
+    const f = w.floors[bE.pos!.floor]!;
+    const tv = w.meta.terrainTable.indexOf('core:stairs_down');
+    const i = f.terrain.findIndex((v) => v === tv);
+    bE.pos = { floor: bE.pos!.floor, x: i % f.width, y: Math.trunc(i / f.width) };
+    applyEvent(w, { type: 'thought', player: b.port.playerId, text: '', seq: w.seq + 1, cause: null, floor: null, ft: 0, wall: 0, seenBy: [], put: [bE] } as unknown as GameEvent);
+    await until(() => b.port.view().status === 'your_turn', 5000);
+    expect((await b.port.act({ type: 'extract', confirm: true }, { source: 'bot' })).ok).toBe(true);
+    await until(() => h.wakes.some((x) => x.reason === 'camp' && x.level === 'wake'), 15000);
+    await p.stop();
+    await h.close();
+  }, 60000);
+
+  it('V4-1f §22.5: 協力プレイの pilot 2 体（参加の順で 2 番目が 1 番目についていく）は、お互いを追って止まらず、後の者は先の階へ進まない', async () => {
+    const config = loadConfig({ port: 0, runsDir: null, profilesDir: null, waitOthersMs: 100 });
+    const manager = new SessionManager(content, config);
+    const app = createApp(manager, config);
+    await new Promise<void>((r) => app.server.listen(0, '127.0.0.1', () => r()));
+    const base = `http://127.0.0.1:${(app.server.address() as AddressInfo).port}`;
+    const a = await manager.createRun({ name: 'A', seed: 'pilot-two', classId: 'core:warrior', controller: { kind: 'agent', label: 'pilot' }, mode: 'coop', objective: 'auto' });
+    if ('error' in a) throw new Error(a.error.message);
+    a.session.world.meta.options.turnTimeoutMs = 2000;
+    const b = await manager.joinRun(a.session.runId, { name: 'B', classId: 'core:scout', controller: { kind: 'agent', label: 'pilot' } });
+    if ('error' in b) throw new Error(b.error.message);
+    const mk = (token: string): Harness => ({ base, token, dir: mkdtempSync(join(tmpdir(), 'muse-pilot-test-')), wakes: [], close: async () => undefined });
+    const ha = mk(a.token), hb = mk(b.token);
+    const w = a.session.world;
+    const depthOf = (pid: string) => { const e = w.entities[w.players[pid]!.entityId]; return w.players[pid]!.state === 'alive' && e?.pos ? w.floors[e.pos.floor]!.depth : null; };
+    const samples: { a: number | null; b: number | null }[] = [];
+    const timer = setInterval(() => samples.push({ a: depthOf(a.port.playerId), b: depthOf(b.port.playerId) }), 30);
+    const pa = start(ha, { responder: simpleResponder, mode: 'coop', maxActions: 300 });
+    const pb = start(hb, { responder: simpleResponder, mode: 'coop', maxActions: 300 });
+    await until(() => rows(ha.dir).filter((x) => x.tool).length >= 60 && rows(hb.dir).filter((x) => x.tool).length >= 60, 50000);
+    clearInterval(timer);
+    await pa.stop();
+    await pb.stop();
+    // B の state.json: ついていく相手は A
+    expect(JSON.parse(readFileSync(join(hb.dir, 'state.json'), 'utf-8')).follow).toBe(a.port.playerId);
+    expect(JSON.parse(readFileSync(join(ha.dir, 'state.json'), 'utf-8')).follow).toBeNull();
+    // 両方が迷宮にいた間、B が A より深い階にいたことはほとんど無い（A が上った直後だけ）
+    const both = samples.filter((x) => x.a !== null && x.b !== null);
+    expect(both.length).toBeGreaterThan(10);
+    expect(both.filter((x) => x.b! > x.a!).length / both.length).toBeLessThan(0.1);
+    manager.closeAll();
+    await new Promise<void>((r2) => app.server.close(() => r2()));
   }, 60000);
 
   it('V4-1e §19.5: 目的でない遺物は、ランを通して 1 回だけ知らせる（pilot を起動し直しても、memory.json の記録で知らせない）', async () => {

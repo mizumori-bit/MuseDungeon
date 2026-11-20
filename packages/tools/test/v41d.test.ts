@@ -72,7 +72,7 @@ describe('V4-1d blocked_by_traps (§18.1)', () => {
     const res = await act(a, { type: 'travel', to: { x: a.ox + 6, y: a.oy } });
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error.hint).toContain(`The poison dart trap at (${a.ox + 1},${a.oy}) blocks the way.`);
-    expect(ENGINE_VERSION).toBe('0.32.0');
+    expect(ENGINE_VERSION >= '0.32.0').toBe(true);
     a.manager.closeAll();
   });
 });

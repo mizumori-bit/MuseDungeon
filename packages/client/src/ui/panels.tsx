@@ -393,6 +393,33 @@ export function MonstersPanel({ monsters, hp, onFight, throwSlotFor, reach, onRe
   );
 }
 
+/**
+ * 遊ぶ人の画面の仲間（V4-1f §22.4。観測の party と同じ）: 名前・人間か AI か・どの階にいるか（キャンプ・倒れている）。
+ * 位置と HP は、同じ階にいて見えているときだけ
+ */
+export function ObsPartyPanel({ party }: { party: Observation['party'] }) {
+  if (!party?.length) return null;
+  const HP: Record<string, [string, string]> = { healthy: ['健康', 'healthy'], wounded: ['軽傷', 'wounded'], badly_wounded: ['重傷', 'badly wounded'], near_death: ['瀕死', 'near death'] };
+  return (
+    <section class="panel">
+      <h3>{tr('仲間', 'Party')}</h3>
+      <ul class="party">
+        {party.map((m) => (
+          <li key={m.id}>
+            <span class="dot" style={{ background: PLAYER_COLORS[(m.order - 1) % PLAYER_COLORS.length] }} />
+            <b>{m.name}</b> <span class={`tag ${m.controller}`}>{m.controller === 'agent' ? 'AI' : tr('人間', 'human')}</span>
+            <div class="sub">
+              {m.status === 'in_dungeon'
+                ? <>{m.floor !== undefined ? tr(`地下 ${m.floor} 階`, `B${m.floor}`) : ''}{m.pos ? <span class="muted"> {tr('見えている', 'in view')} ({m.pos[0]},{m.pos[1]}) {m.hp ? tr(HP[m.hp][0], HP[m.hp][1]) : ''}</span> : null}</>
+                : <span class={`pstate ${m.status}`}>{m.status === 'at_camp' ? tr('キャンプ', 'at camp') : m.status === 'down' ? tr('倒れている', 'down') : tr('ランを抜けた', 'left')}</span>}
+            </div>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 export function PartyPanel({ world, catalog, follow, onFollow }: { world: World; catalog: Catalog; follow: string | null; onFollow?: (pid: string) => void }) {
   const L = getLocale();
   return (

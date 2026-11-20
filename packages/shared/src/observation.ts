@@ -203,6 +203,16 @@ export interface ObsMilestone { depth: number; name: string; types: { id: string
 /** 加護の一覧（V3-3 §3.3）。used: 遠征に 1 回の加護をこの遠征で使った */
 export interface ObsBoon { id: string; name: string; desc: string; used?: boolean }
 export interface ObsPlayer { id: string; name: string; pos: Pos; dir: Dir | null; dist: number; hp_state: HpState }
+/**
+ * 自分以外の参加者（V4-1f §22.4。参加の順）。仲間のいる階とキャンプにいるかどうかは、いつでも分かる（同じ遠征を一緒に進める相手で、隠す理由が無い）。
+ * pos・hp・entity は、同じ階にいて見えているときだけ（entity は visible.players の id）。order: 参加の順（1 から。自分の番号は抜けている番号）。
+ * 仲間のいる階の地形・敵は渡さない
+ */
+export interface ObsPartyMember {
+  id: string; name: string; controller: 'human' | 'agent'; order: number;
+  status: 'in_dungeon' | 'at_camp' | 'down' | 'left';
+  floor?: number; pos?: [number, number]; hp?: HpState; entity?: string;
+}
 /** lair: 棲み処の地物（護りの火）の持ち主の守護者の呼び名（V3-3c §44.6） */
 /** id: travel_to で指せる（V3-8a §56.1 の 5） */
 export interface ObsFeature { id?: string; type: string; name: string; pos: Pos; dir: Dir | null; dist: number; state?: string; lair?: string }
@@ -268,6 +278,8 @@ export interface Observation {
   };
   /** items_omitted: 記憶の中の遠いアイテムのうち省いた件数 */
   visible: { monsters: ObsMonster[]; items: ObsItem[]; players: ObsPlayer[]; features: ObsFeature[]; items_omitted?: number };
+  /** 自分以外の参加者（V4-1f §22.4。ソロのランでは空の配列） */
+  party: ObsPartyMember[];
   navigation: {
     here: string;
     passable_dirs: Dir[];
@@ -345,6 +357,34 @@ export function relLabel(locale: Locale, from: Pos, to: Pos): string {
 }
 
 const HP_JA: Record<HpState, string> = { healthy: '健康', wounded: '軽傷', badly_wounded: '重傷', near_death: '瀕死' };
+
+/** 自分以外の参加者（V4-1f §22.4）。階と状態は view.party（いつでも）、位置と HP は見えている者（view.entities）からだけ */
+export function partyOf(view: PlayerView): ObsPartyMember[] {
+  const out: ObsPartyMember[] = [];
+  view.party.forEach((p, i) => {
+    if (p.playerId === view.playerId) return;
+    const status: ObsPartyMember['status'] = p.state === 'alive' ? 'in_dungeon' : p.state === 'at_camp' ? 'at_camp' : p.state === 'dead' ? 'down' : 'left';
+    const seen = status === 'in_dungeon' ? view.entities.find((e) => e.cat === 'player' && e.id === p.entityId) : undefined;
+    out.push({
+      id: p.playerId, name: p.name, controller: p.controller.kind === 'human' ? 'human' : 'agent', order: i + 1, status,
+      ...(status === 'in_dungeon' && p.depth !== null ? { floor: p.depth } : {}),
+      ...(seen ? { pos: [seen.pos.x, seen.pos.y] as [number, number], hp: seen.hp ?? 'healthy', entity: seen.id } : {}),
+    });
+  });
+  return out;
+}
+
+/** 仲間の 1 行（V4-1f §22.4。「仲間: ○○（地下 1 階）、△△（キャンプ）」） */
+export function partyText(L: Locale, party: readonly ObsPartyMember[]): string {
+  if (!party.length) return '';
+  const one = (m: ObsPartyMember) => {
+    const where = m.status === 'in_dungeon' ? (m.floor !== undefined ? t(L, `地下 ${m.floor} 階`, `depth ${m.floor}`) : t(L, '迷宮', 'in the dungeon'))
+      : m.status === 'at_camp' ? t(L, 'キャンプ', 'at camp') : m.status === 'down' ? t(L, '倒れている', 'down') : t(L, 'ランを抜けた', 'left the run');
+    const seen = m.pos ? t(L, `・見えている (${m.pos[0]},${m.pos[1]}) ${HP_JA[m.hp ?? 'healthy']}`, `, in view (${m.pos[0]},${m.pos[1]}) ${m.hp ?? 'healthy'}`) : '';
+    return `${m.name}${m.controller === 'human' ? t(L, '［人間］', ' [human]') : ''}（${where}${seen}）`;
+  };
+  return t(L, `仲間: ${party.map(one).join('、')}`, `Party: ${party.map(one).join(', ')}`);
+}
 const AW_JA: Record<string, string> = { asleep: '睡眠中', unaware: '未察知', hunting: '追跡中' };
 
 export function itemDisplayName(catalog: Catalog, locale: Locale, kind: string | null, appearanceId: string | null, affixes: readonly string[] = []): string {
@@ -1432,6 +1472,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       ...(boonChoiceObs ? { boon_choice: boonChoiceObs } : {}),
     },
     visible: { monsters, items, players, features, ...(itemsOmitted ? { items_omitted: itemsOmitted } : {}) },
+    party: partyOf(view),
     navigation: { here, passable_dirs, frontiers, known_stairs, collectable: { count: collectIds.length, ids: collectIds }, ...(view.memory.unsighted?.length ? { unsighted: view.memory.unsighted.length } : {}) },
     recent_events: (opts.recent ?? []).map((e) => e.text).filter((s) => s.length > 0).slice(-10),
     valid_actions,
@@ -1775,6 +1816,8 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
   if (obs.status === 'at_camp') {
     // キャンプ専用の形: 成績と候補だけ
     lines.push(`[seq ${obs.seq} | ${t(L, 'キャンプ', 'Camp')} | HP ${s.hp}/${s.max_hp} | Lv${s.level} | ${statusText.at_camp[L === 'en' ? 1 : 0]}]`);
+    const pt = partyText(L, obs.party ?? []);
+    if (pt) lines.push(pt);
     if (obs.expedition?.result) lines.push(obs.expedition.result.text);
     // 直前の遠征の比較（1 行。目標の宣言は V3-8 §53.5 で外した）
     if (obs.camp?.compare?.lines.length) lines.push(obs.camp.compare.lines[0]);
@@ -1804,6 +1847,11 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
   const floorText = s.floor ? t(L, `地下${s.floor.depth}階 ${s.floor.biome_name}${ftText}`, `Depth ${s.floor.depth} ${s.floor.biome_name}${ftText}`) : '-';
   const posText = s.pos ? t(L, `位置(${s.pos.x},${s.pos.y})`, `pos(${s.pos.x},${s.pos.y})`) : '';
   lines.push(`[seq ${obs.seq} | ${floorText} | HP ${s.hp}/${s.max_hp} | Lv${s.level} | ${posText ? posText + ' | ' : ''}${statusText[obs.status][L === 'en' ? 1 : 0]}]`);
+  // 仲間（V4-1f §22.4）
+  {
+    const pt = partyText(L, obs.party ?? []);
+    if (pt) lines.push(pt);
+  }
   // 遠征は 1 行（目的・進捗・extract の可否 | 戦利品 | 気配）
   if (obs.expedition) {
     const x = obs.expedition;

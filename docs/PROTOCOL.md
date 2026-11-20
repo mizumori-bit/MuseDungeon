@@ -29,6 +29,7 @@ ActionError {
   details?: {
     blocked_by?: EntityId[]   // V4-1a: じゃまをしている敵（hostile_adjacent・blocked。そのプレイヤーに見えている敵だけ。hint にも名前）
     blocked_by_traps?: { id: EntityId; kind: string; pos: Pos }[]   // V4-1d: 道をふさいでいる罠（マクロの blocked。そのプレイヤーが見つけている罠だけ。経路の上で近い順。hint にも名前と位置）
+    still_inside?: { id: PlayerId; name: string; floor: number }[]  // V4-1f: start_expedition が断られたとき、まだ迷宮にいる仲間と、その階（hint にも名前と階）
   }
 }
 ```
@@ -226,6 +227,12 @@ Observation {
     players:  { id, name, pos, dir, dist, hp_state }[]
     features: { type, pos, dir, dist, state? }[]   // 階段・扉・泉・発見済みの罠 など
   }
+  party: {                             // V4-1f: 自分以外の参加者（参加の順）。ソロのランでは空の配列
+    id: PlayerId, name, controller: 'human' | 'agent', order: number   // order: 参加の順（1 から。自分の番号は、抜けている番号）
+    status: 'in_dungeon' | 'at_camp' | 'down' | 'left'                 // 迷宮にいる・キャンプにいる・倒れている・ランを抜けた
+    floor?: number                       // 迷宮にいるときの階（見えていなくても出す）
+    pos?: [x, y], hp?: HpState, entity?: EntityId   // 同じ階にいて、見えているときだけ（entity は visible.players の id と同じ）
+  }[]
   navigation: {
     here: string                         // 足元の地形・アイテム
     passable_dirs: Dir[]
@@ -422,6 +429,11 @@ V3-2R で足した項目（同じく後方互換。会心と経験値のルー�
 - `StatusInst.source`（状態異常を与えた者。毒で倒したときの撃破者になる）、`status_applied.targetAffixes`
 - `player_state.reason: 'joined'`（キャンプから始まる参加）。参加コマンドの `atCamp`
 - プレイヤー向けの射影で、見えていた個体が視界の外へ動いた `entity_moved` に `dirOut`（向きだけ。行き先は伏せたまま）
+
+V4-1f で足した項目（`engineVersion` 0.33.0。出来事の種類は増やしていないので `eventVersion` は 21 のまま。IMPROVEMENTS_V4 §22、DESIGN.md §38.6）:
+
+- 観測: `party[]`（自分以外の参加者。名前・人間か AI か・参加の順・迷宮にいるか・キャンプにいるか・倒れているか・抜けたか、迷宮にいれば階。位置・HP の段階・エンティティ ID は同じ階で見えているときだけ）。仲間のいる階の地形・敵は渡さない。ソロのランでは空の配列。文に 1 行（「仲間: ○○（地下 1 階）、△△（キャンプ）」）。人間の画面にも同じ表示
+- エラー: `start_expedition` が、仲間がまだ迷宮にいるために断られるとき、`details.still_inside: { id, name, floor }[]` と、hint に名前と階（「○○がまだ地下 1 階にいる。遠征は全員が戻るまで続く」）
 
 V4-1d で足した項目（`engineVersion` 0.32.0。出来事の種類は増やしていないので `eventVersion` は 21 のまま。IMPROVEMENTS_V4 §18、DESIGN.md §38.4）:
 

@@ -8,14 +8,35 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import type { Observation, TurnBlock } from '@muse/shared';
+import type { ObsPartyMember, Observation, Pos, TurnBlock } from '@muse/shared';
 import { readFeed } from '../drive';
-import { afterAction, decide, fightArgs, isRoleEnemy, lineWith, MOVE_TOOLS, newMemory, NOTIFY_STOPS, type PilotMemory, type TrapBlock, type TrapRef, trapLines, type Wake, type WakeLevel } from './decide';
+import { afterAction, decide, fightArgs, isRoleEnemy, leaderOf, lineWith, MOVE_TOOLS, newMemory, NOTIFY_STOPS, type PilotMemory, type TrapBlock, type TrapRef, trapLines, type Wake, type WakeLevel } from './decide';
 import { defaultOrders, parseOrders, type PilotOrders, type QueuedCommand, writeJsonAtomic } from './orders';
 
 /** 遠征ごとの結果（--dir の history.jsonl。1 遠征 1 行。V4-1e §19.3） */
-/** banked: 確定した点（遠征の結果の payout。ソロなら自分の分、協力プレイなら参加者の合計）。result.points（達成したときの基礎点）ではない */
-export interface HistoryRow { no: number; slot: string | null; objective: { type: string; target_depth: number | null }; turns: number; banked: number; end: string; last_wake: string | null }
+/**
+ * banked: 確定した点（遠征の結果の payout。ソロなら自分の分、協力プレイなら参加者の合計）。result.points（達成したときの基礎点）ではない。
+ * slain・met・dealt・taken（V4-1f §22.2）: 目的の守護者を倒したか、目的の相手に会えたか（見えたか）、目的の相手に見た被害の最大、自分が受けた被害の合計
+ */
+export interface HistoryRow { no: number; slot: string | null; objective: { type: string; target_depth: number | null }; turns: number; banked: number; end: string; last_wake: string | null; slain?: boolean; met?: boolean; dealt?: number; taken?: number }
+/**
+ * 大守護者のもう一度の相談（V4-1f §22.2）: warden: engage にした時点（history の engageSince 行目）より後で、大守護者を目的にして倒さずに終わった遠征。
+ * retryAfter 回以上なら、その遠征と大守護者の階を返す（上げる）。無ければ null
+ */
+export function wardenRetry(history: readonly HistoryRow[], engageSince: number, retryAfter: number): { depth: number; tries: HistoryRow[] } | null {
+  const tries = history.slice(engageSince).filter((h) => h.objective.type === 'slay_warden' && !h.slain);
+  const depth = tries.at(-1)?.objective.target_depth;
+  return depth != null && tries.length >= retryAfter ? { depth, tries } : null;
+}
+/** wardenRetry で上げるときの detail */
+export function wardenRetryDetail(r: { depth: number; tries: readonly HistoryRow[] }, self: { level: number; hp: number; max_hp: number }): string {
+  return [
+    `節目の大守護者（地下 ${r.depth} 階）に挑むと決めた後、倒さずに ${r.tries.length} 回の遠征が終わった。続けて挑むなら orders.json の rev を上げる（policy.warden は "engage" のまま）、やめるなら "avoid"`,
+    ...r.tries.map((h) => `遠征 ${h.no}: ${h.end}・相手に${h.met ? '会えた' : '会えなかった'}・相手に見た被害 ${h.dealt ?? 0}・受けた被害 ${h.taken ?? 0}・${h.turns} 手番`),
+    `レベル ${self.level}・HP ${self.hp}/${self.max_hp}`,
+  ].join('\n');
+}
+
 /** 同じ理由の wake に、返事役が同じ返事を続けた回数を数えない理由（1 回きりの選択。§19.3） */
 const STREAK_SKIP = new Set(['camp', 'perk_pending', 'boon_pending', 'orders_invalid']);
 
@@ -47,7 +68,8 @@ export interface PilotState {
   expedition_no: number | null;
   turn: number;
   orders_rev: number;
-  status: 'running' | 'waiting' | 'holding' | 'camp' | 'ended';
+  /** waiting_party: キャンプで、仲間が迷宮から戻るのを待っている（V4-1f §22.5。行き詰まりにも空回りにも数えない） */
+  status: 'running' | 'waiting' | 'holding' | 'camp' | 'waiting_party' | 'ended';
   /** level: notify / wake（返事役が答えてよい）/ escalate（返事役は答えない。AI か人間へ回す。V4-1e §19.1） */
   wake: { reason: string; level: WakeLevel; turn: number; detail: string } | null;
   /** いま効いている mode（return は、キャンプに着いたら同じ rev の間 auto。V4-1e §19.4） */
@@ -63,6 +85,9 @@ export interface PilotState {
   stairs: Observation['navigation']['known_stairs'];
   /** 今の階で見つけている罠（観測の visible.features のうち、公開カタログの分類が罠のもの。見えている罠と覚えている罠。V4-1d §18.1） */
   traps: { id: string; name: string; pos: [number, number]; dist: number }[];
+  /** 仲間（観測の party の写し。V4-1f §22.4）と、ついていく相手の ID（§22.5。いなければ null） */
+  party: ObsPartyMember[];
+  follow: string | null;
   /** いま戦っている相手と、倒す前に止まった回数（pilot の記録） */
   target: { id: string; stops: number } | null;
   /** 相手にしないと決めた敵の ID（pilot の記録。方針 ignore・unignore で書き換えられる） */
@@ -152,13 +177,24 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
   const onceKeys = new Set<string>();
   /** queue の命令のうち、済ませた数（その rev の。起動し直したときに、済ませた命令をくり返さない） */
   let savedQueue: { rev: number; done: number } | null = null;
+  /** 階（深さ）ごとの、pilot が立ったマス（遠征をまたぐ。見回りの行き先。V4-1f §22.1）。1 階につき 400 まで */
+  const walked = new Map<string, Pos[]>();
+  /** 空回りの数え始め（history の何行目から数えるか。stalled に返事が来たら 0 に戻す。§22.3）と、warden: engage にした時点（§22.2） */
+  let stallBase = 0;
+  let engageSince: number | null = null;
   try {
-    const m = JSON.parse(readFileSync(memoryPath, 'utf-8')) as { once?: string[]; queue?: { rev: number; done: number } };
+    const m = JSON.parse(readFileSync(memoryPath, 'utf-8')) as { once?: string[]; queue?: { rev: number; done: number }; walked?: Record<string, [number, number][]>; stall_base?: number; engage_since?: number | null };
     for (const k of m.once ?? []) onceKeys.add(k);
     if (m.queue && typeof m.queue.rev === 'number' && typeof m.queue.done === 'number') savedQueue = m.queue;
+    for (const [d, cells] of Object.entries(m.walked ?? {})) walked.set(d, cells.map(([x, y]) => ({ x, y })));
+    if (typeof m.stall_base === 'number') stallBase = m.stall_base;
+    if (typeof m.engage_since === 'number') engageSince = m.engage_since;
   } catch { /* 無い・壊れている */ }
   let queueMark: { rev: number; done: number } | null = savedQueue;
-  const saveMemory = () => writeJsonAtomic(memoryPath, { run_id: runId, once: [...onceKeys], ...(queueMark ? { queue: queueMark } : {}) });
+  const saveMemory = () => writeJsonAtomic(memoryPath, {
+    run_id: runId, once: [...onceKeys], ...(queueMark ? { queue: queueMark } : {}), stall_base: stallBase, engage_since: engageSince,
+    walked: Object.fromEntries([...walked].map(([d, cells]) => [d, cells.map((c) => [c.x, c.y])])),
+  });
   const history: HistoryRow[] = [];
   try { for (const l of readFileSync(historyPath, 'utf-8').split('\n')) if (l.trim()) history.push(JSON.parse(l) as HistoryRow); } catch { /* 無い */ }
   log(`[pilot] run ${runId}, files in ${dir}`);
@@ -201,6 +237,10 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
   /** 起こして返事を待っている（rev が変わるまで）。homeward: hold_max_turns が過ぎて帰る側へ倒した */
   /** farDamage: 起こしてから、隣でない相手から受けた被害の合計（最大 HP の 4 分の 1 を超えたら帰る側へ倒す。V4-1c §17.4） */
   let waiting = null as { key: string; also: string[]; reason: string; sinceTurn: number; cond: boolean; homeward: boolean; wake: Wake; farDamage: number } | null;
+  /** キャンプで、仲間が迷宮から戻るのを待っている（V4-1f §22.5） */
+  let waitingParty = false;
+  /** この遠征の記録（history.jsonl の met・dealt・taken。V4-1f §22.2） */
+  let expTrack = { no: null as number | null, met: false, dealt: 0, taken: 0 };
   /** mode: return でキャンプに着いた rev（同じ rev の間は auto として扱う。V4-1e §19.4） */
   let returnDoneRev: number | null = null;
   const effOrders = (): PilotOrders => (orders.mode === 'return' && returnDoneRev === orders.rev ? { ...orders, mode: 'auto' } : orders);
@@ -260,15 +300,17 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
     hostiles: obs.visible.monsters.map((m) => ({ id: m.id, name: m.name, pos: [m.pos.x, m.pos.y] as [number, number], dist: m.dist, hp_state: m.hp_state, hunting: m.awareness === 'hunting' && !m.fleeing, role: m.role ?? (isRoleEnemy(m) ? 'elite' : null), objective: !!m.objective, ignored: ignoredNow().includes(m.id) })),
     stairs: obs.navigation.known_stairs,
     traps: trapsNow().map((f) => ({ id: f.id!, name: f.name, pos: [f.pos.x, f.pos.y] as [number, number], dist: f.dist })),
+    party: obs.party ?? [],
+    follow: leaderOf(obs, orders.policy)?.id ?? null,
     target: lastTarget && obs.visible.monsters.some((m) => m.id === lastTarget) ? { id: lastTarget, stops: mem.stops[lastTarget] ?? 0 } : null,
     ignored: ignoredNow(),
     recovering: mem.recovering,
     ...(obs.status === 'at_camp' && obs.camp ? { camp: { next_no: obs.camp.next_no, offers: obs.camp.offers.map((o) => ({ index: o.index, slot: o.slot ?? null, type: o.type, target_depth: o.target_depth, points: o.points, recommended_level: o.recommended_level, text: o.text })),
       ...(obs.camp.milestone ? { milestone: { depth: obs.camp.milestone.depth, name: obs.camp.milestone.name, cleared: obs.camp.milestone.cleared } } : {}) } } : {}),
     // 観測の文の行をそのまま（pilot は言い換えない）: 状態の 1 行・直前の結果・起こした理由の行
-    summary: [obs.summary, lastOutcome, w?.detail ?? ''].filter(Boolean).join('\n'),
+    summary: [obs.summary, lineWith(text, '仲間: '), lastOutcome, w?.detail ?? ''].filter(Boolean).join('\n'),
   }; };
-  const statusNow = (): PilotState['status'] => obs.status === 'at_camp' ? 'camp' : waiting ? (coop ? 'holding' : 'waiting') : 'running';
+  const statusNow = (): PilotState['status'] => obs.status === 'at_camp' ? (waitingParty && !waiting ? 'waiting_party' : 'camp') : waiting ? (coop ? 'holding' : 'waiting') : 'running';
   /** state.json は、中身が変わったときだけ書き直す（返事を待つ間に毎回書き直すと、Windows で、読みに来た相手や相手の orders.json の置き換えとぶつかる。V4-1e の --wake-cmd のテストで分かった） */
   let lastStateJson = '';
   const writeState = () => {
@@ -352,6 +394,9 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
       const exp = obs.expedition?.no ?? null;
       streak = streak && streak.exp === exp && streak.reason === waiting.reason && streak.sig === sig ? { ...streak, count: streak.count + 1 } : { exp, reason: waiting.reason, sig, count: 1 };
     } else if (waiting && waiting.wake.level === 'escalate') streak = null;
+    // 空回り（stalled）に返事が来た: rev が上がっただけでも再開し、空回りの数えを 0 に戻す（V4-1f §22.3）。大守護者の相談の返事なら、engage の数え直し（§22.2）
+    if (waiting && waiting.reason === 'stalled') { stallBase = history.length; saveMemory(); }
+    if (waiting && waiting.reason === 'warden_decision') { engageSince = next.policy.warden === 'engage' ? history.length : null; saveMemory(); }
     orders = next;
     queue = [...next.queue];
     queueRetries = 0;
@@ -370,7 +415,10 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
   const observeMemory = () => {
     const scope = scopeNow();
     if (scope !== memScope) {
-      const keep = { recovering: mem.recovering, crossed: mem.crossed };
+      // 階を移っても、ついていく相手の記録は遠征の間残す
+      const keep = { recovering: mem.recovering, crossed: mem.crossed, follow: mem.follow };
+      // 歩いたマスを残す（階を移るたび）
+      saveMemory();
       mem = { ...newMemory(), ...keep };
       gaveUp = new Set();
       visited = new Set();
@@ -383,6 +431,30 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
     if (pos) {
       const lastPos = mem.trail[mem.trail.length - 1];
       if (!lastPos || lastPos.x !== pos.x || lastPos.y !== pos.y) { mem.trail.push({ x: pos.x, y: pos.y }); if (mem.trail.length > 60) mem.trail.shift(); }
+      // この階で立ったマス（遠征をまたぐ。見回りの行き先。V4-1f §22.1）
+      const d = String(obs.self.floor?.depth ?? '');
+      const cells = walked.get(d) ?? [];
+      if (!cells.some((c) => c.x === pos.x && c.y === pos.y)) { cells.push({ x: pos.x, y: pos.y }); if (cells.length > 400) cells.shift(); walked.set(d, cells); }
+    }
+    // この遠征の記録（目的の相手に会えたか・見た被害・受けた被害。V4-1f §22.2）
+    const xno = obs.expedition && obs.status !== 'at_camp' ? obs.expedition.no : null;
+    if (xno !== null) {
+      if (expTrack.no !== xno) expTrack = { no: xno, met: false, dealt: 0, taken: 0 };
+      for (const m of obs.visible.monsters.filter((mm) => mm.objective)) { expTrack.met = true; expTrack.dealt = Math.max(expTrack.dealt, m.damage_seen ?? 0); }
+      if (prev.scope.split(':')[0] === String(xno) && obs.self.hp < prev.hp) expTrack.taken += prev.hp - obs.self.hp;
+    }
+    // ついていく相手（V4-1f §22.5）: 遠征ごとに記録し直す。同じ階で見えた位置、この遠征で迷宮にいたか、同じ階にいたことがあるか
+    const leader = obs.status !== 'at_camp' ? leaderOf(obs, orders.policy) : null;
+    if (!leader) mem.follow = null;
+    else {
+      if (!mem.follow || mem.follow.id !== leader.id || mem.follow.exp !== xno) mem.follow = { id: leader.id, exp: xno, met: false, inDungeon: false, lastPos: null, lastFloor: leader.floor ?? null, floorAtStart: leader.floor ?? null, startTurn: turn.turn_no };
+      const f = mem.follow;
+      const myDepth = obs.self.floor?.depth ?? null;
+      if (leader.status === 'in_dungeon') f.inDungeon = true;
+      if (leader.floor !== undefined && leader.floor === myDepth) f.met = true;
+      if ((leader.floor ?? null) !== f.lastFloor) f.lastPos = null;
+      f.lastFloor = leader.floor ?? null;
+      if (leader.pos) f.lastPos = { x: leader.pos[0], y: leader.pos[1] };
     }
     // 隣でない相手から被害を受けた: HP が減ったのに、前にも今にも起きている敵が隣にいない（観測の構造化された項目だけで決める。§14.9）
     const adjAwake = obs.visible.monsters.some((m) => m.dist <= 1 && m.awareness !== 'asleep');
@@ -513,9 +585,19 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
       const x = obs.expedition;
       const pay = (x.result as { payout?: { banked: number; players: { banked: number }[] } }).payout;
       const banked = pay ? (pay.players.length === 1 ? pay.players[0]!.banked : pay.banked) : 0;
-      const row: HistoryRow = { no: x.no, slot: x.slot ?? null, objective: { type: x.objective.type, target_depth: x.objective.target_depth }, turns: x.result!.turns, banked, end: x.result!.reason, last_wake: lastWakeOf.get(x.no) ?? null };
+      const tr = expTrack.no === x.no ? expTrack : { met: false, dealt: 0, taken: 0 };
+      const row: HistoryRow = { no: x.no, slot: x.slot ?? null, objective: { type: x.objective.type, target_depth: x.objective.target_depth }, turns: x.result!.turns, banked, end: x.result!.reason, last_wake: lastWakeOf.get(x.no) ?? null,
+        slain: !!x.progress.guardian_slain, met: tr.met, dealt: tr.dealt, taken: tr.taken };
       history.push(row);
       appendFileSync(historyPath, `${JSON.stringify(row)}\n`);
+      // 大守護者に挑むと決めた後、倒さずに warden_retry_after 回終わった: もう一度上げる（V4-1f §22.2。返事が来るまでキャンプで待つ）
+      if (orders.policy.warden === 'engage') {
+        if (engageSince === null) engageSince = history.length - 1;
+        const wr = wardenRetry(history, engageSince, orders.policy.warden_retry_after);
+        const key = wr ? `warden_decision:${wr.depth}:retry:${engageSince}:${wr.tries.length}` : '';
+        if (wr && !onceKeys.has(key)) wakeNow({ level: 'escalate', reason: 'warden_decision', key, detail: wardenRetryDetail(wr, obs.self) });
+      } else engageSince = null;
+      saveMemory();
     }
     // 他の人の番（協力プレイ）: 次の手番を待つ
     if (turn.state === 'waiting_others') {
@@ -584,7 +666,7 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
     mem.ignored = ignoredNow();
     // 空回り（V4-1e §19.3）: キャンプで、直近の stall_after 回の遠征がどれも「確定 0」か「10 手番以内」
     const n = orders.policy.stall_after;
-    const recent = history.slice(-n);
+    const recent = history.slice(stallBase).slice(-n);
     const stalled = obs.status === 'at_camp' && n > 0 && recent.length >= n && recent.every((h) => h.banked === 0 || h.turns <= 10)
       ? [`直近 ${n} 回の遠征が、どれも確定 0 か 10 手番以内に終わった（空回り）。次の遠征を自動で始めずに止まる。続けるなら queue に start_expedition を書く（方針を変えるなら policy も）:`,
         ...recent.map((h) => `遠征 ${h.no}（${h.slot ?? '-'}・${h.objective.type}${h.objective.target_depth !== null ? ` 地下 ${h.objective.target_depth} 階` : ''}）: ${h.turns} 手番・確定 ${h.banked}・${h.end}・最後に起こした理由 ${h.last_wake ?? 'なし'}`)].join('\n')
@@ -593,6 +675,7 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
     for (const h of history) if (h.objective.type === 'slay_warden' && h.objective.target_depth !== null) wardenTries[String(h.objective.target_depth)] = (wardenTries[String(h.objective.target_depth)] ?? 0) + 1;
     const { decision, active, notify, update } = decide(obs, {
       orders: effOrders(), coop, waiting: !!waiting, homeward: !!waiting?.homeward, acked, text, once: onceKeys, stalled, wardenTries,
+      walked: walked.get(String(obs.self.floor?.depth ?? '')) ?? [], turnNo: turn.turn_no,
       refused: refused.tools, refusedTargets: refused.targets, refusal: refused.last, notified: new Set(notified.keys()), mem,
       trapBlock: refused.trap, throwKinds,
     });
@@ -621,15 +704,35 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
       else if (!reloadOrders()) await sleep(pollMs);
       continue;
     }
+    waitingParty = decision.kind === 'idle' && decision.wait === 'party';
     if (decision.kind === 'idle') {
-      // ソロで起こして待つ間、追ってくる敵も被害も無い: 何もせずに返事を待つ
       writeState();
+      // キャンプで仲間を待つ（V4-1f §22.5）: 仲間の動きを待って観測を取り直す（返事の orders.json も見る）
+      if (decision.wait === 'party') {
+        if (!reloadOrders()) {
+          await waitFeed(1000);
+          const o = await call('observe', {}).catch(() => null);
+          const op = o?.data as { observation?: Observation; turn?: TurnBlock } | undefined;
+          if (op?.observation) { obs = op.observation; text = o!.text; }
+          if (op?.turn) turn = op.turn;
+          observeMemory();
+        }
+        continue;
+      }
+      // ソロで起こして待つ間、追ってくる敵も被害も無い: 何もせずに返事を待つ
       if (!reloadOrders()) await sleep(pollMs);
       continue;
     }
     const before = turn.turn_no;
     const relicLine = decision.relic ? lineWith(text, decision.relic) : '';
     const r = await act(decision.tool, decision.args, 'pilot');
+    // 探す手（V4-1f §22.1）: 使った手番を数え、立ったマスを覚える。見回り先へ着けなかったら、この階ではもう行かない
+    if (decision.seek) {
+      mem.seekTurns += Math.max(1, turn.turn_no - before);
+      if (obs.self.pos) mem.seekVisited.push({ x: obs.self.pos.x, y: obs.self.pos.y });
+      const to = decision.args.to as { x?: number; y?: number } | undefined;
+      if (decision.tool === 'travel_to' && to && typeof to.x === 'number' && typeof to.y === 'number' && (!r.ok || (r.stop && NOTIFY_STOPS.has(r.stop)))) mem.patrolFailed.push({ x: to.x, y: to.y });
+    }
     // 目的でない遺物を拾いに行った（pick_relics。V4-1e §19.5）: 着いて見えなくなった（拾った）なら知らせる。道が無い等なら、この階ではもう行かない
     if (decision.relic) {
       if (r.ok && !obs.visible.items.some((i) => i.id === decision.relic) && (!r.stop || r.stop === 'arrived')) note('relic_picked', relicLine || decision.relic, `relic_picked:${decision.relic}`);

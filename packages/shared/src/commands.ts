@@ -148,7 +148,8 @@ export interface ActionError {
   hint: string;
   /** blocked_by: じゃまをしている敵の ID（hostile_adjacent・blocked。そのプレイヤーに見えている敵だけ。V4-1a §12.3） */
   /** blocked_by_traps: 道をふさいでいる罠（マクロの blocked。そのプレイヤーが見つけている罠だけ。経路の上で近い順。V4-1d §18.1） */
-  details?: { blocked_by?: string[]; blocked_by_traps?: { id: string; kind: string; pos: { x: number; y: number } }[] };
+  /** still_inside: start_expedition が断られたとき、まだ迷宮にいる仲間と、その階（V4-1f §22.4） */
+  details?: { blocked_by?: string[]; blocked_by_traps?: { id: string; kind: string; pos: { x: number; y: number } }[]; still_inside?: { id: string; name: string; floor: number }[] };
 }
 
 export function actionError(code: ActionErrorCode, message: string, hint: string): ActionError {

@@ -1,6 +1,6 @@
 # pilot — 代行 bot の作例
 
-AI のプレイヤーとゲームの間に置く、小さな常駐プログラムです（設計は `docs/IMPROVEMENTS_V4.md` §10、§14・§18・§19 で見直し）。
+AI のプレイヤーとゲームの間に置く、小さな常駐プログラムです（設計は `docs/IMPROVEMENTS_V4.md` §10、§14・§18・§19・§22 で見直し）。
 
 - **速いループ（pilot）**: 1 手ずつ速く動かす。探索する、追ってくる雑魚と戦う、階段を上り下りする、拾う、休む。決着しない戦いを諦める、HP が減ったら立て直す。
 - **遅いループ（AI）**: pilot に起こされたときだけ、要約（`state.json`）を読んで方針（`orders.json`）を書き直す。
@@ -81,7 +81,14 @@ npm.cmd run pilot -- --token <player_token> --wake-cmd "node my-ai.mjs"
     "hold_max_turns": 40,          // 起こしてからこの手番が過ぎても返事が無ければ、階段へ行って帰る側へ倒す
     "warden": "escalate",          // 節目の大守護者: "escalate"＝その大守護者につき 1 回上げる / "engage"＝起こさずに挑む / "avoid"＝挑まない
     "stall_after": 3,              // 直近のこの回数の遠征が、どれも確定 0 か 10 手番以内なら空回り: 次を始めずに上げる（0＝見ない）
-    "pick_relics": false           // 目的でない遺物も、追ってくる敵が見えていないときに拾う（拾うと階が起きる）
+    "pick_relics": false,          // 目的でない遺物も、追ってくる敵が見えていないときに拾う（拾うと階が起きる）
+    "seek_max_turns": 150,         // 目的の階で目的の相手・品が見えていないとき、探す手番の上限（使っても見つからなければ target_not_found で起こす）
+    "warden_retry_after": 2,       // warden: "engage" にした後、大守護者を倒さずにこの回数の遠征が終わったら、もう一度上げる
+    "coop": {                      // 協力プレイで仲間と一緒に動く
+      "follow": "auto",            // "auto"＝人間の仲間、いなければ参加がいちばん早い者（自分がそれなら、だれにもついていかない）/ "none" / 仲間の名前か ID
+      "follow_distance": 8,        // 同じ階で、これより離れたら寄る
+      "wait_for_party": true       // 遠征の最初に、相手が同じ階に来るまで待つ
+    }
   },
   "camp": { "auto_start": null }   // null＝キャンプでは必ず起こす / "safe"・"standard"・"ambitious"＝その枠で自動で出発
 }
@@ -105,7 +112,7 @@ npm.cmd run pilot -- --token <player_token> --wake-cmd "node my-ai.mjs"
 ```jsonc
 {
   "run_id": "…", "expedition_no": 23, "turn": 1234, "orders_rev": 3,
-  "status": "running",             // "running" / "waiting"（起こして待っている）/ "holding"（協力プレイで持ち場）/ "camp" / "ended"
+  "status": "running",             // "running" / "waiting"（起こして待っている）/ "holding"（協力プレイで持ち場）/ "camp" / "waiting_party"（キャンプで、仲間が迷宮から戻るのを待っている）/ "ended"
   "wake": { "reason": "guardian_seen", "level": "wake", "turn": 1230, "detail": "- 守護者ゴブリン［目的］ [守護者] e_y04fyo (35,18) 東2南4 …" },   // level: "notify" / "wake" / "escalate"
   "mode": "auto",                   // いま効いている mode（"return" でキャンプに着いた後は "auto"）
   "self": { "level": 26, "hp": 213, "max_hp": 213, "floor": 16, "pos": [22, 4] },
@@ -114,6 +121,8 @@ npm.cmd run pilot -- --token <player_token> --wake-cmd "node my-ai.mjs"
   "hostiles": [{ "id": "e_y04fyo", "name": "守護者ゴブリン", "pos": [35, 18], "dist": 4, "hp_state": "healthy", "hunting": true, "role": "guardian", "objective": true, "ignored": false }],
   "stairs": [{ "type": "up", "pos": { "x": 3, "y": 8 }, "dist": 12, "reachable": true, "path_len": 14 }],   // 観測の known_stairs そのまま（sealed も）
   "traps": [{ "id": "e_trp001", "name": "毒矢の罠", "pos": [13, 13], "dist": 1 }],   // 今の階で見つけている罠（見えている罠と覚えている罠。公開カタログの分類で罠と分かる地物）
+  "party": [{ "id": "p_u6ez", "name": "…", "controller": "human", "order": 1, "status": "in_dungeon", "floor": 1, "pos": [12, 8], "hp": "wounded", "entity": "e_…" }],   // 観測の party の写し（協力プレイの仲間。pos・hp・entity は同じ階で見えているときだけ）
+  "follow": "p_u6ez",               // ついていく相手の ID（いなければ null）
   "target": { "id": "e_1vc5a5", "stops": 1 },   // いま戦っている相手と、決着しないまま止まった回数
   "ignored": ["e_1vc5a5"],          // 相手にしないと決めた敵
   "recovering": false,              // 立て直しの段の途中か
@@ -129,11 +138,11 @@ npm.cmd run pilot -- --token <player_token> --wake-cmd "node my-ai.mjs"
 
 ### history.jsonl（pilot が追記する。1 遠征 1 行）
 
-キャンプに着くたびに、終えた遠征を 1 行足します: `{ "no", "slot", "objective": { "type", "target_depth" }, "turns", "banked"（確定した点）, "end"（終わり方）, "last_wake"（最後に起こした理由）}`。空回り（`stall_after`）と、大守護者に挑んだ回数（`warden_decision` の `detail`）に使います。
+キャンプに着くたびに、終えた遠征を 1 行足します: `{ "no", "slot", "objective": { "type", "target_depth" }, "turns", "banked"（確定した点）, "end"（終わり方）, "last_wake"（最後に起こした理由）, "slain"（目的の守護者を倒したか）, "met"（目的の相手に会えたか）, "dealt"（目的の相手に見た被害）, "taken"（受けた被害）}`。空回り（`stall_after`）と、大守護者に挑んだ回数・もう一度の相談（`warden_decision` の `detail`）に使います。
 
 ### memory.json（pilot が書く）
 
-ランを通して 1 回だけのことの記録（知らせた目的でない遺物・守護者・強敵、上げた大守護者）と、済ませた `queue` の数です。pilot を止めて起動し直しても、同じ遺物を知らせ直したり、済んだ命令を出し直したりしないためのものです。
+ランを通して 1 回だけのことの記録（知らせた目的でない遺物・守護者・強敵、上げた大守護者）と、済ませた `queue` の数、階ごとの立ったマス（見回りの行き先）、空回りと大守護者の相談の数え始めです。pilot を止めて起動し直しても、同じ遺物を知らせ直したり、済んだ命令を出し直したりしないためのものです。
 
 `pilot-data/` は `.gitignore` に入っています。
 
@@ -144,7 +153,7 @@ npm.cmd run pilot -- --token <player_token> --wake-cmd "node my-ai.mjs"
 | # | 条件 | すること |
 |---|---|---|
 | 1 | ランが終わった | 起こして（`ended`）終える |
-| 2 | キャンプにいる | 空回りなら上げる（`stalled`。下）。選べる候補が大守護者に挑むか節目の先へ行くものだけなら、`warden` のとおり（`escalate`: その大守護者につき 1 回上げる。`avoid`・上げた後: 空回りとして上げて待つ）。そうでなければ `camp.auto_start` の枠で出発（大守護者に関わる候補は `warden: "engage"` のときだけ）。無ければ起こす（`camp`。遠征のレポートの要点と候補の文つき）。`stop_at_camp` なら終える |
+| 2 | キャンプにいる | 遠征の途中で仲間がまだ迷宮にいれば、遠征を始めずに待つ（`waiting_party`。行き詰まりにも空回りにも数えない）。空回りなら上げる（`stalled`。下）。選べる候補が大守護者に挑むか節目の先へ行くものだけなら、`warden` のとおり（`escalate`: その大守護者につき 1 回上げる。`avoid`・上げた後: 空回りとして上げて待つ）。そうでなければ `camp.auto_start` の枠で出発（大守護者に関わる候補は `warden: "engage"` のときだけ）。無ければ起こす（`camp`。遠征のレポートの要点と候補の文つき）。`stop_at_camp` なら終える |
 | 3 | `orders.json` の `rev` が変わった | 読み直す。`mode: "stop"` なら終える |
 | 4 | `queue` に命令がある | 先頭を 1 つ実行する |
 | 5 | 起こして返事を待っている・`mode: "hold"` | 持ち場の動き（下） |
@@ -158,11 +167,13 @@ npm.cmd run pilot -- --token <player_token> --wake-cmd "node my-ai.mjs"
 | — | 相手にしない敵が、起きていて隣にいる | 1 回殴る |
 | 12 | 追ってくる敵（追跡中・逃げていない・「動かない」でない。相手にしない敵を除く）がいる | いちばん近い敵に `fight`（寄り方は `approach`。待つ間に撃ってきた相手が見えていれば、その相手から）。倒す前に止まったら知らせて続ける（下の「決着しない戦い」） |
 | — | 移動が、見つけている罠にふさがれて断られた（エラーの `details.blocked_by_traps`） | `step_on_traps: true` なら、隣の罠を 1 歩の `move` で踏む（`stepped_on_trap` を知らせる。隣でなければ罠の隣まで行く）。`false`（既定）なら踏まずに表の次の行へ（何も残らなければ、罠の行・位置・方角を添えて `refused_blocked` で起こす） |
+| — | 協力プレイで、ついていく相手がいる（`coop.follow`） | 相手が別の階: 自分からは先へ進まず、相手の階へ行く（遠征の最初は、相手が同じ階に来るまで待つ: `wait_for_party`）。同じ階で `follow_distance` より離れた: 相手の隣へ。見えない: 最後に見た位置へ。近い: いつもどおり（階段は相手が先に移ってから）。相手がキャンプに帰った: 自分も帰る。やることが無ければ待つ |
 | 13 | 敵がいなくて HP が `rest_below_pct` を切っている | 休む（`rest`） |
 | 14 | 目的を果たした（`after_objective: "extract"`）・`return`・`stop_at_camp`・大守護者に挑まない | 帰る（上の帰り方の順。階段を知らなければ探して探索する）。`"wake"` なら起こす、`"continue"` なら先へ |
 | 15 | 目的の階より深い所にいる／浅い所にいる | 上り階段で上がる／封じられていない下り階段で下りる（踏破の目的なら、目的の階の下り階段まで） |
 | 16 | 引数なしの `collect` が拾いに行く品がある（観測の `navigation.collectable`） | `collect` |
-| 17 | 探索できる所が残っている | `explore`（目的の階より浅くて下り階段を知らなければ、下への風の方角へ） |
+| 17 | 探索できる所が残っている | `explore`（目的の階より浅くて下り階段を知らなければ、下への風の方角へ。目的の階で目的の相手・品を探している間は、気配の方角へ） |
+| — | 目的の階で、目的の相手（守護者・大守護者・賞金首）か目的の品が見えていない（探す） | 大守護者なら封じられた下り階段の広間へ。探索し終えた階は見回る（この階で立ったことのあるマスのうち、探し始めてから行っていない、いちばん遠い所。気配があればその方角を先に）。`seek_max_turns` を使っても見つからない・見回る所が無ければ起こす（`target_not_found`） |
 | 18 | 何も残っていない | 起こす（`nothing_to_do`。命令が断られて残らなかったなら `refused_<code>`） |
 
 - 相手にしない敵が見えている間は、`explore`・`travel_to`・`collect` を被害を受けても止まらない進み方（`mode: steady`）で使います。1 回の呼び出しの被害が最大 HP の 4 分の 1 を超えると止まり、立て直しの段へ移ります。
@@ -205,7 +216,7 @@ npm.cmd run pilot -- --token <player_token> --wake-cmd "node my-ai.mjs"
 
 起こしてから、隣でない相手から受けた被害の合計が最大 HP の 4 分の 1 を超えたとき（撃たれ続けている。ゲームの `steady` が止まる線と同じ）も、`hold_max_turns` を待たずに同じく帰る側へ倒します（`under_fire` を知らせる）。
 
-**空回り**（V4-1e）: 直近の `stall_after` 回の遠征が、どれも「確定 0」か「10 手番以内に終わった」なら、次の遠征を自動で始めずに、キャンプで上げます（`stalled`。`detail` に遠征の一覧と、それぞれの最後の起こした理由）。遠征の中でも、同じ理由の `wake` に返事役が同じ返事を 3 回続けたら、4 回目は返事役に渡さずに上げます（`stalled`）。返事役と pilot の間で、同じやり取りが回り続けるのを止めるためです。
+**空回り**（V4-1e）: 直近の `stall_after` 回の遠征が、どれも「確定 0」か「10 手番以内に終わった」なら、次の遠征を自動で始めずに、キャンプで上げます（`stalled`。`detail` に遠征の一覧と、それぞれの最後の起こした理由）。pilot は自分では再開しません。再開は `orders.json` の `rev` を上げるだけで足ります（`queue` は要りません。空回りの数えは 0 に戻り、`camp.auto_start` があればそのとおりに出発します。無ければ `camp` で起こします）。`stall_after: 0` で、空回りの検知を切れます。遠征の中でも、同じ理由の `wake` に返事役が同じ返事を 3 回続けたら、4 回目は返事役に渡さずに上げます（`stalled`）。返事役と pilot の間で、同じやり取りが回り続けるのを止めるためです。
 
 ## 起こす理由・知らせる理由
 
@@ -215,7 +226,7 @@ npm.cmd run pilot -- --token <player_token> --wake-cmd "node my-ai.mjs"
 
 | 理由 | いつ |
 |---|---|
-| `warden_decision` | 節目の大守護者に挑むかを決めてほしい（`warden: "escalate"` のとき、その大守護者につき 1 回）: キャンプで選べる候補が大守護者に挑むか節目の先へ行くものだけ・目的の階がこの階の封じられた階段の先・大守護者が見えた。`detail` に大守護者の名前と階、候補の見込みの文、レベル・推奨のレベル・HP・持ち物の行、それまでに挑んだ遠征の数。返事は `policy.warden` を `"engage"` か `"avoid"` に |
+| `warden_decision` | 節目の大守護者に挑むかを決めてほしい（`warden: "escalate"` のとき、その大守護者につき 1 回）: キャンプで選べる候補が大守護者に挑むか節目の先へ行くものだけ・目的の階がこの階の封じられた階段の先・大守護者が見えた。`detail` に大守護者の名前と階、候補の見込みの文、レベル・推奨のレベル・HP・持ち物の行、それまでに挑んだ遠征の数。返事は `policy.warden` を `"engage"` か `"avoid"` に。`"engage"` にした後、倒さずに `warden_retry_after` 回の遠征が終わったときも、もう一度上げる（`detail` にその遠征の終わり方・相手に会えたか・相手に見た被害・受けた被害。返事が来るまでキャンプで待つ） |
 | `stalled` | 空回り（上の「空回り」）。`warden: "avoid"` のまま選べる候補が尽きたときも |
 | `safety` | 安全装置に達した（pilot を終える） |
 
@@ -230,7 +241,8 @@ npm.cmd run pilot -- --token <player_token> --wake-cmd "node my-ai.mjs"
 | `danger` | 危ないのに、退く手も立て直す手も無い |
 | `gave_up` | この遠征の目的の相手と、決着しないまま（または HP の下限で）`give_up_after` 回止まった |
 | `objective_done` | 遠征の目的を果たした（`after_objective: "wake"` のとき） |
-| `nothing_to_do` | 表に当てはまるものが何も残っていない（探索し終えたのに目的の相手が見つからない、など） |
+| `target_not_found` | 目的の階で目的の相手・品を探したが見つからない（`seek_max_turns` を使った・見回る所が残っていない） |
+| `nothing_to_do` | 表に当てはまるものが何も残っていない |
 | `refused_<code>` | 命令が断られて、表に残るものが無い（`refused_hostile_adjacent`: 隣の起きている敵がじゃまで動けない、`refused_blocked`: 経路が敵か罠にふさがれている、など）。ふさいでいる罠（エラーの `details.blocked_by_traps`）は「道をふさぐ罠: <観測の行>（方角 e・隣）」の行で、じゃまをしている敵（`details.blocked_by`）は観測の行で、`detail` の先頭に添え、ほかの見えている者の行を後ろに添える。pilot はその敵に自分からは挑まない |
 | `stuck` | 行き詰まり（同じことで何度起こしても手番が進まない、同じ命令が同じ止まり方で 4 回止まった、探索も撃破も進まない命令が 8 回続いた） |
 | `unknown_stop` | 知らない止まり方 |
@@ -285,7 +297,15 @@ npm.cmd run pilot -- --token <player_token> --wake-cmd "node my-ai.mjs"
 { "rev": 16, "mode": "auto", "policy": { "warden": "engage", "engage_objective": true } }
 ```
 
-**空回り（`stalled`。上げる段）**: 方針を変えて、遠征を選び直す（`queue` に `start_expedition`）。やめるなら `"stop"`。
+**空回り（`stalled`。上げる段）**: 再開するなら `rev` を上げるだけでよい（方針を変えるなら `policy` も。いつも同じ枠で出発させるなら `camp.auto_start`）。遠征を選ぶなら `queue` に `start_expedition`。やめるなら `"stop"`。
+
+```json
+{ "rev": 17, "mode": "auto", "camp": { "auto_start": "safe" } }
+```
+
+**目的の相手が見つからない（`target_not_found`）**: 帰る（`mode: "return"`）か、探す手番を増やす（`seek_max_turns`）。
+
+**協力プレイ**: pilot は人間の仲間（いなければ、参加がいちばん早い仲間）についていきます。だれにもついていかずに 1 人のときと同じに動かすなら `"coop": { "follow": "none" }`、決まった仲間についていかせるなら `"follow": "<名前か ID>"`。
 
 **じゃまをされて動けない（`refused_blocked` など）**: `detail` の先頭の行の敵と戦う。相手にせずに続けるなら `ignore`。
 

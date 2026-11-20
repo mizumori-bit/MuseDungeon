@@ -5,7 +5,7 @@
 //   目的の相手・品 → engage_objective: true（以後は pilot が挑む・拾う）
 //   特技・加護   → 最初の候補
 //   動けない（refused_hostile_adjacent・refused_blocked） → じゃまをしている敵（detail の先頭の行）と戦う。罠にふさがれていたら帰る
-//   危ない・行き詰まり・やることが無い・目的の相手を諦めた → 帰る（mode: return。階段から帰り、綱は階段へ着けないとき・途中で危ないときだけ。
+//   危ない・行き詰まり・やることが無い・目的の相手を諦めた・目的の相手が見つからない（target_not_found） → 帰る（mode: return。階段から帰り、綱は階段へ着けないとき・途中で危ないときだけ。
 //                  そのために allow_lifeline: true にする。V4-1e §19.4。今までは綱を queue に書いていた）
 // それ以外は「わかった」とだけ返す（rev を上げる）。知らせる（notify）と上げる（escalate: AI か人間へ回すもの。V4-1e §19.1）には返事をしない。
 // 自分の返事の相手（--wake-cmd や --wake-url の先）を書くときの手本にもなる。
@@ -57,7 +57,7 @@ export function simpleResponder(ev: WakeEvent): void {
       else home();
       break;
     }
-    case 'danger': case 'nothing_to_do': case 'stuck': case 'gave_up':
+    case 'danger': case 'nothing_to_do': case 'stuck': case 'gave_up': case 'target_not_found':
       home();
       break;
     default:

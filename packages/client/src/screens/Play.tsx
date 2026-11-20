@@ -14,7 +14,7 @@ import { toViewEvents } from '../render/events';
 import { sceneFromView } from '../render/scene';
 import { soundDirector } from '../sound/director';
 import {
-  AlertsBar, carriedCount, InventoryPanel, isApproaching, isBoundItem, MessageLog, MonstersPanel, StatusPanel, SummaryDialog, type InvAction, type LogLine,
+  AlertsBar, carriedCount, InventoryPanel, isApproaching, isBoundItem, MessageLog, MonstersPanel, ObsPartyPanel, StatusPanel, SummaryDialog, type InvAction, type LogLine,
 } from '../ui/panels';
 import { ErrorBanner, Header, MapView, ThemePicker, useCatalog, useLocaleRefresh, useTheme } from '../ui/common';
 import { SoundControls } from '../ui/sound';
@@ -1244,6 +1244,7 @@ ${tr('それでも装備しますか？', 'Equip it anyway?')}`)) send({ ...last
               onLifeline={expActive && lifeSlot ? doLifeline : undefined} />
           )}
           {view && catalog && <StatusPanel view={view} catalog={catalog} speed={obs?.self.speed} floor={atCamp ? null : obs?.self.floor} />}
+          {obs && <ObsPartyPanel party={obs.party} />}
           {obs && !atCamp && <MonstersPanel monsters={obs.visible.monsters} hp={obs.self.hp} onFight={doFight} throwSlotFor={throwSlotFor} reach={reachIds} onReach={doReach} />}
           {view && catalog && <InventoryPanel view={view} catalog={catalog} onAction={invAction} focused={mode === 'inv'} selected={selSlot} onSelect={setSelSlot} exposed={exposed} />}
           <MessageLog lines={log} />

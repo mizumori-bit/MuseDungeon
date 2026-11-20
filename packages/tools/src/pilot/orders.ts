@@ -70,6 +70,15 @@ export interface PilotPolicy {
   stall_after: number;
   /** 目的でない遺物も、追ってくる敵が見えていないときに拾う（V4-1e §19.5。既定 false: 拾うと階が起きる） */
   pick_relics: boolean;
+  /** 目的の相手・品を探す（V4-1f §22.1）手番の上限。使っても見つからなければ target_not_found で起こす */
+  seek_max_turns: number;
+  /** warden: engage にした後、その大守護者を目的にした遠征が倒さずにこの回数終わったら、もう一度上げる（V4-1f §22.2） */
+  warden_retry_after: number;
+  /**
+   * 協力プレイで仲間と一緒に動く（V4-1f §22.5）。follow: auto＝人間の仲間、いなければ参加がいちばん早い者（自分がそれなら、だれにもついていかない）/
+   * none＝1 人のときと同じ / 仲間の名前か ID。follow_distance: 同じ階でこれより離れたら寄る。wait_for_party: 遠征の最初に、相手が同じ階に来るまで待つ
+   */
+  coop: { follow: string; follow_distance: number; wait_for_party: boolean };
 }
 
 export interface PilotOrders {
@@ -113,10 +122,13 @@ export const DEFAULT_POLICY: PilotPolicy = {
   warden: 'escalate',
   stall_after: 3,
   pick_relics: false,
+  seek_max_turns: 150,
+  warden_retry_after: 2,
+  coop: { follow: 'auto', follow_distance: 8, wait_for_party: true },
 };
 
 export function defaultOrders(): PilotOrders {
-  return { rev: 1, mode: 'auto', queue: [], policy: { ...DEFAULT_POLICY, ignore: [], unignore: [] }, camp: { auto_start: null } };
+  return { rev: 1, mode: 'auto', queue: [], policy: { ...DEFAULT_POLICY, ignore: [], unignore: [], coop: { ...DEFAULT_POLICY.coop } }, camp: { auto_start: null } };
 }
 
 const num = (x: unknown, d: number, min = 0): number => (typeof x === 'number' && Number.isFinite(x) && x >= min ? x : d);
@@ -170,6 +182,16 @@ export function parseOrders(raw: unknown): PilotOrders {
       warden: p.warden === 'engage' || p.warden === 'avoid' ? p.warden : 'escalate',
       stall_after: num(p.stall_after, d.stall_after),
       pick_relics: bool(p.pick_relics, d.pick_relics),
+      seek_max_turns: num(p.seek_max_turns, d.seek_max_turns, 1),
+      warden_retry_after: num(p.warden_retry_after, d.warden_retry_after, 1),
+      coop: (() => {
+        const c = (p.coop && typeof p.coop === 'object' ? p.coop : {}) as Record<string, unknown>;
+        return {
+          follow: typeof c.follow === 'string' && c.follow ? c.follow : d.coop.follow,
+          follow_distance: num(c.follow_distance, d.coop.follow_distance, 1),
+          wait_for_party: bool(c.wait_for_party, d.coop.wait_for_party),
+        };
+      })(),
     },
     camp: { auto_start: typeof camp.auto_start === 'string' && camp.auto_start ? camp.auto_start : null },
   };

@@ -926,10 +926,22 @@ export function maybeEndExpedition(ctx: Ctx): void {
 export function startExpedition(ctx: Ctx, pr: PlayerRecord, offer: number | 'endless'): ActionError | null {
   const L = pr.locale;
   const w = ctx.world;
-  if (currentExpedition(w)) return actionError('bad_request', t(L, '遠征は既に進行中。', 'An expedition is already in progress.'), t(L, '行動ツールで遠征を続ける。', 'Continue with action tools.'));
+  // 仲間がまだ迷宮にいる（キャンプに戻ったのは自分だけ）: だれがどの階にいるかを details.still_inside と hint に入れる（V4-1f §22.4）
+  const stillInside = (base: ActionError): ActionError => {
+    if (pr.state !== 'at_camp') return base;
+    const inside = w.playerOrder.filter((pid) => pid !== pr.id && w.players[pid].state === 'alive').map((pid) => {
+      const o = w.players[pid];
+      const at = w.entities[o.entityId]?.pos?.floor;
+      return { id: pid, name: o.name, floor: at ? w.floors[at]?.depth ?? 0 : 0 };
+    });
+    if (!inside.length) return base;
+    const who = inside.map((m) => t(L, `${m.name}がまだ地下 ${m.floor} 階にいる`, `${m.name} is still on depth ${m.floor}`)).join(t(L, '、', '; '));
+    return { ...base, hint: t(L, `${who}。遠征は全員が戻るまで続く。`, `${who}. The expedition lasts until everyone is back.`), details: { still_inside: inside } };
+  };
+  if (currentExpedition(w)) return stillInside(actionError('bad_request', t(L, '遠征は既に進行中。', 'An expedition is already in progress.'), t(L, '行動ツールで遠征を続ける。', 'Continue with action tools.')));
   if (pr.state !== 'at_camp' && pr.state !== 'alive') return actionError('dead', t(L, 'あなたは既にランから外れている。', 'You are no longer in the run.'), '');
   const camp = w.camp;
-  if (!camp) return actionError('not_at_camp', t(L, '遠征の候補が無い。', 'There are no expedition offers.'), t(L, '仲間の遠征が終わるのを待つ。', 'Wait for your allies to finish.'));
+  if (!camp) return stillInside(actionError('not_at_camp', t(L, '遠征の候補が無い。', 'There are no expedition offers.'), t(L, '仲間の遠征が終わるのを待つ。', 'Wait for your allies to finish.')));
   if (offer !== 'endless' && !camp.offers.some((c) => c.index === offer)) return actionError('bad_request', t(L, `候補 ${offer} は無い。`, `There is no offer ${offer}.`), t(L, `offer は 1〜${camp.offers.length} か "endless"。`, `offer is 1-${camp.offers.length} or "endless".`));
   // 節目の階の不変条件（V4-0a §1.1）: 倒した記録の無い節目の階に大守護者がいなければ、作り直す
   restoreForStart(ctx);
