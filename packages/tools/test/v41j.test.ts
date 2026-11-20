@@ -219,6 +219,28 @@ describe('V4-1j の測り直しで見つけた: 眠っている目的の相手�
   });
 });
 
+describe('V4-1j §31.6 の 3: 協力プレイで、仲間が重傷以下なら、休むより先に助けに行く（自分の HP が減っていても）', () => {
+  it('HP below the recovery line, nothing chasing: goes to the badly wounded ally instead of resting; healthy ally or solo: rests; in danger: its own retreat first', () => {
+    const m = newMemory(); m.recovering = true;
+    m.follow = { id: 'p_h', exp: 6, met: true, inDungeon: true, lastPos: null, lastFloor: 3, floorAtStart: 3, startTurn: 0 };
+    const hurtAlly = member({ order: 1, controller: 'human', hp: 'badly_wounded', pos: [30, 10], entity: 'e_h00001' });
+    const r = decide(fieldObs({ hp: 12, party: [hurtAlly] }), ctx(defaultOrders(), { coop: true, mem: m }));
+    expect(summary(r)).toMatch(/^act:travel_to:\{"to":"e_h00001","mode":"flee"/);
+    expect(r.decision.kind === 'act' && r.decision.why).toBe('assist');
+    // 仲間が元気: 休む（今までどおり）
+    const r2 = decide(fieldObs({ hp: 12, party: [{ ...hurtAlly, hp: 'healthy' }] }), ctx(defaultOrders(), { coop: true, mem: m }));
+    expect(summary(r2)).toBe('act:rest:{}');
+    // 自分が倒されうる: 判断の表の 7（危ないとき）が先。協力プレイでは、上げて、帰る前に 1 回だけ相手の所へ寄る（§28.2 の 1）
+    const r3 = decide(fieldObs({ hp: 12, party: [hurtAlly], alerts: [lethal], monsters: [mon({ dist: 2, pos: { x: 22, y: 10 } })], recovery: potion }), ctx(defaultOrders(), { coop: true, mem: m }));
+    expect(r3.decision.kind === 'act' && r3.decision.why).toBe('danger');
+    expect(r3.notify.find((n) => n.reason === 'danger')?.detail).toContain('H の所へ寄る');
+    // 寄り終えた（もう寄った）: 自分の退く手（ここでは薬）
+    const m4 = { ...m, dangerJoin: 'done' as const };
+    const r4 = decide(fieldObs({ hp: 12, party: [hurtAlly], alerts: [lethal], monsters: [mon({ dist: 2, pos: { x: 22, y: 10 } })], recovery: potion }), ctx(defaultOrders(), { coop: true, mem: m4 }));
+    expect(summary(r4)).toBe('act:use_item:{"slot":"c"}');
+  });
+});
+
 describe('V4-1j §30.4: 協力プレイで、同じ階に仲間が生きている間は、立て直しのために階を移らない', () => {
   const mem = (): PilotMemory => { const m = newMemory(); m.recovering = true; m.trail = [{ x: 1, y: 1 }, { x: 28, y: 10 }]; return m; };
   it('the ally on this floor out of sight: no stairs; the ally on another floor: stairs; retreat_via_stairs: true: stairs', () => {
@@ -242,9 +264,12 @@ describe('V4-1j §30.1: 自分が先頭でも、同じ階に仲間がいる間�
     expect(summary(r)).toBe('act:wait:{}');
     expect(r.notify.find((n) => n.reason === 'stairs_hold')?.detail).toContain('H が隣に来るまで待つ');
     expect(r.update?.stairHold).toEqual({ depth: 3, since: 50 });
-    // hold_max_turns（40）が過ぎた: 下りる
+    // hold_max_turns（40）が過ぎた: 1 人で下りる（moved_without_party を知らせる。§31.6 の 4）
     const m = newMemory(); m.stairHold = { depth: 3, since: 50 };
-    expect(summary(decide(o, ctx(defaultOrders(), { coop: true, turnNo: 90, mem: m })))).toBe('act:use_stairs:{}');
+    const rx = decide(o, ctx(defaultOrders(), { coop: true, turnNo: 90, mem: m }));
+    expect(summary(rx)).toBe('act:use_stairs:{}');
+    expect(rx.notify.find((n) => n.reason === 'moved_without_party')?.detail).toContain('H が 40 手番待っても隣に来なかった');
+    expect(r.notify.some((n) => n.reason === 'moved_without_party')).toBe(false);
     // 相手が隣: 下りる
     const near = fieldObs({ stairs: [onDown], party: [member({ order: 2, pos: [21, 10], entity: 'e_h00001' })] });
     expect(summary(decide(near, ctx(defaultOrders(), { coop: true, turnNo: 50 })))).toBe('act:use_stairs:{}');

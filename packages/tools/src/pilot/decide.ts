@@ -699,7 +699,15 @@ export function decide(obs: Observation, ctx: DecideContext): DecideResult {
   const shotAt = mem.hurtFarAgo !== null && mem.hurtFarAgo <= 2;
   // 8. 立て直しの段（§14.3）: HP が wake_hp_pct を切った、または fight が hp_floor で止まった・断られた、steady が被害で止まった
   const needRecovery = pct < p.wake_hp_pct || mem.recovering;
-  if (needRecovery) {
+  // 協力プレイで、ついていく相手（か、ついてくる相手）が重傷以下: 休むより先に助けに行く（自分の HP が減っていても。離れて休むより、一緒にいる
+  // ほうが両方にとって安全）。自分が倒されうるときだけ、上の 7 の退く手が先（V4-1j §31.6 の 3。協力の測り直しで、pilot が休んでいる間に、
+  // 見えない所で重傷の相方が倒れた）。回復の能動技だけは先に使う（使っても離れない）。助けに行くのは下の「助けに行く」の行
+  const assistFirst = assisting && !decidedHome;
+  if (needRecovery && assistFirst) {
+    const hab = pct < p.wake_hp_pct ? healAction(obs, p, { items: false }) : null;
+    if (hab && can(hab.tool)) { notify.push(W('healed', `healed:${obs.seq}`, healedText(hab), 'notify')); return act(hab.tool, hab.args); }
+  }
+  if (needRecovery && !assistFirst) {
     if (mem.recovering && pct >= p.rest_below_pct && !activeCh.length) upd({ recovering: false, recoverFought: [] });
     else {
       if (!mem.recovering) { upd({ recovering: true }); notify.push(W('recovering', `recovering:${obs.seq}`, alert(obs, 'low_hp')?.text ?? obs.summary, 'notify')); }
@@ -1031,7 +1039,11 @@ export function decide(obs: Observation, ctx: DecideContext): DecideResult {
     const away = here.filter((m) => !m.pos || cheb(obs.self.pos!, { x: m.pos[0], y: m.pos[1] }) > 1);
     if (!away.length) return null;
     const since = mem.stairHold && mem.stairHold.depth === depth ? mem.stairHold.since : (ctx.turnNo ?? 0);
-    if ((ctx.turnNo ?? 0) - since >= p.hold_max_turns) return null;
+    if ((ctx.turnNo ?? 0) - since >= p.hold_max_turns) {
+      // 待ち切った: 1 人で階を移る（置いていったのか、待ったうえで進んだのかが、記録で分かるように知らせる。V4-1j §31.6 の 4）
+      notify.push(W('moved_without_party', `moved_without_party:${x?.no ?? 0}:${depth}:${ctx.turnNo ?? 0}`, `${away.map((m) => m.name).join('・')} が ${p.hold_max_turns} 手番待っても隣に来なかったので、1 人で階を移る（地下 ${depth} 階から）`, 'notify'));
+      return null;
+    }
     if (!mem.stairHold || mem.stairHold.depth !== depth) {
       upd({ stairHold: { depth, since } });
       notify.push(W('stairs_hold', `stairs_hold:${x?.no ?? 0}:${depth}`, `階段の上で、${away.map((m) => m.name).join('・')} が隣に来るまで待つ（自分が先頭でも、先に階を移らない。${p.hold_max_turns} 手番まで）`, 'notify'));
