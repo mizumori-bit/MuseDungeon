@@ -38,6 +38,8 @@ export interface CatalogItem {
   bound?: boolean;
   /** 使うと自分の HP が回復する（効果の定義 onUse の heal から。V4-1c §16.2）: 回復量（ダイスか数）と、最大 HP に対する下限の割合 */
   heal?: { amount: string; minPct?: number };
+  /** 使うと所持品を鑑定する（効果の定義 onUse の identify から。S1b §12.4 の 8） */
+  identifies?: true;
   /** 自分の持ち物の性能（鑑定済みなら定義の値をそのまま見せる。V3-2R §14.3） */
   weapon?: { dmg: string; acc: number };
   armorStats?: { armor: number; eva: number };

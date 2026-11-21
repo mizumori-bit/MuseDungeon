@@ -445,6 +445,8 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
       // 共有層の野営の火（S1 §9.10）
       if (ev.publicFire) return ja ? `この階には ${ev.publicFire} の野営の火がある。地図に載せた（途中の道はまだ分からない）。` : `${ev.publicFire}'s campfire is on this floor. It is on your map (the way there is still unknown).`;
       if (!ev.publicStairs) return null;
+      // 道しるべ（S1b §12.4 の 1）: 入口からの道も載せた
+      if (ev.publicPath) return ja ? `この階の下り階段は公開されている（${ev.publicStairs} が報告）。入口から階段までの道しるべと一緒に地図に載せた（travel_to stairs_down で向かえる）。` : `This floor's down stairs have been published (reported by ${ev.publicStairs}). They are on your map with a trail from the entrance (travel_to stairs_down goes there).`;
       return ja ? `この階の下り階段は公開されている（${ev.publicStairs} が報告）。地図に載せた（途中の道はまだ分からない）。` : `This floor's down stairs have been published (reported by ${ev.publicStairs}). They are on your map (the way there is still unknown).`;
     case 'fire_placed':
       return ja ? `野営の火を置いた（地下${ev.depth}階 (${ev.x},${ev.y})。確定点から ${ev.cost} 点を払った。キャンプに着くと、ほかの参加者の世界にも現れる）。` : `You set a campfire (depth ${ev.depth} (${ev.x},${ev.y}); paid ${ev.cost} banked points. It reaches the other participants once you are back at camp).`;

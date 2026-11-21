@@ -5,9 +5,10 @@ import type {
 } from '@muse/shared';
 import {
   actionError, briefingLines, briefingShort, buildObservation, buildTurnBlock, campLines, changesLine, compareLines, describeInventory, describeTarget, diffChanges, progressLines, reportLines,
-  cheb, compassDir, dirLabel, formatObservationText, guardianDisplayName, kindName, lastWithoutXp, MACRO_COMPLETED_STOPS, mapTextLines, memoryCombatText, memoryKey, mineCount, nameOf, pickableItems, progressText, renderAsciiMap, resultText, t,
+  cheb, compassDir, dirLabel, formatObservationText, guardianDisplayName, kindName, lastWithoutXp, MACRO_COMPLETED_STOPS, mapTextLines, memoryCombatText, memoryKey, mineCount, nameOf, nearDirs, pickableItems, progressText, renderAsciiMap, resultText, t,
   turnLine, turnSnapshot, turnStateOf,
 } from '@muse/shared';
+import type { MacroReport } from './RunSession';
 import { compareVersions, ENGINE_VERSION } from '@muse/engine';
 import type { PlayerOptions } from './RunSession';
 import type { MacroStop } from '@muse/shared';
@@ -93,12 +94,27 @@ export interface PlayerPort {
   formatActionText(p: ActionPayload): string;
 }
 
+/**
+ * explore toward の結果の文に添える、方角と違う向きに歩いた理由（S1b §12.4 の 4）。
+ * 方角に行ける未探索の境界が無かった手・方角の境界が遠回りで近い境界を先に見た回数・始めた所から見て方角と違う向きに進んだ（道が回り込んでいる）
+ */
+export function towardNote(L: Locale, tw: NonNullable<MacroReport['toward']>, end: Pos | null): string {
+  if (!tw.dir) return '';
+  const what = tw.kind === 'draft' ? t(L, '下への風', 'the draft') : t(L, '気配', 'the sense');
+  const dir = dirLabel(L, tw.dir);
+  if (tw.noAlong) return t(L, `${what}の方角（${dir}）に、行ける未探索の境界が無い手が ${tw.noAlong} 手あった（その間は、ほかの方角の近い境界を探した）。`, `For ${tw.noAlong} step${tw.noAlong > 1 ? 's' : ''} there was no reachable unexplored edge toward ${what} (${tw.dir}); meanwhile it searched the nearest edges in other directions.`);
+  if (tw.detour) return t(L, `${what}の方角（${dir}）の境界は遠回りなので、近くの境界を先に見た（${tw.detour} 回）。`, `The edges toward ${what} (${tw.dir}) were a long way round, so it looked at nearer ones first (${tw.detour} time${tw.detour > 1 ? 's' : ''}).`);
+  const moved = end && cheb(tw.start, end) >= 2 ? compassDir(tw.start, end) : null;
+  if (moved && !nearDirs(tw.dir).includes(moved)) return t(L, `${what}の方角（${dir}）の境界へは、分かっている道が回り込んでいるので、始めた所から${dirLabel(L, moved)}へ進んだ。`, `The known way to the edges toward ${what} (${tw.dir}) winds around, so you moved ${moved} from where you started.`);
+  return '';
+}
+
 /** シーズンの決まりの短い説明（S0。参加したとき・再開したとき） */
 function seasonBriefing(L: Locale, s: NonNullable<PlayerView['season']>): string[] {
   return [
     t(L, `シーズン「${s.name}」に参加している（ソロ。全員が同じシードのダンジョンを、それぞれのランで潜る）。詳しくは get_rules topic=season。`, `You are in season "${s.name}" (solo; everyone dives the same seed in their own run). Details: get_rules topic=season.`),
     t(L, `- 行動予算: シーズンを通して自分の手番 ${s.budget.limit}（ランをまたいで 1 つ。残り ${Math.max(0, s.budgetLeft)}）。迷宮の中の手番だけ減る。尽きた手番で時間切れ（キャンプへ戻り、未確定の戦利品を失う。倒れた扱いにはしない）。帰る分を残すこと。`, `- Budget: ${s.budget.limit} own turns for the whole season (one budget across runs; ${Math.max(0, s.budgetLeft)} left). Only dungeon turns count. Running out is time up (back to camp, unbanked haul lost; not counted as dying). Keep enough to get home.`),
-    t(L, '- 階は、ランの間、作られたまま残る（遠征ごとに変わらない）。地形と階段の位置は、だれのランでも同じ。キャンプで report_stairs すると、このランで見た下り階段を報告できる（最初の報告者に貢献 1）。倒れると、報告していない階段は報告できなくなる。公開された階段は、次の遠征から地図に載る（道は分からない）。', '- Floors persist for the whole run (they do not change between expeditions). Terrain and stairs are the same in every run. At camp, report_stairs reports the down stairs you saw in this run (1 contribution to the first reporter). If you die, unreported stairs are lost. Published stairs appear on your map from the next expedition (not the way there).'),
+    t(L, '- 階は、ランの間、作られたまま残る（遠征ごとに変わらない）。地形と階段の位置は、だれのランでも同じ。キャンプで report_stairs すると、このランで見た下り階段を報告できる（最初の報告者に貢献 1）。倒れると、報告していない階段は報告できなくなる。公開された階段は、次の遠征から、入口からの道しるべ（いちばん短い道のマス）と一緒に地図に載る（travel_to stairs_down で向かえる）。', '- Floors persist for the whole run (they do not change between expeditions). Terrain and stairs are the same in every run. At camp, report_stairs reports the down stairs you saw in this run (1 contribution to the first reporter). If you die, unreported stairs are lost. Published stairs appear on your map from the next expedition, with a trail from the entrance (the shortest way; travel_to stairs_down goes there).'),
     t(L, '- 賞: 冒険（いちばん深い階）・貢献（最初の報告の数）・生還（一度も倒れていない者の確定点の合計）・支援（自分の野営の火が、ほかの参加者に使われた回数）。同着は使った予算の少ないほうが上。順位はキャンプの観測に出る。', '- Awards: adventure (deepest floor), contribution (first reports), survival (banked points of those who never died), support (uses of your campfires by others). Ties go to less budget used. Standings show at camp.'),
     t(L, '- 野営の火: 迷宮の中で place_fire（1 手番。費用は 深さ × 200 点を、このランの確定点から）。キャンプに着くと、ほかの参加者の世界の同じマスにも現れる。火の隣か上で interact すると HP が休憩の上限まで戻る（1 回の遠征で、1 つの階につき 1 回）。詳しくは get_rules topic=season。', '- Campfires: place_fire in the dungeon (one turn; costs depth x 200 of this run\'s banked points). Once you reach camp it appears on the same cell in the others\' worlds. interact on or next to one heals you to the rest cap (once per floor per expedition). Details: get_rules topic=season.'),
   ];
@@ -127,7 +143,7 @@ const STOP_TEXT: Record<string, [string, string]> = {
   no_progress: ['同じ 2 マスを往復して進めない（行き先か道を変える）', 'stuck going back and forth between two cells (pick another destination or route)'],
   hit_and_run: ['待つ間に標的に殴られたが、標的は隣にいない（当てては離れる相手。寄って殴る・通路で受ける・投げる）', 'the target hit you while you waited but is not adjacent (it strikes and backs off: close in, hold a corridor, or throw)'],
   target_shooting: ['標的は離れたまま撃ってくる（その場で撃つ相手。射線を切るか、寄って殴る: fight の approach: \'advance\' で寄って戦える）', 'the target keeps shooting from where it stands (it does not close in: break its line of fire or close in yourself; fight with approach: \'advance\' closes in and fights)'],
-  target_not_hunting: ['相手はあなたを追っていない', 'the target is not hunting you'],
+  target_not_hunting: ['相手はあなたを追っていない（寄って殴るなら fight の approach: \'advance\'）', 'the target is not hunting you (fight with approach: \'advance\' walks up and strikes)'],
   collect_far: ['残りの品は within 歩より遠い（拾うなら within を大きくする）', 'the remaining items are farther than within steps (raise within to fetch them)'],
   chaser_near: ['止まらずに探索を続けていた遅い追跡者が 2 マス以内に来た', 'a slow hunter you kept exploring ahead of came within 2 cells'],
   damage_taken: ['この呼び出しで受けた被害の合計が最大 HP の 4 分の 1 を超えた（steady）', 'the damage taken during this call passed a quarter of your max HP (steady)'],
@@ -436,6 +452,10 @@ export class SessionPlayerPort implements PlayerPort {
         }
         // 遅い追跡者に追われたまま探索した（V4-0b §1.4）
         if (m?.slowChasers) outcome += ' ' + t(L, `遅い敵 ${m.slowChasers} 体に追われたまま探索した。`, `Explored with ${m.slowChasers} slow hunter${m.slowChasers > 1 ? 's' : ''} on your trail.`);
+        // explore toward: 方角と違う向きに歩いた理由（S1b §12.4 の 4。仕様どおりの動きだが、逆へ進んだと読まれた）
+        if (m?.toward) { const note = towardNote(L, m.toward, view.self.pos); if (note) outcome += ' ' + note; }
+        // fight: 床の投げ物を拾いに行かなかった（S1b §12.4 の 5）
+        if (m?.retrieveHeld) outcome += ' ' + t(L, '床の投げ物を拾いに行くと隣の追ってくる敵から離れるので、拾いに行かなかった（隣の相手と戦うなら fight { target }）。', 'Did not go for your thrown items on the floor: that would mean stepping away from an adjacent hunter (to fight it, fight { target }).');
         // fight で見失った・逃げられた: 最後に見た場所（V4-0b §1.4。マクロが覚えた場所。V4-0c §4.2）
         if (cmd.type === 'fight' && (r.interruptedBy === 'target_gone' || r.interruptedBy === 'target_fled')) {
           const at = m?.targetSeenAt;
@@ -510,6 +530,16 @@ export class SessionPlayerPort implements PlayerPort {
       const keep = new Set([...others.slice(0, 3), ...others.slice(3).filter((x) => x.type === 'died')]);
       const texts = shown.filter((x) => keep.has(x) || x.type === 'xp_gained').map((x) => x.text);
       outcome = texts.length ? texts.join(' ') : defaultOutcome(cmd, L);
+      // 鑑定の巻物を対象なしで使い、ほかにも鑑定できる品があった: 対象の選び方を添える（S1b §12.4 の 8: ねらいと違う品に使った）
+      if (cmd.type === 'use' && !cmd.targetSlot) {
+        const used = before.inventory.find((i) => i.slot === cmd.slot);
+        const ided = r.events.filter((e) => e.type === 'item_identified' && (e as { player?: string }).player === this.playerId) as { kind: string; appearanceId: string | null }[];
+        const usedKind = used?.kind ?? (used?.appearanceId ? ided.find((e) => e.appearanceId === used.appearanceId)?.kind : undefined);
+        if (used && usedKind && this.catalog.items[usedKind]?.identifies) {
+          const cands = before.inventory.filter((i) => i.id !== used.id && ((!i.kind && i.appearanceId !== used.appearanceId) || (!!i.kind && !!this.catalog.items[i.kind]?.slot && !i.inspected)));
+          if (cands.length >= 2) outcome += ' ' + t(L, '対象を付けなかったので、スロット順で最初の未鑑定の品を鑑定した（品を選ぶなら use_item { slot, target_slot: <その品のスロット> }）。', 'With no target, it identified the first unidentified item by slot order (to choose, use_item { slot, target_slot: <that item\'s slot> }).');
+        }
+      }
     }
     // 行動から次の自分の手番までに受けた被害の合計（必ず書く）
     if (cmd.type === 'fight') {
@@ -636,6 +666,18 @@ export class SessionPlayerPort implements PlayerPort {
       else {
         lines.push(...briefingLines(L, x, this.catalog.rules));
         lines.push(t(L, `進捗: ${progressText(L, x, view.floor?.depth ?? null)}`, `Progress: ${progressText(L, x, view.floor?.depth ?? null)}`));
+      }
+      // 今いる階と、目的の階が上か下か（S1b §12.4 の 8: 目的の階と逆の階段へ向かった）
+      // 2 回目以降の遠征は 1 行のまま（V3-2R3 §20.6）なので、その行に足す
+      if (kind === 'start' && view.floor) {
+        const here = view.floor.depth, to = x.objective.targetDepth;
+        const way = to === null ? '' : to > here ? t(L, `（${to - here} 階下。下り階段から降りる）`, ` (${to - here} down: take the stairs down)`)
+          : to < here ? t(L, `（${here - to} 階上。上り階段から上がる）`, ` (${here - to} up: take the stairs up)`) : t(L, '（この階）', ' (this floor)');
+        const where = to === null
+          ? t(L, `今いる階: 地下${here}階。`, `You are on depth ${here}.`)
+          : t(L, `今いる階: 地下${here}階。目的の階: 地下${to}階${way}。`, `You are on depth ${here}. Objective floor: depth ${to}${way}.`);
+        if (x.no > 1 && lines.length) lines[lines.length - 1] += (L === 'en' ? ' ' : '') + where;
+        else lines.push(where);
       }
     } else if (view.status === 'at_camp') {
       if (x?.result) lines.push(resultText(L, x, this.catalog.rules));

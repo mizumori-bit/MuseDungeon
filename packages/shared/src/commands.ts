@@ -32,7 +32,8 @@ export const CommandSchema = z.discriminatedUnion('type', [
   // マクロ（サーバーで基本行動へ展開）
   /** toward: 'draft' は下への風の方角の未探索を優先する（V3-2R3 §20.5） */
   // pickup: 'useful'（explore の既定）は劣る装備を拾わない、true は全部、false は拾わない。toward: draft（下への風）/ sense（遺物・守護者の気配。V3-4b §28.7）
-  z.object({ type: z.literal('explore'), mode: MacroModeSchema.optional(), hpFloor: HpFloorSchema.optional(), pickup: z.union([z.boolean(), z.literal('useful')]).optional(), toward: z.enum(['draft', 'sense']).optional() }),
+  // maxSteps: この手数で止まる（max_turns。S1b §12.4 の 9。上限は 1 回の手数の上限と同じ 200）
+  z.object({ type: z.literal('explore'), mode: MacroModeSchema.optional(), hpFloor: HpFloorSchema.optional(), pickup: z.union([z.boolean(), z.literal('useful')]).optional(), toward: z.enum(['draft', 'sense']).optional(), maxSteps: z.number().int().min(1).max(200).optional() }),
   z.object({ type: z.literal('travel'), to: TravelTargetSchema, mode: MacroModeSchema.optional(), hpFloor: HpFloorSchema.optional(), pickup: z.union([z.boolean(), z.literal('useful')]).optional() }),
   z.object({ type: z.literal('rest'), untilHp: z.number().int().positive().optional(), maxTurns: z.number().int().positive().optional() }),
   /** 既知の「自分が投げた物」（what: 'thrown'、既定）か、見えている・記憶したアイテム（'items'）を近い順に拾う */

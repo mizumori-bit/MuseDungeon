@@ -1,6 +1,6 @@
 // 知覚: プレイヤーの視界と知識（knowledge_updated）、モンスターの視認、騒音、起床、モンスターの思い出。
 import type { Entity, FloorHint, FloorKey, MonsterMemory, PlayerId, PlayerRecord, Pos, RememberedEntity, Sense } from '@muse/shared';
-import { cheb, compassDir, currentExpedition, inCover, indicesToRanges, memoryKey } from '@muse/shared';
+import { cheb, compassDir, currentExpedition, findPath, inCover, indicesToRanges, memoryKey } from '@muse/shared';
 import type { Ctx } from './ctx';
 import { computeFov, hasLos, inCircle, line } from './geom';
 import { firstStealthPerk, gearOf, noiseRingOf, notePerk, perkStealth, stealthOf } from './build';
@@ -198,18 +198,44 @@ export function updateKnowledge(ctx: Ctx, key: FloorKey): void {
 
 /**
  * 公開された下り階段（S0。PROTOCOL §9.4）: キャンプで取り込んだ一覧にこの階があれば、その下り階段のマスを覚えている地図に載せる。
- * 地図の巻物と同じ「地形は分かっているが、まだ見ていない」マス（mapped）。途中の道は載せない。シーズンでないランには一覧が無い
+ * 地図の巻物と同じ「地形は分かっているが、まだ見ていない」マス（mapped）。S1b から、入口から階段までの道しるべ（幅 1 マス）も載せる。
+ * 載せるのは、その階に入ったとき（階段のマスをまだ覚えていなければ）。シーズンでないランには一覧が無い
  */
 function seedPublicStairs(ctx: Ctx, pr: PlayerRecord, key: FloorKey): void {
   const f = ctx.world.floors[key];
   const ps = f && f.branch === 'main' ? ctx.world.season?.public.find((p) => p.depth === f.depth) : undefined;
   if (!f || !ps || !f.stairs.down.some((d) => d.x === ps.x && d.y === ps.y)) return;
   const i = ps.y * f.width + ps.x;
-  if ((pr.knowledge.floors[key]?.seen[i] ?? 0) !== 0) return;
+  const seen = pr.knowledge.floors[key]?.seen;
+  if ((seen?.[i] ?? 0) !== 0) return;
+  // 道しるべ（S1b §12.4 の 1）: 入口（上り階段。地下 1 階は最初の入口）から公開された下り階段までの、いちばん短い道のマスも載せる。
+  // 自分の世界のその階の地形で引く（通れるマスと扉。鍵のかかった格子扉・閉じた格子扉・壁は通らない）。敵・罠・地物は見ない
+  // （隠れた罠の場所が道の引き方から分からないように）。乱数は使わない（向きの順は固定）。引けなければ階段のマスだけ
+  const path = publicPathCells(ctx, key, f.entry, { x: ps.x, y: ps.y });
+  const cells = path ?? [i];
+  const fresh = cells.filter((c) => (seen?.[c] ?? 0) === 0);
+  const newlySeen: number[] = [];
+  for (const c of fresh) newlySeen.push(c, f.terrain[c]);
   ctx.emit({
-    type: 'knowledge_updated', player: pr.id, floorKey: key, visible: null, newlySeen: [i, f.terrain[i]], rememberedSet: [], rememberedDel: [], metAdd: [],
-    mappedAdd: [i], publicStairs: ps.by, seenBy: [pr.id], floor: key,
+    type: 'knowledge_updated', player: pr.id, floorKey: key, visible: null, newlySeen, rememberedSet: [], rememberedDel: [], metAdd: [],
+    mappedAdd: fresh, publicStairs: ps.by, ...(path ? { publicPath: true as const } : {}), seenBy: [pr.id], floor: key,
   });
+}
+
+/** 入口から下り階段までのいちばん短い道のマス（入口と階段を含む。セルの番号）。道が無ければ null */
+export function publicPathCells(ctx: Ctx, key: FloorKey, from: Pos, to: Pos): number[] | null {
+  const f = ctx.world.floors[key];
+  const n = f.width * f.height;
+  const passable = new Uint8Array(n);
+  for (let y = 0; y < f.height; y++) for (let x = 0; x < f.width; x++) {
+    const tr = ctx.terrainAt(key, x, y);
+    if (tr.passable || tr.door === 'closed') passable[y * f.width + x] = 1;
+  }
+  const zero = new Uint8Array(n);
+  const grid = { width: f.width, height: f.height, passable, known: passable, occupied: zero, hazard: zero, unsighted: zero };
+  const path = findPath(grid, from, [to.y * f.width + to.x], 'none');
+  if (!path) return null;
+  return [from.y * f.width + from.x, ...path.map((p) => p.y * f.width + p.x)];
 }
 
 /**

@@ -127,10 +127,10 @@ turn: {
 | `use_ability` | `ability`（または `id`）, `target?: dir | entity_id`, `slot?` | 能動技（V3-4 §4.2。V4-1g で `ability` を足した。どちらも無ければ、要る引数の名前を言うエラー）。`id` は `self.abilities` の短い ID（`bash`）か完全な ID（`core:bash`）。資源は無く、再使用までの手番（`cooldown`）と、立て直しだけ遠征ごとの回数で管理する。覚えていない・残りの手番がある・回数を使い切った・対象が無いときは手番を使わずに拒否（`cannot_use` / `no_target` / `invalid_direction` / `blocked`）。対象: 隣の敵（強打。ID か方向、隣に 1 体なら省略可）、投擲の対象（狙い撃ち。射程と射線は `throw_item` と同じ検証、`slot` 省略時は投擲用の品の最初のスロット）、方向（身をかわす）、なし（なぎ払い・立て直し）。結果のイベントに `ability_used`（`cooldownLeft` はこの手番の後の残り） |
 | `wait` | `turns?: 1..10` | 追跡中の敵が見えなければ休息（回復が `restMultiplier` 倍）。`turns` が 2 以上ならマクロ（V3-2R2）: 敵が新たに見えた（`hostile_in_view`）・起きている敵が隣に来た（`hostile_adjacent`）・攻撃や毒以外の被害・状態異常で止まり、指定の手数で `max_turns` |
 | `rest` | `until_hp?`, `max_turns?` | マクロ。全快（かつ毒が抜ける）か、指定の HP・手数か、中断まで（上限 `rest.maxTurns`） |
-| `explore` | `mode?`, `hp_floor?`, `pickup?`（既定 true）, `toward?: 'draft'` | マクロ。未見の区画（地図の巻物で地形だけ知った区画を含む）へ自動移動。pickup（既定 'useful'。V3-4b）なら通り道と見えている・記憶したアイテムも拾う（'useful' は、鑑定済みで接辞の無い武器・防具のうち公開の数字が装備中の品以下のものを種類が違っても拾わない。true は全部。遺物・鑑定済みの有害品・装備中の品と同じ種類で接辞が含まれる＝同じか劣る装備は拾わない。V3-2R3）。`toward: 'draft'` は下への風の方角、`'sense'`（V3-4b）は遺物・守護者の気配の方角（と隣り合う方角）の未探索を優先する（V3-2R3）。決めた行き先は境界である間は追い続け、見えて消えたらそのすぐ近くの境界を追う（風の方角が歩くたびに変わっても往復しない。2026-11-17） |
+| `explore` | `mode?`, `hp_floor?`, `pickup?`（既定 true）, `toward?: 'draft'`, `max_steps?: 1..200` | マクロ。`max_steps`（S1b）はその手数で止まる（`max_turns`。既定は 1 回の上限 200）。`toward: 'draft'` は下への風が消えたら（公開された階段を自分の目で見たら。S1b）`stairs_seen` で止まる。方角に行ける境界が無い・遠回り・道が回り込んでいるために方角と違う向きへ歩いたら、結果の文に理由を書く（S1b）。未見の区画（地図の巻物で地形だけ知った区画を含む）へ自動移動。pickup（既定 'useful'。V3-4b）なら通り道と見えている・記憶したアイテムも拾う（'useful' は、鑑定済みで接辞の無い武器・防具のうち公開の数字が装備中の品以下のものを種類が違っても拾わない。true は全部。遺物・鑑定済みの有害品・装備中の品と同じ種類で接辞が含まれる＝同じか劣る装備は拾わない。V3-2R3）。`toward: 'draft'` は下への風の方角、`'sense'`（V3-4b）は遺物・守護者の気配の方角（と隣り合う方角）の未探索を優先する（V3-2R3）。決めた行き先は境界である間は追い続け、見えて消えたらそのすぐ近くの境界を追う（風の方角が歩くたびに変わっても往復しない。2026-11-17） |
 | `travel_to` | `to: {x,y} | 'stairs_down' | 'stairs_up' | entity_id`, `mode?`, `hp_floor?`, `pickup?` | マクロ。既知地図上のみ。目的地がアイテムなら着いて拾う |
 | `collect` | `what?: 'thrown'|'items'`, `within?: 1..200`, `kinds?: string[]`, `all?: boolean`, `mode?`, `hp_floor?` | マクロ（v3）。`thrown`（既定）は既知の自分が投げた物、`items` は見えている・記憶したアイテムを近い順に回って拾う。結果に `collected: { picked, remaining }`。V3-8: `within` は歩数の上限（既定 15。残りがどれも遠ければ `collect_far`）、`kinds` は種類 ID か区分、`items` は鑑定済みで今の装備より劣る装備を飛ばす（`all: true` で拾う） |
-| `fight` | `target: entity_id`, `with?: slot`, `hp_floor?`, `abilities?: string[]`, `until?: 'target'\|'clear'`, `adjacent?: 'throw'\|'melee'\|'stop'`, `approach?: 'wait'\|'advance'` | マクロ（V3-2R、V3-2R2 で拡張）。`approach`（V4-1a、`with` なし）: `wait`（既定）は相手が隣に来るのを待つ。`advance` は相手へ向かって歩き、隣に着いたら殴る（歩く間に撃たれても止まらない。`hp_floor`・`hp_risk`・新しい敵・予備動作・見失いなどの止まり方はそのまま。経路がふさがれていれば `blocked`）。`until: 'clear'`（V3-4b）: 標的を倒した後も、隣の追跡中の敵、いなければ最も近い追跡中の敵へ続け、いなくなれば `cleared`。`adjacent`（V3-4b、with のとき）: 相手が隣に来たら stop（既定）／throw（投げ続ける）／melee（近接に切り替える）。新しく見えた追跡中の敵で止まるのは被弾の記録の無い種族だけ。追跡中で逃げていない標的が見えなくなったら `fight.lostWait`（5）手番まで待つ（逃げて見えなくなったら `target_fled`）。待つ手番に標的以外の射撃で被弾したら `shot_while_waiting`。`abilities`（V3-4a）: 並べた能動技を使える手番ごとに使う。強打は標的が隣、なぎ払いは起きている敵が隣に 2 体以上、狙い撃ちは `with` の品で射程と射線が通るとき（それ以外の手番は通常の攻撃）。立て直し・身をかわすは載せられない、覚えていない、`with` の無い狙い撃ちは手番を使わずに `cannot_use`。結果の文に使った能動技と回数。その相手と決着を付ける。`with` なし: 隣なら近接攻撃を繰り返す。相手が追跡中で届かない間は隣に来るまで待つ（最大 10 手番、`target_not_approaching`）。当てて逃げる相手は追跡中で 2 マス以内なら 2 手番まで待つ（追わない）。`with`: そのスロットの品を投げて戦う（射程と射線が通るまで待つ）。止まるのは: 相手が倒れた（`target_down`）・離れた／逃げて射程を出た（`target_moved`）・見えなくなった（`target_gone`）・（`with`）隣に来た（`target_adjacent`）・品が尽きた（`out_of_ammo`）・射線が 3 手番続けて通らない（`no_line_of_sight`）・HP が `hp_floor`（既定 50%）以下・**次の手番に、届く追跡中の敵（隣・飛び道具）から 1 手の最悪の被害（`worst_turn` の合計）を受けると `hp_floor` を割る（`hp_risk`。被弾の前に止まる。始める前なら `hp_floor` のエラーで拒否）**・被弾の記録の無い種族から初めて被弾した（`first_hit`。一度だけ）・追跡中の別の敵・状態異常（V3-2R3）。眠っている・気付いていない相手は待たない（`target_not_hunting` で拒否）。結果の `outcome` に与えた攻撃（投げた）回数・命中・合計・待った手番 |
+| `fight` | `target: entity_id`, `with?: slot`, `hp_floor?`, `abilities?: string[]`, `until?: 'target'\|'clear'`, `adjacent?: 'throw'\|'melee'\|'stop'`, `approach?: 'wait'\|'advance'` | マクロ（V3-2R、V3-2R2 で拡張）。`approach`（V4-1a、`with` なし）: `wait`（既定）は相手が隣に来るのを待つ。`advance` は相手へ向かって歩き、隣に着いたら殴る（歩く間に撃たれても止まらない。`hp_floor`・`hp_risk`・新しい敵・予備動作・見失いなどの止まり方はそのまま。経路がふさがれていれば `blocked`）。`until: 'clear'`（V3-4b）: 標的を倒した後も、隣の追跡中の敵、いなければ最も近い追跡中の敵へ続け、いなくなれば `cleared`。`adjacent`（V3-4b、with のとき）: 相手が隣に来たら stop（既定）／throw（投げ続ける）／melee（近接に切り替える）。新しく見えた追跡中の敵で止まるのは被弾の記録の無い種族だけ。追跡中で逃げていない標的が見えなくなったら `fight.lostWait`（5）手番まで待つ（逃げて見えなくなったら `target_fled`）。待つ手番に標的以外の射撃で被弾したら `shot_while_waiting`。`abilities`（V3-4a）: 並べた能動技を使える手番ごとに使う。強打は標的が隣、なぎ払いは起きている敵が隣に 2 体以上、狙い撃ちは `with` の品で射程と射線が通るとき（それ以外の手番は通常の攻撃）。立て直し・身をかわすは載せられない、覚えていない、`with` の無い狙い撃ちは手番を使わずに `cannot_use`。結果の文に使った能動技と回数。その相手と決着を付ける。`with` なし: 隣なら近接攻撃を繰り返す。相手が追跡中で届かない間は隣に来るまで待つ（最大 10 手番、`target_not_approaching`）。当てて逃げる相手は追跡中で 2 マス以内なら 2 手番まで待つ（追わない）。`with`: そのスロットの品を投げて戦う（射程と射線が通るまで待つ）。止まるのは: 相手が倒れた（`target_down`）・離れた／逃げて射程を出た（`target_moved`）・見えなくなった（`target_gone`）・（`with`）隣に来た（`target_adjacent`）・品が尽きた（`out_of_ammo`）・射線が 3 手番続けて通らない（`no_line_of_sight`）・HP が `hp_floor`（既定 50%）以下・**次の手番に、届く追跡中の敵（隣・飛び道具）から 1 手の最悪の被害（`worst_turn` の合計）を受けると `hp_floor` を割る（`hp_risk`。被弾の前に止まる。始める前なら `hp_floor` のエラーで拒否）**・被弾の記録の無い種族から初めて被弾した（`first_hit`。一度だけ）・追跡中の別の敵・状態異常（V3-2R3）。眠っている・気付いていない相手は待たない（`target_not_hunting` で拒否。断りの文に `approach: 'advance'`）。**`approach: 'advance'` なら、眠っている・気付いていない相手にも寄って殴る**（S1b。途中で気づかれたらそのまま続ける。近づけたかは、追跡中の相手は直線の距離、そうでない相手は道のりで数える）。`with` の品が尽きたとき、自分の投擲物を拾いに行くのは隣に追ってくる敵がいない間だけ（いれば `out_of_ammo`。S1b）。結果の `outcome` に与えた攻撃（投げた）回数・命中・合計・待った手番 |
 | `pickup` | `item?: entity_id` | 省略時は足元の全て（入る分だけ） |
 | `drop` | `slot`, `qty?` | |
 | `equip` / `unequip` | `slot`, `confirm?`（equip のみ） | 呪いと分かっている品の equip は `confirm: true` が要る（無ければ `confirm_required`。V3-8）。装備すると、未鑑定の種類（装飾品）は正体が、装備品は呪いの有無が分かる（V3-4）。呪われた装備は外せない・同じ場所に別の品を付けられない・捨てられない（`cannot_use`） |
@@ -167,7 +167,7 @@ ActionResult {
   - `careful`（既定）: 初見の**種族**・追跡中（逃走中を除く）で自分に届く敵の出現・見えている敵が追跡に変わった・攻撃を受けた（外れも含む、`attacked`）・毒以外のダメージ・状態異常・HP が 50%／25% をまたいだ（`hp_threshold`）・階段の発見（explore）で止まる。既知の種族の眠っている・気づいていない個体、隣にいない動かない敵、毒の継続ダメージ、アイテムの発見では止まらない（`changes` には出る）。隣に起きている敵（逃走中を除く）がいれば動かない
   - `steady`: 追跡中の敵が隣接した・初見の種族・HP が `hp_floor`（既定 最大 HP の 50%）未満・その階の下り階段を初めて見た（`stairs_seen`。V3-2R2）で止まる
   - `flee`: 到着・進路をふさがれた・HP が `hp_floor`（既定 25%）未満で止まる。隣に敵がいても動く（退却）
-  - どの mode も 1 歩ずつ通常の `move` として記録し、敵は通常どおり攻撃する。マクロは攻撃しない（次のマスに敵がいれば `blocked`。steady・flee は、ふさいでいる相手が逃走中なら攻撃して進み、ほかに道が無いときは逃走中の敵のマスを通る経路を引く）。発見済みの罠は踏まない（罠を通る道しか無ければ罠の手前で `trap_ahead`。始める前なら `blocked` で拒否し、`details.blocked_by_traps` にその道の上の罠、ヒントに罠の名前と位置と `move { dir: '<罠の方角>' }`。V4-1d）。経路探索で避ける「見えている動かない敵の隣」は、その呼び出しの間に一度見た動かない敵も含む。`rest` は敵が視界に入ると状態によらず止まる（動かない敵は隣にいなければ休息を妨げない。V3-2R2: すでに見た個体が逃げながら視界を出入りしても止まらない）
+  - どの mode も 1 歩ずつ通常の `move` として記録し、敵は通常どおり攻撃する。マクロは攻撃しない（次のマスに敵がいれば `blocked`。steady・flee は、ふさいでいる相手が逃走中なら攻撃して進み、ほかに道が無いときは逃走中の敵のマスを通る経路を引く）。発見済みの罠は踏まない（罠を通る道しか無ければ罠の手前で `trap_ahead`。始める前なら `blocked` で拒否し、`details.blocked_by_traps` にその道の上の罠、ヒントに罠の名前と位置と `move { dir: '<罠の方角>' }`。V4-1d）。経路探索で避ける「見えている動かない敵の隣」は、その呼び出しの間に一度見た動かない敵も含む。その呼び出しの間に眠っているのを見た敵は、見えなくなってもそのマスをふさいでいるものとして道を引く（そのマスが見えていなくなっていれば忘れる。ふさがれて `blocked` になれば `blocked_by` に入る。S1b: 見えると避け、見えないと通る、で 2 マスを往復した）。travel_to の「20 手のあいだ道のりが縮まない」（`no_progress`）は、動かない敵・眠っている敵・発見済みの罠が新しく見えたら、そこから数え直す（S1b: 通路をふさぐ敵が見えて遠回りに変わった後、前の短い道のりと比べて止まっていた）。`rest` は敵が視界に入ると状態によらず止まる（動かない敵は隣にいなければ休息を妨げない。V3-2R2: すでに見た個体が逃げながら視界を出入りしても止まらない）
   - careful と steady は、その階の下り階段を初めて見たときにも止まる（`stairs_seen`。flee は止まらない。V3-2R2）。止まる前に足元の拾える品を 1 つ拾う。経路探索は、見えている動かない敵の隣のマスを罠と同じく避ける（ほかに道が無ければ通る）
   - `valid_actions` の `fight` と `mode:steady` の行には、既定の `hp_floor` の実数を書く（「HP 24 未満で止まる」）
 - **0 歩で終わる呼び出しは作らない**: 実行前に 1 歩も進めないと分かれば、手番を使わずに理由付きのエラー（`hostile_adjacent`・`hostile_in_view`・`hp_floor`・`blocked`・`unreachable`・`unknown_destination`・`nothing_to_do`）で返す。`valid_actions` にはその場で進める mode だけを出す（隣に敵がいれば `travel_to stairs_up mode:flee` と `fight <id>`）。
@@ -185,7 +185,7 @@ Observation {
   seq: number
   status: 'your_turn' | 'waiting_others' | 'dead' | 'ended' | 'at_camp'
   summary: string                      // 1 行の現況
-  alerts: Alert[]                      // 重要度順。例 { code:'enemy_adjacent', text, entity?, data? }（data: incoming / escape の数値。V3-2R2）
+  alerts: Alert[]                      // 重要度順。例 { code:'enemy_adjacent', text, entity?, data? }（data: incoming / escape の数値。V3-2R2。シーズンの budget_low。S1b）
   self: {
     name, class, level, xp, xp_next
     hp, max_hp, statuses: {id, turns_left}[]
@@ -292,7 +292,7 @@ Observation {
 - `rest_estimate` は engine と同じ式（`regenInterval`・`regenStep`）と自分の回復の蓄積値（`self.regen`）で数える。中断が無ければ `rest` の実績と一致する。
 - `fleeing`: 逃走の閾値（種族データの `fleeBelowHpPct`）を下回った追跡中の敵。逃走中の敵は `extract` と休息を妨げない。
 - 目安: brief は約 400 トークン以内、full は約 1,500 トークン以内。`map` は brief では既定で付け、`new_run` のオプション `brief_map: false` で外せる。
-- 地図（v3）: モンスターは種族ごとに固定の 1 文字（content の `glyph`。一意）。テキストでは上の 2 行が x 座標の 10 の位・1 の位、行頭が y 座標の目盛り。`get_map` も同じ。
+- 地図（v3）: モンスターは種族ごとに固定の 1 文字（content の `glyph`。一意）。テキストでは上の 2 行が x 座標の 10 の位・1 の位、行頭が y 座標の目盛り。`get_map` も同じ。10 の位は 10 の倍数の列にだけ書く（範囲に 10 の倍数が無い狭い地図だけ、左端に書く。S1b: 左端が x=1 の地図で、左端の「0」をその列の x=0 と読んで 1 列ずれた）。
 - 帰還の綱を持っていれば `valid_actions` に「use_item <slot>（帰還の綱: その場でキャンプへ戻る・+N 確定・追跡中の 1 手の最悪の被害 …）」（危なくないときは短い行）。階段の上の extract には「次の遠征はこの階段から始まる。階の敵は追跡をやめて全快する」、綱には「次の遠征はこの遠征を始めた階段から」、射撃する敵には fight の待ち受けではなく「travel_to <id>（近づく／視線を切る）」（V3-2R3a）、追跡中の敵が届くときの階段への移動には「階段まで N 歩。追われたままなら最悪 M の被害（HP h）」（M が HP 以上で綱を持っていれば綱の候補を先に。V3-2R3b）、隣に起きている追跡中の敵がいるときの薬・巻物には「使う間に隣の敵が行動する」を添える。同じか劣る装備には equip を出さない（未鑑定の指輪・首飾りには出す）。下への風があれば「explore toward:draft」（V3-2R3）。特技の候補は「choose_perk <n>（名前: 説明）」（自分の手番でなくても・キャンプでも出る）、能動技は使えるものを対象付き（「use_ability bash -> e_xxx」「use_ability slip <dir>」「use_ability cleave」）、使えないものを残りの手番付き（「use_ability bash（あと 3 手番）」）、長柄なら「attack <id>（2 マス先から突く）」（V3-4）。投擲の候補があれば「fight <id> with:<slot>（投擲で決着まで）」、追跡中で届かない相手がいれば「fight <id>（迎え撃つ）」を足す（V3-2R2）。
 - 投擲の候補（`valid_actions`）は、射程内で経路が通る相手だけを、自分を攻撃している相手から順に最大 3 件出す。有害と分かっている薬（`harmful`）は使う代わりに投げる候補になる。自分が投げた物を知っていれば `collect` が出る。
 - 推定残り HP の文章: 記録が足りない間は「3 以上（記録 1 体）」のように下限だけを書く。
@@ -443,6 +443,17 @@ V3-2R で足した項目（同じく後方互換。会心と経験値のルー�
 - `StatusInst.source`（状態異常を与えた者。毒で倒したときの撃破者になる）、`status_applied.targetAffixes`
 - `player_state.reason: 'joined'`（キャンプから始まる参加）。参加コマンドの `atCamp`
 - プレイヤー向けの射影で、見えていた個体が視界の外へ動いた `entity_moved` に `dirOut`（向きだけ。行き先は伏せたまま）
+
+S1b で変えた項目（試運転 t0 を受けた直し。`engineVersion` 0.40.0、`knowledge_updated` に `publicPath` が増えたので `eventVersion` 25。SEASON.md §12.4・§13、DESIGN.md §40.1）:
+
+- **シーズンのランだけ**
+  - 道しるべ（§9.4）: 公開された下り階段の階に入ると、入口（上り階段。地下 1 階は最初の入口）から階段までのいちばん短い道のマスも地図に載る（`knowledge_updated { publicStairs, publicPath: true, newlySeen, mappedAdd }`。道を引けない世界では今までどおり階段のマスだけで `publicPath` は無い）
+  - 観測の `alerts` に `budget_low`（§9.6。`data: { left, stairs: 'up' | 'down' | null, path_len: number | null }`）
+- **すべてのラン**（シーズンでないランで変わるのはこれだけ。生成・候補・出来事の形は変わらない）
+  - マクロ（§2.3）: その呼び出しの間に眠っているのを見た敵は、見えなくなってもそのマスをふさいでいるものとして道を引く（explore・travel_to・collect）。travel_to の「20 手縮まない」は、動かない敵・眠っている敵・発見済みの罠が新しく見えたら数え直す。`explore { toward: 'draft' }` は下への風が消えたら（公開された階段を自分の目で見たら）`stairs_seen` で止まる。`explore` に `max_steps`（その手数で `max_turns`）。`fight` の `approach: 'advance'` は、眠っている・気づいていない相手にも寄って殴る（付けなければ今までどおり `target_not_hunting` で断り、断りの文に `approach: 'advance'` を書く）。`with` の品が尽きたとき、隣に追ってくる敵がいる間は拾いに行かない（`out_of_ammo`）
+  - 結果の文: `explore toward` が方角と違う向きに歩いた理由（方角に行ける境界が無かった手・遠回りで近い境界を先にした回数・道が回り込んでいる）。`fight` が拾いに行かなかったこと。鑑定の巻物を `target_slot` なしで使い、ほかにも鑑定できる品があったときは選び方を添える
+  - 観測: 地図の目盛りの 10 の位は 10 の倍数の列にだけ書く（範囲に 10 の倍数が無いときだけ左端）。`travel_to stairs_*` の見込みに「いま隣の N 体が離れぎわに殴る 1 回ずつを含む」。遠征を始めた応答に「今いる階: 地下N階。目的の階: 地下M階（K 階下。下り階段から降りる）」
+  - 内容: 泉と鑑定の巻物の説明（泉は 3d6+2 で全快ではない。鑑定の巻物は対象を `target_slot` で選ぶ）。カタログの品に `identifies`
 
 S1a で変えた項目（S1 の検査の指摘の直し。規則が変わったので `engineVersion` 0.39.1、取り込みの火に `dup` が増えたので `eventVersion` 24。SEASON.md §10・§11）:
 
@@ -915,7 +926,7 @@ CommandRecord {
 
 ## 9. シーズン（S0。SEASON.md §2）
 
-シーズンのランだけの決まり。**シーズンでないランは何も変わらない**（SEASON.md §1.2 の 5。生成・候補・観測・出来事のどれも）。版は `engineVersion` 0.38.0・`eventVersion` 22。
+シーズンのランだけの決まり。**シーズンでないランは何も変わらない**（SEASON.md §1.2 の 5。生成・候補・観測・出来事のどれも）。版は `engineVersion` 0.38.0・`eventVersion` 22（S1 で 0.39.0・23、S1a で 0.39.1・24、S1b で 0.40.0・25。§5 のそれぞれの「変えた項目」）。
 
 ### 9.1 シーズンと参加
 
@@ -957,9 +968,11 @@ CommandRecord {
 - 結果: 出来事 `stairs_reported { player, stairs: { depth, x, y, first }[], gained }`（本人だけ）と、取り込み（`season_synced`）。
 - 断る: シーズンでないラン（`bad_request`）、キャンプでない（`not_at_camp`）、送るものが無い（`nothing_to_do`）。倒れた・ランが終わった後は送れない（そのランの報告していない階段は、報告できなくなる）。
 - **取り込み**は、キャンプに着いたとき（遠征の終わり）・遠征を始めるとき・報告したときだけ。取り込んだ一覧が `season.public`。遠征の途中で公開されたものは、次の遠征から見える。
-- **公開されている階に入ると**、その階の下り階段のマスが覚えている地図に載る（`knowledge_updated { newlySeen, mappedAdd, publicStairs: <公開した者の名前> }`）。地図の巻物と同じ「地形は分かっているが、まだ見ていない」マスで、途中の道は分からない。
-  - 観測: `navigation.known_stairs[]` の `public_by: string`（自分の目で見るまで）。下への風（`self.floor.draft`）は、公開された階段を自分の目で見るまで出続ける（`explore { toward: 'draft' }` はその方角を探す）。
-  - `travel_to stairs_down` は、覚えている地図だけで道を探すので、途中の道が分かるまで `unreachable` で断られる（手番は使わない）。そのときのヒントに `explore { toward: 'draft' }` を出す。
+- **公開されている階に入ると**、その階の下り階段のマスが覚えている地図に載る（`knowledge_updated { newlySeen, mappedAdd, publicStairs: <公開した者の名前> }`）。地図の巻物と同じ「地形は分かっているが、まだ見ていない」マス。
+  - **道しるべ**（S1b。SEASON.md §12.4 の 1）: 同じ出来事で、入口（`floor.entry`。上り階段。地下 1 階は最初の入口）から公開された下り階段までの、いちばん短い道のマス（入口と階段を含む。幅 1 マス。まわりの部屋は載せない）も載せる（`publicPath: true`。`newlySeen`・`mappedAdd` は、そのうちまだ覚えていないマス）。道は**自分の世界のその階の地形**で引く（通れる地形と扉。鍵のかかった格子扉・閉じた格子扉・壁・瓦礫・柱は通らない）。敵・罠・地物は見ないので、隠れた罠の場所は道の引き方から分からない。向きの順は固定で、乱数は使わない（生成の乱数も、入口と階段も変わらない。§9.3）。引けなければ、今までどおり階段のマスだけ（`publicPath` は無い）。
+  - 載せる時機: その階に入ったとき（取り込みで公開を知った後、まだその階段のマスを覚えていなければ）。作ってある階も、後で作る階も同じ。覚えている地図はその階にいるときしか見えないので、取り込みのときに載せるのと見え方は同じ。
+  - 観測: `navigation.known_stairs[]` の `public_by: string`（自分の目で見るまで）。下への風（`self.floor.draft`）は、公開された階段を自分の目で見るまで出続ける（`explore { toward: 'draft' }` はその方角を探し、風が消えたら `stairs_seen` で止まる）。
+  - `travel_to stairs_down` は、覚えている地図だけで道を探す。道しるべがあれば最初から通る。道しるべを引けなかった階では、途中の道が分かるまで `unreachable` で断られる（手番は使わない）。そのときのヒントに `explore { toward: 'draft' }` を出す。
 - S0 で公開できるのは下り階段だけ。1 つの階の下り階段は 1 つ。
 
 ### 9.5 賞と順位
@@ -1002,6 +1015,7 @@ Observation.season?: {
 ```
 
 - 文: 迷宮の中は 2 行目に予算の 1 行（「シーズン「S0」: 残りの予算 2,140/3,000 手番」）。順位は出さない。
+- **予算の終わりぎわの知らせ**（S1b。SEASON.md §12.4 の 2）: 迷宮の中で、残りの予算が、いちばん近い着ける階段（`navigation.known_stairs` の `path_len` がある上り・下り階段。どちらでも extract できる）までの歩数の 2 倍を下回ったとき、または 100 を切ったときは、`alerts` に `budget_low`（`data: { left, stairs: 'up' | 'down' | null, path_len: number | null }`）。文は「予算の残り 37 手番。いちばん近い着ける階段（上り階段）まで 25 歩（尽きると時間切れで、未確定の戦利品を失う）」。着ける階段が分からなければ「着ける階段が分からない（既知の道で届く階段が無い。…）」、階段の上なら「いま上り階段の上にいる（ここで extract できる。…）」。キャンプとシーズンでないランには出さない。
 - キャンプは、予算の 1 行・賞ごとの 1 行（自分の値と順位、1 位の名前と値、1 位との差）・「まだ報告していない階段 N（うち、まだだれも公開していないもの M）」。`valid_actions` に `report_stairs`（報告できるものがあるとき）。予算が無いか終わりの時刻を過ぎたら、候補の代わりにその 1 行。
 - 参加したときの最初の観測（briefing）に、シーズンの決まりを短く出す。
 

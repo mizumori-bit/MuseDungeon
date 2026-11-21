@@ -457,9 +457,10 @@ export function createMcpServer(ctx: McpContext): McpServer {
     description: 'マクロ: 未見の区画へ進む（最大 200 手）。pickup（既定 useful）なら通り道と見えているアイテムのうち使える物を拾う。toward: draft は下への風、sense は遺物・守護者の気配の方角を優先する。止まる条件は mode で選ぶ。1 歩も進めないなら手番を使わずに理由付きで拒否する。',
     inputSchema: {
       ...actionCommon, ...moveArgs, pickup: z.union([z.boolean(), z.literal('useful')]).optional().describe("通り道と見えている・記憶したアイテムを拾う。'useful'（既定）: 使える物だけ（鑑定済みで接辞の無い武器・防具は、装備中の品より数字が上のときだけ）。true: 全部（遺物・鑑定済みの有害品・同じ種類の同じか劣る装備は除く）。false: 拾わない"),
-      toward: z.enum(['draft', 'sense']).optional().describe("'draft': 下への風の方角の未探索を優先する（下り階段を探すとき）。'sense': 遺物・守護者の気配の方角の未探索を優先する"),
+      toward: z.enum(['draft', 'sense']).optional().describe("'draft': 下への風の方角の未探索を優先する（下り階段を探すとき。公開された階段を自分の目で見たら止まる）。'sense': 遺物・守護者の気配の方角の未探索を優先する"),
+      max_steps: z.number().int().min(1).max(200).optional().describe('この手数で止まる（既定は 1 回の上限 200。行動予算のあるシーズンで、使う手番を区切るとき）'),
     },
-  }, async (a) => act('explore', a, { type: 'explore', mode: a.mode, hpFloor: a.hp_floor, pickup: a.pickup, ...(a.toward ? { toward: a.toward } : {}) }));
+  }, async (a) => act('explore', a, { type: 'explore', mode: a.mode, hpFloor: a.hp_floor, pickup: a.pickup, ...(a.toward ? { toward: a.toward } : {}), ...(a.max_steps !== undefined ? { maxSteps: a.max_steps } : {}) }));
   server.registerTool('travel_to', {
     title: '移動（目的地）', description: "マクロ: 既知地図上の経路で座標・階段・記憶した対象（敵・アイテム・地物の ID）へ移動。目的地がアイテムなら着いて拾う（着いた手番に止まっても、hp_floor・hp_risk・予備動作でなければ拾ってから止まる）。地物は隣に着けば到着。隣に敵がいても退くなら mode: 'flee'。",
     inputSchema: { ...actionCommon, to: z.union([PosZ, z.enum(['stairs_down', 'stairs_up']), z.string().regex(/^e_[0-9a-z]{6}$/)]), ...moveArgs, pickup: z.union([z.boolean(), z.literal('useful')]).optional().describe("通り道のアイテムも拾う（既定: 目的地がアイテムのとき true。'useful' は使える物だけ）") },

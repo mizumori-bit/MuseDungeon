@@ -5,7 +5,7 @@ import type { Catalog } from '@muse/shared';
 import type { Content } from '@muse/content';
 import { createRun, ENGINE_VERSION, isPlayersTurn, joinPlayer, seasonSync, step } from '@muse/engine';
 import type {
-  ActionError, AgentActivity, Command, CommandRecord, CommandSource, Expedition, ExpeditionReport, GameEvent, JoinCommand, LegacyMonster, MacroStop, ProjectedEvent,
+  ActionError, AgentActivity, Command, CommandRecord, CommandSource, Dir, Expedition, ExpeditionReport, GameEvent, JoinCommand, LegacyMonster, MacroStop, ProjectedEvent,
   PerceivedEvent, PlayerId, PlayerView, Pos, ReportCall, RunMetaFile, RunSummary, SeasonSyncCommand, TurnSnapshot, World,
 } from '@muse/shared';
 import {
@@ -67,6 +67,10 @@ export interface MacroReport {
   slowChasers?: number;
   /** fight: 標的を最後に見た場所（V4-0c §4.2） */
   targetSeenAt?: Pos;
+  /** explore toward: 始めた所と方角・方角に行ける境界が無かった手・遠回りで近い境界を先にした回数（S1b §12.4 の 4。結果の文で理由を言う） */
+  toward?: { kind: 'draft' | 'sense'; dir: Dir | null; start: Pos; noAlong: number; detour: number };
+  /** fight: 投げる物が尽きたが、隣に追ってくる敵がいるので床の投げ物を拾いに行かなかった（S1b §12.4 の 5） */
+  retrieveHeld?: boolean;
 }
 
 export type SubmitResult =
@@ -690,6 +694,8 @@ export class RunSession {
       hpGained: end.self.stats.hp - state.startHp,
       ...(state.slowChasers?.length ? { slowChasers: state.slowChasers.length } : {}),
       ...(state.targetSeenAt ? { targetSeenAt: { ...state.targetSeenAt } } : {}),
+      ...(cmd.type === 'explore' && cmd.toward && startView.self.pos ? { toward: { kind: cmd.toward, dir: state.towardDir ?? null, start: { ...startView.self.pos }, noAlong: state.towardNoAlong ?? 0, detour: state.towardDetour ?? 0 } } : {}),
+      ...(state.retrieveHeld ? { retrieveHeld: true } : {}),
     };
     return { ok: true, events: all, startSeq, steps: state.steps, interruptedBy: stop, macro };
   }

@@ -55,7 +55,7 @@
     "onUse": [{ "effect": "teleport" }], "desc": { "ja": "同じ階のどこかへ瞬間移動する", "en": "Teleports you somewhere on this floor" } , "clue": {"ja": "紙が温かい（転移の巻物か地図の巻物）", "en": "the paper is warm (teleportation or mapping)"} },
   { "id": "core:scroll_identify", "name": { "ja": "鑑定の巻物", "en": "scroll of identify" }, "category": "scroll", "unidentified": true,
     "depth": { "min": 1 }, "rarity": 1, "stack": true,
-    "onUse": [{ "effect": "identify", "count": 1 }], "desc": { "ja": "所持品の正体を 1 種類明らかにする（武器・防具・装飾品なら呪いの有無も）", "en": "Identifies one kind of item you carry (for weapons, armor and accessories, also whether it is cursed)" } , "clue": {"ja": "文字が淡く光る（鑑定の巻物か解呪の巻物）", "en": "the letters glow faintly (identify or remove curse)"} },
+    "onUse": [{ "effect": "identify", "count": 1 }], "desc": { "ja": "所持品の正体を 1 種類明らかにする（武器・防具・装飾品なら呪いの有無も）。対象は use_item の target_slot で選ぶ（省くとスロット順で最初の未鑑定の品）", "en": "Identifies one kind of item you carry (for weapons, armor and accessories, also whether it is cursed). Choose the item with use_item target_slot (otherwise the first unidentified item by slot)" } , "clue": {"ja": "文字が淡く光る（鑑定の巻物か解呪の巻物）", "en": "the letters glow faintly (identify or remove curse)"} },
   { "id": "core:scroll_remove_curse", "name": { "ja": "解呪の巻物", "en": "scroll of remove curse" }, "category": "scroll", "unidentified": true,
     "depth": { "min": 2 }, "rarity": 2, "stack": true,
     "onUse": [{ "effect": "uncurse" }], "desc": { "ja": "所持品すべての呪いを解く（呪いの接辞が消え、外せるようになる）", "en": "Lifts every curse on what you carry (the curse affix is removed and the item can be taken off)" } , "clue": {"ja": "文字が淡く光る（鑑定の巻物か解呪の巻物）", "en": "the letters glow faintly (identify or remove curse)"} },

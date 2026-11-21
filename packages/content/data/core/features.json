@@ -4,7 +4,7 @@
     "states": ["idle", "used"], "initialState": "idle", "passable": true,
     "onInteract": [{ "effect": "heal", "amount": "3d6+2" }, { "effect": "cure", "status": "core:poison" }],
     "afterInteract": "used"
-  , "desc": {"ja": "澄んだ水が湧いている。飲むと（interact）傷が癒え、毒が消える。1 回だけ", "en": "Clear water wells up. Drinking (interact) heals and cures poison, once"} },
+  , "desc": {"ja": "澄んだ水が湧いている。飲むと（interact）HP が 3d6+2（5〜20）戻り、毒が消える（休憩の上限を超えても戻る。全快ではない）。1 回だけ", "en": "Clear water wells up. Drinking (interact) restores 3d6+2 HP (5-20) and cures poison (it can go past the rest cap; it is not a full heal), once"} },
   {
     "id": "core:altar", "name": { "ja": "祭壇", "en": "altar" }, "category": "feature",
     "states": ["idle", "used"], "initialState": "idle", "passable": true,

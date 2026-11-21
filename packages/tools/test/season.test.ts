@@ -257,10 +257,11 @@ describe('S0 §2.4: reporting and published stairs', () => {
       const st = o.observation.navigation.known_stairs.find((s) => s.type === 'down');
       expect(st?.public_by).toBe('Aya');
       expect(o.text).toContain('（公開: Aya が報告。まだ見ていない）');
-      // travel_to stairs_down は途中の道が分からないので断られ、下への風を探す手を出す
+      // 入口からの道しるべも載る（S1b §12.4 の 1）ので、travel_to stairs_down は道が分からないとは断られない
+      // （道しるべを引けない階の断りとヒントは s1b.test.ts）
+      expect(b.session.history.some((e) => e.type === 'knowledge_updated' && e.publicStairs && e.publicPath)).toBe(true);
       const tr = await act(b.port, { type: 'travel', to: 'stairs_down' });
-      expect(!tr.ok && tr.error.code).toBe('unreachable');
-      if (!tr.ok) expect(tr.error.hint).toContain("explore { toward: 'draft' }");
+      expect(tr.ok || tr.error.code).not.toBe('unreachable');
       // 下への風は、自分の目で見るまで出続ける
       expect(o.observation.self.floor?.draft).toBeTruthy();
       // 公開で知っただけの階段は報告できない

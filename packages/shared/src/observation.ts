@@ -912,9 +912,12 @@ export function mapTextLines(map: MapResult): string[] {
   const pad = String(Math.max(lastY, 0)).length;
   const tens: string[] = [];
   const ones: string[] = [];
+  // 10 の位は 10 の倍数の列にだけ書く（S1b §12.4 の 6: 左端が 10 の倍数でない地図で、左端にも 10 の位の「0」を書いていたので、
+  // その列を x=0 と読んで 1 列ずれた）。範囲に 10 の倍数が無いときだけ、左端に書く
+  const hasTen = Array.from({ length: width }, (_, i) => map.origin.x + i).some((x) => x % 10 === 0);
   for (let i = 0; i < width; i++) {
     const x = map.origin.x + i;
-    tens.push(x % 10 === 0 || i === 0 ? String(Math.trunc(x / 10) % 10) : ' ');
+    tens.push(x % 10 === 0 || (i === 0 && !hasTen) ? String(Math.trunc(x / 10) % 10) : ' ');
     ones.push(String(x % 10));
   }
   const lead = ' '.repeat(pad + 1);
@@ -1268,6 +1271,22 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
         // worst_if_chased: 追われたままなら最悪の被害（敵ごとに歩く間の攻撃回数 × 受けた最大の一撃。記録の無い敵がいれば null。V3-4b §28.5）
         data: { stairs: st.type, path_len: st.path_len, faster, worst_if_chased: unrecorded ? null : chaseOf(st.path_len!).worst, hp: me.stats.hp },
       });
+    }
+  }
+  // 予算の終わりぎわ（S1b §12.4 の 2。シーズンのランの迷宮の中）: 残りが、いちばん近い着ける階段までの歩数の 2 倍を下回ったか、100 を切った
+  if (view.season && f && pos && view.status !== 'dead' && view.status !== 'at_camp') {
+    const left = Math.max(0, view.season.budgetLeft);
+    const near = known_stairs.filter((s) => s.path_len !== null).sort((a, b) => a.path_len! - b.path_len! || (a.type === 'up' ? -1 : 1))[0];
+    const steps = near ? near.path_len! : null;
+    if (left < 100 || (steps !== null && left < steps * 2)) {
+      const tail = t(L, '尽きると時間切れで、未確定の戦利品を失う', 'running out is time up and loses the unbanked haul');
+      const name = near ? (near.type === 'up' ? t(L, '上り階段', 'stairs up') : t(L, '下り階段', 'stairs down')) : '';
+      const text = steps === null
+        ? t(L, `予算の残り ${left} 手番。着ける階段が分からない（既知の道で届く階段が無い。${tail}）`, `Budget: ${left} turns left. No stairs you can reach on the known map (${tail})`)
+        : steps === 0
+          ? t(L, `予算の残り ${left} 手番。いま${name}の上にいる（ここで extract できる。${tail}）`, `Budget: ${left} turns left. You are on the ${name} (you can extract here; ${tail})`)
+          : t(L, `予算の残り ${left} 手番。いちばん近い着ける階段（${name}）まで ${steps} 歩（${tail}）`, `Budget: ${left} turns left. ${steps} steps to the nearest reachable stairs (${name}; ${tail})`);
+      alerts.push({ code: 'budget_low', text, data: { left, stairs: near?.type ?? null, path_len: steps } });
     }
   }
   if ((opts.recent ?? []).some((e) => e.type === 'entity_changed_floor' && (e.event as any).id === me.id)) {
@@ -1740,8 +1759,10 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
       ? t(L, `階段まで ${n} 歩。追われたままなら最悪の被害は不明（記録のない敵がいる。HP ${hpNow}）`, `${n} steps to the stairs. If they keep chasing you, worst damage unknown (an enemy has no record; HP ${hpNow})`)
       : (() => {
         const c = x.chaseOf(n);
-        return t(L, `階段まで ${n} 歩。追われたままなら最悪 ${c.worst} の被害（追いつけるのは ${c.catchers} 体・射撃 ${c.shooters} 体。HP ${hpNow}）`,
-          `${n} steps to the stairs. If they keep chasing you, worst ${c.worst} damage (${c.catchers} can catch you, ${c.shooters} shooting; HP ${hpNow})`);
+        // いま隣にいる近接の敵は、離れる手番に 1 回殴りうる（最悪の被害に入れてある。「追いつけるのは 0 体」を安全と読まれた。S1b §12.4 の 8）
+        const adj = x.huntingReach.filter((m) => m.dist <= 1 && !m.traits.includes('ranged')).length;
+        return t(L, `階段まで ${n} 歩。追われたままなら最悪 ${c.worst} の被害（追いつけるのは ${c.catchers} 体・射撃 ${c.shooters} 体${adj ? `・いま隣の ${adj} 体が離れぎわに殴る 1 回ずつを含む` : ''}。HP ${hpNow}）`,
+          `${n} steps to the stairs. If they keep chasing you, worst ${c.worst} damage (${c.catchers} can catch you, ${c.shooters} shooting${adj ? `; includes one hit each from the ${adj} adjacent as you step away` : ''}; HP ${hpNow})`);
       })();
   };
   const stairsLine = (type: 'down' | 'up'): string => {

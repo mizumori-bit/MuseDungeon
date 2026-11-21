@@ -67,6 +67,8 @@ export function buildCatalog(c: Content): Catalog {
       })()),
       // 未鑑定の手がかり（V3-5 §5.4。2〜3 種で共有する公開の表）
       ...(it.clue ? { clue: it.clue } : {}),
+      // 使うと所持品を鑑定する（鑑定の巻物。S1b §12.4 の 8: 対象を付けずに使った結果の文に、対象の選び方を添える）
+      ...(it.onUse.some((e) => e.effect === 'identify') ? { identifies: true as const } : {}),
     };
   }
   return {
