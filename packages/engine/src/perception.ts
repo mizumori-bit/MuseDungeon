@@ -1,6 +1,6 @@
 // 知覚: プレイヤーの視界と知識（knowledge_updated）、モンスターの視認、騒音、起床、モンスターの思い出。
 import type { Entity, FloorHint, FloorKey, MonsterMemory, PlayerId, PlayerRecord, Pos, RememberedEntity, Sense } from '@muse/shared';
-import { cheb, compassDir, currentExpedition, findPath, inCover, indicesToRanges, memoryKey } from '@muse/shared';
+import { cheb, compassDir, currentExpedition, findPath, inCover, indicesToRanges, isSeasonSpot, memoryKey } from '@muse/shared';
 import type { Ctx } from './ctx';
 import { computeFov, hasLos, inCircle, line } from './geom';
 import { firstStealthPerk, gearOf, noiseRingOf, notePerk, perkStealth, stealthOf } from './build';
@@ -115,6 +115,7 @@ export function updateKnowledge(ctx: Ctx, key: FloorKey): void {
     const fov = playerFov(ctx, pr);
     const fovSet = new Set(fov);
     seedCampfires(ctx, pr, key, fovSet);
+    seedPublicSpots(ctx, pr, key, fovSet);
     const k = pr.knowledge;
     const fk = k.floors[key];
     const visChanged = !sameArr(fov, k.visible) || !fk;
@@ -215,7 +216,10 @@ function seedPublicStairs(ctx: Ctx, pr: PlayerRecord, key: FloorKey): void {
   const cells = path ?? [i];
   const fresh = cells.filter((c) => (seen?.[c] ?? 0) === 0);
   const newlySeen: number[] = [];
-  for (const c of fresh) newlySeen.push(c, f.terrain[c]);
+  // 道しるべのマスは、階段のほかは普通の床として載せる（S1c §14.6 の 5・§14.10 の 2）。その世界だけの浅い水・扉の開け閉めなどを載せない
+  // （棲み処の場所の手がかりにならないように）。自分の目で見たら、本当の地形に直る（updateKnowledge が見た地形と比べる）
+  const plain = ctx.world.meta.terrainTable.indexOf(ctx.content.biomes[f.biome]?.palette.floor ?? 'core:floor');
+  for (const c of fresh) newlySeen.push(c, ctx.content.terrain[ctx.content.terrainIndex[ctx.world.meta.terrainTable[f.terrain[c]]]]?.stairs || plain < 0 ? f.terrain[c] : plain);
   ctx.emit({
     type: 'knowledge_updated', player: pr.id, floorKey: key, visible: null, newlySeen, rememberedSet: [], rememberedDel: [], metAdd: [],
     mappedAdd: fresh, publicStairs: ps.by, ...(path ? { publicPath: true as const } : {}), seenBy: [pr.id], floor: key,
@@ -257,6 +261,26 @@ function seedCampfires(ctx: Ctx, pr: PlayerRecord, key: FloorKey, fovSet: Readon
       rememberedSet: [{ id: e.id, kind: e.kind, cat: 'feature', pos: { x: e.pos.x, y: e.pos.y }, qty: 1, ft: f.time, state: e.feature?.state ?? 'lit' }],
       rememberedDel: [], metAdd: [], publicFire: e.campfire.by, seenBy: [pr.id], floor: key,
     });
+  }
+}
+
+/**
+ * 公開された特別な場所（S1c §14.5。祭壇・賭けの祭壇・碑文）: その階に入ると、まだ覚えていないものが覚えている地図に載る（報告した者の名前つき）。
+ * 火と同じく、地物があることだけで、そのマスの地形と途中の道は載せない。自分の世界のそのマスに同じ種類の特別な場所が無ければ載せない
+ */
+function seedPublicSpots(ctx: Ctx, pr: PlayerRecord, key: FloorKey, fovSet: ReadonlySet<number>): void {
+  const f = ctx.world.floors[key];
+  const spots = f && f.branch === 'main' ? (ctx.world.season?.spots ?? []).filter((s) => s.depth === f.depth) : [];
+  for (const s of spots) {
+    const i = s.y * f.width + s.x;
+    if (fovSet.has(i)) continue;
+    const e = ctx.entitiesOn(key).find((x) => x.pos && x.pos.x === s.x && x.pos.y === s.y && x.kind === s.kind && isSeasonSpot(ctx.world, x));
+    if (!e?.pos) continue;
+    const fk = pr.knowledge.floors[key];
+    if (fk?.remembered.some((r) => r.id === e.id)) continue;
+    const r: RememberedEntity = { id: e.id, kind: e.kind, cat: 'feature', pos: { x: e.pos.x, y: e.pos.y }, qty: 1, ft: f.time };
+    if (e.feature?.state !== undefined) r.state = e.feature.state;
+    ctx.emit({ type: 'knowledge_updated', player: pr.id, floorKey: key, visible: null, newlySeen: [], rememberedSet: [r], rememberedDel: [], metAdd: [], publicSpot: s.by, seenBy: [pr.id], floor: key });
   }
 }
 

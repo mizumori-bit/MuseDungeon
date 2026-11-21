@@ -116,11 +116,19 @@ export const SeasonSyncSchema = z.object({
     public: z.array(z.object({ depth: z.number().int().positive(), x: z.number().int(), y: z.number().int(), by: z.string().max(64) })),
     awards: z.array(SeasonAwardSchema), contribution: z.number().int().nonnegative(), died: z.boolean(),
     /** S1: 共有層の野営の火（mine: 自分の火、uses: 支援賞に数えた回数）と、参加者の表示名 */
-    fires: z.array(z.object({ depth: z.number().int().positive(), x: z.number().int(), y: z.number().int(), by: z.string().max(64), mine: z.boolean().optional(), uses: z.number().int().nonnegative().optional(), dup: z.boolean().optional() })).optional(),
+    fires: z.array(z.object({ depth: z.number().int().positive(), x: z.number().int(), y: z.number().int(), by: z.string().max(64), mine: z.boolean().optional(), uses: z.number().int().nonnegative().optional(), dup: z.boolean().optional(),
+      /** S1c §14.4 の 7: 自分の火を使った（支援賞に数えた）参加者の表示名 */
+      users: z.array(z.string().max(64)).max(64).optional() })).optional(),
+    /** S1c §14.5: 公開された特別な場所（祭壇・賭けの祭壇・碑文。by は最初に報告した者） */
+    spots: z.array(z.object({ depth: z.number().int().positive(), x: z.number().int(), y: z.number().int(), kind: z.string().max(64), by: z.string().max(64) })).optional(),
     self: z.string().max(64).optional(),
   }),
   /** 報告の結果（reason: report）: 送った階段と、最初の報告だったか */
-  report: z.object({ stairs: z.array(z.object({ depth: z.number().int().positive(), x: z.number().int(), y: z.number().int(), first: z.boolean() })) }).optional(),
+  report: z.object({
+    stairs: z.array(z.object({ depth: z.number().int().positive(), x: z.number().int(), y: z.number().int(), first: z.boolean() })),
+    /** S1c §14.5: 送った特別な場所と、最初の報告だったか */
+    spots: z.array(z.object({ depth: z.number().int().positive(), x: z.number().int(), y: z.number().int(), kind: z.string().max(64), first: z.boolean() })).optional(),
+  }).optional(),
 });
 export type SeasonSyncCommand = z.infer<typeof SeasonSyncSchema>;
 

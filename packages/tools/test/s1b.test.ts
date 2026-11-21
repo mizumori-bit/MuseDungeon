@@ -92,10 +92,12 @@ describe('S1b §12.4 の 1: the trail to published stairs', () => {
     const ev = b.session.history.filter((e) => e.type === 'knowledge_updated' && e.publicStairs) as Extract<GameEvent, { type: 'knowledge_updated' }>[];
     expect(ev).toHaveLength(1);
     expect(ev[0].publicPath).toBe(true);
-    // 載せたのは道のマスだけ（まだ見ていないもの）。地形は自分の世界のもの
+    // 載せたのは道のマスだけ（まだ見ていないもの）。地形は、階段のほかは普通の床（S1c §14.6 の 5・§14.10 の 2: その世界だけの浅い水・扉を載せない）
     const added = new Set(ev[0].mappedAdd ?? []);
     for (const i of added) expect(trail).toContain(i);
-    for (let j = 0; j < ev[0].newlySeen.length; j += 2) expect(ev[0].newlySeen[j + 1]).toBe(f.terrain[ev[0].newlySeen[j]]);
+    const plain = w.meta.terrainTable.indexOf('core:floor');
+    const isStairsT = (ti: number) => !!content.terrain[content.terrainIndex[w.meta.terrainTable[ti]]]?.stairs;
+    for (let j = 0; j < ev[0].newlySeen.length; j += 2) expect(ev[0].newlySeen[j + 1]).toBe(isStairsT(f.terrain[ev[0].newlySeen[j]]) ? f.terrain[ev[0].newlySeen[j]] : plain);
     // 道のすべてのマスを覚えている（見た・地図に載った）
     for (const i of trail) expect(fk.seen[i]).not.toBe(0);
     expect(fk.mapped ?? []).toContain(stairs.y * f.width + stairs.x);
@@ -122,17 +124,21 @@ describe('S1b §12.4 の 1: the trail to published stairs', () => {
     const { stairs } = await publishDepth1(m);
     // 隠れた罠: B の世界の地下 1 階の道の上に、まだ見つけていない罠を置いてから遠征を始める
     const b = await seasonRun(m, 'Ben');
-    // 地下 1 階は参加の時点では作られていないことがあるので、作られていれば罠を置く
+    // 地下 1 階は参加の時点で作られている（参加の命令が作る。S1c §14.10 の 3: 作られていなければ、このテストは何も確かめずに通っていた）
     const exp0 = b.session.world.floors['main:1'];
-    if (exp0) {
-      const trail0 = expectedTrail(b.session.world, 'main:1', stairs);
-      const c = trail0[Math.trunc(trail0.length / 2)];
-      inject(b.session.world, { put: [{ id: 'e_s1btr1', kind: 'core:trap_dart', sid: 997001, pos: { floor: 'main:1', x: c % exp0.width, y: Math.trunc(c / exp0.width) }, trap: { revealedTo: [] } } as unknown as Entity] });
-    }
+    expect(exp0).toBeDefined();
+    const trail0 = expectedTrail(b.session.world, 'main:1', stairs);
+    expect(trail0.length).toBeGreaterThan(4);
+    const c0 = trail0[Math.trunc(trail0.length / 2)];
+    inject(b.session.world, { put: [{ id: 'e_s1btr1', kind: 'core:trap_dart', sid: 997001, pos: { floor: 'main:1', x: c0 % exp0.width, y: Math.trunc(c0 / exp0.width) }, trap: { revealedTo: [] } } as unknown as Entity] });
+    expect(b.session.world.entities.e_s1btr1.pos).toEqual({ floor: 'main:1', x: c0 % exp0.width, y: Math.trunc(c0 / exp0.width) });
     expect((await act(b.port, { type: 'start_expedition', offer: 1 })).ok).toBe(true);
     const wb = b.session.world;
     const trail = expectedTrail(wb, 'main:1', stairs);
     const evB = b.session.history.find((e) => e.type === 'knowledge_updated' && e.publicStairs) as Extract<GameEvent, { type: 'knowledge_updated' }>;
+    expect(evB.publicPath).toBe(true);
+    // 罠のマスも道に入ったまま（罠を避けて引かない）
+    expect(trail).toEqual(trail0);
     const fk = wb.players[b.playerId].knowledge.floors['main:1'];
     for (const i of trail) expect(fk.seen[i]).not.toBe(0);
     for (const i of evB.mappedAdd ?? []) expect(trail).toContain(i);
@@ -175,13 +181,11 @@ describe('S1b §12.4 の 1: the trail to published stairs', () => {
       expect((await act(b.port, { type: 'use', slot: life.slot })).ok).toBe(true);
       for (let i = 0; i < 20 && b.port.view().status !== 'at_camp'; i++) await act(b.port, { type: 'wait' });
       expect((await act(b.port, { type: 'start_expedition', offer: 1 })).ok).toBe(true);
-      const f = b.session.world.floors['main:1'];
-      const fk = b.session.world.players[b.playerId].knowledge.floors['main:1'];
-      const seenBefore = (fk.seen[stairs.y * f.width + stairs.x] ?? 0) !== 0;
-      if (!seenBefore || b.session.history.some((e) => e.type === 'knowledge_updated' && e.publicStairs)) {
-        const ev = b.session.history.find((e) => e.type === 'knowledge_updated' && e.publicStairs) as Extract<GameEvent, { type: 'knowledge_updated' }> | undefined;
-        expect(ev?.publicPath).toBe(true);
-      }
+      // 道しるべの出来事があること（S1c §14.10 の 3: 無くても通っていた）。B は 1 回目の遠征で何もせずに綱で帰ったので、階段をまだ見ていない
+      const ev = b.session.history.find((e) => e.type === 'knowledge_updated' && e.publicStairs) as Extract<GameEvent, { type: 'knowledge_updated' }> | undefined;
+      expect(ev?.publicPath).toBe(true);
+      expect((ev?.mappedAdd ?? []).length).toBeGreaterThan(3);
+      void stairs;
       await act(b.port, { type: 'travel', to: 'stairs_down' });
       await b.port.act({ type: 'retire' }, { source: 'bot' });
       const v = verifyRunDir(content, join(dir, b.session.runId));
@@ -220,7 +224,12 @@ describe('S1b §12.4 の 2: the budget alert near the end', () => {
     };
     // 100 を切ったら、いつも出る（階段までの歩数つき）。100 ちょうどなら出ない（ここでは階段までの歩数の 2 倍が 100 より小さい）
     const a99 = alertAt(99);
-    expect(a99?.text).toBe(`予算の残り 99 手番。いちばん近い着ける階段（下り階段）まで ${steps} 歩（尽きると時間切れで、未確定の戦利品を失う）`);
+    // 帰還の綱を持っていれば 1 句（S1c §14.6 の 4）。持っていなければ書かない
+    expect(base.inventory.some((it) => it.kind === 'core:lifeline')).toBe(true);
+    expect(a99?.text).toBe(`予算の残り 99 手番。いちばん近い着ける階段（下り階段）まで ${steps} 歩（尽きると時間切れで、未確定の戦利品を失う。綱なら、その場で帰れる（確定は戦利品の半分））`);
+    const noRope = structuredClone(base);
+    noRope.inventory = noRope.inventory.filter((it) => it.kind !== 'core:lifeline');
+    expect(alertAt(99, noRope)?.text).toBe(`予算の残り 99 手番。いちばん近い着ける階段（下り階段）まで ${steps} 歩（尽きると時間切れで、未確定の戦利品を失う）`);
     expect(a99?.data).toEqual({ left: 99, stairs: 'down', path_len: steps });
     expect(alertAt(100)).toBeUndefined();
     // 2 倍の決まり: 階段から遠い見え方（覚えている地図を、端から端へ折り返す長い通路だけにする）で、境目の前後
@@ -247,7 +256,7 @@ describe('S1b §12.4 の 2: the budget alert near the end', () => {
     const f = noStairs.floor!;
     noStairs.memory.terrain[stairs.y * f.width + stairs.x] = noStairs.terrainTable.indexOf('core:floor');
     const an = alertAt(80, noStairs);
-    expect(an?.text).toBe('予算の残り 80 手番。着ける階段が分からない（既知の道で届く階段が無い。尽きると時間切れで、未確定の戦利品を失う）');
+    expect(an?.text).toBe('予算の残り 80 手番。着ける階段が分からない（既知の道で届く階段が無い。尽きると時間切れで、未確定の戦利品を失う。綱なら、その場で帰れる（確定は戦利品の半分））');
     expect(alertAt(150, noStairs)).toBeUndefined();
     // キャンプとシーズンでないランには出ない
     await lifelineHome(b);

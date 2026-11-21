@@ -10,7 +10,7 @@ import type {
 } from '@muse/shared';
 import {
   actionError, applyEvent, buildExpeditionReport, canonicalHash, guardianDisplayName, compareReports, emptyWorld, filterEventsForPlayer, FREE_COMMANDS, MACRO_COMMANDS,
-  macroNext, macroStart, macroStopError, narrate, projectPlayerView, publicStairsAt, seasonReportable, selfTurnMarks, t,
+  macroNext, macroStart, macroStopError, narrate, projectPlayerView, publicStairsAt, seasonReportable, seasonReportableSpots, selfTurnMarks, t,
 } from '@muse/shared';
 import type { SeasonHooks } from '../season/SeasonService';
 import type { ServerConfig } from '../config';
@@ -590,7 +590,7 @@ export class RunSession {
     return { ok: true, events: r.events, startSeq };
   }
 
-  /** report_stairs（S0 §9.4）: キャンプでだけ。このランで自分の目で見た下り階段のうち、まだ報告していないものを全部送る */
+  /** report_stairs（S0 §9.4・S1c §14.5）: キャンプでだけ。このランで自分の目で見た下り階段と特別な場所のうち、まだ報告していないものを全部送る */
   private reportNow(pid: PlayerId, opts: SubmitOpts): SubmitResult {
     const pr = this.world.players[pid];
     const L = pr.locale;
@@ -599,8 +599,10 @@ export class RunSession {
       return { ok: false, error: actionError('not_at_camp', t(L, '階段の報告はキャンプでだけできる。', 'You can report stairs only at camp.'), t(L, '階段から帰るか、遠征を終えてから。', 'Return to camp first.')) };
     }
     const list = seasonReportable(this.world, pid);
-    if (!list.length) return { ok: false, error: actionError('nothing_to_do', t(L, 'このランで見た下り階段は、全部報告してある。', 'You have already reported every down staircase you saw in this run.'), t(L, '新しい階段を見つけたら、キャンプでまた報告できる。', 'Find new stairs and report them at camp.')) };
-    const res = this.deps.season.report(this, pid, list);
+    // 特別な場所（S1c §14.5。祭壇・賭けの祭壇・碑文）も、まとめて送る
+    const spots = seasonReportableSpots(this.world, pid);
+    if (!list.length && !spots.length) return { ok: false, error: actionError('nothing_to_do', t(L, 'このランで見た下り階段と特別な場所（部屋の作りにある祭壇・賭けの祭壇・碑文）は、全部報告してある。', 'You have already reported every down staircase and special place (built-in altar, altar of chance, inscription) you saw in this run.'), t(L, '新しく見つけたら、キャンプでまた報告できる。', 'Find new ones and report them at camp.')) };
+    const res = this.deps.season.report(this, pid, list, spots);
     if (!res) return { ok: false, error: actionError('season_ended', t(L, 'このシーズンは結果が確定している。報告はもう受け付けない。', 'This season has been finalized; reports are no longer accepted.'), '') };
     return this.seasonSyncNow(pid, 'report', { source: opts.source, thought: opts.thought }, res);
   }

@@ -18,6 +18,7 @@ import { num, pickLore, tellStory } from './story';
 import { isMilestoneDepth } from './gen/generate';
 import { spawnFromSpec, sumAffixMods } from './spawn';
 import { recomputeStats } from './stats';
+import { campfireNear, fireReturnCheck } from './campfire';
 
 const OFFER_TYPES: ObjectiveType[] = ['reach_depth', 'slay_guardian', 'retrieve_relic'];
 /** 帰還の綱（V3-2R2 §18.1） */
@@ -737,18 +738,27 @@ export function wouldComplete(ctx: Ctx, x: Expedition, e: Entity): boolean {
   return true;
 }
 
-export function extractError(ctx: Ctx, e: Entity, pr: PlayerRecord, confirm: boolean | undefined): { error: ActionError } | { completed: boolean; expedition: Expedition } {
+/** fire: 階段の上でなく、野営の火の上か隣から帰る（S1c §14.3 の 1。帰り支度の手番がかかる） */
+export function extractError(ctx: Ctx, e: Entity, pr: PlayerRecord, confirm: boolean | undefined): { error: ActionError } | { completed: boolean; expedition: Expedition; fire?: Entity } {
   const L = pr.locale;
   const x = currentExpedition(ctx.world);
   if (!x) return { error: actionError('cannot_extract', t(L, '進行中の遠征が無い。', 'There is no expedition in progress.'), t(L, 'キャンプなら start_expedition で次の遠征を始める。', 'At camp, start one with start_expedition.')) };
   const tr = ctx.terrainAt(e.pos!.floor, e.pos!.x, e.pos!.y);
-  if (!tr.stairs) return { error: actionError('cannot_extract', t(L, '階段の上でないと extract できない。', 'You must stand on stairs to extract.'), t(L, 'travel_to stairs_up / stairs_down で階段へ移動する。階段から遠ければ帰還の綱（use_item）も使える。', 'Move onto stairs with travel_to stairs_up / stairs_down. Far from stairs, the lifeline (use_item) also works.')) };
+  // シーズンのラン: 野営の火の上か隣なら、追ってくる敵が見えていなければ、帰り支度の後に帰れる（S1c §14.3 の 1）
+  const fire = !tr.stairs ? campfireNear(ctx, e) : undefined;
+  if (!tr.stairs && !fire) {
+    return { error: actionError('cannot_extract', t(L, ctx.world.season ? '階段の上か、野営の火の上か隣でないと extract できない。' : '階段の上でないと extract できない。', ctx.world.season ? 'You must stand on stairs, or on or next to a campfire, to extract.' : 'You must stand on stairs to extract.'), t(L, 'travel_to stairs_up / stairs_down で階段へ移動する。階段から遠ければ帰還の綱（use_item）も使える。', 'Move onto stairs with travel_to stairs_up / stairs_down. Far from stairs, the lifeline (use_item) also works.')) };
+  }
+  if (fire) {
+    const err = fireReturnCheck(ctx, e, pr, fire);
+    if (err) return { error: err };
+  }
   // 階段の上なら追跡中の敵が見えていても extract できる（敵は階段を追ってこない。V3-2R2 §18.1）
   const completed = wouldComplete(ctx, x, e);
   if (!completed && confirm !== true) {
     return { error: actionError('confirm_required', t(L, '目的は未達成。今 extract すると撤退（報酬なし）になる。', 'The objective is not complete; extracting now is a withdrawal (no reward).'), t(L, '撤退するなら confirm: true を付けて extract する。', 'To withdraw, call extract with confirm: true.')) };
   }
-  return { completed, expedition: x };
+  return { completed, expedition: x, ...(fire ? { fire } : {}) };
 }
 
 /** extract の実行: 盤面から外してキャンプへ（全回復・状態異常解除）。lifeline: 帰還の綱で戻った */

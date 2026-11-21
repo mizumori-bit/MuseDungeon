@@ -237,7 +237,7 @@ export interface PlayerView {
    * シーズンの写し（S0。PROTOCOL §9.6。シーズンのランだけ）。budgetLeft: 今の予算の残り。
    * unreported・unpublished: まだ報告していない階段と、そのうち取り込んだ一覧でまだだれも公開していないもの
    */
-  season?: SeasonState & { budgetLeft: number; unreported: number; unpublished: number };
+  season?: SeasonState & { budgetLeft: number; unreported: number; unpublished: number; spotsUnreported: number; spotsUnpublished: number };
 }
 
 export function hpState(hp: number, maxHp: number): HpState {

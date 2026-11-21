@@ -1,5 +1,5 @@
 // シーズン（S0。SEASON.md §2・PROTOCOL.md §9）の、World から読むだけの関数。engine・サーバー・観測が同じものを使う。
-import type { Locale, PlayerId, SeasonAward, SeasonState, World } from './types';
+import type { Entity, Locale, PlayerId, SeasonAward, SeasonSpot, SeasonState, World } from './types';
 import { t } from './util';
 
 /** ランの中の予算の残り（取り込んだ残り − その後の自分の手番）。シーズンのランでなければ null */
@@ -34,11 +34,62 @@ export function seasonReportable(world: World, pid: PlayerId): { depth: number; 
   return out.sort((a, b) => a.depth - b.depth);
 }
 
-/** キャンプの「まだ報告していない階段 N（うち、まだだれも公開していないもの M）」の数。M は取り込んだ公開の一覧で数える */
-export function seasonStairsCounts(world: World, pid: PlayerId): { unreported: number; unpublished: number } {
+/**
+ * 報告できる特別な場所の種類（S1c §14.5）。泉は対象にしない（条件「静か」で、その遠征で初めて作る階から消える。だれの世界にもあるとは限らない）。
+ * 祭壇は、部屋の作り（prefab。祠など）に組み込まれたものだけ（ばらまかれる祭壇は、条件の敵・品の数で場所が変わる）。賭けの祭壇と碑文は、どれも部屋の作りにある
+ */
+export const SEASON_SPOT_KINDS: readonly string[] = ['core:altar', 'core:gamble_altar', 'core:inscription'];
+
+/** その地物が、報告できる特別な場所か（種類・部屋の作りの中・守護者の棲み処の地物でない） */
+export function isSeasonSpot(world: World, e: Entity): boolean {
+  if (!e.feature || !e.pos || e.lairOf || e.campfire || !SEASON_SPOT_KINDS.includes(e.kind)) return false;
+  const f = world.floors[e.pos.floor];
+  if (!f || f.branch !== 'main') return false;
+  const { x, y } = e.pos;
+  return f.regions.some((r) => r.kind === 'prefab' && x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h);
+}
+
+/**
+ * 報告できる特別な場所（S1c §14.5）: このランで自分の目で見た（そのマスを見た。地図の巻物や公開で知っただけでない）もののうち、
+ * このランでまだ報告していないもの。深さ・y・x の順
+ */
+export function seasonReportableSpots(world: World, pid: PlayerId): { depth: number; x: number; y: number; kind: string }[] {
+  const s = world.season;
+  const pr = world.players[pid];
+  if (!s || !pr) return [];
+  const done = s.reportedSpots ?? [];
+  const out: { depth: number; x: number; y: number; kind: string }[] = [];
+  for (const e of Object.values(world.entities)) {
+    if (!isSeasonSpot(world, e)) continue;
+    const f = world.floors[e.pos!.floor];
+    const fk = pr.knowledge.floors[f.key];
+    if (!fk) continue;
+    const i = e.pos!.y * f.width + e.pos!.x;
+    if ((fk.seen[i] ?? 0) === 0 || (fk.mapped ?? []).includes(i)) continue;
+    if (done.some((d) => d.depth === f.depth && d.x === e.pos!.x && d.y === e.pos!.y)) continue;
+    out.push({ depth: f.depth, x: e.pos!.x, y: e.pos!.y, kind: e.kind });
+  }
+  return out.sort((a, b) => a.depth - b.depth || a.y - b.y || a.x - b.x);
+}
+
+/** 公開された特別な場所（その深さと座標） */
+export function publicSpotAt(state: SeasonState | null | undefined, depth: number, x: number, y: number): SeasonSpot | null {
+  return state?.spots?.find((p) => p.depth === depth && p.x === x && p.y === y) ?? null;
+}
+
+/**
+ * キャンプの「まだ報告していない階段 N（うち、まだだれも公開していないもの M）」の数。M は取り込んだ公開の一覧で数える。
+ * 特別な場所（S1c §14.5）も同じ形で数える（spotsUnreported・spotsUnpublished）
+ */
+export function seasonStairsCounts(world: World, pid: PlayerId): { unreported: number; unpublished: number; spotsUnreported: number; spotsUnpublished: number } {
   const list = seasonReportable(world, pid);
   const pub = new Set((world.season?.public ?? []).map((p) => p.depth));
-  return { unreported: list.length, unpublished: list.filter((x) => !pub.has(x.depth)).length };
+  const spots = seasonReportableSpots(world, pid);
+  const spotPub = world.season?.spots ?? [];
+  return {
+    unreported: list.length, unpublished: list.filter((x) => !pub.has(x.depth)).length,
+    spotsUnreported: spots.length, spotsUnpublished: spots.filter((x) => !spotPub.some((p) => p.depth === x.depth && p.x === x.x && p.y === x.y)).length,
+  };
 }
 
 /** 公開された下り階段（その深さ） */

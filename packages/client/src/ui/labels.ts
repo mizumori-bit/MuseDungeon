@@ -34,6 +34,9 @@ const EXTRACT_BLOCK: Record<NonNullable<ObsExpedition['extract_blocked_by']>, [s
   not_on_stairs: ['階段の上ではない', 'not on stairs'],
   not_your_turn: ['手番ではない', 'not your turn'],
   ended: ['遠征は終了済み', 'the expedition is over'],
+  // 野営の火のそば（S1c。シーズンのランだけ）
+  hunted_at_fire: ['野営の火のそばだが、追ってくる敵が見えている', 'by a campfire, but a hunting enemy is in view'],
+  budget_at_fire: ['野営の火のそばだが、予算の残りが帰り支度に足りない', 'by a campfire, but too little budget left to pack up'],
 };
 
 export function extractBlockLabel(code: ObsExpedition['extract_blocked_by']): string {

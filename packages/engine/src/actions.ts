@@ -23,7 +23,7 @@ import { Registry, roll } from './registry';
 import { regenTick } from './scheduler';
 import { recomputeStats } from './stats';
 import { spawnFromSpec } from './spawn';
-import { campfireCheck, placeFire, placeFireCheck, useCampfire } from './campfire';
+import { campfireCheck, placeFire, placeFireCheck, startFireReturn, useCampfire } from './campfire';
 
 export interface ActionOutcome { cost: number; scheduled?: boolean }
 export type Prepared = { error: ActionError } | { run: () => ActionOutcome };
@@ -797,6 +797,8 @@ actions.register('stairs', (ctx, e, pr) => {
 actions.register('extract', (ctx, e, pr, cmd: Extract<Command, { type: 'extract' }>) => {
   const r = extractError(ctx, e, pr, cmd.confirm);
   if ('error' in r) return { error: r.error };
+  // 野営の火から（S1c §14.3 の 1）: この手番から帰り支度。残りは行動できず、切れたら帰る（追ってくる敵が見えたら取りやめ）
+  if (r.fire) { const fire = r.fire; return { run: () => startFireReturn(ctx, e, pr, fire, cmd.confirm === true, r.expedition) }; }
   return { run: () => { doExtract(ctx, e, pr, r.completed, r.expedition); return { cost: 0, scheduled: true }; } };
 });
 

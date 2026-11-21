@@ -308,6 +308,9 @@ export function applyEvent(world: World, ev: GameEvent): void {
     case 'fire_used':
       if (world.season) world.season.fireUses = clone(ev.usesAfter);
       break;
+    // 火からの帰り支度（S1c）: 状態は status_applied・status_expired と player_state が持つ
+    case 'fire_return':
+      break;
     case 'notes_updated':
       world.players[ev.player].knowledge.notes = clone(ev.notesAfter);
       break;

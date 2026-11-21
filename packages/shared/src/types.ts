@@ -534,7 +534,10 @@ export interface SeasonAward {
 export interface SeasonStairs { depth: number; x: number; y: number; by: string }
 
 /** 共有層の野営の火（S1。PROTOCOL §9.10）。mine: 自分の火、uses: 自分の火が支援賞に数えられた回数、dup: 同じマスの取り合いで載らなかった自分の火（S1a） */
-export interface SeasonFire { depth: number; x: number; y: number; by: string; mine?: boolean; uses?: number; dup?: boolean }
+export interface SeasonFire { depth: number; x: number; y: number; by: string; mine?: boolean; uses?: number; dup?: boolean; /** S1c: 自分の火を使った参加者の表示名（支援賞に数えた順） */ users?: string[] }
+
+/** 公開された特別な場所（S1c §14.5。祭壇・賭けの祭壇・碑文のうち、部屋の作りに組み込まれたもの）。by は最初に報告した者 */
+export interface SeasonSpot { depth: number; x: number; y: number; kind: string; by: string }
 
 /**
  * シーズンの写し（S0。PROTOCOL §9.6）。キャンプで取り込んだ共有層（season_sync）。
@@ -560,6 +563,10 @@ export interface SeasonState {
   placed?: { depth: number; x: number; y: number }[];
   fireUses?: { no: number; depth: number; x: number; y: number }[];
   self?: string;
+  /** S1c（古いランの写しには無い）: 公開された特別な場所・このランで報告した特別な場所（深さと座標）・前の取り込みから新しく自分の火を使った者（キャンプの知らせ） */
+  spots?: SeasonSpot[];
+  reportedSpots?: { depth: number; x: number; y: number }[];
+  fireNews?: { depth: number; x: number; y: number; names: string[] }[];
 }
 
 export interface WorldSecret {

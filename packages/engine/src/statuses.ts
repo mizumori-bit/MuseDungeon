@@ -4,6 +4,7 @@ import type { Entity, StatusInst } from '@muse/shared';
 import { applyDamage } from './combat';
 import type { Ctx } from './ctx';
 import { lifelineReturn } from './expedition';
+import { fireReturnExpire, fireReturnTick } from './campfire';
 import { Registry } from './registry';
 import { notePerk, perkHook, perkWithHook } from './build';
 import { guardianDotMult } from './guardians';
@@ -38,6 +39,8 @@ statusHandlers.register('cowed', {});
 statusHandlers.register('stat_mod', {});
 // 帰還の綱（V3-2R2 §18.1）: その間は行動できず、切れたらキャンプへ戻る。被害は受ける
 statusHandlers.register('recall', { incapacitates: true, expire: (ctx, e) => lifelineReturn(ctx, e) });
+// 野営の火からの帰り支度（S1c §14.3 の 1）: その間は行動できない。手番の始めに、追ってくる敵が見えたら取りやめ。切れたら火から帰る
+statusHandlers.register('fire_return', { incapacitates: true, tick: (ctx, e) => fireReturnTick(ctx, e), expire: (ctx, e, inst) => fireReturnExpire(ctx, e, inst.power) });
 
 function statusSeen(ctx: Ctx, e: Entity) {
   return e.pos ? ctx.perceive(e.pos.floor, [{ field: 'target', pos: e.pos, entity: e.id }], e.player ? [e.player] : []) : { seenBy: e.player ? [e.player] : [] };
@@ -81,16 +84,18 @@ export function removeStatus(ctx: Ctx, e: Entity, id: string): boolean {
 /** 手番開始時に状態異常を処理する。行動不能だったら true */
 export function tickStatuses(ctx: Ctx, e: Entity): boolean {
   if (!e.statuses?.length) return false;
-  let incap = false;
+  const incapIds: string[] = [];
   for (const inst of [...e.statuses]) {
     const def = ctx.content.statuses[inst.id];
     if (!def) continue;
     const h = statusHandlers.get(def.handler);
-    if (h.incapacitates) incap = true;
+    if (h.incapacitates) incapIds.push(inst.id);
     h.tick?.(ctx, e, inst, def);
     if ((ctx.world.entities[e.id]?.stats?.hp ?? 0) <= 0) return true;
   }
   const cur = ctx.world.entities[e.id];
+  // 自分の tick で外れた状態（帰り支度の取りやめ。S1c §14.3 の 1）は、この手番を止めない
+  const incap = incapIds.some((id) => (cur?.statuses ?? []).some((s) => s.id === id));
   if (!cur?.statuses?.length) return incap;
   const after = cur.statuses.map((s) => ({ ...s, turnsLeft: s.turnsLeft - 1 }));
   const expired = after.filter((s) => s.turnsLeft <= 0);

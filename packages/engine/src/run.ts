@@ -18,7 +18,7 @@ import { placeSeasonFires } from './campfire';
 import { advance, endTurn } from './scheduler';
 import { recomputeStats } from './stats';
 
-export const ENGINE_VERSION = '0.40.0';
+export const ENGINE_VERSION = '0.41.0';
 
 export interface CreateRunParams {
   runId: string;
@@ -182,6 +182,27 @@ export function seasonSync(world: World, content: Content, playerId: PlayerId, c
   const me = world.entities[pr.entityId];
   const turns = me?.actor?.turns ?? 0;
   const reported = [...new Set([...(world.season?.reported ?? []), ...(cmd.report?.stairs ?? []).map((x) => x.depth)])].sort((a, b) => a - b);
+  // 特別な場所（S1c §14.5）: このランで報告したもの（深さと座標）を持ち越す
+  const sameCell = (a: { depth: number; x: number; y: number }, b: { depth: number; x: number; y: number }) => a.depth === b.depth && a.x === b.x && a.y === b.y;
+  const reportedSpots = [...(world.season?.reportedSpots ?? [])].map((x) => ({ ...x }));
+  for (const s of cmd.report?.spots ?? []) if (!reportedSpots.some((r) => sameCell(r, s))) reportedSpots.push({ depth: s.depth, x: s.x, y: s.y });
+  reportedSpots.sort((a, b) => a.depth - b.depth || a.y - b.y || a.x - b.x);
+  // 自分の火を新しく使った者（S1c §14.4 の 7。前の取り込みの写しと比べる。このランの最初の取り込みでは知らせない）。
+  // キャンプの観測で見せるまで持ち越す: 遠征を始めるとき（start）は、キャンプで見せた分を捨てて、その後の分だけ。キャンプ・報告では前の分に足す
+  const fireNews: { depth: number; x: number; y: number; names: string[] }[] = cmd.reason === 'camp' || cmd.reason === 'report'
+    ? (world.season?.fireNews ?? []).map((n) => ({ ...n, names: [...n.names] })) : [];
+  if (world.season) {
+    for (const f of cmd.season.fires ?? []) {
+      if (!f.mine || !f.users?.length) continue;
+      const prev = (world.season.fires ?? []).find((p) => p.mine && sameCell(p, f));
+      const before = prev?.users ?? [];
+      const names = f.users.slice(before.length);
+      if (!names.length) continue;
+      const have = fireNews.find((n) => sameCell(n, f));
+      if (have) have.names.push(...names);
+      else fireNews.push({ depth: f.depth, x: f.x, y: f.y, names });
+    }
+  }
   const after: SeasonState = {
     id: cmd.season.id, name: cmd.season.name,
     budget: { limit: cmd.season.budget.limit, left: cmd.season.budget.left, at: turns },
@@ -193,11 +214,15 @@ export function seasonSync(world: World, content: Content, playerId: PlayerId, c
     placed: (world.season?.placed ?? []).map((x) => ({ ...x })),
     fireUses: (world.season?.fireUses ?? []).map((x) => ({ ...x })),
     ...(cmd.season.self ? { self: cmd.season.self } : {}),
+    ...(cmd.season.spots ? { spots: cmd.season.spots.map((x) => ({ ...x })) } : {}),
+    ...(reportedSpots.length ? { reportedSpots } : {}),
+    ...(fireNews.length ? { fireNews } : {}),
   };
   if (meta.thought) ctx.emit({ type: 'thought', player: playerId, text: meta.thought.slice(0, 280), seenBy: [playerId] });
   if (cmd.report) {
     const stairs = cmd.report.stairs.map((x) => ({ ...x }));
-    ctx.emit({ type: 'stairs_reported', player: playerId, stairs, gained: stairs.filter((x) => x.first).length, seenBy: [playerId], floor: null });
+    const spots = (cmd.report.spots ?? []).map((x) => ({ ...x }));
+    ctx.emit({ type: 'stairs_reported', player: playerId, stairs, ...(spots.length ? { spots } : {}), gained: stairs.filter((x) => x.first).length + spots.filter((x) => x.first).length, seenBy: [playerId], floor: null });
   }
   ctx.emit({ type: 'season_synced', player: playerId, reason: cmd.reason, seasonAfter: after, seenBy: [playerId], floor: null });
   // 共有層の火を、作ってある階のすべてに置く（まだ作っていない階には、作ったときに置く）

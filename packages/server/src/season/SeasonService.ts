@@ -31,7 +31,7 @@ export interface Participant {
   runs: SeasonRunRec[];
   /** シーズンで着いたいちばん深い階と、初めて着いたときまでに使った予算 */
   best: { depth: number; used: number };
-  /** 最初に報告した階段の数と、最後の 1 つを報告したときまでに使った予算 */
+  /** 最初に報告した数（階段と特別な場所。S1c §14.5）と、最後の 1 つを報告したときまでに使った予算 */
   firstReports: number;
   lastFirstUsed: number;
   died: boolean;
@@ -46,6 +46,9 @@ export function nameKey(name: string): string {
 }
 
 export interface PublicStairsRec { depth: number; x: number; y: number; by: string; profileId: string; runId: string; used: number; wall: number; order: number }
+
+/** 公開された特別な場所（S1c §14.5。spots.json）: 祭壇・賭けの祭壇・碑文のうち、部屋の作りに組み込まれたもの。最初に報告した者 */
+export interface PublicSpotRec { depth: number; x: number; y: number; kind: string; by: string; profileId: string; runId: string; used: number; wall: number; order: number }
 
 /**
  * 共有層の野営の火（S1。PROTOCOL §9.10。fires.json）。used: 載せたときまでに置いた者が使った予算、
@@ -68,6 +71,8 @@ interface SeasonData {
   def: SeasonDef;
   participants: Participant[];
   public: PublicStairsRec[];
+  /** 公開された特別な場所（S1c §14.5） */
+  spots: PublicSpotRec[];
   fires: PublicFireRec[];
   result: SeasonResult | null;
 }
@@ -171,6 +176,7 @@ export class SeasonStore {
       def,
       participants: this.readJson<Participant[]>(id, 'participants.json') ?? [],
       public: this.readJson<PublicStairsRec[]>(id, 'public.json') ?? [],
+      spots: this.readJson<PublicSpotRec[]>(id, 'spots.json') ?? [],
       fires: this.readJson<PublicFireRec[]>(id, 'fires.json') ?? [],
       result: this.readJson<SeasonResult>(id, 'result.json'),
     };
@@ -189,7 +195,7 @@ export class SeasonStore {
   open(def: SeasonDef): SeasonData {
     if (!SEASON_ID_RE.test(def.id)) throw new Error(`bad season id ${def.id} (a-z 0-9 _ -, up to 32)`);
     if (this.get(def.id)) throw new Error(`season ${def.id} already exists`);
-    const d: SeasonData = { def, participants: [], public: [], fires: [], result: null };
+    const d: SeasonData = { def, participants: [], public: [], spots: [], fires: [], result: null };
     this.data.set(def.id, d);
     this.writeJson(def.id, 'season.json', def);
     this.log(def.id, { type: 'opened', def });
@@ -221,6 +227,7 @@ export class SeasonStore {
 
   saveParticipants(d: SeasonData): void { this.writeJson(d.def.id, 'participants.json', d.participants); }
   savePublic(d: SeasonData): void { this.writeJson(d.def.id, 'public.json', d.public); }
+  saveSpots(d: SeasonData): void { this.writeJson(d.def.id, 'spots.json', d.spots); }
   saveFires(d: SeasonData): void { this.writeJson(d.def.id, 'fires.json', d.fires); }
   saveResult(d: SeasonData): void { this.writeJson(d.def.id, 'result.json', d.result); }
 
@@ -232,6 +239,8 @@ export class SeasonStore {
   }
 }
 
+export interface SeasonReportResult { stairs: { depth: number; x: number; y: number; first: boolean }[]; spots?: { depth: number; x: number; y: number; kind: string; first: boolean }[] }
+
 /** ランが今どうなっているか（SessionManager が答える）。null は動いていない（終わった・復旧していない） */
 export type LiveRunState = 'in_dungeon' | 'at_camp' | 'ended' | null;
 
@@ -239,8 +248,8 @@ export type LiveRunState = 'in_dungeon' | 'at_camp' | 'ended' | null;
 export interface SeasonHooks {
   /** その参加者の、今の取り込みの中身（予算の残り・公開された階段・順位の写し） */
   sync(session: RunSession, pid: PlayerId): SeasonSyncCommand['season'] | null;
-  /** 階段の報告: サーバーに届いた順で、最初の報告かを決めて残す */
-  report(session: RunSession, pid: PlayerId, stairs: readonly { depth: number; x: number; y: number }[]): { stairs: { depth: number; x: number; y: number; first: boolean }[] } | null;
+  /** 階段と特別な場所（S1c §14.5）の報告: サーバーに届いた順で、最初の報告かを決めて残す */
+  report(session: RunSession, pid: PlayerId, stairs: readonly { depth: number; x: number; y: number }[], spots?: readonly { depth: number; x: number; y: number; kind: string }[]): SeasonReportResult | null;
   onCommit(session: RunSession, events: readonly GameEvent[]): void;
 }
 
@@ -375,17 +384,20 @@ export class SeasonService implements SeasonHooks {
       budget: { limit: d.def.budget, left: d.def.budget - used(p) },
       ends_at: d.def.endsAt, ended: this.status(d) !== 'open',
       public: [...d.public].sort((a, b) => a.depth - b.depth).map((x) => ({ depth: x.depth, x: x.x, y: x.y, by: x.by })),
+      // 特別な場所（S1c §14.5）: 報告の順
+      spots: [...d.spots].sort((a, b) => a.order - b.order).map((x) => ({ depth: x.depth, x: x.x, y: x.y, kind: x.kind, by: x.by })),
       awards: (['adventure', 'contribution', 'survival', 'support'] as const).map((id) => st.award(p, id)),
       contribution: p.firstReports, died: p.died,
       // 野営の火（S1 §9.10）: 共有層の火（載せた順）。自分の火には mine と、支援賞に数えた回数
       // 取り合いで載らなかった火（dup）は、置いた者にだけ渡す（自分の火として数える）
+      // users（S1c §14.4 の 7）: 自分の火を使った（支援賞に数えた）参加者の表示名（数えた順）
       fires: [...d.fires].filter((f) => !f.dup || f.profileId === p.profileId).sort((a, b) => a.order - b.order)
-        .map((f) => ({ depth: f.depth, x: f.x, y: f.y, by: f.by, ...(f.profileId === p.profileId ? { mine: true, uses: f.uses, ...(f.dup ? { dup: true } : {}) } : {}) })),
+        .map((f) => ({ depth: f.depth, x: f.x, y: f.y, by: f.by, ...(f.profileId === p.profileId ? { mine: true, uses: f.uses, ...(f.dup ? { dup: true } : {}), ...(f.users.length ? { users: f.users.map((id) => d.participants.find((q) => q.profileId === id)?.name ?? '?') } : {}) } : {}) })),
       self: p.name,
     };
   }
 
-  report(session: RunSession, pid: PlayerId, stairs: readonly { depth: number; x: number; y: number }[]): { stairs: { depth: number; x: number; y: number; first: boolean }[] } | null {
+  report(session: RunSession, pid: PlayerId, stairs: readonly { depth: number; x: number; y: number }[], spots: readonly { depth: number; x: number; y: number; kind: string }[] = []): SeasonReportResult | null {
     const f = this.find(session, pid);
     if (!f || f.d.result) return null;
     const { d, p } = f;
@@ -400,11 +412,22 @@ export class SeasonService implements SeasonHooks {
       }
       out.push({ ...s, first });
     }
+    // 特別な場所（S1c §14.5）: その階のそのマスを最初に報告した者に貢献 1（階段と同じ数え方）
+    const outSpots: { depth: number; x: number; y: number; kind: string; first: boolean }[] = [];
+    for (const s of spots) {
+      const first = !d.spots.some((x) => x.depth === s.depth && x.x === s.x && x.y === s.y);
+      if (first) {
+        d.spots.push({ depth: s.depth, x: s.x, y: s.y, kind: s.kind, by: p.name, profileId: p.profileId, runId: session.runId, used: used(p), wall: this.now(), order: d.spots.length + 1 });
+        gained++;
+      }
+      outSpots.push({ ...s, first });
+    }
     if (gained) { p.firstReports += gained; p.lastFirstUsed = used(p); }
-    this.store.log(d.def.id, { type: 'reported', profileId: p.profileId, runId: session.runId, used: used(p), stairs: out });
-    this.store.savePublic(d);
+    this.store.log(d.def.id, { type: 'reported', profileId: p.profileId, runId: session.runId, used: used(p), stairs: out, ...(outSpots.length ? { spots: outSpots } : {}) });
+    if (out.length) this.store.savePublic(d);
+    if (outSpots.length) this.store.saveSpots(d);
     this.store.saveParticipants(d);
-    return { stairs: out };
+    return { stairs: out, ...(outSpots.length ? { spots: outSpots } : {}) };
   }
 
   /** ランの今の状態を参加者の記録に写す。大事な変化があれば true */
@@ -525,13 +548,19 @@ export class SeasonService implements SeasonHooks {
   }
 
   /**
-   * 火が使われた（S1 §8.5）: 置いた本人でない・その参加者がその火で数えられるのはシーズンを通して 1 回・最大 HP の supportMinHealPct% 以上が戻った、
+   * 火が使われた（S1 §8.5・S1c §14.3 の 5）: 置いた本人でない・その参加者がその火で数えられるのはシーズンを通して 1 回・
+   * 「使った」は、最大 HP の supportMinHealPct% 以上が戻った（fire_used）か、その火から帰還・撤退した（fire_return の done）、
    * をすべて満たす使用だけを、火を置いた参加者の支援賞に数える。数えた数を返す
    */
   private countFireUses(d: SeasonData, user: Participant, run: SeasonRunRec, session: RunSession, pid: PlayerId): boolean {
     if (d.result) return false;
-    // そのランの火の使用をすべて見る（やり直しても同じ: 数えたかどうかは火ごとの users で決まる）
-    const uses = session.history.filter((e): e is Extract<GameEvent, { type: 'fire_used' }> => e.type === 'fire_used' && e.player === pid);
+    // そのランの火の使用をすべて見る（やり直しても同じ: 数えたかどうかは火ごとの users で決まる）。記録の順のまま（firesSeen は、その順で記録に書いた数）
+    type Use = { depth: number; x: number; y: number; amount: number | null; maxHp: number | null; via: 'heal' | 'return' };
+    const uses: Use[] = [];
+    for (const e of session.history) {
+      if (e.type === 'fire_used' && e.player === pid) uses.push({ depth: e.depth, x: e.x, y: e.y, amount: e.amount, maxHp: e.maxHp, via: 'heal' });
+      else if (e.type === 'fire_return' && e.player === pid && e.phase === 'done') uses.push({ depth: e.depth, x: e.x, y: e.y, amount: null, maxHp: null, via: 'return' });
+    }
     const placed = session.world.season?.placed ?? [];
     const seen = run.firesSeen ?? 0;
     let n = 0;
@@ -540,8 +569,9 @@ export class SeasonService implements SeasonHooks {
       const fire = d.fires.find((x) => !x.dup && cell(x));
       // 使った者の火（自分の置いた火・取り合いで載らなかった火）は、同じマスにほかの者の火があっても数えない（S1a §10.1 の 5）
       const own = !!fire && (fire.profileId === user.profileId || d.fires.some((x) => x.profileId === user.profileId && cell(x)) || placed.some(cell));
-      const counted = !!fire && !own && !fire.users.includes(user.profileId) && e.amount * 100 >= e.maxHp * this.supportMinHealPct;
-      if (i >= seen) this.store.log(d.def.id, { type: 'fire_used', profileId: user.profileId, runId: session.runId, depth: e.depth, x: e.x, y: e.y, amount: e.amount, maxHp: e.maxHp, counted, ...(fire ? { holder: fire.profileId } : {}) });
+      const enough = e.via === 'return' || e.amount! * 100 >= e.maxHp! * this.supportMinHealPct;
+      const counted = !!fire && !own && !fire.users.includes(user.profileId) && enough;
+      if (i >= seen) this.store.log(d.def.id, { type: 'fire_used', via: e.via, profileId: user.profileId, runId: session.runId, depth: e.depth, x: e.x, y: e.y, ...(e.via === 'heal' ? { amount: e.amount, maxHp: e.maxHp } : {}), counted, ...(fire ? { holder: fire.profileId } : {}) });
       if (!counted || !fire) return;
       fire.uses++;
       fire.users.push(user.profileId);

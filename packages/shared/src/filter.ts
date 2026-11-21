@@ -23,7 +23,7 @@ const PLAYER_VISIBLE: ReadonlySet<EventType> = new Set<EventType>([
   // シーズン（S0 §9.4）: 階段の報告の結果（本人だけ）
   'stairs_reported',
   // 野営の火（S1 §9.10。本人だけ）
-  'fire_placed', 'fire_used',
+  'fire_placed', 'fire_used', 'fire_return',
 ]);
 
 /** 自分に関するときだけ渡す種別 */
@@ -52,6 +52,7 @@ const SELF_ONLY: Partial<Record<EventType, (ev: any, playerId: PlayerId, selfId:
   thought: (ev, p) => ev.player === p,
   fire_placed: (ev, p) => ev.player === p,
   fire_used: (ev, p) => ev.player === p,
+  fire_return: (ev, p) => ev.player === p,
 };
 
 /** プレイヤー向けに縮約したイベント（seenBy/masks/put/del を除去済み） */
@@ -76,7 +77,7 @@ export function filterEventsForPlayer(events: readonly GameEvent[], playerId: Pl
   const identified = new Set(view.identified);
   for (const ev of events) {
     // 公開された階段・野営の火を地図に載せた knowledge_updated（S0 §9.4・S1 §9.10）だけは文にする（ほかの knowledge_updated は渡さない。シーズンでないランには無い）
-    if (!PLAYER_VISIBLE.has(ev.type) && !(ev.type === 'knowledge_updated' && (ev.publicStairs || ev.publicFire))) continue;
+    if (!PLAYER_VISIBLE.has(ev.type) && !(ev.type === 'knowledge_updated' && (ev.publicStairs || ev.publicFire || ev.publicSpot))) continue;
     if (!eventVisibleTo(ev, playerId)) continue;
     const selfOnly = SELF_ONLY[ev.type];
     if (selfOnly && !selfOnly(ev, playerId, selfId)) continue;

@@ -119,7 +119,7 @@ async function placeFireAt(r: Run, p: Pos) {
 }
 
 describe('S1 §8.1・§8.2: placing a campfire', () => {
-  it('costs depth x 200 banked points (the survival number drops) and refuses stairs, features, nearby fires, hunters, a second one on the floor, too few points and a fourth one', async () => {
+  it('costs depth x 100 banked points (S1c §14.3 の 4; the survival number drops) and refuses stairs, features, nearby fires, hunters, a second one on the floor, too few points and a fourth one', async () => {
     const m = manager();
     openSeason(m);
     const a = await seasonRun(m, 'Aya');
@@ -130,16 +130,19 @@ describe('S1 §8.1・§8.2: placing a campfire', () => {
     const k1 = floorOf(a);
     const c1 = openCells(w, k1, [w.floors[k1].entry, ...w.floors[k1].stairs.down], 2)[0];
     const turns0 = meOf(w, pid).actor!.turns;
-    // 観測に place_fire の行（費用・確定点・残りの数）
-    expect(a.port.observe().observation.valid_actions.some((x) => x.startsWith('place_fire (野営の火を置く: 費用 200 点'))).toBe(true);
+    // 観測に place_fire の行（置いた本人の得が先。費用・確定点・残りの数。S1c §14.3 の 7）
+    const pfLine = a.port.observe().observation.valid_actions.find((x) => x.startsWith('place_fire ('))!;
+    expect(pfLine).toContain('野営の火を置く: そこから帰れる（帰り支度 5 手番）・次の遠征はそこから始まる・休憩の上限まで回復');
+    expect(pfLine).toContain('費用 100 点');
+    expect(pfLine.indexOf('そこから帰れる')).toBeLessThan(pfLine.indexOf('支援賞'));
     const r1 = await placeFireAt(a, c1);
     expect(r1.ok ? r1.outcome : JSON.stringify(r1.error)).toContain('野営の火を置いた');
     expect(meOf(w, pid).actor!.turns).toBe(turns0 + 1);
-    expect(w.players[pid].stats.banked).toBe(800);
+    expect(w.players[pid].stats.banked).toBe(900);
     expect(firesOn(w, k1).map((e) => `${e.pos!.x},${e.pos!.y}|${e.campfire!.by}`)).toEqual([`${c1.x},${c1.y}|Aya`]);
     expect(w.season!.placed).toEqual([{ depth: 1, x: c1.x, y: c1.y }]);
     // 生還賞の数字（確定点）も下がる
-    expect(m.seasons.standings(SID)!.standings[0].survival?.value).toBe(800);
+    expect(m.seasons.standings(SID)!.standings[0].survival?.value).toBe(900);
     // 見えるもの: 置いた者の名前
     expect(a.port.observe().observation.visible.features.find((f) => f.type === 'core:camp_fire')?.by).toBe('Aya');
     const err = async (p: Pos) => { const r = await placeFireAt(a, p); return r.ok ? 'ok' : r.error.message; };
@@ -155,12 +158,12 @@ describe('S1 §8.1・§8.2: placing a campfire', () => {
     inject(w, { put: [{ id: 'e_s1ft01', kind: 'core:fountain', sid: ++sid, pos: { floor: k1, x: far.x, y: far.y }, feature: { state: 'idle' } }] });
     expect(await err(far)).toContain('ほかの地物か罠');
     inject(w, { del: ['e_s1ft01'] });
-    // 地下 2 階: 点が足りない → 足りれば置ける（400）
+    // 地下 2 階: 点が足りない → 足りれば置ける（200）
     await descend(a);
     const k2 = floorOf(a);
     setBanked(w, pid, 100);
     const c2 = openCells(w, k2, [w.floors[k2].entry, ...w.floors[k2].stairs.down], 2)[0];
-    expect(await err(c2)).toContain('確定した点が足りない（費用 400 点');
+    expect(await err(c2)).toContain('確定した点が足りない（費用 200 点');
     // 追ってくる敵が見えている
     setBanked(w, pid, 5000);
     const nb = besideOf(w, k2, c2).at;
@@ -172,7 +175,7 @@ describe('S1 §8.1・§8.2: placing a campfire', () => {
     expect(!hr.ok && hr.error.code).toBe('hostile_in_view');
     clearMonsters(w);
     expect(await err(c2)).toBe('ok');
-    expect(w.players[pid].stats.banked).toBe(4600);
+    expect(w.players[pid].stats.banked).toBe(4800);
     // 3 つ目（地下 3 階）は置ける。4 つ目（地下 4 階）はシーズンの上限
     await descend(a);
     expect(await err(openCells(w, floorOf(a), [w.floors[floorOf(a)].entry, ...w.floors[floorOf(a)].stairs.down], 2)[0])).toBe('ok');
@@ -363,7 +366,7 @@ describe('S1 §8.4: sharing', () => {
       if (step1) await act(a.port, { type: 'move', dir: step1 });
       const banked = a.session.world.players[a.playerId].stats.banked ?? 0;
       const depth = a.port.view().floor!.depth;
-      expect(banked).toBeGreaterThanOrEqual(depth * 200);
+      expect(banked).toBeGreaterThanOrEqual(depth * 100);
       const pf = await act(a.port, { type: 'place_fire' });
       expect(pf.ok ? '' : pf.error.message).toBe('');
       await a.port.act({ type: 'retire' }, { source: 'bot' });
@@ -759,8 +762,8 @@ describe('S1a §10.1: fixes', () => {
     setBanked(w, a.playerId, 1000);
     const k1 = floorOf(a);
     expect((await placeFireAt(a, openCells(w, k1, [w.floors[k1].entry, ...w.floors[k1].stairs.down], 2)[0])).ok).toBe(true);
-    expect(w.players[a.playerId].stats.banked).toBe(800);
-    expect(m.seasons.standings(SID)!.standings[0].survival!.value).toBe(800);
+    expect(w.players[a.playerId].stats.banked).toBe(900);
+    expect(m.seasons.standings(SID)!.standings[0].survival!.value).toBe(900);
     await lifelineHome(a);
     const prof = m.profiles.store.resolve(a.ptoken)!;
     const run = m.profiles.store.get(prof.id)!.runs.find((x) => x.runId === a.session.runId)!;

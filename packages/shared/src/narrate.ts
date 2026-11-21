@@ -114,11 +114,14 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
       return ja ? `${v}は倒れた。${hpNote}` : `${cap(v)} dies.${hpNote}`;
     }
     case 'status_applied': {
+      // 火からの帰り支度（S1c）は fire_return の文に出る
+      if (ev.status?.id === 'core:fire_return') return null;
       const tg = who(ctx, ev.target, ev.targetKind, ev.targetAffixes);
       const st = nameOf(ctx.catalog.statuses[ev.status?.id]?.name, L, ev.status?.id);
       return ja ? `${tg}は${st}状態になった。` : `${cap(tg)} ${ev.target === self ? 'are' : 'is'} now ${st}.`;
     }
     case 'status_expired': {
+      if (ev.statusId === 'core:fire_return') return null;
       const tg = who(ctx, ev.target, ev.targetKind, ev.targetAffixes);
       const st = nameOf(ctx.catalog.statuses[ev.statusId]?.name, L, ev.statusId);
       return ja ? `${tg}の${st}状態が解けた。` : `${cap(tg)} ${ev.target === self ? 'are' : 'is'} no longer ${st}.`;
@@ -444,6 +447,12 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
     case 'knowledge_updated':
       // 共有層の野営の火（S1 §9.10）
       if (ev.publicFire) return ja ? `この階には ${ev.publicFire} の野営の火がある。地図に載せた（途中の道はまだ分からない）。` : `${ev.publicFire}'s campfire is on this floor. It is on your map (the way there is still unknown).`;
+      // 公開された特別な場所（S1c §14.5）
+      if (ev.publicSpot) {
+        const r = (ev.rememberedSet as { kind: string; pos: Pos }[] | undefined)?.[0];
+        const nm = r ? kindName(ctx.catalog, L, r.kind) : (ja ? '特別な場所' : 'a special place');
+        return ja ? `この階の${nm}は公開されている（${ev.publicSpot} が報告。(${r?.pos.x},${r?.pos.y})）。地図に載せた（途中の道はまだ分からない）。` : `This floor's ${nm} has been published (reported by ${ev.publicSpot}; (${r?.pos.x},${r?.pos.y})). It is on your map (the way there is still unknown).`;
+      }
       if (!ev.publicStairs) return null;
       // 道しるべ（S1b §12.4 の 1）: 入口からの道も載せた
       if (ev.publicPath) return ja ? `この階の下り階段は公開されている（${ev.publicStairs} が報告）。入口から階段までの道しるべと一緒に地図に載せた（travel_to stairs_down で向かえる）。` : `This floor's down stairs have been published (reported by ${ev.publicStairs}). They are on your map with a trail from the entrance (travel_to stairs_down goes there).`;
@@ -454,11 +463,26 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
       return ja ? `${ev.by} の野営の火で休んだ。HP +${ev.amount}（この遠征では、この階の火はもう使えない）。` : `You rest at ${ev.by}'s campfire: HP +${ev.amount} (no more campfires on this floor this expedition).`;
     case 'stairs_reported': {
       const list = (ev.stairs as { depth: number; first: boolean }[]) ?? [];
-      const firsts = list.filter((x) => x.first).map((x) => (ja ? `地下${x.depth}階` : `depth ${x.depth}`));
-      const others = list.filter((x) => !x.first).map((x) => (ja ? `地下${x.depth}階` : `depth ${x.depth}`));
+      // 特別な場所（S1c §14.5）: 祭壇・賭けの祭壇・碑文
+      const spots = (ev.spots as { depth: number; x: number; y: number; kind: string; first: boolean }[] | undefined) ?? [];
+      const spotName = (x: { depth: number; x: number; y: number; kind: string }) => (ja ? `地下${x.depth}階の${kindName(ctx.catalog, L, x.kind)} (${x.x},${x.y})` : `the ${kindName(ctx.catalog, L, x.kind)} on depth ${x.depth} (${x.x},${x.y})`);
+      const firsts = [...list.filter((x) => x.first).map((x) => (ja ? `地下${x.depth}階の階段` : `depth ${x.depth} stairs`)), ...spots.filter((x) => x.first).map(spotName)];
+      const others = [...list.filter((x) => !x.first).map((x) => (ja ? `地下${x.depth}階の階段` : `depth ${x.depth} stairs`)), ...spots.filter((x) => !x.first).map(spotName)];
+      const what = ja
+        ? [list.length ? `下り階段を ${list.length} つ` : '', spots.length ? `特別な場所を ${spots.length} つ` : ''].filter(Boolean).join('と')
+        : [list.length ? `${list.length} down staircase(s)` : '', spots.length ? `${spots.length} special place(s)` : ''].filter(Boolean).join(' and ');
       return ja
-        ? `下り階段を ${list.length} つ報告した。${firsts.length ? `最初の報告: ${firsts.join('・')}（貢献 +${firsts.length}）。` : '最初の報告は無かった。'}${others.length ? `すでに公開されていた: ${others.join('・')}。` : ''}`
-        : `Reported ${list.length} down staircase(s). ${firsts.length ? `First reports: ${firsts.join(', ')} (contribution +${firsts.length}).` : 'None were first.'}${others.length ? ` Already published: ${others.join(', ')}.` : ''}`;
+        ? `${what}報告した。${firsts.length ? `最初の報告: ${firsts.join('・')}（貢献 +${firsts.length}）。` : '最初の報告は無かった。'}${others.length ? `すでに公開されていた: ${others.join('・')}。` : ''}`
+        : `Reported ${what}. ${firsts.length ? `First reports: ${firsts.join(', ')} (contribution +${firsts.length}).` : 'None were first.'}${others.length ? ` Already published: ${others.join(', ')}.` : ''}`;
+    }
+    // 野営の火から帰る（S1c §14.3 の 1）
+    case 'fire_return': {
+      if (ev.phase === 'start') return ja ? `${ev.by} の野営の火で帰り支度を始めた（${ev.turns} 手番。この手番を含む。その間に追ってくる敵が見えたら取りやめになる）。` : `You start packing up at ${ev.by}'s campfire (${ev.turns} turns including this one; it is called off if a hunting enemy comes into view).`;
+      if (ev.phase === 'done') return ja ? `${ev.by} の野営の火から${ev.completed ? '帰還した（遠征達成）' : '撤退した'}。次の遠征は、この火のそばから始まる。` : `You ${ev.completed ? 'return home (expedition complete)' : 'withdraw'} from ${ev.by}'s campfire. The next expedition starts beside this fire.`;
+      const why = ev.reason === 'hostile' ? (ja ? '追ってくる敵が見えた' : 'a hunting enemy came into view')
+        : ev.reason === 'moved' ? (ja ? '火のそばから離された' : 'you were moved away from the fire')
+          : (ja ? '目的が未達成になった（撤退するなら extract confirm: true）' : 'the objective is no longer complete (to withdraw, extract confirm: true)');
+      return ja ? `帰り支度を取りやめた（${why}）。過ごした手番は戻らない。帰るなら、もう一度 extract（最初から）。` : `Packing up is called off (${why}). The turns spent are gone; extract again to start over.`;
     }
     case 'expedition_started':
       return ja ? `遠征 ${ev.expedition?.no} が始まった: ${objectiveText(L, ev.expedition?.objective)}` : `Expedition ${ev.expedition?.no} begins: ${objectiveText(L, ev.expedition?.objective)}`;

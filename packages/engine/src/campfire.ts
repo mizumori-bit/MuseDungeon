@@ -1,15 +1,101 @@
 // 野営の火（S1。SEASON.md §8・PROTOCOL.md §9.10）: 置く・使う・共有層の火を世界に置く。
 // 火は世界ごとのエンティティ（地物 core:camp_fire、campfire.by）。地物の判定（ctx.featureAt）には入らないので、
 // ほかの世界でその世界だけの地物・罠・立てない地形と重なっても、それらは今までどおり働き、火は同じマスにあって隣か上から使える。
-import type { ActionError, Entity, FloorKey, PlayerRecord } from '@muse/shared';
-import { actionError, cheb, currentExpedition, isMilestoneOf, restCapHp, t } from '@muse/shared';
+import type { ActionError, Entity, Expedition, FloorKey, PlayerRecord } from '@muse/shared';
+import { actionError, cheb, currentExpedition, isMilestoneOf, restCapHp, seasonBudgetLeft, t } from '@muse/shared';
 import { heal } from './combat';
 import type { Ctx } from './ctx';
-import { huntingInView } from './expedition';
+import { doExtract, huntingInView, wouldComplete } from './expedition';
 import { makeFeature } from './spawn';
+import { addStatus, removeStatus } from './statuses';
 import { milestoneRule } from './warden';
 
 export const CAMPFIRE_KIND = 'core:camp_fire';
+/** 火からの帰り支度（S1c §14.3 の 1）。その間は行動できず、切れたら帰還・撤退する。追ってくる敵が見えたら取りやめ */
+export const FIRE_RETURN = 'core:fire_return';
+
+/** 足元か隣の野営の火（S1c §14.3 の 1: 火の上か隣から帰還できる）。火どうしは 5 マスより離れているので、あっても 1 つ */
+export function campfireNear(ctx: Ctx, e: Entity): Entity | undefined {
+  const p = e.pos;
+  if (!p || !ctx.world.season) return undefined;
+  return ctx.entitiesOn(p.floor).filter((x) => x.campfire && x.pos && cheb(x.pos, p) <= 1).sort((a, b) => cheb(a.pos!, p) - cheb(b.pos!, p) || a.sid - b.sid)[0];
+}
+
+/**
+ * 火から帰れるか（S1c §14.3 の 1。階段の上でないとき）。追ってくる敵が見えている（休憩と同じ判定）・帰り支度の手番に予算が足りないなら断る。
+ * 確定の決まり（達成・confirm）は階段と同じで、extractError が見る
+ */
+export function fireReturnCheck(ctx: Ctx, e: Entity, pr: PlayerRecord, fire: Entity): ActionError | null {
+  const L = pr.locale;
+  const n = ctx.content.balance.season.fireReturnTurns;
+  if (huntingInView(ctx, pr, true)) {
+    return actionError('hostile_in_view', t(L, `追ってくる敵が見えている間は、野営の火から帰れない（帰り支度に ${n} 手番かかる）。階段の上なら、追われていても帰れる。`, `You cannot return from a campfire while a hunting enemy is in view (packing up takes ${n} turns). From stairs you can return even while chased.`), t(L, '敵を片付けるか、離れてから。急ぐなら階段か帰還の綱。', 'Deal with the enemy or get away first. In a hurry, use stairs or the lifeline.'));
+  }
+  const left = seasonBudgetLeft(ctx.world, pr.id);
+  if (left !== null && left < n) {
+    return actionError('cannot_extract', t(L, `予算の残り（${left} 手番）が、火からの帰り支度の ${n} 手番に足りない。`, `Your budget left (${left} turns) is less than the ${n} turns packing up at a campfire takes.`), t(L, '階段の上で extract するか、帰還の綱で帰る。', 'Extract on stairs, or use the lifeline.'));
+  }
+  void fire;
+  return null;
+}
+
+/**
+ * 火から帰り始める（extract の手番が 1 つ目）。残りの手番は帰り支度の状態（行動できない）で過ごし、切れたら帰還・撤退する（confirm を覚える）。
+ * 手番が 1 なら、その場で帰る
+ */
+export function startFireReturn(ctx: Ctx, e: Entity, pr: PlayerRecord, fire: Entity, confirm: boolean, x: Expedition): { cost: number; scheduled?: boolean } {
+  const n = ctx.content.balance.season.fireReturnTurns;
+  const f = ctx.world.floors[fire.pos!.floor];
+  const at = { depth: f.depth, x: fire.pos!.x, y: fire.pos!.y, by: fire.campfire!.by };
+  if (n <= 1) {
+    finishFireReturn(ctx, ctx.world.entities[e.id], pr, fire, x);
+    return { cost: 0, scheduled: true };
+  }
+  ctx.emit({ type: 'fire_return', player: pr.id, phase: 'start', ...at, turns: n, seenBy: [pr.id], floor: fire.pos!.floor });
+  addStatus(ctx, ctx.world.entities[e.id], FIRE_RETURN, n - 1, confirm ? 1 : 0);
+  return { cost: 100 };
+}
+
+/** 帰り支度が済んだ: その火から帰還・撤退する（確定は階段と同じ。綱ではない）。次の遠征は、いるマス（火の上か隣）から */
+function finishFireReturn(ctx: Ctx, e: Entity, pr: PlayerRecord, fire: Entity, x: Expedition): void {
+  const f = ctx.world.floors[fire.pos!.floor];
+  const completed = wouldComplete(ctx, x, e);
+  ctx.emit({ type: 'fire_return', player: pr.id, phase: 'done', depth: f.depth, x: fire.pos!.x, y: fire.pos!.y, by: fire.campfire!.by, completed, seenBy: [pr.id], floor: fire.pos!.floor });
+  doExtract(ctx, ctx.world.entities[e.id], pr, completed, x);
+}
+
+function cancelFireReturn(ctx: Ctx, e: Entity, pr: PlayerRecord, reason: 'hostile' | 'moved' | 'not_complete', fire: Entity | undefined): void {
+  removeStatus(ctx, e, FIRE_RETURN);
+  const f = e.pos ? ctx.world.floors[e.pos.floor] : undefined;
+  ctx.emit({
+    type: 'fire_return', player: pr.id, phase: 'cancel', reason,
+    depth: f?.depth ?? 0, x: fire?.pos?.x ?? -1, y: fire?.pos?.y ?? -1, by: fire?.campfire?.by ?? '', seenBy: [pr.id], floor: e.pos?.floor ?? null,
+  });
+}
+
+/**
+ * 帰り支度（S1c §14.3 の 1）の手番の始め: 追ってくる敵が見えた（休憩と同じ判定）・火から離された、なら取りやめ（過ごした手番は戻らない）。
+ * 状態のハンドラ（statuses.ts の fire_return）が呼ぶ
+ */
+export function fireReturnTick(ctx: Ctx, e0: Entity): void {
+  const e = ctx.world.entities[e0.id] ?? e0;
+  const pr = e.player ? ctx.world.players[e.player] : undefined;
+  if (!pr || !e.pos) return;
+  const fire = campfireNear(ctx, e);
+  if (!fire) { cancelFireReturn(ctx, e, pr, 'moved', undefined); return; }
+  if (huntingInView(ctx, pr, true)) cancelFireReturn(ctx, e, pr, 'hostile', fire);
+}
+
+/** 帰り支度が切れた: 帰る。目的を達成していないのに confirm が無かった（始めたときは達成していた）なら、帰らずに取りやめ */
+export function fireReturnExpire(ctx: Ctx, e: Entity, power: number): void {
+  const pr = e.player ? ctx.world.players[e.player] : undefined;
+  const x = currentExpedition(ctx.world);
+  if (!pr || pr.state !== 'alive' || !x || !e.pos) return;
+  const fire = campfireNear(ctx, e);
+  if (!fire) { cancelFireReturn(ctx, e, pr, 'moved', undefined); return; }
+  if (!wouldComplete(ctx, x, e) && power !== 1) { cancelFireReturn(ctx, e, pr, 'not_complete', fire); return; }
+  finishFireReturn(ctx, e, pr, fire, x);
+}
 
 const sameCell = (a: { depth: number; x: number; y: number }, b: { depth: number; x: number; y: number }) => a.depth === b.depth && a.x === b.x && a.y === b.y;
 

@@ -166,7 +166,7 @@ export function buildCatalog(c: Content): Catalog {
       recommendedLevel: { byDepth: [...c.balance.expedition.recommendedLevelByDepth] },
       xp: { ...c.balance.xp },
       lifeline: { ...c.balance.lifeline },
-      seasonFire: { costPerDepth: c.balance.season.fireCostPerDepth, perSeason: c.balance.season.firesPerSeason, spacing: c.balance.season.fireSpacing, supportMinHealPct: c.balance.season.supportMinHealPct },
+      seasonFire: { costPerDepth: c.balance.season.fireCostPerDepth, perSeason: c.balance.season.firesPerSeason, spacing: c.balance.season.fireSpacing, supportMinHealPct: c.balance.season.supportMinHealPct, returnTurns: c.balance.season.fireReturnTurns },
       teleport: { ...c.balance.teleport },
       guardianRanks: c.balance.guardian.ranks.map((r) => ({ hpPct: r.hpPct, minHpBase: r.minHpBase, minHpPerDepth: r.minHpPerDepth })),
       perkOptions: c.balance.perks.options,

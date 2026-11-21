@@ -83,6 +83,8 @@ export function createMcpServer(ctx: McpContext): McpServer {
   );
   const { manager } = ctx;
   const waitMs = manager.config.waitOthersMs;
+  // 野営の火の数（S1c。ツールの説明に出す）
+  const fireRules = manager.catalog.rules.seasonFire;
 
   // 直前の portOf で見つからなかったトークン（復旧に失敗したランなら、そのエラーを返す。V4-1m §37.1。portOf と noSession は同期で続けて呼ぶ）
   let missed: string | undefined;
@@ -322,7 +324,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
   }, async (a) => act('start_expedition', a, { type: 'start_expedition', offer: a.offer }));
   server.registerTool('extract', {
     title: '帰還・撤退',
-    description: '階段の上で遠征を終える。目的を達成していれば帰還（達成）、未達成なら confirm: true で撤退（目的を除いた半分・生還）。追跡中の敵が見えていてもできる（敵は階段を追ってこない）。階段から遠ければ帰還の綱（use_item）。',
+    description: `階段の上で遠征を終える。目的を達成していれば帰還（達成）、未達成なら confirm: true で撤退（目的を除いた半分・生還）。追跡中の敵が見えていてもできる（敵は階段を追ってこない）。階段から遠ければ帰還の綱（use_item）。シーズンのランでは、野営の火の上か隣からも帰れる（追ってくる敵が見えていなければ。帰り支度 ${fireRules?.returnTurns ?? 5} 手番。途中で追ってくる敵が見えたら取りやめ。次の遠征はそこから始まる）。`,
     inputSchema: { ...actionCommon, confirm: z.boolean().optional().describe('未達成のまま撤退するときに true') },
   }, async (a) => act('extract', a, { type: 'extract', confirm: a.confirm }));
 
@@ -502,12 +504,12 @@ export function createMcpServer(ctx: McpContext): McpServer {
   });
   server.registerTool('report_stairs', {
     title: '階段を報告する',
-    description: 'シーズンのランのキャンプで、このランで自分の目で見た下り階段のうち、まだ報告していないものを全部報告する（手番を消費しない）。その階の下り階段を最初に報告した者に貢献 1。報告した階段は、ほかの参加者の次の遠征から地図に載る。Report the down stairs you saw in this run (season runs, at camp).',
+    description: 'シーズンのランのキャンプで、このランで自分の目で見た下り階段と特別な場所（部屋の作りにある祭壇・賭けの祭壇・碑文）のうち、まだ報告していないものを全部報告する（手番を消費しない）。それぞれ、最初に報告した者に貢献 1。報告したものは、ほかの参加者の次の遠征から地図に載る。Report the down stairs and special places (built-in altars, altars of chance, inscriptions) you saw in this run (season runs, at camp).',
     inputSchema: { ...common, thought: actionCommon.thought },
   }, async (a) => act('report_stairs', a, { type: 'report_stairs' }));
   server.registerTool('place_fire', {
     title: '野営の火を置く',
-    description: 'シーズンのランの迷宮の中で、自分のいるマスに野営の火を置く（1 手番）。費用は 深さ × 200 点で、このランの確定した点から払う（戻らない）。キャンプに着くと、ほかの参加者の世界の同じ階の同じマスにも現れる。だれでも火の隣か上で interact すると、HP が休憩の上限まで戻る（1 回の遠征で 1 つの階につき 1 回）。ほかの参加者に使われると支援賞に数える。置けない所と上限は get_rules topic=season。Set a campfire on your cell (season runs; costs depth x 200 banked points).',
+    description: `シーズンのランの迷宮の中で、自分のいるマスに野営の火を置く（1 手番）。置いた本人の得: 火の上か隣から帰還・撤退できる（extract。追ってくる敵が見えていなければ。帰り支度 ${fireRules?.returnTurns ?? 5} 手番）・火から帰ると次の遠征はそこから始まる・火の隣か上で interact すると HP が休憩の上限まで戻る（1 回の遠征で 1 つの階につき 1 回）。費用は 深さ × ${fireRules?.costPerDepth ?? 100} 点で、このランの確定した点から払う（戻らない）。キャンプに着くと、ほかの参加者の世界の同じ階の同じマスにも現れ、ほかの参加者に使われると支援賞に数える。置けない所と上限（シーズンで ${fireRules?.perSeason ?? 3} つ）は get_rules topic=season。Set a campfire on your cell (season runs): you can return home from it and start your next expedition there; costs depth x ${fireRules?.costPerDepth ?? 100} banked points.`,
     inputSchema: { ...actionCommon },
   }, async (a) => act('place_fire', a, { type: 'place_fire' }));
   server.registerTool('choose_perk', {

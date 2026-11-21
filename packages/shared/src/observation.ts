@@ -13,7 +13,7 @@ import { kindName } from './narrate';
 import type { NavGrid } from './nav';
 import { buildNavGrid, distanceField, findFrontiers } from './nav';
 import type { Dir, EntityRole, Expedition, HaulParts, Locale, MonsterMemory, Names, ObjectiveType, OfferSlot, Pos, SeasonAward } from './types';
-import { awardText, fireUsedDepths, myCampfires, publicStairsAt, seasonBudgetText } from './season';
+import { awardName, awardText, fireUsedDepths, myCampfires, publicSpotAt, publicStairsAt, seasonBudgetText } from './season';
 import { DIRS, DIR_VEC } from './types';
 import { addDiceBonus, cheb, ceilDiv, compassDir, damageRangeVs, dirTo, floorDiv, formatDice, parseDice, t } from './util';
 import type { EntityView, HpState, ItemView, PlayerView, ViewStatus } from './view';
@@ -139,7 +139,13 @@ export interface ObsExpedition {
   can_extract: boolean;
   /** 今 extract したら: complete（達成して帰還）/ withdraw（撤退、confirm が必要） */
   extract_outcome: 'complete' | 'withdraw';
-  extract_blocked_by?: 'not_on_stairs' | 'not_your_turn' | 'ended';
+  /**
+   * hunted_at_fire: 野営の火のそばだが、追ってくる敵が見えている（火からは帰れない。S1c §14.3 の 1）、
+   * budget_at_fire: 野営の火のそばだが、予算の残りが帰り支度の手番に足りない
+   */
+  extract_blocked_by?: 'not_on_stairs' | 'not_your_turn' | 'ended' | 'hunted_at_fire' | 'budget_at_fire';
+  /** fire: 階段でなく、足元か隣の野営の火から帰る（帰り支度 turns 手番。S1c §14.3 の 1） */
+  extract_via?: { type: 'fire'; by: string; turns: number };
   /** 1 行の要約 */
   text: string;
   /** 終了した遠征の結果 */
@@ -227,7 +233,8 @@ export interface ObsPartyMember {
 /** id: travel_to で指せる（V3-8a §56.1 の 5） */
 /** desc: 何であるか・どう使うかの 1 行（V4-1g G6。すべての地物にある） */
 /** by: 野営の火を置いた者（S1 §9.10） */
-export interface ObsFeature { id?: string; type: string; name: string; pos: Pos; dir: Dir | null; dist: number; state?: string; lair?: string; desc?: string; by?: string }
+/** public_by: シーズンで公開された特別な場所（祭壇・賭けの祭壇・碑文。S1c §14.5）で、まだ自分の目で見ていない（報告した者の名前） */
+export interface ObsFeature { id?: string; type: string; name: string; pos: Pos; dir: Dir | null; dist: number; state?: string; lair?: string; desc?: string; by?: string; public_by?: string }
 /**
  * 自分の持ち物の性能（鑑定済みのみ。接辞込み）。weapon.traits は武器の特性（V3-4）、armor の move_cost / wake_pct は重い鎧、
  * mods は装飾品の修正と、接辞による追加の修正（最大 HP・視界など）
@@ -326,6 +333,12 @@ export interface ObsSeason {
   awards?: (SeasonAward & { text: string })[];
   /** まだ報告していない階段と、そのうちまだだれも公開していないもの */
   stairs?: { unreported: number; unpublished: number };
+  /** まだ報告していない特別な場所（祭壇・賭けの祭壇・碑文。S1c §14.5）と、そのうちまだだれも公開していないもの（キャンプだけ） */
+  spots?: { unreported: number; unpublished: number };
+  /** 前の取り込みから新しく自分の野営の火を使った者（キャンプだけ。S1c §14.4 の 7） */
+  fire_news?: { depth: number; x: number; y: number; names: string[]; text: string }[];
+  /** 迷宮で、いま火を置けるマスにいるとき: 支援賞の行と自分の火の数（S1c §14.4 の 7） */
+  support?: { placed: number; limit: number; text: string };
   /** 自分の野営の火（キャンプだけ。S1 §9.10）: uses は支援賞に数えた回数、まだ共有層に載っていない火は null */
   fires?: { depth: number; x: number; y: number; uses: number | null; dup?: true }[];
   fires_text?: string;
@@ -412,8 +425,13 @@ export function partyOf(view: PlayerView): ObsPartyMember[] {
   return out;
 }
 
-/** シーズン（S0。PROTOCOL §9.6）: 予算はいつも、賞と報告していない階段はキャンプでだけ */
-export function seasonObs(view: PlayerView): ObsSeason | null {
+/** 「（あなたの火 1/3・あと 2 つ置ける）」（S1c §14.4 の 7） */
+function fireCountText(L: Locale, n: number, limit: number): string {
+  return t(L, `（あなたの火 ${n}/${limit}・あと ${Math.max(0, limit - n)} つ置ける）`, ` (your campfires ${n}/${limit}; ${Math.max(0, limit - n)} left to set)`);
+}
+
+/** シーズン（S0。PROTOCOL §9.6）: 予算はいつも、賞と報告していない階段はキャンプでだけ。fireLimit: シーズンで置ける火の数（catalog の rules.seasonFire） */
+export function seasonObs(view: PlayerView, fireLimit?: number): ObsSeason | null {
   const s = view.season;
   if (!s) return null;
   const L = view.locale;
@@ -427,9 +445,14 @@ export function seasonObs(view: PlayerView): ObsSeason | null {
     : f.uses === null
     ? t(L, `地下${f.depth}階 (${f.x},${f.y}) まだ載っていない`, `depth ${f.depth} (${f.x},${f.y}) not yet shared`)
     : t(L, `地下${f.depth}階 (${f.x},${f.y}) 支援 ${f.uses} 回`, `depth ${f.depth} (${f.x},${f.y}) supported ${f.uses}`);
+  // 支援賞の行に、自分の火の数と残り（S1c §14.4 の 7）
+  const limit = fireLimit ?? null;
+  const supportText = (a: SeasonAward) => (a.id === 'support' && limit !== null ? `${awardText(L, a)}${fireCountText(L, myCampfires(s).length, limit)}` : awardText(L, a));
+  const news = camp ? (s.fireNews ?? []).map((n) => ({ ...n, names: [...n.names], text: t(L, `知らせ: あなたの野営の火（地下${n.depth}階 (${n.x},${n.y})）を ${n.names.join('・')} が使った（支援賞 +${n.names.length}）`, `News: ${n.names.join(', ')} used your campfire (depth ${n.depth} (${n.x},${n.y})) (support +${n.names.length})`) })) : [];
   return {
     id: s.id, name: s.name, budget: { left: Math.max(0, s.budgetLeft), limit: s.budget.limit }, ended: s.ended,
-    ...(camp ? { awards: s.awards.map((a) => ({ ...a, leader: a.leader ? { ...a.leader } : null, text: awardText(L, a) })), stairs: { unreported: s.unreported, unpublished: s.unpublished } } : {}),
+    ...(camp ? { awards: s.awards.map((a) => ({ ...a, leader: a.leader ? { ...a.leader } : null, text: supportText(a) })), stairs: { unreported: s.unreported, unpublished: s.unpublished }, spots: { unreported: s.spotsUnreported ?? 0, unpublished: s.spotsUnpublished ?? 0 } } : {}),
+    ...(news.length ? { fire_news: news } : {}),
     ...(fires.length ? { fires, fires_text: t(L, `あなたの野営の火: ${fires.map(fireText).join('／')}`, `Your campfires: ${fires.map(fireText).join(' / ')}`) } : {}),
     ...(used.length ? { fire_used: { depths: used, text: t(L, `この遠征で野営の火を使った階: ${used.map((d) => `地下${d}階`).join('・')}（その階の火は、もう使えない）`, `Campfires used this expedition on: ${used.map((d) => `depth ${d}`).join(', ')} (no more there)`) } } : {}),
     text: seasonBudgetText(L, s.name, s.budgetLeft, s.budget.limit),
@@ -870,8 +893,8 @@ function featureGlyph(catalog: Catalog, kind: string | null): string {
   return '*';
 }
 
-/** place_fire の行（S1 §8.2）。置けないときは「不可」と理由 */
-function placeFireLine(view: PlayerView, catalog: Catalog, hunting: boolean): string {
+/** 火を置けない理由（S1 §8.2。置けるなら null。engine と同じ順） */
+function placeFireWhy(view: PlayerView, catalog: Catalog, hunting: boolean): string | null {
   const L = view.locale;
   const r = catalog.rules.seasonFire!;
   const f = view.floor!;
@@ -889,8 +912,19 @@ function placeFireLine(view: PlayerView, catalog: Catalog, hunting: boolean): st
             : mine.some((x) => x.depth === f.depth) ? t(L, 'この階にはもうあなたの火がある', 'you already have one on this floor')
               : mine.length >= r.perSeason ? t(L, `シーズンで置ける ${r.perSeason} つを置いた`, `you have set all ${r.perSeason} for the season`)
                 : view.record.banked < cost ? t(L, `確定点が足りない（費用 ${cost}・確定点 ${view.record.banked}）`, `not enough banked points (cost ${cost}, banked ${view.record.banked})`) : null;
-  return why ? `place_fire (${t(L, `不可: ${why}`, `unavailable: ${why}`)})`
-    : `place_fire (${t(L, `野営の火を置く: 費用 ${cost} 点（このランの確定点 ${view.record.banked} から）・シーズンで残り ${r.perSeason - mine.length} つ。キャンプに着くと、ほかの参加者の世界にも現れる`, `set a campfire: costs ${cost} of your ${view.record.banked} banked points; ${r.perSeason - mine.length} left this season. It reaches the others once you are back at camp`)})`;
+  return why;
+}
+
+/** place_fire の行（S1 §8.2）。置けないときは「不可」と理由。置いた本人の得を先に、ほかの者に使われると支援賞に数えることを後に（S1c §14.3 の 7） */
+function placeFireLine(view: PlayerView, catalog: Catalog, hunting: boolean): string {
+  const L = view.locale;
+  const r = catalog.rules.seasonFire!;
+  const why = placeFireWhy(view, catalog, hunting);
+  if (why) return `place_fire (${t(L, `不可: ${why}`, `unavailable: ${why}`)})`;
+  const cost = view.floor!.depth * r.costPerDepth;
+  const left = r.perSeason - myCampfires(view.season).length;
+  const n = r.returnTurns ?? 5;
+  return `place_fire (${t(L, `野営の火を置く: そこから帰れる（帰り支度 ${n} 手番）・次の遠征はそこから始まる・休憩の上限まで回復（1 回の遠征で 1 つの階に 1 回）。費用 ${cost} 点（このランの確定点 ${view.record.banked} から）・シーズンで残り ${left} つ。キャンプに着くと、ほかの参加者の世界にも現れ、使われると支援賞に数える`, `set a campfire: you can return home from it (${n} turns packing up), the next expedition starts there, and it heals to the rest cap (once per floor per expedition). Costs ${cost} of your ${view.record.banked} banked points; ${left} left this season. It reaches the others once you are back at camp, and their uses count for your support award`)})`;
 }
 
 /** 地物の名前。野営の火は置いた者の名前を添える（S1 §9.10） */
@@ -1109,7 +1143,9 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       if (r.value !== undefined) it.value = r.value;
       rememberedItems.push(it);
     }
-    if (r.cat !== 'item') features.push({ id: r.id, type: r.kind ?? 'feature', name: campfireName(catalog, L, r.kind, r.campfire), pos: r.pos, ...rel(r.pos), state: r.state, ...(r.lair ? { lair: guardianDisplayName(L, r.lair) } : {}), ...(r.campfire ? { by: r.campfire.by } : {}), ...featureDesc(r.kind) });
+    // 公開された特別な場所（S1c §14.5）: そのマスをまだ自分の目で見ていなければ、報告した者の名前
+    const spot = r.cat === 'feature' && f && !view.memory.terrain[r.pos.y * f.width + r.pos.x] ? publicSpotAt(view.season, f.depth, r.pos.x, r.pos.y) : null;
+    if (r.cat !== 'item') features.push({ id: r.id, type: r.kind ?? 'feature', name: campfireName(catalog, L, r.kind, r.campfire), pos: r.pos, ...rel(r.pos), state: r.state, ...(r.lair ? { lair: guardianDisplayName(L, r.lair) } : {}), ...(r.campfire ? { by: r.campfire.by } : {}), ...(spot ? { public_by: spot.by } : {}), ...featureDesc(r.kind) });
   }
   // 記憶の中のアイテムは近い順に 3 件まで（遺物は常に出す）。戦闘中（追跡中の敵が見えている間）は出さない。残りは件数だけ（V3-2R §14.2）
   rememberedItems.sort((a, b) => a.dist - b.dist || (a.id < b.id ? -1 : 1));
@@ -1279,7 +1315,9 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
     const near = known_stairs.filter((s) => s.path_len !== null).sort((a, b) => a.path_len! - b.path_len! || (a.type === 'up' ? -1 : 1))[0];
     const steps = near ? near.path_len! : null;
     if (left < 100 || (steps !== null && left < steps * 2)) {
-      const tail = t(L, '尽きると時間切れで、未確定の戦利品を失う', 'running out is time up and loses the unbanked haul');
+      // 帰還の綱を持っていれば 1 句（S1c §14.6 の 4）
+      const rope = view.inventory.some((it) => it.kind === 'core:lifeline') ? t(L, '。綱なら、その場で帰れる（確定は戦利品の半分）', '; the lifeline takes you home from here (half the haul is banked)') : '';
+      const tail = t(L, `尽きると時間切れで、未確定の戦利品を失う${rope}`, `running out is time up and loses the unbanked haul${rope}`);
       const name = near ? (near.type === 'up' ? t(L, '上り階段', 'stairs up') : t(L, '下り階段', 'stairs down')) : '';
       const text = steps === null
         ? t(L, `予算の残り ${left} 手番。着ける階段が分からない（既知の道で届く階段が無い。${tail}）`, `Budget: ${left} turns left. No stairs you can reach on the known map (${tail})`)
@@ -1335,12 +1373,16 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
   if (xv) {
     const active = xv.status !== 'ended' && view.status !== 'at_camp';
     // 階段の上なら追跡中の敵が見えていても extract できる（V3-2R2 §18.1）
-    const blocked: ObsExpedition['extract_blocked_by'] = !active ? 'ended' : view.status !== 'your_turn' ? 'not_your_turn' : !onStairs ? 'not_on_stairs' : undefined;
+    // 野営の火の上か隣（S1c §14.3 の 1）: 追ってくる敵が見えていなければ（休憩と同じ判定）、帰り支度の後に帰れる。階段の上なら階段が先
+    const fireNear = !onStairs && view.season && pos ? view.entities.filter((e) => e.campfire && cheb(e.pos, pos) <= 1).sort((a, b) => cheb(a.pos, pos) - cheb(b.pos, pos))[0] : undefined;
+    const returnTurns = catalog.rules.seasonFire?.returnTurns ?? 5;
+    const fireBlock: ObsExpedition['extract_blocked_by'] = fireNear ? (restBlocked ? 'hunted_at_fire' : (view.season?.budgetLeft ?? 0) < returnTurns ? 'budget_at_fire' : undefined) : 'not_on_stairs';
+    const blocked: ObsExpedition['extract_blocked_by'] = !active ? 'ended' : view.status !== 'your_turn' ? 'not_your_turn' : !onStairs ? fireBlock : undefined;
     const prog: ObsExpedition['progress'] = { depth: f?.depth ?? null, target_depth: xv.objective.targetDepth };
     if (xv.objective.type === 'reach_depth') prog.reached = xv.progress.reached;
     if (xv.objective.type === 'slay_guardian' || xv.objective.type === 'slay_warden') prog.guardian_slain = xv.progress.guardianSlain;
     if (xv.objective.type === 'retrieve_relic') prog.relic_held = xv.progress.relicHeldByYou;
-    const extractText = blocked === undefined ? t(L, 'extract: 可', 'extract: possible')
+    const extractText = blocked === undefined ? (fireNear ? t(L, `extract: 可（野営の火から。帰り支度 ${returnTurns} 手番）`, `extract: possible (from the campfire; ${returnTurns} turns packing up)`) : t(L, 'extract: 可', 'extract: possible'))
       : blocked === 'ended' ? '' : t(L, `extract: 不可(${EXTRACT_BLOCK_JA[blocked]})`, `extract: not now (${blocked})`);
     const statusText = xv.status === 'objective_complete' ? t(L, '目的達成済み', 'objective complete') : xv.status === 'ended' ? t(L, '終了', 'ended') : t(L, '進行中', 'in progress');
     expedition = {
@@ -1353,6 +1395,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       text: [t(L, `【遠征${xv.no}】${objectiveText(L, xv.objective)}`, `[Expedition ${xv.no}] ${objectiveText(L, xv.objective)}`), statusText, progressText(L, xv, f?.depth ?? null), extractText].filter(Boolean).join(' | '),
     };
     if (blocked !== undefined) expedition.extract_blocked_by = blocked;
+    if (blocked === undefined && fireNear) expedition.extract_via = { type: 'fire', by: fireNear.campfire!.by, turns: returnTurns };
     // 守護者（V3-3 §3.1）: 名前・型・分かった弱点。生きている間は【遠征】の行に「守護者「名」（弱点: …）」
     if (xv.guardian) {
       const g = xv.guardian;
@@ -1555,7 +1598,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
   const collectIds = collectTargets(view, catalog);
   const valid_actions = buildValidActions(view, catalog, {
     passable_dirs, onStairs, itemsHere: itemsHere.length > 0, relicHere: itemsHere.some((i) => i.role === 'relic'), hostiles, frontiers: frontiers.length, known_stairs, grid,
-    canExtract: expedition?.can_extract ?? false, objectiveComplete: expedition?.extract_outcome === 'complete', restTurns: rest && !rest.blocked_by ? rest.turns : null,
+    canExtract: expedition?.can_extract ?? false, objectiveComplete: expedition?.extract_outcome === 'complete', extractVia: expedition?.extract_via, restTurns: rest && !rest.blocked_by ? rest.turns : null,
     attackers, mineCount, pickables, collectable: collectIds.length, huntingReach, worstSum, unrecorded, chaseOf, lifelineShort: !!opts.lifelineShort,
     draft: view.floorHint?.draft ?? null,
     ifLifeline: expedition?.haul?.if_lifeline_now,
@@ -1625,8 +1668,17 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
   if (rest && rest.blocked_by !== 'hostile_hunting') obs.self.rest_estimate = rest;
   if (expedition) obs.expedition = expedition;
   if (camp) obs.camp = camp;
-  const season = seasonObs(view);
-  if (season) obs.season = season;
+  const season = seasonObs(view, catalog.rules.seasonFire?.perSeason);
+  if (season) {
+    // 迷宮で、いま火を置けるマスにいる: 支援賞の行（キャンプで取り込んだもの）と自分の火の数（S1c §14.4 の 7）
+    if (view.status === 'your_turn' && f && pos && catalog.rules.seasonFire && !placeFireWhy(view, catalog, restBlocked)) {
+      const a = view.season?.awards.find((x) => x.id === 'support');
+      const n = myCampfires(view.season).length;
+      const lim = catalog.rules.seasonFire.perSeason;
+      season.support = { placed: n, limit: lim, text: `${a ? awardText(L, a) : awardName(L, 'support')}${fireCountText(L, n, lim)}` };
+    }
+    obs.season = season;
+  }
   if (opts.detail === 'full') obs.self.inventory = invItems;
   else obs.self.inventory_brief = invBrief;
   if (opts.map && f && pos) {
@@ -1637,7 +1689,10 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
   return obs;
 }
 
-const EXTRACT_BLOCK_JA: Record<string, string> = { not_on_stairs: '階段の上ではない', not_your_turn: '手番ではない', ended: '終了済み' };
+const EXTRACT_BLOCK_JA: Record<string, string> = {
+  not_on_stairs: '階段の上ではない', not_your_turn: '手番ではない', ended: '終了済み',
+  hunted_at_fire: '野営の火のそばだが、追ってくる敵が見えている', budget_at_fire: '野営の火のそばだが、予算の残りが帰り支度に足りない',
+};
 
 interface VAInput {
   lifelineShort?: boolean;
@@ -1646,6 +1701,8 @@ interface VAInput {
   collectable: number;
   frontiers: number; known_stairs: Observation['navigation']['known_stairs']; grid: NavGrid | null;
   canExtract: boolean; objectiveComplete: boolean; restTurns: number | null;
+  /** 野営の火から帰る（S1c §14.3 の 1） */
+  extractVia?: ObsExpedition['extract_via'];
   /** 自分を攻撃している相手 */
   attackers: Set<string>;
   /** 既知の「自分が投げた物」の数 */
@@ -1681,7 +1738,10 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
   ];
   if (view.status === 'at_camp') {
     // シーズン（S0 §9.4）: 報告できる階段があれば report_stairs。予算が無いか終わりの時刻を過ぎたら、遠征は始められない
-    const report = view.season && view.season.unreported > 0 ? [`report_stairs (${t(L, `報告していない階段 ${view.season.unreported}`, `${view.season.unreported} unreported stairs`)})`] : [];
+    // 特別な場所（S1c §14.5）も同じ命令で報告する
+    const ss = view.season;
+    const reportWhat = ss ? [ss.unreported > 0 ? t(L, `報告していない階段 ${ss.unreported}`, `${ss.unreported} unreported stairs`) : '', (ss.spotsUnreported ?? 0) > 0 ? t(L, `報告していない特別な場所 ${ss.spotsUnreported}`, `${ss.spotsUnreported} unreported special places`) : ''].filter(Boolean) : [];
+    const report = reportWhat.length ? [`report_stairs (${reportWhat.join(t(L, '・', ', '))})`] : [];
     const closed = !!view.season && (view.season.budgetLeft <= 0 || view.season.ended);
     if (!view.camp || closed) return [...perkLines, ...report, ...(view.camp ? ['retire'] : ['wait_for_turn'])];
     return [
@@ -1741,7 +1801,10 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
     : t(L, '・次の遠征はこの階段から始まる。階の敵は追跡をやめて全快する', '; the next expedition starts from these stairs, where monsters stop hunting and heal fully');
   // 投げた物が床に残っている（V3-8 §53.3。止めはしない）
   const leftBehind = x.mineCount > 0 ? t(L, `・投げた物が ${x.mineCount} 個、この階の床に残っている`, `; ${x.mineCount} of your thrown items are still on this floor`) : '';
-  if (x.canExtract) out.push(x.objectiveComplete ? `extract (${t(L, '帰還: 遠征達成', 'complete the expedition')}${fromHere}${leftBehind})` : `extract confirm:true (${t(L, '撤退: 未達成のまま終える', 'withdraw without the reward')}${fromHere}${leftBehind})`);
+  // 野営の火から（S1c §14.3 の 1）: 帰り支度の手番・取りやめ・次の遠征はこの火のそばから
+  const viaFire = x.extractVia;
+  const fromFire = viaFire ? t(L, `・${viaFire.by} の野営の火から。帰り支度 ${viaFire.turns} 手番（この手番を含む。その間に追ってくる敵が見えたら取りやめ）・次の遠征はこのマスから始まる`, `; from ${viaFire.by}'s campfire: ${viaFire.turns} turns packing up (including this one; called off if a hunting enemy comes into view); the next expedition starts from this cell`) : '';
+  if (x.canExtract) out.push(x.objectiveComplete ? `extract (${t(L, '帰還: 遠征達成', 'complete the expedition')}${viaFire ? fromFire : fromHere}${leftBehind})` : `extract confirm:true (${t(L, '撤退: 未達成のまま終える', 'withdraw without the reward')}${viaFire ? fromFire : fromHere}${leftBehind})`);
   // 移動マクロはその場で進める mode だけを出す（V3-2R §14.2）。隣に起きている敵がいれば careful では動かないので flee を出す
   const adjAwake = x.hostiles.filter((m) => m.dist <= 1 && m.awareness !== 'asleep' && !m.fleeing);
   // 既定の hp_floor の実数（steady・fight は最大 HP の 50%。V3-2R2 §18.5）
@@ -1995,7 +2058,10 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
       lines.push(obs.season.text);
       for (const a of obs.season.awards ?? []) lines.push(a.text);
       if (obs.season.fires_text) lines.push(obs.season.fires_text);
+      for (const n of obs.season.fire_news ?? []) lines.push(n.text);
       if (obs.season.stairs) lines.push(t(L, `まだ報告していない階段 ${obs.season.stairs.unreported}（うち、まだだれも公開していないもの ${obs.season.stairs.unpublished}）${obs.season.stairs.unreported ? '。report_stairs で報告できる' : ''}`, `Unreported stairs ${obs.season.stairs.unreported} (not yet published by anyone: ${obs.season.stairs.unpublished})${obs.season.stairs.unreported ? '. Report them with report_stairs' : ''}`));
+      // 特別な場所（S1c §14.5）: 見つけたものがあるときだけ
+      if (obs.season.spots?.unreported) lines.push(t(L, `まだ報告していない特別な場所（祭壇・賭けの祭壇・碑文） ${obs.season.spots.unreported}（うち、まだだれも公開していないもの ${obs.season.spots.unpublished}）。report_stairs で一緒に報告できる`, `Unreported special places (altars, altars of chance, inscriptions) ${obs.season.spots.unreported} (not yet published by anyone: ${obs.season.spots.unpublished}). report_stairs reports them too`));
     }
     // 遠征が進んでいる（仲間がまだ迷宮にいる）: 全員が戻ったら、次の遠征を選べる（V4-1g G1）
     if (obs.expedition && obs.expedition.status !== 'ended') lines.push(t(L, `遠征 ${obs.expedition.no} が進んでいる（仲間がまだ迷宮にいる）。全員が戻ったら、次の遠征を選べる`, `Expedition ${obs.expedition.no} is still under way (allies are still inside). You can choose the next one when everyone is back`));
@@ -2036,6 +2102,7 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
   // シーズン（S0 §9.6）: 迷宮の中は予算の残りだけ（順位は出さない）
   if (obs.season) lines.push(obs.season.text);
   if (obs.season?.fire_used) lines.push(obs.season.fire_used.text);
+  if (obs.season?.support) lines.push(obs.season.support.text);
   // 仲間（V4-1f §22.4）
   {
     const pt = partyText(L, obs.party ?? []);
@@ -2113,7 +2180,7 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
       lines.push(`- ${it.name}${it.objective ? t(L, '［目的］', ' [objective]') : ''}${qtyText}${tags} ${it.id} (${it.pos.x},${it.pos.y}) ${relLabel(L, from, it.pos)}${it.remembered ? t(L, ' (記憶)', ' (remembered)') : ''}`);
     }
     if (vis.items_omitted) lines.push(`- ${t(L, `ほかに記憶しているアイテム ${vis.items_omitted} 件（get_map の注目点）`, `${vis.items_omitted} more remembered items (see get_map)`)}`);
-    for (const ft of vis.features) lines.push(`- ${ft.name}${ft.lair ? t(L, `（${ft.lair}の棲み処）`, ` (${ft.lair}'s lair)`) : ''}${ft.id ? ` ${ft.id}` : ''} (${ft.pos.x},${ft.pos.y}) ${relLabel(L, from, ft.pos)}${ft.state && ft.state !== 'idle' ? ` [${featureStateText(L, ft.state)}]` : ''}`);
+    for (const ft of vis.features) lines.push(`- ${ft.name}${ft.lair ? t(L, `（${ft.lair}の棲み処）`, ` (${ft.lair}'s lair)`) : ''}${ft.id ? ` ${ft.id}` : ''} (${ft.pos.x},${ft.pos.y}) ${relLabel(L, from, ft.pos)}${ft.state && ft.state !== 'idle' ? ` [${featureStateText(L, ft.state)}]` : ''}${ft.public_by ? t(L, `（公開: ${ft.public_by} が報告）`, ` (published by ${ft.public_by})`) : ''}`);
     for (const st2 of stairsLines) {
       const name = st2.type === 'down' ? t(L, '下り階段', 'stairs down') : t(L, '上り階段', 'stairs up');
       // 公開された階段（S0 §9.4）: まだ自分の目で見ていない。途中の道は分からない

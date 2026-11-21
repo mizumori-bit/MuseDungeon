@@ -8,7 +8,7 @@ import { ENGINE_VERSION, generateFloor, previewOffers } from '@muse/engine';
 import type { AddressInfo } from 'node:net';
 import { computeStandings, createApp, loadConfig, RunSession, SessionManager } from '@muse/server';
 import type { Participant, PlayerPort } from '@muse/server';
-import { applyEvent, seasonBudgetLeft, seasonReportable } from '@muse/shared';
+import { applyEvent, SEASON_SPOT_KINDS, seasonBudgetLeft, seasonReportable } from '@muse/shared';
 import type { Command, Expedition, GameEvent, World } from '@muse/shared';
 import { playWithPort } from '../src/bot';
 import { verifyRunDir } from '../src/replay';
@@ -80,6 +80,10 @@ describe('S0 §2.3: the stairs are in the same place in every season run', () =>
       ['quiet', undefined, { monstersPct: 100, itemsPct: 100, treasurePct: 100, noFountain: true }],
     ];
     const key = (g: ReturnType<typeof generateFloor>) => `${g.floor.entry.x},${g.floor.entry.y}|${g.floor.stairs.down.map((d) => `${d.x},${d.y}`).join(' ')}`;
+    // 特別な場所（S1c §14.5）: 部屋の作りの祭壇・賭けの祭壇・碑文も、目的・条件で変わらない
+    const spots = (g: ReturnType<typeof generateFloor>) => g.spawns.filter((sp) => sp.type === 'feature' && SEASON_SPOT_KINDS.includes(sp.kind) && g.floor.regions.some((r) => r.kind === 'prefab' && sp.x >= r.x && sp.x < r.x + r.w && sp.y >= r.y && sp.y < r.y + r.h))
+      .map((sp) => `${sp.kind}@${'x' in sp ? sp.x : ''},${'y' in sp ? sp.y : ''}`).sort().join(' ');
+    let spotCount = 0;
     let floors = 0, nonSeasonMoved = 0;
     for (let s = 0; s < 24; s++) {
       for (let d = 1; d <= 20; d++) {
@@ -87,15 +91,19 @@ describe('S0 §2.3: the stairs are in the same place in every season run', () =>
         const base = generateFloor(content, seed, 'main', d, table);
         if (base.floor.floorType === 'core:warden_hall') continue;
         floors++;
+        const sBase = spots(generateFloor(content, seed, 'main', d, table, undefined, undefined, { season: true }));
+        spotCount += sBase ? sBase.split(' ').length : 0;
         for (const [label, obj, mods] of variants) {
           const g = generateFloor(content, seed, 'main', d, table, obj, mods, { season: true });
           expect(key(g), `${seed} depth ${d}: ${label}`).toBe(key(base));
+          expect(spots(g), `${seed} depth ${d}: ${label} (spots)`).toBe(sBase);
         }
         const ns = generateFloor(content, seed, 'main', d, table, variants[2][1]);
         if (key(ns) !== key(base)) nonSeasonMoved++;
       }
     }
     expect(floors).toBe(384);
+    expect(spotCount).toBeGreaterThan(100);
     // 決まりが要ること: シーズンでない生成では、賞金首の目標階の階段が動くことがある
     expect(nonSeasonMoved).toBeGreaterThan(0);
   });

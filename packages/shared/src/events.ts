@@ -7,7 +7,7 @@ import type {
 } from './types';
 
 /** 2: 遠征・実ダメージ・回復の蓄積値（IMPROVEMENTS_V2）。3: ビルド（特技・能動技・呪い。V3-4）。22: シーズン（S0）。古いログもそのまま畳み込める */
-export const EVENT_VERSION = 25;
+export const EVENT_VERSION = 26;
 
 export interface EventBase {
   seq: number;
@@ -202,6 +202,8 @@ export type GameEvent =
       publicPath?: true;
       /** 共有層の野営の火を地図に載せた（S1 §9.10）: 置いた者の名前。rememberedSet に火、newlySeen・mappedAdd はそのマスだけ */
       publicFire?: string;
+      /** 公開された特別な場所（祭壇・賭けの祭壇・碑文。S1c §14.5）を地図に載せた: 最初に報告した者の名前。rememberedSet にその地物だけ（地形は載せない） */
+      publicSpot?: string;
       /** 目標の気配（after 値。変化したときだけ。null は気配なし） */
       senseAfter?: Sense | null;
       /** 今いる階の手がかり（after 値。変化したときだけ。V3-2R2） */
@@ -215,7 +217,13 @@ export type GameEvent =
   /** 野営の火を使った（S1。本人だけ）。by: 置いた者、amount: 戻った HP、usesAfter: SeasonState.fireUses の after 値 */
   | E<'fire_used', { player: PlayerId; depth: number; x: number; y: number; by: string; amount: number; maxHp: number; usesAfter: { no: number; depth: number; x: number; y: number }[] }>
   /** 階段の報告の結果（S0 §9.4。本人だけ）。gained: 最初の報告の数（貢献） */
-  | E<'stairs_reported', { player: PlayerId; stairs: { depth: number; x: number; y: number; first: boolean }[]; gained: number }>
+  /** spots（S1c §14.5）: 報告した特別な場所（祭壇・賭けの祭壇・碑文）と最初の報告だったか。gained は階段と特別な場所の合計 */
+  | E<'stairs_reported', { player: PlayerId; stairs: { depth: number; x: number; y: number; first: boolean }[]; spots?: { depth: number; x: number; y: number; kind: string; first: boolean }[]; gained: number }>
+  /**
+   * 野営の火から帰る（S1c §14.3 の 1。本人だけ）。start: 帰り支度を始めた（turns は extract の手番を含む全部）、cancel: 取りやめ（reason）、
+   * done: 帰り支度が済み、この火から帰還・撤退した（completed。続く player_state が at_camp）。depth・x・y・by はその火（cancel で火から離されたときは -1）
+   */
+  | E<'fire_return', { player: PlayerId; phase: 'start' | 'cancel' | 'done'; depth: number; x: number; y: number; by: string; turns?: number; reason?: 'hostile' | 'moved' | 'not_complete'; completed?: boolean }>
   | E<'notes_updated', { player: PlayerId; notesAfter: string[] }>
   // 遠征
   | E<'expedition_offered', { camp: CampState }>
