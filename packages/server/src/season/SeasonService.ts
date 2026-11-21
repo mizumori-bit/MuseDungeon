@@ -188,6 +188,16 @@ export class SeasonStore {
     this.writeJson(id, 'invites.json', list);
   }
 
+  /** 招いた者を外す（運用の道具。S0b §6.2 の 5）。外したら true */
+  removeInvite(id: string, profileId: string): boolean {
+    const list = this.invites(id);
+    const next = list.filter((x) => x.profileId !== profileId);
+    if (next.length === list.length) return false;
+    if (!this.dir) { this.memInvites.set(id, next); return true; }
+    this.writeJson(id, 'invites.json', next);
+    return true;
+  }
+
   saveParticipants(d: SeasonData): void { this.writeJson(d.def.id, 'participants.json', d.participants); }
   savePublic(d: SeasonData): void { this.writeJson(d.def.id, 'public.json', d.public); }
   saveResult(d: SeasonData): void { this.writeJson(d.def.id, 'result.json', d.result); }
@@ -259,6 +269,25 @@ export class SeasonService implements SeasonHooks {
     this.store.addInvite(id, { profileId, name: display, invitedAt: now });
     this.store.log(id, { type: 'invited', profileId, name: display, newProfile: !existing });
     return { profileId, name: display, ...(newToken ? { token: newToken } : {}) };
+  }
+
+  /**
+   * 招きを取り消す（S0b。SEASON.md §6.2 の 5。運用の道具から）: ランを 1 回も始めていない者だけ。
+   * 表示名（招いたときの比べ方と同じ）かプロフィールの ID で指す。プロフィールそのものは消さない（シーズンに入れなくなるだけ）
+   */
+  uninvite(id: string, by: { name?: string; profileId?: string }): { profileId: string; name: string } | { error: string } {
+    const d = this.store.get(id);
+    if (!d) return { error: `シーズン ${id} は無い / no such season` };
+    if (d.result) return { error: `シーズン ${id} は確定している / season ${id} is final` };
+    if (!by.name && !by.profileId) return { error: '--name（招いたときの表示名）か --profile（プロフィールの ID）が要る。一覧は season -- invites --id <id> / --name or --profile is required' };
+    const invites = this.store.invites(id);
+    const inv = by.profileId ? invites.find((x) => x.profileId === by.profileId) : invites.find((x) => nameKey(x.name) === nameKey(by.name!));
+    if (!inv) return { error: `${by.profileId ? `プロフィール ${by.profileId}` : `表示名「${by.name}」`}は、シーズン ${id} に招かれていない（一覧は season -- invites --id ${id}） / not invited` };
+    const runs = this.participant(d, inv.profileId)?.runs.length ?? 0;
+    if (runs > 0) return { error: `「${inv.name}」（${inv.profileId}）は、このシーズンのランを ${runs} 回始めている。ランを始めた者の招きは取り消せない（順位と予算の記録が残るため） / already started ${runs} run(s); cannot uninvite` };
+    this.store.removeInvite(id, inv.profileId);
+    this.store.log(id, { type: 'uninvited', profileId: inv.profileId, name: inv.name });
+    return { profileId: inv.profileId, name: inv.name };
   }
 
   get(id: string): SeasonData | null { return this.store.get(id); }

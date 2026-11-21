@@ -130,8 +130,15 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
       const tail = ups.length ? (ja ? `（${ups.join('・')}）` : ` (${ups.join(', ')})`) : '';
       return ja ? `レベル ${ev.levelAfter} に上がった！${tail}` : `You reach level ${ev.levelAfter}!${tail}`;
     }
-    case 'xp_gained':
-      return null;
+    case 'xp_gained': {
+      // 経験値が増えた理由（S0b。SEASON.md §6.2 の 1）。理由はプレイヤー向けの射影が足す（filter.ts の annotateXp）。俯瞰では出さない
+      if (!self || ev.target !== self) return null;
+      const why = ev.reason === 'kill' ? (ja ? `${who(ctx, null, ev.victimKind, ev.victimAffixes)}を倒した` : `killed ${who(ctx, null, ev.victimKind, ev.victimAffixes)}`)
+        : ev.reason === 'depth' ? (ja ? `初めて地下${ev.depth ?? '?'}階に着いた` : `first time on depth ${ev.depth ?? '?'}`)
+          : ev.reason === 'objective' ? (ja ? '遠征の目的を達成した' : 'expedition objective complete') : null;
+      if (ja) return why ? `経験値 +${ev.amount}（${why}）。` : `経験値 +${ev.amount}。`;
+      return why ? `+${ev.amount} XP (${why}).` : `+${ev.amount} XP.`;
+    }
     // ビルド（V3-4）
     case 'perk_offered': {
       if (ev.target !== self) return null;

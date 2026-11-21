@@ -135,5 +135,37 @@ export function filterEventsForPlayer(events: readonly GameEvent[], playerId: Pl
     }
     out.push(pe as ProjectedEvent);
   }
+  annotateXp(out, selfId);
   return out;
+}
+
+/**
+ * 経験値が増えた理由（S0b。SEASON.md §6.2 の 1）: engine の xp_gained は理由を持たないので、同じ命令の中で
+ * その前にある、自分が見た出来事から決めて、射影に足す（engine の出来事の形は変えない）。
+ * 経験値が入るのは 3 つだけ（combat.ts の grantXp の呼び出し）: 自分が倒した died の直後、自分の entity_changed_floor（新しい深さ）の後、
+ * objective_completed の直後。間に別の xp_gained があれば、それより前は別の経験値の理由なので見ない。決まらなければ付けない。
+ */
+function annotateXp(out: ProjectedEvent[], selfId: string): void {
+  for (let i = 0; i < out.length; i++) {
+    const e = out[i] as Record<string, unknown>;
+    if (e.type !== 'xp_gained' || e.target !== selfId) continue;
+    for (let j = i - 1; j >= 0; j--) {
+      const p = out[j] as Record<string, unknown>;
+      if (p.cause !== e.cause || p.type === 'xp_gained') break;
+      if (p.type === 'died' && p.killer === selfId && p.id !== selfId) {
+        e.reason = 'kill';
+        e.victimKind = (p.kind as string | null | undefined) ?? null;
+        e.victimAffixes = (p.affixes as string[] | null | undefined) ?? null;
+        break;
+      }
+      if (p.type === 'objective_completed') { e.reason = 'objective'; break; }
+      if (p.type === 'entity_changed_floor' && p.id === selfId) {
+        const to = (p.to as { floor?: string } | null | undefined)?.floor;
+        const depth = to ? Number(to.split(':')[1]) : NaN;
+        e.reason = 'depth';
+        if (Number.isFinite(depth)) e.depth = depth;
+        break;
+      }
+    }
+  }
 }

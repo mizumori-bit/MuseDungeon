@@ -74,6 +74,7 @@ function ja(r: CatalogRules): Record<Topic, string> {
 - 死ぬと、その者はランから外れ、持ち物（装備・品・帰還の綱）と、その遠征の戦利品をすべて失う（その場に落とさない。協力プレイでも仲間には残らない。ほかの参加者はランを続けられる）。
 - スコア（版 2）= 確定点の合計。遠征中に得た点は「未確定の戦利品」として積み上がり、持ち帰って（extract）初めて確定する。死ねばその遠征の戦利品は失う（詳しくは get_rules expedition）。記録には達成した遠征の数が残る。
 - ダンジョンは階層ごとにシードからプロシージャル生成され、深さに上限は無い。深層では敵が強化（tier と接辞）される。
+- **階は、ランの間、作られたまま残る。** 階はそのランで初めて入ったときに作られ、その後は遠征をまたいでも作り直されない（地形・階段・扉・床に残した品はそのままで、倒した敵は戻らない。変わるのは、キャンプにいる間に敵が落ち着くこと・徘徊の敵が湧くこと・遠征の開始時に目的の守護者や遺物が置かれ、目的でない守護者と強敵が去ること）。例外は 1 つ: 倒していない節目の階に大守護者がいなければ、遠征の開始時にその階を作り直す（get_rules expedition の「節目の大守護者」）。シーズンのランでは、地形と階段の位置は参加者の全員に同じ（get_rules season）。
 - あなたが知り得るのは、自分の視界（半径 8 前後）と記憶した地図だけ。未探索の地形や視界外の敵は観測に含まれない。
 - 手番は速度ベース（標準 100）。速い敵はあなたより多く動く。プレイヤーがいない階は時間が止まる。ただし守護者と大守護者は、あなたを追っていない間（階を離れている間と、同じ階で見失って探すのをやめた後）、手番 1 つにつき最大体力の ${r.guardianAwayHealPct ?? 2}% を回復する（次に見たとき・追跡を再開したとき・階に戻ったときに一度に。物陰に入った数手番では始まらない）。全快すれば落ち着く: 持ち場へ戻り、追跡をやめ、状態異常・怒りが消え、呼んだ手下は去る。眠りが深い守護者は眠りに戻る。キャンプへ戻ると、すべての守護者が全快して落ち着く。退いてすぐ薬や泉で戻して戻るのは今までどおり効く（通常の敵は回復しない）。
 - 不正な行動は状態を変えず時間も消費しない。エラーには code / message / hint と valid_actions が付く。
@@ -140,7 +141,7 @@ ${traitsLines(r, true)}
 - 候補には推奨レベルと自分との差（level_gap = 推奨 − 自分。正なら推奨より低い）、条件の危険度の合計（trait_danger）が出る。推奨レベルは深度ごとの公開の表（地下1〜${r.recommendedLevel.byDepth.length}階: ${r.recommendedLevel.byDepth.join(', ')}。より深い階は直近 4 階の傾きで伸ばす）。隠し情報は使わない。
 - new_run で objective を省くとキャンプから始まり、最初の遠征も 3 候補から選ぶ。
 ## その他
-- 経験値は敵を倒すほか、新しい深度に初めて着く（${r.xp.perNewDepth} × 深度）と遠征の目的を達成する（${r.xp.perObjective} × 目標深度）ことでも得る。
+- 経験値の入り方は get_rules combat の「経験値とレベル」にまとめてある（敵を倒す・新しい深さに初めて着く・遠征の目的を達成する、の 3 つだけ）。
 - 遠征が達成か撤退で終わるとキャンプに戻る。キャンプでは時間が進まず、HP は全快し状態異常は消える。次の遠征の候補 3 つから start_expedition { offer } で選ぶ（前回 extract した階段から再開。帰還の綱で戻った場合は、その遠征を始めた階段から。目標の階が上なら上り階段を使う）。キャンプにいる間に、作られているすべての階が落ち着く: 敵は追跡をやめ、体力が全快し、状態異常が消える（見た被害 damage_seen の記憶も消える。守護者・賞金首の傷跡は残る）。再開する階では、再開するマスが見える敵が離れた場所へ移る（削っては帰るを繰り返しても得にならない）。何も選ばずにやめてもよい（resume_run で後から続けられる）。
 - 接続が切れても遠征は終わらない（中断）。resume_run で続きから再開できる。
 - 観測の expedition に目的・進捗・can_extract（今この場で extract できるか）が毎回付く。`,
@@ -181,10 +182,9 @@ ${traitsLines(r, true)}
 - 命中: d20 + 命中値(acc) >= 10 + 相手の回避(eva)。出目 20 は必中かつ会心、出目 1 は必ず外れ。
 - 会心: ダメージダイスが最大値になり（＋威力）、相手の装甲を無視する。一度見た最大の一撃が、その種族の最悪の目安になる。
 - 眠っている相手には命中 +5。攻撃すると相手は目を覚ます。
-- 近接ダメージ: 武器ダイス + 威力(might) - 相手の装甲(armor)、最低 1。投擲: 投擲ダイス - 装甲、最低 1。表示されるダメージは実際に減った HP（とどめの超過分は含まない。ただし、とどめの文は与えるはずだった値と、残っていた HP を出す: 「6 ダメージを与えた（とどめ。残りは 5 だった）」。fight の合計は実際に減った HP）。
+- 近接ダメージ: 武器ダイス + 威力(might) - 相手の装甲(armor)、最低 1。投擲: 投擲ダイス - 装甲、最低 1。表示されるダメージは実際に減った HP（とどめの超過分は含まない。ただし、とどめの文は与えるはずだった値と、残っていた HP を出す: 「6 ダメージを与えた（とどめ。残りは 5 だった）」。fight の合計と遠征レポートの与ダメージは実際に減った HP で、とどめの超過分は含まない。超過があれば fight の合計の文に「とどめの一撃の超過分 1 は含まない」と添える）。
 - 習熟: 職業ごとに近接・投擲の命中の修正がある（戦士は投擲 −2、斥候は投擲 +2。get_rules classes）。装備の「近接の命中」「投擲の命中」も足す。
 - 状態異常: 毒（毎手番 1 ダメージ）、錆（装甲 −2。0 未満にはならない。10 手番。重ならず、また当たると手番が戻るだけ）、加速（速度 2 倍）、減速（速度半分）、睡眠（行動不能、ダメージで解ける）、朦朧（行動不能。強打・鎚矛）、身かわし（次の自分の手番まで近接が当たらない）、構え（次の自分の手番までに受ける最初の一撃の装甲が上がる）、怯え（逃げ出す HP の閾値が上がる。威圧）${r.lifeline.turns > 0 ? '、帰還中（帰還の綱。行動不能、切れるとキャンプへ）' : ''}。手番開始時に処理。毒で倒れた敵は、毒を与えた者が倒した扱い（賞金・撃破点・経験値）。視界の外で毒が効いている間は相手の名前・体力・位置は出ず、倒れたときだけ「あなたの毒で何かが倒れた」と知らされる。
-- 経験値でレベルアップ（次のレベルに必要な累計 XP = 15×Lv²）。最大 HP が上がり、特技を 1 つ選べる（choose_perk。get_rules classes）。
 - 回復の薬（鑑定済み）: HP を 2d8+4 回復する。ただし最大 HP の 30% を下回らない。毒も消す。
 - 自然回復: max(${rg.minInterval}, ${rg.baseInterval} - floor(Lv/${rg.levelDiv})) 手番ごとに 1 HP。追跡中の敵が見えない状態での wait（rest の各手を含む）は休息となり ${rg.restMultiplier} 倍の速さで回復する。**休憩と自然回復で戻るのは最大 HP の ${r.restCapPct ?? 100}% まで**（それより上は回復の薬・立て直し・泉・レベルアップ・キャンプでだけ戻る。HP は遠征の中で減っていく資源）。観測の self.rest_estimate に、その上限（cap_hp）までの手数・時間・その間の徘徊の目安が出る。
 - 敵の HP は 4 段階でしか分からない: healthy（${b1}% 以上）/ wounded（${b2}% 以上）/ badly_wounded（${b3}% 以上）/ near_death（それ未満）。
@@ -194,15 +194,20 @@ ${traitsLines(r, true)}
 - threat(1-5) は「自分の現在 HP と、その種族から受けた最大の一撃」から見積もった危険度。その種族から攻撃を受けた記録が無ければ null（脅威: 不明（被弾の記録なし）。本当に初めて見た種族は「不明（初見）」）。worst_hit にその最大の一撃、worst_turn に 1 手番あたりの最悪の被害（worst_hit × 自分の 1 手番に相手が行動する回数。自分より速い相手は 2 回。ただし少しだけ速い相手は毎手番 2 回は動けない: 1 手番に 2 回動いたのを見た相手は、次に 2 回動けるまでの手番を 1 回と数える。速さ 120 と 100 なら 2 回の後の 3 手番は 1 回。fight の hp_risk も同じ数え方）。追跡中の敵の worst_turn、またはその合計が今の HP 以上なら alerts に lethal_range、合計の 2 倍が HP 以上なら lethal_2turns。
 - 守護者の記録は種族の記録と分けて残る（体力・命中・最大の一撃。recall では「守護者の記録」）。
 - 通りの記録: 自分の攻撃が当たったときの平均ダメージが種族ごと・近接と投擲に分けて残る（「近接の通り 平均 2.5／13 回」）。装甲そのものは出ない。
-- 撃破の経験値は深いほど多い（深度 1 階ごとに +${r.xp.killDepthPct ?? 0}%）。
 - 見れば分かる特徴は初見から出る: speed（自分の今の速さとの比較で slow / normal / fast。speed_ratio は倍率で、「遅い×0.8」はあなたの 1 手に 0.8 手）、size（small 小柄・large 大柄）、traits（pack 群れる・ranged 飛び道具・stationary 動かない・armored 重装＝素の装甲 3 以上・evasive 回避が高い＝素の回避 5 以上・rusting 錆びさせる＝当たると装甲が錆びる・pierce 装甲を抜く＝射撃が装甲を無視する・drain 血を吸う＝与えたダメージの分だけ回復する・heavy_swing 大振り＝隣の相手に 1 手構え、次の手番に構えたときに相手がいたマスを 2 倍で打つ。外れると 1 手朦朧）。look にも出る。体力・威力・回避・弱点は伏せたまま。
 - 飛び道具（ranged）の敵は距離を取る: 寄られると下がり、下がる手番は撃たない。待ち受けると撃たれ続けるので、近づくか視線を切る。
 - 命中の記録: 種族ごとに（守護者は守護者のその種族で別に）、ランを通して、自分の攻撃（近接・投擲を分ける）と相手から自分への攻撃の回数と命中が残り、visible.monsters の hits に出る（「この種族の記録: あなたの命中 近接1/6・相手の命中 3/5」。目の前の 1 体の数ではない）。確率そのものは出ない。
 - 群れの被害見込み: 追跡中の敵が 2 体以上見えると alerts に incoming（追跡中の数・記録の最大被害の合計・記録の無い数・あなたの HP）。逃げ道: 追跡中の敵が見えていて既知の階段に辿り着けるとき、alerts に escape（最寄りの階段・経路長・あなたより速い追跡中の敵の数）。そのとき valid_actions の travel_to stairs_* に「階段まで 7 歩。追われたままなら最悪 6 の被害（追いつけるのは 1 体・射撃 0 体。HP 9）」が付く。最悪の被害は、敵ごとに「歩く間に攻撃できる回数 × 受けた最大の一撃」の合計: 射撃する敵は歩数、近接の敵は 切り上げ(歩数 × max(0, 敵の速さ ÷ あなたの歩く速さ − 1))、今隣にいる敵は +1 回（あなたの歩く速さは重い鎧の手番コストを入れる。同じ速さ以下の近接の敵は、隣にいても 1 回分だけ）。記録の無い敵がいれば不明。一番近い階段でもそれが HP 以上で綱を持っていれば、綱の候補が階段より前に並ぶ。
 - 浅い階の群れは小さい: 群れの数は最大で 深度 + 1（地下1階は 2、地下2階は 3）。
 - 転移の巻物: 着地点は元の位置から ${r.teleport.minDistance} マス以上離れ、追跡中の敵から見えないマスを優先する（無ければ距離だけ、それも無ければどこでも）。
-- 経験値: 敵を倒す、新しい深度に初めて着く、遠征の目的を達成する。レベルアップの文に上がった最大 HP と、特技の候補が並ぶ。
-- 騒音: 戦闘・扉の開閉は音を立て、近くの眠っている敵を起こすことがある。`,
+- 騒音: 戦闘・扉の開閉は音を立て、近くの眠っている敵を起こすことがある。
+## 経験値とレベル（経験値の入り方は、ここにまとめる）
+- 経験値が入るのは次の 3 つだけ。増えたときは「経験値 +6（大ネズミを倒した）」のように、理由つきの文が出る（観測の self.xp に累計）。
+  1. 敵を倒す: 倒した本人に、種族の経験値 × (100 + ${r.xp.killDepthPct ?? 0} × (その階の深さ − 1))%（切り捨て。深い階ほど多い）。毒で倒しても、毒を与えた者に入る。
+  2. 新しい深さに初めて着く: そのランで着いた最も深い階を更新したとき、${r.xp.perNewDepth} × その深さ。前に着いたことのある深さでは入らない。
+  3. 遠征の目的を達成する: 達成した瞬間に、迷宮にいる参加者のそれぞれに ${r.xp.perObjective} × 目標の深さ（帰還を待たない。目的なしの遠征には無い）。
+- これ以外（帰還・撤退・帰還の綱・踏破（深追い）・宝・発見・休憩・キャンプ）では入らない。
+- レベルアップ: 累計の経験値が 15×Lv² に達すると次のレベルになる（Lv1→2 は 15、Lv2→3 は 60）。最大 HP が上がり（職業ごと。get_rules classes）、特技を 1 つ選べる（choose_perk）。レベルアップの文に、上がった最大 HP と特技の候補が並ぶ。`,
     items: `# アイテム
 - 武器・防具・装飾品（指輪・護符）: equip で装備。接辞（例: 鋭い = 命中+2）付きのものもある。
 - 武器の特性: 速い（短剣。近接の手番コスト 70）、長柄（槍。直線で 2 マス先を attack）、薙ぐ（戦斧。対象と自分の両方に隣接する敵 1 体にも当たる）、砕く（鎚矛。当たれば 20% で 1 手番の朦朧）、扱いやすい（小剣。特別な効果なし）。
@@ -242,7 +247,7 @@ ${traitsLines(r, true)}
 - 参加: 運用者がそのシーズンに招いたプロフィールだけが参加できる。list_runs の seasons にある ID で new_run { season, profile_token }（profile_token は運用者から受け取ったもの。必須）。1 つのプロフィールが 1 人の参加者で、順位の表の名前は招かれたときの表示名。シーズンのランはソロで、シーズンのシード、Lv1 のキャンプから。継承は受けない。同じ参加者のシーズンのランは同時に 1 つ。倒れたら、同じ profile_token で、同じシーズンの新しいランを Lv1 から始められる（予算は続きから）。
 - 行動予算: 参加者 1 人につき、シーズンを通して自分の手番の数で持つ（ランをまたいで 1 つ。倒れてやり直しても戻らない）。迷宮の中の自分の手番だけを数え、マクロの中の手番も 1 つずつ。キャンプでは減らない。残りは観測にいつも出る。
 - 時間切れ: 予算が尽きた手番の終わりに、その遠征は時間切れで終わる。キャンプへ戻され、未確定の戦利品は失う（持ち物は残る）。倒れた扱いにはしない。その後は新しい遠征を始められない（キャンプでの操作と報告はできる）。帰る分の手番を残しておくこと。
-- 階段の位置は、だれのランでも同じ。報告: キャンプで report_stairs（手番を使わない）。このランで自分の目で見た下り階段のうち、まだ報告していないものを全部送る。その階の下り階段を最初に報告した 1 人に貢献 1（サーバーに届いた順）。倒れると、そのランで報告していなかった階段は報告できなくなる。
+- 階の地形と階段の位置は、だれのランでも同じ（同じシードと版から作る。守護者の棲み処の柱・浅い水など、数マスの違いはある）。階は、ランの間、作られたまま残る（遠征ごとに変わらない。get_rules overview）。報告: キャンプで report_stairs（手番を使わない）。このランで自分の目で見た下り階段のうち、まだ報告していないものを全部送る。その階の下り階段を最初に報告した 1 人に貢献 1（サーバーに届いた順）。倒れると、そのランで報告していなかった階段は報告できなくなる。
 - 公開された階段: キャンプに着いたときと遠征を始めるときに取り込む。公開されている階に入ると、下り階段のマスがはじめから地図に載る（公開した者の名前つき）。途中の道は分からない（travel_to stairs_down は道が分かるまで届かない。下への風は自分の目で見るまで出るので explore { toward: 'draft' }）。遠征の途中で公開されたものは、次の遠征から。
 - 賞（称号は無い。結果の記録に残る）: 冒険賞＝シーズンで着いたいちばん深い階（着いた時点で数える。帰れなくてもよい）。貢献賞＝最初に報告した階段の数。生還賞＝シーズンで一度も倒れていない者の、確定した点の合計。同着は、使った予算の少ないほうが上（冒険はその階に着いたとき、貢献は最後の 1 つを報告したとき、生還は使った予算の合計）。時間切れは倒れた扱いにしない。
 - 順位は、キャンプの観測に賞ごとの 1 行で出る（自分の値と順位、1 位の名前と値、1 位との差）。迷宮の中では予算の残りだけ（順位はキャンプで取り込んだものが、その遠征の間の最新）。
@@ -265,6 +270,7 @@ function en(r: CatalogRules): Record<Topic, string> {
 - When you die you leave the run and lose everything you carry (equipment, items, the lifeline) and that expedition's haul. Nothing is dropped where you fell, and in co-op nothing passes to your allies; the others can go on with the run.
 - Score (version 2) = total banked points. Points earned during an expedition are an unbanked haul that only counts once you bring it back (extract); dying loses that expedition's haul (see get_rules expedition). The record keeps how many expeditions you completed.
 - Floors are procedurally generated from a seed; depth is unbounded. Deeper monsters gain tiers and affixes.
+- **Floors persist for the whole run.** A floor is made the first time you enter it in this run and is never remade between expeditions (terrain, stairs, doors and items left on the floor stay, and slain monsters stay dead. What changes: monsters settle while you are at camp, wanderers spawn, and at the start of an expedition its guardian or relic is placed while guardians and elites that are not its objective leave). One exception: an unslain milestone floor without its warden is remade at the start of an expedition (milestone wardens in get_rules expedition). In a season run, terrain and stairs are the same for every participant (get_rules season).
 - You only know your field of view (~radius 8) and the map you remember. Unexplored terrain and unseen monsters are never included.
 - Speed-based turns (normal 100). Floors without players are frozen in time, except that guardians and wardens heal ${r.guardianAwayHealPct ?? 2}% of their max HP per turn while they are not chasing you (while you are off the floor, and on the same floor once they lose you and give up the search; applied at once when you next see them, when they resume the hunt, or when you return; a few turns behind cover do not count). At full they settle: back to their post, no hunting, statuses and rage gone, summoned minions leave, and a deep sleeper goes back to sleep. Going back to camp heals and settles every guardian. Stepping away briefly to drink a potion or use a fountain still works (ordinary enemies do not heal).
 - Invalid actions change nothing and cost no time; errors include code/message/hint and valid_actions.
@@ -331,6 +337,7 @@ ${traitsLines(r, false)}
 - Offers show the recommended level, your gap to it (level_gap = recommended - yours) and the sum of trait dangers (trait_danger). Recommended levels come from a public table (depth 1-${r.recommendedLevel.byDepth.length}: ${r.recommendedLevel.byDepth.join(', ')}; deeper depths extend the last 4-depth slope). No hidden information is used.
 - new_run without objective starts at camp, so you choose the first expedition from 3 offers too.
 ## Other
+- How XP is earned is all under "XP and levels" in get_rules combat (kills, first arrival at a new depth and completing the objective; nothing else).
 - After completing or withdrawing you are at camp: time does not pass, HP is restored and statuses cleared. Choose the next of 3 offers with start_expedition { offer } (you restart from the stairs you extracted on; after a lifeline, from where that expedition began). While you are at camp every floor that has been made settles: monsters stop hunting, heal fully and lose their statuses (your damage_seen for them is cleared too; guardians' and bounties' scars stay). On the restart floor, any that can see the restart cell move far away (chipping and leaving does not pay). You may stop instead and resume_run later.
 - A disconnect does not end an expedition; resume_run continues it.
 - Every observation includes expedition (objective, progress, can_extract).`,
@@ -370,10 +377,9 @@ Free: choose_perk{option} / observe / wait_for_turn / expedition / review / reco
 - To hit: d20 + acc >= 10 + target eva. Natural 20 always hits and crits; natural 1 always misses.
 - Critical hit: the damage dice roll their maximum (plus might) and armor is ignored. The biggest hit you have seen is the worst case for that species.
 - +5 to hit sleeping targets; attacking wakes them.
-- Melee damage: weapon dice + might - armor (min 1). Thrown: thrown dice - armor (min 1). Reported damage is the HP actually lost (overkill excluded; the killing-blow line shows the intended damage and the HP that was left, e.g. "6 damage (killing blow; it had 5 left)"; fight totals count HP actually lost).
+- Melee damage: weapon dice + might - armor (min 1). Thrown: thrown dice - armor (min 1). Reported damage is the HP actually lost (overkill excluded; the killing-blow line shows the intended damage and the HP that was left, e.g. "6 damage (killing blow; it had 5 left)"; fight totals and the expedition report's damage dealt count HP actually lost, without overkill, and a fight total with overkill says "the finishing blow's 1 overkill is not counted").
 - Proficiency: each class has melee and thrown accuracy modifiers (warrior thrown -2, scout thrown +2; get_rules classes). Equipment "melee acc" / "thrown acc" add to them.
 - Statuses: poison (1 dmg/turn), rusted (armor -2, never below 0, 10 turns; does not stack, a new hit only refreshes it), haste (x2 speed), slow (x0.5), sleep (helpless, damage wakes), stunned (helpless; bash, mace), evasive (melee misses you until your next turn), braced (the first hit before your next turn meets more armor), cowed (flees at more HP; intimidate)${r.lifeline.turns > 0 ? ', recalling (lifeline; helpless, then back to camp)' : ''}. Processed at turn start. A monster killed by poison counts as killed by whoever poisoned it (bounty, kill points, XP). While your poison works on something out of sight you learn nothing about it; only its death is reported ("something fell to your poison").
-- Level up at total XP = 15*Lv^2: more max HP and one perk of your choice (choose_perk; get_rules classes).
 - Potion of healing (identified): heals 2d8+4 HP, never less than 30% of max HP, and cures poison.
 - Regeneration: 1 HP every max(${rg.minInterval}, ${rg.baseInterval} - floor(Lv/${rg.levelDiv})) turns. wait with no hunting enemy in view (each rest turn too) counts as resting and regenerates ${rg.restMultiplier}x faster. **Rest and natural regeneration only heal up to ${r.restCapPct ?? 100}% of max HP** (above that only potions, second wind, fountains, level-ups and camp heal; HP is a resource that wears down over an expedition). self.rest_estimate shows turns/time to that cap (cap_hp) and expected wanderers.
 - Monster HP is shown in 4 bands: healthy (>= ${b1}%), wounded (>= ${b2}%), badly_wounded (>= ${b3}%), near_death (below).
@@ -383,15 +389,20 @@ Free: choose_perk{option} / observe / wait_for_turn / expedition / review / reco
 - threat (1-5) is estimated from your HP and the biggest hit you have taken from that species; null if it has never hit you ("unknown, first sighting" only for a species you have truly never met). worst_hit shows that biggest hit and worst_turn the worst damage per turn (worst_hit x how many times it acts in one of your turns; 2 if it is faster, except that a slightly faster enemy cannot act twice every turn: once you saw it act twice in one turn, the turns until it can do so again count as 1; for speed 120 vs 100, the 3 turns after a double. fight's hp_risk counts the same way). alerts carry lethal_range when a hunting enemy's worst_turn, or their sum, is at least your HP, and lethal_2turns when twice the sum is.
 - Guardians have their own record, separate from the species (HP, hits, worst hit; recall shows it as the guardian record).
 - Damage records: the average damage of your hits per species, melee and thrown separately ("melee avg 2.5 over 13"). Armor itself stays hidden.
-- Kill XP grows with depth (+${r.xp.killDepthPct ?? 0}% per depth).
 - What you can see is shown from the first sighting: speed (slow / normal / fast compared with your current speed; speed_ratio gives the factor, "slow x0.8" = 0.8 moves per move of yours), size (small / large) and traits (pack, ranged, stationary, armored = base armor 3+, evasive = base evasion 5+, rusting = its hits rust your armor, pierce = its shots ignore armor, drain = heals by the damage it deals, heavy_swing = braces for a turn next to you, then strikes the cell you were on for double damage; a miss stuns it for a turn). look shows them too. HP, power, evasion and weaknesses stay hidden.
 - Ranged enemies keep their distance: when approached they back off, and they do not shoot while backing off. Waiting for them means being shot; close in or break line of sight.
 - Hit records: per species (guardians of a species are kept apart) over the whole run, your attacks (melee and thrown separately) and its attacks on you, as hits/tries in visible.monsters hits ("this species' record: your hits melee 1/6, its hits 3/5"; not the count for the one in front of you). No probabilities are given.
 - Pack danger: with 2+ hunting enemies in view, alerts carry incoming (how many, the sum of their recorded worst hits, how many have no record, your HP). Escape: with hunting enemies in view and known reachable stairs, alerts carry escape (nearest stairs, path length, how many hunters are faster than you), and the travel_to stairs_* candidates say "7 steps to the stairs. If they keep chasing you, worst 6 damage (1 can catch you, 0 shooting; HP 9)". The worst damage sums, per enemy, the attacks it gets while you walk x its worst hit on you: a shooter gets one per step; a melee enemy gets ceil(steps x max(0, its speed / your walking speed - 1)), plus 1 if it is adjacent now (your walking speed includes heavy armor's move cost; a melee enemy no faster than you gets 1 at most, and only if adjacent). Unknown if one has no record. If even the nearest stairs could cost your HP and you hold the lifeline, the lifeline candidate is listed before the stairs.
 - Packs are small on shallow floors: at most depth + 1 (2 on depth 1, 3 on depth 2).
 - Teleport scroll: prefers a landing cell at least ${r.teleport.minDistance} cells away that no hunting enemy can see (then distance only, then anywhere).
-- XP comes from kills, first arrival at a new depth and completing an expedition objective. Level-up messages list the max HP gained and the perk options.
-- Noise from combat and doors may wake nearby sleepers.`,
+- Noise from combat and doors may wake nearby sleepers.
+## XP and levels (everything about how XP is earned is here)
+- XP comes from these three only. Each gain is reported with its reason, e.g. "+6 XP (killed cave rat)" (self.xp in the observation is the total).
+  1. A kill: the killer gets the species' XP x (100 + ${r.xp.killDepthPct ?? 0} x (the floor's depth - 1))% (rounded down; deeper is more). A poison kill goes to whoever poisoned it.
+  2. First arrival at a new depth: when you beat the deepest floor reached in this run, ${r.xp.perNewDepth} x that depth. A depth you have reached before gives nothing.
+  3. Completing an expedition objective: the moment it is done, each participant in the dungeon gets ${r.xp.perObjective} x the target depth (no need to extract first; expeditions without an objective give none).
+- Nothing else gives XP (extracting, withdrawing, the lifeline, overreach, treasure, discoveries, resting, camp).
+- Level up: at total XP = 15*Lv^2 you reach the next level (15 for Lv1->2, 60 for Lv2->3): more max HP (per class; get_rules classes) and one perk of your choice (choose_perk). The level-up message lists the max HP gained and the perk options.`,
     items: `# Items
 - Weapons, armor and accessories (rings, amulets): equip them. Some have affixes (e.g. keen = +2 acc).
 - Weapon traits: quick (dagger; melee costs 70), reach (spear; attack 2 cells away in a straight line), sweep (war axe; also hits one enemy adjacent to both you and the target), crush (mace; 20% to stun for 1 turn on a hit), balanced (short sword; nothing special).
@@ -430,7 +441,7 @@ Free: choose_perk{option} / observe / wait_for_turn / expedition / review / reco
 - Joining: only profiles the operator invited to the season may join. Call new_run { season, profile_token } with an ID from list_runs (seasons); the profile_token is the one the operator gave you and is required. One profile is one participant, shown in the standings under the name it was invited with. Season runs are solo, use the season's seed and start at camp at Lv1. No legacy. A participant has one season run at a time. After dying you may start a new run at Lv1 in the same season with the same profile_token (the budget carries on).
 - Budget: each participant has a number of own turns for the whole season (one budget across runs; dying does not refund it). Only your own turns in the dungeon count, every turn inside a macro too. Camp is free. The budget left is always in the observation.
 - Time up: at the end of the turn that uses up the budget, the expedition ends as time up. You are sent back to camp and lose the unbanked haul (you keep your items). It does not count as dying. You cannot start another expedition afterwards (camp actions and reports still work). Keep enough turns to get home.
-- Stairs are in the same place in every participant's run. Reporting: report_stairs at camp (no turn). It sends every down staircase you saw with your own eyes in this run and have not reported yet. The first participant to report a floor's down stairs gets 1 contribution (in the order the server receives them). If you die, the stairs you did not report from that run can no longer be reported.
+- Terrain and stairs are the same in every participant's run (made from the same seed and version; a few cells can differ, such as a guardian lair's pillars or shallow water). Floors persist for the whole run (they do not change between expeditions; get_rules overview). Reporting: report_stairs at camp (no turn). It sends every down staircase you saw with your own eyes in this run and have not reported yet. The first participant to report a floor's down stairs gets 1 contribution (in the order the server receives them). If you die, the stairs you did not report from that run can no longer be reported.
 - Published stairs are taken in when you arrive at camp and when you start an expedition. On a floor with published stairs, the down staircase is on your map from the start (with the reporter's name). The way there is unknown (travel_to stairs_down cannot reach it until the path is known; the draft stays until you see the stairs, so use explore { toward: 'draft' }). Stairs published during your expedition show from the next one.
 - Awards (no titles; kept in the results): Adventure = the deepest floor reached in the season (counted on arrival, even if you never get back). Contribution = the number of stairs you reported first. Survival = the banked points of participants who never died this season. Ties go to whoever used less budget (adventure: when first reaching that floor; contribution: when reporting the last one; survival: total used). Time up does not count as dying.
 - The standings appear at camp, one line per award (your value and rank, the leader and their value, the gap). In the dungeon only the budget left is shown (what you took in at camp is the latest during that expedition).

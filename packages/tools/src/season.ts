@@ -1,4 +1,4 @@
-// シーズンの運用（S0。PROTOCOL.md §9.1）: 開く・招く・一覧・順位・確定・地下 5 階の大守護者の下見。
+// シーズンの運用（S0。PROTOCOL.md §9.1）: 開く・招く・招きの取り消し・一覧・順位・確定・地下 5 階の大守護者の下見。
 // サーバーと同じ置き場所（既定 runs/seasons。MUSE_SEASONS_DIR か --dir）に書く。動いているサーバーは、知らない ID を聞かれたときに読み直す。
 import type { Content } from '@muse/content';
 import { createRun, ENGINE_VERSION, previewWarden } from '@muse/engine';
@@ -20,6 +20,8 @@ export interface SeasonCliArgs {
   /** 招く（S0a）: プロフィールの置き場所（サーバーと同じ。既定 runs/profiles）と、今あるプロフィールを招くときのトークン */
   profilesDir?: string | null;
   profileToken?: string;
+  /** 招きの取り消し（S0b）: プロフィールの ID */
+  profileId?: string;
 }
 
 /** 使われなかった引数の知らせ（PowerShell の `npm run` は名前付きの引数を消し、引用符の無いカンマは別の引数に分ける） */
@@ -57,6 +59,14 @@ export function seasonCli(content: Content, a: SeasonCliArgs, log: (s: string) =
         log(`profile_token: ${r.token}`);
         log(`このトークンは、この 1 回だけ表示する。参加者へ手で渡す（リポジトリ・記録・チャットの公開の場には残さない）。参加は new_run { character_name, season: "${a.id}", profile_token }。`);
       } else log('今あるプロフィールを招いた。参加者は、今のトークンのまま new_run { season } で参加できる。');
+      return 0;
+    }
+    case 'uninvite': {
+      // 招きの取り消し（S0b。SEASON.md §6.2 の 5）: ランを 1 回も始めていない者だけ
+      if (!a.id) { log('--id が要る（シーズンの ID）'); return 1; }
+      const r = svc.uninvite(a.id, { ...(a.name ? { name: a.name } : {}), ...(a.profileId ? { profileId: a.profileId } : {}) });
+      if ('error' in r) { log(r.error); return 1; }
+      log(`シーズン ${a.id} の「${r.name}」（${r.profileId}）の招きを取り消した。このプロフィールは、もうこのシーズンのランを始められない（プロフィールそのものは残る。同じプロフィールを招き直すなら invite --profile-token <そのトークン>）。表示名「${r.name}」は、また使える。`);
       return 0;
     }
     case 'invites': {
@@ -107,7 +117,7 @@ export function seasonCli(content: Content, a: SeasonCliArgs, log: (s: string) =
       return 0;
     }
     default:
-      log('使い方（PowerShell）: npm.cmd run season -- open --id <id> --seed <seed> --ends "<ISO 時刻>" [--name <名前>] [--budget 3000] / invite --id <id> --name <表示名> [--profile-token <今あるトークン>] / invites --id <id> / list / standings --id <id> / close --id <id> / wardens --seeds "a,b,c" [--depth 5]  （共通: --dir <置き場所>・--profiles-dir <プロフィールの置き場所>。bash では npm run）');
+      log('使い方（PowerShell）: npm.cmd run season -- open --id <id> --seed <seed> --ends "<ISO 時刻>" [--name <名前>] [--budget 3000] / invite --id <id> --name <表示名> [--profile-token <今あるトークン>] / uninvite --id <id> (--name <表示名> | --profile <profile_id>) / invites --id <id> / list / standings --id <id> / close --id <id> / wardens --seeds "a,b,c" [--depth 5]  （共通: --dir <置き場所>・--profiles-dir <プロフィールの置き場所>。bash では npm run）');
       return 1;
   }
 }

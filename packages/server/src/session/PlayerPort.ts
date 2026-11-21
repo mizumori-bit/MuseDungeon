@@ -98,7 +98,7 @@ function seasonBriefing(L: Locale, s: NonNullable<PlayerView['season']>): string
   return [
     t(L, `シーズン「${s.name}」に参加している（ソロ。全員が同じシードのダンジョンを、それぞれのランで潜る）。詳しくは get_rules topic=season。`, `You are in season "${s.name}" (solo; everyone dives the same seed in their own run). Details: get_rules topic=season.`),
     t(L, `- 行動予算: シーズンを通して自分の手番 ${s.budget.limit}（ランをまたいで 1 つ。残り ${Math.max(0, s.budgetLeft)}）。迷宮の中の手番だけ減る。尽きた手番で時間切れ（キャンプへ戻り、未確定の戦利品を失う。倒れた扱いにはしない）。帰る分を残すこと。`, `- Budget: ${s.budget.limit} own turns for the whole season (one budget across runs; ${Math.max(0, s.budgetLeft)} left). Only dungeon turns count. Running out is time up (back to camp, unbanked haul lost; not counted as dying). Keep enough to get home.`),
-    t(L, '- 階段の位置はだれのランでも同じ。キャンプで report_stairs すると、このランで見た下り階段を報告できる（最初の報告者に貢献 1）。倒れると、報告していない階段は報告できなくなる。公開された階段は、次の遠征から地図に載る（道は分からない）。', '- Stairs are in the same place in every run. At camp, report_stairs reports the down stairs you saw in this run (1 contribution to the first reporter). If you die, unreported stairs are lost. Published stairs appear on your map from the next expedition (not the way there).'),
+    t(L, '- 階は、ランの間、作られたまま残る（遠征ごとに変わらない）。地形と階段の位置は、だれのランでも同じ。キャンプで report_stairs すると、このランで見た下り階段を報告できる（最初の報告者に貢献 1）。倒れると、報告していない階段は報告できなくなる。公開された階段は、次の遠征から地図に載る（道は分からない）。', '- Floors persist for the whole run (they do not change between expeditions). Terrain and stairs are the same in every run. At camp, report_stairs reports the down stairs you saw in this run (1 contribution to the first reporter). If you die, unreported stairs are lost. Published stairs appear on your map from the next expedition (not the way there).'),
     t(L, '- 賞: 冒険（いちばん深い階）・貢献（最初の報告の数）・生還（一度も倒れていない者の確定点の合計）。同着は使った予算の少ないほうが上。順位はキャンプの観測に出る。', '- Awards: adventure (deepest floor), contribution (first reports), survival (banked points of those who never died). Ties go to less budget used. Standings show at camp.'),
   ];
 }
@@ -497,19 +497,21 @@ export class SessionPlayerPort implements PlayerPort {
           outcome += t(L, ` 回収 ${collected.picked} 個、残り ${remaining} 個。${relicNote ? `${relicNote}。` : ''}`, ` Recovered ${collected.picked}, ${remaining} left.${relicNote ? ` ${relicNote[0].toUpperCase()}${relicNote.slice(1)}.` : ''}`);
         }
       }
-      const notable = mine.filter((x) => x.type !== 'entity_moved' && x.type !== 'damaged' && x.type !== 'attack'
+      // 経験値の文（S0b）は最後の 2 件に入れない（直前の出来事に出る。倒した文・レベルアップの文を押し出さない）
+      const notable = mine.filter((x) => x.type !== 'entity_moved' && x.type !== 'damaged' && x.type !== 'attack' && x.type !== 'xp_gained'
         && !(cmd.type === 'collect' && x.type === 'item_picked_up')).slice(-2).map((x) => x.text);
       if (notable.length) outcome += ' ' + notable.join(' ');
     } else {
       const shown = mine.filter((x) => !(x.type === 'damaged' && (x.event as Record<string, unknown>).target === view.self.id));
-      // 最初の 3 件に、倒した文は必ず足す（V3-7 の評価: 薙ぐで倒した 2 体目の「倒した」が無かった）
+      // 最初の 3 件に、倒した文は必ず足す（V3-7 の評価: 薙ぐで倒した 2 体目の「倒した」が無かった）。
+      // レベルアップの文も必ず足す（S0b: 経験値の文が増えて、4 件目に押し出されないように）
       const first = shown.slice(0, 3);
-      const texts = [...first, ...shown.slice(3).filter((x) => x.type === 'died')].map((x) => x.text);
+      const texts = [...first, ...shown.slice(3).filter((x) => x.type === 'died' || x.type === 'level_up')].map((x) => x.text);
       outcome = texts.length ? texts.join(' ') : defaultOutcome(cmd, L);
     }
     // 行動から次の自分の手番までに受けた被害の合計（必ず書く）
     if (cmd.type === 'fight') {
-      let swings = 0, hits = 0, dealt = 0, melee = 0, throws = 0;
+      let swings = 0, hits = 0, dealt = 0, melee = 0, throws = 0, overkill = 0;
       // until: 'clear' は標的が替わるので、自分の攻撃をすべて数える
       const clear = cmd.until === 'clear';
       const isTarget = (id: string | null | undefined) => clear ? !!id && id !== view.self.id : id === cmd.target;
@@ -517,7 +519,11 @@ export class SessionPlayerPort implements PlayerPort {
         if (e.type === 'attack' && e.attacker === view.self.id && isTarget(e.target)) { swings++; melee++; if (e.hit) hits++; }
         // 投擲で戦った（with）: 投げた数と当たった数
         if (e.type === 'item_thrown' && e.actor === view.self.id) { swings++; throws++; if (e.hit && isTarget(e.hit)) hits++; }
-        if (e.type === 'damaged' && e.source === view.self.id && isTarget(e.target)) dealt += e.dealt ?? e.amount;
+        if (e.type === 'damaged' && e.source === view.self.id && isTarget(e.target)) {
+          dealt += e.dealt ?? e.amount;
+          // とどめの超過分（1 行ごとのとどめの文は出目の値を出すので、合計と食い違って見えないように添える。S0b §6.2 の 2）
+          if (e.dealt !== undefined && e.amount > e.dealt) overkill += e.amount - e.dealt;
+        }
       }
       if (clear) {
         // 接辞付きの名前・守護者の呼び名で（V3-3 後の AI 評価: 「毒牙の小悪魔」が「小悪魔」、守護者ネガが「ジャッカル」と出た）
@@ -539,8 +545,9 @@ export class SessionPlayerPort implements PlayerPort {
       // 近接と投擲を分けて書く（V3-5a 後の AI 評価: adjacent: 'melee' に切り替えた後の近接も「投げ」と数えた）
       const how = melee && throws ? t(L, `近接 ${melee} 回・投擲 ${throws} 回、`, `${melee} melee and ${throws} throws, `)
         : throws ? t(L, `${throws} 回投げ `, `Threw ${throws} times, `) : t(L, `${melee} 回攻撃し `, `Swung ${melee} times, `);
-      outcome += ' ' + t(L, `${how}${hits} 回命中・合計 ${dealt} ダメージを与えた${abText ? `（能動技: ${abText}）` : ''}${waits ? `（待った手番 ${waits}）` : ''}。`,
-        `${how}${hits} hit for ${dealt} total${abText ? ` (abilities: ${abText})` : ''}${waits ? ` (waited ${waits} turns)` : ''}.`);
+      const overText = overkill ? t(L, `（実際に減らした HP。とどめの一撃の超過分 ${overkill} は含まない）`, ` (HP actually removed; the finishing blow's ${overkill} overkill is not counted)`) : '';
+      outcome += ' ' + t(L, `${how}${hits} 回命中・合計 ${dealt} ダメージを与えた${overText}${abText ? `（能動技: ${abText}）` : ''}${waits ? `（待った手番 ${waits}）` : ''}。`,
+        `${how}${hits} hit for ${dealt} total${overText}${abText ? ` (abilities: ${abText})` : ''}${waits ? ` (waited ${waits} turns)` : ''}.`);
     }
     // 帰還の綱で戻った: 確定点
     const lifelined = r.events.some((e) => e.type === 'player_state' && e.player === this.playerId && e.reason === 'lifeline');

@@ -1223,7 +1223,9 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
     }
   }
   if ((opts.recent ?? []).some((e) => e.type === 'entity_changed_floor' && (e.event as any).id === me.id)) {
-    alerts.push({ code: 'new_floor', text: t(L, '新しい階に到着した', 'Arrived on a new floor') });
+    // 前に来た階でも出るので「新しい階」とは書かない（S0b §6.2 の 4: 階は遠征ごとに作り直されると読まれた。階はランの間、作られたまま残る）
+    const d = view.floor?.depth;
+    alerts.push({ code: 'new_floor', text: t(L, `階を移った${d ? `（地下${d}階）` : ''}`, `Moved to another floor${d ? ` (depth ${d})` : ''}`) });
   }
 
   // 自分

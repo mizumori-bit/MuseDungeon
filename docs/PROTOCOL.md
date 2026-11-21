@@ -37,6 +37,8 @@ ActionError {
 
 エラー時の結果: `{ ok: false, error, valid_actions, turn }`（プレイヤーが束縛されていない `no_session` と、復旧に失敗したランの `recovery_failed` には `turn` が無い）。
 
+**引数の形がツールの定義に合わないとき**（要る引数が無い・型が違う。たとえば `travel_to` に `to` でなく `target`、`choose_perk` に `option` でなく `choice` を渡した）は、ゲームに届く前に MCP の SDK の入力の検査が断る（S0b で確かめた。SEASON.md §7.3）。結果は `isError: true` で、`content` の文は `MCP error -32602: Input validation error: Invalid arguments for tool travel_to: Invalid input at to`（型が単純な引数は `Required at dir`）。**足りない引数の名前は文に出る**が、`structuredContent`・`turn`・`valid_actions` は付かない（§1 の「両方を返す」の例外）。定義に無い名前の引数（`target`）は、黙って捨てられる。別名は受け付けない。
+
 `recovery_failed`（V4-1m）: サーバーの起動時の復旧（記録の再生）に失敗したランのトークンで再開・行動しようとした（MCP の `resume_run` とトークンを使うツール、`GET /api/player/feed`、WebSocket の `hello`（プレイヤー・観戦）、`join_run`・`POST /api/runs/:id/join`）。「見つからない」（`no_session`）とは分ける。`message` に、そのランの ID と失敗の理由（1 行）。ランの記録は消えていないので、サーバーを直して起動し直せば、同じトークンで再開できる。HTTP は 503
 
 ### 1.2 ターン契約（`turn` ブロック）
@@ -440,6 +442,16 @@ V3-2R で足した項目（同じく後方互換。会心と経験値のルー�
 - `StatusInst.source`（状態異常を与えた者。毒で倒したときの撃破者になる）、`status_applied.targetAffixes`
 - `player_state.reason: 'joined'`（キャンプから始まる参加）。参加コマンドの `atCamp`
 - プレイヤー向けの射影で、見えていた個体が視界の外へ動いた `entity_moved` に `dirOut`（向きだけ。行き先は伏せたまま）
+
+S0b で変えた項目（文と、プレイヤー向けの出来事の射影と、道具だけ。engine と出来事の形は変えていないので `engineVersion` は 0.38.0、`eventVersion` は 22 のまま。開いているシーズン s0 はそのまま使える。SEASON.md §6.2・§7）:
+
+- プレイヤー向けの射影（`filterEventsForPlayer`）: 自分の `xp_gained` に、増えた理由 `reason?: 'kill' | 'depth' | 'objective'` と、`victimKind?` / `victimAffixes?`（`kill`。倒した相手が見えていなければ null）・`depth?`（`depth`。着いた深さ）を足す。engine の `xp_gained` には無い。経験値が入るのは 3 か所だけ（倒した・新しい深さに初めて着いた・目的を達成した）なので、同じ命令（`cause`）の中で `xp_gained` の前にある、自分が知覚した出来事（自分が倒した `died`・自分の `entity_changed_floor`・`objective_completed`）の最も近いものから決める。間に別の `xp_gained` があればそこで止め、決まらなければ付けない（理由をこしらえない）。すべてのプレイヤーに同じ（観戦の俯瞰では文にしない）
+- 文: 自分の `xp_gained` を文にする（今までは文にしていなかった）: 「経験値 +6（大ネズミを倒した）」「経験値 +8（初めて地下2階に着いた）」「経験値 +16（遠征の目的を達成した）」、理由が無ければ「経験値 +N」（英語 `+6 XP (killed cave rat)`・`(first time on depth 2)`・`(expedition objective complete)`）。手番が 1 つの行動の結果（outcome）は「最初の 3 件＋倒した文」に、レベルアップの文も必ず足す（経験値の文に押し出されないように）。マクロの結果の「最後の 2 件」には経験値の文を入れない（直前の出来事に出る）
+- 文: `fight` の結果の「合計 N ダメージを与えた」は今までどおり実際に減らした HP の合計で、とどめの一撃の超過分（`damaged.amount − dealt`）があれば「（実際に減らした HP。とどめの一撃の超過分 M は含まない）」を添える（英語 ` (HP actually removed; the finishing blow's M overkill is not counted)`）。1 行ごとのとどめの文（出目の値と残りの HP）は今のまま
+- 文: alerts の `new_floor` を「新しい階に到着した」から「階を移った（地下N階）」に（前に来た階でも出るので、作り直された階と読まれないように）
+- get_rules: 経験値の入り方とレベルを combat の「## 経験値とレベル」1 か所にまとめた（数は変えていない。expedition の「その他」はそこを指す）。overview に「階は、ランの間、作られたまま残る」（例外は倒していない節目の階の作り直し。シーズンでは地形と階段の位置が全員に同じ）。season にも同じことを短く。fight の合計とレポートの与ダメージに、とどめの超過分を含まないこと。シーズンの参加の briefing にも「階は、ランの間、作られたまま残る」
+- 運用の道具: `season -- uninvite --id <id> (--name <表示名> | --profile <profile_id>)`（§9.1）
+- 試運転の道具: `npm.cmd run call -- <tool> [key=value …]`・`--tools`（`packages/tools/src/mcp-call.ts`。トークンはファイルに保存して伏せる。SEASON.md §7.6）
 
 S0a で変えた項目（サーバーと運用の道具だけ。ゲームの規則は変えていないので `engineVersion` は 0.38.0、`eventVersion` は 22 のまま。SEASON.md §4.1・§5）:
 
@@ -890,6 +902,7 @@ CommandRecord {
   - 表示名は、同じシーズンの中で重ならないこと（前後の空白を除き、大文字と小文字・全角と半角を区別しないで比べる）。重なれば断る。同じプロフィールを 2 回は招けない。
   - 招いた者は `seasons/<id>/invites.json`（`{ profileId, name, invitedAt }[]`。トークンは入れない）。このファイルを書くのは運用の道具だけで、サーバーは参加のたびに読み直す（起動し直さなくてよい）。
   - `season -- invites --id <id>`: 招いた者の一覧（表示名・プロフィールの ID・ランの数。トークンは出さない）。
+  - **招きの取り消し**（S0b。SEASON.md §6.2 の 5）: `season -- uninvite --id <id> --name <表示名>`（招いたときと同じ比べ方）か `--profile <profile_id>`。**このシーズンのランを 1 回も始めていない者だけ**（始めた者は、順位と予算の記録があるので断る）。`invites.json` から外し、`log.jsonl` に `uninvited`。プロフィールそのものは消さない（そのトークンでは、もうこのシーズンのランを始められない。シーズンでないランには使える）。外した表示名は、また使える。確定したシーズンでは断る。
 - **参加**: `new_run { season: <id>, profile_token }`（HTTP は `POST /api/runs { season, profileToken }`）。`profile_token` は必須で、そのシーズンに招かれたプロフィールのものだけ。1 つのプロフィールが、1 つのシーズンに 1 人の参加者で、順位の表の名前は招いたときの表示名（`character_name` はキャラクターの名前で、順位には使わない）。倒れた後の新しいランも、同じトークンで同じ参加者として数え、予算は続きから。
 - トークンは、リポジトリ・ランの記録・シーズンの記録・観測・順位の表のどれにも出さない（プロフィールのファイルにはハッシュだけ）。
 - シーズンのランは**ソロ**。シーズンのシードで、Lv1 のキャンプから始まる（`seed`・`mode`・`objective` は使わない）。継承（V3-7）は受けない。シーズンのランの記録は、後のランの継承に使わない。記録・図鑑・実績は付く。
