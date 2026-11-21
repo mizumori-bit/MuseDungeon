@@ -607,14 +607,19 @@ export function dealtText(L: Locale, d: ObsMonster['dealt']): string {
   return parts.join(L === 'en' ? ', ' : '・');
 }
 
-/** 命中の記録の文（「あなたの命中 近接 1/6・相手の命中 3/5」） */
-export function hitsText(L: Locale, h: ObsMonster['hits']): string {
+/**
+ * 命中の記録の文（「この種族の記録: あなたの命中 近接1/6・相手の命中 3/5」）。記録は種族ごと（守護者なら守護者のその種族）の、ランを通した数で、
+ * 目の前の 1 体の数ではない。文の頭でそう分かるようにする（V4-1m §39.1: 「1 体に 350〜390 回当てた」と読まれた）。guardian: 守護者の記録（role が guardian）
+ */
+export function hitsText(L: Locale, h: ObsMonster['hits'], guardian = false): string {
   if (!h) return '';
   const parts: string[] = [];
   if (h.your_melee) parts.push(t(L, `あなたの命中 近接${h.your_melee[0]}/${h.your_melee[1]}`, `your hits melee ${h.your_melee[0]}/${h.your_melee[1]}`));
   if (h.your_thrown) parts.push(t(L, `${h.your_melee ? '投擲' : 'あなたの命中 投擲'}${h.your_thrown[0]}/${h.your_thrown[1]}`, `${h.your_melee ? 'thrown' : 'your hits thrown'} ${h.your_thrown[0]}/${h.your_thrown[1]}`));
   if (h.theirs) parts.push(t(L, `相手の命中 ${h.theirs[0]}/${h.theirs[1]}`, `its hits ${h.theirs[0]}/${h.theirs[1]}`));
-  return parts.join(L === 'en' ? ', ' : '・');
+  if (!parts.length) return '';
+  const head = guardian ? t(L, 'この種族の守護者の記録: ', "record for this species' guardians: ") : t(L, 'この種族の記録: ', "this species' record: ");
+  return head + parts.join(L === 'en' ? ', ' : '・');
 }
 
 const EXPLORED_JA: Record<number, string> = { 1: '約 1/4', 2: '約半分', 3: '約 3/4', 4: 'ほぼ全て' };
@@ -1949,7 +1954,7 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
       // 見れば分かる特徴（速さは自分との比較）と命中の記録
       const looks = [m.size === 'large' ? t(L, '大柄', 'large') : m.size === 'small' ? t(L, '小柄', 'small') : '', m.speed === 'fast' ? t(L, `速い×${m.speed_ratio ?? ''}`, `fast x${m.speed_ratio ?? ''}`) : m.speed === 'slow' ? t(L, `遅い×${m.speed_ratio ?? ''}`, `slow x${m.speed_ratio ?? ''}`) : '', ...m.traits.map((tr) => abilityName(L, tr))].filter(Boolean);
       const looksText = looks.length ? (L === 'en' ? ` [${looks.join(', ')}]` : `  [${looks.join('・')}]`) : '';
-      const hitLine = [hitsText(L, m.hits), dealtText(L, m.dealt)].filter(Boolean).join(L === 'en' ? ', ' : '・');
+      const hitLine = [hitsText(L, m.hits, m.role === 'guardian'), dealtText(L, m.dealt)].filter(Boolean).join(L === 'en' ? ', ' : '・');
       const hits = hitLine && !brief ? (L === 'en' ? ` ${hitLine}` : `  ${hitLine}`) : '';
       // 守護者の呼び名・型・分かった弱点、予備動作（V3-3）
       const gtext = m.guardian ? (L === 'en'

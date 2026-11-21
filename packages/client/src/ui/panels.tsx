@@ -319,7 +319,7 @@ export function MonstersPanel({ monsters, hp, onFight, throwSlotFor, reach, onRe
               : '';
           const speed = monsterSpeedLabel(m.speed);
           const looks = monsterLooksText(m);
-          const hits = hitsText(L, m.hits);
+          const hits = hitsText(L, m.hits, m.role === 'guardian');
           const dealt = dealtText(L, m.dealt);
           const perTurn = worstTurnText(m);
           const meet = m.dist > 1 && isApproaching(m);

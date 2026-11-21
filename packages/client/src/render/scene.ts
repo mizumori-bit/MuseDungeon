@@ -81,7 +81,7 @@ function monsterKnowledge(view: PlayerView, catalog: Catalog, e: EntityView, om?
     if (sp) parts.push(sp);
     const looks = monsterLooksText(om);
     if (looks) parts.push(looks);
-    const hits = hitsText(L, om.hits);
+    const hits = hitsText(L, om.hits, om.role === 'guardian');
     if (hits) parts.push(hits);
     const dealt = dealtText(L, om.dealt);
     if (dealt) parts.push(dealt);

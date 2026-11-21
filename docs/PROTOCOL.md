@@ -213,7 +213,7 @@ Observation {
                 speed: 'slow'|'normal'|'fast',                // 自分の今の速さとの比較（見れば分かる。V3-2R2）
                 traits: ('pack'|'ranged'|'stationary'|'armored'|'rusting'|'pierce')[],   // 見れば分かる特徴（種族の公開タグ。V3-2R2。armored = 素の装甲 3 以上、V3-2R3。rusting = 当たると錆びる・pierce = 射撃が装甲を無視、V3-5a）
                 first_seen?: true,                            // 本当に初めて見た種族（threat null の文が「不明（初見）」になる）
-                hits?: { your_melee?: [hits, tries], your_thrown?: [hits, tries], theirs?: [hits, tries] },   // 命中の記録（種族ごと。確率は出さない）
+                hits?: { your_melee?: [hits, tries], your_thrown?: [hits, tries], theirs?: [hits, tries] },   // 命中の記録（種族ごと。守護者は守護者のその種族。ランを通した数。確率は出さない。文は「この種族の記録: あなたの命中 近接1/6・相手の命中 3/5」。V4-1m §39.1）
                 role?: 'guardian', fleeing?: true,            // 守護者 / 手負いで逃走中
                 objective?: true,                             // この遠征の目的の相手（目的の守護者・大守護者・賞金首。V4-1a。文は名前の後ろに「［目的］」）
                 damage_seen?: number,                         // 見ている間にこの個体が受けた実ダメージの合計
@@ -438,6 +438,10 @@ V3-2R で足した項目（同じく後方互換。会心と経験値のルー�
 - `StatusInst.source`（状態異常を与えた者。毒で倒したときの撃破者になる）、`status_applied.targetAffixes`
 - `player_state.reason: 'joined'`（キャンプから始まる参加）。参加コマンドの `atCamp`
 - プレイヤー向けの射影で、見えていた個体が視界の外へ動いた `entity_moved` に `dirOut`（向きだけ。行き先は伏せたまま）
+
+V4-1m の続き（§39.1。観測の文だけ。構造化した項目と数え方は変えていないので `engineVersion` は 0.37.0、`eventVersion` は 21 のまま）:
+
+- 観測の文: 命中の記録の頭に「この種族の記録: 」（守護者は「この種族の守護者の記録: 」。英語は `this species' record: `・`record for this species' guardians: `）。後ろに続く「近接の通り」も同じ記録。人間の画面の敵の説明も同じ文。get_rules の説明と例の文も直した
 
 V4-1m で変えた項目（サーバーだけ。ゲームの規則は変えていないので `engineVersion` は 0.37.0、`eventVersion` は 21 のまま。IMPROVEMENTS_V4 §37、DESIGN.md §38.13）:
 

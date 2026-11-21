@@ -9,7 +9,7 @@ import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
 import { buildCatalog, loadContent } from '@muse/content';
 import type { Entity, GameEvent, ObsMonster, ObsPartyMember, Observation } from '@muse/shared';
-import { applyEvent } from '@muse/shared';
+import { applyEvent, hitsText } from '@muse/shared';
 import { createApp, createMcpServer, loadConfig, rulesText, SessionManager } from '@muse/server';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -319,3 +319,17 @@ describe('V4-1m §37.5: party_apart（ついていく相手と別の階のまま
   });
 });
 
+describe('V4-1m §39.1: 命中の記録の文に「この種族」を添える（観測の文・人間の画面・規則の文）', () => {
+  it('the hit record text says it is the species record (the guardians of the species for a guardian), in both languages', () => {
+    const h = { your_melee: [331, 450] as [number, number], theirs: [3, 5] as [number, number] };
+    expect(hitsText('ja', h)).toBe('この種族の記録: あなたの命中 近接331/450・相手の命中 3/5');
+    expect(hitsText('ja', h, true)).toBe('この種族の守護者の記録: あなたの命中 近接331/450・相手の命中 3/5');
+    expect(hitsText('en', h)).toBe("this species' record: your hits melee 331/450, its hits 3/5");
+    expect(hitsText('en', h, true)).toBe("record for this species' guardians: your hits melee 331/450, its hits 3/5");
+    expect(hitsText('ja', { your_thrown: [2, 4] })).toBe('この種族の記録: あなたの命中 投擲2/4');
+    expect(hitsText('ja', undefined)).toBe('');
+    expect(hitsText('ja', {})).toBe('');
+    expect(rulesText('all', 'ja', catalog)).toContain('（「この種族の記録: あなたの命中 近接1/6・相手の命中 3/5」。目の前の 1 体の数ではない）');
+    expect(rulesText('all', 'en', catalog)).toContain("this species' record: your hits melee 1/6, its hits 3/5");
+  });
+});
