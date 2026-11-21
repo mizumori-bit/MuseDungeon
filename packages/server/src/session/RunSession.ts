@@ -132,7 +132,7 @@ export class RunSession {
     const wall = p.wall ?? Date.now();
     const { world, events } = createRun(deps.content, { runId, seed, mode: p.mode ?? 'solo', wall });
     const s = new RunSession(deps, runId, world, wall);
-    s.history.push(...events);
+    appendAll(s.history, events);
     s.log?.writeMeta(s.metaFile);
     s.log?.appendEvents(events);
     s.writeKeyframe();
@@ -151,16 +151,16 @@ export class RunSession {
     s.metaFile = meta;
     const allEvents = readJsonl<GameEvent>(join(dir, 'events.jsonl'));
     // 履歴はキーフレーム時点までのログ＋再実行分
-    s.history.push(...allEvents.filter((e) => e.seq <= kf.seq));
+    appendAll(s.history, allEvents.filter((e) => e.seq <= kf.seq));
     const commands = readJsonl<CommandRecord>(join(dir, 'commands.jsonl'));
     s.cseq = commands.length ? commands[commands.length - 1].cseq : 0;
     const replayed: GameEvent[] = [];
     for (const rec of commands) {
       if (rec.cseq <= kf.cseq || rec.macro) continue;
       const evs = s.reexecute(rec);
-      replayed.push(...evs);
+      appendAll(replayed, evs);
     }
-    s.history.push(...replayed);
+    appendAll(s.history, replayed);
     s.rebuildCalls(commands);
     // 目標の宣言（V3-7a）は V3-8 §53.5 で外した。古いランの goals.jsonl は読まない（再実行は commands.jsonl だけで、宣言はゲームに影響しない）
     const logged = allEvents.filter((e) => e.seq > kf.seq);
@@ -240,7 +240,7 @@ export class RunSession {
     const resultSeq: [number, number] | null = events.length ? [events[0].seq, events[events.length - 1].seq] : null;
     this.log?.appendEvents(events);
     this.log?.appendCommand({ ...rec, resultSeq });
-    this.history.push(...events);
+    appendAll(this.history, events);
     this.updatedAt = rec.wall;
     for (const pid of this.world.playerOrder) this.appendMessages(pid, events);
     const floorChange = events.some((e) => e.type === 'entity_changed_floor' || e.type === 'player_joined'
@@ -597,7 +597,7 @@ export class RunSession {
       if ('stop' in res) { stop = res.stop!; break; }
       const r = res.r!;
       if (!r.ok) { firstError = r.error; stop = 'error'; break; }
-      all.push(...r.events);
+      appendAll(all, r.events);
       lastEvents = r.events;
       if (state.steps % 5 === 0) for (const l of this.listeners) l.onMacro?.({ playerId: pid, kind: cmd.type, state: 'running', steps: state.steps });
     }
@@ -681,4 +681,12 @@ export class RunSession {
 
 function require_read(p: string): string {
   return readFileSync(p, 'utf8');
+}
+
+/**
+ * 配列の後ろに足す（push(...src) は引数の数に上限があり、長いランの復旧で src が十数万件になると
+ * 「Maximum call stack size exceeded」で落ちた。V4-1m §37.1）
+ */
+function appendAll<T>(dst: T[], src: readonly T[]): void {
+  for (const x of src) dst.push(x);
 }

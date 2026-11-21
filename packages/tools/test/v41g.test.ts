@@ -451,9 +451,12 @@ void (null as unknown as Command);
 describe('V4-1g pilot: cornered (found by the measurement)', () => {
   it('recovering with no way to flee (no stairs, travel_to refused): hits the adjacent chaser instead of raising danger over and over', () => {
     // 役割の無い敵: 撃ってくる相手がいないので、立て直しの 3 で殴る（V4-1h §26.1）
-    const r0 = decide(fieldObs({ hp: 10, monsters: [mon({ id: 'e_cor001' })] }), ctx(defaultOrders(), { refused: new Set(['travel_to']) }));
+    const r0 = decide(fieldObs({ hp: 12, monsters: [mon({ id: 'e_cor001' })] }), ctx(defaultOrders(), { refused: new Set(['travel_to']) }));
     expect(summary(r0)).toBe('act:fight:{"target":"e_cor001","hp_floor":9}');
     expect(r0.decision.kind === 'act' && r0.decision.why).toBe('recover');
+    // V4-1m C6: HP 10 では、その fight は断られる（1 手の最悪 2 で hp_floor 9 を割る）ので出さない。逃げる手も無いので、追い詰められたとして殴る
+    const r0b = decide(fieldObs({ hp: 10, monsters: [mon({ id: 'e_cor001' })] }), ctx(defaultOrders(), { refused: new Set(['travel_to']) }));
+    expect(summary(r0b)).toBe('act:attack:{"target":"e_cor001"}');
     // 撃たれている間は 3 では殴らない。それでも逃げる手がまったく無ければ、追い詰められたとして殴る（cornered）
     const shot = newMemory(); shot.hurtFarAgo = 0;
     const o = fieldObs({ hp: 10, monsters: [mon({ id: 'e_cor001' })] });

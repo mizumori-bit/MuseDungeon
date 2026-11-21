@@ -281,7 +281,8 @@ describe('pilot の判断の表（§10.4〜§10.6）', () => {
     expect(r5.decision.kind === 'act' && r5.decision.tool).toBe('travel_to');
     if (r5.decision.kind === 'act') expect(r5.decision.args.to).toEqual({ x: obs.self.pos!.x + 8, y: obs.self.pos!.y });
     // 3) 隣で追ってくる役割の無い敵がいて、階段にも仲間にも行けない: 殴る（撃ってくる相手がいない。V4-1h §26.1）
-    obs.visible.monsters = [monster({ id: 'e_chase1', dist: 1 })];
+    //    V4-1m C6: その fight が HP で断られる（1 手の最悪の被害で hp_floor を割る）なら出さない。ここでは断られない相手（1 手の最悪 1）
+    obs.visible.monsters = [monster({ id: 'e_chase1', dist: 1, worst_turn: 1 })];
     const r6 = decide(obs, ctxOf(defaultOrders(), { mem }));
     // 殴るのはマクロの fight（hp_floor は critical_hp の線。V4-1h の続き §27.5）
     expect(r6.decision.kind === 'act' && `${r6.decision.tool}:${r6.decision.args.target}:${r6.decision.args.hp_floor}`).toBe(`fight:e_chase1:${Math.ceil(obs.self.max_hp / 4) - 1}`);

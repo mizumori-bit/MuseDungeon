@@ -31,12 +31,12 @@ export class WsHub {
       if (msg.t !== 'hello') { send({ t: 'error', error: actionError('bad_request', 'first message must be hello', '') }); ws.close(); return; }
       if (msg.role === 'player') {
         const port = this.manager.portForToken(msg.token);
-        if (!port || port.runId !== msg.runId) { send({ t: 'error', error: actionError('no_session', 'invalid token for this run', 'ロビーから参加し直す') }); ws.close(); return; }
+        if (!port || port.runId !== msg.runId) { send({ t: 'error', error: this.manager.recoveryFailedForToken(msg.token) ?? this.manager.recoveryFailedError(msg.runId) ?? actionError('no_session', 'invalid token for this run', 'ロビーから参加し直す') }); ws.close(); return; }
         attachPlayerSocket(ws, port, this.config.spectatorPolicy);
         return;
       }
       const session = this.manager.get(msg.runId);
-      if (!session) { send({ t: 'error', error: actionError('no_session', 'run is not live', 'リプレイ画面で見る') }); ws.close(); return; }
+      if (!session) { send({ t: 'error', error: this.manager.recoveryFailedError(msg.runId) ?? actionError('no_session', 'run is not live', 'リプレイ画面で見る') }); ws.close(); return; }
       const spec = new SpectatorPort(session, this.config.spectatorPolicy, this.config.spectatorDelaySeq);
       this.attachSpectator(ws, spec, msg.mode, msg.follow);
     });

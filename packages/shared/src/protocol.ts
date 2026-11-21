@@ -66,6 +66,8 @@ export interface RunListing {
   summary?: RunSummary;
   /** 遠征の一覧（遠征単位のリプレイ選択用） */
   expeditions?: ExpeditionBrief[];
+  /** サーバーの起動時に復旧できなかった（理由の 1 行と時刻。V4-1m §37.1） */
+  recoveryFailed?: { reason: string; at: number };
 }
 
 export interface RunMetaFile {

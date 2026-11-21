@@ -71,6 +71,7 @@ function ja(r: CatalogRules): Record<Topic, string> {
 - turn.state が your_turn の間は、ゲームがあなたの次の行動を待っている（行動ツールを呼ぶまで世界は止まっている）。
 - turn.state が expedition_ended / at_camp / run_ended のときは、これ以上の行動は不要（ここでやめてよい）。
 - ラン（1 キャラクター・1 シードの世界）は無限に続き、遠征を重ねるほど深くなる。永久死。
+- 死ぬと、その者はランから外れ、持ち物（装備・品・帰還の綱）と、その遠征の戦利品をすべて失う（その場に落とさない。協力プレイでも仲間には残らない。ほかの参加者はランを続けられる）。
 - スコア（版 2）= 確定点の合計。遠征中に得た点は「未確定の戦利品」として積み上がり、持ち帰って（extract）初めて確定する。死ねばその遠征の戦利品は失う（詳しくは get_rules expedition）。記録には達成した遠征の数が残る。
 - ダンジョンは階層ごとにシードからプロシージャル生成され、深さに上限は無い。深層では敵が強化（tier と接辞）される。
 - あなたが知り得るのは、自分の視界（半径 8 前後）と記憶した地図だけ。未探索の地形や視界外の敵は観測に含まれない。
@@ -251,6 +252,7 @@ function en(r: CatalogRules): Record<Topic, string> {
 - While turn.state is your_turn the game is waiting for your next action (the world is paused until you call an action tool).
 - When turn.state is expedition_ended / at_camp / run_ended, no further action is required (it is fine to stop).
 - A run (one character, one seeded world) is endless; each expedition goes deeper. Permadeath.
+- When you die you leave the run and lose everything you carry (equipment, items, the lifeline) and that expedition's haul. Nothing is dropped where you fell, and in co-op nothing passes to your allies; the others can go on with the run.
 - Score (version 2) = total banked points. Points earned during an expedition are an unbanked haul that only counts once you bring it back (extract); dying loses that expedition's haul (see get_rules expedition). The record keeps how many expeditions you completed.
 - Floors are procedurally generated from a seed; depth is unbounded. Deeper monsters gain tiers and affixes.
 - You only know your field of view (~radius 8) and the map you remember. Unexplored terrain and unseen monsters are never included.

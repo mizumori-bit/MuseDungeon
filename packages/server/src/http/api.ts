@@ -80,7 +80,11 @@ export function createApp(manager: SessionManager, config: ServerConfig): App {
     if (p === '/api/health') return json(res, 200, { ok: true, contentVersion: manager.catalog.contentVersion });
     if (p === '/api/player/feed' && m === 'GET') {
       const tok = feedToken(req, url);
-      if (!tok || !handleFeed(req, res, manager, config, tok)) return fail(res, 401, actionError('no_session', 'unknown or missing player token', 'Authorization: Bearer <player_token> か ?token= を付ける'));
+      if (!tok || !handleFeed(req, res, manager, config, tok)) {
+        // 復旧に失敗したランのトークン（V4-1m §37.1）: 「見つからない」でなく、理由つきで 503
+        const f = manager.recoveryFailedForToken(tok ?? undefined);
+        return f ? fail(res, 503, f) : fail(res, 401, actionError('no_session', 'unknown or missing player token', 'Authorization: Bearer <player_token> か ?token= を付ける'));
+      }
       return;
     }
     if (p === '/api/config') return json(res, 200, { spectatorPolicy: config.spectatorPolicy });
@@ -118,7 +122,7 @@ export function createApp(manager: SessionManager, config: ServerConfig): App {
         const body = (await readBody(req).catch(() => null)) as JoinRunRequest | null;
         if (!body?.name) return fail(res, 400, actionError('bad_request', 'name is required', ''));
         const r = await manager.joinRun(runId, { name: body.name, classId: body.classId, locale: body.locale, controller: body.controller ?? { kind: 'unknown', label: 'http' }, profileToken: body.profileToken, legacy: body.legacy });
-        if ('error' in r) return fail(res, 400, r.error);
+        if ('error' in r) return fail(res, r.error.code === 'recovery_failed' ? 503 : 400, r.error);
         return json(res, 200, { runId, playerId: r.playerId, token: r.token, profileId: r.profile.id, ...(r.profile.token ? { profileToken: r.profile.token } : {}) });
       }
       const live = manager.get(runId);

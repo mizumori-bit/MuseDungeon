@@ -22,6 +22,7 @@ ActionError {
   code: 'invalid_direction' | 'blocked' | 'no_target' | 'out_of_range' | 'no_line_of_sight'
       | 'no_such_item' | 'cannot_use' | 'inventory_full' | 'nothing_here' | 'unknown_destination'
       | 'unreachable' | 'not_your_turn' | 'stale_turn' | 'dead' | 'run_ended' | 'no_session' | 'bad_request'
+      | 'recovery_failed'   // V4-1m: そのランはサーバーの起動時に復旧できなかった（message に理由。ランの記録は残っている）
       | 'confirm_required' | 'cannot_extract' | 'not_at_camp' | 'at_camp'     // 遠征（v2）
       | 'hostile_adjacent' | 'hostile_in_view' | 'hp_floor' | 'nothing_to_do'   // マクロが 1 歩も進めない（V3-2R。手番を使わない）
   message: string      // 何が起きたか
@@ -34,7 +35,9 @@ ActionError {
 }
 ```
 
-エラー時の結果: `{ ok: false, error, valid_actions, turn }`（プレイヤーが束縛されていない `no_session` には `turn` が無い）。
+エラー時の結果: `{ ok: false, error, valid_actions, turn }`（プレイヤーが束縛されていない `no_session` と、復旧に失敗したランの `recovery_failed` には `turn` が無い）。
+
+`recovery_failed`（V4-1m）: サーバーの起動時の復旧（記録の再生）に失敗したランのトークンで再開・行動しようとした（MCP の `resume_run` とトークンを使うツール、`GET /api/player/feed`、WebSocket の `hello`（プレイヤー・観戦）、`join_run`・`POST /api/runs/:id/join`）。「見つからない」（`no_session`）とは分ける。`message` に、そのランの ID と失敗の理由（1 行）。ランの記録は消えていないので、サーバーを直して起動し直せば、同じトークンで再開できる。HTTP は 503
 
 ### 1.2 ターン契約（`turn` ブロック）
 
@@ -436,6 +439,12 @@ V3-2R で足した項目（同じく後方互換。会心と経験値のルー�
 - `player_state.reason: 'joined'`（キャンプから始まる参加）。参加コマンドの `atCamp`
 - プレイヤー向けの射影で、見えていた個体が視界の外へ動いた `entity_moved` に `dirOut`（向きだけ。行き先は伏せたまま）
 
+V4-1m で変えた項目（サーバーだけ。ゲームの規則は変えていないので `engineVersion` は 0.37.0、`eventVersion` は 21 のまま。IMPROVEMENTS_V4 §37、DESIGN.md §38.13）:
+
+- 復旧: 長いラン（出来事が十数万件）の起動時の復旧が「Maximum call stack size exceeded」で落ちていた不具合を直した（記録の再生の仕方は変えていない）
+- エラー: `recovery_failed`（復旧に失敗したランのトークン・ランへの再開と参加。理由つき。HTTP は 503）
+- HTTP: `GET /api/runs` の `recoveryFailed?: { reason, at }`
+
 V4-1l で変えた項目（`engineVersion` 0.37.0。出来事の種類は増やしていないので `eventVersion` は 21 のまま。IMPROVEMENTS_V4 §34、DESIGN.md §38.12）:
 
 - コンテンツ: 守護者の弱点に `maxArmor`（その弱点を付けてよい装甲の目安の上限。無ければ上限なし）。「投擲に弱い」は `maxArmor: 4`（装甲の目安が 5 以上の相手では、装甲を引いた後の被害が下限の 1 に張り付き、1.5 倍しても 2 にしかならない。5 は投げナイフ（1d4+1）の最大の値）
@@ -813,7 +822,7 @@ CommandRecord {
 |---|---|
 | `GET /` | Web クライアント |
 | `POST /mcp` ほか | MCP Streamable HTTP |
-| `GET /api/runs` | ラン一覧（進行中・終了済み） |
+| `GET /api/runs` | ラン一覧（進行中・終了済み）。サーバーの起動時に復旧できなかったランには `recoveryFailed: { reason, at }`（V4-1m。理由の 1 行と時刻。`live: false`・`joinable: false`）。人間の画面のランの一覧にも出す |
 | `GET /api/runs/:id/meta` | meta（終了前はシード無し） |
 | `GET /api/runs/:id/events?from=&to=` | イベント範囲（JSONL） |
 | `GET /api/runs/:id/keyframes` / `/:seq` | キーフレーム一覧／取得（進行中は secret 除去） |

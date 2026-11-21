@@ -53,7 +53,7 @@ function out(text: string, structured: Record<string, unknown>, isError = false)
 /** エラー応答。プレイヤーが束縛されていれば turn ブロックと状態行を付ける */
 function errOut(error: ActionError, valid_actions: string[] = [], turn?: { block: TurnBlock; line: string }): ToolResult {
   const text = `Error [${error.code}] ${error.message}${error.hint ? `\nHint: ${error.hint}` : ''}${valid_actions.length ? `\nActions: ${valid_actions.join(' / ')}` : ''}${turn ? `\n${turn.line}` : ''}`;
-  return out(text, { ok: false, error, valid_actions, ...(turn ? { turn: turn.block } : {}) }, error.code === 'no_session' || error.code === 'bad_request');
+  return out(text, { ok: false, error, valid_actions, ...(turn ? { turn: turn.block } : {}) }, error.code === 'no_session' || error.code === 'bad_request' || error.code === 'recovery_failed');
 }
 
 /** 照会系の応答に turn（変化なし）と状態行を付ける */
@@ -84,11 +84,18 @@ export function createMcpServer(ctx: McpContext): McpServer {
   const { manager } = ctx;
   const waitMs = manager.config.waitOthersMs;
 
+  // 直前の portOf で見つからなかったトークン（復旧に失敗したランなら、そのエラーを返す。V4-1m §37.1。portOf と noSession は同期で続けて呼ぶ）
+  let missed: string | undefined;
   const portOf = (token?: string): PlayerPort | null => {
     const tok = token ?? ctx.boundToken;
-    return tok ? manager.portForToken(tok) : null;
+    const port = tok ? manager.portForToken(tok) : null;
+    missed = port ? undefined : tok ?? undefined;
+    return port;
   };
-  const noSession = () => errOut(actionError('no_session', 'このMCP接続にはプレイヤーが束縛されていない / no player bound to this connection', 'new_run で始めるか、resume_run(player_token) で再開する / call new_run or resume_run'));
+  const noSession = () => {
+    const f = manager.recoveryFailedForToken(missed);
+    return errOut(f ?? actionError('no_session', 'このMCP接続にはプレイヤーが束縛されていない / no player bound to this connection', 'new_run で始めるか、resume_run(player_token) で再開する / call new_run or resume_run'));
+  };
 
   const record = (port: PlayerPort, tool: string, args: Record<string, unknown>, text: string) => {
     const { player_token: _t, profile_token: _p, ...safe } = args;
@@ -227,7 +234,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
     inputSchema: { player_token: z.string(), ...optionArgs },
   }, async (args) => {
     const port = manager.portForToken(args.player_token);
-    if (!port) return errOut(actionError('no_session', 'そのトークンのランは見つからない / unknown token', 'new_run で新しく始める / start a new run'));
+    if (!port) return errOut(manager.recoveryFailedForToken(args.player_token) ?? actionError('no_session', 'そのトークンのランは見つからない / unknown token', 'new_run で新しく始める / start a new run'));
     ctx.boundToken = args.player_token;
     applyOptions(port, args);
     const briefing = port.briefing('resume', { camp: false });

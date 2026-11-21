@@ -39,6 +39,10 @@ export class SessionManager {
     this.store = config.runsDir ? new RunStore(config.runsDir) : null;
   }
 
+  /** 起動時に復旧できなかったラン（理由の 1 行と時刻）と、そのランのトークン（V4-1m §37.1: 一覧と再開のエラーに出す） */
+  private readonly failed = new Map<string, { reason: string; at: number }>();
+  private readonly failedTokens = new Map<string, string>();
+
   /** 起動時: 進行中だったランをキーフレーム＋コマンド再実行で復旧する */
   recoverAll(log: (msg: string) => void = () => undefined): void {
     const dir = this.config.runsDir;
@@ -58,13 +62,31 @@ export class SessionManager {
           log(`  古い版で始まったラン ${runId}（engine ${created}。今は ${ENGINE_VERSION}）${gaps.length ? `: ${gaps.join(' / ')}` : '。分かっている不整合は無い'}`);
         }
       } catch (e) {
-        log(`failed to recover ${runId}: ${(e as Error).message}`);
+        const reason = String((e as Error).message ?? e).split('\n')[0].slice(0, 200);
+        log(`failed to recover ${runId}: ${reason}`);
+        this.failed.set(runId, { reason, at: Date.now() });
+        for (const tok of Object.keys(this.store!.tokens(runId))) this.failedTokens.set(tok, runId);
       }
     }
   }
 
   get(runId: string): RunSession | undefined {
     return this.sessions.get(runId);
+  }
+
+  /** そのランが起動時に復旧できなかったなら、そのエラー（理由つき。V4-1m §37.1） */
+  recoveryFailedError(runId: string): ActionError | null {
+    const f = this.failed.get(runId);
+    if (!f) return null;
+    return actionError('recovery_failed',
+      `ラン ${runId} は、サーバーの起動時に復旧できなかった（理由: ${f.reason}）。ランの記録は残っている / run ${runId} could not be recovered at server start (${f.reason}); its records are kept`,
+      'サーバーの管理者に知らせる。直してサーバーを起動し直せば、同じトークンで再開できる / tell the server operator; once fixed and restarted, resume with the same token');
+  }
+
+  /** そのトークンのランが起動時に復旧できなかったなら、そのエラー */
+  recoveryFailedForToken(token: string | undefined): ActionError | null {
+    const runId = token ? this.failedTokens.get(token) : undefined;
+    return runId ? this.recoveryFailedError(runId) : null;
   }
 
   /** 新しいラン: 作成 → 参加 → 最初の遠征の開始（start_expedition をコマンドとして記録する） */
@@ -89,7 +111,7 @@ export class SessionManager {
 
   async joinRun(runId: string, req: { name: string; classId?: string; locale?: Locale; controller: Controller; profileToken?: string; legacy?: boolean }): Promise<Joined | { error: ActionError }> {
     const session = this.sessions.get(runId);
-    if (!session) return { error: actionError('no_session', `run ${runId} is not active`, 'list_runs で参加可能なランを確認する / check list_runs') };
+    if (!session) return { error: this.recoveryFailedError(runId) ?? actionError('no_session', `run ${runId} is not active`, 'list_runs で参加可能なランを確認する / check list_runs') };
     // 協力プレイのランに入った者は、遠征が進んでいても、キャンプから始める。進んでいる遠征には入らず、次の遠征から一緒に出る（V4-1g G1）
     return this.joinSession(session, { ...req, atCamp: true }, req.controller.kind === 'agent' ? 'mcp' : 'ws');
   }
@@ -178,6 +200,7 @@ export class SessionManager {
           }),
           summary,
           expeditions: summary?.expeditions,
+          ...(this.failed.has(id) ? { recoveryFailed: { ...this.failed.get(id)! } } : {}),
         });
       }
     }

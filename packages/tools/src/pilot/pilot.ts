@@ -548,6 +548,11 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
     // 空回り（stalled）に返事が来た: rev が上がっただけでも再開し、空回りの数えを 0 に戻す（V4-1f §22.3）。大守護者の相談の返事なら、engage の数え直し（§22.2）
     if (waiting && waiting.reason === 'stalled') { stallBase = history.length; saveMemory(); }
     if (waiting && waiting.reason === 'warden_decision') { engageSince = next.policy.warden === 'engage' ? history.length : null; saveMemory(); }
+    // 仲間が倒れた（party_down）に返事が来た: その仲間については、ランを通して、もう上げない（V4-1m C1。起動し直しても同じ）
+    if (waiting && waiting.reason === 'party_down') {
+      for (const id of waiting.key.replace(/^party_down:camp:/, '').split(',').filter(Boolean)) onceKeys.add(`party_down:${id}`);
+      saveMemory();
+    }
     orders = next;
     queue = [...next.queue];
     queueRetries = 0;
@@ -567,7 +572,7 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
     const scope = scopeNow();
     if (scope !== memScope) {
       // 階を移っても、ついていく相手の記録は遠征の間残す
-      const keep = { recovering: mem.recovering, crossed: mem.crossed, follow: mem.follow, assisting: mem.assisting, assistArrived: mem.assistArrived, dangerHome: mem.dangerHome, dangerJoin: mem.dangerJoin, dangerJoinHp: mem.dangerJoinHp, dangerRecover: mem.dangerRecover };
+      const keep = { recovering: mem.recovering, crossed: mem.crossed, follow: mem.follow, assisting: mem.assisting, assistArrived: mem.assistArrived, dangerHome: mem.dangerHome, dangerJoin: mem.dangerJoin, dangerJoinHp: mem.dangerJoinHp, dangerRecover: mem.dangerRecover, apart: mem.apart };
       // 歩いたマスを残す（階を移るたび）
       saveMemory();
       mem = { ...newMemory(), ...keep };
@@ -771,6 +776,17 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
     if (reason === 'fight_target_fled' && target && !mem.fled.includes(target)) mem.fled.push(target);
     // 待つ間に標的でない相手に撃たれた（V4-1d §18.2）: 撃ってきた相手（見えていて追跡中の、飛び道具の特徴を持つ、隣でない、役割の無い敵。
     // 射線の通る相手を先に、近い順）が見えていれば、次の fight の標的にする。見えていなければ、1 回来た道を戻る
+    // 待つ間に、標的でない隣の敵に殴られた（V4-1m C5）: 殴ってきた隣の敵（追跡中・役割の無い敵を先に。名前が結果の文にある敵を先に）と、次に戦う。
+    // 同じ止まり方で、同じ fight を出し直さない（8 回くり返して stuck になっていた）
+    if (reason === 'fight_hit_while_waiting') {
+      const ignoredSet = new Set(ignoredNow());
+      const adj = obs.visible.monsters.filter((m) => m.id !== target && m.dist <= 1 && m.awareness === 'hunting' && !ignoredSet.has(m.id))
+        .sort((a, b) => (isRoleEnemy(a) ? 1 : 0) - (isRoleEnemy(b) ? 1 : 0) || (detail.includes(a.name) ? 0 : 1) - (detail.includes(b.name) ? 0 : 1));
+      const hitter = adj[0];
+      if (hitter) { mem.hitBy = hitter.id; note(reason, [lineWith(text, hitter.id), detail, `殴ってきた ${hitter.name} ${hitter.id} と戦う（倒したら、もとの相手に戻る）`].filter(Boolean).join('\n')); }
+      else note(reason, detail);
+      return;
+    }
     if (reason === 'fight_shot_while_waiting') {
       const ignoredSet = new Set(ignoredNow());
       const shooter = obs.visible.monsters
@@ -845,7 +861,8 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
       waiting = null;
     }
     // 黙って止まらない（V4-1i B7）: 命令も知らせも出さないまま実時間で 2 分過ぎたら、いまの状態を添えて上げる（pilot は止めない。黙りが続く間は 1 回だけ）
-    if (!silentRaised && now() - lastActivity >= SILENT_MS) {
+    // 上げた（escalate）返事を待っている間は数えない（待つ理由は、もう知らせてある。V4-1m C2: party_down の返事を待つ間に 5 回重なった）
+    if (!silentRaised && !(waiting && waiting.wake.level === 'escalate') && now() - lastActivity >= SILENT_MS) {
       silentRaised = true;
       raise({ level: 'escalate', reason: 'safety', key: `safety:silent:${Math.floor(now() / 1000)}`, detail: [`${Math.round((now() - lastActivity) / 60000)} 分、命令も知らせも出していない（pilot は止まっていない）。いまの状態: ${statusNow()}${waiting ? `（${waiting.reason} の返事を待っている）` : ''}`, obs.summary].join('\n') });
     }
@@ -896,6 +913,13 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
     // 4. queue（AI が明示した 1 回きりの命令。キャンプでも先に実行する。§14.5）
     if (queue.length && !refused.tools.has('queue') && !closing) {
       const q = queue[0]!;
+      // 選ぶ特技・加護が残っていない choose_perk・choose_boon は、断られる前に捨てる（queue_failed を出さない。V4-1m C4: 同じ特技に 2 回積まれた）
+      const choice = q.tool === 'choose_perk' ? 'perk_pending' : q.tool === 'choose_boon' ? 'boon_pending' : null;
+      if (choice && !obs.alerts.some((al) => al.code === choice)) {
+        appendLog({ source: 'queue', tool: q.tool, args: q.args ?? {}, ok: false, why: 'queue_dropped', detail: `${choice} が無いので捨てた（もう選んである）` });
+        queue.shift(); markQueue(); queueRetries = 0;
+        continue;
+      }
       // queue の fight に hp_floor が無ければ、方針の値（wake_hp_pct）を使う
       const args: Record<string, unknown> = q.tool === 'fight' && q.args?.hp_floor === undefined ? { ...(q.args ?? {}), hp_floor: Math.floor((obs.self.max_hp * orders.policy.wake_hp_pct) / 100) } : { ...(q.args ?? {}) };
       const haulBefore = obs.expedition?.haul?.text ?? '';
@@ -1142,7 +1166,7 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
       if (noProgress >= NO_PROGRESS_MAX) { noProgress = 0; wakeNow({ level: 'wake', reason: 'stuck', key: `stuck:progress:${turn.turn_no}`, detail: `階の探索も撃破も進まない命令が ${NO_PROGRESS_MAX} 回続いた: ${lastOutcome}` }); continue; }
     }
     if (aa.kind === 'ok') {
-      if (aa.killed && typeof decision.args.target === 'string') { delete mem.stops[decision.args.target]; if (mem.shotBy === decision.args.target) mem.shotBy = null; }
+      if (aa.killed && typeof decision.args.target === 'string') { delete mem.stops[decision.args.target]; if (mem.shotBy === decision.args.target) mem.shotBy = null; if (mem.hitBy === decision.args.target) mem.hitBy = null; }
       writeState();
       continue;
     }

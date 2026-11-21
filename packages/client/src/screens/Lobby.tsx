@@ -87,7 +87,9 @@ export function Lobby() {
   const playersText = (r: RunListing) => r.players.map((p) => {
     const sp = r.summary?.players.find((x) => x.id === p.id);
     const banked = sp?.banked !== undefined ? tr(` 確定${sp.banked}`, ` banked ${sp.banked}`) : '';
-    return `${p.name}(${p.controller.kind === 'agent' ? 'AI' : p.controller.kind === 'unknown' ? '?' : tr('人', 'H')}${p.depth ? ` B${p.depth}` : ''} Lv${p.level}${p.state !== 'alive' ? ` ${playerStateLabel(p.state)}` : ''}${banked})`;
+    // 復旧できなかったラン（V4-1m §37.1）で要約が無い者は、状態が分からない（一覧の既定の「死亡」を出さない）
+    const stateKnown = !(r.recoveryFailed && !sp);
+    return `${p.name}(${p.controller.kind === 'agent' ? 'AI' : p.controller.kind === 'unknown' ? '?' : tr('人', 'H')}${p.depth ? ` B${p.depth}` : ''} Lv${p.level}${stateKnown && p.state !== 'alive' ? ` ${playerStateLabel(p.state)}` : ''}${banked})`;
   }).join(', ');
 
   // スコアの版ごとに別の表（版 2: 確定点 → 達成した遠征の数 → 最深。版 1 は旧スコア）
@@ -194,10 +196,12 @@ export function Lobby() {
                   <div><code>{r.runId}</code> <span class="tag">{r.mode}</span> <small>seq {r.seq}</small></div>
                   <div class="sub">{playersText(r)}</div>
                   {expeditionText(r) && <div class="sub exp">{expeditionText(r)}</div>}
+                  {/* 起動時に復旧できなかったラン（V4-1m §37.1）: 理由を出し、観戦・再開は出さない（記録は残っているので巻き戻しは見られる） */}
+                  {r.recoveryFailed && <div class="sub warn">{tr(`サーバーの起動時に復旧できなかった（理由: ${r.recoveryFailed.reason}）。記録は残っている`, `Could not be recovered at server start (${r.recoveryFailed.reason}); its records are kept`)}</div>}
                   <div class="row">
-                    <a class="button small" href={`#/watch/${r.runId}`}>{tr('観戦', 'Watch')}</a>
+                    {!r.recoveryFailed && <a class="button small" href={`#/watch/${r.runId}`}>{tr('観戦', 'Watch')}</a>}
                     <a class="button small" href={`#/replay/${r.runId}`}>{tr('巻き戻し', 'Rewind')}</a>
-                    {tok && <a class="button small primary" href={`#/play/${r.runId}`}>{tr('再開', 'Resume')}</a>}
+                    {tok && !r.recoveryFailed && <a class="button small primary" href={`#/play/${r.runId}`}>{tr('再開', 'Resume')}</a>}
                     {r.joinable && !tok && <button class="small" disabled={busy} onClick={() => join(r.runId)}>{tr('参加', 'Join')}</button>}
                   </div>
                 </li>

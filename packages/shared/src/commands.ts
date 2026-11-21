@@ -136,6 +136,8 @@ export type ActionErrorCode =
   /** 下り階段が封じられている（節目の大守護者が生きている。V3-3 §3.2） */
   | 'sealed'
   | 'unreachable' | 'not_your_turn' | 'stale_turn' | 'dead' | 'run_ended' | 'no_session' | 'bad_request'
+  /** そのランはサーバーの起動時に復旧できなかった（message に理由。記録は残っている。V4-1m §37.1） */
+  | 'recovery_failed'
   | 'confirm_required' | 'cannot_extract' | 'not_at_camp' | 'at_camp'
   // マクロが 1 歩も進めないと分かったとき（手番を使わない。V3-2R §14.2）
   | 'hostile_adjacent' | 'hostile_in_view' | 'hp_floor' | 'nothing_to_do';

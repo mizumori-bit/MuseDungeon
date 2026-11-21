@@ -170,6 +170,7 @@ th, td { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--line
 .offers li .otext { flex: 1; }
 .offers.compact li { font-size: 12px; padding: 1px 0; color: var(--muted); }
 .sub.exp { color: #b4d8ff; }
+.sub.warn { color: #ffb4a8; }
 
 .turnbar { padding: 4px 8px; border-bottom: 1px solid var(--line); font-size: 12.5px; }
 .turnline { color: #cfe8ff; }

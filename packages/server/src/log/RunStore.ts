@@ -129,6 +129,12 @@ export class RunStore {
     return /^run_[0-9a-z]+$/.test(runId) && existsSync(join(this.dir(runId), 'meta.json'));
   }
 
+  /** 再開用トークン（tokens.json。サーバーの中だけで使う。復旧に失敗したランのトークンを見分けるため。V4-1m §37.1） */
+  tokens(runId: string): Record<string, string> {
+    const p = join(this.dir(runId), 'tokens.json');
+    try { return existsSync(p) ? JSON.parse(readFileSync(p, 'utf8')) as Record<string, string> : {}; } catch { return {}; }
+  }
+
   listRunIds(): string[] {
     if (!existsSync(this.runsDir)) return [];
     return readdirSync(this.runsDir).filter((d) => d.startsWith('run_') && existsSync(join(this.runsDir, d, 'meta.json')));
