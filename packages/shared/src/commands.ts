@@ -68,6 +68,8 @@ export const CommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('choose_perk'), option: z.union([z.number().int().min(1).max(9), z.string().min(1)]) }),
   // 大守護者を倒したときの加護の選択（V3-3 §3.2。手番を消費しない）
   z.object({ type: z.literal('choose_boon'), option: z.union([z.number().int().min(1).max(9), z.string().min(1)]) }),
+  /** シーズンのランのキャンプで、このランで見た下り階段を報告する（S0。手番を消費しない。サーバーが共有層に問い合わせ、season_sync として記録する） */
+  z.object({ type: z.literal('report_stairs') }),
 ]);
 
 export type Command = z.infer<typeof CommandSchema>;
@@ -96,6 +98,26 @@ export const LegacyMonsterSchema = z.object({
 });
 export type LegacyMonster = z.infer<typeof LegacyMonsterSchema>;
 
+/** シーズンの写し（S0。PROTOCOL §9.7）。budget.at は engine が取り込んだときの手番で埋める */
+const SeasonAwardSchema = z.object({
+  id: z.enum(['adventure', 'contribution', 'survival']), value: z.number().int().nullable(), rank: z.number().int().nullable(), entrants: z.number().int().nonnegative(),
+  leader: z.object({ name: z.string().max(64), value: z.number().int() }).nullable(), gap: z.number().int().nullable(),
+});
+export const SeasonSyncSchema = z.object({
+  type: z.literal('season_sync'),
+  reason: z.enum(['join', 'camp', 'start', 'report']),
+  season: z.object({
+    id: z.string().max(64), name: z.string().max(64),
+    budget: z.object({ limit: z.number().int().nonnegative(), left: z.number().int() }),
+    ends_at: z.number(), ended: z.boolean(),
+    public: z.array(z.object({ depth: z.number().int().positive(), x: z.number().int(), y: z.number().int(), by: z.string().max(64) })),
+    awards: z.array(SeasonAwardSchema), contribution: z.number().int().nonnegative(), died: z.boolean(),
+  }),
+  /** 報告の結果（reason: report）: 送った階段と、最初の報告だったか */
+  report: z.object({ stairs: z.array(z.object({ depth: z.number().int().positive(), x: z.number().int(), y: z.number().int(), first: z.boolean() })) }).optional(),
+});
+export type SeasonSyncCommand = z.infer<typeof SeasonSyncSchema>;
+
 /** システムコマンド（参加・離脱）。commands.jsonl に記録し、決定論的再実行で流す */
 export const JoinSchema = z.object({
   type: z.literal('join'),
@@ -117,7 +139,7 @@ export type CommandSource = 'mcp' | 'ws' | 'macro' | 'timeout' | 'bot' | 'system
 export interface CommandRecord {
   cseq: number;
   player: PlayerId | null;
-  command: Command | JoinCommand;
+  command: Command | JoinCommand | SeasonSyncCommand;
   source: CommandSource;
   /** マクロ展開元の cseq */
   parent?: number;
@@ -139,6 +161,8 @@ export type ActionErrorCode =
   /** そのランはサーバーの起動時に復旧できなかった（message に理由。記録は残っている。V4-1m §37.1） */
   | 'recovery_failed'
   | 'confirm_required' | 'cannot_extract' | 'not_at_camp' | 'at_camp'
+  /** シーズン（S0。PROTOCOL §9）: 参加できない（理由は message）・行動予算が残っていない・終わりの時刻を過ぎた */
+  | 'season_unavailable' | 'budget_exhausted' | 'season_ended'
   // マクロが 1 歩も進めないと分かったとき（手番を使わない。V3-2R §14.2）
   | 'hostile_adjacent' | 'hostile_in_view' | 'hp_floor' | 'nothing_to_do';
 

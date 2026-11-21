@@ -2,22 +2,22 @@
 // 決定論: 同じシード＋同じコマンド列（wall を含む）→ 同じイベント列。
 import type { Content } from '@muse/content';
 import type {
-  ActionError, Command, Entity, GameEvent, JoinCommand, LegacyMonster, MonsterMemory, PlayerId, PlayerRecord, RunMeta, RunOptions, World, WorldSecret,
+  ActionError, Command, Entity, GameEvent, JoinCommand, LegacyMonster, MonsterMemory, PlayerId, PlayerRecord, RunMeta, RunOptions, SeasonState, SeasonSyncCommand, World, WorldSecret,
 } from '@muse/shared';
-import { actionError, CAMP_COMMANDS, emptyWorld, EVENT_VERSION, FREE_COMMANDS, MACRO_COMMANDS, Rng, t } from '@muse/shared';
+import { actionError, CAMP_COMMANDS, emptyWorld, EVENT_VERSION, FREE_COMMANDS, MACRO_COMMANDS, Rng, seasonBudgetLeft, t } from '@muse/shared';
 import { actions, freeCommand } from './actions';
 import './abilities';
 import './guardianBehaviors';
 import { initialBuild } from './build';
 import { Ctx } from './ctx';
-import { accrueHaul, noteRooms, checkObjective, huntingInView, offerExpeditions, startExpedition } from './expedition';
+import { accrueHaul, noteRooms, checkObjective, huntingInView, offerExpeditions, startExpedition, timeUp } from './expedition';
 import { noteClues } from './build';
 import { ensureFloor, findFreeCell } from './floors';
 import { updateKnowledge } from './perception';
 import { advance, endTurn } from './scheduler';
 import { recomputeStats } from './stats';
 
-export const ENGINE_VERSION = '0.37.0';
+export const ENGINE_VERSION = '0.38.0';
 
 export interface CreateRunParams {
   runId: string;
@@ -25,6 +25,8 @@ export interface CreateRunParams {
   mode?: 'solo' | 'coop';
   options?: Partial<RunOptions>;
   wall?: number;
+  /** シーズンのラン（S0。SEASON.md §2）。ソロだけ */
+  season?: { id: string; name: string };
 }
 
 export interface EngineResult { events: GameEvent[] }
@@ -58,6 +60,7 @@ export function createRun(content: Content, p: CreateRunParams): { world: World;
       turnTimeoutMs: p.options?.turnTimeoutMs !== undefined ? p.options.turnTimeoutMs : mode === 'coop' ? 30000 : null,
       maxPlayers: p.options?.maxPlayers ?? (mode === 'coop' ? 4 : 1),
     },
+    ...(p.season ? { season: { id: p.season.id, name: p.season.name } } : {}),
   };
   const secret: WorldSecret = {
     seed: p.seed,
@@ -166,6 +169,34 @@ function legacyMemory(content: Content, list: readonly LegacyMonster[]): Record<
   return out;
 }
 
+/**
+ * シーズンの取り込み（S0。PROTOCOL §9.7）: サーバーが記録したシステムの命令 season_sync を、出来事 season_synced（報告なら stairs_reported も）にする。
+ * 予算の at は今の自分の手番で埋める。このランで報告した階は、前の写しに報告の分を足して持ち越す。再生は記録だけで一致する
+ */
+export function seasonSync(world: World, content: Content, playerId: PlayerId, cmd: SeasonSyncCommand, meta: { cseq: number | null; wall: number; thought?: string }): StepResult {
+  const pr = world.players[playerId];
+  if (!pr) return { ok: false, error: actionError('no_session', 'no such player', 'join_run / resume_run'), events: [] };
+  if (!world.meta.season || world.meta.season.id !== cmd.season.id) return { ok: false, error: actionError('bad_request', 'not a run of this season', ''), events: [] };
+  const ctx = new Ctx(world, content, meta.cseq, meta.wall);
+  const me = world.entities[pr.entityId];
+  const turns = me?.actor?.turns ?? 0;
+  const reported = [...new Set([...(world.season?.reported ?? []), ...(cmd.report?.stairs ?? []).map((x) => x.depth)])].sort((a, b) => a - b);
+  const after: SeasonState = {
+    id: cmd.season.id, name: cmd.season.name,
+    budget: { limit: cmd.season.budget.limit, left: cmd.season.budget.left, at: turns },
+    ends_at: cmd.season.ends_at, ended: cmd.season.ended,
+    public: cmd.season.public.map((x) => ({ ...x })), awards: cmd.season.awards.map((a) => ({ ...a, leader: a.leader ? { ...a.leader } : null })),
+    contribution: cmd.season.contribution, died: cmd.season.died, reported,
+  };
+  if (meta.thought) ctx.emit({ type: 'thought', player: playerId, text: meta.thought.slice(0, 280), seenBy: [playerId] });
+  if (cmd.report) {
+    const stairs = cmd.report.stairs.map((x) => ({ ...x }));
+    ctx.emit({ type: 'stairs_reported', player: playerId, stairs, gained: stairs.filter((x) => x.first).length, seenBy: [playerId], floor: null });
+  }
+  ctx.emit({ type: 'season_synced', player: playerId, reason: cmd.reason, seasonAfter: after, seenBy: [playerId], floor: null });
+  return { ok: true, events: ctx.finish() };
+}
+
 /** meta.auto: 時間切れの待機・サーバーが代わりに出した命令（V4-1j §30.6。その手番は、仲間の last_act に数えない） */
 export function step(world: World, content: Content, playerId: PlayerId, cmd: Command, meta: { cseq: number | null; wall: number; thought?: string; auto?: boolean }): StepResult {
   const pr = world.players[playerId];
@@ -183,7 +214,15 @@ export function step(world: World, content: Content, playerId: PlayerId, cmd: Co
     if (fk) advance(ctx, fk);
     return { ok: true, events: ctx.finish() };
   }
+  // 階段の報告（S0）はサーバーが共有層に問い合わせて season_sync にする。engine には来ない
+  if (cmd.type === 'report_stairs') return { ok: false, error: actionError('bad_request', t(L, 'report_stairs はシーズンのランのキャンプでだけ使える。', 'report_stairs works only at camp in a season run.'), ''), events: [] };
   if (CAMP_COMMANDS.has(cmd.type) && cmd.type === 'start_expedition') {
+    // シーズン（S0 §9.2）: 予算が残っていない・終わりの時刻を過ぎた（キャンプで取り込んだ写し）なら始めない
+    if (world.season) {
+      const left = seasonBudgetLeft(world, playerId) ?? 0;
+      if (left <= 0) return { ok: false, error: actionError('budget_exhausted', t(L, `このシーズンの行動予算（${world.season.budget.limit} 手番）を使い切った。新しい遠征は始められない。`, `You have used up this season's budget (${world.season.budget.limit} turns). You cannot start another expedition.`), t(L, 'キャンプでは report_stairs で階段を報告できる。ここで終えてよい。', 'At camp you can still report stairs with report_stairs. It is fine to stop here.')), events: [] };
+      if (world.season.ended) return { ok: false, error: actionError('season_ended', t(L, `シーズン「${world.season.name}」は終わりの時刻を過ぎた。新しい遠征は始められない。`, `Season "${world.season.name}" has passed its end time. You cannot start another expedition.`), t(L, 'キャンプでは report_stairs で階段を報告できる。ここで終えてよい。', 'At camp you can still report stairs with report_stairs. It is fine to stop here.')), events: [] };
+    }
     const err = startExpedition(ctx, pr, cmd.offer);
     if (err) return { ok: false, error: err, events: [] };
     const floors = [...new Set(world.playerOrder.map((pid) => world.entities[world.players[pid].entityId]?.pos?.floor).filter((k): k is string => !!k))].sort();
@@ -213,6 +252,10 @@ export function step(world: World, content: Content, playerId: PlayerId, cmd: Co
     const r = prep.run();
     const cur = world.entities[e.id];
     if (!r.scheduled && cur?.pos && world.players[playerId].state === 'alive' && world.floors[key].currentActor === e.id) endTurn(ctx, cur, r.cost, restful);
+    // シーズンの行動予算（S0 §9.2）: 残りが 0 になった手番の終わりに、その遠征は時間切れで終わる（キャンプへ。倒れた扱いにしない）
+    if (world.season && world.players[playerId].state === 'alive' && world.entities[e.id]?.pos && (seasonBudgetLeft(world, playerId) ?? 1) <= 0) {
+      timeUp(ctx, world.entities[e.id], world.players[playerId]);
+    }
     const after = world.entities[e.id]?.pos?.floor ?? key;
     const touched = after === key ? [key] : [key, after];
     for (const k of touched) updateKnowledge(ctx, k);

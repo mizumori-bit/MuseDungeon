@@ -12,6 +12,7 @@ import { choicesReport, formatChoices } from './choices';
 import { buildsReport, formatBuilds } from './builds';
 import { budgetReport, formatBudget } from './budget';
 import { verifyRunDir, writeGolden } from './replay';
+import { seasonCli } from './season';
 import { resolve } from 'node:path';
 
 const argv = process.argv.slice(2);
@@ -151,6 +152,15 @@ async function main() {
       const errs = validateContentHandlers(content);
       console.log(errs.length ? errs.join('\n') : `content ${content.version} OK`);
       if (errs.length) process.exitCode = 1;
+      break;
+    }
+    case 'season': {
+      // シーズンの運用（S0。PROTOCOL §9.1）
+      const dir = flag('dir') ? resolve(flag('dir')!) : loadConfig().seasonsDir;
+      process.exitCode = seasonCli(content, {
+        sub: argv[1] ?? '', dir, id: flag('id'), name: flag('name'), seed: flag('seed'), budget: flag('budget') ? Number(flag('budget')) : undefined,
+        ends: flag('ends'), seeds: flag('seeds')?.split(',').map((x) => x.trim()).filter(Boolean), depth: flag('depth') ? Number(flag('depth')) : undefined,
+      });
       break;
     }
     case 'pacing': {

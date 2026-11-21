@@ -61,8 +61,9 @@ export function createApp(manager: SessionManager, config: ServerConfig): App {
   };
 
   const spectatorBlocked = (runId: string): boolean => {
-    if (config.spectatorPolicy !== 'follow_only') return false;
     const s = manager.get(runId);
+    // シーズンのランは follow_only（S0 §9.7）
+    if (config.spectatorPolicy !== 'follow_only' && !s?.world.meta.season && !store?.meta(runId)?.season) return false;
     const ended = s ? s.world.status === 'ended' : store?.meta(runId)?.status === 'ended';
     return !ended;
   };
@@ -90,6 +91,15 @@ export function createApp(manager: SessionManager, config: ServerConfig): App {
     if (p === '/api/config') return json(res, 200, { spectatorPolicy: config.spectatorPolicy });
     if (p === '/api/content/catalog') return json(res, 200, manager.catalog);
     if (p === '/api/leaderboard') return json(res, 200, { entries: store?.leaderboard() ?? [] });
+    // シーズン（S0。PROTOCOL §9.8）: 一覧と順位の表（公開された階段の位置は出さない）
+    if (p === '/api/seasons' && m === 'GET') return json(res, 200, { seasons: manager.seasons.list() });
+    {
+      const sm = /^\/api\/seasons\/([a-z0-9][a-z0-9_-]{0,31})$/.exec(p);
+      if (sm && m === 'GET') {
+        const st = manager.seasons.standings(sm[1]);
+        return st ? json(res, 200, st) : fail(res, 404, actionError('no_session', `unknown season ${sm[1]}`, 'GET /api/seasons'));
+      }
+    }
     if (p === '/api/runs' && m === 'GET') return json(res, 200, { runs: manager.listRuns() });
     if (p === '/api/runs' && m === 'POST') {
       const body = (await readBody(req).catch(() => null)) as NewRunRequest | null;
@@ -97,7 +107,7 @@ export function createApp(manager: SessionManager, config: ServerConfig): App {
       // controller を省いたら「分からない」（V4-1g G2。ブラウザの画面は human を送る）
       const controller: Controller = body.controller ?? { kind: 'unknown', label: 'http' };
       const r = await manager.createRun({ ...body, controller });
-      if ('error' in r) return fail(res, 400, r.error);
+      if ('error' in r) return fail(res, r.error.code === 'season_unavailable' ? 409 : 400, r.error);
       return json(res, 200, { runId: r.session.runId, playerId: r.playerId, token: r.token, profileId: r.profile.id, ...(r.profile.token ? { profileToken: r.profile.token } : {}) });
     }
     // プロフィール（V3-7 §7.1）: Authorization: Bearer <profile_token>。MCP の profile・records と同じ中身
@@ -136,7 +146,8 @@ export function createApp(manager: SessionManager, config: ServerConfig): App {
         const lines: string[] = [];
         for (const ev of src.events) {
           if (ev.seq < from || ev.seq > to) continue;
-          const se = spectatorEvent(ev, src.ended);
+          // シーズンのラン（S0）は終わってもシードを出さない
+          const se = spectatorEvent(ev, src.ended && !(live?.world.meta.season ?? store?.meta(runId)?.season));
           if (se) lines.push(JSON.stringify(se));
         }
         res.writeHead(200, { 'content-type': 'application/x-ndjson; charset=utf-8', 'cache-control': 'no-store' });
@@ -149,7 +160,8 @@ export function createApp(manager: SessionManager, config: ServerConfig): App {
         const kf = store?.keyframe(runId, Number(km[1]));
         if (!kf) return fail(res, 404, actionError('bad_request', 'no such keyframe', ''));
         const ended = live ? live.world.status === 'ended' : store!.meta(runId)?.status === 'ended';
-        const w: World = ended ? { ...kf.world, secret: { ...kf.world.secret, rng: {} } } : stripSecret(kf.world);
+        // シーズンのラン（S0）は終わってもシードを出さない
+        const w: World = ended && !kf.world.meta.season ? { ...kf.world, secret: { ...kf.world.secret, rng: {} } } : stripSecret(kf.world);
         return json(res, 200, w);
       }
       if (sub === '/index') {

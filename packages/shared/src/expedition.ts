@@ -38,6 +38,7 @@ export function endReasonText(L: Locale, r: ExpeditionEndReason | null): string 
     case 'lifeline': return t(L, '帰還の綱で帰還', 'returned by lifeline');
     case 'died': return t(L, '死亡', 'died');
     case 'retired': return t(L, '引退', 'retired');
+    case 'time_up': return t(L, '時間切れ（シーズンの予算が尽きた）', 'time up (season budget used up)');
     default: return t(L, '進行中', 'in progress');
   }
 }

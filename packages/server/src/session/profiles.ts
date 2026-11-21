@@ -141,7 +141,8 @@ export class ProfileService implements ProfileHooks {
   legacyFor(profileId: string, exceptRun?: string): LegacyMonster[] {
     const p = this.store.get(profileId);
     if (!p) return [];
-    return legacyFrom(p.runs.filter((r) => r.runId !== exceptRun), this.content.balance.legacy.minKills);
+    // シーズンのランの記録は継承に使わない（S0。SEASON.md §2.1: 継承は受けないし、残さない）
+    return legacyFrom(p.runs.filter((r) => r.runId !== exceptRun && !r.season), this.content.balance.legacy.minKills);
   }
 
   onCommit(session: RunSession, events: readonly GameEvent[]): void {
@@ -204,7 +205,7 @@ export class ProfileService implements ProfileHooks {
     const dead = p.state === 'dead';
     const over = dead || w.status === 'ended' || p.state === 'left';
     return {
-      runId: session.runId, character: p.name, classId: p.classId, legacy: !!p.legacy, legacyKinds: p.legacy?.kinds ?? 0,
+      runId: session.runId, character: p.name, classId: p.classId, ...(w.meta.season ? { season: w.meta.season.id } : {}), legacy: !!p.legacy, legacyKinds: p.legacy?.kinds ?? 0,
       startedAt: session.createdAt, endedAt: over ? session.updatedAt : null, status: over ? 'ended' : 'active',
       end: dead ? 'died' : over ? 'retired' : null, deathCause: p.stats.deathCause,
       level: e?.level?.level ?? 1, banked: p.stats.banked ?? 0, deepest: p.stats.deepest,

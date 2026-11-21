@@ -30,6 +30,7 @@
     "assets:check": "tsx packages/tools/src/cli.ts assets-check",
     "golden": "tsx packages/tools/src/cli.ts golden",
     "pacing": "tsx packages/tools/src/cli.ts pacing",
+    "season": "tsx packages/tools/src/cli.ts season",
     "drive": "tsx packages/tools/src/cli.ts drive",
     "choices": "tsx packages/tools/src/cli.ts choices",
     "budget": "tsx packages/tools/src/cli.ts budget",

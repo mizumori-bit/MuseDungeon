@@ -32,12 +32,13 @@ export class WsHub {
       if (msg.role === 'player') {
         const port = this.manager.portForToken(msg.token);
         if (!port || port.runId !== msg.runId) { send({ t: 'error', error: this.manager.recoveryFailedForToken(msg.token) ?? this.manager.recoveryFailedError(msg.runId) ?? actionError('no_session', 'invalid token for this run', 'ロビーから参加し直す') }); ws.close(); return; }
-        attachPlayerSocket(ws, port, this.config.spectatorPolicy);
+        attachPlayerSocket(ws, port, this.manager.get(msg.runId)?.world.meta.season ? 'follow_only' : this.config.spectatorPolicy);
         return;
       }
       const session = this.manager.get(msg.runId);
       if (!session) { send({ t: 'error', error: this.manager.recoveryFailedError(msg.runId) ?? actionError('no_session', 'run is not live', 'リプレイ画面で見る') }); ws.close(); return; }
-      const spec = new SpectatorPort(session, this.config.spectatorPolicy, this.config.spectatorDelaySeq);
+      // シーズンのランは follow_only（S0 §9.7: 俯瞰から公開されていない階段が分からないように）
+      const spec = new SpectatorPort(session, session.world.meta.season ? 'follow_only' : this.config.spectatorPolicy, this.config.spectatorDelaySeq);
       this.attachSpectator(ws, spec, msg.mode, msg.follow);
     });
   }

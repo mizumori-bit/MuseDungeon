@@ -20,6 +20,8 @@ const PLAYER_VISIBLE: ReadonlySet<EventType> = new Set<EventType>([
   'expedition_offered', 'expedition_started', 'objective_completed', 'expedition_ended', 'haul_changed',
   // 階の作り直し（V4-0a §1.1。消すエンティティは del で、プレイヤーには渡らない）
   'floor_reset',
+  // シーズン（S0 §9.4）: 階段の報告の結果（本人だけ）
+  'stairs_reported',
 ]);
 
 /** 自分に関するときだけ渡す種別 */
@@ -69,7 +71,8 @@ export function filterEventsForPlayer(events: readonly GameEvent[], playerId: Pl
   const selfId = view.self.id;
   const identified = new Set(view.identified);
   for (const ev of events) {
-    if (!PLAYER_VISIBLE.has(ev.type)) continue;
+    // 公開された階段を地図に載せた knowledge_updated（S0 §9.4）だけは文にする（ほかの knowledge_updated は渡さない。シーズンでないランには無い）
+    if (!PLAYER_VISIBLE.has(ev.type) && !(ev.type === 'knowledge_updated' && ev.publicStairs)) continue;
     if (!eventVisibleTo(ev, playerId)) continue;
     const selfOnly = SELF_ONLY[ev.type];
     if (selfOnly && !selfOnly(ev, playerId, selfId)) continue;

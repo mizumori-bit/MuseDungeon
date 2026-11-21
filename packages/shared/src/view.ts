@@ -2,10 +2,13 @@
 // projectPlayerView はルール無しの純粋なフィルタ。仕様: docs/PROTOCOL.md §4
 import type {
   CampState, Controller, Entity, EntityId, EntityRole, EquipSlot, Expedition, ExpeditionEndReason, ExpeditionResult, FloorKey,
-  Locale, MonsterMemory, Objective, OfferSlot, PlayerBuild, PlayerId, PlayerState, Pos, RememberedEntity, Stats, StatusInst, World, Sense, FloorHint, Names, Intent, RelicInfo, MilestoneInfo,
+  Locale, MonsterMemory, Objective, OfferSlot, PlayerBuild, PlayerId, PlayerState, Pos, RememberedEntity, SeasonState, Stats, StatusInst, World, Sense, FloorHint, Names, Intent, RelicInfo, MilestoneInfo,
 } from './types';
 import type { Dir } from './types';
 import { cheb, compassDir } from './util';
+import { seasonBudgetLeft, seasonStairsCounts } from './season';
+
+const clone = <T>(x: T): T => structuredClone(x);
 
 export type HpState = 'healthy' | 'wounded' | 'badly_wounded' | 'near_death';
 export type Awareness = 'asleep' | 'unaware' | 'hunting';
@@ -226,6 +229,11 @@ export interface PlayerView {
   milestonesCleared: number[];
   /** 自分の成績（スコア版 2 の確定点・失った戦利品・達成した遠征の数） */
   record: { banked: number; lost: number; expeditions: number };
+  /**
+   * シーズンの写し（S0。PROTOCOL §9.6。シーズンのランだけ）。budgetLeft: 今の予算の残り。
+   * unreported・unpublished: まだ報告していない階段と、そのうち取り込んだ一覧でまだだれも公開していないもの
+   */
+  season?: SeasonState & { budgetLeft: number; unreported: number; unpublished: number };
 }
 
 export function hpState(hp: number, maxHp: number): HpState {
@@ -580,6 +588,7 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
     campDepth: campDepthOf(world),
     milestonesCleared: [...(world.milestones?.cleared ?? [])],
     record: { banked: rec.stats.banked ?? 0, lost: rec.stats.lost ?? 0, expeditions: rec.stats.expeditions ?? 0 },
+    ...(world.season ? { season: { ...clone(world.season), budgetLeft: seasonBudgetLeft(world, playerId) ?? 0, ...seasonStairsCounts(world, playerId) } } : {}),
   };
 }
 

@@ -33,6 +33,8 @@ export type MacroStop =
   | 'unreachable' | 'unknown_destination' | 'step_limit' | 'full_hp' | 'status_changed'
   | 'not_your_turn' | 'dead' | 'run_ended' | 'floor_changed' | 'blocked' | 'error'
   | 'target_hp' | 'max_turns' | 'left_board' | 'attacked' | 'collected' | 'hostile_adjacent' | 'sense_found' | 'hit_while_waiting'
+  // シーズンの行動予算が尽きてキャンプへ戻された（S0 §9.2）
+  | 'time_up'
   | 'hp_floor' | 'hp_threshold' | 'target_down' | 'target_gone' | 'target_moved' | 'hostile_alerted'
   // explore が止まらずに続けた遅い追跡者が 2 マス以内に来た（V4-0b §1.4）
   | 'chaser_near'
@@ -601,7 +603,7 @@ function intentKeys(view: PlayerView): string[] {
 }
 
 /** 足元の目的の品を拾ってから止まる、の対象にしない止まり方（V3-8a §56.1: HP・被弾の前の停止・予備動作と、もう動けないもの） */
-const NO_PICK_STOPS: ReadonlySet<MacroStop> = new Set<MacroStop>(['hp_floor', 'hp_risk', 'intent', 'run_ended', 'dead', 'left_board', 'not_your_turn', 'floor_changed', 'error']);
+const NO_PICK_STOPS: ReadonlySet<MacroStop> = new Set<MacroStop>(['hp_floor', 'hp_risk', 'intent', 'run_ended', 'dead', 'left_board', 'time_up', 'not_your_turn', 'floor_changed', 'error']);
 
 export function macroNext(state: MacroState, view: PlayerView, catalog: Catalog, events: readonly ProjectedEvent[]): MacroDecision {
   // 拾う 1 手を挟んだ後は、そのときの理由で止まる

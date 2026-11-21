@@ -21,6 +21,8 @@ function unknownProfileError(): ActionError {
 }
 import type { SessionDeps } from './RunSession';
 import { ProfilePort, ProfileService, ProfileStore } from './profiles';
+import { SeasonService, SeasonStore } from '../season/SeasonService';
+import type { LiveRunState } from '../season/SeasonService';
 
 /** profile: そのプレイヤーのプロフィール（token は新しく作ったときだけ） */
 export interface Joined { session: RunSession; playerId: PlayerId; token: string; port: PlayerPort; profile: { id: string; token?: string } }
@@ -31,12 +33,29 @@ export class SessionManager {
   readonly store: RunStore | null;
   readonly catalog: Catalog;
   readonly profiles: ProfileService;
+  /** シーズン（S0。PROTOCOL §9） */
+  readonly seasons: SeasonService;
+  private seasonTimer: NodeJS.Timeout | null = null;
 
   constructor(content: Content, readonly config: ServerConfig) {
     this.catalog = buildCatalog(content);
     this.profiles = new ProfileService(content, this.catalog, new ProfileStore(config.profilesDir));
-    this.deps = { content, catalog: this.catalog, config, profiles: this.profiles };
+    this.seasons = new SeasonService(new SeasonStore(config.seasonsDir ?? null), { engineVersion: ENGINE_VERSION, contentVersion: content.version }, (runId) => this.liveRunState(runId));
+    this.deps = { content, catalog: this.catalog, config, profiles: this.profiles, season: this.seasons };
     this.store = config.runsDir ? new RunStore(config.runsDir) : null;
+    // 終わりの時刻の後の確定（SEASON.md §2.1）: 1 分ごとに見る
+    this.seasonTimer = setInterval(() => this.seasons.tick(), 60_000);
+    this.seasonTimer.unref?.();
+  }
+
+  /** シーズンの確定のための、ランの今の状態（S0） */
+  private liveRunState(runId: string): LiveRunState {
+    const s = this.sessions.get(runId);
+    if (!s) return null;
+    if (s.world.status === 'ended') return 'ended';
+    const pid = s.world.playerOrder[0];
+    const st = pid ? s.world.players[pid].state : 'dead';
+    return st === 'alive' ? 'in_dungeon' : st === 'at_camp' ? 'at_camp' : 'ended';
   }
 
   /** 起動時に復旧できなかったラン（理由の 1 行と時刻）と、そのランのトークン（V4-1m §37.1: 一覧と再開のエラーに出す） */
@@ -93,6 +112,7 @@ export class SessionManager {
   async createRun(req: NewRunRequest & { controller: Controller }): Promise<Joined | { error: ActionError }> {
     // 知らないプロフィールのトークンは、ランを作る前に断る（断った後に、誰もいないランが残らない）
     if (req.profileToken && !this.profiles.store.resolve(req.profileToken)) return { error: unknownProfileError() };
+    if (req.season !== undefined) return this.createSeasonRun(req as NewRunRequest & { controller: Controller; season: string });
     const session = RunSession.create(this.deps, { seed: req.seed, mode: req.mode ?? 'solo' });
     this.sessions.set(session.runId, session);
     // objective を省くとキャンプから始まる（最初の遠征も候補 3 つから選ぶ。V3-2R §14.4）
@@ -109,9 +129,30 @@ export class SessionManager {
     return joined;
   }
 
+  /**
+   * シーズンのラン（S0。PROTOCOL §9.1）: シーズンのシードでソロ、Lv1 のキャンプから。継承は受けない。
+   * 参加者（プロフィール）ごとに同時に 1 つ。参加の直後に取り込む（予算・公開された階段・順位）
+   */
+  private async createSeasonRun(req: NewRunRequest & { controller: Controller; season: string }): Promise<Joined | { error: ActionError }> {
+    const profileId = req.profileToken ? this.profiles.store.resolve(req.profileToken)!.id : null;
+    const chk = this.seasons.canStart(req.season, profileId);
+    if ('reason' in chk) return { error: actionError('season_unavailable', chk.reason, 'list_runs の seasons で開いているシーズンを確かめる / check open seasons with list_runs') };
+    const def = chk.def;
+    const session = RunSession.create(this.deps, { seed: def.seed, mode: 'solo', season: { id: def.id, name: def.name } });
+    this.sessions.set(session.runId, session);
+    const joined = await this.joinSession(session, { name: req.name, classId: req.classId, locale: req.locale, controller: req.controller, atCamp: true, profileToken: req.profileToken, legacy: false }, req.controller.kind === 'agent' ? 'mcp' : 'ws');
+    if ('error' in joined) { this.sessions.delete(session.runId); session.discard(); return joined; }
+    const pname = this.profiles.store.get(joined.profile.id)?.name ?? req.name;
+    this.seasons.registerRun(def.id, joined.profile.id, pname, session.runId);
+    await session.syncSeason(joined.playerId, 'join');
+    return joined;
+  }
+
   async joinRun(runId: string, req: { name: string; classId?: string; locale?: Locale; controller: Controller; profileToken?: string; legacy?: boolean }): Promise<Joined | { error: ActionError }> {
     const session = this.sessions.get(runId);
     if (!session) return { error: this.recoveryFailedError(runId) ?? actionError('no_session', `run ${runId} is not active`, 'list_runs で参加可能なランを確認する / check list_runs') };
+    // シーズンのランはソロ（S0 §9.1）。ほかの者は入れない
+    if (session.world.meta.season) return { error: actionError('season_unavailable', 'シーズンのランには参加できない（new_run の season で自分のランを始める） / season runs are solo; start your own with new_run { season }', 'new_run { season }') };
     // 協力プレイのランに入った者は、遠征が進んでいても、キャンプから始める。進んでいる遠征には入らず、次の遠征から一緒に出る（V4-1g G1）
     return this.joinSession(session, { ...req, atCamp: true }, req.controller.kind === 'agent' ? 'mcp' : 'ws');
   }
@@ -180,7 +221,7 @@ export class SessionManager {
       });
       const alive = players.filter((p) => p.state === 'alive' || p.state === 'at_camp').length;
       out.push({
-        runId: s.runId, status: w.status, mode: w.meta.mode, createdAt: s.createdAt, updatedAt: s.updatedAt, seq: w.seq,
+        runId: s.runId, status: w.status, mode: w.meta.mode, ...(w.meta.season ? { season: w.meta.season.id } : {}), createdAt: s.createdAt, updatedAt: s.updatedAt, seq: w.seq,
         live: true, joinable: w.status === 'active' && alive < w.meta.options.maxPlayers, players, summary: s.summary() ?? undefined,
         expeditions: (w.expeditions ?? []).map((x) => ({ no: x.no, objective: { ...x.objective }, status: x.status, endReason: x.endReason, points: x.points, startSeq: x.startSeq, endSeq: x.endSeq })),
       });
@@ -214,6 +255,8 @@ export class SessionManager {
 
   closeAll(): void {
     for (const s of this.sessions.values()) s.close();
+    this.seasons.flush();
+    if (this.seasonTimer) { clearInterval(this.seasonTimer); this.seasonTimer = null; }
   }
 }
 

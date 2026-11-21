@@ -945,7 +945,14 @@ validators.register('vaults_reachable', (s) => {
 
 export const MAX_ATTEMPTS = 8;
 
-export function generateFloor(content: Content, seed: string, branch: string, depth: number, terrainTable: string[], objective?: ObjectiveSpec, mods?: GenMods): GeneratedFloor {
+/**
+ * season: シーズンのラン（S0。SEASON.md §2.3・PROTOCOL §9.3）。入口と下り階段がシードと版だけで決まるように、
+ * 賞金首は異変を置き換えずに足し、生成の検査を目的を置く前に済ませ、目的を置けなくても作り直さない。
+ * 宝物庫の目的はシーズンのランの候補に出ない（expedition.ts）。シーズンでないランの生成は変わらない
+ */
+export interface GenOptions { season?: boolean }
+
+export function generateFloor(content: Content, seed: string, branch: string, depth: number, terrainTable: string[], objective?: ObjectiveSpec, mods?: GenMods, opts: GenOptions = {}): GeneratedFloor {
   const floorType = selectFloorType(content, seed, branch, depth);
   const biome = selectBiome(content, seed, branch, depth);
   const pacing = resolvePacing(floorType, depth);
@@ -974,7 +981,11 @@ export function generateFloor(content: Content, seed: string, branch: string, de
     }
     // 階の異変（V3-5 §5.3）。賞金首を討つ遠征は「賞金首」を必ず付ける（V3-8 §53.2）
     const bountyEvent = objective?.bounty ? content.lists.floorEvents.find((e) => e.handler === 'bounty') : undefined;
-    if (bountyEvent) { s.event = bountyEvent; s.bounty = objective!.bounty; }
+    // シーズンのラン（S0 §9.3）: 賞金首は異変を「置き換え」ずに「足す」。本来の異変はそのまま（地形・数・巡回の強敵も）で、賞金首は後で
+    // 入口から遠いマスに足す。生成の流れと検査の結果が目的の無い生成と同じになり、入口と下り階段が変わらない
+    // （置き換えると、野営跡の地形が無くなる・入口のそばの巡回の強敵で落ちていた検査が通る、で別の階になった）
+    const seasonBounty = opts.season && bountyEvent ? objective!.bounty : undefined;
+    if (bountyEvent && !seasonBounty) { s.event = bountyEvent; s.bounty = objective!.bounty; }
     else if (!fallback && floorType.rules.events) { const ev = rollFloorEvent(s); if (ev) s.event = ev; }
     applyEventBefore(s);
     grid.connectAll(layoutRng, s.passable);
@@ -985,16 +996,22 @@ export function generateFloor(content: Content, seed: string, branch: string, de
     if (!fallback) placeLevers(s);
     assignElites(s);
     applyEventAfter(s);
+    // シーズンのランの賞金首（上の続き）: 本来の異変の効果の後に足す。異変の札は、本来の異変が無ければ「賞金首」
+    if (seasonBounty && bountyEvent) { const own = s.event; s.event = bountyEvent; s.bounty = seasonBounty; applyEventAfter(s); s.event = own ?? bountyEvent; }
     // 節目の大守護者（V3-3 §3.2）。最後の作り直しでも置く。置けない生成は失敗とし、黙って大守護者のいない階を作らない（V4-0a §1.1）
     if (floorType.rules.warden && !placeWarden(s)) {
       if (!fallback) continue;
       throw new Error(`generateFloor: the warden could not be placed on ${branch}:${depth}`);
     }
-    if (objective && !placeObjective(s, objective) && !fallback) continue;
+    const vs = fallback ? ['stairs_connected'] : [...floorType.validators, 'stairs_path', 'vaults_reachable'];
+    // シーズンのラン（S0 §9.3）: 検査を目的（守護者・遺物・棲み処の柱）より前に。目的を置けなくても作り直さない（置けないのは入口から 8 マスより遠い床が無いときだけ）
+    if (opts.season) {
+      if (!fallback && !vs.every((v) => validators.get(v)(s))) continue;
+      if (objective) placeObjective(s, objective);
+    } else if (objective && !placeObjective(s, objective) && !fallback) continue;
     // 条件「泉が無い」
     if (mods?.noFountain) s.spawns = s.spawns.filter((sp) => !(sp.type === 'feature' && sp.kind.includes('fountain')));
-    const vs = fallback ? ['stairs_connected'] : [...floorType.validators, 'stairs_path', 'vaults_reachable'];
-    if (!fallback && !vs.every((v) => validators.get(v)(s))) continue;
+    if (!opts.season && !fallback && !vs.every((v) => validators.get(v)(s))) continue;
     // 地形 index へ変換
     const tIdx = (id: string) => {
       const i = terrainTable.indexOf(id);

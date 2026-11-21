@@ -73,8 +73,9 @@ turn: {
 | ツール | 引数 | 結果 |
 |---|---|---|
 | `get_rules` | `topic?: 'overview'|'expedition'|'actions'|'combat'|'items'|'classes'|'observation'|'all'`, `locale?` | ルールブック。式・操作・遠征（戦利品・確定点・候補の枠と条件・危険度）・観測の読み方のみで、個別のモンスター数値は含めない。数値は `balance.json`（公開カタログの `rules`）から生成。`classes` は職業ごとの初期値・初期装備・成長（v3）と、習熟・特技の系統・特技の一覧・能動技の一覧（V3-4） |
-| `list_runs` | – | 参加可能・再開可能なラン一覧 |
+| `list_runs` | – | 参加可能・再開可能なラン一覧と、開いているシーズン（`seasons: { id, name, budget, ends_at }[]`。S0 §9.1） |
 | `new_run` | `character_name`, `class?`（`warrior`/`scout`）, `mode?: 'solo'|'coop'`, `seed?`, `locale?`, `objective?: 'auto'|'reach_depth'|'slay_guardian'|'retrieve_relic'|'endless'`, `brief_map?`, `map?`, `inventory?`, `status_line?` | `objective` を省くと**キャンプから始まる**（`at_camp`・`awaiting: 'camp_choice'`。最初の遠征も 3 候補から `start_expedition` で選ぶ。V3-2R）。`objective` を渡せば従来どおり最初の遠征まで始める（`auto` は 1 番目の候補 = 堅実・到達）。`{ run_id, player_token, player_id, briefing, observation, turn }`。`seed` を指定しても結果には返さない。`map` 以下は `set_options` と同じ（`brief_map: false` は `map: 'never'`）。不明な `class` のエラーは職業の一覧を返す |
+| `new_run`（シーズン） | 上の引数に `season: string`（シーズンの ID）, `profile_token?` | S0（§9.1）。シーズンのシードでソロ、Lv1 のキャンプから始まる。`seed`・`mode`・`objective`・`legacy` は使わない（継承は受けない）。参加できないときは `season_unavailable`（理由は message） |
 | `join_run` | `run_id`, `character_name`, `class?` | 同上（COOP。キャンプから始まる。進んでいる遠征には入らず、次の遠征から一緒に出る。V4-1g） |
 | `resume_run` | `player_token`, `map?`, `inventory?`, `status_line?` | 現在の MCP 接続にプレイヤーを再束縛する。**再開ブリーフィング**（遠征の目的と進捗、現在地、直近の節目 最大 10 件、自分のメモ）＋ `observation` ＋ `turn` |
 | `retire` | `confirm: true` | ランを終了する（キャラクターは戻らない）。スコアを記録。遠征中なら、その遠征の戦利品は失う（キャンプで引退すれば確定点はそのまま） |
@@ -86,6 +87,7 @@ turn: {
 | `expedition` | – | 遠征の目的・達成条件・進捗（ブリーフィング）。キャンプでは次の遠征の候補。手番を消費しない。V3-6: 進行中なら途中経過（`progress: { combat, tempo }` と 3 行）、キャンプなら直前の遠征のレポート（`report`） |
 | `review` | `expedition?: number` | V3-6。終わった遠征のレポート（`report`。省略時は直前の遠征）。文は 12 行のレポートに、入りきらなかった場面と、倒れる直前の出来事を足したもの。手番を消費しない |
 | `extract` | `confirm?: boolean`, 共通引数 | 行動。階段（上り・下り）の上なら可（V3-2R2: 追跡中の敵が見えていてもよい。敵は階段を追ってこない）。目的を達成していれば**帰還**（遠征は `completed`、戦利品 × 倍率を確定）。未達成なら `confirm: true` で**撤退**（`withdrawn`、(戦利品 − 目的) × `withdrawPct`% を確定）。`confirm` が無ければ `confirm_required`。確定する点は観測の `expedition.haul.if_extract_now` と一致する。所持している宝は換金され、達成して持ち帰った遺物は納められ、どちらも所持品から消える |
+| `report_stairs` | 共通引数 | S0（§9.4）。シーズンのランのキャンプで、このランで自分の目で見た下り階段のうち、まだ報告していないものを全部報告する。手番を消費しない。最初の報告者に貢献 1。結果に `stairs_reported` の 1 行と `season` |
 | `start_expedition` | `offer: 1..n | 'endless'` | キャンプで次の遠征を始める。前回 `extract` した階段から再開する。結果に `briefing`（目的・枠・条件・倍率・戦利品の説明） |
 
 スコア（版 2、v3）: ランのスコア = 確定点（`banked`）の合計。遠征の払い戻しは、帰還 = 戦利品 × 条件の倍率、撤退 = (戦利品 − 目的の基礎点) × `withdrawPct`%（初期値 50）、帰還の綱 = (戦利品 − 目的の基礎点) × `lifeline.pct`%（初期値 50。倍率なし。目的を達成済みでも目的の点は運ばず、遺物は失う。V3-2R2、V3-4b で改め）、死亡・引退 = 0（失った戦利品 `lost` として記録）。結果の段階は 4 つ（階段で帰還・綱で帰還・階段で撤退・死）。戦利品の内訳 `HaulParts` は `objective`（達成で基礎点）・`overreach`（踏破: 目標より深い階の**下り階段に立ったとき**。着いただけでは入らない。n 階目 = 目的の基礎点 × (`overreachPct.first` + `overreachPct.step` × (n − 1))%、下限 `overreachFirst` + `overreachStep` × (n − 1)。V3-2R2）・`treasure`（所持している宝の価値）・`bounty`（守護者の賞金）・`discovery`（このランで初めて倒した種族・鑑定したアイテム種。守護者の撃破は数えない）・`kills`（撃破の点 = 種族の経験値 × `killPerXp` × 深さの係数、接辞付きは × `killAffixPct`%。V3-2R3）。宝を除く部分は遠征の参加者で共有し、extract した各自に払い戻す。係数は `balance.json` の `haul`。
@@ -401,7 +403,7 @@ EventBase {
 | | `objective_progress` | no, progressAfter, statusAfter, targetsAfter?, extractedAfter?（守護者・遺物の ID を含むので**俯瞰専用**） |
 | | `objective_completed` | no, objective |
 | | `haul_changed` | no, haulAfter（賞金・発見・撃破の after 値）, gains, reasons（v3。参加者に渡す。文章にするのは賞金と発見だけ） |
-| | `expedition_ended` | no, reason（completed/withdrawn/lifeline/died/retired）, result, summary（ラン継続中はシード無し） |
+| | `expedition_ended` | no, reason（completed/withdrawn/lifeline/died/retired、S0 で time_up）, result, summary（ラン継続中はシード無し） |
 | メタ | `thought` | player, text（状態は変えない） |
 | | `chat` | player, text |
 | 追加 | `player_state` / `player_stats` | プレイヤーの生死・離脱 / 撃破数・到達深度・死因 |
@@ -438,6 +440,16 @@ V3-2R で足した項目（同じく後方互換。会心と経験値のルー�
 - `StatusInst.source`（状態異常を与えた者。毒で倒したときの撃破者になる）、`status_applied.targetAffixes`
 - `player_state.reason: 'joined'`（キャンプから始まる参加）。参加コマンドの `atCamp`
 - プレイヤー向けの射影で、見えていた個体が視界の外へ動いた `entity_moved` に `dirOut`（向きだけ。行き先は伏せたまま）
+
+S0（シーズン）で変えた項目（`engineVersion` 0.38.0、`eventVersion` 22。SEASON.md §2、DESIGN.md §39。中身は §9）。シーズンでないランは何も変わらない（生成・候補・観測・出来事のどれも）:
+
+- MCP: `new_run` の `season`、ツール `report_stairs`、`list_runs` の `seasons`。WS の `{ type: 'report_stairs' }`
+- 命令: システムの命令 `season_sync`（commands.jsonl）
+- イベント: `season_synced`・`stairs_reported`、`expedition_ended.reason` と `player_state.reason` の `time_up`、`knowledge_updated.publicStairs`
+- エラー: `season_unavailable`・`budget_exhausted`・`season_ended`
+- 観測: `season`（予算・キャンプでは賞と順位・報告していない階段）、`navigation.known_stairs[].public_by`。マクロの止まり方 `time_up`
+- HTTP: `GET /api/seasons`・`GET /api/seasons/:id`、`POST /api/runs` の `season`
+- get_rules: `topic: 'season'`（`all` にも入る）
 
 V4-1m の続き（§39.1。観測の文だけ。構造化した項目と数え方は変えていないので `engineVersion` は 0.37.0、`eventVersion` は 21 のまま）:
 
@@ -794,6 +806,8 @@ CommandRecord {
 
 マクロ行動は「元の呼び出し 1 件（イベント無し）」＋「展開された基本行動 N 件（`source: 'macro'`）」として記録する。決定論的再実行では基本行動だけを流す。
 
+システムの命令（`player: null` の `join` のほかに、S0 の `season_sync`）も同じ記録に入り、再実行で流す。`season_sync` は、共有層（シーズン）から来たものをランに入れる唯一の口で、中身（予算の残り・公開された階段・順位の写し・報告の結果）をそのまま持つ。再実行は記録だけで一致する（シーズンの記録を読まない）。§9.7
+
 ---
 
 ## 7. WebSocket（`/ws`）
@@ -835,9 +849,10 @@ CommandRecord {
 | `GET /api/player/feed` | **ターンフィード**（SSE、v2）。`Authorization: Bearer <player_token>` か `?token=`。下記 |
 | `GET /api/health` / `GET /api/config` | 生存確認 / `spectatorPolicy` |
 | `GET /api/content/catalog` | 公開カタログ |
-| `POST /api/runs` / `POST /api/runs/:id/join` | ランを開始・参加（`{ name, classId?, seed?, mode?, locale?, objective?, controller? }` → `{ runId, playerId, token }`。`controller` を省くと `{ kind: 'unknown' }`。V4-1g。ブラウザの画面は `human` を送る。参加はキャンプから始まる）。開始時は最初の遠征まで始める |
+| `POST /api/runs` / `POST /api/runs/:id/join` | ランを開始・参加（`{ name, classId?, seed?, mode?, locale?, objective?, controller?, season?, profileToken? }`。`season` は S0 §9.1 → `{ runId, playerId, token }`。`controller` を省くと `{ kind: 'unknown' }`。V4-1g。ブラウザの画面は `human` を送る。参加はキャンプから始まる）。開始時は最初の遠征まで始める |
 | `GET /api/runs/:id/commands` | commands.jsonl（AI パネルのツール呼び出し・thought 表示用） |
 | `GET /api/runs/:id/summary` | 終了時サマリー |
+| `GET /api/seasons` / `GET /api/seasons/:id` | S0（§9.8）。シーズンの一覧 / 1 つのシーズンの順位の表（公開された階段の位置は出さない） |
 
 ### 8.1 ターンフィード（`GET /api/player/feed`）
 
@@ -851,3 +866,116 @@ CommandRecord {
 | `ended` | …, scope: 'expedition' \| 'run', turn, text, summary | 遠征の終了（キャンプ）またはランの終了 |
 
 参照ドライバ `npm run drive`（`packages/tools/src/drive.ts`）がこのフィードを購読し、差し替え可能な「エージェント呼び出し」（任意のコマンド実行／HTTP POST／内蔵ダミー）を呼ぶ。MCP のリソース購読通知は実装していない（任意項目）。
+
+---
+
+## 9. シーズン（S0。SEASON.md §2）
+
+シーズンのランだけの決まり。**シーズンでないランは何も変わらない**（SEASON.md §1.2 の 5。生成・候補・観測・出来事のどれも）。版は `engineVersion` 0.38.0・`eventVersion` 22。
+
+### 9.1 シーズンと参加
+
+- **開く**: 運用者が `npm run season -- open --id <id> --seed <seed> --ends <ISO 8601 の時刻> [--name <名前>] [--budget 3000]`。定義はサーバーの記録の置き場所の `seasons/<id>/season.json`（既定は `runs/seasons`。`MUSE_SEASONS_DIR` で変えられる）。動いているサーバーは、知らない ID を聞かれたときに読み直すので、起動し直さなくてよい。
+  - `SeasonDef { id, name, seed, engineVersion, contentVersion, budget, endsAt, openedAt }`。`engineVersion`・`contentVersion` は開いたときの版。サーバーの版と違えば、そのシーズンのランは始められない（SEASON.md §2.1: 開いている間、版は変えない）。
+  - ほかに `season -- list`・`season -- standings --id`・`season -- close --id`（すぐ確定する）・`season -- wardens --seeds a,b,c`（シードごとの地下 5 階の大守護者の種族と装甲の目安。§2.8 のシード選び）。
+- **参加**: `new_run { season: <id>, profile_token? }`（HTTP は `POST /api/runs { season }`）。1 つのプロフィールが、1 つのシーズンに 1 人の参加者。`profile_token` を省くと新しいプロフィール（＝新しい参加者）になる。
+- シーズンのランは**ソロ**。シーズンのシードで、Lv1 のキャンプから始まる（`seed`・`mode`・`objective` は使わない）。継承（V3-7）は受けない。シーズンのランの記録は、後のランの継承に使わない。記録・図鑑・実績は付く。
+- 同じ参加者のシーズンのランは、同時に 1 つ。倒れる・引退でランが終わったら、同じシーズンで新しいランを Lv1 から始められる（回数の上限は無い）。
+- 断るとき（`season_unavailable`。理由は message）: 知らないシーズン・終わったシーズン（終わりの時刻を過ぎた）・版が違う・予算が残っていない・進行中のシーズンのランがある。
+- RunMeta に `season?: { id, name }`（ランの始まりから。俯瞰とプレイヤーの両方に見える）。ランの一覧（`RunListing`）にも `season?`。
+
+### 9.2 行動予算
+
+- 参加者 1 人につき、シーズンを通して**自分の手番 `budget` 個**（既定 3,000）。迷宮の中の自分の手番だけを数え、マクロの中の手番も 1 つずつ数える。キャンプでは減らない。ランをまたいで 1 つ（倒れてやり直しても戻らない）。
+- ランの中の残り = 最後に取り込んだときの残り `season.budget.left` −（今の自分の手番 − 取り込んだときの自分の手番 `season.budget.at`）。サーバーは取り込みのたびに、その参加者のすべてのシーズンのランの手番の合計から `left` を決める。
+- **残りが 0 になった手番の終わりに、その遠征は時間切れで終わる**: `player_state { state: 'at_camp', reason: 'time_up' }`、`expedition_ended { reason: 'time_up' }`。未確定の戦利品は失い（`lost` に入る。確定 0）、持ち物は残る（宝・遺物も持ったまま）。倒れた扱いにしない（生還賞は残る）。マクロの途中なら、マクロは `time_up` で止まる。
+- 予算が残っていなければ、`start_expedition` は `budget_exhausted` で断る。キャンプでの操作・報告・引退はできる。
+- 終わりの時刻を過ぎたら（キャンプで取り込んだ `season.ended`）、`start_expedition` は `season_ended` で断る。出ている遠征は、帰るか倒れるまで続けてよい（その分も順位に数える）。
+
+### 9.3 階段の位置
+
+- シーズンのランでは、同じ階の入口（上り階段）と下り階段の位置は、だれが・いつ・どの遠征で作っても同じ（シーズンのシードと版だけで決まる）。テストで守る。そのために、シーズンのランでは:
+  1. 宝物庫を開ける遠征（`open_vault`）を候補に出さない。
+  2. 賞金首の遠征の目標階は、異変を「賞金首」に置き換えずに、賞金首を**足す**。本来の異変はそのまま（地形・敵と品の数・巡回の強敵・眠りも）で、賞金首はその後で入口から 8 マスより遠いマスに置く。異変の札（到着の文）は本来の異変のもので、本来の異変が無ければ「賞金首」（SEASON.md §2.3 の 2 の「置き換えても地形が変わらない作り」。実装メモは SEASON.md §3.1）。
+  3. 生成の検査（階段への道の長さ・入口のそばに敵がいない など）を、遠征の目的（守護者・遺物・棲み処）を置く前に済ませる。目的を置けなかったときは、作り直さずに目的のない階にする（置けないのは入口から 8 マスより遠い床が無いときだけで、今の生成では起きない）。
+- 守護者の棲み処の地形（柱・浅い水）と、条件による格子扉の違いは残る（階段は変わらない）。
+
+### 9.4 報告と公開された階段
+
+- **`report_stairs`**（MCP のツール、WS の `{ type: 'report_stairs' }`）。キャンプでだけ。手番を使わない。このランで**自分の目で見た**下り階段（地図の巻物や公開で知っただけのものは入らない）のうち、このランでまだ報告していないものを全部送る。サーバーに届いた順で、その階の下り階段を最初に報告した参加者に**貢献 1**（その場で付く）。2 人目からは付かない。
+- 結果: 出来事 `stairs_reported { player, stairs: { depth, x, y, first }[], gained }`（本人だけ）と、取り込み（`season_synced`）。
+- 断る: シーズンでないラン（`bad_request`）、キャンプでない（`not_at_camp`）、送るものが無い（`nothing_to_do`）。倒れた・ランが終わった後は送れない（そのランの報告していない階段は、報告できなくなる）。
+- **取り込み**は、キャンプに着いたとき（遠征の終わり）・遠征を始めるとき・報告したときだけ。取り込んだ一覧が `season.public`。遠征の途中で公開されたものは、次の遠征から見える。
+- **公開されている階に入ると**、その階の下り階段のマスが覚えている地図に載る（`knowledge_updated { newlySeen, mappedAdd, publicStairs: <公開した者の名前> }`）。地図の巻物と同じ「地形は分かっているが、まだ見ていない」マスで、途中の道は分からない。
+  - 観測: `navigation.known_stairs[]` の `public_by: string`（自分の目で見るまで）。下への風（`self.floor.draft`）は、公開された階段を自分の目で見るまで出続ける（`explore { toward: 'draft' }` はその方角を探す）。
+  - `travel_to stairs_down` は、覚えている地図だけで道を探すので、途中の道が分かるまで `unreachable` で断られる（手番は使わない）。そのときのヒントに `explore { toward: 'draft' }` を出す。
+- S0 で公開できるのは下り階段だけ。1 つの階の下り階段は 1 つ。
+
+### 9.5 賞と順位
+
+| 賞 `id` | 値 `value` | 同着のとき（少ないほうが上） |
+|---|---|---|
+| `adventure` 冒険賞 | シーズンで着いたいちばん深い階（ランをまたいだ最良。着いた時点で数える。帰れなくてもよい） | その階に初めて着いたときまでに使った予算 |
+| `contribution` 貢献賞 | 最初に報告した階段の数（シーズンの合計） | 最後の 1 つを報告したときまでに使った予算 |
+| `survival` 生還賞 | シーズンで一度も倒れていない参加者の、確定した点の合計（シーズンのすべてのランの `banked`） | 使った予算 |
+
+- 順位は値の大きい順。値も同着の決め方も同じなら同じ順位（1, 2, 2, 4）。倒れた参加者は生還賞の対象外（`value: null`・`rank: null`）。時間切れは倒れた扱いにしない。
+- 順位の写しは取り込みのときに入る（キャンプで見るものが、その遠征の間の最新）。
+
+### 9.6 観測と PlayerView
+
+```ts
+PlayerView.season?: SeasonState & { unreported: number; unpublished: number }   // シーズンのランだけ
+SeasonState {
+  id, name
+  budget: { limit: number; left: number; at: number }   // left: 取り込んだときの残り、at: そのときの自分の手番
+  ends_at: number            // 終わりの時刻（表示用。ゲームは ended だけを見る）
+  ended: boolean             // 取り込んだとき、終わりの時刻を過ぎていた
+  public: { depth, x, y, by }[]   // 公開された下り階段（by は最初に報告した者の名前）
+  awards: SeasonAward[]
+  contribution: number       // 自分が最初に報告した数
+  died: boolean              // このシーズンで倒れたことがある
+  reported: number[]         // このランで報告した階の深さ
+}
+SeasonAward { id: 'adventure'|'contribution'|'survival'; value: number|null; rank: number|null; entrants: number; leader: { name, value }|null; gap: number|null }
+
+Observation.season?: {
+  id, name
+  budget: { left, limit }
+  ended: boolean
+  awards?: (SeasonAward & { text })[]          // キャンプだけ
+  stairs?: { unreported, unpublished }         // キャンプだけ。報告していない階段（うち、まだだれも公開していないもの）
+  text: string                                 // 予算の 1 行
+}
+```
+
+- 文: 迷宮の中は 2 行目に予算の 1 行（「シーズン「S0」: 残りの予算 2,140/3,000 手番」）。順位は出さない。
+- キャンプは、予算の 1 行・賞ごとの 1 行（自分の値と順位、1 位の名前と値、1 位との差）・「まだ報告していない階段 N（うち、まだだれも公開していないもの M）」。`valid_actions` に `report_stairs`（報告できるものがあるとき）。予算が無いか終わりの時刻を過ぎたら、候補の代わりにその 1 行。
+- 参加したときの最初の観測（briefing）に、シーズンの決まりを短く出す。
+
+### 9.7 記録と再生
+
+- 共有層から来るもの（予算の残り・公開された階段・順位の写し・報告の結果）は、システムの命令 `season_sync` として commands.jsonl に残し、engine が出来事 `season_synced`（と `stairs_reported`）にして `applyEvent` で World（`world.season`）に入れる。予算が尽きたこと（時間切れ）は、engine が取り込んだ値から手番ごとに決める。どれも再生は記録だけで一致する。
+
+```ts
+SeasonSyncCommand {
+  type: 'season_sync'
+  reason: 'join' | 'camp' | 'start' | 'report'
+  season: Omit<SeasonState, 'reported' | 'budget'> & { budget: { limit, left } }   // at は engine が今の手番で埋める
+  report?: { stairs: { depth, x, y, first }[] }
+}
+// 記録: player はその参加者、source は 'system'（報告のときは送った者の source と thought）
+```
+
+- シーズンの側の記録は `seasons/<id>/` に残す: `season.json`（定義）・`participants.json`（参加者ごとのラン・使った予算・最深とそのときの予算・最初の報告の数・倒れたか）・`public.json`（公開された階段と報告の順）・`log.jsonl`（参加・ランの始まりと終わり・報告・取り込み・順位の移り変わり・確定）・`result.json`（確定した結果）。
+- 確定: 終わりの時刻の後、参加者の全員が迷宮にいない（キャンプにいるかランが終わった）か、終わりから 1 時間たったら。確定の後は記録を変えない。
+- 観戦: シーズンのランは `follow_only`（サーバーの `spectatorPolicy` によらない）。俯瞰の観戦から公開されていない階段が分からないように。
+
+### 9.8 HTTP
+
+- `GET /api/seasons` → `{ seasons: { id, name, budget, endsAt, status: 'open'|'ended'|'final', participants }[] }`
+- `GET /api/seasons/:id` → `{ season, standings: { name, runs, used, died, adventure: { value, rank }, contribution: { value, rank }, survival: { value, rank } | null }[], result? }`（公開された階段の位置は出さない。人間の画面のロビーの順位の表）
+
+### 9.9 規則の文
+
+`get_rules { topic: 'season' }`（`all` にも入る）: シーズン・予算と時間切れ・階段の報告と公開・3 つの賞と同着の決め方。

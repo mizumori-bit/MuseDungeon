@@ -81,12 +81,14 @@ export function Watch({ runId }: { runId: string }) {
   macroRef.current = macro;
 
   useEffect(() => {
-    api.config().then((c) => setPolicy(c.spectatorPolicy)).catch(() => setPolicy('omniscient'));
-    api.runs().then((rs) => {
+    const conf = api.config().then((c) => c.spectatorPolicy).catch(() => 'omniscient' as SpectatorPolicy);
+    api.runs().then(async (rs) => {
       const r = rs.find((x) => x.runId === runId) ?? null;
       setListing(r);
       if (r && !followRef.current) setFollow(r.players.find((p) => p.state === 'alive' || p.state === 'at_camp')?.id ?? r.players[0]?.id ?? null);
-    }).catch((e) => setError(errorText(e)));
+      // シーズンのラン（S0 §9.7）は、進行中はサーバーの設定によらず追従視点だけ
+      setPolicy(r?.season && r.status === 'active' ? 'follow_only' : await conf);
+    }).catch(async (e) => { setError(errorText(e)); setPolicy(await conf); });
   }, [runId]);
 
   const followOnly = policy === 'follow_only';

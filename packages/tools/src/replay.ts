@@ -4,7 +4,7 @@ import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync,
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { Content } from '@muse/content';
-import { createRun, joinPlayer, step } from '@muse/engine';
+import { createRun, joinPlayer, seasonSync, step } from '@muse/engine';
 import type { CommandRecord, GameEvent, RunMetaFile, World } from '@muse/shared';
 import { applyEvent, canonicalHash, emptyWorld } from '@muse/shared';
 import { loadConfig, SessionManager } from '@muse/server';
@@ -52,11 +52,13 @@ export function verifyRunDir(content: Content, dir: string): VerifyResult {
   // 決定論的再実行（基本行動だけを流す）
   const first = events[0];
   if (first?.type !== 'run_started' || !first.secret) throw new Error('events.jsonl must start with run_started (with secret)');
-  const { world, events: created } = createRun(content, { runId: first.meta.runId, seed: first.secret.seed, mode: first.meta.mode, options: first.meta.options, wall: first.wall });
+  const { world, events: created } = createRun(content, { runId: first.meta.runId, seed: first.secret.seed, mode: first.meta.mode, options: first.meta.options, wall: first.wall, ...(first.meta.season ? { season: first.meta.season } : {}) });
   const re: GameEvent[] = [...created];
   for (const rec of commands) {
     if (rec.macro) continue;
     if (rec.command.type === 'join') re.push(...joinPlayer(world, content, rec.command, { cseq: rec.cseq, wall: rec.wall }).events);
+    // シーズンの取り込み（S0 §9.7）: 中身は記録に全部ある
+    else if (rec.command.type === 'season_sync') re.push(...seasonSync(world, content, rec.player!, rec.command, { cseq: rec.cseq, wall: rec.wall, thought: rec.thought }).events);
     else re.push(...step(world, content, rec.player!, rec.command, { cseq: rec.cseq, wall: rec.wall, thought: rec.thought }).events);
   }
   const reexecMatches = canonicalHash(noWall(re)) === canonicalHash(noWall(events));

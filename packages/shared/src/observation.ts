@@ -11,7 +11,8 @@ import type { ReportCompare } from './expeditionStats';
 import { kindName } from './narrate';
 import type { NavGrid } from './nav';
 import { buildNavGrid, distanceField, findFrontiers } from './nav';
-import type { Dir, EntityRole, Expedition, HaulParts, Locale, MonsterMemory, Names, ObjectiveType, OfferSlot, Pos } from './types';
+import type { Dir, EntityRole, Expedition, HaulParts, Locale, MonsterMemory, Names, ObjectiveType, OfferSlot, Pos, SeasonAward } from './types';
+import { awardText, publicStairsAt, seasonBudgetText } from './season';
 import { DIRS, DIR_VEC } from './types';
 import { addDiceBonus, cheb, ceilDiv, compassDir, damageRangeVs, dirTo, floorDiv, formatDice, parseDice, t } from './util';
 import type { EntityView, HpState, ItemView, PlayerView, ViewStatus } from './view';
@@ -296,7 +297,8 @@ export interface Observation {
     /** path_len: 既知地図上の経路長（不明なら null） */
     /** occupied_by: 階段の上に見えている敵の ID（travel_to はふさがれて止まる。V3-7a 後の評価） */
     /** sealed: 大守護者を倒していない節目の下り階段（V4-1a §12.4） */
-    known_stairs: { type: 'down' | 'up'; pos: Pos; dist: number; reachable: boolean; path_len: number | null; occupied_by?: string; sealed?: true }[];
+    /** public_by: シーズンで公開された下り階段で、まだ自分の目で見ていない（S0 §9.4。途中の道は分からない） */
+    known_stairs: { type: 'down' | 'up'; pos: Pos; dist: number; reachable: boolean; path_len: number | null; occupied_by?: string; sealed?: true; public_by?: string }[];
     /** 引数なしの collect（what: items）が拾いに行く品（V4-1a §12.1）: 既定の範囲（15 歩）の内側で、collect と同じ経路で着ける品。valid_actions の件数はこれ */
     collectable: { count: number; ids: string[] };
     /** 地形は判明しているが、まだ見ていないセルの数（地図の巻物の後。explore はそこへ向かう） */
@@ -309,6 +311,21 @@ export interface Observation {
   expedition?: ObsExpedition;
   /** キャンプの候補（遠征と遠征の間のみ） */
   camp?: ObsCamp;
+  /** シーズン（S0。PROTOCOL §9.6。シーズンのランだけ）。賞と報告していない階段はキャンプでだけ */
+  season?: ObsSeason;
+}
+
+export interface ObsSeason {
+  id: string;
+  name: string;
+  budget: { left: number; limit: number };
+  /** 終わりの時刻を過ぎた（新しい遠征は始められない） */
+  ended: boolean;
+  awards?: (SeasonAward & { text: string })[];
+  /** まだ報告していない階段と、そのうちまだだれも公開していないもの */
+  stairs?: { unreported: number; unpublished: number };
+  /** 予算の 1 行 */
+  text: string;
 }
 
 export interface ObservationOptions {
@@ -386,6 +403,19 @@ export function partyOf(view: PlayerView): ObsPartyMember[] {
     });
   });
   return out;
+}
+
+/** シーズン（S0。PROTOCOL §9.6）: 予算はいつも、賞と報告していない階段はキャンプでだけ */
+export function seasonObs(view: PlayerView): ObsSeason | null {
+  const s = view.season;
+  if (!s) return null;
+  const L = view.locale;
+  const camp = view.status === 'at_camp';
+  return {
+    id: s.id, name: s.name, budget: { left: Math.max(0, s.budgetLeft), limit: s.budget.limit }, ended: s.ended,
+    ...(camp ? { awards: s.awards.map((a) => ({ ...a, leader: a.leader ? { ...a.leader } : null, text: awardText(L, a) })), stairs: { unreported: s.unreported, unpublished: s.unpublished } } : {}),
+    text: seasonBudgetText(L, s.name, s.budgetLeft, s.budget.limit),
+  };
 }
 
 /** 仲間の 1 行（V4-1f §22.4。「仲間: ○○（地下 1 階）、△△（キャンプ）」） */
@@ -1096,7 +1126,10 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       const p = { x: i % f.width, y: Math.trunc(i / f.width) };
       const dd = pathDist(p);
       const occ = view.entities.find((e) => e.cat === 'monster' && e.pos.x === p.x && e.pos.y === p.y && e.id !== view.self.id);
-      known_stairs.push({ type: st, pos: p, dist: dd >= 0 ? dd : cheb(pos, p), reachable: dd >= 0, path_len: dd >= 0 ? dd : null, ...(occ ? { occupied_by: occ.id } : {}), ...(st === 'down' && sealedDown ? { sealed: true as const } : {}) });
+      // 公開された下り階段（S0 §9.4）: まだ自分の目で見ていない間は、公開した者の名前を添える
+      const pub = st === 'down' && view.floor ? publicStairsAt(view.season, view.floor.depth) : null;
+      const pubBy = pub && pub.x === p.x && pub.y === p.y && (view.memory.unsighted ?? []).includes(i) ? pub.by : undefined;
+      known_stairs.push({ type: st, pos: p, dist: dd >= 0 ? dd : cheb(pos, p), reachable: dd >= 0, path_len: dd >= 0 ? dd : null, ...(occ ? { occupied_by: occ.id } : {}), ...(st === 'down' && sealedDown ? { sealed: true as const } : {}), ...(pubBy ? { public_by: pubBy } : {}) });
     }
     known_stairs.sort((a, b) => a.dist - b.dist);
     const fr = findFrontiers(grid)
@@ -1522,6 +1555,8 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
   if (rest && rest.blocked_by !== 'hostile_hunting') obs.self.rest_estimate = rest;
   if (expedition) obs.expedition = expedition;
   if (camp) obs.camp = camp;
+  const season = seasonObs(view);
+  if (season) obs.season = season;
   if (opts.detail === 'full') obs.self.inventory = invItems;
   else obs.self.inventory_brief = invBrief;
   if (opts.map && f && pos) {
@@ -1575,9 +1610,13 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
     ...(x.perkChoice?.options ?? []).map((o) => `choose_perk ${o.option} (${o.name}: ${o.desc})`),
   ];
   if (view.status === 'at_camp') {
-    if (!view.camp) return [...perkLines, 'wait_for_turn'];
+    // シーズン（S0 §9.4）: 報告できる階段があれば report_stairs。予算が無いか終わりの時刻を過ぎたら、遠征は始められない
+    const report = view.season && view.season.unreported > 0 ? [`report_stairs (${t(L, `報告していない階段 ${view.season.unreported}`, `${view.season.unreported} unreported stairs`)})`] : [];
+    const closed = !!view.season && (view.season.budgetLeft <= 0 || view.season.ended);
+    if (!view.camp || closed) return [...perkLines, ...report, ...(view.camp ? ['retire'] : ['wait_for_turn'])];
     return [
       ...perkLines,
+      ...report,
       ...view.camp.offers.map((o) => `start_expedition ${o.index} (${objectiveText(L, o.objective)})`),
       'start_expedition endless', 'retire',
     ];
@@ -1867,6 +1906,12 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
     lines.push(`[seq ${obs.seq} | ${t(L, 'キャンプ', 'Camp')} | HP ${s.hp}/${s.max_hp} | Lv${s.level} | ${statusText.at_camp[L === 'en' ? 1 : 0]}]`);
     const pt = partyText(L, obs.party ?? []);
     if (pt) lines.push(pt);
+    // シーズン（S0 §9.6）: 予算・賞ごとの順位・報告していない階段
+    if (obs.season) {
+      lines.push(obs.season.text);
+      for (const a of obs.season.awards ?? []) lines.push(a.text);
+      if (obs.season.stairs) lines.push(t(L, `まだ報告していない階段 ${obs.season.stairs.unreported}（うち、まだだれも公開していないもの ${obs.season.stairs.unpublished}）${obs.season.stairs.unreported ? '。report_stairs で報告できる' : ''}`, `Unreported stairs ${obs.season.stairs.unreported} (not yet published by anyone: ${obs.season.stairs.unpublished})${obs.season.stairs.unreported ? '. Report them with report_stairs' : ''}`));
+    }
     // 遠征が進んでいる（仲間がまだ迷宮にいる）: 全員が戻ったら、次の遠征を選べる（V4-1g G1）
     if (obs.expedition && obs.expedition.status !== 'ended') lines.push(t(L, `遠征 ${obs.expedition.no} が進んでいる（仲間がまだ迷宮にいる）。全員が戻ったら、次の遠征を選べる`, `Expedition ${obs.expedition.no} is still under way (allies are still inside). You can choose the next one when everyone is back`));
     if (obs.expedition?.result) lines.push(obs.expedition.result.text);
@@ -1881,7 +1926,12 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
     if (obs.camp?.records) lines.push(obs.camp.records.line);
     if (obs.camp?.version_note) lines.push(obs.camp.version_note);
     if (obs.alerts.length) lines.push('!! ' + obs.alerts.map((a) => a.text).join(' / '));
-    if (obs.camp) {
+    const seasonClosed = obs.season && (obs.season.budget.left <= 0 || obs.season.ended);
+    if (obs.camp && seasonClosed) {
+      lines.push(obs.season!.budget.left <= 0
+        ? t(L, 'このシーズンの行動予算を使い切った。新しい遠征は始められない（報告と引退はできる。ここで終えてよい）', 'You have used up this season\'s budget. No more expeditions (you can still report and retire; it is fine to stop here)')
+        : t(L, 'シーズンは終わりの時刻を過ぎた。新しい遠征は始められない（報告と引退はできる。ここで終えてよい）', 'The season has passed its end time. No more expeditions (you can still report and retire; it is fine to stop here)'));
+    } else if (obs.camp) {
       lines.push(t(L, `次の遠征の候補（遠征 ${obs.camp.next_no}）。start_expedition { offer } で始める:`, `Offers for expedition ${obs.camp.next_no} (start with start_expedition { offer }):`));
       for (const o of obs.camp.offers) lines.push('  ' + o.text);
       lines.push('  ' + t(L, 'endless) 目的なしでひたすら潜る（offer: "endless"）', 'endless) no objective, just descend (offer: "endless")'));
@@ -1898,6 +1948,8 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
   const floorText = s.floor ? t(L, `地下${s.floor.depth}階 ${s.floor.biome_name}${ftText}`, `Depth ${s.floor.depth} ${s.floor.biome_name}${ftText}`) : '-';
   const posText = s.pos ? t(L, `位置(${s.pos.x},${s.pos.y})`, `pos(${s.pos.x},${s.pos.y})`) : '';
   lines.push(`[seq ${obs.seq} | ${floorText} | HP ${s.hp}/${s.max_hp} | Lv${s.level} | ${posText ? posText + ' | ' : ''}${statusText[obs.status][L === 'en' ? 1 : 0]}]`);
+  // シーズン（S0 §9.6）: 迷宮の中は予算の残りだけ（順位は出さない）
+  if (obs.season) lines.push(obs.season.text);
   // 仲間（V4-1f §22.4）
   {
     const pt = partyText(L, obs.party ?? []);
@@ -1978,7 +2030,9 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
     for (const ft of vis.features) lines.push(`- ${ft.name}${ft.lair ? t(L, `（${ft.lair}の棲み処）`, ` (${ft.lair}'s lair)`) : ''}${ft.id ? ` ${ft.id}` : ''} (${ft.pos.x},${ft.pos.y}) ${relLabel(L, from, ft.pos)}${ft.state && ft.state !== 'idle' ? ` [${featureStateText(L, ft.state)}]` : ''}`);
     for (const st2 of stairsLines) {
       const name = st2.type === 'down' ? t(L, '下り階段', 'stairs down') : t(L, '上り階段', 'stairs up');
-      lines.push(`- ${name} (${st2.pos.x},${st2.pos.y}) ${t(L, '距離', 'dist')}${st2.dist} ${st2.reachable ? t(L, '到達可', 'reachable') : t(L, '到達不明', 'unknown path')}`);
+      // 公開された階段（S0 §9.4）: まだ自分の目で見ていない。途中の道は分からない
+      const pub = st2.public_by ? t(L, `（公開: ${st2.public_by} が報告。まだ見ていない）`, ` (published by ${st2.public_by}; not yet seen)`) : '';
+      lines.push(`- ${name} (${st2.pos.x},${st2.pos.y}) ${t(L, '距離', 'dist')}${st2.dist} ${st2.reachable ? t(L, '到達可', 'reachable') : t(L, '到達不明', 'unknown path')}${pub}`);
     }
   }
   if (alive) {

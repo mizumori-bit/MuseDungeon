@@ -111,6 +111,7 @@ export function updateKnowledge(ctx: Ctx, key: FloorKey): void {
   if (!players.length) return;
   const ents = ctx.entitiesOn(key);
   for (const pr of players) {
+    seedPublicStairs(ctx, pr, key);
     const fov = playerFov(ctx, pr);
     const fovSet = new Set(fov);
     const k = pr.knowledge;
@@ -195,6 +196,22 @@ export function updateKnowledge(ctx: Ctx, key: FloorKey): void {
 }
 
 /**
+ * 公開された下り階段（S0。PROTOCOL §9.4）: キャンプで取り込んだ一覧にこの階があれば、その下り階段のマスを覚えている地図に載せる。
+ * 地図の巻物と同じ「地形は分かっているが、まだ見ていない」マス（mapped）。途中の道は載せない。シーズンでないランには一覧が無い
+ */
+function seedPublicStairs(ctx: Ctx, pr: PlayerRecord, key: FloorKey): void {
+  const f = ctx.world.floors[key];
+  const ps = f && f.branch === 'main' ? ctx.world.season?.public.find((p) => p.depth === f.depth) : undefined;
+  if (!f || !ps || !f.stairs.down.some((d) => d.x === ps.x && d.y === ps.y)) return;
+  const i = ps.y * f.width + ps.x;
+  if ((pr.knowledge.floors[key]?.seen[i] ?? 0) !== 0) return;
+  ctx.emit({
+    type: 'knowledge_updated', player: pr.id, floorKey: key, visible: null, newlySeen: [i, f.terrain[i]], rememberedSet: [], rememberedDel: [], metAdd: [],
+    mappedAdd: [i], publicStairs: ps.by, seenBy: [pr.id], floor: key,
+  });
+}
+
+/**
  * 目標の気配（公開ルール）: 遠征の参加者が目標階にいる間、守護者（未討伐）か遺物（未入手）の方角と、10 マス以内かどうか。
  * 正確な位置は出さない。
  */
@@ -229,8 +246,13 @@ function floorHintFor(ctx: Ctx, pr: PlayerRecord, key: FloorKey, newlySeen: numb
   const fresh = new Set<number>();
   for (let j = 0; j < newlySeen.length; j += 2) fresh.add(newlySeen[j]);
   const known = (i: number) => (fk?.seen[i] ?? 0) !== 0 || fresh.has(i);
+  // 公開された階段（S0 §9.4）は、自分の目で見るまで下への風を出し続ける（地図に載っているが、まだ見ていないマス）
+  const sighted = new Set(mappedDel);
+  const pub = ctx.world.season?.public.find((p) => p.depth === f.depth);
+  const publicOnly = (sx: number, sy: number) => !!pub && f.branch === 'main' && pub.x === sx && pub.y === sy
+    && (fk?.mapped ?? []).includes(sy * f.width + sx) && !sighted.has(sy * f.width + sx);
   let draft: FloorHint['draft'] = null;
-  if (f.stairs.down.length && !f.stairs.down.some((s) => known(s.y * f.width + s.x))) {
+  if (f.stairs.down.length && !f.stairs.down.some((s) => known(s.y * f.width + s.x) && !publicOnly(s.x, s.y))) {
     const near = [...f.stairs.down].sort((a, b) => cheb(me.pos!, a) - cheb(me.pos!, b) || a.y - b.y || a.x - b.x)[0];
     draft = compassDir(me.pos, near);
   }

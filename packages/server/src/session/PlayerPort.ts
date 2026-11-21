@@ -93,6 +93,16 @@ export interface PlayerPort {
   formatActionText(p: ActionPayload): string;
 }
 
+/** シーズンの決まりの短い説明（S0。参加したとき・再開したとき） */
+function seasonBriefing(L: Locale, s: NonNullable<PlayerView['season']>): string[] {
+  return [
+    t(L, `シーズン「${s.name}」に参加している（ソロ。全員が同じシードのダンジョンを、それぞれのランで潜る）。詳しくは get_rules topic=season。`, `You are in season "${s.name}" (solo; everyone dives the same seed in their own run). Details: get_rules topic=season.`),
+    t(L, `- 行動予算: シーズンを通して自分の手番 ${s.budget.limit}（ランをまたいで 1 つ。残り ${Math.max(0, s.budgetLeft)}）。迷宮の中の手番だけ減る。尽きた手番で時間切れ（キャンプへ戻り、未確定の戦利品を失う。倒れた扱いにはしない）。帰る分を残すこと。`, `- Budget: ${s.budget.limit} own turns for the whole season (one budget across runs; ${Math.max(0, s.budgetLeft)} left). Only dungeon turns count. Running out is time up (back to camp, unbanked haul lost; not counted as dying). Keep enough to get home.`),
+    t(L, '- 階段の位置はだれのランでも同じ。キャンプで report_stairs すると、このランで見た下り階段を報告できる（最初の報告者に貢献 1）。倒れると、報告していない階段は報告できなくなる。公開された階段は、次の遠征から地図に載る（道は分からない）。', '- Stairs are in the same place in every run. At camp, report_stairs reports the down stairs you saw in this run (1 contribution to the first reporter). If you die, unreported stairs are lost. Published stairs appear on your map from the next expedition (not the way there).'),
+    t(L, '- 賞: 冒険（いちばん深い階）・貢献（最初の報告の数）・生還（一度も倒れていない者の確定点の合計）。同着は使った予算の少ないほうが上。順位はキャンプの観測に出る。', '- Awards: adventure (deepest floor), contribution (first reports), survival (banked points of those who never died). Ties go to less budget used. Standings show at camp.'),
+  ];
+}
+
 const STOP_TEXT: Record<string, [string, string]> = {
   hostile_in_view: ['敵が視界に入った', 'a hostile came into view'],
   hostile_adjacent: ['隣に起きている敵がいる（退くなら mode: flee、戦うなら fight）', "an awake enemy is adjacent (retreat with mode: 'flee', or fight)"],
@@ -143,6 +153,7 @@ const STOP_TEXT: Record<string, [string, string]> = {
   blocked: ['道が塞がれている', 'the path is blocked'],
   trap_ahead: ['次のマスが発見済みの罠（ほかに道が無い。踏むなら move）', 'the next step is a discovered trap (no other way; use move to step on it)'],
   left_board: ['盤面を離れた', 'you left the board'],
+  time_up: ['シーズンの行動予算が尽きた（時間切れでキャンプへ戻った）', 'the season budget ran out (time up: back at camp)'],
   error: ['行動できなかった', 'an action failed'],
   attacked: ['攻撃を受けた', 'you were attacked'],
   collected: ['回収し終えた', 'nothing left to collect'],
@@ -608,6 +619,8 @@ export class SessionPlayerPort implements PlayerPort {
     const L = view.locale;
     const lines: string[] = [];
     const x = view.expedition;
+    // シーズン（S0 §9.6）: 参加したときと再開したときに、決まりを短く（詳しくは get_rules topic=season）
+    if (view.season) lines.push(...seasonBriefing(L, view.season));
     if (x && x.status !== 'ended' && view.status !== 'at_camp') {
       // 2 回目以降の遠征の開始は 1 行（ルールは最初の遠征で説明済み。V3-2R3 §20.6）
       if (kind === 'start' && x.no > 1) lines.push(briefingShort(L, x, this.catalog.rules));

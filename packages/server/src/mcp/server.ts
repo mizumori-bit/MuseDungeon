@@ -156,11 +156,14 @@ export function createMcpServer(ctx: McpContext): McpServer {
     inputSchema: {},
   }, async () => {
     const runs = manager.listRuns().filter((r) => r.status === 'active').map((r) => ({
-      run_id: r.runId, mode: r.mode, joinable: r.joinable, seq: r.seq,
+      run_id: r.runId, mode: r.mode, joinable: r.joinable && !r.season, seq: r.seq, ...(r.season ? { season: r.season } : {}),
       players: r.players.map((p) => ({ name: p.name, class: p.classId, controller: p.controller.kind, state: p.state, depth: p.depth })),
     }));
-    const text = runs.length ? runs.map((r) => `${r.run_id} [${r.mode}] ${r.joinable ? 'joinable' : 'full'} — ${r.players.map((p) => `${p.name}(${p.class}, ${p.state}, depth ${p.depth ?? '-'})`).join(', ')}`).join('\n') : 'No active runs. Use new_run.';
-    return out(text, { runs });
+    // 開いているシーズン（S0 §9.1）: new_run { season } で参加する
+    const seasons = manager.seasons.list().filter((x) => x.status === 'open').map((x) => ({ id: x.id, name: x.name, budget: x.budget, ends_at: new Date(x.endsAt).toISOString(), participants: x.participants }));
+    const text = (runs.length ? runs.map((r) => `${r.run_id} [${r.mode}${r.season ? ` season ${r.season}` : ''}] ${r.joinable ? 'joinable' : 'full'} — ${r.players.map((p) => `${p.name}(${p.class}, ${p.state}, depth ${p.depth ?? '-'})`).join(', ')}`).join('\n') : 'No active runs. Use new_run.')
+      + (seasons.length ? '\n' + seasons.map((x) => `season ${x.id}「${x.name}」 budget ${x.budget} turns, ends ${x.ends_at}, participants ${x.participants} — new_run { season: "${x.id}" }`).join('\n') : '');
+    return out(text, { runs, seasons });
   });
 
   /** new_run / resume_run の表示オプション（brief_map は旧引数: false → map: never） */
@@ -197,6 +200,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
       objective: z.enum(['auto', 'reach_depth', 'slay_guardian', 'retrieve_relic', 'endless']).optional().describe('最初の遠征の目的（既定 auto = 最初の候補。endless は目的なし）'),
       profile_token: z.string().optional().describe('前のランで受け取った profile_token。記録・図鑑・実績が積まれ、図鑑の知識の一部を引き継ぐ（省くと新しいプロフィールを作り、応答で返す）'),
       legacy: z.boolean().optional().describe('false で図鑑の知識を引き継がない（既定 true）'),
+      season: z.string().max(32).optional().describe('シーズンの ID（list_runs の seasons）。シーズンのシードでソロ、Lv1 のキャンプから始まる。seed・mode・objective・legacy は使わない。profile_token で同じ参加者として数える'),
       ...optionArgs,
       brief_map: z.boolean().optional().describe('旧引数。false は map: never と同じ'),
     },
@@ -210,6 +214,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
     const r = await manager.createRun({
       name: args.character_name, classId, mode: args.mode, seed: args.seed, locale: args.locale, controller,
       objective: args.objective as ObjectiveChoice | undefined, profileToken: args.profile_token, legacy: args.legacy,
+      ...(args.season !== undefined ? { season: args.season } : {}),
     });
     if ('error' in r) return errOut(r.error);
     return joinedOut(r.port, r.token, r.session.runId, 'new_run', { ...args, seed: undefined }, 'run_started', r.profile);
@@ -494,6 +499,11 @@ export function createMcpServer(ctx: McpContext): McpServer {
     if (!id) return missingArg('use_ability', a, 'ability', "use_ability { ability: 'bash', target: 'e_xxxxxx' }");
     return act('use_ability', a, { type: 'ability', id, ...(a.target ? { target: a.target as never } : {}), ...(a.slot ? { slot: a.slot } : {}) });
   });
+  server.registerTool('report_stairs', {
+    title: '階段を報告する',
+    description: 'シーズンのランのキャンプで、このランで自分の目で見た下り階段のうち、まだ報告していないものを全部報告する（手番を消費しない）。その階の下り階段を最初に報告した者に貢献 1。報告した階段は、ほかの参加者の次の遠征から地図に載る。Report the down stairs you saw in this run (season runs, at camp).',
+    inputSchema: { ...common, thought: actionCommon.thought },
+  }, async (a) => act('report_stairs', a, { type: 'report_stairs' }));
   server.registerTool('choose_perk', {
     title: '特技を選ぶ', description: 'レベルアップの特技の候補から 1 つ選ぶ（self.perk_choice。手番を消費しない。選ぶまで進行は止まらない）。option は候補の番号（1 から）か特技の ID。',
     inputSchema: { ...common, option: z.union([z.number().int().min(1).max(9), z.string().min(1)]) },

@@ -82,7 +82,7 @@ export function selfTurnMarks(events: readonly GameEvent[], selfId: string): [nu
 
 const VIA_JA: Record<string, string> = { melee: '近接', ranged: '射撃', thrown: '投擲', poison: '毒', trap: '罠', effect: '効果', other: 'その他' };
 const viaText = (L: Locale, via: string) => (L === 'en' ? via : VIA_JA[via] ?? via);
-const REASON_JA: Record<string, string> = { completed: '帰還・達成', withdrawn: '撤退', lifeline: '帰還の綱', died: '死亡', retired: '引退' };
+const REASON_JA: Record<string, string> = { completed: '帰還・達成', withdrawn: '撤退', lifeline: '帰還の綱', died: '死亡', retired: '引退', time_up: '時間切れ' };
 const reasonText = (L: Locale, r: string | null) => (r === null ? t(L, '進行中', 'in progress') : L === 'en' ? r : REASON_JA[r] ?? r);
 const depthOf = (key: unknown): number | null => {
   if (typeof key !== 'string') return null;

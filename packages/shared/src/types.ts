@@ -331,7 +331,8 @@ export type PlayerState = 'alive' | 'dead' | 'left' | 'at_camp';
 /** slay_bounty: 賞金首を討つ・open_vault: 宝物庫を開ける（V3-8 §53.2。目標が地下 6 階より深い踏破の枠から） */
 export type ObjectiveType = 'reach_depth' | 'slay_guardian' | 'retrieve_relic' | 'slay_warden' | 'slay_bounty' | 'open_vault' | 'endless';
 /** lifeline: 帰還の綱で戻った（V3-2R2 §18.1） */
-export type ExpeditionEndReason = 'completed' | 'withdrawn' | 'lifeline' | 'died' | 'retired';
+/** time_up: シーズンの行動予算が尽きた（S0。PROTOCOL §9.2。倒れた扱いにしない） */
+export type ExpeditionEndReason = 'completed' | 'withdrawn' | 'lifeline' | 'died' | 'retired' | 'time_up';
 export const OBJECTIVE_TYPES: readonly ObjectiveType[] = ['reach_depth', 'slay_guardian', 'retrieve_relic', 'endless'];
 
 export interface Objective {
@@ -464,7 +465,8 @@ export interface Expedition {
   progress: ObjectiveProgress;
   /** treasure: extract のときに持ち帰った宝の価値の合計 */
   /** lifeline: 帰還の綱で戻った（確定は戦利品の lifeline.pct %） */
-  extracted: { player: PlayerId; completed: boolean; treasure?: number; lifeline?: boolean }[];
+  /** timeUp: シーズンの予算が尽きてキャンプへ戻された（S0。確定 0、未確定の戦利品は失う） */
+  extracted: { player: PlayerId; completed: boolean; treasure?: number; lifeline?: boolean; timeUp?: boolean }[];
   result: ExpeditionResult | null;
   slot?: OfferSlot;
   traits?: string[];
@@ -512,6 +514,42 @@ export interface RunMeta {
   /** 中にいる者が隣からしか見えない地形（背の高い草。V3-5 §5.2）の terrainTable の番号 */
   concealTerrain?: number[];
   options: RunOptions;
+  /** シーズンのラン（S0。SEASON.md §2）。ランの始まりから。生成・候補・予算の決まりが変わる */
+  season?: { id: string; name: string };
+}
+
+/** シーズンの賞の写し（S0。PROTOCOL §9.5）。value・rank が null なら対象外（生還賞で倒れた） */
+export interface SeasonAward {
+  id: 'adventure' | 'contribution' | 'survival';
+  value: number | null;
+  rank: number | null;
+  entrants: number;
+  leader: { name: string; value: number } | null;
+  gap: number | null;
+}
+
+/** 公開された下り階段（S0 §9.4）。by: 最初に報告した者の名前 */
+export interface SeasonStairs { depth: number; x: number; y: number; by: string }
+
+/**
+ * シーズンの写し（S0。PROTOCOL §9.6）。キャンプで取り込んだ共有層（season_sync）。
+ * budget.left は取り込んだときの残り、budget.at はそのときの自分の手番（残り = left − (手番 − at)）
+ */
+export interface SeasonState {
+  id: string;
+  name: string;
+  budget: { limit: number; left: number; at: number };
+  /** 終わりの時刻（表示用。ゲームは ended だけを見る） */
+  ends_at: number;
+  ended: boolean;
+  public: SeasonStairs[];
+  awards: SeasonAward[];
+  /** 自分が最初に報告した数（シーズンの合計） */
+  contribution: number;
+  /** このシーズンで倒れたことがある（生還賞の対象外） */
+  died: boolean;
+  /** このランで報告した階の深さ */
+  reported: number[];
 }
 
 export interface WorldSecret {
@@ -539,6 +577,8 @@ export interface World {
   camp?: CampState | null;
   /** 倒した節目の大守護者の深さ（V3-3 §3.2） */
   milestones?: { cleared: number[] };
+  /** シーズンの写し（S0。ソロだけなので、ランに 1 つ。取り込みは season_synced だけ） */
+  season?: SeasonState;
 }
 
 export interface RunSummaryPlayer {

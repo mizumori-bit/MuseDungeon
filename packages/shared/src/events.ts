@@ -3,11 +3,11 @@
 import type {
   AiState, BaseStats, CampState, Dir, Entity, EntityId, EquipSlot, Expedition, ExpeditionHaul, ExpeditionEndReason, ExpeditionResult, Floor,
   FloorKey, FloorPos, MonsterMemory, Objective, ObjectiveProgress, PlayerId, PlayerRecord, PlayerStats, Pos,
-  RememberedEntity, RngState, RunMeta, RunSummary, Sense, Stats, StatusInst, WorldSecret, FloorHint, Names,
+  RememberedEntity, RngState, RunMeta, RunSummary, SeasonState, Sense, Stats, StatusInst, WorldSecret, FloorHint, Names,
 } from './types';
 
-/** 2: 遠征・実ダメージ・回復の蓄積値（IMPROVEMENTS_V2）。3: ビルド（特技・能動技・呪い。V3-4）。古いログもそのまま畳み込める */
-export const EVENT_VERSION = 21;
+/** 2: 遠征・実ダメージ・回復の蓄積値（IMPROVEMENTS_V2）。3: ビルド（特技・能動技・呪い。V3-4）。22: シーズン（S0）。古いログもそのまま畳み込める */
+export const EVENT_VERSION = 22;
 
 export interface EventBase {
   seq: number;
@@ -195,12 +195,18 @@ export type GameEvent =
       /** 地図の巻物などで地形だけ知ったセル（追加）と、自分の目で見たので外すセル（V3-2R） */
       mappedAdd?: number[];
       mappedDel?: number[];
+      /** 公開された下り階段を地図に載せた（S0 §9.4）: 最初に報告した者の名前。newlySeen・mappedAdd はそのマスだけ */
+      publicStairs?: string;
       /** 目標の気配（after 値。変化したときだけ。null は気配なし） */
       senseAfter?: Sense | null;
       /** 今いる階の手がかり（after 値。変化したときだけ。V3-2R2） */
       hintAfter?: FloorHint | null;
     }>
   | E<'monster_memory_updated', { player: PlayerId; kind: string; memoryAfter: MonsterMemory }>
+  /** シーズンの取り込み（S0 §9.7。season_sync から。本人だけ）。seasonAfter がランの写しになる */
+  | E<'season_synced', { player: PlayerId; reason: 'join' | 'camp' | 'start' | 'report'; seasonAfter: SeasonState }>
+  /** 階段の報告の結果（S0 §9.4。本人だけ）。gained: 最初の報告の数（貢献） */
+  | E<'stairs_reported', { player: PlayerId; stairs: { depth: number; x: number; y: number; first: boolean }[]; gained: number }>
   | E<'notes_updated', { player: PlayerId; notesAfter: string[] }>
   // 遠征
   | E<'expedition_offered', { camp: CampState }>

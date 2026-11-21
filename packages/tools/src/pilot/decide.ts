@@ -1369,7 +1369,7 @@ export const CONTINUE_STOPS = new Set([
   'hostile_in_view', 'hostile_adjacent', 'hostile_alerted', 'attacked', 'damaged', 'item_seen', 'stairs_seen', 'explored', 'step_limit',
   'arrived', 'collected', 'collect_far', 'chaser_near', 'intent', 'sense_found', 'status_changed', 'floor_changed', 'hp_threshold',
   'hp_floor', 'hp_risk', 'first_hit', 'max_turns', 'full_hp', 'rest_cap', 'target_hp', 'hit_while_waiting', 'shot_while_waiting',
-  'not_your_turn', 'dead', 'run_ended', 'left_board',
+  'not_your_turn', 'dead', 'run_ended', 'left_board', 'time_up',
 ]);
 /** 移動のマクロの止まり方のうち、知らせて表を続けるもの（くり返せば行き詰まり stuck になる。§14.1） */
 export const NOTIFY_STOPS = new Set(['blocked', 'no_progress', 'unreachable', 'unknown_destination', 'trap_ahead', 'target_gone', 'error']);
@@ -1378,7 +1378,7 @@ export const FIGHT_STOPS = new Set([
   'target_gone', 'target_moved', 'target_adjacent', 'out_of_ammo', 'no_line_of_sight', 'target_not_approaching', 'target_not_hunting',
   'not_throwable', 'ability_unknown', 'ability_not_allowed', 'ability_needs_with', 'target_fled', 'hit_and_run', 'target_shooting',
   'hp_floor', 'hp_risk', 'first_hit', 'hostile_in_view', 'hit_while_waiting', 'shot_while_waiting', 'status_changed', 'intent', 'step_limit',
-  'blocked', 'unreachable', 'error', 'not_your_turn', 'dead', 'run_ended', 'left_board', 'floor_changed',
+  'blocked', 'unreachable', 'error', 'not_your_turn', 'dead', 'run_ended', 'left_board', 'time_up', 'floor_changed',
 ]);
 /** approach: auto で、寄ってやり直す止まり方（離れて撃ってくる・寄ってこない。§14.2） */
 export const ADVANCE_STOPS = new Set(['target_shooting', 'target_not_approaching']);

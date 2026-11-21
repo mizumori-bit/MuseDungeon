@@ -428,8 +428,22 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
         const lost = ev.relicLost ? (ja ? '遺物は持ち帰れず、失われた。' : ' The relic could not come along and is lost.') : '';
         return ja ? `${ctx.playerNames[ev.player] ?? 'プレイヤー'} は帰還の綱でキャンプに戻った（全回復）。${lost}` : `${ctx.playerNames[ev.player] ?? 'A player'} is pulled back to camp by the lifeline (fully healed).${lost}`;
       }
+      // シーズンの行動予算が尽きた（S0 §9.2）
+      if (ev.state === 'at_camp' && ev.reason === 'time_up') return ja ? 'シーズンの行動予算が尽きた。時間切れでキャンプへ戻された（未確定の戦利品は失った。持ち物は残っている。倒れた扱いにはならない）。' : 'The season budget has run out. Time up: you are sent back to camp (the unbanked haul is lost; you keep your items; this does not count as dying).';
       if (ev.state === 'at_camp') return ja ? `${ctx.playerNames[ev.player] ?? 'プレイヤー'} はキャンプに戻った（全回復）。` : `${ctx.playerNames[ev.player] ?? 'A player'} returns to camp (fully healed).`;
       return null;
+    // シーズン（S0 §9.4）: 公開された階段を地図に載せた・階段の報告の結果
+    case 'knowledge_updated':
+      if (!ev.publicStairs) return null;
+      return ja ? `この階の下り階段は公開されている（${ev.publicStairs} が報告）。地図に載せた（途中の道はまだ分からない）。` : `This floor's down stairs have been published (reported by ${ev.publicStairs}). They are on your map (the way there is still unknown).`;
+    case 'stairs_reported': {
+      const list = (ev.stairs as { depth: number; first: boolean }[]) ?? [];
+      const firsts = list.filter((x) => x.first).map((x) => (ja ? `地下${x.depth}階` : `depth ${x.depth}`));
+      const others = list.filter((x) => !x.first).map((x) => (ja ? `地下${x.depth}階` : `depth ${x.depth}`));
+      return ja
+        ? `下り階段を ${list.length} つ報告した。${firsts.length ? `最初の報告: ${firsts.join('・')}（貢献 +${firsts.length}）。` : '最初の報告は無かった。'}${others.length ? `すでに公開されていた: ${others.join('・')}。` : ''}`
+        : `Reported ${list.length} down staircase(s). ${firsts.length ? `First reports: ${firsts.join(', ')} (contribution +${firsts.length}).` : 'None were first.'}${others.length ? ` Already published: ${others.join(', ')}.` : ''}`;
+    }
     case 'expedition_started':
       return ja ? `遠征 ${ev.expedition?.no} が始まった: ${objectiveText(L, ev.expedition?.objective)}` : `Expedition ${ev.expedition?.no} begins: ${objectiveText(L, ev.expedition?.objective)}`;
     case 'objective_completed':

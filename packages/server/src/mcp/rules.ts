@@ -2,7 +2,7 @@
 // 数値は content の balance.json（catalog.rules）から作る（ルールブックと実際の挙動が食い違わないように）。
 import type { Catalog, CatalogRules } from '@muse/shared';
 
-export const RULE_TOPICS = ['overview', 'expedition', 'actions', 'combat', 'items', 'classes', 'observation', 'all'] as const;
+export const RULE_TOPICS = ['overview', 'expedition', 'actions', 'combat', 'items', 'classes', 'observation', 'season', 'all'] as const;
 export type RulesTopic = (typeof RULE_TOPICS)[number];
 type Topic = Exclude<RulesTopic, 'all' | 'classes'>;
 
@@ -237,6 +237,16 @@ ${traitsLines(r, true)}
 - 継承: 図鑑で ${r.legacyMinKills ?? 5} 体以上倒した種族の知識（能力・体力の記録・受けた最大ダメージ・射程）は、次のランの開始時に「前の潜る者の覚え書き」として引き継がれる（recall・look に「覚え書きより」）。体力の推定と見込みに効く。引き継ぐのは種族の知識だけ（未鑑定の外見・守護者の弱点・地図・能力値・装備・加護は毎回ゼロから）。new_run { legacy: false } で継承しない。
 - 実績: 遠征とランの終わりに、遠征のレポートと記録の値で判定し、プロフィールに残る（強さには影響しない）。名前はすべて見え、条件を伏せたものは取ると分かる。取った遠征の後のキャンプに「新しい実績」が出る。
 - 振り返り: 遠征が終わった応答に、その遠征のレポート（戦闘・道具・進み・場面。12 行以内、JSON の report は全項目）が付く。集計するのは自分が見た出来事だけ。expedition は進行中なら途中経過（戦闘と進み）、キャンプなら直前の遠征のレポートを返す。review {expedition?} で終わった遠征のレポートを読み直せる（このランの前の遠征との比較と、全部の場面）。キャンプの観測には、直前の遠征の比較が 2 行まで出る。助言はしない（事実だけ）。`,
+    season: `# シーズン（S0。new_run { season } で参加したランだけ）
+- シーズンは、運用者が開く、同じシードのダンジョンに多くの参加者が挑む期間。参加者は、それぞれ自分のランで潜る（同じ世界に同席しない）。共有するのは、公開された階段と順位だけ。
+- 参加: list_runs の seasons にある ID で new_run { season, profile_token? }。1 つのプロフィールが 1 人の参加者（profile_token を渡すと同じ参加者として数える）。シーズンのランはソロで、シーズンのシード、Lv1 のキャンプから。継承は受けない。同じ参加者のシーズンのランは同時に 1 つ。倒れたら、同じシーズンで新しいランを Lv1 から始められる。
+- 行動予算: 参加者 1 人につき、シーズンを通して自分の手番の数で持つ（ランをまたいで 1 つ。倒れてやり直しても戻らない）。迷宮の中の自分の手番だけを数え、マクロの中の手番も 1 つずつ。キャンプでは減らない。残りは観測にいつも出る。
+- 時間切れ: 予算が尽きた手番の終わりに、その遠征は時間切れで終わる。キャンプへ戻され、未確定の戦利品は失う（持ち物は残る）。倒れた扱いにはしない。その後は新しい遠征を始められない（キャンプでの操作と報告はできる）。帰る分の手番を残しておくこと。
+- 階段の位置は、だれのランでも同じ。報告: キャンプで report_stairs（手番を使わない）。このランで自分の目で見た下り階段のうち、まだ報告していないものを全部送る。その階の下り階段を最初に報告した 1 人に貢献 1（サーバーに届いた順）。倒れると、そのランで報告していなかった階段は報告できなくなる。
+- 公開された階段: キャンプに着いたときと遠征を始めるときに取り込む。公開されている階に入ると、下り階段のマスがはじめから地図に載る（公開した者の名前つき）。途中の道は分からない（travel_to stairs_down は道が分かるまで届かない。下への風は自分の目で見るまで出るので explore { toward: 'draft' }）。遠征の途中で公開されたものは、次の遠征から。
+- 賞（称号は無い。結果の記録に残る）: 冒険賞＝シーズンで着いたいちばん深い階（着いた時点で数える。帰れなくてもよい）。貢献賞＝最初に報告した階段の数。生還賞＝シーズンで一度も倒れていない者の、確定した点の合計。同着は、使った予算の少ないほうが上（冒険はその階に着いたとき、貢献は最後の 1 つを報告したとき、生還は使った予算の合計）。時間切れは倒れた扱いにしない。
+- 順位は、キャンプの観測に賞ごとの 1 行で出る（自分の値と順位、1 位の名前と値、1 位との差）。迷宮の中では予算の残りだけ（順位はキャンプで取り込んだものが、その遠征の間の最新）。
+- 終わりの時刻を過ぎたら、新しい遠征は始められない。出ている遠征は、帰るか倒れるまで続けてよい（その分も数える）。`,
   };
 }
 
@@ -415,6 +425,16 @@ Free: choose_perk{option} / observe / wait_for_turn / expedition / review / reco
 - Legacy: species you have slain ${r.legacyMinKills ?? 5}+ times in the codex carry over to the next run as "a previous delver's notes" (abilities, HP record, worst hit, range; recall and look say "from the notes"). They feed HP estimates and threat. Only species knowledge carries over (unidentified looks, guardian weaknesses, maps, stats, gear and boons start from zero). new_run { legacy: false } turns it off.
 - Feats: judged at the end of each expedition and run from report and record values, kept in the profile (no effect on strength). All names are visible; hidden conditions show once earned. The camp after an expedition lists "New feats".
 - Review: the response that ends an expedition carries its report (combat, items, tempo, moments; 12 lines of text, the full report in JSON). Only events you perceived are counted. expedition returns progress so far (combat and tempo) during an expedition and the last report at camp. review {expedition?} re-reads an ended expedition's report (with the comparison to your earlier expeditions in this run and every moment). At camp, the observation shows up to 2 lines comparing your last expedition. Facts only, no advice.`,
+    season: `# Seasons (S0; only runs started with new_run { season })
+- A season is a period, opened by the operator, in which many participants take on the dungeon of one seed. Each participant dives in their own run (nobody shares a world). Only published stairs and the standings are shared.
+- Joining: new_run { season, profile_token? } with an ID from list_runs (seasons). One profile is one participant (pass profile_token to be counted as the same participant). Season runs are solo, use the season's seed and start at camp at Lv1. No legacy. A participant has one season run at a time. After dying you may start a new run at Lv1 in the same season.
+- Budget: each participant has a number of own turns for the whole season (one budget across runs; dying does not refund it). Only your own turns in the dungeon count, every turn inside a macro too. Camp is free. The budget left is always in the observation.
+- Time up: at the end of the turn that uses up the budget, the expedition ends as time up. You are sent back to camp and lose the unbanked haul (you keep your items). It does not count as dying. You cannot start another expedition afterwards (camp actions and reports still work). Keep enough turns to get home.
+- Stairs are in the same place in every participant's run. Reporting: report_stairs at camp (no turn). It sends every down staircase you saw with your own eyes in this run and have not reported yet. The first participant to report a floor's down stairs gets 1 contribution (in the order the server receives them). If you die, the stairs you did not report from that run can no longer be reported.
+- Published stairs are taken in when you arrive at camp and when you start an expedition. On a floor with published stairs, the down staircase is on your map from the start (with the reporter's name). The way there is unknown (travel_to stairs_down cannot reach it until the path is known; the draft stays until you see the stairs, so use explore { toward: 'draft' }). Stairs published during your expedition show from the next one.
+- Awards (no titles; kept in the results): Adventure = the deepest floor reached in the season (counted on arrival, even if you never get back). Contribution = the number of stairs you reported first. Survival = the banked points of participants who never died this season. Ties go to whoever used less budget (adventure: when first reaching that floor; contribution: when reporting the last one; survival: total used). Time up does not count as dying.
+- The standings appear at camp, one line per award (your value and rank, the leader and their value, the gap). In the dungeon only the budget left is shown (what you took in at camp is the latest during that expedition).
+- After the end time you cannot start new expeditions. An expedition already under way may continue until you return or die (it still counts).`,
   };
 }
 

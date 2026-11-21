@@ -3,15 +3,16 @@
 import { randomBytes } from 'node:crypto';
 import type { Catalog } from '@muse/shared';
 import type { Content } from '@muse/content';
-import { createRun, ENGINE_VERSION, isPlayersTurn, joinPlayer, step } from '@muse/engine';
+import { createRun, ENGINE_VERSION, isPlayersTurn, joinPlayer, seasonSync, step } from '@muse/engine';
 import type {
   ActionError, AgentActivity, Command, CommandRecord, CommandSource, Expedition, ExpeditionReport, GameEvent, JoinCommand, LegacyMonster, MacroStop, ProjectedEvent,
-  PerceivedEvent, PlayerId, PlayerView, Pos, ReportCall, RunMetaFile, RunSummary, TurnSnapshot, World,
+  PerceivedEvent, PlayerId, PlayerView, Pos, ReportCall, RunMetaFile, RunSummary, SeasonSyncCommand, TurnSnapshot, World,
 } from '@muse/shared';
 import {
   actionError, applyEvent, buildExpeditionReport, canonicalHash, guardianDisplayName, compareReports, emptyWorld, filterEventsForPlayer, FREE_COMMANDS, MACRO_COMMANDS,
-  macroNext, macroStart, macroStopError, narrate, projectPlayerView, selfTurnMarks, t,
+  macroNext, macroStart, macroStopError, narrate, projectPlayerView, publicStairsAt, seasonReportable, selfTurnMarks, t,
 } from '@muse/shared';
+import type { SeasonHooks } from '../season/SeasonService';
 import type { ServerConfig } from '../config';
 import { LogWriter } from '../log/LogWriter';
 import type { KeyframeFile } from '../log/LogWriter';
@@ -27,6 +28,8 @@ export interface SessionDeps {
   config: ServerConfig;
   /** プロフィール（V3-7）。遠征とランが終わるたびに記録を書き直す */
   profiles?: ProfileHooks;
+  /** シーズン（S0。PROTOCOL §9）。シーズンのランの取り込み・報告・記録 */
+  season?: SeasonHooks;
 }
 
 export interface SessionListener {
@@ -126,11 +129,11 @@ export class RunSession {
 
   // ---------- 生成・復旧 ----------
 
-  static create(deps: SessionDeps, p: { seed?: string; mode?: 'solo' | 'coop'; runId?: string; wall?: number }): RunSession {
+  static create(deps: SessionDeps, p: { seed?: string; mode?: 'solo' | 'coop'; runId?: string; wall?: number; season?: { id: string; name: string } }): RunSession {
     const runId = p.runId ?? newRunId();
     const seed = p.seed ?? randomBytes(6).toString('hex');
     const wall = p.wall ?? Date.now();
-    const { world, events } = createRun(deps.content, { runId, seed, mode: p.mode ?? 'solo', wall });
+    const { world, events } = createRun(deps.content, { runId, seed, mode: p.mode ?? 'solo', wall, ...(p.season ? { season: p.season } : {}) });
     const s = new RunSession(deps, runId, world, wall);
     appendAll(s.history, events);
     s.log?.writeMeta(s.metaFile);
@@ -154,6 +157,13 @@ export class RunSession {
     appendAll(s.history, allEvents.filter((e) => e.seq <= kf.seq));
     const commands = readJsonl<CommandRecord>(join(dir, 'commands.jsonl'));
     s.cseq = commands.length ? commands[commands.length - 1].cseq : 0;
+    // 参加者のプロフィールと継承（参加の命令から）。参加の直後にキーフレームが書かれるので、キーフレームより前の参加も読む
+    // （読んでいなかったので、起動し直して復旧したランでは、プロフィールの記録が書き直されず、シーズンの取り込みも止まった。S0 で見つけた）
+    for (const rec of commands) {
+      if (rec.command.type !== 'join' || !rec.assigned) continue;
+      const jc = rec.command;
+      s.joinInfo.set(rec.assigned, { ...(jc.profile ? { profile: jc.profile } : {}), ...(jc.legacy ? { legacy: jc.legacy.monsters } : {}) });
+    }
     const replayed: GameEvent[] = [];
     for (const rec of commands) {
       if (rec.cseq <= kf.cseq || rec.macro) continue;
@@ -203,6 +213,8 @@ export class RunSession {
       if (r.ok) this.joinInfo.set(r.playerId, { ...(cmd.profile ? { profile: cmd.profile } : {}), ...(cmd.legacy ? { legacy: cmd.legacy.monsters } : {}) });
       return r.events;
     }
+    // シーズンの取り込み（S0 §9.7）: 中身は記録に全部ある（シーズンの記録は読まない）
+    if (cmd.type === 'season_sync') return seasonSync(this.world, this.deps.content, rec.player!, cmd, { cseq: rec.cseq, wall: rec.wall, thought: rec.thought }).events;
     const r = step(this.world, this.deps.content, rec.player!, cmd, { cseq: rec.cseq, wall: rec.wall, thought: rec.thought, auto: rec.source === 'timeout' || rec.source === 'system' });
     return r.events;
   }
@@ -223,8 +235,10 @@ export class RunSession {
         const p = w.players[pid];
         return { id: pid, name: p.name, classId: p.classId, controller: { ...p.controller }, joinedSeq: p.joinedSeq };
       }),
-      seed: w.status === 'ended' ? w.secret.seed : undefined,
+      // シーズンのラン（S0）は終わってもシードを出さない
+      seed: w.status === 'ended' && !w.meta.season ? w.secret.seed : undefined,
       lastSeq: w.seq,
+      ...(w.meta.season ? { season: w.meta.season.id } : {}),
     };
   }
 
@@ -263,6 +277,13 @@ export class RunSession {
     }
     // プロフィール（V3-7）: 参加・遠征の終わり・ランの終わりで記録を書き直す（図鑑・実績の目標の判定より先に）
     if (events.length) this.deps.profiles?.onCommit(this, events);
+    // シーズン（S0）: 参加者の記録を書き直し、キャンプに着いたら取り込む（次に積む。いま確定している命令の後、次の命令より前）
+    if (events.length && this.world.meta.season && this.deps.season) {
+      this.deps.season.onCommit(this, events);
+      if (events.some((e) => e.type === 'expedition_ended')) {
+        for (const pid of this.world.playerOrder) if (this.world.players[pid].state === 'at_camp') void this.enqueue(() => this.seasonSyncNow(pid, 'camp'));
+      }
+    }
     if (events.length) for (const l of this.listeners) l.onEvents?.(events);
     for (const w of [...this.waiters]) w();
     this.scheduleTimeouts();
@@ -532,7 +553,52 @@ export class RunSession {
       };
     }
     if (MACRO_COMMANDS.has(cmd.type) || (cmd.type === 'wait' && (cmd.turns ?? 1) > 1)) return this.runMacro(pid, cmd, opts);
+    // シーズン（S0 §9.4）: 階段の報告はサーバーが共有層に問い合わせ、season_sync として記録する
+    if (cmd.type === 'report_stairs') return this.enqueue(() => this.reportNow(pid, opts));
+    // シーズン（S0 §9.4）: 遠征を始めるときに取り込む（予算・終わりの時刻・公開された階段・順位）
+    if (cmd.type === 'start_expedition' && this.world.meta.season && this.deps.season && pr.state === 'at_camp') {
+      return this.enqueue(() => { this.seasonSyncNow(pid, 'start'); return this.stepNow(pid, cmd, opts.source, opts.thought); });
+    }
     return this.enqueue(() => this.stepNow(pid, cmd, opts.source, opts.thought));
+  }
+
+  /** シーズンの取り込みを、キューの中で。参加の直後に SessionManager が呼ぶ */
+  syncSeason(pid: PlayerId, reason: 'join' | 'camp' | 'start'): Promise<SubmitResult> {
+    return this.enqueue(() => this.seasonSyncNow(pid, reason));
+  }
+
+  /**
+   * シーズンの取り込み（S0 §9.7）: 共有層の今の写しを、システムの命令 season_sync として記録して流す（キューの中から呼ぶ）。
+   * report: 報告の結果（送った者の source と thought で記録する）
+   */
+  private seasonSyncNow(pid: PlayerId, reason: SeasonSyncCommand['reason'], src: { source: CommandSource; thought?: string } = { source: 'system' }, report?: SeasonSyncCommand['report']): SubmitResult {
+    if (this.closed || !this.world.meta.season || !this.deps.season || this.world.status === 'ended') return { ok: false, error: actionError('bad_request', 'not a season run', '') };
+    const season = this.deps.season.sync(this, pid);
+    if (!season) return { ok: false, error: actionError('bad_request', 'this player is not a participant of the season', '') };
+    const cmd: SeasonSyncCommand = { type: 'season_sync', reason, season, ...(report ? { report } : {}) };
+    const startSeq = this.world.seq;
+    const cseq = this.cseq + 1;
+    const wall = Date.now();
+    const r = seasonSync(this.world, this.deps.content, pid, cmd, { cseq, wall, thought: src.thought });
+    if (!r.ok) return { ok: false, error: r.error };
+    this.cseq = cseq;
+    this.commit({ cseq, player: pid, command: cmd, source: src.source, wall, thought: src.thought }, r.events);
+    return { ok: true, events: r.events, startSeq };
+  }
+
+  /** report_stairs（S0 §9.4）: キャンプでだけ。このランで自分の目で見た下り階段のうち、まだ報告していないものを全部送る */
+  private reportNow(pid: PlayerId, opts: SubmitOpts): SubmitResult {
+    const pr = this.world.players[pid];
+    const L = pr.locale;
+    if (!this.world.meta.season || !this.deps.season) return { ok: false, error: actionError('bad_request', t(L, 'report_stairs はシーズンのランだけで使える。', 'report_stairs works only in a season run.'), '') };
+    if (pr.state !== 'at_camp' || this.world.status === 'ended') {
+      return { ok: false, error: actionError('not_at_camp', t(L, '階段の報告はキャンプでだけできる。', 'You can report stairs only at camp.'), t(L, '階段から帰るか、遠征を終えてから。', 'Return to camp first.')) };
+    }
+    const list = seasonReportable(this.world, pid);
+    if (!list.length) return { ok: false, error: actionError('nothing_to_do', t(L, 'このランで見た下り階段は、全部報告してある。', 'You have already reported every down staircase you saw in this run.'), t(L, '新しい階段を見つけたら、キャンプでまた報告できる。', 'Find new stairs and report them at camp.')) };
+    const res = this.deps.season.report(this, pid, list);
+    if (!res) return { ok: false, error: actionError('season_ended', t(L, 'このシーズンは結果が確定している。報告はもう受け付けない。', 'This season has been finalized; reports are no longer accepted.'), '') };
+    return this.seasonSyncNow(pid, 'report', { source: opts.source, thought: opts.thought }, res);
   }
 
   private stepNow(pid: PlayerId, cmd: Command, source: CommandSource, thought?: string, parent?: number): SubmitResult {
@@ -563,7 +629,15 @@ export class RunSession {
     {
       const probe = macroStart(startView, cmd, this.deps.catalog);
       const d0 = macroNext(probe, startView, this.deps.catalog, []);
-      if ('stop' in d0) return { ok: false, error: macroStopError(startView.locale, d0.stop, cmd, d0.dir, d0.blockedBy, d0.traps) };
+      if ('stop' in d0) {
+        const err = macroStopError(startView.locale, d0.stop, cmd, d0.dir, d0.blockedBy, d0.traps);
+        // 公開された階段（S0 §9.4）: 地図に載っていても途中の道は分からない。下への風の方角を探す手を出す
+        const pub = startView.floor ? publicStairsAt(startView.season, startView.floor.depth) : null;
+        if (pub && d0.stop === 'unreachable' && cmd.type === 'travel' && cmd.to === 'stairs_down' && (startView.memory.unsighted ?? []).includes(pub.y * startView.floor!.width + pub.x)) {
+          err.hint = t(startView.locale, `この下り階段は公開されたもの（${pub.by} が報告）で、途中の道はまだ分からない。explore { toward: 'draft' } で下への風の方角を探す。`, `These stairs were published (reported by ${pub.by}); the way there is still unknown. Use explore { toward: 'draft' } to search toward the draft.`);
+        }
+        return { ok: false, error: err };
+      }
     }
     // 元の呼び出し 1 件（イベント無し）を記録
     const parent = await this.enqueue(() => {
@@ -584,7 +658,8 @@ export class RunSession {
     for (;;) {
       if (!this.isTurn(pid)) {
         const got = await this.waitForTurn(pid, this.deps.config.waitOthersMs);
-        if (!got) { stop = this.world.status === 'ended' ? 'run_ended' : this.world.players[pid].state !== 'alive' ? 'dead' : 'waiting_others'; break; }
+        // シーズンの予算が尽きてキャンプへ戻された（S0 §9.2）は time_up
+        if (!got) { stop = this.world.status === 'ended' ? 'run_ended' : this.world.players[pid].state === 'at_camp' && this.world.season ? 'time_up' : this.world.players[pid].state !== 'alive' ? 'dead' : 'waiting_others'; break; }
       }
       const res = await this.enqueue(() => {
         const view = this.view(pid);

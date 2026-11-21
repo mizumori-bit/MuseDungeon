@@ -85,7 +85,8 @@ export function ensureFloor(ctx: Ctx, key: FloorKey): Floor {
   const inRange = !!x && (x.objective.targetDepth === null || depth <= x.objective.targetDepth);
   const mods = inRange && (x!.traits?.length ?? 0) > 0
     ? { monstersPct: fx.monstersPct, itemsPct: fx.itemsPct, treasurePct: fx.treasurePct, noFountain: fx.noFountain } : undefined;
-  const gen = generateFloor(ctx.content, ctx.world.secret.seed, branch, depth, ctx.world.meta.terrainTable, objective ?? undefined, mods);
+  // シーズンのラン（S0 §9.3）: 入口と下り階段がシードと版だけで決まる生成
+  const gen = generateFloor(ctx.content, ctx.world.secret.seed, branch, depth, ctx.world.meta.terrainTable, objective ?? undefined, mods, ctx.world.meta.season ? { season: true } : {});
   const { terrain, ...rest } = gen.floor;
   // 階は作られたときの性質を覚える（V4-0e §8.1）: 階を作るときに効いた条件（群れる・乏しい・静かの「泉なし」）。条件の無い階は空
   const floorData = { ...rest, genTraits: inRange ? floorGenTraits(ctx, x!.traits) : [] };

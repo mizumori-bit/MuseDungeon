@@ -57,6 +57,8 @@ export interface RunListing {
   runId: string;
   status: 'active' | 'ended';
   mode: 'solo' | 'coop';
+  /** シーズンのラン（S0）: シーズンの ID */
+  season?: string;
   createdAt: number;
   updatedAt: number;
   seq: number;
@@ -81,9 +83,11 @@ export interface RunMetaFile {
   options: { turnTimeoutMs: number | null; maxPlayers: number };
   status: 'active' | 'ended';
   players: { id: PlayerId; name: string; classId: string; controller: Controller; joinedSeq: number }[];
-  /** 終了後のみ（シード共有用） */
+  /** 終了後のみ（シード共有用）。シーズンのランは出さない（S0） */
   seed?: string;
   lastSeq?: number;
+  /** シーズンのラン（S0）: シーズンの ID */
+  season?: string;
 }
 
 export type MarkerType = 'join' | 'floor' | 'level_up' | 'kill' | 'near_death' | 'death' | 'thought' | 'end'
@@ -129,6 +133,19 @@ export interface NewRunRequest {
   profileToken?: string;
   /** false で継承しない（V3-7 §7.3。比較用。サーバーの legacyPolicy が off なら常に継承しない） */
   legacy?: boolean;
+  /** シーズンの ID（S0。PROTOCOL §9.1）。シーズンのシードでソロ、Lv1 のキャンプから。seed・mode・objective・legacy は使わない */
+  season?: string;
+}
+
+/** シーズンの一覧の 1 行（S0。GET /api/seasons・list_runs の seasons） */
+export interface SeasonListing { id: string; name: string; budget: number; endsAt: number; status: 'open' | 'ended' | 'final'; participants: number }
+
+/** シーズンの順位の表の 1 行（S0。GET /api/seasons/:id。公開された階段の位置は入れない） */
+export interface SeasonStandingRow {
+  name: string; runs: number; used: number; died: boolean;
+  adventure: { value: number; rank: number };
+  contribution: { value: number; rank: number };
+  survival: { value: number; rank: number } | null;
 }
 
 // ---- ターンフィード（GET /api/player/feed、SSE） ----

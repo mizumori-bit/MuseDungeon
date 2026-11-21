@@ -39,7 +39,8 @@ export class SpectatorPort {
     const flush = () => {
       const upTo = this.visibleUpTo();
       if (upTo <= sent) return;
-      const ended = this.session.world.status === 'ended';
+      // シーズンのラン（S0）は終わってもシードを出さない
+      const ended = this.session.world.status === 'ended' && !this.session.world.meta.season;
       const out: GameEvent[] = [];
       for (const ev of this.session.history) {
         if (ev.seq <= sent) continue;

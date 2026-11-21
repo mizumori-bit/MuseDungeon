@@ -437,7 +437,8 @@ export function buildSummary(ctx: Ctx, reason: string, hideSeed = false): RunSum
   const expeditions = (ctx.world.expeditions ?? []).map((x) => ({
     no: x.no, objective: { ...x.objective }, status: x.status, endReason: x.endReason, points: x.points, startSeq: x.startSeq, endSeq: x.endSeq,
   }));
-  return { runId: ctx.world.meta.runId, reason, seed: hideSeed ? '' : ctx.world.secret.seed, endedSeq: ctx.world.seq + 1, players, expeditions, scoreVersion: 2 };
+  // シーズンのラン（S0）はシードを出さない（参加者の全員が同じシード。分かると手元で同じダンジョンを作れる）
+  return { runId: ctx.world.meta.runId, reason, seed: hideSeed || ctx.world.meta.season ? '' : ctx.world.secret.seed, endedSeq: ctx.world.seq + 1, players, expeditions, scoreVersion: 2 };
 }
 
 export function endRun(ctx: Ctx, reason: string): void {

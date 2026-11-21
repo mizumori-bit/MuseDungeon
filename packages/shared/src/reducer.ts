@@ -296,6 +296,11 @@ export function applyEvent(world: World, ev: GameEvent): void {
     case 'monster_memory_updated':
       world.players[ev.player].knowledge.monsterMemory[ev.kind] = clone(ev.memoryAfter);
       break;
+    case 'season_synced':
+      world.season = clone(ev.seasonAfter);
+      break;
+    case 'stairs_reported':
+      break;
     case 'notes_updated':
       world.players[ev.player].knowledge.notes = clone(ev.notesAfter);
       break;

@@ -1,5 +1,5 @@
 // ロビー: 進行中のラン（観戦・参加・再開）、終了したラン（リプレイ）、リーダーボード、新規ラン。
-import type { LeaderboardEntry, Locale, ProfileRecords, RunListing } from '@muse/shared';
+import type { LeaderboardEntry, Locale, ProfileRecords, RunListing, SeasonListing, SeasonStandingRow } from '@muse/shared';
 import { endReasonText, kindName, nameOf, objectiveText } from '@muse/shared';
 import { useEffect, useState } from 'preact/hooks';
 import { api, errorText } from '../api';
@@ -16,6 +16,8 @@ export function Lobby() {
   const { catalog, error: catErr } = useCatalog();
   const [runs, setRuns] = useState<RunListing[] | null>(null);
   const [board, setBoard] = useState<LeaderboardEntry[]>([]);
+  // シーズン（S0。PROTOCOL §9.8）: 開いている・終わったシーズンの順位の表
+  const [seasons, setSeasons] = useState<{ season: SeasonListing; standings: SeasonStandingRow[] }[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [name, setName] = useState(getPref('name', 'Adventurer'));
   const [classId, setClassId] = useState(getPref('class', 'core:warrior'));
@@ -40,6 +42,7 @@ export function Lobby() {
   const refresh = () => {
     api.runs().then((r) => { setRuns(r); setError(null); }).catch((e) => setError(errorText(e)));
     api.leaderboard().then(setBoard).catch(() => undefined);
+    api.seasons().then((list) => Promise.all(list.map((x) => api.season(x.id)))).then(setSeasons).catch(() => undefined);
   };
   useEffect(() => {
     refresh();
@@ -224,6 +227,39 @@ export function Lobby() {
             ))}
           </ul>
         </section>
+
+        {seasons.length > 0 && (
+          <section class="panel">
+            <h3>{tr('シーズン', 'Seasons')}</h3>
+            {seasons.map(({ season: s, standings }) => (
+              <div key={s.id}>
+                <h4 title={tr('同着は、使った予算（手番）の少ないほうが上', 'Ties go to whoever used less budget (turns)')}>
+                  {s.name}（{s.status === 'open' ? tr(`開催中・${fmtTime(s.endsAt)} まで`, `open until ${fmtTime(s.endsAt)}`) : s.status === 'ended' ? tr('終わりの時刻を過ぎた（確定待ち）', 'past its end (awaiting results)') : tr('確定', 'final')}・{tr(`予算 ${s.budget} 手番・参加 ${s.participants}`, `budget ${s.budget} turns, ${s.participants} participants`)}）
+                </h4>
+                {standings.length === 0 && <div class="muted">{tr('まだ参加者がいない', 'No participants yet')}</div>}
+                {standings.length > 0 && (
+                  <table class="board">
+                    <thead><tr>
+                      <th>{tr('名前', 'Name')}</th><th title={tr('いちばん深い階', 'Deepest floor')}>{tr('冒険', 'Adventure')}</th>
+                      <th title={tr('最初に報告した階段の数', 'Stairs reported first')}>{tr('貢献', 'Contribution')}</th>
+                      <th title={tr('一度も倒れていない者の確定点', 'Banked points of those who never died')}>{tr('生還', 'Survival')}</th>
+                      <th>{tr('使った予算', 'Budget used')}</th><th>{tr('ラン', 'Runs')}</th>
+                    </tr></thead>
+                    <tbody>{standings.map((r) => (
+                      <tr key={r.name}>
+                        <td>{r.name}</td>
+                        <td>{r.adventure.rank}. {tr(`地下${r.adventure.value}階`, `D${r.adventure.value}`)}</td>
+                        <td>{r.contribution.rank}. {r.contribution.value}</td>
+                        <td>{r.survival ? `${r.survival.rank}. ${r.survival.value}` : tr('対象外（倒れた）', 'out (fell)')}</td>
+                        <td>{r.used}</td><td>{r.runs}</td>
+                      </tr>
+                    ))}</tbody>
+                  </table>
+                )}
+              </div>
+            ))}
+          </section>
+        )}
 
         <section class="panel">
           <h3>{tr('リーダーボード', 'Leaderboard')}</h3>

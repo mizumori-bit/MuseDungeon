@@ -24,6 +24,8 @@ export interface ServerConfig {
   profilesDir: string | null;
   /** 継承（V3-7 §7.3）: off なら new_run {legacy: true} でも継承しない */
   legacyPolicy: 'on' | 'off';
+  /** シーズンの置き場所（S0。PROTOCOL §9.1）。null ならメモリだけ。既定は runsDir/seasons（runsDir が null なら null） */
+  seasonsDir: string | null;
 }
 
 export function loadConfig(overrides: Partial<ServerConfig> = {}): ServerConfig {
@@ -43,6 +45,7 @@ export function loadConfig(overrides: Partial<ServerConfig> = {}): ServerConfig 
     legacyPolicy: env.MUSE_LEGACY_POLICY === 'off' ? 'off' : 'on',
     ...overrides,
     profilesDir: overrides.profilesDir !== undefined ? overrides.profilesDir : env.MUSE_PROFILES_DIR ?? (runsDirOf(overrides, env) ? join(runsDirOf(overrides, env)!, 'profiles') : null),
+    seasonsDir: overrides.seasonsDir !== undefined ? overrides.seasonsDir : env.MUSE_SEASONS_DIR ?? (runsDirOf(overrides, env) ? join(runsDirOf(overrides, env)!, 'seasons') : null),
   };
 }
 

@@ -304,7 +304,8 @@ export function makeOffers(ctx: Ctx, no: number): ExpeditionOffer[] {
     // 賞金首と宝物庫はまだ生成していない階だけ（残っている目的の賞金首は再挑戦）。乱数は別の流れ（ほかの候補を動かさない）
     if (type === 'reach_depth' && target > DEEP_OBJECTIVE_DEPTH) {
       const fresh = !ctx.world.floors[`main:${target}`];
-      const pool: ObjectiveType[] = [...(lastObjective === 'reach_depth' ? [] : ['reach_depth' as const]), ...(fresh || bountyLeft.has(target) ? ['slay_bounty' as const] : []), ...(fresh ? ['open_vault' as const] : [])];
+      const pool: ObjectiveType[] = [...(lastObjective === 'reach_depth' ? [] : ['reach_depth' as const]), ...(fresh || bountyLeft.has(target) ? ['slay_bounty' as const] : []), ...(fresh && !ctx.world.meta.season ? ['open_vault' as const] : [])];
+      // シーズンのランは宝物庫を開ける遠征を出さない（S0 §9.3: 目標階の階段の位置が変わるため）
       if (pool.length) type = pool[Rng.fromSeed(`${ctx.world.secret.seed}|expedition|${no}|deep|${i}`).int(pool.length)];
     }
     const n = rng.range(s.traitsMin, s.traitsMax);
@@ -805,6 +806,32 @@ export function doExtract(ctx: Ctx, e: Entity, pr: PlayerRecord, completed: bool
   maybeEndExpedition(ctx);
 }
 
+/**
+ * シーズンの行動予算が尽きた（S0。PROTOCOL §9.2）: その場からキャンプへ戻す。未確定の戦利品は失い、持ち物は残る（宝・遺物も持ったまま）。
+ * 倒れた扱いにしない。次の遠征は、綱と同じく、この遠征を始めた地点から（ただし予算が無いので始められない）
+ */
+export function timeUp(ctx: Ctx, e: Entity, pr: PlayerRecord): void {
+  const x = currentExpedition(ctx.world);
+  const me = ctx.world.entities[e.id];
+  if (!x || !me?.pos || pr.state !== 'alive') return;
+  const key = me.pos.floor;
+  ctx.curFloor = key;
+  ctx.emit({
+    type: 'objective_progress', no: x.no, progressAfter: { ...x.progress }, statusAfter: x.status,
+    extractedAfter: [...x.extracted, { player: pr.id, completed: false, treasure: 0, timeUp: true }], seenBy: [], floor: key,
+  });
+  const startPos = x.start[pr.id]?.pos;
+  const extractPos = startPos && ctx.world.floors[startPos.floor] ? { ...startPos } : { floor: key, x: me.pos.x, y: me.pos.y };
+  const body = structuredClone(ctx.world.entities[e.id]);
+  delete body.pos;
+  body.actor = { ...body.actor!, dormant: true, regen: 0 };
+  body.stats = { ...body.stats!, hp: body.stats!.maxHp };
+  body.statuses = [];
+  if (body.build?.abilities?.length) body.build = { ...body.build, abilities: body.build.abilities.map((a) => ({ ...a, readyAt: 0 })) };
+  ctx.emit({ type: 'player_state', player: pr.id, state: 'at_camp', reason: 'time_up', extractPos, put: [body], seenBy: 'all', floor: key });
+  maybeEndExpedition(ctx);
+}
+
 /** 記録庫が次の節目の大守護者の記憶を 1 つ返す（V3-3a §35.7）: 節目ごとに 1 つ目は弱点、2 つ目は体力と最大の一撃、3 つ目からは無い */
 function recallWarden(ctx: Ctx, pr: PlayerRecord, relic: string, floor: string): void {
   const ms = nextMilestone(ctx);
@@ -874,7 +901,8 @@ export function maybeEndExpedition(ctx: Ctx): void {
   if (!x) return;
   if (w.playerOrder.some((pid) => w.players[pid].state === 'alive')) return;
   let reason: ExpeditionEndReason;
-  if (x.extracted.length) reason = x.extracted.some((r) => r.completed && !r.lifeline) ? 'completed' : x.extracted.some((r) => r.lifeline) ? 'lifeline' : 'withdrawn';
+  if (x.extracted.length) reason = x.extracted.some((r) => r.completed && !r.lifeline && !r.timeUp) ? 'completed' : x.extracted.some((r) => r.lifeline) ? 'lifeline'
+    : x.extracted.some((r) => !r.timeUp) ? 'withdrawn' : 'time_up';
   else reason = x.participants.some((pid) => w.players[pid]?.state === 'dead') ? 'died' : 'retired';
   const points = reason === 'completed' ? x.points : 0;
   let deepest = 0, kills = 0, turns = 0;
@@ -895,6 +923,13 @@ export function maybeEndExpedition(ctx: Ctx): void {
   for (const r of x.extracted) {
     const pr = w.players[r.player];
     if (!pr) continue;
+    // 時間切れ（S0 §9.2）: 確定 0。未確定の戦利品は失う（持っている宝は持ち物に残るので、失った数には宝を入れない）
+    if (r.timeUp) {
+      const lost = haulTotal({ ...shared, treasure: 0 });
+      players.push({ player: pr.id, banked: 0, lost });
+      ctx.emit({ type: 'player_stats', player: pr.id, stats: { ...pr.stats, lost: (pr.stats.lost ?? 0) + lost }, seenBy: [pr.id], floor: null });
+      continue;
+    }
     const parts = { ...shared, treasure: r.treasure ?? 0 };
     partsTotal = { ...partsTotal, treasure: partsTotal.treasure + parts.treasure };
     const banked = payoutOf(ctx.content.balance, parts, r.completed, mult, !!r.lifeline);

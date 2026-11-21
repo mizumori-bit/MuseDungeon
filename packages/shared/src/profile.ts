@@ -114,6 +114,8 @@ export interface ProfileRun {
   runId: string;
   character: string;
   classId: string;
+  /** シーズンのラン（S0）。継承に使わない（SEASON.md §2.1: 継承は受けないし、残さない） */
+  season?: string;
   /** 継承したか（記録の表を分ける。§7.3） */
   legacy: boolean;
   legacyKinds: number;
