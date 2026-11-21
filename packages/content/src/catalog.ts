@@ -87,7 +87,8 @@ export function buildCatalog(c: Content): Catalog {
     items,
     appearances: Object.fromEntries(c.lists.appearances.map((a) => [a.id, { name: a.name, category: a.category }])),
     features: Object.fromEntries(c.lists.features.map((f) => [f.id, {
-      name: f.name, category: f.category, states: f.states, interactable: f.onInteract.length > 0 || !!f.afterInteract || !!f.gamble || f.lever || !!f.burst, passable: f.passable,
+      name: f.name, category: f.category, states: f.states, interactable: f.onInteract.length > 0 || !!f.afterInteract || !!f.gamble || f.lever || !!f.burst || f.campfire, passable: f.passable,
+      ...(f.campfire ? { campfire: true as const } : {}),
       ...(f.afterInteract ? { afterInteract: f.afterInteract } : {}),
       ...(f.desc ? { desc: f.desc } : {}),
       // 賭けの祭壇の表（確率は % に直して公開。V3-5 §5.1）
@@ -163,6 +164,7 @@ export function buildCatalog(c: Content): Catalog {
       recommendedLevel: { byDepth: [...c.balance.expedition.recommendedLevelByDepth] },
       xp: { ...c.balance.xp },
       lifeline: { ...c.balance.lifeline },
+      seasonFire: { costPerDepth: c.balance.season.fireCostPerDepth, perSeason: c.balance.season.firesPerSeason, spacing: c.balance.season.fireSpacing, supportMinHealPct: c.balance.season.supportMinHealPct },
       teleport: { ...c.balance.teleport },
       guardianRanks: c.balance.guardian.ranks.map((r) => ({ hpPct: r.hpPct, minHpBase: r.minHpBase, minHpPerDepth: r.minHpPerDepth })),
       perkOptions: c.balance.perks.options,

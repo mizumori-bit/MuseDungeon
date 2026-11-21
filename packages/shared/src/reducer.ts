@@ -301,6 +301,13 @@ export function applyEvent(world: World, ev: GameEvent): void {
       break;
     case 'stairs_reported':
       break;
+    // 野営の火（S1 §9.10）: このランで置いた火・使った遠征と階の after 値
+    case 'fire_placed':
+      if (world.season) world.season.placed = clone(ev.placedAfter);
+      break;
+    case 'fire_used':
+      if (world.season) world.season.fireUses = clone(ev.usesAfter);
+      break;
     case 'notes_updated':
       world.players[ev.player].knowledge.notes = clone(ev.notesAfter);
       break;

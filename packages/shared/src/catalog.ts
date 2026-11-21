@@ -107,7 +107,8 @@ export interface Catalog {
   classes: Record<string, CatalogClass>;
   items: Record<string, CatalogItem>;
   appearances: Record<string, { name: Names; category: string }>;
-  features: Record<string, { name: Names; category: 'feature' | 'trap'; states: string[]; interactable: boolean; passable: boolean; afterInteract?: string; desc?: Names; gamble?: { name: Names; pct: number }[] }>;
+  /** campfire: 野営の火（S1。SEASON.md §8） */
+  features: Record<string, { name: Names; category: 'feature' | 'trap'; states: string[]; interactable: boolean; passable: boolean; afterInteract?: string; desc?: Names; gamble?: { name: Names; pct: number }[]; campfire?: true }>;
   /** speedPct: 速度を変える状態異常の倍率（%）。公開ルール（加速 x2 など） */
   /** armor: 装甲の修正（錆。V3-5a） */
   /** tone: 付いた者にとって悪い・良い状態か（音の状態の ailment・boost。SOUND_SPEC §2.1） */
@@ -179,6 +180,8 @@ export interface CatalogRules {
   xp: { perNewDepth: number; perObjective: number; killDepthPct?: number };
   /** 帰還の綱: 使ってから戻るまでの手番と、確定する戦利品の割合（V3-2R2 §18.1） */
   lifeline: { turns: number; pct: number };
+  /** シーズンの野営の火（S1。SEASON.md §8）: 費用（深さ × 点）・シーズンで置ける数・ほかの火との間・支援賞に数える戻りの下限（最大 HP の %） */
+  seasonFire?: { costPerDepth: number; perSeason: number; spacing: number; supportMinHealPct: number };
   /** 転移の巻物の着地点の最短距離 */
   teleport: { minDistance: number };
   /** 守護者の格ごとの体力の上乗せ（%。V3-2R3 §20.1） */

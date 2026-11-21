@@ -23,6 +23,7 @@ import { Registry, roll } from './registry';
 import { regenTick } from './scheduler';
 import { recomputeStats } from './stats';
 import { spawnFromSpec } from './spawn';
+import { campfireCheck, placeFire, placeFireCheck, useCampfire } from './campfire';
 
 export interface ActionOutcome { cost: number; scheduled?: boolean }
 export type Prepared = { error: ActionError } | { run: () => ActionOutcome };
@@ -664,10 +665,24 @@ actions.register('ability', (ctx, e, pr, cmd: Extract<Command, { type: 'ability'
   return { run: () => { markUsed(prep.target); prep.run(); return { cost: 100 }; } };
 });
 
+// 野営の火を置く（S1。SEASON.md §8.2）: 自分のいるマスに。1 手番。費用はこのランの確定点から
+actions.register('place_fire', (ctx, e, pr) => {
+  const c = placeFireCheck(ctx, e, pr);
+  if ('error' in c) return { error: c.error };
+  return { run: () => { placeFire(ctx, ctx.world.entities[e.id], pr, c.cost); return { cost: 100 }; } };
+});
+
 actions.register('interact', (ctx, e, pr, cmd: Extract<Command, { type: 'interact' }>) => {
   const key = e.pos!.floor;
   const p = cmd.dir ? stepPos(e.pos!, cmd.dir) : { x: e.pos!.x, y: e.pos!.y };
   const tr = ctx.terrainAt(key, p.x, p.y);
+  // 野営の火（S1。SEASON.md §8.1）: 今使えるなら火を使う。使えなければ、同じマスのその世界の扉・地物を今までどおり（ほかの世界の火と重なったとき。§9.4）
+  const fire = ctx.campfireAt(key, p.x, p.y);
+  const fireCheck = fire ? campfireCheck(ctx, e, pr, fire) : null;
+  if (fire && fireCheck && 'amount' in fireCheck) {
+    return { run: () => { useCampfire(ctx, ctx.world.entities[e.id], pr, fire, fireCheck.amount); return { cost: 100 }; } };
+  }
+  const fireErr = fireCheck && 'error' in fireCheck ? fireCheck.error : null;
   if (cmd.dir && tr.door === 'open') {
     if (ctx.actorAt(key, p.x, p.y) || ctx.itemsAt(key, p.x, p.y).length) return fail(pr, 'blocked', '扉の間に何かがあって閉められない。', 'Something is in the doorway.', '扉の上を空けてから閉める。', 'Clear the doorway first.');
     return {
@@ -728,6 +743,7 @@ actions.register('interact', (ctx, e, pr, cmd: Extract<Command, { type: 'interac
       },
     };
   }
+  if (fireErr) return { error: fireErr };
   if (tr.stairs && !cmd.dir) return fail(pr, 'nothing_here', '階段を使うには use_stairs。', 'Use use_stairs for stairs.', 'use_stairs を呼ぶ。', 'Call use_stairs.');
   return fail(pr, 'nothing_here', 'そこには操作できるものが無い。', 'There is nothing to interact with there.', '扉や泉・祭壇に隣接して方向を指定する。', 'Stand next to a door or feature and give its direction.');
 });
@@ -763,7 +779,7 @@ actions.register('stairs', (ctx, e, pr) => {
       if (depth > p.stats.deepest) {
         ctx.emit({ type: 'player_stats', player: pr.id, stats: { ...p.stats, deepest: depth }, seenBy: [pr.id], floor: toKey });
         // 新しい深度に初めて着いた経験値（敵を避けて進んでも深度相応に育つ）
-        grantXp(ctx, ctx.world.entities[me.id], ctx.content.balance.xp.perNewDepth * depth);
+        grantXp(ctx, ctx.world.entities[me.id], ctx.content.balance.xp.perNewDepth * depth, { reason: 'depth', depth });
       }
       // 加護（俊足。V3-3 §3.3）: 階段を使った直後の N 手番、加速
       const swift = boonHook(ctx, ctx.world.entities[me.id], 'stairs_haste');

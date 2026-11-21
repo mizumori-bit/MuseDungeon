@@ -48,6 +48,7 @@ export function publicStairsAt(state: SeasonState | null | undefined, depth: num
 
 const AWARD_NAME: Record<SeasonAward['id'], [string, string]> = {
   adventure: ['冒険賞', 'Adventure award'], contribution: ['貢献賞', 'Contribution award'], survival: ['生還賞', 'Survival award'],
+  support: ['支援賞', 'Support award'],
 };
 
 export function awardName(L: Locale, id: SeasonAward['id']): string {
@@ -58,6 +59,7 @@ export function awardName(L: Locale, id: SeasonAward['id']): string {
 export function awardValueText(L: Locale, id: SeasonAward['id'], v: number): string {
   if (id === 'adventure') return t(L, `地下${v}階`, `depth ${v}`);
   if (id === 'survival') return t(L, `${v} 点`, `${v} pts`);
+  if (id === 'support') return t(L, `${v} 回`, `${v} uses`);
   return String(v);
 }
 
@@ -78,4 +80,19 @@ export function awardText(L: Locale, a: SeasonAward): string {
 /** 予算の 1 行（迷宮の中もキャンプも） */
 export function seasonBudgetText(L: Locale, name: string, left: number, limit: number): string {
   return t(L, `シーズン「${name}」: 残りの予算 ${Math.max(0, left)}/${limit} 手番`, `Season "${name}": budget left ${Math.max(0, left)}/${limit} turns`);
+}
+
+/** 自分の野営の火（S1 §9.10）: 取り込んだ自分の火（使われた回数つき）と、このランで置いてまだ載っていない火 */
+export function myCampfires(state: SeasonState | null | undefined): { depth: number; x: number; y: number; uses: number | null }[] {
+  if (!state) return [];
+  const pub = state.fires ?? [];
+  const out: { depth: number; x: number; y: number; uses: number | null }[] = pub.filter((f) => f.mine).map((f) => ({ depth: f.depth, x: f.x, y: f.y, uses: f.uses ?? 0 }));
+  for (const p of state.placed ?? []) if (!pub.some((f) => f.depth === p.depth && f.x === p.x && f.y === p.y)) out.push({ ...p, uses: null });
+  return out.sort((a, b) => a.depth - b.depth);
+}
+
+/** この遠征で火を使った階の深さ（S1 §8.3。1 回の遠征で、1 つの階につき 1 回） */
+export function fireUsedDepths(state: SeasonState | null | undefined, expeditionNo: number | null): number[] {
+  if (!state || expeditionNo === null) return [];
+  return [...new Set((state.fireUses ?? []).filter((u) => u.no === expeditionNo).map((u) => u.depth))].sort((a, b) => a - b);
 }

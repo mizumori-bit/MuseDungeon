@@ -77,6 +77,8 @@ const FEATURE: Record<string, GlyphDrawable> = {
   'core:brittle_ceiling': { kind: 'glyph', ch: '^', fg: '#8a8070' },
   'core:spore_pod': { kind: 'glyph', ch: 'o', fg: '#a0d060', bold: true },
   'core:spore_cloud': { kind: 'glyph', ch: '*', fg: '#80c040' },
+  // 野営の火（S1。シーズンの参加者が置く）
+  'core:camp_fire': { kind: 'glyph', ch: '=', fg: '#ff9a3c', bold: true },
 };
 
 const STATUS: Record<string, GlyphDrawable> = {

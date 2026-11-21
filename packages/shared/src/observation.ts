@@ -2,7 +2,7 @@
 // 派生情報は PlayerView（とカタログ）だけから計算する。仕様: docs/PROTOCOL.md §3
 import type { Catalog, CatalogEquipStats } from './catalog';
 import { abilityStatus, accBonuses, curseUnknown, isCursedItem, perkChoice, shortId, weaponReach } from './build';
-import { armorWithStatuses, boonHookSum, haulTotal, nameOf, nextCampOf, nextOverreach, offerGap, offerWardenExtra, overreachPoints, payoutOf, regenInterval, regenStep, restCapHp, stairsSealed } from './catalog';
+import { armorWithStatuses, boonHookSum, haulTotal, isMilestoneOf, nameOf, nextCampOf, nextOverreach, offerGap, offerWardenExtra, overreachPoints, payoutOf, regenInterval, regenStep, restCapHp, stairsSealed } from './catalog';
 import { floorTraitsText, guardianDisplayName, multText, objectiveText, offerText, partsText, progressText, resultText } from './expedition';
 import { COLLECT_WITHIN, collectTargets, isStationary, pickableItems, sameOrWorseEquip, worseEquip } from './macro';
 import { attacksPerTurn, chaseAttacks, memoryOf, monsterSpeedOf, selfSpeed } from './danger';
@@ -13,7 +13,7 @@ import { kindName } from './narrate';
 import type { NavGrid } from './nav';
 import { buildNavGrid, distanceField, findFrontiers } from './nav';
 import type { Dir, EntityRole, Expedition, HaulParts, Locale, MonsterMemory, Names, ObjectiveType, OfferSlot, Pos, SeasonAward } from './types';
-import { awardText, publicStairsAt, seasonBudgetText } from './season';
+import { awardText, fireUsedDepths, myCampfires, publicStairsAt, seasonBudgetText } from './season';
 import { DIRS, DIR_VEC } from './types';
 import { addDiceBonus, cheb, ceilDiv, compassDir, damageRangeVs, dirTo, floorDiv, formatDice, parseDice, t } from './util';
 import type { EntityView, HpState, ItemView, PlayerView, ViewStatus } from './view';
@@ -226,7 +226,8 @@ export interface ObsPartyMember {
 /** lair: 棲み処の地物（護りの火）の持ち主の守護者の呼び名（V3-3c §44.6） */
 /** id: travel_to で指せる（V3-8a §56.1 の 5） */
 /** desc: 何であるか・どう使うかの 1 行（V4-1g G6。すべての地物にある） */
-export interface ObsFeature { id?: string; type: string; name: string; pos: Pos; dir: Dir | null; dist: number; state?: string; lair?: string; desc?: string }
+/** by: 野営の火を置いた者（S1 §9.10） */
+export interface ObsFeature { id?: string; type: string; name: string; pos: Pos; dir: Dir | null; dist: number; state?: string; lair?: string; desc?: string; by?: string }
 /**
  * 自分の持ち物の性能（鑑定済みのみ。接辞込み）。weapon.traits は武器の特性（V3-4）、armor の move_cost / wake_pct は重い鎧、
  * mods は装飾品の修正と、接辞による追加の修正（最大 HP・視界など）
@@ -325,6 +326,11 @@ export interface ObsSeason {
   awards?: (SeasonAward & { text: string })[];
   /** まだ報告していない階段と、そのうちまだだれも公開していないもの */
   stairs?: { unreported: number; unpublished: number };
+  /** 自分の野営の火（キャンプだけ。S1 §9.10）: uses は支援賞に数えた回数、まだ共有層に載っていない火は null */
+  fires?: { depth: number; x: number; y: number; uses: number | null }[];
+  fires_text?: string;
+  /** この遠征で野営の火を使った階（迷宮の中。S1 §8.3） */
+  fire_used?: { depths: number[]; text: string };
   /** 予算の 1 行 */
   text: string;
 }
@@ -412,9 +418,18 @@ export function seasonObs(view: PlayerView): ObsSeason | null {
   if (!s) return null;
   const L = view.locale;
   const camp = view.status === 'at_camp';
+  // 野営の火（S1 §9.10）: キャンプでは自分の火と使われた回数、迷宮ではこの遠征で火を使った階
+  const fires = camp ? myCampfires(s) : [];
+  const xno = view.expedition && view.expedition.status !== 'ended' ? view.expedition.no : null;
+  const used = camp ? [] : fireUsedDepths(s, xno);
+  const fireText = (f: { depth: number; x: number; y: number; uses: number | null }) => f.uses === null
+    ? t(L, `地下${f.depth}階 (${f.x},${f.y}) まだ載っていない`, `depth ${f.depth} (${f.x},${f.y}) not yet shared`)
+    : t(L, `地下${f.depth}階 (${f.x},${f.y}) 支援 ${f.uses} 回`, `depth ${f.depth} (${f.x},${f.y}) supported ${f.uses}`);
   return {
     id: s.id, name: s.name, budget: { left: Math.max(0, s.budgetLeft), limit: s.budget.limit }, ended: s.ended,
     ...(camp ? { awards: s.awards.map((a) => ({ ...a, leader: a.leader ? { ...a.leader } : null, text: awardText(L, a) })), stairs: { unreported: s.unreported, unpublished: s.unpublished } } : {}),
+    ...(fires.length ? { fires, fires_text: t(L, `あなたの野営の火: ${fires.map(fireText).join('／')}`, `Your campfires: ${fires.map(fireText).join(' / ')}`) } : {}),
+    ...(used.length ? { fire_used: { depths: used, text: t(L, `この遠征で野営の火を使った階: ${used.map((d) => `地下${d}階`).join('・')}（その階の火は、もう使えない）`, `Campfires used this expedition on: ${used.map((d) => `depth ${d}`).join(', ')} (no more there)`) } } : {}),
     text: seasonBudgetText(L, s.name, s.budgetLeft, s.budget.limit),
   };
 }
@@ -849,7 +864,37 @@ function featureGlyph(catalog: Catalog, kind: string | null): string {
   if (f?.category === 'trap') return '^';
   if (kind.includes('fountain')) return '{';
   if (kind.includes('altar')) return '_';
+  if (f?.campfire) return '=';
   return '*';
+}
+
+/** place_fire の行（S1 §8.2）。置けないときは「不可」と理由 */
+function placeFireLine(view: PlayerView, catalog: Catalog, hunting: boolean): string {
+  const L = view.locale;
+  const r = catalog.rules.seasonFire!;
+  const f = view.floor!;
+  const pos = view.self.pos!;
+  const mine = myCampfires(view.season);
+  const tr = catalog.terrain[view.terrainTable[view.memory.terrain[pos.y * f.width + pos.x]]];
+  const fires = [...view.entities.filter((e) => e.campfire), ...view.memory.remembered.filter((m) => m.campfire && !view.entities.some((e) => e.id === m.id))];
+  const near = fires.find((e) => cheb(e.pos, pos) <= r.spacing);
+  const cost = f.depth * r.costPerDepth;
+  const why = isMilestoneOf(catalog.rules.milestone, f.depth) ? t(L, '大守護者の間の階には置けない', 'not on a warden floor')
+    : tr?.stairs || tr?.door || tr?.tags.includes('grate') ? t(L, '階段・扉・格子扉の上には置けない', 'not on stairs, doors or grates')
+      : view.entities.some((e) => (e.cat === 'feature' || e.cat === 'trap') && !e.campfire && e.pos.x === pos.x && e.pos.y === pos.y) ? t(L, 'ほかの地物のあるマスには置けない', 'not on another feature')
+        : near ? t(L, `ほかの火（${near.campfire!.by} の火・(${near.pos.x},${near.pos.y})）から ${r.spacing} マス以内`, `within ${r.spacing} cells of ${near.campfire!.by}'s campfire at (${near.pos.x},${near.pos.y})`)
+          : hunting ? t(L, '追跡中の敵が見えている', 'a hunting enemy is in view')
+            : mine.some((x) => x.depth === f.depth) ? t(L, 'この階にはもうあなたの火がある', 'you already have one on this floor')
+              : mine.length >= r.perSeason ? t(L, `シーズンで置ける ${r.perSeason} つを置いた`, `you have set all ${r.perSeason} for the season`)
+                : view.record.banked < cost ? t(L, `確定点が足りない（費用 ${cost}・確定点 ${view.record.banked}）`, `not enough banked points (cost ${cost}, banked ${view.record.banked})`) : null;
+  return why ? `place_fire (${t(L, `不可: ${why}`, `unavailable: ${why}`)})`
+    : `place_fire (${t(L, `野営の火を置く: 費用 ${cost} 点（このランの確定点 ${view.record.banked} から）・シーズンで残り ${r.perSeason - mine.length} つ。キャンプに着くと、ほかの参加者の世界にも現れる`, `set a campfire: costs ${cost} of your ${view.record.banked} banked points; ${r.perSeason - mine.length} left this season. It reaches the others once you are back at camp`)})`;
+}
+
+/** 地物の名前。野営の火は置いた者の名前を添える（S1 §9.10） */
+function campfireName(catalog: Catalog, L: Locale, kind: string | null, fire: { by: string } | undefined): string {
+  const base = kindName(catalog, L, kind);
+  return fire ? t(L, `${base}（${fire.by} の火）`, `${base} (${fire.by}'s)`) : base;
 }
 
 function termName(catalog: Catalog, locale: Locale, id: string | undefined): string {
@@ -1041,7 +1086,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
     } else if (e.cat === 'player') {
       players.push({ id: e.id, name: e.name ?? '?', pos: e.pos, ...rel(e.pos), hp_state: e.hp ?? 'healthy' });
     } else {
-      features.push({ id: e.id, type: e.kind ?? 'feature', name: kindName(catalog, L, e.kind), pos: e.pos, ...rel(e.pos), state: e.state, ...(e.lair ? { lair: guardianDisplayName(L, e.lair) } : {}), ...featureDesc(e.kind) });
+      features.push({ id: e.id, type: e.kind ?? 'feature', name: campfireName(catalog, L, e.kind, e.campfire), pos: e.pos, ...rel(e.pos), state: e.state, ...(e.lair ? { lair: guardianDisplayName(L, e.lair) } : {}), ...(e.campfire ? { by: e.campfire.by } : {}), ...featureDesc(e.kind) });
     }
   }
   monsters.sort((a, b) => a.dist - b.dist || (a.id < b.id ? -1 : 1));
@@ -1059,7 +1104,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       if (r.value !== undefined) it.value = r.value;
       rememberedItems.push(it);
     }
-    if (r.cat !== 'item') features.push({ id: r.id, type: r.kind ?? 'feature', name: kindName(catalog, L, r.kind), pos: r.pos, ...rel(r.pos), state: r.state, ...(r.lair ? { lair: guardianDisplayName(L, r.lair) } : {}), ...featureDesc(r.kind) });
+    if (r.cat !== 'item') features.push({ id: r.id, type: r.kind ?? 'feature', name: campfireName(catalog, L, r.kind, r.campfire), pos: r.pos, ...rel(r.pos), state: r.state, ...(r.lair ? { lair: guardianDisplayName(L, r.lair) } : {}), ...(r.campfire ? { by: r.campfire.by } : {}), ...featureDesc(r.kind) });
   }
   // 記憶の中のアイテムは近い順に 3 件まで（遺物は常に出す）。戦闘中（追跡中の敵が見えている間）は出さない。残りは件数だけ（V3-2R §14.2）
   rememberedItems.sort((a, b) => a.dist - b.dist || (a.id < b.id ? -1 : 1));
@@ -1870,9 +1915,21 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
     for (const e of view.entities) {
       if (e.cat !== 'feature' || e.pos.x !== nx || e.pos.y !== ny) continue;
       const fd = e.kind ? catalog.features[e.kind] : undefined;
+      // 野営の火（S1 §8.1・§8.3）: engine の判定と同じ順（この階で使った・追跡中の敵・休憩の上限）
+      if (e.campfire) {
+        const capHp = restCapHp(catalog.rules, view.self.stats.maxHp);
+        const xno = view.expedition && view.expedition.status !== 'ended' ? view.expedition.no : 0;
+        const why = fireUsedDepths(view.season, xno).includes(f.depth) ? t(L, '不可: この遠征では、この階の火をもう使った', 'unavailable: already used a campfire on this floor this expedition')
+          : hunting ? t(L, '不可: 追跡中の敵が見えている', 'unavailable: a hunting enemy is in view')
+            : view.self.stats.hp >= capHp ? t(L, `不可: HP はもう休憩の上限（${capHp}）`, `unavailable: HP is at the rest cap (${capHp})`) : null;
+        out.push(`interact${d ? ' ' + d : ''} (${why ?? t(L, `${campfireName(catalog, L, e.kind, e.campfire)}: HP を ${capHp} まで戻す（+${capHp - view.self.stats.hp}）`, `${campfireName(catalog, L, e.kind, e.campfire)}: heal to ${capHp} (+${capHp - view.self.stats.hp})`)})`);
+        continue;
+      }
       if (fd?.interactable && e.state !== 'used' && (!fd.afterInteract || e.state !== fd.afterInteract)) out.push(`interact${d ? ' ' + d : ''} (${kindName(catalog, L, e.kind)})`);
     }
   }
+  // 野営の火を置く（S1 §8.2）: シーズンのランだけ。engine の判定と同じ順で、見えている分から（最後に決めるのは engine）
+  if (view.season && catalog.rules.seasonFire) out.push(placeFireLine(view, catalog, hunting));
   // 一番近い階段でも、追われたままなら最悪の被害が今の HP 以上: 綱の候補を階段より前に並べる（V3-2R3b §23.1）。
   // 記録の無い敵がいるときは、記録のある分だけの見込み（下限）で判断する
   const near = x.huntingReach.length ? nearestStairs() : undefined;
@@ -1914,6 +1971,7 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
     if (obs.season) {
       lines.push(obs.season.text);
       for (const a of obs.season.awards ?? []) lines.push(a.text);
+      if (obs.season.fires_text) lines.push(obs.season.fires_text);
       if (obs.season.stairs) lines.push(t(L, `まだ報告していない階段 ${obs.season.stairs.unreported}（うち、まだだれも公開していないもの ${obs.season.stairs.unpublished}）${obs.season.stairs.unreported ? '。report_stairs で報告できる' : ''}`, `Unreported stairs ${obs.season.stairs.unreported} (not yet published by anyone: ${obs.season.stairs.unpublished})${obs.season.stairs.unreported ? '. Report them with report_stairs' : ''}`));
     }
     // 遠征が進んでいる（仲間がまだ迷宮にいる）: 全員が戻ったら、次の遠征を選べる（V4-1g G1）
@@ -1954,6 +2012,7 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
   lines.push(`[seq ${obs.seq} | ${floorText} | HP ${s.hp}/${s.max_hp} | Lv${s.level} | ${posText ? posText + ' | ' : ''}${statusText[obs.status][L === 'en' ? 1 : 0]}]`);
   // シーズン（S0 §9.6）: 迷宮の中は予算の残りだけ（順位は出さない）
   if (obs.season) lines.push(obs.season.text);
+  if (obs.season?.fire_used) lines.push(obs.season.fire_used.text);
   // 仲間（V4-1f §22.4）
   {
     const pt = partyText(L, obs.party ?? []);

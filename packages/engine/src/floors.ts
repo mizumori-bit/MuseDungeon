@@ -7,6 +7,7 @@ import { activeEffects, floorGenTraits, placementFor, recordTargets } from './ex
 import { currentExpedition } from '@muse/shared';
 import { generateFloor } from './gen/generate';
 import { spawnFromSpec } from './spawn';
+import { placeSeasonFires } from './campfire';
 
 /** 今のコンテンツの地形のうち、このランの地形の表に無いもの（古い版で始まったラン） */
 export function missingTerrain(ctx: Ctx): string[] {
@@ -53,7 +54,8 @@ export function noteFloorTraits(ctx: Ctx): void {
   const exps: Expedition[] = w.expeditions ?? [];
   const oldest = new Map<FloorKey, number>();
   for (const e of Object.values(w.entities)) {
-    if (!e.pos || e.player || e.item || (!e.actor && !e.feature)) continue;
+    // 野営の火（S1）は階を作った後に置くので、作った遠征の手がかりにしない
+    if (!e.pos || e.player || e.item || e.campfire || (!e.actor && !e.feature)) continue;
     const k = e.pos.floor;
     const cur = oldest.get(k);
     if (cur === undefined || e.sid < cur) oldest.set(k, e.sid);
@@ -109,6 +111,8 @@ export function ensureFloor(ctx: Ctx, key: FloorKey): Floor {
   const li = ctx.world.meta.terrainTable.indexOf('core:grate_locked');
   const vaultLocks = objective?.vault && li >= 0 ? terrain.filter((tv) => tv === li).length : 0;
   if (objective) recordTargets(ctx, spawned, { bounty: bountyId, vaultLocks });
+  // 共有層の野営の火（S1 §9.10）: 作った後に置く（生成の乱数は使わない）
+  placeSeasonFires(ctx, key);
   ctx.curFloor = prevFloor;
   ctx.now = prevNow;
   return ctx.world.floors[key];

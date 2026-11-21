@@ -87,10 +87,10 @@ export function seasonCli(content: Content, a: SeasonCliArgs, log: (s: string) =
       const st = a.id ? svc.standings(a.id) : null;
       if (!st) { log(`シーズン ${a.id ?? '(--id)'} は無い`); return 1; }
       log(`${st.season.id}「${st.season.name}」 ${st.season.status}${st.result ? `（確定 ${new Date(st.result.finalizedAt).toISOString()}・${st.result.reason}）` : ''}`);
-      log('| 名前 | ラン | 使った予算 | 冒険（最深） | 貢献（最初の報告） | 生還（確定点） |');
-      log('|---|---|---|---|---|---|');
+      log('| 名前 | ラン | 使った予算 | 冒険（最深） | 貢献（最初の報告） | 生還（確定点） | 支援（火が使われた回数） |');
+      log('|---|---|---|---|---|---|---|');
       for (const r of st.standings) {
-        log(`| ${r.name}${r.died ? '（倒れた）' : ''} | ${r.runs} | ${r.used} | ${r.adventure.rank}位 地下${r.adventure.value}階 | ${r.contribution.rank}位 ${r.contribution.value} | ${r.survival ? `${r.survival.rank}位 ${r.survival.value}` : '対象外'} |`);
+        log(`| ${r.name}${r.died ? '（倒れた）' : ''} | ${r.runs} | ${r.used} | ${r.adventure.rank}位 地下${r.adventure.value}階 | ${r.contribution.rank}位 ${r.contribution.value} | ${r.survival ? `${r.survival.rank}位 ${r.survival.value}` : '対象外'} | ${r.support ? `${r.support.rank}位 ${r.support.value}` : '-'} |`);
       }
       return 0;
     }
@@ -99,7 +99,7 @@ export function seasonCli(content: Content, a: SeasonCliArgs, log: (s: string) =
       if (!d) { log(`シーズン ${a.id ?? '(--id)'} は無い`); return 1; }
       if (d.result) { log(`シーズン ${d.def.id} はもう確定している`); return 0; }
       const r = svc.finalize(d, 'operator');
-      log(`シーズン ${d.def.id} を確定した。冒険 ${r.winners.adventure.map((w) => w.name).join('・') || '-'}／貢献 ${r.winners.contribution.map((w) => w.name).join('・') || '-'}／生還 ${r.winners.survival.map((w) => w.name).join('・') || '-'}`);
+      log(`シーズン ${d.def.id} を確定した。冒険 ${r.winners.adventure.map((w) => w.name).join('・') || '-'}／貢献 ${r.winners.contribution.map((w) => w.name).join('・') || '-'}／生還 ${r.winners.survival.map((w) => w.name).join('・') || '-'}／支援 ${(r.winners.support ?? []).map((w) => w.name).join('・') || '-'}`);
       return 0;
     }
     case 'wardens': {

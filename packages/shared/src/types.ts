@@ -100,6 +100,8 @@ export interface Entity {
   trap?: { revealedTo: PlayerId[] };
   /** expiresAt: この階の時刻を過ぎたら消える（毒の雲。V3-5 §5.2） */
   feature?: { state: string; expiresAt?: number };
+  /** 野営の火（S1。SEASON.md §8）: 置いた者の名前。地物の判定（featureAt）には入らない */
+  campfire?: { by: string };
   /** レバーがつながっている格子扉のマス（V3-5 §5.2） */
   links?: Pos[];
   player?: PlayerId;
@@ -520,7 +522,7 @@ export interface RunMeta {
 
 /** シーズンの賞の写し（S0。PROTOCOL §9.5）。value・rank が null なら対象外（生還賞で倒れた） */
 export interface SeasonAward {
-  id: 'adventure' | 'contribution' | 'survival';
+  id: 'adventure' | 'contribution' | 'survival' | 'support';
   value: number | null;
   rank: number | null;
   entrants: number;
@@ -530,6 +532,9 @@ export interface SeasonAward {
 
 /** 公開された下り階段（S0 §9.4）。by: 最初に報告した者の名前 */
 export interface SeasonStairs { depth: number; x: number; y: number; by: string }
+
+/** 共有層の野営の火（S1。PROTOCOL §9.10）。mine: 自分の火、uses: 自分の火が支援賞に数えられた回数 */
+export interface SeasonFire { depth: number; x: number; y: number; by: string; mine?: boolean; uses?: number }
 
 /**
  * シーズンの写し（S0。PROTOCOL §9.6）。キャンプで取り込んだ共有層（season_sync）。
@@ -550,6 +555,11 @@ export interface SeasonState {
   died: boolean;
   /** このランで報告した階の深さ */
   reported: number[];
+  /** S1（どれも古いランの写しには無い）: 取り込んだ共有層の火・このランで置いた火（キャンプに着くかランが終わると載る）・このランで火を使った遠征と階・参加者の表示名 */
+  fires?: SeasonFire[];
+  placed?: { depth: number; x: number; y: number }[];
+  fireUses?: { no: number; depth: number; x: number; y: number }[];
+  self?: string;
 }
 
 export interface WorldSecret {

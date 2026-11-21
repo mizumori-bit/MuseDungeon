@@ -7,7 +7,7 @@ import type {
 } from './types';
 
 /** 2: 遠征・実ダメージ・回復の蓄積値（IMPROVEMENTS_V2）。3: ビルド（特技・能動技・呪い。V3-4）。22: シーズン（S0）。古いログもそのまま畳み込める */
-export const EVENT_VERSION = 22;
+export const EVENT_VERSION = 23;
 
 export interface EventBase {
   seq: number;
@@ -81,7 +81,8 @@ export type GameEvent =
   | E<'status_expired', { target: EntityId; targetKind: string; statusId: string; statusesAfter: StatusInst[]; targetAffixes?: string[] }>
   | E<'status_ticked', { target: EntityId; statusesAfter: StatusInst[] }>
   | E<'stats_changed', { target: EntityId; statsAfter: Stats; baseAfter: BaseStats | null; speedAfter: number | null; reason: string }>
-  | E<'xp_gained', { target: EntityId; amount: number; xpAfter: number }>
+  /** reason（S1。SEASON.md §8.9 の 2）: 倒した（victimKind・victimAffixes。見えていなければ null）・新しい深さに初めて着いた（depth）・目的を達成した。古い出来事には無い */
+  | E<'xp_gained', { target: EntityId; amount: number; xpAfter: number; reason?: 'kill' | 'depth' | 'objective'; victimKind?: string | null; victimAffixes?: string[] | null; depth?: number }>
   | E<'level_up', { target: EntityId; levelAfter: number; xpAfter: number; statsAfter: Stats; baseAfter: BaseStats; gains?: { maxHp: number; acc: number; might: number; eva: number } }>
   // ビルド（V3-4。状態変化は put で表す）
   /** 特技の候補が出た（options が空なら前の候補を選んだ後に引く） */
@@ -197,6 +198,8 @@ export type GameEvent =
       mappedDel?: number[];
       /** 公開された下り階段を地図に載せた（S0 §9.4）: 最初に報告した者の名前。newlySeen・mappedAdd はそのマスだけ */
       publicStairs?: string;
+      /** 共有層の野営の火を地図に載せた（S1 §9.10）: 置いた者の名前。rememberedSet に火、newlySeen・mappedAdd はそのマスだけ */
+      publicFire?: string;
       /** 目標の気配（after 値。変化したときだけ。null は気配なし） */
       senseAfter?: Sense | null;
       /** 今いる階の手がかり（after 値。変化したときだけ。V3-2R2） */
@@ -205,6 +208,10 @@ export type GameEvent =
   | E<'monster_memory_updated', { player: PlayerId; kind: string; memoryAfter: MonsterMemory }>
   /** シーズンの取り込み（S0 §9.7。season_sync から。本人だけ）。seasonAfter がランの写しになる */
   | E<'season_synced', { player: PlayerId; reason: 'join' | 'camp' | 'start' | 'report'; seasonAfter: SeasonState }>
+  /** 野営の火を置いた（S1。本人だけ）。placedAfter は SeasonState.placed の after 値 */
+  | E<'fire_placed', { player: PlayerId; depth: number; x: number; y: number; cost: number; placedAfter: { depth: number; x: number; y: number }[] }>
+  /** 野営の火を使った（S1。本人だけ）。by: 置いた者、amount: 戻った HP、usesAfter: SeasonState.fireUses の after 値 */
+  | E<'fire_used', { player: PlayerId; depth: number; x: number; y: number; by: string; amount: number; maxHp: number; usesAfter: { no: number; depth: number; x: number; y: number }[] }>
   /** 階段の報告の結果（S0 §9.4。本人だけ）。gained: 最初の報告の数（貢献） */
   | E<'stairs_reported', { player: PlayerId; stairs: { depth: number; x: number; y: number; first: boolean }[]; gained: number }>
   | E<'notes_updated', { player: PlayerId; notesAfter: string[] }>

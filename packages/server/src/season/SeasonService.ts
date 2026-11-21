@@ -34,6 +34,8 @@ export interface Participant {
   firstReports: number;
   lastFirstUsed: number;
   died: boolean;
+  /** 支援賞（S1 §8.5）: 自分の火が、ほかの参加者に使われて数えた回数（古い記録には無い） */
+  support?: number;
 }
 
 /** 招いた者（S0a。SEASON.md §4.1）。invites.json は運用の道具だけが書き、サーバーは読むだけ。トークンは入れない */
@@ -46,6 +48,12 @@ export function nameKey(name: string): string {
 
 export interface PublicStairsRec { depth: number; x: number; y: number; by: string; profileId: string; runId: string; used: number; wall: number; order: number }
 
+/**
+ * 共有層の野営の火（S1。PROTOCOL §9.10。fires.json）。used: 載せたときまでに置いた者が使った予算、
+ * uses: 支援賞に数えた回数、users: 数えた参加者（1 つの火で 1 人 1 回）
+ */
+export interface PublicFireRec { order: number; depth: number; x: number; y: number; by: string; profileId: string; runId: string; used: number; wall: number; uses: number; users: string[] }
+
 export interface SeasonResult {
   finalizedAt: number;
   reason: 'all_back' | 'grace_over' | 'operator';
@@ -57,6 +65,7 @@ interface SeasonData {
   def: SeasonDef;
   participants: Participant[];
   public: PublicStairsRec[];
+  fires: PublicFireRec[];
   result: SeasonResult | null;
 }
 
@@ -68,6 +77,7 @@ const used = (p: Participant) => p.runs.reduce((a, r) => a + r.turns, 0);
 /** 順位に数える参加者（1 回でもランを始めた者。招いただけの者は入れない） */
 const started = (ps: readonly Participant[]) => ps.filter((p) => p.runs.length > 0);
 const banked = (p: Participant) => p.runs.reduce((a, r) => a + r.banked, 0);
+const support = (p: Participant) => p.support ?? 0;
 
 /** 値の大きい順、同着は使った予算の少ない順。値も予算も同じなら同じ順位（1, 2, 2, 4） */
 function ranked<T>(items: T[], value: (x: T) => number, tie: (x: T) => number): Map<T, number> {
@@ -99,13 +109,18 @@ export function computeStandings(ps: readonly Participant[]): {
   const advLead = leaderOf(adv, (p) => p.best.depth);
   const conLead = leaderOf(con, (p) => p.firstReports);
   const surLead = leaderOf(sur, (p) => banked(p));
+  // 支援賞（S1 §8.5）: 自分の火が使われた回数。同着は使った予算の少ないほう
+  const sup = ranked(list, (p) => support(p), (p) => used(p));
+  const supLead = leaderOf(sup, (p) => support(p));
   const rows: SeasonStandingRow[] = list.map((p) => ({
     name: p.name, runs: p.runs.length, used: used(p), died: p.died,
     adventure: { value: p.best.depth, rank: adv.get(p)! },
     contribution: { value: p.firstReports, rank: con.get(p)! },
     survival: p.died ? null : { value: banked(p), rank: sur.get(p)! },
+    support: { value: support(p), rank: sup.get(p)! },
   })).sort((a, b) => a.adventure.rank - b.adventure.rank || a.name.localeCompare(b.name));
   const award = (p: Participant, id: SeasonAward['id']): SeasonAward => {
+    if (id === 'support') return { id, value: support(p), rank: sup.get(p) ?? null, entrants: list.length, leader: supLead, gap: supLead ? supLead.value - support(p) : null };
     if (id === 'adventure') return { id, value: p.best.depth, rank: adv.get(p) ?? null, entrants: list.length, leader: advLead, gap: advLead ? advLead.value - p.best.depth : null };
     if (id === 'contribution') return { id, value: p.firstReports, rank: con.get(p) ?? null, entrants: list.length, leader: conLead, gap: conLead ? conLead.value - p.firstReports : null };
     if (p.died) return { id, value: null, rank: null, entrants: alive.length, leader: surLead, gap: null };
@@ -151,6 +166,7 @@ export class SeasonStore {
       def,
       participants: this.readJson<Participant[]>(id, 'participants.json') ?? [],
       public: this.readJson<PublicStairsRec[]>(id, 'public.json') ?? [],
+      fires: this.readJson<PublicFireRec[]>(id, 'fires.json') ?? [],
       result: this.readJson<SeasonResult>(id, 'result.json'),
     };
     this.data.set(id, d);
@@ -168,7 +184,7 @@ export class SeasonStore {
   open(def: SeasonDef): SeasonData {
     if (!SEASON_ID_RE.test(def.id)) throw new Error(`bad season id ${def.id} (a-z 0-9 _ -, up to 32)`);
     if (this.get(def.id)) throw new Error(`season ${def.id} already exists`);
-    const d: SeasonData = { def, participants: [], public: [], result: null };
+    const d: SeasonData = { def, participants: [], public: [], fires: [], result: null };
     this.data.set(def.id, d);
     this.writeJson(def.id, 'season.json', def);
     this.log(def.id, { type: 'opened', def });
@@ -200,6 +216,7 @@ export class SeasonStore {
 
   saveParticipants(d: SeasonData): void { this.writeJson(d.def.id, 'participants.json', d.participants); }
   savePublic(d: SeasonData): void { this.writeJson(d.def.id, 'public.json', d.public); }
+  saveFires(d: SeasonData): void { this.writeJson(d.def.id, 'fires.json', d.fires); }
   saveResult(d: SeasonData): void { this.writeJson(d.def.id, 'result.json', d.result); }
 
   log(id: string, rec: Record<string, unknown>): void {
@@ -231,6 +248,8 @@ export class SeasonService implements SeasonHooks {
     readonly versions: { engineVersion: string; contentVersion: string },
     private readonly liveRun: (runId: string) => LiveRunState = () => null,
     private readonly now: () => number = Date.now,
+    /** 支援賞に数える使用の戻りの下限（最大 HP の %。balance.season.supportMinHealPct） */
+    private readonly supportMinHealPct = 10,
   ) {}
 
   status(d: SeasonData): SeasonListing['status'] {
@@ -351,8 +370,11 @@ export class SeasonService implements SeasonHooks {
       budget: { limit: d.def.budget, left: d.def.budget - used(p) },
       ends_at: d.def.endsAt, ended: this.status(d) !== 'open',
       public: [...d.public].sort((a, b) => a.depth - b.depth).map((x) => ({ depth: x.depth, x: x.x, y: x.y, by: x.by })),
-      awards: (['adventure', 'contribution', 'survival'] as const).map((id) => st.award(p, id)),
+      awards: (['adventure', 'contribution', 'survival', 'support'] as const).map((id) => st.award(p, id)),
       contribution: p.firstReports, died: p.died,
+      // 野営の火（S1 §9.10）: 共有層の火（載せた順）。自分の火には mine と、支援賞に数えた回数
+      fires: [...d.fires].sort((a, b) => a.order - b.order).map((f) => ({ depth: f.depth, x: f.x, y: f.y, by: f.by, ...(f.profileId === p.profileId ? { mine: true, uses: f.uses } : {}) })),
+      self: p.name,
     };
   }
 
@@ -424,8 +446,60 @@ export class SeasonService implements SeasonHooks {
       const f = this.find(session, pid);
       if (!f) continue;
       const big = this.refresh(session, pid, f);
+      // 野営の火（S1 §8.4・§8.5）: 使われた火を数え（その場で）、キャンプに着いた・ランが終わったら、このランで置いた火を載せる
+      const usedFire = this.countFireUses(f.d, f.p, events.filter((e) => e.type === 'fire_used' && e.player === pid));
+      const pr = session.world.players[pid];
+      const home = pr && (pr.state === 'at_camp' || pr.state === 'dead' || pr.state === 'left' || session.world.status === 'ended');
+      const published = home && events.some((e) => e.type === 'expedition_ended' || e.type === 'run_ended' || (e.type === 'player_state' && e.player === pid)) ? this.publishFires(f.d, f.p, session) : 0;
+      if (big || usedFire || published) this.store.saveParticipants(f.d);
       if (big || events.some((e) => e.type === 'expedition_ended' || e.type === 'run_ended')) this.tick();
     }
+  }
+
+  /**
+   * このランで置いた火（SeasonState.placed）のうち、まだ載っていないものを共有層へ載せる（S1 §8.4: キャンプに着いたとき・ランが終わったとき）。
+   * 同じマスにほかの者の火がもう載っていれば載せない（fire_duplicate。費用は戻らない）。載せた数を返す
+   */
+  private publishFires(d: SeasonData, p: Participant, session: RunSession): number {
+    if (d.result) return 0;
+    const placed = session.world.season?.placed ?? [];
+    let n = 0;
+    for (const pl of placed) {
+      const same = d.fires.find((x) => x.depth === pl.depth && x.x === pl.x && x.y === pl.y);
+      if (same) {
+        if (same.profileId !== p.profileId) this.store.log(d.def.id, { type: 'fire_duplicate', profileId: p.profileId, runId: session.runId, depth: pl.depth, x: pl.x, y: pl.y, holder: same.profileId });
+        continue;
+      }
+      const rec: PublicFireRec = { order: d.fires.length + 1, depth: pl.depth, x: pl.x, y: pl.y, by: p.name, profileId: p.profileId, runId: session.runId, used: used(p), wall: this.now(), uses: 0, users: [] };
+      d.fires.push(rec);
+      this.store.log(d.def.id, { type: 'fire_published', profileId: p.profileId, runId: session.runId, depth: pl.depth, x: pl.x, y: pl.y, order: rec.order });
+      n++;
+    }
+    if (n) this.store.saveFires(d);
+    return n;
+  }
+
+  /**
+   * 火が使われた（S1 §8.5）: 置いた本人でない・その参加者がその火で数えられるのはシーズンを通して 1 回・最大 HP の supportMinHealPct% 以上が戻った、
+   * をすべて満たす使用だけを、火を置いた参加者の支援賞に数える。数えた数を返す
+   */
+  private countFireUses(d: SeasonData, user: Participant, uses: readonly GameEvent[]): number {
+    if (d.result || !uses.length) return 0;
+    let n = 0;
+    for (const e of uses) {
+      if (e.type !== 'fire_used') continue;
+      const fire = d.fires.find((x) => x.depth === e.depth && x.x === e.x && x.y === e.y);
+      const counted = !!fire && fire.profileId !== user.profileId && !fire.users.includes(user.profileId) && e.amount * 100 >= e.maxHp * this.supportMinHealPct;
+      this.store.log(d.def.id, { type: 'fire_used', profileId: user.profileId, depth: e.depth, x: e.x, y: e.y, amount: e.amount, maxHp: e.maxHp, counted, ...(fire ? { holder: fire.profileId } : {}) });
+      if (!counted || !fire) continue;
+      fire.uses++;
+      fire.users.push(user.profileId);
+      const holder = d.participants.find((x) => x.profileId === fire.profileId);
+      if (holder) holder.support = (holder.support ?? 0) + 1;
+      n++;
+    }
+    if (n) this.store.saveFires(d);
+    return n;
   }
 
   /** 確定（SEASON.md §2.1）: 終わりの時刻の後、参加者の全員が迷宮にいないか、終わりから 1 時間たったら */
@@ -444,11 +518,12 @@ export class SeasonService implements SeasonHooks {
     if (d.result) return d.result;
     this.flush();
     const st = computeStandings(started(d.participants));
-    const winners = { adventure: [], contribution: [], survival: [] } as SeasonResult['winners'];
+    const winners = { adventure: [], contribution: [], survival: [], support: [] } as SeasonResult['winners'];
     for (const r of st.rows) {
       if (r.adventure.rank === 1) winners.adventure.push({ name: r.name, value: r.adventure.value });
       if (r.contribution.rank === 1 && r.contribution.value > 0) winners.contribution.push({ name: r.name, value: r.contribution.value });
       if (r.survival?.rank === 1) winners.survival.push({ name: r.name, value: r.survival.value });
+      if (r.support?.rank === 1 && r.support.value > 0) winners.support.push({ name: r.name, value: r.support.value });
     }
     d.result = { finalizedAt: this.now(), reason, winners, standings: st.rows };
     this.store.saveParticipants(d);

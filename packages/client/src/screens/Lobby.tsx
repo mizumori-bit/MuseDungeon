@@ -243,6 +243,7 @@ export function Lobby() {
                       <th>{tr('名前', 'Name')}</th><th title={tr('いちばん深い階', 'Deepest floor')}>{tr('冒険', 'Adventure')}</th>
                       <th title={tr('最初に報告した階段の数', 'Stairs reported first')}>{tr('貢献', 'Contribution')}</th>
                       <th title={tr('一度も倒れていない者の確定点', 'Banked points of those who never died')}>{tr('生還', 'Survival')}</th>
+                      <th title={tr('自分の野営の火が、ほかの参加者に使われた回数（S1）', 'Uses of your campfires by others (S1)')}>{tr('支援', 'Support')}</th>
                       <th>{tr('使った予算', 'Budget used')}</th><th>{tr('ラン', 'Runs')}</th>
                     </tr></thead>
                     <tbody>{standings.map((r) => (
@@ -251,6 +252,7 @@ export function Lobby() {
                         <td>{r.adventure.rank}. {tr(`地下${r.adventure.value}階`, `D${r.adventure.value}`)}</td>
                         <td>{r.contribution.rank}. {r.contribution.value}</td>
                         <td>{r.survival ? `${r.survival.rank}. ${r.survival.value}` : tr('対象外（倒れた）', 'out (fell)')}</td>
+                        <td>{r.support ? `${r.support.rank}. ${r.support.value}` : '-'}</td>
                         <td>{r.used}</td><td>{r.runs}</td>
                       </tr>
                     ))}</tbody>

@@ -439,6 +439,12 @@ export const BalanceSchema = z.object({
     withdrawPct: Int.min(0).max(100),
     guardianBounty: z.object({ base: Int.min(0), perDepth: Int.min(0) }),
   }),
+  /**
+   * シーズンの野営の火（S1。SEASON.md §8）: 置く費用（深さ × fireCostPerDepth 点。このランの確定点から）・シーズンで置ける数・ほかの火との間（チェビシェフ距離）・
+   * 支援賞に数える使用の戻りの下限（最大 HP の %）
+   */
+  season: z.object({ fireCostPerDepth: Int.min(0), firesPerSeason: Int.min(0), fireSpacing: Int.min(0), supportMinHealPct: Int.min(0).max(100) })
+    .default({ fireCostPerDepth: 200, firesPerSeason: 3, fireSpacing: 5, supportMinHealPct: 10 }),
   /** 帰還の綱（V3-2R2 §18.1）: 使ってから戻るまでの手番と、確定する戦利品の割合 */
   lifeline: z.object({ turns: Int.min(0), pct: Int.min(0).max(100) }).default({ turns: 0, pct: 50 }),
   /** 転移の着地点: 元の位置からこの距離以上（チェビシェフ）を優先する */
@@ -546,6 +552,8 @@ export const FeatureSchema = z.object({
   collapse: z.object({ trigger: z.number().int().min(0), loudness: z.number().int().min(0), radius: z.number().int().min(0), dmg: DiceSchema }).optional(),
   /** 胞子嚢（V3-5 §5.2）: 突く（interact）か投げた物が当たると弾け、radius マスに毒の雲（cloud）を turns 手番残す */
   burst: z.object({ radius: z.number().int().min(0), cloud: IdSchema, turns: z.number().int().min(1) }).optional(),
+  /** 野営の火（S1。SEASON.md §8）: シーズンの参加者が置く。隣か上で操作すると HP が休憩の上限まで戻る（処理は engine の interact） */
+  campfire: z.boolean().default(false),
   /** 賭けの祭壇（V3-5 §5.1）: 操作すると重みで 1 つ選び、その効果が起きる（表と確率は公開） */
   gamble: z.array(z.object({ weight: z.number().int().min(1), name: NamesSchema, effects: z.array(EffectSchema).min(1) })).optional(),
 });

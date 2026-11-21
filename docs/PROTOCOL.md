@@ -90,6 +90,7 @@ turn: {
 | `review` | `expedition?: number` | V3-6。終わった遠征のレポート（`report`。省略時は直前の遠征）。文は 12 行のレポートに、入りきらなかった場面と、倒れる直前の出来事を足したもの。手番を消費しない |
 | `extract` | `confirm?: boolean`, 共通引数 | 行動。階段（上り・下り）の上なら可（V3-2R2: 追跡中の敵が見えていてもよい。敵は階段を追ってこない）。目的を達成していれば**帰還**（遠征は `completed`、戦利品 × 倍率を確定）。未達成なら `confirm: true` で**撤退**（`withdrawn`、(戦利品 − 目的) × `withdrawPct`% を確定）。`confirm` が無ければ `confirm_required`。確定する点は観測の `expedition.haul.if_extract_now` と一致する。所持している宝は換金され、達成して持ち帰った遺物は納められ、どちらも所持品から消える |
 | `report_stairs` | 共通引数 | S0（§9.4）。シーズンのランのキャンプで、このランで自分の目で見た下り階段のうち、まだ報告していないものを全部報告する。手番を消費しない。最初の報告者に貢献 1。結果に `stairs_reported` の 1 行と `season` |
+| `place_fire` | 共通引数（`thought`・`expect_seq`） | S1（§9.10）。シーズンのランの迷宮の中で、自分のいるマスに野営の火を置く（1 手番）。費用は 深さ × 200 点を、このランの確定点から。置けないときは理由つきで断る（手番を使わない） |
 | `start_expedition` | `offer: 1..n | 'endless'` | キャンプで次の遠征を始める。前回 `extract` した階段から再開する。結果に `briefing`（目的・枠・条件・倍率・戦利品の説明） |
 
 スコア（版 2、v3）: ランのスコア = 確定点（`banked`）の合計。遠征の払い戻しは、帰還 = 戦利品 × 条件の倍率、撤退 = (戦利品 − 目的の基礎点) × `withdrawPct`%（初期値 50）、帰還の綱 = (戦利品 − 目的の基礎点) × `lifeline.pct`%（初期値 50。倍率なし。目的を達成済みでも目的の点は運ばず、遺物は失う。V3-2R2、V3-4b で改め）、死亡・引退 = 0（失った戦利品 `lost` として記録）。結果の段階は 4 つ（階段で帰還・綱で帰還・階段で撤退・死）。戦利品の内訳 `HaulParts` は `objective`（達成で基礎点）・`overreach`（踏破: 目標より深い階の**下り階段に立ったとき**。着いただけでは入らない。n 階目 = 目的の基礎点 × (`overreachPct.first` + `overreachPct.step` × (n − 1))%、下限 `overreachFirst` + `overreachStep` × (n − 1)。V3-2R2）・`treasure`（所持している宝の価値）・`bounty`（守護者の賞金）・`discovery`（このランで初めて倒した種族・鑑定したアイテム種。守護者の撃破は数えない）・`kills`（撃破の点 = 種族の経験値 × `killPerXp` × 深さの係数、接辞付きは × `killAffixPct`%。V3-2R3）。宝を除く部分は遠征の参加者で共有し、extract した各自に払い戻す。係数は `balance.json` の `haul`。
@@ -443,9 +444,20 @@ V3-2R で足した項目（同じく後方互換。会心と経験値のルー�
 - `player_state.reason: 'joined'`（キャンプから始まる参加）。参加コマンドの `atCamp`
 - プレイヤー向けの射影で、見えていた個体が視界の外へ動いた `entity_moved` に `dirOut`（向きだけ。行き先は伏せたまま）
 
+S1 で変えた項目（野営の火と支援賞。`engineVersion` 0.39.0、`eventVersion` 23。SEASON.md §8、DESIGN.md §40。中身は §9.10）。シーズンでないランで変わるのは `xp_gained` の項目だけ:
+
+- 命令: `place_fire`（迷宮の中・1 手番。シーズンのランだけ）。MCP のツール `place_fire`、WS の `{ t: 'command', command: { type: 'place_fire' } }`
+- イベント: `fire_placed`・`fire_used`。`entity_spawned.reason` に `fire_placed`（自分で置いた）・`season_fire`（取り込んだ）。`healed.via` に `fire`。`knowledge_updated.publicFire`（取り込んだ火を地図に載せた。置いた者の名前）
+- **`xp_gained` に理由**（§8.9 の 2。すべてのラン）: `reason: 'kill' | 'depth' | 'objective'`、`kill` は `victimKind`・`victimAffixes`（倒した相手が見えていなかったら null）、`depth` は `depth`。S0b でプレイヤー向けの射影が出来事の順から決めていたもの（下の S0b の 1 行目）は、やめた。文は S0b のまま。理由の無い古い出来事は「経験値 +N」
+- 地物: `core:camp_fire`（野営の火）。エンティティの `campfire: { by }`、`EntityView`・`RememberedView` の `campfire`
+- 命令 `season_sync` の `season.fires`・`season.self`、賞の `support`。`SeasonState` の `fires`・`placed`・`fireUses`・`self`（どれも任意。古いランの写しには無い）
+- 観測: `visible.features[].by`（火を置いた者）、`season.fires`（キャンプ: 自分の火と使われた回数）、`season.fire_used`（迷宮: この遠征で火を使った階）、`valid_actions` の `place_fire`・火の `interact`
+- HTTP: 順位の表の `support`
+- get_rules: season に火・費用・上限・支援賞
+
 S0b で変えた項目（文と、プレイヤー向けの出来事の射影と、道具だけ。engine と出来事の形は変えていないので `engineVersion` は 0.38.0、`eventVersion` は 22 のまま。開いているシーズン s0 はそのまま使える。SEASON.md §6.2・§7）:
 
-- プレイヤー向けの射影（`filterEventsForPlayer`）: 自分の `xp_gained` に、増えた理由 `reason?: 'kill' | 'depth' | 'objective'` と、`victimKind?` / `victimAffixes?`（`kill`。倒した相手が見えていなければ null）・`depth?`（`depth`。着いた深さ）を足す。engine の `xp_gained` には無い。経験値が入るのは 3 か所だけ（倒した・新しい深さに初めて着いた・目的を達成した）なので、同じ命令（`cause`）の中で `xp_gained` の前にある、自分が知覚した出来事（自分が倒した `died`・自分の `entity_changed_floor`・`objective_completed`）の最も近いものから決める。間に別の `xp_gained` があればそこで止め、決まらなければ付けない（理由をこしらえない）。すべてのプレイヤーに同じ（観戦の俯瞰では文にしない）
+- （S1 でやめた。理由は engine の `xp_gained` が持つ）プレイヤー向けの射影（`filterEventsForPlayer`）: 自分の `xp_gained` に、増えた理由 `reason?: 'kill' | 'depth' | 'objective'` と、`victimKind?` / `victimAffixes?`（`kill`。倒した相手が見えていなければ null）・`depth?`（`depth`。着いた深さ）を足す。engine の `xp_gained` には無い。経験値が入るのは 3 か所だけ（倒した・新しい深さに初めて着いた・目的を達成した）なので、同じ命令（`cause`）の中で `xp_gained` の前にある、自分が知覚した出来事（自分が倒した `died`・自分の `entity_changed_floor`・`objective_completed`）の最も近いものから決める。間に別の `xp_gained` があればそこで止め、決まらなければ付けない（理由をこしらえない）。すべてのプレイヤーに同じ（観戦の俯瞰では文にしない）
 - 文: 自分の `xp_gained` を文にする（今までは文にしていなかった）: 「経験値 +6（大ネズミを倒した）」「経験値 +8（初めて地下2階に着いた）」「経験値 +16（遠征の目的を達成した）」、理由が無ければ「経験値 +N」（英語 `+6 XP (killed cave rat)`・`(first time on depth 2)`・`(expedition objective complete)`）。**経験値の文は、件数に上限のある所の枠に数えない**（ほかの知らせを押し出さない。検査の指摘の直し、SEASON.md §7.9）: 手番が 1 つの行動の結果（outcome）は今までどおり「経験値でない最初の 3 件＋倒した文」で、その間の経験値の文は出た場所に添える。観測の `recent_events`（10 件）・行動の結果の `events`（20 件）・遠征レポートの最期の `last_events`（10 件）も、経験値でないものを数え、その間の経験値の文を添える（`lastWithoutXp`）。マクロの結果の「最後の 2 件」には経験値の文を入れない（直前の出来事に出る）。理由 `objective` は、射影の中ですぐ前の出来事が `objective_completed` のときだけ付ける
 - 文: `fight` の結果の「合計 N ダメージを与えた」は今までどおり実際に減らした HP の合計で、とどめの一撃の超過分（`damaged.amount − dealt`）があれば「（実際に減らした HP。とどめの一撃の超過分 M は含まない）」を添える（英語 ` (HP actually removed; the finishing blow's M overkill is not counted)`）。1 行ごとのとどめの文（出目の値と残りの HP）は今のまま
 - 文: alerts の `new_floor` を「新しい階に到着した」から「階を移った（地下N階）」に（前に来た階でも出るので、作り直された階と読まれないように）
@@ -947,6 +959,7 @@ CommandRecord {
 | `adventure` 冒険賞 | シーズンで着いたいちばん深い階（ランをまたいだ最良。着いた時点で数える。帰れなくてもよい） | その階に初めて着いたときまでに使った予算 |
 | `contribution` 貢献賞 | 最初に報告した階段の数（シーズンの合計） | 最後の 1 つを報告したときまでに使った予算 |
 | `survival` 生還賞 | シーズンで一度も倒れていない参加者の、確定した点の合計（シーズンのすべてのランの `banked`） | 使った予算 |
+| `support` 支援賞（S1） | 自分の野営の火が、ほかの参加者に使われた回数（§9.10 の 3 つの条件を満たす使用だけ） | 使った予算 |
 
 - 順位は値の大きい順。値も同着の決め方も同じなら同じ順位（1, 2, 2, 4）。倒れた参加者は生還賞の対象外（`value: null`・`rank: null`）。時間切れは倒れた扱いにしない。
 - 順位の写しは取り込みのときに入る（キャンプで見るものが、その遠征の間の最新）。
@@ -1007,4 +1020,28 @@ SeasonSyncCommand {
 
 ### 9.9 規則の文
 
-`get_rules { topic: 'season' }`（`all` にも入る）: シーズン・予算と時間切れ・階段の報告と公開・3 つの賞と同着の決め方。
+`get_rules { topic: 'season' }`（`all` にも入る）: シーズン・予算と時間切れ・階段の報告と公開・4 つの賞と同着の決め方・野営の火（S1）。
+
+### 9.10 野営の火と支援賞（S1。SEASON.md §8）
+
+**置く**（`place_fire`。迷宮の中・1 手番・自分のいるマス）:
+
+- 費用: 階の深さ × `balance.season.fireCostPerDepth`（200）点を、**このランの確定した点**（`stats.banked`）から払う。払った点は戻らない（生還賞の数字も下がる）。
+- 断る（手番を使わない。`message` に理由と足りないもの）: シーズンのランでない（`bad_request`）・節目の階（5 の倍数の深さ）・階段・扉・格子扉の上・ほかの地物か罠のあるマス・ほかの火（だれのものでも。この世界にある火）から `fireSpacing`（5）マス以内（チェビシェフ距離）・追ってくる敵が見えている（`hostile_in_view`）・この深さに自分の火がもうある・シーズンを通して `firesPerSeason`（3）つ置いた（取り込んだ自分の火＋このランでまだ載っていない火）・確定した点が足りない（`cannot_use`）。
+- 出来事: `entity_spawned { reason: 'fire_placed', entity: { kind: 'core:camp_fire', feature: { state: 'lit' }, campfire: { by } } }`・`player_stats`（`banked` が減る）・`fire_placed { player, depth, x, y, cost, placedAfter }`（`placedAfter` は `SeasonState.placed` の after 値）。置いた本人の世界には、その手番からある。
+- 共有層へ載るのは、**その者がキャンプに着いたとき**（遠征の終わり）か、**そのランが終わったとき**（倒れた・引退）。サーバーが `SeasonState.placed` を読んで載せる。同じマスにほかの者の火がもう載っていれば、載せない（`log.jsonl` に `fire_duplicate`。費用は戻らない）。5 マスの決まりは、置く者の世界で見るだけ（ほぼ同時に近くへ置かれた火は、どちらも載る）。
+
+**届く**: 取り込み（`season_sync` の `season.fires: { depth, x, y, by, mine?, uses? }[]`。`mine` は自分の火、`uses` は自分の火が支援賞に数えられた回数）で届く。engine は取り込みのときに、作ってある階のすべてに、まだその階のそのマスに火が無ければ、火を置く（`entity_spawned { reason: 'season_fire' }`）。まだ作っていない階には、その階を作ったとき（生成の後。生成の乱数は使わないので、入口と階段は変わらない。§9.3）に置く。**どの世界でも、同じ階の同じマスに置く**。
+
+- そのマスの世界ごとの違い（決めたこと。SEASON.md §9.4）: 品・敵がいても置く（同じマスにいてよい）。ほかの地物・罠と重なっても置き、その世界の地物・罠は今までどおり働く（火は、地物の判定 `featureAt` に入らない。罠も踏めば働く）。立てない地形（棲み処の柱など）でも置き、隣から使える。
+- その階に入ると、火のマスが覚えている地図に載る（`knowledge_updated { mappedAdd, rememberedSet, publicFire: <置いた者> }`。途中の道は分からない）。
+
+**使う**（`interact`。火の上なら `dir` を省く、隣なら火の方向）:
+
+- HP が休憩の上限（最大 HP × `rest.capPct`%。`restCapHp`）まで戻る（`healed { via: 'fire' }`・`fire_used { player, depth, x, y, by, amount, maxHp, usesAfter }`）。1 手番。
+- 使えない（手番を使わない）: HP がもう上限以上・追ってくる敵が見えている（休憩と同じ判定）・**この遠征で、この階の火をもう使った**（`SeasonState.fireUses` の `{ no, depth }`。火がいくつあっても、だれの火でも）。
+- 同じマスにその世界の地物があるとき: 火が今使えるなら火を使い、使えないなら、その世界の地物を今までどおり操作する。
+
+**支援賞**（`support`）: 自分の火が、ほかの参加者に使われた回数。数えるのは、(1) 置いた本人でない、(2) その参加者がその火で数えられるのはシーズンを通して 1 回だけ、(3) その使用で最大 HP の `supportMinHealPct`（10）% 以上が戻った、のすべてを満たす使用だけ。サーバーが、使った者のランの `fire_used` を確定するたびに数える（その場で。キャンプを待たない）。同着は使った予算の少ないほう。共有層の火は `seasons/<id>/fires.json`（`{ order, depth, x, y, by, profileId, runId, wall, used, users }`）。
+
+観測: 火は `visible.features`（`by`）と覚えている地図に出る。`valid_actions` に `place_fire（費用・確定点・残りの数。置けないときは不可と理由）`、火の隣と上で `interact <dir>（野営の火: HP を N まで戻す）`。迷宮では `season.fire_used`（この遠征で火を使った階）、キャンプでは `season.fires`（自分の火ごとに、使われた回数。まだ載っていない火も）と、賞の 4 行。

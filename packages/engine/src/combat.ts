@@ -376,14 +376,24 @@ export function kill(ctx: Ctx, victim: Entity, killer: Entity | null, via: Damag
     if (!masks[pr.id]?.includes('id')) updateMemory(ctx, pr.id, victim, (m) => { m.kills += 1; });
     // 撃破の経験値に深さの係数（深度 1 階ごとに xp.killDepthPct %。直行しても深さに追いつく。V3-2R3 §20.2）
     const kd = ctx.content.balance.xp.killDepthPct ?? 0;
-    grantXp(ctx, ctx.world.entities[killer.id], Math.trunc(((victim.xp ?? 0) * (100 + kd * Math.max(0, depth - 1))) / 100));
+    // 経験値の理由（S1 §8.9 の 2）: 倒した相手。見ていなかった相手（視界外で毒が倒した）は種族を伏せる
+    const unseenVictim = !seen.seenBy.includes(pr.id) || !!masks[pr.id]?.includes('id');
+    const af = victim.scale?.affixes ?? [];
+    grantXp(ctx, ctx.world.entities[killer.id], Math.trunc(((victim.xp ?? 0) * (100 + kd * Math.max(0, depth - 1))) / 100),
+      { reason: 'kill', victimKind: unseenVictim ? null : victim.kind, victimAffixes: unseenVictim || !af.length ? null : [...af] });
   }
 }
 
-export function grantXp(ctx: Ctx, e: Entity, amount: number): void {
+/** 経験値が入った理由（S1。SEASON.md §8.9 の 2。出来事 xp_gained に書く） */
+export type XpWhy =
+  | { reason: 'kill'; victimKind: string | null; victimAffixes: string[] | null }
+  | { reason: 'depth'; depth: number }
+  | { reason: 'objective' };
+
+export function grantXp(ctx: Ctx, e: Entity, amount: number, why?: XpWhy): void {
   if (!e.level || amount <= 0) return;
   const xpAfter = e.level.xp + amount;
-  ctx.emit({ type: 'xp_gained', target: e.id, amount, xpAfter, seenBy: e.player ? [e.player] : [] });
+  ctx.emit({ type: 'xp_gained', target: e.id, amount, xpAfter, ...(why ?? {}), seenBy: e.player ? [e.player] : [] });
   let cur = ctx.world.entities[e.id];
   const cls = ctx.content.classes[ctx.world.players[e.player!]?.classId ?? ''];
   while (cur.level && cur.level.xp >= xpForLevel(cur.level.level)) {

@@ -147,6 +147,8 @@ export interface SeasonStandingRow {
   adventure: { value: number; rank: number };
   contribution: { value: number; rank: number };
   survival: { value: number; rank: number } | null;
+  /** 支援賞（S1）: 自分の火がほかの参加者に使われた回数。古い記録には無い */
+  support?: { value: number; rank: number };
 }
 
 // ---- ターンフィード（GET /api/player/feed、SSE） ----

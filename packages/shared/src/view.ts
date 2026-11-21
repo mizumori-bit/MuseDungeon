@@ -73,6 +73,8 @@ export interface EntityView {
   intent?: Intent;
   /** 棲み処の地物（護りの火）の持ち主の守護者の呼び名（V3-3c §44.6） */
   lair?: { name: Names; title?: Names };
+  /** 野営の火（S1 §9.10）: 置いた者の名前 */
+  campfire?: { by: string };
   /** 持っている品（倒すと落とす。宝物庫の鍵。V3-5 §5.1） */
   carries?: string;
   /** 名前付きの強敵の名前（V3-5 §5.4） */
@@ -98,6 +100,8 @@ export interface RememberedView {
   lair?: { name: Names; title?: Names };
   /** この遠征の目的の遺物（V4-1a §12.2） */
   objective?: true;
+  /** 野営の火（S1 §9.10）: 置いた者の名前 */
+  campfire?: { by: string };
 }
 
 /** 護りの火の手がかり（V3-3c §44.6）: 同じ守護者の火を 1 基でも見ていれば、まだ見ていない灯っている火の方角と遠さ（気配と同じ形） */
@@ -463,6 +467,7 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
         const fv: EntityView = { id: e.id, cat, kind: e.kind, appearanceId: null, pos, state: e.feature?.state };
         const lg = e.lairOf ? world.entities[e.lairOf]?.guardian : undefined;
         if (lg) fv.lair = { name: { ...lg.name }, ...(lg.title ? { title: { ...lg.title } } : {}) };
+        if (e.campfire) fv.campfire = { by: e.campfire.by };
         entities.push(fv);
       }
     }
@@ -480,6 +485,7 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
     if (r.cat === 'item' && we?.item?.value !== undefined) rv.value = we.item.value;
     const lg = we?.lairOf ? world.entities[we.lairOf]?.guardian : undefined;
     if (lg) rv.lair = { name: { ...lg.name }, ...(lg.title ? { title: { ...lg.title } } : {}) };
+    if (we?.campfire) rv.campfire = { by: we.campfire.by };
     return rv;
   });
   // 護りの火の手がかり（V3-3c §44.6）: 同じ守護者の火を見た（見えている・覚えている）なら、まだ見ていない灯っている火の方角と遠さ

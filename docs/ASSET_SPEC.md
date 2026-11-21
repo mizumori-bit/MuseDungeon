@@ -294,6 +294,7 @@ World State にエンティティの「向き」は無い。向きはクライ�
 | 脆い天井 `core:brittle_ceiling` | `intact` → `fallen` | 推奨（崩れた後は瓦礫の姿） |
 | 胞子嚢 `core:spore_pod` | `ripe` → `burst` | 推奨 |
 | 毒の雲 `core:spore_cloud` | `drifting` のみ | – （半透明で描く。下のアイテムが見えること） |
+| 野営の火 `core:camp_fire`（S1。シーズンの参加者が置く） | `lit` のみ | – （ほかの地物・罠・品・敵と同じマスにあることがある。`glyph` テーマは橙の `=`） |
 | 罠（毒矢・転移・警報） | 状態なし | – （見つけた罠だけが描かれる） |
 
 - 状態の名前は content の `features` 定義に従う。地物が増えたら、発注表（§9.1）で確かめる。

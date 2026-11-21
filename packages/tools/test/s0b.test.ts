@@ -109,10 +109,10 @@ describe('S0b §6.2-1: XP gains say why', () => {
     expect((await t.act({ type: 'wait' })).ok).toBe(true);
     const ob = content.balance.xp.perObjective * target;
     expect(t.messages()).toContain(`経験値 +${ob}（遠征の目的を達成した）。`);
-    // プレイヤー向けの射影に理由が付く。engine の出来事には無い（engine の形は変えていない）
+    // 理由は engine の出来事が持つ（S1 §8.9 の 2。S0b では射影が出来事の順から決めていた）。射影はそのまま渡す
     const raw = t.r.session.history.filter((e) => e.type === 'xp_gained');
     expect(raw.length).toBe(3);
-    for (const e of raw) expect('reason' in e).toBe(false);
+    expect(raw.map((e) => e.type === 'xp_gained' && e.reason)).toEqual(['kill', 'depth', 'objective']);
     const view = projectPlayerView(t.world, t.pid);
     const pe = filterEventsForPlayer(t.r.session.history, t.pid, view).filter((e) => e.type === 'xp_gained') as unknown as Record<string, unknown>[];
     expect(pe.map((e) => e.reason)).toEqual(['kill', 'depth', 'objective']);
@@ -140,35 +140,21 @@ describe('S0b §6.2-1: XP gains say why', () => {
     expect(narrate(pe[0], { ...ctx, selfId: null })).toBeNull();
   });
 
-  it('boundaries: two kills in one command, an unseen poison kill, a died from another command, another XP gain in between, the objective only right before', () => {
+  it('the projection passes the engine\'s reasons through and makes none up (S1 §8.9-2: no more guessing from the order of events)', () => {
     const me = 'e_me0001';
     const view = { self: { id: me } } as unknown as Parameters<typeof filterEventsForPlayer>[2];
     let seq = 0;
     const ev = (o: Record<string, unknown>, cause = 7) => ({ seq: ++seq, cause, floor: 'main:3', ft: 0, wall: 0, seenBy: ['p_1'], ...o }) as unknown as GameEvent;
-    const died = (id: string, kind: string, o: Record<string, unknown> = {}, cause = 7) => ev({ type: 'died', id, kind, killer: me, killerKind: 'core:warrior', via: 'melee', pos: { x: 1, y: 1 }, ...o }, cause);
-    const xp = (amount: number, cause = 7) => ev({ type: 'xp_gained', target: me, amount, xpAfter: 50 }, cause);
+    const died = ev({ type: 'died', id: 'e_m00001', kind: 'core:goblin', killer: me, killerKind: 'core:warrior', via: 'melee', pos: { x: 1, y: 1 } });
     const reasons = (events: GameEvent[]) => (filterEventsForPlayer(events, 'p_1', view).filter((e) => e.type === 'xp_gained') as unknown as Record<string, unknown>[])
       .map((e) => `${e.reason ?? '-'}:${e.victimKind ?? e.depth ?? ''}`);
-    // 同じ命令で 2 体（薙ぐ）: それぞれ直前の倒した相手
-    expect(reasons([died('e_m00001', 'core:goblin'), xp(3), died('e_m00002', 'core:cave_rat'), xp(1)])).toEqual(['kill:core:goblin', 'kill:core:cave_rat']);
-    // 視界の外の毒: 相手は伏せたまま（何かを倒した）
-    const poisoned = filterEventsForPlayer([died('e_m00003', 'core:goblin', { via: 'poison', masks: { p_1: ['id', 'pos', 'kind', 'affixes', 'maxHp'] } }), xp(3)], 'p_1', view);
-    const px = poisoned.find((e) => e.type === 'xp_gained') as unknown as Record<string, unknown>;
-    expect(px.reason).toBe('kill');
-    expect(px.victimKind).toBeNull();
-    expect(narrate(px as never, { locale: 'ja', catalog, selfId: me, playerNames: {} })).toBe('経験値 +3（何かを倒した）。');
-    // 別の命令の died は拾わない
-    expect(reasons([died('e_m00004', 'core:goblin', {}, 6), xp(3, 7)])).toEqual(['-:']);
-    // 間に別の経験値があれば、その前の出来事は別の経験値の理由
-    expect(reasons([died('e_m00005', 'core:goblin'), xp(3), xp(8)])).toEqual(['kill:core:goblin', '-:']);
-    // 目的の達成は、すぐ前の出来事のときだけ（間に別の出来事があれば付けない。その前の倒した相手も拾わない）
-    const done = () => ev({ type: 'objective_completed', no: 1, objective: { type: 'reach_depth', targetDepth: 3 }, seenBy: 'all' });
-    expect(reasons([done(), xp(24)])).toEqual(['objective:']);
-    expect(reasons([died('e_m00006', 'core:goblin'), done(), ev({ type: 'story', text: 'x', seenBy: ['p_1'] }), xp(24)])).toEqual(['-:']);
-    // 他人の経験値（協力。自分あてでない xp_gained）は自分の射影に入らない
-    expect(reasons([done(), ev({ type: 'xp_gained', target: 'e_other1', amount: 24, xpAfter: 30, seenBy: ['p_2'] }), xp(24)])).toEqual(['objective:']);
-    // 自分の階の移動 → 新しい深さ
-    expect(reasons([ev({ type: 'entity_changed_floor', id: me, kind: 'core:warrior', from: { floor: 'main:2', x: 1, y: 1 }, to: { floor: 'main:3', x: 2, y: 2 }, dir: 'down', nextActAt: 0 }), xp(12)])).toEqual(['depth:3']);
+    // 理由の無い古い出来事は、直前に倒した文があっても理由を付けない
+    expect(reasons([died, ev({ type: 'xp_gained', target: me, amount: 3, xpAfter: 50 })])).toEqual(['-:']);
+    // engine の理由はそのまま（伏せた相手は null で「何かを倒した」）
+    expect(reasons([ev({ type: 'xp_gained', target: me, amount: 3, xpAfter: 50, reason: 'kill', victimKind: 'core:goblin', victimAffixes: null })])).toEqual(['kill:core:goblin']);
+    const px = filterEventsForPlayer([ev({ type: 'xp_gained', target: me, amount: 3, xpAfter: 53, reason: 'kill', victimKind: null, victimAffixes: null })], 'p_1', view)[0];
+    expect(narrate(px, { locale: 'ja', catalog, selfId: me, playerNames: {} })).toBe('経験値 +3（何かを倒した）。');
+    expect(reasons([ev({ type: 'xp_gained', target: me, amount: 12, xpAfter: 60, reason: 'depth', depth: 3 })])).toEqual(['depth:3']);
   });
 
   it('XP lines do not take the slots of capped lists (the recent events of the observation)', async () => {

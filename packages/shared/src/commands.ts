@@ -70,6 +70,8 @@ export const CommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('choose_boon'), option: z.union([z.number().int().min(1).max(9), z.string().min(1)]) }),
   /** シーズンのランのキャンプで、このランで見た下り階段を報告する（S0。手番を消費しない。サーバーが共有層に問い合わせ、season_sync として記録する） */
   z.object({ type: z.literal('report_stairs') }),
+  /** 野営の火を置く（S1。SEASON.md §8.2。迷宮の中・1 手番・シーズンのランだけ） */
+  z.object({ type: z.literal('place_fire') }),
 ]);
 
 export type Command = z.infer<typeof CommandSchema>;
@@ -100,7 +102,7 @@ export type LegacyMonster = z.infer<typeof LegacyMonsterSchema>;
 
 /** シーズンの写し（S0。PROTOCOL §9.7）。budget.at は engine が取り込んだときの手番で埋める */
 const SeasonAwardSchema = z.object({
-  id: z.enum(['adventure', 'contribution', 'survival']), value: z.number().int().nullable(), rank: z.number().int().nullable(), entrants: z.number().int().nonnegative(),
+  id: z.enum(['adventure', 'contribution', 'survival', 'support']), value: z.number().int().nullable(), rank: z.number().int().nullable(), entrants: z.number().int().nonnegative(),
   leader: z.object({ name: z.string().max(64), value: z.number().int() }).nullable(), gap: z.number().int().nullable(),
 });
 export const SeasonSyncSchema = z.object({
@@ -112,6 +114,9 @@ export const SeasonSyncSchema = z.object({
     ends_at: z.number(), ended: z.boolean(),
     public: z.array(z.object({ depth: z.number().int().positive(), x: z.number().int(), y: z.number().int(), by: z.string().max(64) })),
     awards: z.array(SeasonAwardSchema), contribution: z.number().int().nonnegative(), died: z.boolean(),
+    /** S1: 共有層の野営の火（mine: 自分の火、uses: 支援賞に数えた回数）と、参加者の表示名 */
+    fires: z.array(z.object({ depth: z.number().int().positive(), x: z.number().int(), y: z.number().int(), by: z.string().max(64), mine: z.boolean().optional(), uses: z.number().int().nonnegative().optional() })).optional(),
+    self: z.string().max(64).optional(),
   }),
   /** 報告の結果（reason: report）: 送った階段と、最初の報告だったか */
   report: z.object({ stairs: z.array(z.object({ depth: z.number().int().positive(), x: z.number().int(), y: z.number().int(), first: z.boolean() })) }).optional(),

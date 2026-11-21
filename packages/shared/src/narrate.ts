@@ -97,7 +97,8 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
     }
     case 'healed': {
       // 自然回復・休息は 1 ずつ頻繁に起きるので文章にしない（rest の結果に合計が出る）
-      if (ev.via === 'regen' || ev.via === 'rest') return null;
+      // 野営の火（S1）は fire_used の文に戻った HP が出る
+      if (ev.via === 'regen' || ev.via === 'rest' || ev.via === 'fire') return null;
       const tg = who(ctx, ev.target, ev.targetKind);
       return ja ? `${tg}は ${ev.amount} 回復した。` : `${cap(tg)} recover${ev.target === self ? '' : 's'} ${ev.amount} HP.`;
     }
@@ -131,7 +132,7 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
       return ja ? `レベル ${ev.levelAfter} に上がった！${tail}` : `You reach level ${ev.levelAfter}!${tail}`;
     }
     case 'xp_gained': {
-      // 経験値が増えた理由（S0b。SEASON.md §6.2 の 1）。理由はプレイヤー向けの射影が足す（filter.ts の annotateXp）。俯瞰では出さない
+      // 経験値が増えた理由（S0b。SEASON.md §6.2 の 1）。理由は engine の出来事が持つ（S1 §8.9 の 2）。古い出来事には無い。俯瞰では出さない
       if (!self || ev.target !== self) return null;
       const why = ev.reason === 'kill' ? (ja ? `${who(ctx, null, ev.victimKind, ev.victimAffixes)}を倒した` : `killed ${who(ctx, null, ev.victimKind, ev.victimAffixes)}`)
         : ev.reason === 'depth' ? (ja ? `初めて地下${ev.depth ?? '?'}階に着いた` : `first time on depth ${ev.depth ?? '?'}`)
@@ -441,8 +442,14 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
       return null;
     // シーズン（S0 §9.4）: 公開された階段を地図に載せた・階段の報告の結果
     case 'knowledge_updated':
+      // 共有層の野営の火（S1 §9.10）
+      if (ev.publicFire) return ja ? `この階には ${ev.publicFire} の野営の火がある。地図に載せた（途中の道はまだ分からない）。` : `${ev.publicFire}'s campfire is on this floor. It is on your map (the way there is still unknown).`;
       if (!ev.publicStairs) return null;
       return ja ? `この階の下り階段は公開されている（${ev.publicStairs} が報告）。地図に載せた（途中の道はまだ分からない）。` : `This floor's down stairs have been published (reported by ${ev.publicStairs}). They are on your map (the way there is still unknown).`;
+    case 'fire_placed':
+      return ja ? `野営の火を置いた（地下${ev.depth}階 (${ev.x},${ev.y})。確定点から ${ev.cost} 点を払った。キャンプに着くと、ほかの参加者の世界にも現れる）。` : `You set a campfire (depth ${ev.depth} (${ev.x},${ev.y}); paid ${ev.cost} banked points. It reaches the other participants once you are back at camp).`;
+    case 'fire_used':
+      return ja ? `${ev.by} の野営の火で休んだ。HP +${ev.amount}（この遠征では、この階の火はもう使えない）。` : `You rest at ${ev.by}'s campfire: HP +${ev.amount} (no more campfires on this floor this expedition).`;
     case 'stairs_reported': {
       const list = (ev.stairs as { depth: number; first: boolean }[]) ?? [];
       const firsts = list.filter((x) => x.first).map((x) => (ja ? `地下${x.depth}階` : `depth ${x.depth}`));

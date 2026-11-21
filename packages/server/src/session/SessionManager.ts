@@ -40,7 +40,7 @@ export class SessionManager {
   constructor(content: Content, readonly config: ServerConfig) {
     this.catalog = buildCatalog(content);
     this.profiles = new ProfileService(content, this.catalog, new ProfileStore(config.profilesDir));
-    this.seasons = new SeasonService(new SeasonStore(config.seasonsDir ?? null), { engineVersion: ENGINE_VERSION, contentVersion: content.version }, (runId) => this.liveRunState(runId));
+    this.seasons = new SeasonService(new SeasonStore(config.seasonsDir ?? null), { engineVersion: ENGINE_VERSION, contentVersion: content.version }, (runId) => this.liveRunState(runId), Date.now, content.balance.season.supportMinHealPct);
     this.deps = { content, catalog: this.catalog, config, profiles: this.profiles, season: this.seasons };
     this.store = config.runsDir ? new RunStore(config.runsDir) : null;
     // 終わりの時刻の後の確定（SEASON.md §2.1）: 1 分ごとに見る

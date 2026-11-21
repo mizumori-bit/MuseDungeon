@@ -22,6 +22,8 @@ const PLAYER_VISIBLE: ReadonlySet<EventType> = new Set<EventType>([
   'floor_reset',
   // シーズン（S0 §9.4）: 階段の報告の結果（本人だけ）
   'stairs_reported',
+  // 野営の火（S1 §9.10。本人だけ）
+  'fire_placed', 'fire_used',
 ]);
 
 /** 自分に関するときだけ渡す種別 */
@@ -48,6 +50,8 @@ const SELF_ONLY: Partial<Record<EventType, (ev: any, playerId: PlayerId, selfId:
   archive_recalled: (ev, p) => ev.player === p,
   boon_triggered: (ev, _p, self) => ev.actor === self,
   thought: (ev, p) => ev.player === p,
+  fire_placed: (ev, p) => ev.player === p,
+  fire_used: (ev, p) => ev.player === p,
 };
 
 /** プレイヤー向けに縮約したイベント（seenBy/masks/put/del を除去済み） */
@@ -71,8 +75,8 @@ export function filterEventsForPlayer(events: readonly GameEvent[], playerId: Pl
   const selfId = view.self.id;
   const identified = new Set(view.identified);
   for (const ev of events) {
-    // 公開された階段を地図に載せた knowledge_updated（S0 §9.4）だけは文にする（ほかの knowledge_updated は渡さない。シーズンでないランには無い）
-    if (!PLAYER_VISIBLE.has(ev.type) && !(ev.type === 'knowledge_updated' && ev.publicStairs)) continue;
+    // 公開された階段・野営の火を地図に載せた knowledge_updated（S0 §9.4・S1 §9.10）だけは文にする（ほかの knowledge_updated は渡さない。シーズンでないランには無い）
+    if (!PLAYER_VISIBLE.has(ev.type) && !(ev.type === 'knowledge_updated' && (ev.publicStairs || ev.publicFire))) continue;
     if (!eventVisibleTo(ev, playerId)) continue;
     const selfOnly = SELF_ONLY[ev.type];
     if (selfOnly && !selfOnly(ev, playerId, selfId)) continue;
@@ -135,7 +139,6 @@ export function filterEventsForPlayer(events: readonly GameEvent[], playerId: Pl
     }
     out.push(pe as ProjectedEvent);
   }
-  annotateXp(out, selfId);
   return out;
 }
 
@@ -154,34 +157,3 @@ export function lastWithoutXp<T extends { type: string }>(items: readonly T[], n
   return items.slice(i);
 }
 
-/**
- * 経験値が増えた理由（S0b。SEASON.md §6.2 の 1）: engine の xp_gained は理由を持たないので、同じ命令の中で
- * その前にある、自分が見た出来事から決めて、射影に足す（engine の出来事の形は変えない）。
- * 経験値が入るのは 3 つだけ（combat.ts の grantXp の呼び出し）: 自分が倒した died の直後、自分の entity_changed_floor（新しい深さ）の後、
- * objective_completed の直後。間に別の xp_gained があれば、それより前は別の経験値の理由なので見ない。決まらなければ付けない。
- */
-function annotateXp(out: ProjectedEvent[], selfId: string): void {
-  for (let i = 0; i < out.length; i++) {
-    const e = out[i] as Record<string, unknown>;
-    if (e.type !== 'xp_gained' || e.target !== selfId) continue;
-    for (let j = i - 1; j >= 0; j--) {
-      const p = out[j] as Record<string, unknown>;
-      if (p.cause !== e.cause || p.type === 'xp_gained') break;
-      if (p.type === 'died' && p.killer === selfId && p.id !== selfId) {
-        e.reason = 'kill';
-        e.victimKind = (p.kind as string | null | undefined) ?? null;
-        e.victimAffixes = (p.affixes as string[] | null | undefined) ?? null;
-        break;
-      }
-      // 目的の達成は、すぐ前の出来事のときだけ（engine は達成の直後に、参加者ごとに経験値を出す。間にほかの出来事があれば、別の経験値。S0b §7.9）
-      if (p.type === 'objective_completed') { if (j === i - 1) e.reason = 'objective'; break; }
-      if (p.type === 'entity_changed_floor' && p.id === selfId) {
-        const to = (p.to as { floor?: string } | null | undefined)?.floor;
-        const depth = to ? Number(to.split(':')[1]) : NaN;
-        e.reason = 'depth';
-        if (Number.isFinite(depth)) e.depth = depth;
-        break;
-      }
-    }
-  }
-}

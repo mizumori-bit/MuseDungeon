@@ -619,7 +619,7 @@ export function checkObjective(ctx: Ctx): void {
     for (const pid of x.participants) {
       const pr = ctx.world.players[pid];
       const e = pr?.state === 'alive' ? ctx.world.entities[pr.entityId] : undefined;
-      if (e) grantXp(ctx, e, amount);
+      if (e) grantXp(ctx, e, amount, { reason: 'objective' });
     }
   }
 }

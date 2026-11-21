@@ -141,9 +141,18 @@ export class Ctx {
   }
 
   /** 地物または罠 */
+  /** そのマスの地物か罠。野営の火（S1）は入れない（ほかの世界では、その世界の地物・罠と同じマスに置かれることがあり、それらを今までどおり働かせる） */
   featureAt(key: FloorKey, x: number, y: number): Entity | undefined {
     for (const e of this.onFloor(key)) {
-      if ((e.feature || e.trap) && e.pos && e.pos.floor === key && e.pos.x === x && e.pos.y === y) return e;
+      if ((e.feature || e.trap) && !e.campfire && e.pos && e.pos.floor === key && e.pos.x === x && e.pos.y === y) return e;
+    }
+    return undefined;
+  }
+
+  /** そのマスの野営の火（S1。SEASON.md §8） */
+  campfireAt(key: FloorKey, x: number, y: number): Entity | undefined {
+    for (const e of this.onFloor(key)) {
+      if (e.campfire && e.pos && e.pos.floor === key && e.pos.x === x && e.pos.y === y) return e;
     }
     return undefined;
   }

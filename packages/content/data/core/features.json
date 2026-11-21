@@ -18,6 +18,11 @@
     "afterInteract": "out"
   , "desc": {"ja": "護られし者の守りの火。灯っている間、その守護者の装甲が上がる。隣で interact するか、投げた物を当てると消える", "en": "A ward fire. While lit, its guardian has more armor. Put it out with interact next to it or by hitting it with a throw"} },
   {
+    "id": "core:camp_fire", "name": { "ja": "野営の火", "en": "campfire" }, "category": "feature",
+    "states": ["lit"], "initialState": "lit", "passable": true, "campfire": true,
+    "onInteract": []
+  , "desc": {"ja": "シーズンの参加者が置いた野営の火。隣か上で interact すると、HP が休憩の上限まで戻る（1 回の遠征で、1 つの階につき 1 回。追ってくる敵が見えている間は使えない）", "en": "A campfire left by a season participant. interact next to or on it to heal up to the rest cap (once per floor per expedition; not while a hunting enemy is in view)"} },
+  {
     "id": "core:trap_dart", "name": { "ja": "毒矢の罠", "en": "poison dart trap" }, "category": "trap",
     "passable": true, "depth": { "min": 1 }, "rarity": 1,
     "onEnter": [{ "effect": "damage", "amount": "1d4" }, { "effect": "status", "status": "core:poison", "turns": "1d4+2", "power": 1, "chancePct": 70 }]

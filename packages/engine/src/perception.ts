@@ -114,6 +114,7 @@ export function updateKnowledge(ctx: Ctx, key: FloorKey): void {
     seedPublicStairs(ctx, pr, key);
     const fov = playerFov(ctx, pr);
     const fovSet = new Set(fov);
+    seedCampfires(ctx, pr, key, fovSet);
     const k = pr.knowledge;
     const fk = k.floors[key];
     const visChanged = !sameArr(fov, k.visible) || !fk;
@@ -209,6 +210,28 @@ function seedPublicStairs(ctx: Ctx, pr: PlayerRecord, key: FloorKey): void {
     type: 'knowledge_updated', player: pr.id, floorKey: key, visible: null, newlySeen: [i, f.terrain[i]], rememberedSet: [], rememberedDel: [], metAdd: [],
     mappedAdd: [i], publicStairs: ps.by, seenBy: [pr.id], floor: key,
   });
+}
+
+/**
+ * 野営の火（S1。PROTOCOL §9.10）: その階に入ると、まだ覚えていない火のマスが覚えている地図に載る（置いた者の名前つき。途中の道は載せない）。
+ * いま見えている火は、目で見て覚える（この関数では載せない。自分で置いた火も）
+ */
+function seedCampfires(ctx: Ctx, pr: PlayerRecord, key: FloorKey, fovSet: ReadonlySet<number>): void {
+  const f = ctx.world.floors[key];
+  if (!f || !ctx.world.season) return;
+  for (const e of ctx.entitiesOn(key)) {
+    if (!e.campfire || !e.pos) continue;
+    const i = e.pos.y * f.width + e.pos.x;
+    if (fovSet.has(i)) continue;
+    const fk = pr.knowledge.floors[key];
+    if (fk?.remembered.some((r) => r.id === e.id)) continue;
+    const unseen = (fk?.seen[i] ?? 0) === 0;
+    ctx.emit({
+      type: 'knowledge_updated', player: pr.id, floorKey: key, visible: null, newlySeen: unseen ? [i, f.terrain[i]] : [],
+      rememberedSet: [{ id: e.id, kind: e.kind, cat: 'feature', pos: { x: e.pos.x, y: e.pos.y }, qty: 1, ft: f.time, state: e.feature?.state ?? 'lit' }],
+      rememberedDel: [], metAdd: [], ...(unseen ? { mappedAdd: [i] } : {}), publicFire: e.campfire.by, seenBy: [pr.id], floor: key,
+    });
+  }
 }
 
 /**

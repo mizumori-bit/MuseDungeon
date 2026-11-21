@@ -504,6 +504,11 @@ export function createMcpServer(ctx: McpContext): McpServer {
     description: 'シーズンのランのキャンプで、このランで自分の目で見た下り階段のうち、まだ報告していないものを全部報告する（手番を消費しない）。その階の下り階段を最初に報告した者に貢献 1。報告した階段は、ほかの参加者の次の遠征から地図に載る。Report the down stairs you saw in this run (season runs, at camp).',
     inputSchema: { ...common, thought: actionCommon.thought },
   }, async (a) => act('report_stairs', a, { type: 'report_stairs' }));
+  server.registerTool('place_fire', {
+    title: '野営の火を置く',
+    description: 'シーズンのランの迷宮の中で、自分のいるマスに野営の火を置く（1 手番）。費用は 深さ × 200 点で、このランの確定した点から払う（戻らない）。キャンプに着くと、ほかの参加者の世界の同じ階の同じマスにも現れる。だれでも火の隣か上で interact すると、HP が休憩の上限まで戻る（1 回の遠征で 1 つの階につき 1 回）。ほかの参加者に使われると支援賞に数える。置けない所と上限は get_rules topic=season。Set a campfire on your cell (season runs; costs depth x 200 banked points).',
+    inputSchema: { ...actionCommon },
+  }, async (a) => act('place_fire', a, { type: 'place_fire' }));
   server.registerTool('choose_perk', {
     title: '特技を選ぶ', description: 'レベルアップの特技の候補から 1 つ選ぶ（self.perk_choice。手番を消費しない。選ぶまで進行は止まらない）。option は候補の番号（1 から）か特技の ID。',
     inputSchema: { ...common, option: z.union([z.number().int().min(1).max(9), z.string().min(1)]) },

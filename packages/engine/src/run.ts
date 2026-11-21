@@ -14,10 +14,11 @@ import { accrueHaul, noteRooms, checkObjective, huntingInView, offerExpeditions,
 import { noteClues } from './build';
 import { ensureFloor, findFreeCell } from './floors';
 import { updateKnowledge } from './perception';
+import { placeSeasonFires } from './campfire';
 import { advance, endTurn } from './scheduler';
 import { recomputeStats } from './stats';
 
-export const ENGINE_VERSION = '0.38.0';
+export const ENGINE_VERSION = '0.39.0';
 
 export interface CreateRunParams {
   runId: string;
@@ -187,6 +188,11 @@ export function seasonSync(world: World, content: Content, playerId: PlayerId, c
     ends_at: cmd.season.ends_at, ended: cmd.season.ended,
     public: cmd.season.public.map((x) => ({ ...x })), awards: cmd.season.awards.map((a) => ({ ...a, leader: a.leader ? { ...a.leader } : null })),
     contribution: cmd.season.contribution, died: cmd.season.died, reported,
+    // 野営の火（S1 §9.10）: 取り込んだ共有層の火と表示名。このランで置いた火・使った遠征と階は持ち越す
+    fires: (cmd.season.fires ?? []).map((x) => ({ ...x })),
+    placed: (world.season?.placed ?? []).map((x) => ({ ...x })),
+    fireUses: (world.season?.fireUses ?? []).map((x) => ({ ...x })),
+    ...(cmd.season.self ? { self: cmd.season.self } : {}),
   };
   if (meta.thought) ctx.emit({ type: 'thought', player: playerId, text: meta.thought.slice(0, 280), seenBy: [playerId] });
   if (cmd.report) {
@@ -194,6 +200,8 @@ export function seasonSync(world: World, content: Content, playerId: PlayerId, c
     ctx.emit({ type: 'stairs_reported', player: playerId, stairs, gained: stairs.filter((x) => x.first).length, seenBy: [playerId], floor: null });
   }
   ctx.emit({ type: 'season_synced', player: playerId, reason: cmd.reason, seasonAfter: after, seenBy: [playerId], floor: null });
+  // 共有層の火を、作ってある階のすべてに置く（まだ作っていない階には、作ったときに置く）
+  for (const key of Object.keys(world.floors).sort()) placeSeasonFires(ctx, key);
   return { ok: true, events: ctx.finish() };
 }
 
