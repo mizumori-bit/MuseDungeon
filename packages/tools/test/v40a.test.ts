@@ -89,7 +89,8 @@ describe('V4-0a milestone floors always hold a warden (§1.1)', () => {
     expect(g).toBeTruthy();
     expect(g.guardian!.name).toEqual(ms.name);
     expect(g.guardian!.types).toEqual(ms.types);
-    expect(g.guardian!.weakness).toBe(rollWardenInfo(content, a.w.secret.seed, 5).weakness);
+    // 弱点は装甲の目安で付けられるものだけ（V4-1l §34.2。生成した個体の装甲 = 種族 + 深層強化の半分 + 接辞）
+    expect(g.guardian!.weakness).toBe(rollWardenInfo(content, a.w.secret.seed, 5, g.stats!.armor).weakness);
     expect(g.kind).toBe(expectedKind);
     // 床の品は失われ、前の階の記憶も消えた
     expect(a.w.entities[item.id]).toBeUndefined();

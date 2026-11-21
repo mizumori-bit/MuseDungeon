@@ -44,14 +44,13 @@ export const weaknessHandlers = new Registry<WeaknessHandler>('guardianWeakness'
 // ---------------- 候補を作るとき ----------------
 
 /** 守護者の型・弱点・名前を決める（候補の時点。状態を持たないハッシュ） */
-export function rollGuardianInfo(content: Content, seed: string, no: number, slotIndex: number, rank: 1 | 2 | 3, typeCount?: number): GuardianInfo {
+export function rollGuardianInfo(content: Content, seed: string, no: number, slotIndex: number, rank: 1 | 2 | 3, opts: { typeCount?: number; armor?: number } = {}): GuardianInfo {
   const rng = Rng.fromSeed(`${seed}|expedition|${no}|guardian|${slotIndex}`);
   const ranks = content.balance.guardian.ranks;
-  const count = typeCount ?? ranks[Math.min(ranks.length, rank) - 1]?.types ?? 0;
+  const count = opts.typeCount ?? ranks[Math.min(ranks.length, rank) - 1]?.types ?? 0;
   const name = makeName(content, rng);
   const types = pickTypes(content, count, rng);
-  const ws = allowedWeaknesses(content, types);
-  const weakness = ws.length ? ws[rng.int(ws.length)].id : null;
+  const weakness = pickWeakness(allowedWeaknesses(content, types), rng, opts.armor);
   const title = types.length ? content.guardianTypes[types[0]]?.name : undefined;
   return { name, ...(title ? { title: { ...title } } : {}), types, weakness };
 }
@@ -62,13 +61,32 @@ function allowedWeaknesses(content: Content, types: readonly string[]) {
   return content.lists.guardianWeaknesses.filter((w) => !ex.has(w.id));
 }
 
-/** 節目の大守護者の名前・型・弱点（V3-3 §3.2。seed|warden|深さ から。状態を持たない）。型は 2 つ */
-export function rollWardenInfo(content: Content, seed: string, depth: number): GuardianInfo {
+/** その装甲の目安の相手に付けてよい弱点か（V4-1l §34.2: 弱点の maxArmor。無ければ上限なし） */
+export function weaknessFitsArmor(w: { maxArmor?: number }, armor: number): boolean {
+  return w.maxArmor === undefined || armor <= w.maxArmor;
+}
+
+/**
+ * 弱点を 1 つ引く。装甲の目安（armor）が引いた弱点の maxArmor を超えるなら、付けられる弱点から引き直す（V4-1l §34.2。同じ乱数の続き）。
+ * 引いた弱点が付けられる相手は、今までと同じ弱点になる（続いているランの候補と、まだ作っていない階の大守護者の変わり方を小さくする）
+ */
+function pickWeakness(ws: readonly { id: string; maxArmor?: number }[], rng: Rng, armor?: number): string | null {
+  if (!ws.length) return null;
+  const first = ws[rng.int(ws.length)];
+  if (armor === undefined || weaknessFitsArmor(first, armor)) return first.id;
+  const ok = ws.filter((w) => weaknessFitsArmor(w, armor));
+  return ok.length ? ok[rng.int(ok.length)].id : null;
+}
+
+/**
+ * 節目の大守護者の名前・型・弱点（V3-3 §3.2。seed|warden|深さ から。状態を持たない）。型は 2 つ。
+ * 弱点は種族と接辞で決まる装甲の目安（armor）で変わりうるので、弱点を使うのは階を作るとき（armor を渡す）と、その結果だけ（V4-1l §34.2）
+ */
+export function rollWardenInfo(content: Content, seed: string, depth: number, armor?: number): GuardianInfo {
   const rng = Rng.fromSeed(`${seed}|warden|${depth}`);
   const name = makeName(content, rng);
   const types = pickTypes(content, content.balance.guardian.warden.types, rng);
-  const ws = allowedWeaknesses(content, types);
-  const weakness = ws.length ? ws[rng.int(ws.length)].id : null;
+  const weakness = pickWeakness(allowedWeaknesses(content, types), rng, armor);
   const title = types.length ? content.guardianTypes[types[0]]?.name : undefined;
   return { name, ...(title ? { title: { ...title } } : {}), types, weakness, warden: true };
 }

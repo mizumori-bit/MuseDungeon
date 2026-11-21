@@ -13,7 +13,7 @@ import { guardianTypeHandlers, weaknessHandlers } from './guardians';
 
 export { createRun, joinPlayer, step, isPlayersTurn, ENGINE_VERSION } from './run';
 export type { CreateRunParams, StepResult } from './run';
-export { generateFloor, guardianCandidates, selectBiome, selectFloorType } from './gen/generate';
+export { generateFloor, guardianCandidates, selectBiome, selectFloorType, specArmor } from './gen/generate';
 export type { GeneratedFloor, SpawnSpec } from './gen/generate';
 export { computeFov, hasLos, line } from './geom';
 export { shotLine } from './perception';
@@ -31,6 +31,11 @@ export function previewOffers(world: World, content: Content, no: number): Exped
 }
 export { rollGuardianInfo, rollWardenInfo, weaknessHandlers } from './guardians';
 export { wardenHpRange } from './warden';
+import { wardenPreview } from './warden';
+/** 大守護者の下見（種族・体力・一撃・装甲・弱点。階があればその個体、無ければ生成したときの値。World は変えない。V4-1l §34.2 のテスト用） */
+export function previewWarden(world: World, content: Content, depth: number): ReturnType<typeof wardenPreview> {
+  return wardenPreview(new Ctx(world, content, null, 0), depth);
+}
 import { runGaps } from './warden';
 /** 続いているランの不整合（World は変えない。サーバーの起動時のログ用。V4-0b §1.2） */
 export function checkRunGaps(world: World, content: Content): string[] {

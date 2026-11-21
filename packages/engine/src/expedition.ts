@@ -11,7 +11,7 @@ import { ensureFloor, findFreeCell, floorOrder, noteFloorTraits, syncTerrainTabl
 import { hasLos, inCircle } from './geom';
 import { isOpaqueFn } from './perception';
 import { deepTier, guardianCandidates, guardianSpec, pickGuardianKind, rollMonsterAffixes, selectBiome, selectFloorType } from './gen/generate';
-import { departGuardians, lairPlan, makeName, projectedScar, rollGuardianInfo, rollWardenInfo, settleGuardian } from './guardians';
+import { departGuardians, lairPlan, makeName, projectedScar, rollGuardianInfo, settleGuardian } from './guardians';
 import { grantBoon, ownedBoons, pickRelic } from './boons';
 import { nextMilestone, restoreMilestoneFloors, sealedFloor, wardenHpRange, wardenPreview } from './warden';
 import { num, pickLore, tellStory } from './story';
@@ -381,13 +381,15 @@ export function makeOffers(ctx: Ctx, no: number): ExpeditionOffer[] {
       const rank = forceRank ?? guardianRankOf(slot);
       const kind = pickGuardianKind(ctx.content, ctx.world.secret.seed, 'main', target, rank, rng);
       if (kind) {
-        // 型・名前・弱点（V3-3 §3.1・§28.9）: 型と名前は候補に出す。弱点と種族は伏せる
-        const gi = rollGuardianInfo(ctx.content, ctx.world.secret.seed, no, i, rank);
-        offer.guardianKind = kind;
         // 接辞もここで決める（見込みの特徴と一撃の目安に入れる。生成ではこれを使う）
         const affixes = rollMonsterAffixes(ctx.content, target, Rng.fromSeed(`${ctx.world.secret.seed}|guardian-affix|${no}|${i}`));
+        const armor = monsterArmorEstimate(ctx, target, kind, affixes);
+        // 型・名前・弱点（V3-3 §3.1・§28.9）: 型と名前は候補に出す。弱点と種族は伏せる。
+        // 弱点は装甲の目安で付けられるものだけ（V4-1l §34.2: 装甲の高い相手に「投擲に弱い」を付けない）
+        const gi = rollGuardianInfo(ctx.content, ctx.world.secret.seed, no, i, rank, { armor });
+        offer.guardianKind = kind;
         offer.guardianAffixes = affixes;
-        offer.guardian = { rank, traits: guardianTraits(ctx, kind, affixes, 0, rank >= 2), name: gi.name, ...(gi.title ? { title: gi.title } : {}), types: gi.types, maxHit: guardianMaxHit(ctx, target, kind, affixes), hp: guardianHpEstimate(ctx, target, kind, rank, affixes), hpRange: guardianHpRange(ctx, target, kind, rank, affixes), armor: monsterArmorEstimate(ctx, target, kind, affixes) };
+        offer.guardian = { rank, traits: guardianTraits(ctx, kind, affixes, 0, rank >= 2), name: gi.name, ...(gi.title ? { title: gi.title } : {}), types: gi.types, maxHit: guardianMaxHit(ctx, target, kind, affixes), hp: guardianHpEstimate(ctx, target, kind, rank, affixes), hpRange: guardianHpRange(ctx, target, kind, rank, affixes), armor };
         offer.guardianWeakness = gi.weakness;
       }
       // 再挑戦: 新しい守護者を作らず、残っている守護者をもう一度目的にする（同じ名前・型・弱点。乱数は上で引いたまま）
@@ -809,12 +811,13 @@ function recallWarden(ctx: Ctx, pr: PlayerRecord, relic: string, floor: string):
   if (!ms) return;
   const known = ctx.world.players[pr.id]?.knowledge.wardenIntel?.[String(ms.depth)] ?? {};
   const base = { type: 'archive_recalled' as const, player: pr.id, relic, depth: ms.depth, guardianName: { ...ms.name }, seenBy: [pr.id], floor };
+  // 弱点は、その階の大守護者のもの（作られていればその個体、まだなら作ったときの弱点。装甲の目安で変わるので下見から。V4-1l §34.2）
+  const pv = wardenPreview(ctx, ms.depth);
   if (!known.weakness) {
-    const w = rollWardenInfo(ctx.content, ctx.world.secret.seed, ms.depth).weakness;
+    const w = pv?.weakness;
     if (w) { ctx.emit({ ...base, memory: 'weakness', weakness: w }); return; }
   }
   if (known.hp === undefined) {
-    const pv = wardenPreview(ctx, ms.depth);
     if (pv) { ctx.emit({ ...base, memory: 'vitals', hp: pv.hp, maxHit: pv.maxHit, armor: pv.armor }); return; }
   }
   ctx.emit({ ...base, memory: 'none' });

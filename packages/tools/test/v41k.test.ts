@@ -115,20 +115,22 @@ describe('V4-1k §32.1: 通らない相手に殴り続けない（自分の与�
     expect(fightNumbers('Swung 4 times, 3 hit for 9 total.')).toEqual({ melee: 4, throws: 0, hits: 3, dealt: 9 });
     expect(fightNumbers('no numbers')).toBeNull();
   });
-  it('the verdict: more than 6 melee hits with no stage drop → throw (if it can) else give up; throwing that does not drop the stage either → give up; melee only → give up', () => {
+  it('the verdict: more than 6 melee hits with no stage drop → throw (if it can); giving up is by the estimate (V4-1l §34.1: no hp_left_est → 12 hits without a drop)', () => {
     const p = defaultOrders().policy;
     expect(throughVerdict(stat({ mHits: 6, mDealt: 18 }), p, true)).toBe('ok');
     expect(throughVerdict(stat({ mHits: 7, mDealt: 21 }), p, true)).toBe('throw');
-    expect(throughVerdict(stat({ mHits: 7, mDealt: 21 }), p, false)).toBe('give_up');
+    // V4-1l §34.1: 投げられなくても、すぐにはやめない（体力の目安が無い相手は 12 回で）
+    expect(throughVerdict(stat({ mHits: 7, mDealt: 21 }), p, false)).toBe('ok');
     // 段階が下がっていれば、通っている
     expect(throughVerdict(stat({ mHits: 9, mDealt: 27, stage: 'wounded' }), p, true)).toBe('ok');
-    // 投げ始めた後: 投げ続ける。6 回を超えて段階が下がらない・近接より通らない → やめる
+    // 投げ始めた後: 投げ続ける。投げて 6 回当てても下がらず、合わせて 12 回 → やめる。近接より通らない → 近接に戻す（V4-1l）
     expect(throughVerdict(stat({ mHits: 7, mDealt: 21, tHits: 2, tDealt: 16, stageT0: 'healthy' }), p, true)).toBe('throw');
     expect(throughVerdict(stat({ mHits: 7, mDealt: 21, tHits: 7, tDealt: 56, stageT0: 'healthy' }), p, true)).toBe('give_up');
-    expect(throughVerdict(stat({ mHits: 7, mDealt: 21, tHits: 3, tDealt: 6, stageT0: 'healthy' }), p, true)).toBe('give_up');
+    expect(throughVerdict(stat({ mHits: 7, mDealt: 21, tHits: 3, tDealt: 6, stageT0: 'healthy' }), p, true)).toBe('ok');
     // 投げて段階が下がった後、投げる物が無くなった: 近接で続ける
     expect(throughVerdict(stat({ mHits: 7, mDealt: 21, tHits: 4, tDealt: 32, stageT0: 'healthy', stage: 'wounded' }), p, false)).toBe('ok');
-    expect(throughVerdict(stat({ mHits: 7, mDealt: 21 }), ordersOf({ fight_with: 'melee' }).policy, true)).toBe('give_up');
+    expect(throughVerdict(stat({ mHits: 7, mDealt: 21 }), ordersOf({ fight_with: 'melee' }).policy, true)).toBe('ok');
+    expect(throughVerdict(stat({ mHits: 12, mDealt: 21 }), ordersOf({ fight_with: 'melee' }).policy, true)).toBe('give_up');
     // 先に投げる: 投げる物がある間は投げ、無くなったら近接（測り直しで分かった: 投げる物が尽きたら、近接を試さずにやめていた）
     const tf = ordersOf({ fight_with: 'throw_first' }).policy;
     expect(throughVerdict(stat({ stageM0: null, tHits: 9, tDealt: 18, stageT0: 'healthy' }), tf, true)).toBe('throw');

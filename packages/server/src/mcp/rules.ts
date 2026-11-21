@@ -423,7 +423,8 @@ function guardiansText(c: Catalog, locale: 'ja' | 'en'): string {
   const lines = [ja ? '# 守護者の型（候補と観測に称号が出る）' : '# Guardian types (offers and observations show the title)'];
   for (const [id, g] of Object.entries(c.guardianTypes)) lines.push(`- ${nm(g.name)}（${id.split(':')[1]}）: ${nm(g.desc)}`);
   lines.push(ja ? '# 守護者の弱点（どれを持つかは伏せられている）' : '# Guardian weaknesses (which one a guardian has is hidden)');
-  for (const [, w] of Object.entries(c.guardianWeaknesses)) lines.push(`- ${nm(w.name)}: ${nm(w.desc)}`);
+  // 付けてよい装甲の上限（V4-1l §34.2: 装甲の高い相手では効かないので付かない）
+  for (const [, w] of Object.entries(c.guardianWeaknesses)) lines.push(`- ${nm(w.name)}: ${nm(w.desc)}${w.maxArmor !== undefined ? (ja ? `（装甲の目安が ${w.maxArmor} を超える相手には付かない）` : ` (never on a guardian whose armor estimate exceeds ${w.maxArmor})`) : ''}`);
   // 加護（V3-3 §3.3）: 遺物を持ち帰ると付く
   lines.push(ja ? '# 加護（遺物を階段の上で持ち帰ると付く。ランの終わりまで残る）' : '# Boons (gained by carrying a relic out on stairs; they last for the run)');
   const relicOf = (boon: string) => Object.values(c.items).find((it) => it.boon === boon);

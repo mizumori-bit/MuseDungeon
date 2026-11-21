@@ -92,7 +92,8 @@ npm.cmd run pilot -- --token-file .\my-token.txt --wake-cmd "node my-ai.mjs"
     "allow_lifeline": false,       // 帰還の綱を使ってよいか（使うのは、知っている階段へ着けないときだけ。綱は半分しか確定しない）
     "allow_heal": true,            // 回復の手段（観測の self.recovery）を使ってよいか: 能動技は立て直しの最初に、品は倒されうるのに退く手が無いときだけ
     "retreat_via_stairs": null,    // 立て直しで階を移って休んでよいか（null＝ソロは使う・協力プレイは同じ階に仲間が生きている間は使わない。見えていなくても。V4-1j）
-    "fight_with": "auto",          // 戦い方（V4-1k）: "auto"＝近接で戦い、通っていない（当てた回数が 6 回を超えても相手の HP の段階が下がらない）と分かったら投げる。投げても通らなければやめる / "throw_first"＝投げる武器があれば先に投げる（無くなったら近接）/ "melee"＝投げない。弱点を読んで決めるのは AI（warden_decision の返事に書ける）
+    "fight_with": "auto",          // 戦い方（V4-1k）: "auto"＝近接で戦い、通っていない（当てた回数が 6 回を超えても相手の HP の段階が下がらない）と分かったら投げる（投げても近接より通らなければ近接に戻す）/ "throw_first"＝投げる武器があれば先に投げる（無くなったら近接）/ "melee"＝投げない。弱点を読んで決めるのは AI（warden_decision の返事に書ける）。やめるかどうかは give_up_hits で決める
+    "give_up_hits": 30,            // 戦いをやめる見込み（V4-1l）: 倒すまでにあと何回当てる必要があるか（観測の残りの体力の目安 hp_left_est ÷ 自分の 1 回あたりの被害。近接と投擲の大きいほう）がこの回数を超えたら、やめる（not_getting_through）。見込みは、いまの手で 6 回当てた後から出す。体力の目安が無い相手（守護者・大守護者・記録の無い種族）は、最後に HP の段階が下がってから 12 回当てても下がらなければ、やめる
     "on_danger": "return",         // 危ない（danger）を上げた後: "return"＝その遠征は帰る（既定）/ "recover"＝階を移るか回復の手段で立て直す（どちらも無ければ帰る）。倒されうる状態でなくなったら続ける。同じ遠征で 2 回目は帰る（V4-1j）
     "queue_on_fail": "discard",    // queue の命令が失敗したとき: "discard"＝残りを捨てる / "skip"＝その命令だけ捨てる
     "ignore": [], "unignore": [],  // 相手にしない敵の ID を足す・外す（rev を上げたときに一度だけ効く）
@@ -294,7 +295,7 @@ npm.cmd run pilot -- --token-file .\my-token.txt --wake-cmd "node my-ai.mjs"
 | `perk_pending` / `boon_pending` | 特技・加護を選べる（`perk: "wake"` のとき） |
 | `gave_up` | この遠征の目的の相手と、決着しないまま（または HP の下限で）`give_up_after` 回止まった |
 | `objective_done` | 遠征の目的を果たした（`after_objective: "wake"` のとき） |
-| `not_getting_through` | 目的の相手に通っていないので、戦いをやめて帰った（キャンプで、`camp` の代わりに上げる。V4-1k）。`detail` に、近接と投擲それぞれの当てた回数・1 回あたりの被害、相手の HP の段階、自分の HP の減り。戦い方を変えるなら `policy.fight_with`、挑み直さないなら別の候補を選ぶ |
+| `not_getting_through` | 目的の相手に通っていないので、戦いをやめて帰った（キャンプで、`camp` の代わりに上げる。V4-1k）。`detail` に、近接と投擲それぞれの当てた回数・1 回あたりの被害、相手の HP の段階、自分の HP の減り、やめた理由（倒すまでの見込みの回数と、もとにした体力の目安・1 回あたりの被害。目安が無い相手は、段階が下がらないまま当てた回数。V4-1l）。戦い方を変えるなら `policy.fight_with`、やめる見込みを変えるなら `policy.give_up_hits`、挑み直さないなら別の候補を選ぶ |
 | `target_not_found` | 目的の階で目的の相手・品を探したが見つからない（`seek_max_turns` を使った・見回る所が残っていない） |
 | `target_blocked` | 目的の階が、相手にしない敵に撃たれて 2 回出た階（`leave_floor`）か、その先にある（この遠征では戻らない） |
 | `recover_failed` | 立て直しの手が尽きた（まだ倒されうる状態ではない）。`detail` に今の HP・試した手・追ってくる敵。帰るか続けるかを決めてほしい（V4-1h。今までは pilot が自分で階段の上で帰っていた） |

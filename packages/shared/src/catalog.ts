@@ -122,7 +122,7 @@ export interface Catalog {
   /** 守護者の型（V3-3 §3.1）。name は称号 */
   guardianTypes: Record<string, { name: Names; desc: Names; strongVs: 'melee' | 'thrown'; handler: string }>;
   /** 守護者の弱点（V3-3 §3.1）。どの守護者が持つかは試すまで伏せる */
-  guardianWeaknesses: Record<string, { name: Names; desc: Names; handler: string; short?: Names }>;
+  guardianWeaknesses: Record<string, { name: Names; desc: Names; handler: string; short?: Names; /** 付けてよい装甲の目安の上限（V4-1l §34.2） */ maxArmor?: number }>;
   /** 加護（V3-3 §3.3） */
   boons: Record<string, CatalogBoon>;
   /** 物語の枠（V3-3 §3.4。get_rules に出す） */

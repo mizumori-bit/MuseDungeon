@@ -486,11 +486,13 @@ export interface FightStat {
   mHits: number; mDealt: number; tHits: number; tDealt: number;
   /** 初めて戦った時点と、いまの自分の HP */
   selfHp0: number | null; selfHp: number | null;
+  /** 最後に相手の HP の段階が下がった時点の、当てた回数の合計（V4-1l §34.1。無ければ 0） */
+  dropHits?: number;
 }
 type HpStateName = 'healthy' | 'wounded' | 'badly_wounded' | 'near_death';
 const STAGES: HpStateName[] = ['healthy', 'wounded', 'badly_wounded', 'near_death'];
 const STAGE_JA: Record<HpStateName, string> = { healthy: '健康', wounded: '軽傷', badly_wounded: '重傷', near_death: '瀕死' };
-/** 「通っていない」とみなす当てた回数（これを超えても、相手の HP の段階が 1 つも下がらない。V4-1k §32.1） */
+/** 手を替える（近接 → 投げる）当てた回数（これを超えても、相手の HP の段階が 1 つも下がらない。V4-1k §32.1。V4-1l §34.1 で、やめるのには使わない） */
 export const NOT_THROUGH_HITS = 6;
 /**
  * fight の結果の文（PlayerPort の要約）から、近接・投擲の回数と、当てた回数・与えた被害を読む（V4-1k §32.1）。
@@ -506,30 +508,78 @@ export function fightNumbers(text: string): { melee: number; throws: number; hit
   if (m) return { melee: n(m[1]), throws: 0, hits: n(m[2]), dealt: n(m[3]) };
   return null;
 }
+/** 見込みを出すのに要る、いまの手で当てた回数（1 回あたりの被害が落ち着くまで待つ。V4-1l §34.1） */
+export const SETTLE_HITS = 6;
+/** 残りの体力の目安（hp_left_est）が無い相手: 最後に段階が下がってから、この回数当てても下がらなければやめる（V4-1l §34.1） */
+export const NO_EST_GIVE_UP_HITS = 12;
+/** 観測の残りの体力の目安（hp_left_est の幅） */
+export interface HpLeft { min: number; max: number | null }
+
+const stageIdx = (x: HpStateName | null) => (x ? STAGES.indexOf(x) : -1);
+/** その時点から、相手の HP の段階が下がったか */
+const droppedSince = (st: FightStat, from: HpStateName | null) => from !== null && st.stage !== null && stageIdx(st.stage) > stageIdx(from);
+
+/** fight の後の相手の HP の段階を記録に入れる。段階が下がったら、その時点の当てた回数を覚える（V4-1l §34.1） */
+export function noteStage(st: FightStat, now: HpStateName): void {
+  if (st.stage !== null && stageIdx(now) > stageIdx(st.stage)) st.dropHits = st.mHits + st.tHits;
+  st.stage = now;
+}
+
+/** 最後に段階が下がってから（下がっていなければ最初から）当てた回数 */
+export function hitsSinceDrop(st: FightStat): number {
+  return st.mHits + st.tHits - (st.dropHits ?? 0);
+}
+
 /**
- * 通っているか（V4-1k §32.1。pilot の記録と、観測の HP の段階だけで決める。弱点の文は読まない）:
- * ok＝今のまま / throw＝投げる（投げてやり直す・投げ続ける）/ give_up＝やめる（目的なら帰って起こす。目的でなければ相手にしない）
+ * いまの手（V4-1l §34.1: 手を替えるのは回数で。V4-1k §32.1 のまま）: auto は、近接で 6 回を超えて当てても段階が下がらなければ投げる。
+ * 投げても近接より通らない（3 回当てて 1 回あたりが近接以下・段階も下がらない）なら、近接に戻す。throw_first は投げる物がある間は投げる。melee は投げない
  */
-export function throughVerdict(st: FightStat, p: PilotPolicy, canThrow: boolean): 'ok' | 'throw' | 'give_up' {
-  const idx = (x: HpStateName | null) => (x ? STAGES.indexOf(x) : -1);
-  const dropped = (from: HpStateName | null) => from !== null && st.stage !== null && idx(st.stage) > idx(from);
-  const throwOk = canThrow && p.allow_throw && p.fight_with !== 'melee';
-  const meleeStuck = st.mHits > NOT_THROUGH_HITS && !dropped(st.stageM0);
-  // 先に投げる（AI が決めた）: 投げる物がある間は投げ、無くなったら近接（近接が通らなければやめる）
-  if (p.fight_with === 'throw_first') return throwOk ? 'throw' : meleeStuck ? 'give_up' : 'ok';
-  // 近接で戦っている（まだ投げていない）
-  if (st.tHits === 0) {
-    if (meleeStuck) return throwOk ? 'throw' : 'give_up';
-    return 'ok';
+export function fightMethod(st: FightStat, p: PilotPolicy, canThrow: boolean): 'melee' | 'throw' {
+  if (!(canThrow && p.allow_throw && p.fight_with !== 'melee')) return 'melee';
+  if (p.fight_with === 'throw_first') return 'throw';
+  const meleeStuck = st.mHits > NOT_THROUGH_HITS && !droppedSince(st, st.stageM0);
+  const throwWorse = st.mHits > 0 && st.tHits >= 3 && st.tDealt / st.tHits <= st.mDealt / st.mHits && !droppedSince(st, st.stageT0);
+  return meleeStuck && !throwWorse ? 'throw' : 'melee';
+}
+
+/**
+ * 倒すまでにあと何回当てる必要があるかの見込み（V4-1l §34.1）: 残りの体力の目安（上限があれば上限、無ければ下限）÷ 1 回あたりの被害
+ * （近接と投擲の大きいほう。6 回以上当てた手だけ。pilot の記録）。体力の目安が無い・まだ落ち着いていなければ null
+ */
+export function hitsNeeded(st: FightStat, est: HpLeft | null | undefined): { need: number; hp: number; per: number; floorOnly: boolean } | null {
+  if (!est) return null;
+  const per = Math.max(st.mHits >= SETTLE_HITS ? st.mDealt / st.mHits : 0, st.tHits >= SETTLE_HITS ? st.tDealt / st.tHits : 0);
+  if (per <= 0) return null;
+  const hp = est.max ?? est.min;
+  return { need: Math.ceil(hp / per), hp, per, floorOnly: est.max === null };
+}
+
+/**
+ * 通っているか（V4-1k §32.1・V4-1l §34.1。pilot の記録と、観測の HP の段階・残りの体力の目安だけで決める。弱点の文は読まない）:
+ * ok＝今のまま（近接）/ throw＝投げる（投げてやり直す・投げ続ける）/ give_up＝やめる（目的なら帰って起こす。目的でなければ相手にしない）。
+ * やめるのは、いまの手で 6 回当てた後から: 見込みが give_up_hits を超えた（体力の目安がある相手）・最後に段階が下がってから 12 回当てても下がらない（目安が無い相手）
+ */
+export function throughVerdict(st: FightStat, p: PilotPolicy, canThrow: boolean, est?: HpLeft | null): 'ok' | 'throw' | 'give_up' {
+  const m = fightMethod(st, p, canThrow);
+  if ((m === 'throw' ? st.tHits : st.mHits) >= SETTLE_HITS) {
+    if (est) {
+      const h = hitsNeeded(st, est);
+      if (h && h.need > p.give_up_hits) return 'give_up';
+    } else if (hitsSinceDrop(st) >= NO_EST_GIVE_UP_HITS) return 'give_up';
   }
-  // 投げている（近接が通らなかったので）: 投げてからも段階が下がらない（6 回を超えて）・近接より通らない、ならやめる
-  const mAvg = st.mHits ? st.mDealt / st.mHits : 0;
-  const tAvg = st.tDealt / st.tHits;
-  if (st.tHits > NOT_THROUGH_HITS && !dropped(st.stageT0)) return 'give_up';
-  if (st.mHits > 0 && st.tHits >= 3 && tAvg <= mAvg && !dropped(st.stageT0)) return 'give_up';
-  if (throwOk) return 'throw';
-  // 投げる物が無くなった: 投げて段階が下がっていれば近接で続ける。下がっていなければやめる
-  return dropped(st.stageT0) ? 'ok' : 'give_up';
+  return m === 'throw' ? 'throw' : 'ok';
+}
+
+/** やめた理由の文（not_getting_through の detail。見込みの回数と、もとにした数。V4-1l §34.1） */
+export function giveUpText(st: FightStat, p: PilotPolicy, est: HpLeft | null | undefined, canThrow: boolean): string {
+  const h = hitsNeeded(st, est);
+  const how = p.fight_with === 'melee' ? '近接だけで戦った（fight_with: melee なので投げない）'
+    : st.tHits > 0 ? (st.mHits > 0 ? '近接と投擲の両方を試した' : '投げて戦った')
+    : !canThrow || !p.allow_throw ? '近接だけで戦った（投げる物が無い）' : '近接だけで戦った';
+  const why = h
+    ? `倒すまでにあと ${h.need} 回ほど当てる見込み（残りの体力の目安 ${h.hp}${h.floorOnly ? ' 以上' : ''} ÷ 1 回あたり ${h.per.toFixed(1)}）。give_up_hits（${p.give_up_hits} 回）を超えるのでやめる`
+    : `残りの体力の目安が無い相手に、${hitsSinceDrop(st)} 回当てても HP の段階が下がらない（${NO_EST_GIVE_UP_HITS} 回でやめる）`;
+  return `${why}。${how}`;
 }
 /** 戦いの記録の 1 行（not_getting_through・warden_decision の detail。V4-1k §32.1） */
 export function fightStatText(st: FightStat): string {
@@ -550,7 +600,7 @@ export function fightArgs(obs: Observation, p: PilotPolicy, mem: PilotMemory, id
   const withThrow = (kinds: string[], adjacent: 'melee' | 'throw') => ({ target: id, hp_floor, with: kinds.length === 1 ? kinds[0] : kinds, adjacent });
   if (all.length && p.fight_with === 'throw_first') return withThrow(all, 'throw');
   const st = stats ? [...stats.values()].find((x) => x.id === id && x.exp === (obs.expedition?.no ?? null)) : undefined;
-  if (all.length && st && throughVerdict(st, p, true) === 'throw') return withThrow(all, 'throw');
+  if (all.length && st && fightMethod(st, p, true) === 'throw') return withThrow(all, 'throw');
   const last = (mem.stops[id] ?? 0) >= Math.max(1, p.give_up_after - 1);
   // 逃げた相手（target_fled で止まった）は、次から投げる武器でやり直す（V4-1i §28.2 の 3）
   const kinds = all.length && ((last && mem.away.includes(id)) || mem.fled.includes(id)) ? all : [];

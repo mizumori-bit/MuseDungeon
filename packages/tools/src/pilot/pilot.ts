@@ -10,7 +10,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { ObsMonster, ObsPartyMember, Observation, Pos, TurnBlock } from '@muse/shared';
 import { readFeed } from '../drive';
-import { afterAction, decide, fightArgs, fightNumbers, type FightStat, fightStatText, isRoleEnemy, leaderOf, lineWith, MOVE_TOOLS, newMemory, NOTIFY_STOPS, type PilotMemory, throughVerdict, throwKindsOf, type TrapBlock, type TrapRef, trapLines, type Wake, type WakeLevel } from './decide';
+import { afterAction, decide, fightArgs, fightNumbers, type FightStat, fightStatText, giveUpText, isRoleEnemy, leaderOf, lineWith, MOVE_TOOLS, newMemory, noteStage, NOTIFY_STOPS, type PilotMemory, throughVerdict, throwKindsOf, type TrapBlock, type TrapRef, trapLines, type Wake, type WakeLevel } from './decide';
 import { defaultOrders, parseOrders, type PilotOrders, type QueuedCommand, writeJsonAtomic } from './orders';
 
 /** 遠征ごとの結果（--dir の history.jsonl。1 遠征 1 行。V4-1e §19.3） */
@@ -740,18 +740,20 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
     st.mHits += nums.hits - tH; st.mDealt += nums.dealt - tD; st.tHits += tH; st.tDealt += tD;
     st.selfHp = obs.self.hp;
     const now0 = obs.visible.monsters.find((m) => m.id === before.id);
-    if (now0) st.stage = now0.hp_state;
+    if (now0) noteStage(st, now0.hp_state);
     fightStats.delete(key);
     fightStats.set(key, st);
     if (!now0) return;
     const canThrow = throwKindsOf(obs, throwKinds).length > 0;
-    if (throughVerdict(st, orders.policy, canThrow) !== 'give_up') return;
-    const why0 = orders.policy.fight_with === 'melee' ? '近接が通らない（fight_with: melee なので投げない）' : st.tHits > 0 ? '投げても通らない' : '投げる物が無い（近接は通らない）';
+    // やめるかは、倒すまでの見込み（観測の残りの体力の目安 ÷ 1 回あたりの被害）で決める（V4-1l §34.1）
+    const est = now0.hp_left_est ?? null;
+    if (throughVerdict(st, orders.policy, canThrow, est) !== 'give_up') return;
+    const why0 = giveUpText(st, orders.policy, est, canThrow);
     const detail = [lineWith(text, before.id), fightStatText(st), why0].filter(Boolean).join('\n');
     if (st.objective && exp !== null) {
       if (notThrough?.target === before.id && notThrough.exp === exp) return;
       notThrough = { target: before.id, exp, rev: orders.rev, detail };
-      note('not_getting_through', `${detail}\n目的の相手に通っていないので、戦いをやめて帰る（キャンプで not_getting_through を上げる。戦い方を変えるなら policy.fight_with）`, `not_getting_through:${key}`);
+      note('not_getting_through', `${detail}\n目的の相手に通っていないので、戦いをやめて帰る（キャンプで not_getting_through を上げる。戦い方を変えるなら policy.fight_with、やめる見込みの回数は policy.give_up_hits）`, `not_getting_through:${key}`);
     } else if (!gaveUp.has(before.id)) {
       gaveUp.add(before.id);
       mem.ignored = ignoredNow();

@@ -320,6 +320,8 @@ export const GuardianWeaknessSchema = z.object({
   short: NamesSchema.optional(),
   desc: NamesSchema,
   handler: z.string().min(1),
+  /** 付けてよい装甲の目安の上限（V4-1l §34.2: 装甲の高い相手に「投擲に弱い」を付けない。無ければ上限なし） */
+  maxArmor: z.number().int().nonnegative().optional(),
   params: z.record(z.number()).default({}),
 });
 

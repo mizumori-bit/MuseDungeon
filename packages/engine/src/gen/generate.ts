@@ -7,6 +7,7 @@ import type { BountyInfo, EntityRole, Floor, GuardianInfo, Names, Pos, Region } 
 import { cheb, DIRS, DIR_VEC, floorDiv, floorKey, Rng } from '@muse/shared';
 import { Registry, roll } from '../registry';
 import { guardianAsleep, lairPlan, makeName, rollWardenInfo } from '../guardians';
+import { sumAffixMods } from '../spawn';
 import { DOOR, FLOOR, GenGrid, WALL } from './grid';
 import { layoutGenerators } from './layouts';
 
@@ -709,7 +710,16 @@ export function pickGuardianKind(content: Content, seed: string, branch: string,
 }
 
 /** 守護者の生成仕様（生成時と、生成済みの階に遠征の開始時に置くときで共用）。格で体力の上乗せと下限が決まる */
-export function guardianSpec(content: Content, depth: number, kind: string, rank: 1 | 2 | 3, x: number, y: number, rng: Rng, info?: GuardianInfo, affixes?: string[]): SpawnSpec {
+/** 生成する個体の装甲の目安（spawn.ts の makeMonster と同じ式: 種族 + 深層強化の半分 + 接辞。型の効果は除く。V4-1l §34.2） */
+export function specArmor(content: Content, spec: Extract<SpawnSpec, { type: 'monster' }>): number {
+  return (content.monsters[spec.kind]?.stats.armor ?? 0) + floorDiv(spec.tier, 2) + sumAffixMods(content, spec.affixes).armor;
+}
+
+/**
+ * 守護者の生成仕様。info は候補で決めた型・名前・弱点。関数なら、接辞まで決めた後の装甲の目安を渡して決める
+ * （大守護者は種族を生成で選ぶので、弱点をここで決める。V4-1l §34.2）
+ */
+export function guardianSpec(content: Content, depth: number, kind: string, rank: 1 | 2 | 3, x: number, y: number, rng: Rng, info?: GuardianInfo | ((armor: number) => GuardianInfo), affixes?: string[]): SpawnSpec {
   const def = content.monsters[kind];
   const spec = monsterSpec({ content, depth }, def, deepTier(content, depth), x, y, false, rng);
   if (spec.type === 'monster') {
@@ -725,10 +735,11 @@ export function guardianSpec(content: Content, depth: number, kind: string, rank
     spec.hpBonusPct = r.hpPct;
     spec.minHp = r.minHpBase + r.minHpPerDepth * depth;
     // 型・名前・弱点（V3-3）。眠りが深い守護者は眠っていて、潜む者は眠らない
-    if (info) {
+    const gi = typeof info === 'function' ? info(specArmor(content, spec)) : info;
+    if (gi) {
       // 重い一撃（V3-8 §53.1）: 格 2 以上と大守護者
-      spec.guardian = { ...structuredClone(info), ...(rank >= 2 || info.warden ? { heavy: true } : {}) };
-      spec.asleep = guardianAsleep(content, info, spec.asleep);
+      spec.guardian = { ...structuredClone(gi), ...(rank >= 2 || gi.warden ? { heavy: true } : {}) };
+      spec.asleep = guardianAsleep(content, gi, spec.asleep);
     }
   }
   return spec;
@@ -802,10 +813,12 @@ function placeWarden(s: GenState): boolean {
     at = found;
   }
   const x = at % g.w, y = Math.trunc(at / g.w);
-  const info = rollWardenInfo(s.content, s.seed, s.depth);
   const kind = pickGuardianKind(s.content, s.seed, s.branch, s.depth, 3, rng);
   if (!kind) return false;
-  const spec = wardenSpec(s.content, s.depth, kind, x, y, rng, info);
+  // 弱点は、種族と接辞が決まってから装甲の目安で引く（V4-1l §34.2: 装甲の高い相手に「投擲に弱い」を付けない）
+  const spec = wardenSpec(s.content, s.depth, kind, x, y, rng, (armor) => rollWardenInfo(s.content, s.seed, s.depth, armor));
+  const info = spec.type === 'monster' ? spec.guardian : undefined;
+  if (!info) return false;
   s.spawns.push(spec);
   const occupied = new Set<number>([at, ...s.spawns.filter((sp) => 'x' in sp).map((sp) => g.idx((sp as { x: number }).x, (sp as { y: number }).y))]);
   if (s.up) occupied.add(g.idx(s.up.x, s.up.y));
@@ -815,7 +828,7 @@ function placeWarden(s: GenState): boolean {
 }
 
 /** 大守護者の生成仕様（格 3 の守護者に、大守護者の体力・下限・賞金を上書きする） */
-export function wardenSpec(content: Content, depth: number, kind: string, x: number, y: number, rng: Rng, info: GuardianInfo): SpawnSpec {
+export function wardenSpec(content: Content, depth: number, kind: string, x: number, y: number, rng: Rng, info: GuardianInfo | ((armor: number) => GuardianInfo)): SpawnSpec {
   const spec = guardianSpec(content, depth, kind, 3, x, y, rng, info);
   if (spec.type === 'monster') {
     const wb = content.balance.guardian.warden;
