@@ -15,9 +15,17 @@ export interface SeasonCliArgs {
   ends?: string;
   seeds?: string[];
   depth?: number;
+  /** 名前付きの引数の値にならなかった引数（PowerShell の npm run が --id などを消すと、値だけが残る） */
+  stray?: string[];
+}
+
+/** 使われなかった引数の知らせ（PowerShell の `npm run` は名前付きの引数を消し、引用符の無いカンマは別の引数に分ける） */
+export function strayArgsHint(stray: readonly string[]): string {
+  return `使われなかった引数: ${stray.join(' ')}。PowerShell では \`npm run\` が --id などの名前付きの引数を消すので \`npm.cmd run season -- …\` と書き、カンマを含む値は引用符でくくる（例: --seeds "s0-a,s0-b"） / unused arguments; in PowerShell use npm.cmd and quote values with commas`;
 }
 
 export function seasonCli(content: Content, a: SeasonCliArgs, log: (s: string) => void = console.log): number {
+  if (a.stray?.length) log(strayArgsHint(a.stray));
   const store = new SeasonStore(a.dir);
   const svc = new SeasonService(store, { engineVersion: ENGINE_VERSION, contentVersion: content.version });
   switch (a.sub) {
@@ -64,7 +72,7 @@ export function seasonCli(content: Content, a: SeasonCliArgs, log: (s: string) =
       // シード選び（SEASON.md §2.8）: シードごとの節目の大守護者の種族と装甲の目安
       const depth = a.depth ?? 5;
       const seeds = a.seeds ?? [];
-      if (!seeds.length) { log('--seeds a,b,c が要る'); return 1; }
+      if (!seeds.length) { log('--seeds "a,b,c" が要る（カンマで区切ったシード。PowerShell では引用符でくくる）'); return 1; }
       log(`| シード | 地下${depth}階の大守護者 | 体力 | 装甲の目安 | 最大の一撃 | 弱点 |`);
       log('|---|---|---|---|---|---|');
       for (const seed of seeds) {
@@ -75,7 +83,7 @@ export function seasonCli(content: Content, a: SeasonCliArgs, log: (s: string) =
       return 0;
     }
     default:
-      log('使い方: npm run season -- open --id <id> --seed <seed> --ends <ISO 時刻> [--name <名前>] [--budget 3000] / list / standings --id <id> / close --id <id> / wardens --seeds a,b,c [--depth 5]  （共通: --dir <置き場所>）');
+      log('使い方（PowerShell）: npm.cmd run season -- open --id <id> --seed <seed> --ends "<ISO 時刻>" [--name <名前>] [--budget 3000] / list / standings --id <id> / close --id <id> / wardens --seeds "a,b,c" [--depth 5]  （共通: --dir <置き場所>。bash では npm run）');
       return 1;
   }
 }

@@ -875,9 +875,9 @@ CommandRecord {
 
 ### 9.1 シーズンと参加
 
-- **開く**: 運用者が `npm run season -- open --id <id> --seed <seed> --ends <ISO 8601 の時刻> [--name <名前>] [--budget 3000]`。定義はサーバーの記録の置き場所の `seasons/<id>/season.json`（既定は `runs/seasons`。`MUSE_SEASONS_DIR` で変えられる）。動いているサーバーは、知らない ID を聞かれたときに読み直すので、起動し直さなくてよい。
+- **開く**: 運用者が `npm.cmd run season -- open --id <id> --seed <seed> --ends "<ISO 8601 の時刻>" [--name <名前>] [--budget 3000]`（PowerShell では `npm` でなく `npm.cmd` と書き、カンマや `+` を含む値は引用符でくくる。`npm run` だと名前付きの引数が消える。道具は、使われなかった引数があればそう知らせる）。定義はサーバーの記録の置き場所の `seasons/<id>/season.json`（既定は `runs/seasons`。`MUSE_SEASONS_DIR` で変えられる）。動いているサーバーは、知らない ID を聞かれたときに読み直すので、起動し直さなくてよい。
   - `SeasonDef { id, name, seed, engineVersion, contentVersion, budget, endsAt, openedAt }`。`engineVersion`・`contentVersion` は開いたときの版。サーバーの版と違えば、そのシーズンのランは始められない（SEASON.md §2.1: 開いている間、版は変えない）。
-  - ほかに `season -- list`・`season -- standings --id`・`season -- close --id`（すぐ確定する）・`season -- wardens --seeds a,b,c`（シードごとの地下 5 階の大守護者の種族と装甲の目安。§2.8 のシード選び）。
+  - ほかに `season -- list`・`season -- standings --id`・`season -- close --id`（すぐ確定する）・`season -- wardens --seeds "a,b,c"`（シードごとの地下 5 階の大守護者の種族と装甲の目安。§2.8 のシード選び）。
 - **参加**: `new_run { season: <id>, profile_token? }`（HTTP は `POST /api/runs { season }`）。1 つのプロフィールが、1 つのシーズンに 1 人の参加者。`profile_token` を省くと新しいプロフィール（＝新しい参加者）になる。
 - シーズンのランは**ソロ**。シーズンのシードで、Lv1 のキャンプから始まる（`seed`・`mode`・`objective` は使わない）。継承（V3-7）は受けない。シーズンのランの記録は、後のランの継承に使わない。記録・図鑑・実績は付く。
 - 同じ参加者のシーズンのランは、同時に 1 つ。倒れる・引退でランが終わったら、同じシーズンで新しいランを Lv1 から始められる（回数の上限は無い）。

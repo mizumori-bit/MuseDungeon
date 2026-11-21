@@ -12,6 +12,7 @@ import { applyEvent, seasonBudgetLeft, seasonReportable } from '@muse/shared';
 import type { Command, Expedition, GameEvent, World } from '@muse/shared';
 import { playWithPort } from '../src/bot';
 import { verifyRunDir } from '../src/replay';
+import { seasonCli } from '../src/season';
 
 const content = loadContent();
 const table = content.terrain.map((t) => t.id);
@@ -406,5 +407,21 @@ describe('S0 §2.6: records and replay', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('S0: the operator tool', () => {
+  it('says which arguments went unused (PowerShell npm run drops named arguments; unquoted commas split values)', () => {
+    const out: string[] = [];
+    // npm run が --id・--seed・--ends を消した形
+    expect(seasonCli(content, { sub: 'open', dir: null, stray: ['s0', 's0-a', '2026-12-01T21:00:00+09:00'] }, (x) => out.push(x))).toBe(1);
+    expect(out[0]).toContain('使われなかった引数: s0 s0-a');
+    expect(out[0]).toContain('npm.cmd run season');
+    expect(out.at(-1)).toContain('--id が要る');
+    // 正しい形なら知らせない
+    const ok: string[] = [];
+    expect(seasonCli(content, { sub: 'wardens', dir: null, seeds: ['s0-a', 's0-b'], stray: [] }, (x) => ok.push(x))).toBe(0);
+    expect(ok.join(' ')).not.toContain('使われなかった引数');
+    expect(ok.length).toBe(4);
   });
 });

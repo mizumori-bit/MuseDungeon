@@ -157,7 +157,11 @@ async function main() {
     case 'season': {
       // シーズンの運用（S0。PROTOCOL §9.1）
       const dir = flag('dir') ? resolve(flag('dir')!) : loadConfig().seasonsDir;
+      // 名前付きの引数の値にならなかった引数（PowerShell の npm run は --id などを消す。引用符の無いカンマは別の引数に分かれる）
+      const stray: string[] = [];
+      for (let i = 2; i < argv.length; i++) { if (argv[i].startsWith('--')) { i++; continue; } stray.push(argv[i]); }
       process.exitCode = seasonCli(content, {
+        stray,
         sub: argv[1] ?? '', dir, id: flag('id'), name: flag('name'), seed: flag('seed'), budget: flag('budget') ? Number(flag('budget')) : undefined,
         ends: flag('ends'), seeds: flag('seeds')?.split(',').map((x) => x.trim()).filter(Boolean), depth: flag('depth') ? Number(flag('depth')) : undefined,
       });

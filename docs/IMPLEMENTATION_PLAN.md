@@ -22,6 +22,7 @@ PowerShell では `npm run <script> -- --flag` の `--` を PowerShell が消す
 | テンポの計測（V2-5） | `npm.cmd run pacing -- --runs 100` |
 | ホスト駆動（V2-3） | サーバー起動中に `npm.cmd run drive -- --new-run Bot`（内蔵ダミー）。`--token <player_token>` で既存のランを引き継ぐ |
 | 記録の再実行検証 | `npm.cmd run replay:verify -- <runId>` |
+| シーズン（S0） | `npm.cmd run season -- open --id s0 --seed <seed> --ends "<ISO 時刻>"` / `npm.cmd run season -- wardens --seeds "a,b,c"` / `list` / `standings --id s0` / `close --id s0` |
 | アセット | `npm run assets:checklist` / `npm.cmd run assets:check -- packages/client/public/themes/sample` |
 
 ## 1. 守るべき不変条件（レビュー観点）
