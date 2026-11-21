@@ -38,13 +38,15 @@ export function placeSeasonFires(ctx: Ctx, key: FloorKey): void {
   }
 }
 
-/** 自分の火（取り込んだ自分の火と、このランで置いてまだ載っていない火）。シーズンを通して数える */
+/**
+ * 自分の火（取り込んだ自分の火（取り合いで載らなかった火も）と、このランで置いた火）。シーズンを通して数える。
+ * このランで置いた火は、同じマスにほかの者の火が載っていても、いつも自分の火（S1a §10.1 の 5）
+ */
 export function myFires(ctx: Ctx): { depth: number; x: number; y: number }[] {
   const s = ctx.world.season;
   if (!s) return [];
-  const pub = s.fires ?? [];
-  const mine = pub.filter((x) => x.mine).map((x) => ({ depth: x.depth, x: x.x, y: x.y }));
-  for (const p of s.placed ?? []) if (!pub.some((x) => sameCell(x, p))) mine.push({ ...p });
+  const mine = (s.fires ?? []).filter((x) => x.mine).map((x) => ({ depth: x.depth, x: x.x, y: x.y }));
+  for (const p of s.placed ?? []) if (!mine.some((x) => sameCell(x, p))) mine.push({ ...p });
   return mine;
 }
 
@@ -66,7 +68,8 @@ export function placeFireCheck(ctx: Ctx, e: Entity, pr: PlayerRecord): { cost: n
   if (ctx.featureAt(key, p.x, p.y)) return no('ほかの地物か罠のあるマスには置けない。', 'You cannot set a campfire where another feature or a trap is.', '一歩離れてから置く。', 'Step aside first.');
   const near = ctx.entitiesOn(key).filter((x) => x.campfire && x.pos && cheb(x.pos, p) <= r.fireSpacing).sort((a, b) => cheb(a.pos!, p) - cheb(b.pos!, p))[0];
   if (near) return no(`ほかの野営の火（${near.campfire!.by} の火・(${near.pos!.x},${near.pos!.y})）から ${r.fireSpacing} マス以内には置けない。`, `You cannot set a campfire within ${r.fireSpacing} cells of another one (${near.campfire!.by}'s at (${near.pos!.x},${near.pos!.y})).`, `${r.fireSpacing + 1} マス以上離れてから置く。`, `Move at least ${r.fireSpacing + 1} cells away.`);
-  if (huntingInView(ctx, pr)) return no('追ってくる敵が見えている間は、火を置けない。', 'You cannot set a campfire while a hunting enemy is in view.', '敵を片付けるか、離れてから。', 'Deal with the enemy or get away first.', 'hostile_in_view');
+  // 休憩と同じ判定（隣にいない動かない敵は数えない。観測の place_fire の行と同じ。S1a §10.1 の 3）
+  if (huntingInView(ctx, pr, true)) return no('追ってくる敵が見えている間は、火を置けない。', 'You cannot set a campfire while a hunting enemy is in view.', '敵を片付けるか、離れてから。', 'Deal with the enemy or get away first.', 'hostile_in_view');
   const mine = myFires(ctx);
   if (mine.some((x) => x.depth === f.depth)) return no('この階には、もうあなたの火がある（1 つの階に 1 人 1 つまで）。', 'You already have a campfire on this floor (one per person per floor).', 'ほかの階で置く。', 'Set it on another floor.');
   if (mine.length >= r.firesPerSeason) return no(`シーズンを通して置ける火は ${r.firesPerSeason} つまで（もう ${mine.length} つ置いた）。`, `You can set at most ${r.firesPerSeason} campfires in the season (you have set ${mine.length}).`, '置いた火は、動かせないし消せない。', 'Campfires cannot be moved or removed.');

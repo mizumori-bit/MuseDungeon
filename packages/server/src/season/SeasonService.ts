@@ -21,7 +21,8 @@ export interface SeasonDef {
   openedAt: number;
 }
 
-export interface SeasonRunRec { runId: string; startedAt: number; turns: number; deepest: number; banked: number; died: boolean; ended: boolean }
+/** firesSeen（S1a）: そのランの火の使用（fire_used）のうち、記録（log.jsonl）に書いた数。数える処理はやり直しても同じ（火ごとの users で 1 人 1 回） */
+export interface SeasonRunRec { runId: string; startedAt: number; turns: number; deepest: number; banked: number; died: boolean; ended: boolean; firesSeen?: number }
 
 export interface Participant {
   profileId: string;
@@ -34,8 +35,6 @@ export interface Participant {
   firstReports: number;
   lastFirstUsed: number;
   died: boolean;
-  /** 支援賞（S1 §8.5）: 自分の火が、ほかの参加者に使われて数えた回数（古い記録には無い） */
-  support?: number;
 }
 
 /** 招いた者（S0a。SEASON.md §4.1）。invites.json は運用の道具だけが書き、サーバーは読むだけ。トークンは入れない */
@@ -52,7 +51,11 @@ export interface PublicStairsRec { depth: number; x: number; y: number; by: stri
  * 共有層の野営の火（S1。PROTOCOL §9.10。fires.json）。used: 載せたときまでに置いた者が使った予算、
  * uses: 支援賞に数えた回数、users: 数えた参加者（1 つの火で 1 人 1 回）
  */
-export interface PublicFireRec { order: number; depth: number; x: number; y: number; by: string; profileId: string; runId: string; used: number; wall: number; uses: number; users: string[] }
+export interface PublicFireRec {
+  order: number; depth: number; x: number; y: number; by: string; profileId: string; runId: string; used: number; wall: number; uses: number; users: string[];
+  /** 同じマスの取り合いで載らなかった火（S1a §10.1 の 5）: ほかの者には渡さず、置いた者の火としてだけ数える（上限・自分の使用を支援に数えない） */
+  dup?: boolean;
+}
 
 export interface SeasonResult {
   finalizedAt: number;
@@ -77,7 +80,8 @@ const used = (p: Participant) => p.runs.reduce((a, r) => a + r.turns, 0);
 /** 順位に数える参加者（1 回でもランを始めた者。招いただけの者は入れない） */
 const started = (ps: readonly Participant[]) => ps.filter((p) => p.runs.length > 0);
 const banked = (p: Participant) => p.runs.reduce((a, r) => a + r.banked, 0);
-const support = (p: Participant) => p.support ?? 0;
+/** 支援の数は、火ごとの記録（fires.json の uses）から作る（S1a §10.1 の 4: 参加者ごとの数を別に持たない） */
+const supportOf = (fires: readonly PublicFireRec[]) => (p: Participant) => fires.reduce((a, f) => a + (!f.dup && f.profileId === p.profileId ? f.uses : 0), 0);
 
 /** 値の大きい順、同着は使った予算の少ない順。値も予算も同じなら同じ順位（1, 2, 2, 4） */
 function ranked<T>(items: T[], value: (x: T) => number, tie: (x: T) => number): Map<T, number> {
@@ -91,7 +95,7 @@ function ranked<T>(items: T[], value: (x: T) => number, tie: (x: T) => number): 
 }
 
 /** 3 つの賞の順位（PROTOCOL §9.5） */
-export function computeStandings(ps: readonly Participant[]): {
+export function computeStandings(ps: readonly Participant[], fires: readonly PublicFireRec[] = []): {
   rows: SeasonStandingRow[];
   award: (p: Participant, id: SeasonAward['id']) => SeasonAward;
 } {
@@ -110,6 +114,7 @@ export function computeStandings(ps: readonly Participant[]): {
   const conLead = leaderOf(con, (p) => p.firstReports);
   const surLead = leaderOf(sur, (p) => banked(p));
   // 支援賞（S1 §8.5）: 自分の火が使われた回数。同着は使った予算の少ないほう
+  const support = supportOf(fires);
   const sup = ranked(list, (p) => support(p), (p) => used(p));
   const supLead = leaderOf(sup, (p) => support(p));
   const rows: SeasonStandingRow[] = list.map((p) => ({
@@ -364,7 +369,7 @@ export class SeasonService implements SeasonHooks {
     if (!f) return null;
     const { d, p } = f;
     this.refresh(session, pid, f);
-    const st = computeStandings(started(d.participants));
+    const st = computeStandings(started(d.participants), d.fires);
     return {
       id: d.def.id, name: d.def.name,
       budget: { limit: d.def.budget, left: d.def.budget - used(p) },
@@ -373,7 +378,9 @@ export class SeasonService implements SeasonHooks {
       awards: (['adventure', 'contribution', 'survival', 'support'] as const).map((id) => st.award(p, id)),
       contribution: p.firstReports, died: p.died,
       // 野営の火（S1 §9.10）: 共有層の火（載せた順）。自分の火には mine と、支援賞に数えた回数
-      fires: [...d.fires].sort((a, b) => a.order - b.order).map((f) => ({ depth: f.depth, x: f.x, y: f.y, by: f.by, ...(f.profileId === p.profileId ? { mine: true, uses: f.uses } : {}) })),
+      // 取り合いで載らなかった火（dup）は、置いた者にだけ渡す（自分の火として数える）
+      fires: [...d.fires].filter((f) => !f.dup || f.profileId === p.profileId).sort((a, b) => a.order - b.order)
+        .map((f) => ({ depth: f.depth, x: f.x, y: f.y, by: f.by, ...(f.profileId === p.profileId ? { mine: true, uses: f.uses, ...(f.dup ? { dup: true } : {}) } : {}) })),
       self: p.name,
     };
   }
@@ -446,14 +453,51 @@ export class SeasonService implements SeasonHooks {
       const f = this.find(session, pid);
       if (!f) continue;
       const big = this.refresh(session, pid, f);
-      // 野営の火（S1 §8.4・§8.5）: 使われた火を数え（その場で）、キャンプに着いた・ランが終わったら、このランで置いた火を載せる
-      const usedFire = this.countFireUses(f.d, f.p, events.filter((e) => e.type === 'fire_used' && e.player === pid));
-      const pr = session.world.players[pid];
-      const home = pr && (pr.state === 'at_camp' || pr.state === 'dead' || pr.state === 'left' || session.world.status === 'ended');
-      const published = home && events.some((e) => e.type === 'expedition_ended' || e.type === 'run_ended' || (e.type === 'player_state' && e.player === pid)) ? this.publishFires(f.d, f.p, session) : 0;
-      if (big || usedFire || published) this.store.saveParticipants(f.d);
+      // 野営の火（S1 §8.4・§8.5。S1a §10.1 の 1）: キャンプに着いた・ランが終わったコミットで、このランで置いた火を載せ、このランの火の使用をまとめて数える
+      const arrived = events.some((e) => e.type === 'expedition_ended' || e.type === 'run_ended' || (e.type === 'player_state' && e.player === pid));
+      const fires = arrived && this.isHome(session, pid) ? this.settleFires(session, pid, f) : false;
+      if (big || fires) this.store.saveParticipants(f.d);
       if (big || events.some((e) => e.type === 'expedition_ended' || e.type === 'run_ended')) this.tick();
     }
+  }
+
+  /** キャンプにいるか、ランが終わったか（外との出入りの時機。§1.2 の 2） */
+  private isHome(session: RunSession, pid: PlayerId): boolean {
+    const pr = session.world.players[pid];
+    return !!pr && (pr.state === 'at_camp' || pr.state === 'dead' || pr.state === 'left' || session.world.status === 'ended');
+  }
+
+  /** 載せて数える（キャンプに着いたとき・ランが終わったとき・起動し直して復旧したとき）。変わったら true */
+  private settleFires(session: RunSession, pid: PlayerId, f: { d: SeasonData; p: Participant; run: SeasonRunRec }): boolean {
+    const published = this.publishFires(f.d, f.p, session);
+    const counted = this.countFireUses(f.d, f.p, f.run, session, pid);
+    return published > 0 || counted;
+  }
+
+  /**
+   * 起動し直して復旧したラン（S1a §10.1 の 4）: キャンプにいるかランが終わっていれば、載せて数え直す。
+   * 数える処理はやり直しても同じなので、記録を書いた後・保存の前に落ちた使用も、ここで数えられる
+   */
+  onRecovered(session: RunSession): void {
+    if (!session.world.meta.season) return;
+    for (const pid of session.world.playerOrder) {
+      const f = this.find(session, pid);
+      if (!f) continue;
+      this.refresh(session, pid, f);
+      if (this.isHome(session, pid) && this.settleFires(session, pid, f)) this.store.saveParticipants(f.d);
+    }
+  }
+
+  /** 開いているシーズンのうち、版（engine・コンテンツ）がこのサーバーと違うもの（S1a: 起動時の警告） */
+  versionWarnings(): string[] {
+    const out: string[] = [];
+    for (const id of this.store.ids()) {
+      const d = this.store.get(id);
+      if (!d || this.status(d) !== 'open') continue;
+      if (d.def.engineVersion === this.versions.engineVersion && d.def.contentVersion === this.versions.contentVersion) continue;
+      out.push(`シーズン ${id}「${d.def.name}」は版 engine ${d.def.engineVersion}・content ${d.def.contentVersion} で開かれた。このサーバーは engine ${this.versions.engineVersion}・content ${this.versions.contentVersion}。このシーズンでは新しいランを始められない（進行中のランは続けられるが、記録の再生と版が合わない）。シーズンの間は版を変えない（SEASON.md §2.1） / season ${id} was opened on another version; new runs cannot start`);
+    }
+    return out;
   }
 
   /**
@@ -465,14 +509,15 @@ export class SeasonService implements SeasonHooks {
     const placed = session.world.season?.placed ?? [];
     let n = 0;
     for (const pl of placed) {
-      const same = d.fires.find((x) => x.depth === pl.depth && x.x === pl.x && x.y === pl.y);
-      if (same) {
-        if (same.profileId !== p.profileId) this.store.log(d.def.id, { type: 'fire_duplicate', profileId: p.profileId, runId: session.runId, depth: pl.depth, x: pl.x, y: pl.y, holder: same.profileId });
-        continue;
-      }
-      const rec: PublicFireRec = { order: d.fires.length + 1, depth: pl.depth, x: pl.x, y: pl.y, by: p.name, profileId: p.profileId, runId: session.runId, used: used(p), wall: this.now(), uses: 0, users: [] };
+      const at = d.fires.filter((x) => x.depth === pl.depth && x.x === pl.x && x.y === pl.y);
+      if (at.some((x) => x.profileId === p.profileId)) continue;
+      // 同じマスにほかの者の火がもう載っている: ほかの者には渡さないが、置いた者の火として残す（dup。S1a §10.1 の 5。費用は戻らない）
+      const dup = at.length > 0;
+      const rec: PublicFireRec = { order: d.fires.length + 1, depth: pl.depth, x: pl.x, y: pl.y, by: p.name, profileId: p.profileId, runId: session.runId, used: used(p), wall: this.now(), uses: 0, users: [], ...(dup ? { dup: true } : {}) };
       d.fires.push(rec);
-      this.store.log(d.def.id, { type: 'fire_published', profileId: p.profileId, runId: session.runId, depth: pl.depth, x: pl.x, y: pl.y, order: rec.order });
+      this.store.log(d.def.id, dup
+        ? { type: 'fire_duplicate', profileId: p.profileId, runId: session.runId, depth: pl.depth, x: pl.x, y: pl.y, holder: at[0].profileId, order: rec.order }
+        : { type: 'fire_published', profileId: p.profileId, runId: session.runId, depth: pl.depth, x: pl.x, y: pl.y, order: rec.order });
       n++;
     }
     if (n) this.store.saveFires(d);
@@ -483,23 +528,29 @@ export class SeasonService implements SeasonHooks {
    * 火が使われた（S1 §8.5）: 置いた本人でない・その参加者がその火で数えられるのはシーズンを通して 1 回・最大 HP の supportMinHealPct% 以上が戻った、
    * をすべて満たす使用だけを、火を置いた参加者の支援賞に数える。数えた数を返す
    */
-  private countFireUses(d: SeasonData, user: Participant, uses: readonly GameEvent[]): number {
-    if (d.result || !uses.length) return 0;
+  private countFireUses(d: SeasonData, user: Participant, run: SeasonRunRec, session: RunSession, pid: PlayerId): boolean {
+    if (d.result) return false;
+    // そのランの火の使用をすべて見る（やり直しても同じ: 数えたかどうかは火ごとの users で決まる）
+    const uses = session.history.filter((e): e is Extract<GameEvent, { type: 'fire_used' }> => e.type === 'fire_used' && e.player === pid);
+    const placed = session.world.season?.placed ?? [];
+    const seen = run.firesSeen ?? 0;
     let n = 0;
-    for (const e of uses) {
-      if (e.type !== 'fire_used') continue;
-      const fire = d.fires.find((x) => x.depth === e.depth && x.x === e.x && x.y === e.y);
-      const counted = !!fire && fire.profileId !== user.profileId && !fire.users.includes(user.profileId) && e.amount * 100 >= e.maxHp * this.supportMinHealPct;
-      this.store.log(d.def.id, { type: 'fire_used', profileId: user.profileId, depth: e.depth, x: e.x, y: e.y, amount: e.amount, maxHp: e.maxHp, counted, ...(fire ? { holder: fire.profileId } : {}) });
-      if (!counted || !fire) continue;
+    uses.forEach((e, i) => {
+      const cell = (x: { depth: number; x: number; y: number }) => x.depth === e.depth && x.x === e.x && x.y === e.y;
+      const fire = d.fires.find((x) => !x.dup && cell(x));
+      // 使った者の火（自分の置いた火・取り合いで載らなかった火）は、同じマスにほかの者の火があっても数えない（S1a §10.1 の 5）
+      const own = !!fire && (fire.profileId === user.profileId || d.fires.some((x) => x.profileId === user.profileId && cell(x)) || placed.some(cell));
+      const counted = !!fire && !own && !fire.users.includes(user.profileId) && e.amount * 100 >= e.maxHp * this.supportMinHealPct;
+      if (i >= seen) this.store.log(d.def.id, { type: 'fire_used', profileId: user.profileId, runId: session.runId, depth: e.depth, x: e.x, y: e.y, amount: e.amount, maxHp: e.maxHp, counted, ...(fire ? { holder: fire.profileId } : {}) });
+      if (!counted || !fire) return;
       fire.uses++;
       fire.users.push(user.profileId);
-      const holder = d.participants.find((x) => x.profileId === fire.profileId);
-      if (holder) holder.support = (holder.support ?? 0) + 1;
       n++;
-    }
+    });
+    const changed = n > 0 || uses.length !== seen;
+    run.firesSeen = uses.length;
     if (n) this.store.saveFires(d);
-    return n;
+    return changed;
   }
 
   /** 確定（SEASON.md §2.1）: 終わりの時刻の後、参加者の全員が迷宮にいないか、終わりから 1 時間たったら */
@@ -517,7 +568,7 @@ export class SeasonService implements SeasonHooks {
   finalize(d: SeasonData, reason: SeasonResult['reason']): SeasonResult {
     if (d.result) return d.result;
     this.flush();
-    const st = computeStandings(started(d.participants));
+    const st = computeStandings(started(d.participants), d.fires);
     const winners = { adventure: [], contribution: [], survival: [], support: [] } as SeasonResult['winners'];
     for (const r of st.rows) {
       if (r.adventure.rank === 1) winners.adventure.push({ name: r.name, value: r.adventure.value });
@@ -536,6 +587,6 @@ export class SeasonService implements SeasonHooks {
   standings(id: string): { season: SeasonListing; standings: SeasonStandingRow[]; result?: SeasonResult } | null {
     const d = this.store.get(id);
     if (!d) return null;
-    return { season: this.listing(d), standings: d.result?.standings ?? computeStandings(started(d.participants)).rows, ...(d.result ? { result: d.result } : {}) };
+    return { season: this.listing(d), standings: d.result?.standings ?? computeStandings(started(d.participants), d.fires).rows, ...(d.result ? { result: d.result } : {}) };
   }
 }

@@ -20,6 +20,13 @@ export function newProfileId(): string {
 }
 
 /** プロフィールの置き場所（dir が null ならメモリだけ。テスト用） */
+/** そのランで野営の火に払った点（S1。fire_placed の cost の合計） */
+function firePaid(session: RunSession, pid: PlayerId): number {
+  let n = 0;
+  for (const e of session.history) if (e.type === 'fire_placed' && e.player === pid) n += e.cost;
+  return n;
+}
+
 export class ProfileStore {
   private readonly byId = new Map<string, ProfileFile>();
   private readonly byHash = new Map<string, string>();
@@ -215,7 +222,8 @@ export class ProfileService implements ProfileHooks {
       runId: session.runId, character: p.name, classId: p.classId, ...(w.meta.season ? { season: w.meta.season.id } : {}), legacy: !!p.legacy, legacyKinds: p.legacy?.kinds ?? 0,
       startedAt: session.createdAt, endedAt: over ? session.updatedAt : null, status: over ? 'ended' : 'active',
       end: dead ? 'died' : over ? 'retired' : null, deathCause: p.stats.deathCause,
-      level: e?.level?.level ?? 1, banked: p.stats.banked ?? 0, deepest: p.stats.deepest,
+      // 確定点は、野営の火の費用を引く前の点（S1a §10.1 の 6。費用はシーズンの生還賞にだけ効かせる）
+      level: e?.level?.level ?? 1, banked: (p.stats.banked ?? 0) + firePaid(session, pid), deepest: p.stats.deepest,
       expeditions: reports.length, completed: reports.filter((r) => r.reason === 'completed').length, withdrawn: reports.filter((r) => r.reason === 'withdrawn').length,
       wardens: [...(w.milestones?.cleared ?? [])].sort((a, b) => a - b), streakMax,
       best: expeditionBest(reports),

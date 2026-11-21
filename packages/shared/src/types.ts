@@ -533,8 +533,8 @@ export interface SeasonAward {
 /** 公開された下り階段（S0 §9.4）。by: 最初に報告した者の名前 */
 export interface SeasonStairs { depth: number; x: number; y: number; by: string }
 
-/** 共有層の野営の火（S1。PROTOCOL §9.10）。mine: 自分の火、uses: 自分の火が支援賞に数えられた回数 */
-export interface SeasonFire { depth: number; x: number; y: number; by: string; mine?: boolean; uses?: number }
+/** 共有層の野営の火（S1。PROTOCOL §9.10）。mine: 自分の火、uses: 自分の火が支援賞に数えられた回数、dup: 同じマスの取り合いで載らなかった自分の火（S1a） */
+export interface SeasonFire { depth: number; x: number; y: number; by: string; mine?: boolean; uses?: number; dup?: boolean }
 
 /**
  * シーズンの写し（S0。PROTOCOL §9.6）。キャンプで取り込んだ共有層（season_sync）。

@@ -1,5 +1,5 @@
 // S1（野営の火と支援賞。SEASON.md §8・PROTOCOL.md §9.10）のテスト（SEASON.md §8.8）と、§8.9 の 2（経験値の理由を engine が持つ）
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -403,16 +403,19 @@ describe('S1 §8.5: the support award', () => {
       const res = await act(r.port, { type: 'interact' });
       expect(res.ok ? '' : JSON.stringify(res.error)).toBe('');
     };
-    // B: 数える
+    // B: 使ったその場では数えない（S1a §10.1 の 1: 置いた者に、今その階にだれかいると分からないように）。キャンプに着いたときに数える
     await useFire(b, 3);
+    expect(support().value).toBe(0);
+    await lifelineHome(b);
     expect(support().value).toBe(1);
     // B の 2 回目（次の遠征）: 使えるが数えない
-    await lifelineHome(b);
     await useFire(b, 3);
+    await lifelineHome(b);
     expect(support().value).toBe(1);
     // C: 戻りが最大 HP の 10% 未満（上限の 1 つ下から）
     const maxC = meOf(c.session.world, c.playerId).stats!.maxHp;
     await useFire(c, capOf(maxC) - 1);
+    await lifelineHome(c);
     expect(support().value).toBe(1);
     // A 自身: 数えない
     await useFire(a, 3);
@@ -530,6 +533,249 @@ describe('S1 §8.9-2: the engine writes why XP was gained', () => {
     expect(x3.at(-1)?.reason).toBe('kill');
     expect(x3.at(-1)?.victimKind).toBeNull();
     expect(a.port.messages(0, 300).text).toContain('（何かを倒した）');
+    m.closeAll();
+  });
+});
+
+// ---- S1a（SEASON.md §10・§11）: 検査の指摘の直しと、テストの穴 ----
+
+async function withDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
+  const dir = mkdtempSync(join(tmpdir(), 'muse-s1a-'));
+  try { return await fn(dir); } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
+describe('S1a §10.1: fixes', () => {
+  it('a run that receives someone else\'s fires replays from its records alone, on a floor made before the sync and on one made after', () => withDir(async (dir) => {
+    const m = manager(dir);
+    openSeason(m, 's1a-replay-1');
+    const a = await seasonRun(m, 'Aya');
+    await startAndClear(a);
+    const wa = a.session.world;
+    setBanked(wa, a.playerId, 5000);
+    const k1 = floorOf(a);
+    expect((await placeFireAt(a, openCells(wa, k1, [wa.floors[k1].entry, ...wa.floors[k1].stairs.down], 2)[0])).ok).toBe(true);
+    await descend(a);
+    const k2 = floorOf(a);
+    expect((await placeFireAt(a, openCells(wa, k2, [wa.floors[k2].entry, ...wa.floors[k2].stairs.down], 2)[0])).ok).toBe(true);
+    await lifelineHome(a);
+    // B は記録に残る命令だけで遊ぶ（参加の取り込みで地下 1 階に、地下 2 階は作ったときに置く）
+    const b = await seasonRun(m, 'Ben');
+    await playWithPort(b.port, { kind: 'greedy', seed: 'b', maxActs: 900, maxExpeditions: 1 });
+    const spawned = b.session.history.filter((e) => e.type === 'entity_spawned' && e.reason === 'season_fire') as Extract<GameEvent, { type: 'entity_spawned' }>[];
+    expect(spawned.map((e) => e.entity.pos!.floor).sort()).toEqual([k1, k2]);
+    // 地下 1 階の火は取り込み（season_sync）で、地下 2 階の火は階を作ったとき（floor_generated の後）に置いた
+    const at = (k: string) => b.session.history.findIndex((e) => e.type === 'entity_spawned' && e.reason === 'season_fire' && e.entity.pos?.floor === k);
+    const gen2 = b.session.history.findIndex((e) => e.type === 'floor_generated' && e.floorData.key === k2);
+    expect(at(k1)).toBeLessThan(gen2);
+    expect(at(k2)).toBeGreaterThan(gen2);
+    await b.port.act({ type: 'retire' }, { source: 'bot' });
+    const v = verifyRunDir(content, join(dir, b.session.runId));
+    expect(v.reexecMatches).toBe(true);
+    expect(v.foldMatchesKeyframe).toBe(true);
+    // 地図に載せるのは火があることだけ（そのマスの地形は載せない。S1a §10.1 の 2）
+    const seeded = b.session.history.filter((e) => e.type === 'knowledge_updated' && e.publicFire) as Extract<GameEvent, { type: 'knowledge_updated' }>[];
+    expect(seeded.length).toBeGreaterThan(0);
+    for (const e of seeded) { expect(e.newlySeen).toEqual([]); expect(e.mappedAdd ?? []).toEqual([]); }
+    m.closeAll();
+  }));
+
+  it('placing next to a far stationary enemy: the observation and the engine agree (as with rest)', async () => {
+    const m = manager();
+    openSeason(m);
+    const a = await seasonRun(m, 'Aya');
+    await startAndClear(a);
+    const w = a.session.world;
+    setBanked(w, a.playerId, 1000);
+    const k1 = floorOf(a);
+    const c1 = openCells(w, k1, [w.floors[k1].entry, ...w.floors[k1].stairs.down], 2)[0];
+    place(a, c1);
+    expect((await act(a.port, { type: 'wait' })).ok).toBe(true);
+    const still = Object.values(content.monsters).find((d) => d.tags.includes('stationary'))!;
+    const me = meOf(w, a.playerId).pos!;
+    const spot = openCells(w, k1).find((c) => { const d = Math.max(Math.abs(c.x - me.x), Math.abs(c.y - me.y)); return d >= 3 && d <= 4; })!;
+    const mo = { ...monster('e_s1amo1', k1, spot, { state: 'hunting' }), kind: still.id };
+    mo.actor = { ...mo.actor!, speed: still.speed, ai: { ...mo.actor!.ai!, archetype: still.ai.archetype } };
+    inject(w, { put: [mo] });
+    expect(a.port.observe().observation.visible.monsters.find((x) => x.id === 'e_s1amo1')?.awareness).toBe('hunting');
+    const line = a.port.observe().observation.valid_actions.find((x) => x.startsWith('place_fire'))!;
+    expect(line).not.toContain('不可');
+    const r = await act(a.port, { type: 'place_fire' });
+    expect(r.ok ? '' : r.error.message).toBe('');
+    m.closeAll();
+  });
+
+  it('a fire that lost its cell to someone else\'s still counts as the setter\'s (the limits, and its own use is no support); others still use the shared one', async () => {
+    const m = manager();
+    openSeason(m);
+    const a = await seasonRun(m, 'Aya');
+    const b = await seasonRun(m, 'Ben');
+    const c = await seasonRun(m, 'Cid');
+    await startAndClear(a);
+    await startAndClear(b);
+    const wa = a.session.world, wb = b.session.world;
+    setBanked(wa, a.playerId, 1000);
+    setBanked(wb, b.playerId, 1000);
+    const k1 = floorOf(a);
+    const c1 = openCells(wa, k1, [wa.floors[k1].entry, ...wa.floors[k1].stairs.down], 2)
+      .find((x) => openCells(wb, k1).some((y) => y.x === x.x && y.y === x.y))!;
+    expect((await placeFireAt(a, c1)).ok).toBe(true);
+    expect((await placeFireAt(b, c1)).ok).toBe(true);
+    await lifelineHome(a);
+    await lifelineHome(b);
+    const fires = m.seasons.get(SID)!.fires;
+    expect(fires.map((f) => `${f.by}${f.dup ? ':dup' : ''}`)).toEqual(['Aya', 'Ben:dup']);
+    // B の火: シーズンの数にも、同じ階の 1 つにも数える
+    expect(wb.season!.fires!.filter((f) => f.mine).map((f) => f.dup)).toEqual([true]);
+    expect(b.port.observe().text).toContain('同じマスにほかの者の火が先に載った（あなたの火として数える）');
+    await startAndClear(b);
+    const far = openCells(wb, k1, [c1, wb.floors[k1].entry, ...wb.floors[k1].stairs.down], 6)[0];
+    const r = await placeFireAt(b, far);
+    expect(!r.ok && r.error.message).toContain('この階には、もうあなたの火がある');
+    // B の世界のそのマスの火は B の火のまま（写しは作らない）。B が使っても、A の支援に数えない
+    expect(firesOn(wb, k1).map((e) => e.campfire!.by)).toEqual(['Ben']);
+    setHp(b, 3);
+    place(b, c1);
+    expect((await act(b.port, { type: 'interact' })).ok).toBe(true);
+    await lifelineHome(b);
+    const support = (name: string) => m.seasons.standings(SID)!.standings.find((x) => x.name === name)!.support!.value;
+    expect(support('Aya')).toBe(0);
+    expect(support('Ben')).toBe(0);
+    // C の世界には A の火（共有された方）だけ。C が使うと A の支援
+    await startAndClear(c);
+    expect(firesOn(c.session.world, k1).map((e) => e.campfire!.by)).toEqual(['Aya']);
+    setHp(c, 3);
+    place(c, c1);
+    expect((await act(c.port, { type: 'interact' })).ok).toBe(true);
+    await lifelineHome(c);
+    expect(support('Aya')).toBe(1);
+    m.closeAll();
+  });
+
+  it('two different fires on one floor: the second is refused in the same expedition, also after leaving the floor and coming back; another floor\'s fire still works', async () => {
+    const m = manager();
+    openSeason(m);
+    const a = await seasonRun(m, 'Aya');
+    const c = await seasonRun(m, 'Cid');
+    const b = await seasonRun(m, 'Ben');
+    await startAndClear(a);
+    await startAndClear(c);
+    const wa = a.session.world, wc = c.session.world;
+    setBanked(wa, a.playerId, 5000);
+    setBanked(wc, c.playerId, 5000);
+    const k1 = floorOf(a);
+    const fa = openCells(wa, k1, [wa.floors[k1].entry, ...wa.floors[k1].stairs.down], 2)[0];
+    const fc = openCells(wc, k1, [fa, wc.floors[k1].entry, ...wc.floors[k1].stairs.down], 6)[0];
+    expect((await placeFireAt(a, fa)).ok).toBe(true);
+    expect((await placeFireAt(c, fc)).ok).toBe(true);
+    await descend(a);
+    const k2 = floorOf(a);
+    const fa2 = openCells(wa, k2, [wa.floors[k2].entry, ...wa.floors[k2].stairs.down], 2)[0];
+    expect((await placeFireAt(a, fa2)).ok).toBe(true);
+    await lifelineHome(a);
+    await lifelineHome(c);
+    await startAndClear(b);
+    const wb = b.session.world;
+    expect(firesOn(wb, k1).length).toBe(2);
+    // 1 つ目（A の火）は使える。2 つ目（C の火）は同じ遠征の同じ階なので使えない
+    setHp(b, 3);
+    place(b, fa);
+    expect((await act(b.port, { type: 'interact' })).ok).toBe(true);
+    setHp(b, 3);
+    place(b, fc);
+    let r = await act(b.port, { type: 'interact' });
+    expect(!r.ok && r.error.message).toContain('この階の野営の火をもう使った');
+    // 下の階へ行って戻っても、同じ遠征なら地下 1 階は使えない。地下 2 階の火は使える
+    await descend(b);
+    setHp(b, 3);
+    place(b, fa2);
+    expect((await act(b.port, { type: 'interact' })).ok).toBe(true);
+    const up = wb.floors[k2].stairs.up!;
+    place(b, up);
+    expect((await act(b.port, { type: 'stairs' })).ok).toBe(true);
+    clearMonsters(wb);
+    setHp(b, 3);
+    place(b, fc);
+    r = await act(b.port, { type: 'interact' });
+    expect(!r.ok && r.error.message).toContain('この階の野営の火をもう使った');
+    expect(b.port.observe().text).toContain('この遠征で野営の火を使った階: 地下1階・地下2階');
+    m.closeAll();
+  });
+
+  it('support is counted after a restart: uses made before the crash, and uses whose count was not saved', () => withDir(async (dir) => {
+    // 毎回キーフレームを書く（テストの中の書き換えもキーフレームに入り、復旧の後の記録に fire_used が残る）
+    const mk = () => new SessionManager(content, loadConfig({ runsDir: dir, keyframeEvery: 1 }));
+    const m = mk();
+    openSeason(m, 's1a-restart-1');
+    const a = await seasonRun(m, 'Aya');
+    await startAndClear(a);
+    const wa = a.session.world;
+    setBanked(wa, a.playerId, 1000);
+    const k1 = floorOf(a);
+    const c1 = openCells(wa, k1, [wa.floors[k1].entry, ...wa.floors[k1].stairs.down], 2)[0];
+    expect((await placeFireAt(a, c1)).ok).toBe(true);
+    await lifelineHome(a);
+    // B は火を使った後、帰る前にサーバーが止まる（記録には fire_used が残る）
+    const b = await seasonRun(m, 'Ben');
+    await startAndClear(b);
+    // HP を減らして火の上に立って使う（テストの中だけの書き換え。この後の復旧は、記録の再実行の照合が外れても続く）
+    setHp(b, 3);
+    place(b, c1);
+    expect((await act(b.port, { type: 'interact' })).ok).toBe(true);
+    m.closeAll();
+    // 起動し直す: 復旧したランが帰ると、落ちる前の使用も数える
+    const m2 = mk();
+    m2.recoverAll();
+    const b2 = m2.get(b.session.runId)!;
+    const pid = b2.world.playerOrder[0];
+    const life = b2.world.entities[b2.world.players[pid].entityId].inv!.items.map((id) => b2.world.entities[id]).find((it) => it?.kind === 'core:lifeline')!;
+    expect((await b2.submit(pid, { type: 'use', slot: life.item!.slot! }, { source: 'bot' })).ok).toBe(true);
+    for (let i = 0; i < 20 && b2.world.players[pid].state !== 'at_camp'; i++) await b2.submit(pid, { type: 'wait' }, { source: 'bot' });
+    const support = (mm: SessionManager) => mm.seasons.standings(SID)!.standings.find((x) => x.name === 'Aya')!.support!.value;
+    expect(support(m2)).toBe(1);
+    // 数えた後、保存の前に落ちた: fires.json の数を消して起動し直すと、復旧のときに数え直す（やり直しても 1 回のまま）
+    m2.closeAll();
+    const fp = join(dir, 'seasons', SID, 'fires.json');
+    const saved = JSON.parse(readFileSync(fp, 'utf8')) as { uses: number; users: string[] }[];
+    saved[0].uses = 0;
+    saved[0].users = [];
+    writeFileSync(fp, JSON.stringify(saved));
+    const m3 = mk();
+    expect(support(m3)).toBe(0);
+    m3.recoverAll();
+    expect(support(m3)).toBe(1);
+    m3.closeAll();
+    const m4 = mk();
+    m4.recoverAll();
+    expect(support(m4)).toBe(1);
+    m4.closeAll();
+  }));
+
+  it('the profile records banked points before the fire costs (the cost only lowers the survival award)', async () => {
+    const m = manager();
+    openSeason(m);
+    const a = await seasonRun(m, 'Aya');
+    await startAndClear(a);
+    const w = a.session.world;
+    setBanked(w, a.playerId, 1000);
+    const k1 = floorOf(a);
+    expect((await placeFireAt(a, openCells(w, k1, [w.floors[k1].entry, ...w.floors[k1].stairs.down], 2)[0])).ok).toBe(true);
+    expect(w.players[a.playerId].stats.banked).toBe(800);
+    expect(m.seasons.standings(SID)!.standings[0].survival!.value).toBe(800);
+    await lifelineHome(a);
+    const prof = m.profiles.store.resolve(a.ptoken)!;
+    const run = m.profiles.store.get(prof.id)!.runs.find((x) => x.runId === a.session.runId)!;
+    expect(run.banked).toBe(1000);
+    m.closeAll();
+  });
+
+  it('warns at start-up about open seasons opened on another version', () => {
+    const m = manager();
+    m.seasons.store.open({ id: 'old1', name: '古い', seed: 'x', engineVersion: '0.38.0', contentVersion: content.version, budget: 100, endsAt: Date.now() + 86_400_000, openedAt: Date.now() });
+    openSeason(m);
+    const ws = m.seasons.versionWarnings();
+    expect(ws.length).toBe(1);
+    expect(ws[0]).toContain('シーズン old1');
+    expect(ws[0]).toContain('新しいランを始められない');
     m.closeAll();
   });
 });

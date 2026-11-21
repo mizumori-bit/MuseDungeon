@@ -74,6 +74,8 @@ export class SessionManager {
         const r = RunSession.recover(this.deps, runId);
         this.sessions.set(runId, r.session);
         log(r.message);
+        // シーズン（S1a §10.1 の 4）: キャンプにいるかランが終わっていれば、火を載せて支援を数え直す（落ちる前に保存できなかった分）
+        if (r.session.world.meta.season) this.seasons.onRecovered(r.session);
         // 古い版で始まったラン（V4-0b §1.2。World は変えない。記録だけ）: 分かっている不整合（遠征の開始時の検査で直るもの）
         const created = r.session.world.meta.engineVersion;
         if (created && compareVersions(created, ENGINE_VERSION) < 0) {

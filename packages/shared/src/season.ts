@@ -83,11 +83,12 @@ export function seasonBudgetText(L: Locale, name: string, left: number, limit: n
 }
 
 /** 自分の野営の火（S1 §9.10）: 取り込んだ自分の火（使われた回数つき）と、このランで置いてまだ載っていない火 */
-export function myCampfires(state: SeasonState | null | undefined): { depth: number; x: number; y: number; uses: number | null }[] {
+/** uses: 支援賞に数えた回数（まだ載っていない火は null）、dup: 同じマスの取り合いで、ほかの者の火が先に載った（自分の火として数える。S1a） */
+export function myCampfires(state: SeasonState | null | undefined): { depth: number; x: number; y: number; uses: number | null; dup?: true }[] {
   if (!state) return [];
-  const pub = state.fires ?? [];
-  const out: { depth: number; x: number; y: number; uses: number | null }[] = pub.filter((f) => f.mine).map((f) => ({ depth: f.depth, x: f.x, y: f.y, uses: f.uses ?? 0 }));
-  for (const p of state.placed ?? []) if (!pub.some((f) => f.depth === p.depth && f.x === p.x && f.y === p.y)) out.push({ ...p, uses: null });
+  const mine = (state.fires ?? []).filter((f) => f.mine);
+  const out: { depth: number; x: number; y: number; uses: number | null; dup?: true }[] = mine.map((f) => ({ depth: f.depth, x: f.x, y: f.y, uses: f.dup ? null : f.uses ?? 0, ...(f.dup ? { dup: true as const } : {}) }));
+  for (const p of state.placed ?? []) if (!mine.some((f) => f.depth === p.depth && f.x === p.x && f.y === p.y)) out.push({ ...p, uses: null });
   return out.sort((a, b) => a.depth - b.depth);
 }
 

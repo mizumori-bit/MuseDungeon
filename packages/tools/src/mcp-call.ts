@@ -1,6 +1,8 @@
 // 試運転の道具（S0b。SEASON.md §6.2 の 6・§7）: MuseDungeon の MCP のツールを 1 回呼び、AI が受け取る文をそのまま出す。
-// 使い方（PowerShell）: npm.cmd run call -- <tool> [key=value ...] ／ npm.cmd run call -- --tools（ツールの一覧。MCP のクライアントが AI に見せるもの）
-//   bash・cmd では npm run call -- …。例: get_rules topic=season / new_run character_name=Aki class=scout / move dir=n /
+// 使い方（作業場所はリポジトリの直下。PowerShell でも bash でも同じ。S1a）: node packages/tools/bin/call.mjs <tool> [key=value ...]
+//   node packages/tools/bin/call.mjs --tools（ツールの一覧。MCP のクライアントが AI に見せるもの）
+//   npm.cmd run call -- … も動くが、cmd.exe を通るので、引数に「数字＋空白＋日本語」（"thought=3 歩進む"）や JSON の波かっこがあると壊れる。
+//   例: get_rules topic=season / new_run character_name=Aki class=scout / move dir=n /
 //   travel_to to=stairs_down / travel_to to={"x":3,"y":4} / choose_perk option=1 / start_expedition offer=2 / extract confirm=true
 // 値: そのツールの引数が文字列だけなら、そのまま文字列。ほかは JSON として読めれば JSON（数値・true・{"x":3,"y":4}・["a","b"]）、
 //   読めなければ文字列。PowerShell が引用符を消した {x:3,y:4}・[javelin,throwing_knife] も読む。
@@ -19,10 +21,11 @@ interface JsonSchema { type?: string | string[]; anyOf?: JsonSchema[]; oneOf?: J
 interface ToolInfo { name: string; description?: string; inputSchema: JsonSchema }
 
 export const USAGE = [
-  '使い方（PowerShell）: npm.cmd run call -- <tool> [key=value ...]   （bash・cmd では npm run call -- …）',
-  '  npm.cmd run call -- --tools   ツールの一覧（名前・説明・引数）',
-  '  例: get_rules topic=season / new_run character_name=Aki / move dir=n / travel_to to=stairs_down / travel_to to={"x":3,"y":4} / choose_perk option=1',
+  '使い方（作業場所はリポジトリの直下。PowerShell でも bash でも同じ）: node packages/tools/bin/call.mjs <tool> [key=value ...]',
+  '  node packages/tools/bin/call.mjs --tools   ツールの一覧（名前・説明・引数）',
+  '  例: get_rules topic=season / new_run character_name=Aki / move dir=n "thought=北へ 3 歩" / travel_to to=stairs_down / travel_to to={"x":3,"y":4} / choose_perk option=1',
   '  環境変数: MUSE_PORT か MUSE_MCP_URL（つなぐ先。必須）、MUSE_TOKEN_DIR（トークンの置き場所。既定 trial-runs/tokens。プレイヤーごとに別にする）',
+  '  npm.cmd run call -- … も動くが、cmd.exe を通るので、引数に「数字＋空白＋日本語」や JSON の波かっこがあると壊れる（node で直接呼ぶ）',
 ].join('\n');
 
 /** その引数が文字列しか受け取らないか（JSON にしないでそのまま渡す） */
@@ -110,8 +113,8 @@ export function mcpUrl(env: NodeJS.ProcessEnv): string | null {
 
 export const NO_URL = [
   'つなぐ先が分からない。MUSE_PORT（試運転のサーバーのポート）か MUSE_MCP_URL を渡す（既定の 7777 には、付け忘れで入らないように、つながない） / set MUSE_PORT or MUSE_MCP_URL',
-  "  PowerShell: $env:MUSE_PORT='7790'; $env:MUSE_TOKEN_DIR='trial-runs\\t0\\p1'; npm.cmd run -s call -- observe",
-  '  bash: MUSE_PORT=7790 MUSE_TOKEN_DIR=trial-runs/t0/p1 npm run -s call -- observe',
+  "  PowerShell: $env:MUSE_PORT='7790'; $env:MUSE_TOKEN_DIR='trial-runs\\t0\\p1'; node packages/tools/bin/call.mjs observe",
+  '  bash: MUSE_PORT=7790 MUSE_TOKEN_DIR=trial-runs/t0/p1 node packages/tools/bin/call.mjs observe',
   '  7777 のサーバーを使うときも、MUSE_PORT=7777 と書く',
 ].join('\n');
 

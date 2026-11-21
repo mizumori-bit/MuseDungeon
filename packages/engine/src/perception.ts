@@ -213,7 +213,8 @@ function seedPublicStairs(ctx: Ctx, pr: PlayerRecord, key: FloorKey): void {
 }
 
 /**
- * 野営の火（S1。PROTOCOL §9.10）: その階に入ると、まだ覚えていない火のマスが覚えている地図に載る（置いた者の名前つき。途中の道は載せない）。
+ * 野営の火（S1。PROTOCOL §9.10）: その階に入ると、まだ覚えていない火が覚えている地図に載る（置いた者の名前つき。途中の道は載せない）。
+ * 載せるのは火があることだけで、そのマスの地形は載せない（世界ごとに違うことがある: 棲み処の柱など。S1a §10.1 の 2）。
  * いま見えている火は、目で見て覚える（この関数では載せない。自分で置いた火も）
  */
 function seedCampfires(ctx: Ctx, pr: PlayerRecord, key: FloorKey, fovSet: ReadonlySet<number>): void {
@@ -225,11 +226,10 @@ function seedCampfires(ctx: Ctx, pr: PlayerRecord, key: FloorKey, fovSet: Readon
     if (fovSet.has(i)) continue;
     const fk = pr.knowledge.floors[key];
     if (fk?.remembered.some((r) => r.id === e.id)) continue;
-    const unseen = (fk?.seen[i] ?? 0) === 0;
     ctx.emit({
-      type: 'knowledge_updated', player: pr.id, floorKey: key, visible: null, newlySeen: unseen ? [i, f.terrain[i]] : [],
+      type: 'knowledge_updated', player: pr.id, floorKey: key, visible: null, newlySeen: [],
       rememberedSet: [{ id: e.id, kind: e.kind, cat: 'feature', pos: { x: e.pos.x, y: e.pos.y }, qty: 1, ft: f.time, state: e.feature?.state ?? 'lit' }],
-      rememberedDel: [], metAdd: [], ...(unseen ? { mappedAdd: [i] } : {}), publicFire: e.campfire.by, seenBy: [pr.id], floor: key,
+      rememberedDel: [], metAdd: [], publicFire: e.campfire.by, seenBy: [pr.id], floor: key,
     });
   }
 }

@@ -7,7 +7,7 @@ import type {
 } from './types';
 
 /** 2: 遠征・実ダメージ・回復の蓄積値（IMPROVEMENTS_V2）。3: ビルド（特技・能動技・呪い。V3-4）。22: シーズン（S0）。古いログもそのまま畳み込める */
-export const EVENT_VERSION = 23;
+export const EVENT_VERSION = 24;
 
 export interface EventBase {
   seq: number;

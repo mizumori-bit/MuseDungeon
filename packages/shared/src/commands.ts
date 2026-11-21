@@ -115,7 +115,7 @@ export const SeasonSyncSchema = z.object({
     public: z.array(z.object({ depth: z.number().int().positive(), x: z.number().int(), y: z.number().int(), by: z.string().max(64) })),
     awards: z.array(SeasonAwardSchema), contribution: z.number().int().nonnegative(), died: z.boolean(),
     /** S1: 共有層の野営の火（mine: 自分の火、uses: 支援賞に数えた回数）と、参加者の表示名 */
-    fires: z.array(z.object({ depth: z.number().int().positive(), x: z.number().int(), y: z.number().int(), by: z.string().max(64), mine: z.boolean().optional(), uses: z.number().int().nonnegative().optional() })).optional(),
+    fires: z.array(z.object({ depth: z.number().int().positive(), x: z.number().int(), y: z.number().int(), by: z.string().max(64), mine: z.boolean().optional(), uses: z.number().int().nonnegative().optional(), dup: z.boolean().optional() })).optional(),
     self: z.string().max(64).optional(),
   }),
   /** 報告の結果（reason: report）: 送った階段と、最初の報告だったか */

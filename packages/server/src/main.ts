@@ -17,6 +17,8 @@ if (errs.length) {
 }
 const manager = new SessionManager(content, config);
 manager.recoverAll((m) => console.log(`[recover] ${m}`));
+// 版の違う開いているシーズン（S1a）: 新しいランを始められないので、はっきり知らせる
+for (const w of manager.seasons.versionWarnings()) console.warn(`[season] 警告: ${w}`);
 const app = createApp(manager, config);
 const hosts = config.host.split(',').map((h) => h.trim()).filter(Boolean);
 const extras: Server[] = [];

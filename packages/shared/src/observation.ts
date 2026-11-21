@@ -327,7 +327,7 @@ export interface ObsSeason {
   /** まだ報告していない階段と、そのうちまだだれも公開していないもの */
   stairs?: { unreported: number; unpublished: number };
   /** 自分の野営の火（キャンプだけ。S1 §9.10）: uses は支援賞に数えた回数、まだ共有層に載っていない火は null */
-  fires?: { depth: number; x: number; y: number; uses: number | null }[];
+  fires?: { depth: number; x: number; y: number; uses: number | null; dup?: true }[];
   fires_text?: string;
   /** この遠征で野営の火を使った階（迷宮の中。S1 §8.3） */
   fire_used?: { depths: number[]; text: string };
@@ -422,7 +422,9 @@ export function seasonObs(view: PlayerView): ObsSeason | null {
   const fires = camp ? myCampfires(s) : [];
   const xno = view.expedition && view.expedition.status !== 'ended' ? view.expedition.no : null;
   const used = camp ? [] : fireUsedDepths(s, xno);
-  const fireText = (f: { depth: number; x: number; y: number; uses: number | null }) => f.uses === null
+  const fireText = (f: { depth: number; x: number; y: number; uses: number | null; dup?: true }) => f.dup
+    ? t(L, `地下${f.depth}階 (${f.x},${f.y}) 同じマスにほかの者の火が先に載った（あなたの火として数える）`, `depth ${f.depth} (${f.x},${f.y}) another participant's campfire was shared there first (still counts as yours)`)
+    : f.uses === null
     ? t(L, `地下${f.depth}階 (${f.x},${f.y}) まだ載っていない`, `depth ${f.depth} (${f.x},${f.y}) not yet shared`)
     : t(L, `地下${f.depth}階 (${f.x},${f.y}) 支援 ${f.uses} 回`, `depth ${f.depth} (${f.x},${f.y}) supported ${f.uses}`);
   return {
