@@ -5,7 +5,7 @@ import type {
 } from '@muse/shared';
 import {
   actionError, briefingLines, briefingShort, buildObservation, buildTurnBlock, campLines, changesLine, compareLines, describeInventory, describeTarget, diffChanges, progressLines, reportLines,
-  cheb, compassDir, dirLabel, formatObservationText, guardianDisplayName, kindName, MACRO_COMPLETED_STOPS, mapTextLines, memoryCombatText, memoryKey, mineCount, nameOf, pickableItems, progressText, renderAsciiMap, resultText, t,
+  cheb, compassDir, dirLabel, formatObservationText, guardianDisplayName, kindName, lastWithoutXp, MACRO_COMPLETED_STOPS, mapTextLines, memoryCombatText, memoryKey, mineCount, nameOf, pickableItems, progressText, renderAsciiMap, resultText, t,
   turnLine, turnSnapshot, turnStateOf,
 } from '@muse/shared';
 import { compareVersions, ENGINE_VERSION } from '@muse/engine';
@@ -220,7 +220,7 @@ export class SessionPlayerPort implements PlayerPort {
   observe(opts: { detail?: 'brief' | 'full'; map?: boolean; consume?: boolean } = {}): { observation: Observation; text: string } {
     const view = this.view();
     const recent = opts.consume ? this.session.consumeFor(this.playerId) : this.pending();
-    const observation = buildObservation(view, this.catalog, { detail: opts.detail ?? 'brief', map: opts.map ?? true, recent: recent.slice(-10), campCompare: this.campCompare(view), offerNotes: this.offerNotes(view), records: this.campRecords(view) });
+    const observation = buildObservation(view, this.catalog, { detail: opts.detail ?? 'brief', map: opts.map ?? true, recent: lastWithoutXp(recent, 10), campCompare: this.campCompare(view), offerNotes: this.offerNotes(view), records: this.campRecords(view) });
     return { observation, text: formatObservationText(observation, view.locale) };
   }
 
@@ -323,7 +323,7 @@ export class SessionPlayerPort implements PlayerPort {
     const versionNote = view.status === 'at_camp' && !prev?.versionNoted && !!created && compareVersions(created, ENGINE_VERSION) < 0
       ? t(L, `このランは古い版で始まった（engine ${created}）。階の一部が姿を変えることがある`, `This run began on an older version (engine ${created}). Some floors may change shape`) : undefined;
     const shots = unseenShots(p.recent, view.self.id);
-    const observation = buildObservation(view, this.catalog, { detail: p.detail ?? 'brief', map: true, recent: p.recent.slice(-10), lifelineShort, boonsShort, campCompare: this.campCompare(view), offerNotes: this.offerNotes(view), records: this.campRecords(view), ...(versionNote ? { versionNote } : {}), ...(shots.length ? { unseenShots: shots } : {}) });
+    const observation = buildObservation(view, this.catalog, { detail: p.detail ?? 'brief', map: true, recent: lastWithoutXp(p.recent, 10), lifelineShort, boonsShort, campCompare: this.campCompare(view), offerNotes: this.offerNotes(view), records: this.campRecords(view), ...(versionNote ? { versionNote } : {}), ...(shots.length ? { unseenShots: shots } : {}) });
     const state = turnStateOf(view, p.expeditionEndedNow ?? false).state;
     const cur = turnSnapshot(view, observation, state);
     const longLife = observation.valid_actions.some((a) => a.includes('次の遠征はこの遠征を始めた階段から') || a.includes('the next expedition starts from where this one began'));
@@ -504,9 +504,10 @@ export class SessionPlayerPort implements PlayerPort {
     } else {
       const shown = mine.filter((x) => !(x.type === 'damaged' && (x.event as Record<string, unknown>).target === view.self.id));
       // 最初の 3 件に、倒した文は必ず足す（V3-7 の評価: 薙ぐで倒した 2 体目の「倒した」が無かった）。
-      // レベルアップの文も必ず足す（S0b: 経験値の文が増えて、4 件目に押し出されないように）
-      const first = shown.slice(0, 3);
-      const texts = [...first, ...shown.slice(3).filter((x) => x.type === 'died' || x.type === 'level_up')].map((x) => x.text);
+      // 経験値の文（S0b）は 3 件の枠に数えず、出た場所にそのまま入れる（ほかの知らせを押し出さない。S0b §7.9）
+      const others = shown.filter((x) => x.type !== 'xp_gained');
+      const keep = new Set([...others.slice(0, 3), ...others.slice(3).filter((x) => x.type === 'died')]);
+      const texts = shown.filter((x) => keep.has(x) || x.type === 'xp_gained').map((x) => x.text);
       outcome = texts.length ? texts.join(' ') : defaultOutcome(cmd, L);
     }
     // 行動から次の自分の手番までに受けた被害の合計（必ず書く）
@@ -581,7 +582,7 @@ export class SessionPlayerPort implements PlayerPort {
     const res = this.render(view, reason, { recent, changes: true, interruptedBy: r.steps !== undefined ? r.interruptedBy : undefined, expeditionEndedNow: endedNow });
     const payload: ActionSuccess = {
       ok: true, outcome, steps: r.steps, interrupted_by: r.interruptedBy,
-      events: perceived.slice(-20).map((p) => ({ seq: p.seq, type: p.type, text: p.text })),
+      events: lastWithoutXp(perceived, 20).map((p) => ({ seq: p.seq, type: p.type, text: p.text })),
       observation: res.observation, turn: res.turn,
     };
     if (r.macro && cmd.type !== 'rest') { payload.distance = r.macro.distance; payload.time_elapsed = r.macro.timeElapsed; }

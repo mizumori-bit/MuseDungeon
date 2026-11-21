@@ -9,7 +9,7 @@
 //   プレイヤーごとに別の MUSE_TOKEN_DIR を使う。上書きする前のトークンは *.old.txt に 1 行ずつ残す。
 //   保存したプレイヤーのトークンは、player_token を受け取るツールに自動で付く（resume_run も）。プロフィールのトークンは new_run・join_run に自動で付く
 //   （シーズンの参加には、運用者から受け取ったプロフィールのトークンを profile-token.txt に置く）。
-// つなぐ先: MUSE_MCP_URL（既定 http://127.0.0.1:<MUSE_PORT、無ければ 7777>/mcp）。
+// つなぐ先: MUSE_MCP_URL か、MUSE_PORT のポートの 127.0.0.1。どちらも無ければ断る（既定の 7777 は依頼者のサーバー。S0b §7.9）。
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -22,7 +22,7 @@ export const USAGE = [
   '使い方（PowerShell）: npm.cmd run call -- <tool> [key=value ...]   （bash・cmd では npm run call -- …）',
   '  npm.cmd run call -- --tools   ツールの一覧（名前・説明・引数）',
   '  例: get_rules topic=season / new_run character_name=Aki / move dir=n / travel_to to=stairs_down / travel_to to={"x":3,"y":4} / choose_perk option=1',
-  '  環境変数: MUSE_MCP_URL か MUSE_PORT（つなぐ先。既定 7777）、MUSE_TOKEN_DIR（トークンの置き場所。既定 trial-runs/tokens。プレイヤーごとに別にする）',
+  '  環境変数: MUSE_PORT か MUSE_MCP_URL（つなぐ先。必須）、MUSE_TOKEN_DIR（トークンの置き場所。既定 trial-runs/tokens。プレイヤーごとに別にする）',
 ].join('\n');
 
 /** その引数が文字列しか受け取らないか（JSON にしないでそのまま渡す） */
@@ -101,16 +101,38 @@ export function maskTokens(text: string, secrets: readonly { value: string | und
   return out;
 }
 
+/** つなぐ先。MUSE_MCP_URL か MUSE_PORT が無ければ null（既定の 7777 は依頼者のサーバーなので、付け忘れでそこへ入らないように。S0b §7.9） */
+export function mcpUrl(env: NodeJS.ProcessEnv): string | null {
+  if (env.MUSE_MCP_URL) return env.MUSE_MCP_URL;
+  if (env.MUSE_PORT) return `http://127.0.0.1:${env.MUSE_PORT}/mcp`;
+  return null;
+}
+
+export const NO_URL = [
+  'つなぐ先が分からない。MUSE_PORT（試運転のサーバーのポート）か MUSE_MCP_URL を渡す（既定の 7777 には、付け忘れで入らないように、つながない） / set MUSE_PORT or MUSE_MCP_URL',
+  "  PowerShell: $env:MUSE_PORT='7790'; $env:MUSE_TOKEN_DIR='trial-runs\\t0\\p1'; npm.cmd run -s call -- observe",
+  '  bash: MUSE_PORT=7790 MUSE_TOKEN_DIR=trial-runs/t0/p1 npm run -s call -- observe',
+  '  7777 のサーバーを使うときも、MUSE_PORT=7777 と書く',
+].join('\n');
+
 export async function mcpCall(argv: readonly string[], env: NodeJS.ProcessEnv = process.env, print: (s: string) => void = console.log): Promise<number> {
   const [tool, ...pairs] = argv;
   if (!tool || tool === '--help' || tool === '-h') { print(USAGE); return tool ? 0 : 1; }
-  const url = env.MUSE_MCP_URL || `http://127.0.0.1:${env.MUSE_PORT || '7777'}/mcp`;
+  const url = mcpUrl(env);
+  if (!url) { print(NO_URL); return 1; }
   const files = tokenFiles(env);
+  const playerToken = readToken(files.player);
+  const profileToken = readToken(files.profile);
+  // 伏せるトークン（応答・エラーの文のどちらにも）。応答で新しく受け取ったものは後で足す
+  const secrets: { value: string | undefined; file: string }[] = [{ value: playerToken, file: files.player }, { value: profileToken, file: files.profile }];
+  const say = (s: string) => print(maskTokens(s, secrets));
   const client = new Client({ name: 'muse-call', version: '1' });
+  const transport = new StreamableHTTPClientTransport(new URL(url));
   try {
-    await client.connect(new StreamableHTTPClientTransport(new URL(url)));
+    await client.connect(transport);
   } catch (e) {
-    print(`サーバーにつながらない（${url}）: ${(e as Error).message}。MUSE_MCP_URL か MUSE_PORT を確かめる / cannot connect`);
+    say(`サーバーにつながらない（${url}）: ${(e as Error).message}。MUSE_MCP_URL か MUSE_PORT を確かめる / cannot connect`);
+    await transport.terminateSession().catch(() => undefined);
     return 1;
   }
   try {
@@ -123,9 +145,11 @@ export async function mcpCall(argv: readonly string[], env: NodeJS.ProcessEnv = 
     const info = tools.find((t) => t.name === tool);
     const props = info?.inputSchema.properties ?? {};
     const { args, bad } = parsePairs(pairs, props);
-    if (bad.length) { print(`key=value の形でない引数: ${bad.join(' ')}\n${USAGE}`); return 1; }
-    const playerToken = readToken(files.player);
-    const profileToken = readToken(files.profile);
+    if (bad.length) { say(`key=value の形でない引数: ${bad.join(' ')}\n${USAGE}`); return 1; }
+    secrets.push(
+      { value: typeof args.player_token === 'string' ? args.player_token : undefined, file: files.player },
+      { value: typeof args.profile_token === 'string' ? args.profile_token : undefined, file: files.profile },
+    );
     // 保存したトークンを付ける（引数で渡したものが先）
     if (playerToken && 'player_token' in props && args.player_token === undefined) args.player_token = playerToken;
     if (profileToken && (tool === 'new_run' || tool === 'join_run') && 'profile_token' in props && args.profile_token === undefined) args.profile_token = profileToken;
@@ -133,7 +157,7 @@ export async function mcpCall(argv: readonly string[], env: NodeJS.ProcessEnv = 
     try {
       r = (await client.callTool({ name: tool, arguments: args })) as typeof r;
     } catch (e) {
-      print(`呼び出しのエラー: ${(e as Error).message}`);
+      say(`呼び出しのエラー: ${(e as Error).message}`);
       return 1;
     }
     const sc = r.structuredContent ?? {};
@@ -141,16 +165,16 @@ export async function mcpCall(argv: readonly string[], env: NodeJS.ProcessEnv = 
     const newProfile = typeof sc.profile_token === 'string' ? sc.profile_token : undefined;
     if (newPlayer) saveToken(files.player, newPlayer);
     if (newProfile) saveToken(files.profile, newProfile);
-    const secrets = [
-      { value: newPlayer, file: files.player }, { value: playerToken, file: files.player },
-      { value: newProfile, file: files.profile }, { value: profileToken, file: files.profile },
-      { value: typeof args.player_token === 'string' ? args.player_token : undefined, file: files.player },
-      { value: typeof args.profile_token === 'string' ? args.profile_token : undefined, file: files.profile },
-    ];
+    secrets.push({ value: newPlayer, file: files.player }, { value: newProfile, file: files.profile });
     const text = (r.content ?? []).filter((c) => c.type === 'text' && c.text !== undefined).map((c) => c.text!).join('\n');
-    print(maskTokens(text, secrets));
+    say(text);
     return r.isError ? 1 : 0;
+  } catch (e) {
+    say(`呼び出しのエラー: ${(e as Error).message}`);
+    return 1;
   } finally {
+    // セッションの終わりをサーバーへ送る（送らないと、サーバーに呼び出しごとのセッションが残る。S0b §7.9）
+    await transport.terminateSession().catch(() => undefined);
     await client.close();
   }
 }

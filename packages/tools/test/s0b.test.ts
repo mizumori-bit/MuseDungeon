@@ -4,14 +4,17 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
+import { createServer } from 'node:http';
 import { describe, expect, it } from 'vitest';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { buildCatalog, loadContent } from '@muse/content';
 import { ENGINE_VERSION } from '@muse/engine';
 import type { Command, Entity, GameEvent } from '@muse/shared';
-import { applyEvent, buildObservation, filterEventsForPlayer, nameOf, projectPlayerView } from '@muse/shared';
+import { applyEvent, buildObservation, filterEventsForPlayer, lastWithoutXp, nameOf, narrate, projectPlayerView } from '@muse/shared';
 import { createApp, loadConfig, rulesText, SessionManager } from '@muse/server';
 import { fightNumbers } from '../src/index';
-import { maskTokens, mcpCall, parsePairs, parseValue, tokenFiles } from '../src/mcp-call';
+import { maskTokens, mcpCall, mcpUrl, parsePairs, parseValue, tokenFiles } from '../src/mcp-call';
 import { seasonCli } from '../src/season';
 
 const content = loadContent();
@@ -71,11 +74,17 @@ describe('S0b §6.2-1: XP gains say why', () => {
     t.edit((e) => { e.stats!.acc = 60; e.level = { level: 1, xp: 14 }; });
     const b = besideMe(t);
     t.inject({ put: [monster('e_s0bk01', 'core:goblin', key, b.x, b.y, { xp: 5 })] });
+    const seq0 = t.world.seq;
     const k = await t.act({ type: 'move', dir: b.dir });
     expect(k.ok).toBe(true);
     expect(t.messages()).toContain(`経験値 +5（${goblin}を倒した）。`);
     expect(k.ok && k.outcome).toContain(`経験値 +5（${goblin}を倒した）`);
-    expect(k.ok && k.outcome).toContain('レベル 2 に上がった');
+    // 経験値の文は結果の 3 件の枠を使わない（S0b §7.9）: 経験値でない最初の 3 件（会心・ダメージ・倒した・レベルアップ…）は、そのまま結果に残る
+    const mine = t.r.session.messages(t.pid).filter((m) => m.seq > seq0 && !(m.type === 'damaged' && (m.event as Record<string, unknown>).target === t.meId));
+    const firstOthers = mine.filter((m) => m.type !== 'xp_gained').slice(0, 3);
+    expect(firstOthers.length).toBe(3);
+    for (const m of firstOthers) expect(k.ok && k.outcome).toContain(m.text);
+    expect(t.messages()).toContain('レベル 2 に上がった');
     // 新しい深さに初めて着く
     t.clearMonsters();
     const down = t.world.floors[key].stairs.down[0];
@@ -125,6 +134,55 @@ describe('S0b §6.2-1: XP gains say why', () => {
     const view = { self: { id: 'e_aaaaaa' } } as unknown as Parameters<typeof filterEventsForPlayer>[2];
     const pe = filterEventsForPlayer([{ ...ev, seenBy: ['p_1'] } as unknown as GameEvent], 'p_1', view);
     expect((pe[0] as Record<string, unknown>).reason).toBeUndefined();
+    const ctx = { locale: 'ja' as const, catalog, selfId: 'e_aaaaaa', playerNames: {} };
+    expect(narrate(pe[0], ctx)).toBe('経験値 +3。');
+    // 俯瞰（自分のいない観戦）では文にしない
+    expect(narrate(pe[0], { ...ctx, selfId: null })).toBeNull();
+  });
+
+  it('boundaries: two kills in one command, an unseen poison kill, a died from another command, another XP gain in between, the objective only right before', () => {
+    const me = 'e_me0001';
+    const view = { self: { id: me } } as unknown as Parameters<typeof filterEventsForPlayer>[2];
+    let seq = 0;
+    const ev = (o: Record<string, unknown>, cause = 7) => ({ seq: ++seq, cause, floor: 'main:3', ft: 0, wall: 0, seenBy: ['p_1'], ...o }) as unknown as GameEvent;
+    const died = (id: string, kind: string, o: Record<string, unknown> = {}, cause = 7) => ev({ type: 'died', id, kind, killer: me, killerKind: 'core:warrior', via: 'melee', pos: { x: 1, y: 1 }, ...o }, cause);
+    const xp = (amount: number, cause = 7) => ev({ type: 'xp_gained', target: me, amount, xpAfter: 50 }, cause);
+    const reasons = (events: GameEvent[]) => (filterEventsForPlayer(events, 'p_1', view).filter((e) => e.type === 'xp_gained') as unknown as Record<string, unknown>[])
+      .map((e) => `${e.reason ?? '-'}:${e.victimKind ?? e.depth ?? ''}`);
+    // 同じ命令で 2 体（薙ぐ）: それぞれ直前の倒した相手
+    expect(reasons([died('e_m00001', 'core:goblin'), xp(3), died('e_m00002', 'core:cave_rat'), xp(1)])).toEqual(['kill:core:goblin', 'kill:core:cave_rat']);
+    // 視界の外の毒: 相手は伏せたまま（何かを倒した）
+    const poisoned = filterEventsForPlayer([died('e_m00003', 'core:goblin', { via: 'poison', masks: { p_1: ['id', 'pos', 'kind', 'affixes', 'maxHp'] } }), xp(3)], 'p_1', view);
+    const px = poisoned.find((e) => e.type === 'xp_gained') as unknown as Record<string, unknown>;
+    expect(px.reason).toBe('kill');
+    expect(px.victimKind).toBeNull();
+    expect(narrate(px as never, { locale: 'ja', catalog, selfId: me, playerNames: {} })).toBe('経験値 +3（何かを倒した）。');
+    // 別の命令の died は拾わない
+    expect(reasons([died('e_m00004', 'core:goblin', {}, 6), xp(3, 7)])).toEqual(['-:']);
+    // 間に別の経験値があれば、その前の出来事は別の経験値の理由
+    expect(reasons([died('e_m00005', 'core:goblin'), xp(3), xp(8)])).toEqual(['kill:core:goblin', '-:']);
+    // 目的の達成は、すぐ前の出来事のときだけ（間に別の出来事があれば付けない。その前の倒した相手も拾わない）
+    const done = () => ev({ type: 'objective_completed', no: 1, objective: { type: 'reach_depth', targetDepth: 3 }, seenBy: 'all' });
+    expect(reasons([done(), xp(24)])).toEqual(['objective:']);
+    expect(reasons([died('e_m00006', 'core:goblin'), done(), ev({ type: 'story', text: 'x', seenBy: ['p_1'] }), xp(24)])).toEqual(['-:']);
+    // 他人の経験値（協力。自分あてでない xp_gained）は自分の射影に入らない
+    expect(reasons([done(), ev({ type: 'xp_gained', target: 'e_other1', amount: 24, xpAfter: 30, seenBy: ['p_2'] }), xp(24)])).toEqual(['objective:']);
+    // 自分の階の移動 → 新しい深さ
+    expect(reasons([ev({ type: 'entity_changed_floor', id: me, kind: 'core:warrior', from: { floor: 'main:2', x: 1, y: 1 }, to: { floor: 'main:3', x: 2, y: 2 }, dir: 'down', nextActAt: 0 }), xp(12)])).toEqual(['depth:3']);
+  });
+
+  it('XP lines do not take the slots of capped lists (the recent events of the observation)', async () => {
+    const items = [{ type: 'a' }, { type: 'xp_gained' }, { type: 'b' }, { type: 'xp_gained' }, { type: 'c' }];
+    expect(lastWithoutXp(items, 2).map((x) => x.type)).toEqual(['b', 'xp_gained', 'c']);
+    expect(lastWithoutXp(items, 9).length).toBe(5);
+    // 観測の直前の出来事: 経験値でない 10 件は、経験値の文が混ざっても全部残る
+    const t = await newRun('s0b-recent-1');
+    const recent = Array.from({ length: 12 }, (_, i) => ({ seq: i * 2 + 1, type: 'item_picked_up' as const, text: `知らせ ${i}`, event: {} as never }))
+      .flatMap((e, i) => (i % 3 === 0 ? [e, { seq: e.seq + 1, type: 'xp_gained' as const, text: `経験値 +${i}。`, event: {} as never }] : [e]));
+    const obs = buildObservation(projectPlayerView(t.world, t.pid), catalog, { detail: 'brief', map: false, recent });
+    expect(obs.recent_events.filter((s) => s.startsWith('知らせ'))).toEqual(Array.from({ length: 10 }, (_, i) => `知らせ ${i + 2}`));
+    expect(obs.recent_events).toContain('経験値 +3。');
+    t.manager.closeAll();
   });
 });
 
@@ -146,6 +204,23 @@ describe('S0b §6.2-2: the fight total and the killing-blow line do not look inc
     expect(t.messages()).toContain(`${amount} ダメージを与えた（とどめ。残りは 1 だった）`);
     expect(r.outcome).toContain(`合計 1 ダメージを与えた（実際に減らした HP。とどめの一撃の超過分 ${amount - 1} は含まない）`);
     expect(fightNumbers(r.outcome)).toMatchObject({ hits: 1, dealt: 1 });
+    t.manager.closeAll();
+  });
+
+  it('a fight without overkill has no note', async () => {
+    const t = await newRun('s0b-fight-2');
+    t.clearMonsters();
+    const key = t.me().pos!.floor;
+    t.edit((e) => { e.stats!.acc = 60; });
+    const b = besideMe(t);
+    // 倒れない相手（体力が多い）: 超過は無い。fight はほかの理由（hp_floor など）で止まる
+    t.inject({ put: [monster('e_s0bf02', 'core:goblin', key, b.x, b.y, { hp: 5000, xp: 1 })] });
+    const r = await t.act({ type: 'fight', target: 'e_s0bf02' });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(t.world.entities.e_s0bf02).toBeDefined();
+    expect(r.outcome).toMatch(/合計 \d+ ダメージを与えた/);
+    expect(r.outcome).not.toContain('超過分');
     t.manager.closeAll();
   });
 
@@ -284,10 +359,95 @@ describe('S0b §6.2-6: the call tool', () => {
       expect(existsSync(tokenFiles(env2).player)).toBe(true);
       // プレイヤーごとの置き場所は別（p1 のトークンは変わらない）
       expect(readdirSync(join(dir, 'p2')).sort()).toEqual(['player-token.txt', 'profile-token.txt']);
+      // 呼んだ後にサーバーにセッションが残らない（セッションの終わりを送る。S0b §7.9）
+      expect(app.mcp.sessionCount).toBe(0);
     } finally {
-      await new Promise<void>((res) => app.server.close(() => res()));
-      m.closeAll();
+      await app.close();
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses without MUSE_PORT / MUSE_MCP_URL (7777 is the operator\'s server); error texts are masked too', async () => {
+    const out: string[] = [];
+    expect(await mcpCall(['observe'], { MUSE_TOKEN_DIR: 'x' }, (s) => out.push(s))).toBe(1);
+    expect(out.join('\n')).toContain('MUSE_PORT');
+    expect(out.join('\n')).toContain("$env:MUSE_PORT='7790'");
+    expect(mcpUrl({ MUSE_PORT: '7795' })).toBe('http://127.0.0.1:7795/mcp');
+    expect(mcpUrl({})).toBeNull();
+    // エラーの文の中のトークンも伏せる（サーバーが本文にトークンを返す、行儀の悪い相手）
+    const dir = mkdtempSync(join(tmpdir(), 'muse-call-'));
+    const env = { MUSE_TOKEN_DIR: join(dir, 'p') } as Record<string, string>;
+    mkdirSync(join(dir, 'p'), { recursive: true });
+    const secret = 'secret-player-token-123456';
+    writeFileSync(tokenFiles(env).player, `${secret}\n`);
+    const bad = createServer((_req, res) => { res.writeHead(500); res.end(`broken ${secret}`); });
+    await new Promise<void>((res) => bad.listen(0, '127.0.0.1', () => res()));
+    try {
+      env.MUSE_MCP_URL = `http://127.0.0.1:${(bad.address() as AddressInfo).port}/mcp`;
+      const out2: string[] = [];
+      expect(await mcpCall(['observe'], env, (s) => out2.push(s))).toBe(1);
+      expect(out2.join('\n')).toContain('broken ［伏せた:');
+      expect(out2.join('\n')).not.toContain(secret);
+    } finally {
+      await new Promise<void>((res) => bad.close(() => res()));
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('S0b §7.9: idle MCP sessions are swept', () => {
+  it('a client that never ends its session is swept after the idle time; its old session id gets 404 and a new connection can resume; open streams and bound sessions are kept longer', async () => {
+    const m = new SessionManager(content, loadConfig({ runsDir: null, profilesDir: null, seasonsDir: null, waitOthersMs: 100 }));
+    const app = createApp(m, m.config);
+    await new Promise<void>((res) => app.server.listen(0, '127.0.0.1', () => res()));
+    const url = new URL(`http://127.0.0.1:${(app.server.address() as AddressInfo).port}/mcp`);
+    const connect = async (sessionId?: string) => {
+      const transport = new StreamableHTTPClientTransport(url, sessionId ? { sessionId } : undefined);
+      const client = new Client({ name: 'test', version: '0' });
+      await client.connect(transport);
+      return { client, transport };
+    };
+    const waitFor = async (ok: () => boolean) => { for (let i = 0; i < 100 && !ok(); i++) await new Promise((r) => setTimeout(r, 20)); };
+    try {
+      // 束縛しないクライアント（呼び出しごとに player_token を渡す）。終わりを送らずに切る
+      const a = await connect();
+      const nr = await a.client.callTool({ name: 'new_run', arguments: { character_name: 'Sweep', objective: 'reach_depth' } }) as unknown as { structuredContent: { player_token: string } };
+      const token = nr.structuredContent.player_token;
+      const b = await connect();
+      await b.client.callTool({ name: 'observe', arguments: { player_token: token } });
+      const bId = b.transport.sessionId!;
+      // 開いたままの受信の流れ（GET の SSE）があるあいだは、何時間たっても掃除しない
+      await waitFor(() => app.mcp.sessionInfo().some((s) => s.id === bId && s.active > 0));
+      expect(app.mcp.sessionInfo().find((s) => s.id === bId)!.active).toBeGreaterThan(0);
+      expect(app.mcp.sweep(Date.now() + 24 * 3600_000)).toBe(0);
+      await b.transport.close();
+      await a.transport.close();
+      await waitFor(() => app.mcp.sessionInfo().every((s) => s.active === 0));
+      expect(app.mcp.sessionCount).toBe(2);
+      // 束縛していないものは 30 分、束縛した（new_run の）ものは 6 時間
+      const info = app.mcp.sessionInfo();
+      expect(info.find((s) => s.id === bId)!.bound).toBe(false);
+      expect(info.find((s) => s.id === a.transport.sessionId)!.bound).toBe(true);
+      expect(app.mcp.sweep(Date.now() + m.config.mcpIdleMs - 60_000)).toBe(0);
+      expect(app.mcp.sweep(Date.now() + m.config.mcpIdleMs + 1000)).toBe(1);
+      expect(app.mcp.sweep(Date.now() + m.config.mcpBoundIdleMs + 1000)).toBe(1);
+      expect(app.mcp.sessionCount).toBe(0);
+      // 掃除したセッションの ID で呼ぶ: MCP の決まりどおり 404（クライアントは新しい initialize でつなぎ直す）
+      const stale = await connect(bId);
+      const err = await stale.client.callTool({ name: 'observe', arguments: { player_token: token } }).then(() => null, (e: unknown) => e as { code?: number; message?: string });
+      expect(err?.code).toBe(404);
+      expect(err?.message).toContain('Unknown MCP session');
+      await stale.transport.close();
+      // つなぎ直して resume_run で戻れる
+      const c = await connect();
+      const rs = await c.client.callTool({ name: 'resume_run', arguments: { player_token: token } }) as unknown as { content: { text: string }[]; isError?: boolean };
+      expect(rs.isError).toBeFalsy();
+      expect(rs.content[0].text).toContain('現在地');
+      await c.transport.terminateSession();
+      await c.client.close();
+      expect(app.mcp.sessionCount).toBe(0);
+    } finally {
+      await app.close();
     }
   });
 });

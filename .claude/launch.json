@@ -17,6 +17,14 @@
         "docs/sound-audition/serve.mjs"
       ],
       "port": 7790
+    },
+    {
+      "name": "trial-server",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "../MuseDungeon-trial/trial-launch.mjs"
+      ],
+      "port": 7795
     }
   ]
 }

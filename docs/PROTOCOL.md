@@ -446,12 +446,15 @@ V3-2R で足した項目（同じく後方互換。会心と経験値のルー�
 S0b で変えた項目（文と、プレイヤー向けの出来事の射影と、道具だけ。engine と出来事の形は変えていないので `engineVersion` は 0.38.0、`eventVersion` は 22 のまま。開いているシーズン s0 はそのまま使える。SEASON.md §6.2・§7）:
 
 - プレイヤー向けの射影（`filterEventsForPlayer`）: 自分の `xp_gained` に、増えた理由 `reason?: 'kill' | 'depth' | 'objective'` と、`victimKind?` / `victimAffixes?`（`kill`。倒した相手が見えていなければ null）・`depth?`（`depth`。着いた深さ）を足す。engine の `xp_gained` には無い。経験値が入るのは 3 か所だけ（倒した・新しい深さに初めて着いた・目的を達成した）なので、同じ命令（`cause`）の中で `xp_gained` の前にある、自分が知覚した出来事（自分が倒した `died`・自分の `entity_changed_floor`・`objective_completed`）の最も近いものから決める。間に別の `xp_gained` があればそこで止め、決まらなければ付けない（理由をこしらえない）。すべてのプレイヤーに同じ（観戦の俯瞰では文にしない）
-- 文: 自分の `xp_gained` を文にする（今までは文にしていなかった）: 「経験値 +6（大ネズミを倒した）」「経験値 +8（初めて地下2階に着いた）」「経験値 +16（遠征の目的を達成した）」、理由が無ければ「経験値 +N」（英語 `+6 XP (killed cave rat)`・`(first time on depth 2)`・`(expedition objective complete)`）。手番が 1 つの行動の結果（outcome）は「最初の 3 件＋倒した文」に、レベルアップの文も必ず足す（経験値の文に押し出されないように）。マクロの結果の「最後の 2 件」には経験値の文を入れない（直前の出来事に出る）
+- 文: 自分の `xp_gained` を文にする（今までは文にしていなかった）: 「経験値 +6（大ネズミを倒した）」「経験値 +8（初めて地下2階に着いた）」「経験値 +16（遠征の目的を達成した）」、理由が無ければ「経験値 +N」（英語 `+6 XP (killed cave rat)`・`(first time on depth 2)`・`(expedition objective complete)`）。**経験値の文は、件数に上限のある所の枠に数えない**（ほかの知らせを押し出さない。検査の指摘の直し、SEASON.md §7.9）: 手番が 1 つの行動の結果（outcome）は今までどおり「経験値でない最初の 3 件＋倒した文」で、その間の経験値の文は出た場所に添える。観測の `recent_events`（10 件）・行動の結果の `events`（20 件）・遠征レポートの最期の `last_events`（10 件）も、経験値でないものを数え、その間の経験値の文を添える（`lastWithoutXp`）。マクロの結果の「最後の 2 件」には経験値の文を入れない（直前の出来事に出る）。理由 `objective` は、射影の中ですぐ前の出来事が `objective_completed` のときだけ付ける
 - 文: `fight` の結果の「合計 N ダメージを与えた」は今までどおり実際に減らした HP の合計で、とどめの一撃の超過分（`damaged.amount − dealt`）があれば「（実際に減らした HP。とどめの一撃の超過分 M は含まない）」を添える（英語 ` (HP actually removed; the finishing blow's M overkill is not counted)`）。1 行ごとのとどめの文（出目の値と残りの HP）は今のまま
 - 文: alerts の `new_floor` を「新しい階に到着した」から「階を移った（地下N階）」に（前に来た階でも出るので、作り直された階と読まれないように）
 - get_rules: 経験値の入り方とレベルを combat の「## 経験値とレベル」1 か所にまとめた（数は変えていない。expedition の「その他」はそこを指す）。overview に「階は、ランの間、作られたまま残る」（例外は倒していない節目の階の作り直し。シーズンでは地形と階段の位置が全員に同じ）。season にも同じことを短く。fight の合計とレポートの与ダメージに、とどめの超過分を含まないこと。シーズンの参加の briefing にも「階は、ランの間、作られたまま残る」
 - 運用の道具: `season -- uninvite --id <id> (--name <表示名> | --profile <profile_id>)`（§9.1）
-- 試運転の道具: `npm.cmd run call -- <tool> [key=value …]`・`--tools`（`packages/tools/src/mcp-call.ts`。トークンはファイルに保存して伏せる。SEASON.md §7.6）
+- 試運転の道具: `npm.cmd run call -- <tool> [key=value …]`・`--tools`（`packages/tools/src/mcp-call.ts`。トークンはファイルに保存して伏せる。`MUSE_PORT` か `MUSE_MCP_URL` が無ければ断る。呼んだ後はセッションの終わり（DELETE）を送る。SEASON.md §7.6・§7.9）
+- MCP（§8）: 使われていない MCP セッションを掃除する（SEASON.md §7.9）
+
+S0b で変えた項目のうち、MCP のセッションの掃除（`/mcp`）: 処理中の要求も開いたままの受信の流れ（GET の SSE）も無いまま、プレイヤーを束縛していないセッションは 30 分（`MUSE_MCP_IDLE_MS`）、束縛した（`new_run`・`join_run`・`resume_run` をした）セッションは 6 時間（`MUSE_MCP_BOUND_IDLE_MS`）だれも使わなければ、サーバーが閉じる（1 分ごとに見る）。閉じたセッションの ID で呼ぶと HTTP 404・`{ jsonrpc: '2.0', error: { code: -32000, message: 'Unknown MCP session' }, id: null }`（MCP の決まりどおり、クライアントは新しい `initialize` でつなぎ直す。束縛はセッションごとなので、つなぎ直したら `resume_run` か、`player_token` を渡して呼ぶ）。ターンフィード（`GET /api/player/feed`）は MCP のセッションではないので、掃除しない
 
 S0a で変えた項目（サーバーと運用の道具だけ。ゲームの規則は変えていないので `engineVersion` は 0.38.0、`eventVersion` は 22 のまま。SEASON.md §4.1・§5）:
 
@@ -858,7 +861,7 @@ CommandRecord {
 | パス | 内容 |
 |---|---|
 | `GET /` | Web クライアント |
-| `POST /mcp` ほか | MCP Streamable HTTP |
+| `POST /mcp` ほか | MCP Streamable HTTP。使われていないセッション（処理中の要求も開いたままの GET の流れも無いもの）は、束縛していなければ 30 分、束縛していれば 6 時間で閉じる。閉じた・知らないセッションの ID には 404（`Unknown MCP session`。つなぎ直す）。S0b（§5 の S0b の項目、SEASON.md §7.9） |
 | `GET /api/runs` | ラン一覧（進行中・終了済み）。サーバーの起動時に復旧できなかったランには `recoveryFailed: { reason, at }`（V4-1m。理由の 1 行と時刻。`live: false`・`joinable: false`）。人間の画面のランの一覧にも出す |
 | `GET /api/runs/:id/meta` | meta（終了前はシード無し） |
 | `GET /api/runs/:id/events?from=&to=` | イベント範囲（JSONL） |

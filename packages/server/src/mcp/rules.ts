@@ -203,7 +203,7 @@ ${traitsLines(r, true)}
 - 騒音: 戦闘・扉の開閉は音を立て、近くの眠っている敵を起こすことがある。
 ## 経験値とレベル（経験値の入り方は、ここにまとめる）
 - 経験値が入るのは次の 3 つだけ。増えたときは「経験値 +6（大ネズミを倒した）」のように、理由つきの文が出る（観測の self.xp に累計）。
-  1. 敵を倒す: 倒した本人に、種族の経験値 × (100 + ${r.xp.killDepthPct ?? 0} × (その階の深さ − 1))%（切り捨て。深い階ほど多い）。毒で倒しても、毒を与えた者に入る。
+  1. 敵を倒す: 倒した本人に、その個体の経験値（種族の経験値が、深層の強化と接辞で増える）× (100 + ${r.xp.killDepthPct ?? 0} × (その階の深さ − 1))%（切り捨て。深い階ほど多い）。毒で倒しても、毒を与えた者に入る。
   2. 新しい深さに初めて着く: そのランで着いた最も深い階を更新したとき、${r.xp.perNewDepth} × その深さ。前に着いたことのある深さでは入らない。
   3. 遠征の目的を達成する: 達成した瞬間に、迷宮にいる参加者のそれぞれに ${r.xp.perObjective} × 目標の深さ（帰還を待たない。目的なしの遠征には無い）。
 - これ以外（帰還・撤退・帰還の綱・踏破（深追い）・宝・発見・休憩・キャンプ）では入らない。
@@ -398,7 +398,7 @@ Free: choose_perk{option} / observe / wait_for_turn / expedition / review / reco
 - Noise from combat and doors may wake nearby sleepers.
 ## XP and levels (everything about how XP is earned is here)
 - XP comes from these three only. Each gain is reported with its reason, e.g. "+6 XP (killed cave rat)" (self.xp in the observation is the total).
-  1. A kill: the killer gets the species' XP x (100 + ${r.xp.killDepthPct ?? 0} x (the floor's depth - 1))% (rounded down; deeper is more). A poison kill goes to whoever poisoned it.
+  1. A kill: the killer gets that monster's XP (the species' XP, raised by its depth tier and affixes) x (100 + ${r.xp.killDepthPct ?? 0} x (the floor's depth - 1))% (rounded down; deeper is more). A poison kill goes to whoever poisoned it.
   2. First arrival at a new depth: when you beat the deepest floor reached in this run, ${r.xp.perNewDepth} x that depth. A depth you have reached before gives nothing.
   3. Completing an expedition objective: the moment it is done, each participant in the dungeon gets ${r.xp.perObjective} x the target depth (no need to extract first; expeditions without an objective give none).
 - Nothing else gives XP (extracting, withdrawing, the lifeline, overreach, treasure, discoveries, resting, camp).

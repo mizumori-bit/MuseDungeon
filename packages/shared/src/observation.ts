@@ -7,6 +7,7 @@ import { floorTraitsText, guardianDisplayName, multText, objectiveText, offerTex
 import { COLLECT_WITHIN, collectTargets, isStationary, pickableItems, sameOrWorseEquip, worseEquip } from './macro';
 import { attacksPerTurn, chaseAttacks, memoryOf, monsterSpeedOf, selfSpeed } from './danger';
 import type { PerceivedEvent } from './filter';
+import { lastWithoutXp } from './filter';
 import type { ReportCompare } from './expeditionStats';
 import { kindName } from './narrate';
 import type { NavGrid } from './nav';
@@ -1551,7 +1552,8 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
     visible: { monsters, items, players, features, ...(itemsOmitted ? { items_omitted: itemsOmitted } : {}) },
     party: partyOf(view),
     navigation: { here, passable_dirs, frontiers, known_stairs, collectable: { count: collectIds.length, ids: collectIds }, ...(view.memory.unsighted?.length ? { unsighted: view.memory.unsighted.length } : {}) },
-    recent_events: (opts.recent ?? []).map((e) => e.text).filter((s) => s.length > 0).slice(-10),
+    // 経験値の文は 10 件の枠に数えない（ほかの知らせを押し出さない。S0b §7.9）
+    recent_events: lastWithoutXp((opts.recent ?? []).filter((e) => e.text.length > 0), 10).map((e) => e.text),
     valid_actions,
   };
   if (rest && rest.blocked_by !== 'hostile_hunting') obs.self.rest_estimate = rest;

@@ -379,7 +379,9 @@ export function buildExpeditionReport(inp: ReportInput): ExpeditionReport {
     const d = death;
     const before = inp.events.filter((e) => e.seq <= d.seq);
     const texts: string[] = [];
-    if (inp.narrate) for (let i = before.length - 1; i >= 0 && texts.length < 10; i--) { const s = inp.narrate(before[i]); if (s) texts.unshift(s); }
+    // 経験値の文は 10 件の枠に数えない（ほかの知らせを押し出さない。S0b §7.9）
+    let counted = 0;
+    if (inp.narrate) for (let i = before.length - 1; i >= 0 && counted < 10; i--) { const s = inp.narrate(before[i]); if (s) { texts.unshift(s); if (before[i].type !== 'xp_gained') counted++; } }
     report.death = { killer: d.selfHarm || d.killer === null ? null : name(d.killer), via: d.via, ...(d.selfHarm ? { self_inflicted: true } : {}), last_events: texts, hp_trace: [...trace.slice(-19), 0] };
   }
   return report;

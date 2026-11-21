@@ -140,6 +140,21 @@ export function filterEventsForPlayer(events: readonly GameEvent[], playerId: Pl
 }
 
 /**
+ * 件数に上限のある所（行動の結果・直前の出来事・遠征レポートの last_events など）で、経験値の文に枠を使わせない（S0b。SEASON.md §7.9）:
+ * 経験値の文でないものを後ろから n 件と、その間にある経験値の文。経験値の文は、ほかの知らせを押し出さない
+ */
+export function lastWithoutXp<T extends { type: string }>(items: readonly T[], n: number): T[] {
+  let count = 0;
+  let i = items.length;
+  while (i > 0 && count < n) {
+    i--;
+    if (items[i].type !== 'xp_gained') count++;
+  }
+  // 数えきったときは、最後に数えた（経験値でない）ものから。その前の経験値の文は入れない
+  return items.slice(i);
+}
+
+/**
  * 経験値が増えた理由（S0b。SEASON.md §6.2 の 1）: engine の xp_gained は理由を持たないので、同じ命令の中で
  * その前にある、自分が見た出来事から決めて、射影に足す（engine の出来事の形は変えない）。
  * 経験値が入るのは 3 つだけ（combat.ts の grantXp の呼び出し）: 自分が倒した died の直後、自分の entity_changed_floor（新しい深さ）の後、
@@ -158,7 +173,8 @@ function annotateXp(out: ProjectedEvent[], selfId: string): void {
         e.victimAffixes = (p.affixes as string[] | null | undefined) ?? null;
         break;
       }
-      if (p.type === 'objective_completed') { e.reason = 'objective'; break; }
+      // 目的の達成は、すぐ前の出来事のときだけ（engine は達成の直後に、参加者ごとに経験値を出す。間にほかの出来事があれば、別の経験値。S0b §7.9）
+      if (p.type === 'objective_completed') { if (j === i - 1) e.reason = 'objective'; break; }
       if (p.type === 'entity_changed_floor' && p.id === selfId) {
         const to = (p.to as { floor?: string } | null | undefined)?.floor;
         const depth = to ? Number(to.split(':')[1]) : NaN;

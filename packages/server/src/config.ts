@@ -20,6 +20,12 @@ export interface ServerConfig {
   waitOthersMs: number;
   /** ターンフィードの idle 通知の間隔（手番のまま入力が無いとき） */
   idleNoticeMs: number;
+  /**
+   * 使われていない MCP セッションを掃除するまでの時間（S0b §7.9）。開いたままの受信の流れも、処理中の要求も無く、この時間だれも使っていないもの。
+   * mcpIdleMs はプレイヤーを束縛していないセッション（呼び出しごとに player_token を渡すクライアント）、mcpBoundIdleMs は束縛したセッション
+   */
+  mcpIdleMs: number;
+  mcpBoundIdleMs: number;
   /** プロフィールの置き場所（V3-7 §7.1）。null ならメモリだけ。既定は runsDir/profiles（runsDir が null なら null） */
   profilesDir: string | null;
   /** 継承（V3-7 §7.3）: off なら new_run {legacy: true} でも継承しない */
@@ -42,6 +48,8 @@ export function loadConfig(overrides: Partial<ServerConfig> = {}): ServerConfig 
     keyframeEvery: 500,
     waitOthersMs: 20000,
     idleNoticeMs: env.MUSE_IDLE_NOTICE_MS ? parseInt(env.MUSE_IDLE_NOTICE_MS, 10) : 60000,
+    mcpIdleMs: env.MUSE_MCP_IDLE_MS ? parseInt(env.MUSE_MCP_IDLE_MS, 10) : 30 * 60_000,
+    mcpBoundIdleMs: env.MUSE_MCP_BOUND_IDLE_MS ? parseInt(env.MUSE_MCP_BOUND_IDLE_MS, 10) : 6 * 3600_000,
     legacyPolicy: env.MUSE_LEGACY_POLICY === 'off' ? 'off' : 'on',
     ...overrides,
     profilesDir: overrides.profilesDir !== undefined ? overrides.profilesDir : env.MUSE_PROFILES_DIR ?? (runsDirOf(overrides, env) ? join(runsDirOf(overrides, env)!, 'profiles') : null),
