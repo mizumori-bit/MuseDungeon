@@ -234,9 +234,9 @@ export function Lobby() {
             {seasons.map(({ season: s, standings }) => (
               <div key={s.id}>
                 <h4 title={tr('同着は、使った予算（手番）の少ないほうが上', 'Ties go to whoever used less budget (turns)')}>
-                  {s.name}（{s.status === 'open' ? tr(`開催中・${fmtTime(s.endsAt)} まで`, `open until ${fmtTime(s.endsAt)}`) : s.status === 'ended' ? tr('終わりの時刻を過ぎた（確定待ち）', 'past its end (awaiting results)') : tr('確定', 'final')}・{tr(`予算 ${s.budget} 手番・参加 ${s.participants}`, `budget ${s.budget} turns, ${s.participants} participants`)}）
+                  {s.name}（{s.status === 'open' ? tr(`開催中・${fmtTime(s.endsAt)} まで`, `open until ${fmtTime(s.endsAt)}`) : s.status === 'ended' ? tr('終わりの時刻を過ぎた（確定待ち）', 'past its end (awaiting results)') : tr('確定', 'final')}・{tr(`予算 ${s.budget} 手番・参加 ${s.participants}（招いた ${s.invited}）`, `budget ${s.budget} turns, ${s.participants} of ${s.invited} invited playing`)}）
                 </h4>
-                {standings.length === 0 && <div class="muted">{tr('まだ参加者がいない', 'No participants yet')}</div>}
+                {standings.length === 0 && <div class="muted">{tr('まだだれもランを始めていない（参加は運用者に招かれた者だけ）', 'Nobody has started yet (invited players only)')}</div>}
                 {standings.length > 0 && (
                   <table class="board">
                     <thead><tr>

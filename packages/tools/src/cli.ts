@@ -164,6 +164,7 @@ async function main() {
         stray,
         sub: argv[1] ?? '', dir, id: flag('id'), name: flag('name'), seed: flag('seed'), budget: flag('budget') ? Number(flag('budget')) : undefined,
         ends: flag('ends'), seeds: flag('seeds')?.split(',').map((x) => x.trim()).filter(Boolean), depth: flag('depth') ? Number(flag('depth')) : undefined,
+        profilesDir: flag('profiles-dir') ? resolve(flag('profiles-dir')!) : loadConfig().profilesDir, profileToken: flag('profile-token'),
       });
       break;
     }

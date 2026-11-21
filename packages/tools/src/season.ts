@@ -1,8 +1,8 @@
-// シーズンの運用（S0。PROTOCOL.md §9.1）: 開く・一覧・順位・確定・地下 5 階の大守護者の下見。
+// シーズンの運用（S0。PROTOCOL.md §9.1）: 開く・招く・一覧・順位・確定・地下 5 階の大守護者の下見。
 // サーバーと同じ置き場所（既定 runs/seasons。MUSE_SEASONS_DIR か --dir）に書く。動いているサーバーは、知らない ID を聞かれたときに読み直す。
 import type { Content } from '@muse/content';
 import { createRun, ENGINE_VERSION, previewWarden } from '@muse/engine';
-import { SeasonService, SeasonStore, SEASON_ID_RE } from '@muse/server';
+import { ProfileStore, SeasonService, SeasonStore, SEASON_ID_RE } from '@muse/server';
 import type { SeasonDef } from '@muse/server';
 
 export interface SeasonCliArgs {
@@ -17,6 +17,9 @@ export interface SeasonCliArgs {
   depth?: number;
   /** 名前付きの引数の値にならなかった引数（PowerShell の npm run が --id などを消すと、値だけが残る） */
   stray?: string[];
+  /** 招く（S0a）: プロフィールの置き場所（サーバーと同じ。既定 runs/profiles）と、今あるプロフィールを招くときのトークン */
+  profilesDir?: string | null;
+  profileToken?: string;
 }
 
 /** 使われなかった引数の知らせ（PowerShell の `npm run` は名前付きの引数を消し、引用符の無いカンマは別の引数に分ける） */
@@ -43,10 +46,31 @@ export function seasonCli(content: Content, a: SeasonCliArgs, log: (s: string) =
       log(`シーズン ${def.id}「${def.name}」を開いた: 予算 ${def.budget} 手番・終わり ${new Date(def.endsAt).toISOString()}・engine ${def.engineVersion}・content ${def.contentVersion}${a.dir ? `（${a.dir}）` : ''}`);
       return 0;
     }
+    case 'invite': {
+      // 招く（S0a。SEASON.md §4.1）: 招かれたプロフィールだけが、そのシーズンのランを始められる
+      if (!a.id) { log('--id が要る（シーズンの ID）'); return 1; }
+      if (!a.name && !a.profileToken) { log('--name が要る（表示名。同じシーズンの中で重ならないこと）'); return 1; }
+      const r = svc.invite(a.id, a.name ?? '', new ProfileStore(a.profilesDir ?? null), a.profileToken);
+      if ('error' in r) { log(r.error); return 1; }
+      log(`シーズン ${a.id} に「${r.name}」を招いた（profile_id: ${r.profileId}）。`);
+      if (r.token) {
+        log(`profile_token: ${r.token}`);
+        log(`このトークンは、この 1 回だけ表示する。参加者へ手で渡す（リポジトリ・記録・チャットの公開の場には残さない）。参加は new_run { character_name, season: "${a.id}", profile_token }。`);
+      } else log('今あるプロフィールを招いた。参加者は、今のトークンのまま new_run { season } で参加できる。');
+      return 0;
+    }
+    case 'invites': {
+      if (!a.id || !svc.get(a.id)) { log(`シーズン ${a.id ?? '(--id)'} は無い`); return 1; }
+      const list = store.invites(a.id);
+      const ps = svc.get(a.id)!.participants;
+      if (!list.length) log('まだだれも招いていない');
+      for (const x of list) log(`${x.name}（${x.profileId}）招いた ${new Date(x.invitedAt).toISOString()}・ラン ${ps.find((p) => p.profileId === x.profileId)?.runs.length ?? 0}`);
+      return 0;
+    }
     case 'list': {
       const list = svc.list();
       if (!list.length) log('シーズンは無い');
-      for (const s of list) log(`${s.id}「${s.name}」 ${s.status} 予算 ${s.budget} 終わり ${new Date(s.endsAt).toISOString()} 参加者 ${s.participants}`);
+      for (const s of list) log(`${s.id}「${s.name}」 ${s.status} 予算 ${s.budget} 終わり ${new Date(s.endsAt).toISOString()} 招いた ${s.invited}・始めた ${s.participants}`);
       return 0;
     }
     case 'standings': {
@@ -83,7 +107,7 @@ export function seasonCli(content: Content, a: SeasonCliArgs, log: (s: string) =
       return 0;
     }
     default:
-      log('使い方（PowerShell）: npm.cmd run season -- open --id <id> --seed <seed> --ends "<ISO 時刻>" [--name <名前>] [--budget 3000] / list / standings --id <id> / close --id <id> / wardens --seeds "a,b,c" [--depth 5]  （共通: --dir <置き場所>。bash では npm run）');
+      log('使い方（PowerShell）: npm.cmd run season -- open --id <id> --seed <seed> --ends "<ISO 時刻>" [--name <名前>] [--budget 3000] / invite --id <id> --name <表示名> [--profile-token <今あるトークン>] / invites --id <id> / list / standings --id <id> / close --id <id> / wardens --seeds "a,b,c" [--depth 5]  （共通: --dir <置き場所>・--profiles-dir <プロフィールの置き場所>。bash では npm run）');
       return 1;
   }
 }

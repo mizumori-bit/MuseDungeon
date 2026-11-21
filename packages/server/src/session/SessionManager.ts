@@ -110,9 +110,9 @@ export class SessionManager {
 
   /** 新しいラン: 作成 → 参加 → 最初の遠征の開始（start_expedition をコマンドとして記録する） */
   async createRun(req: NewRunRequest & { controller: Controller }): Promise<Joined | { error: ActionError }> {
+    if (req.season !== undefined) return this.createSeasonRun(req as NewRunRequest & { controller: Controller; season: string });
     // 知らないプロフィールのトークンは、ランを作る前に断る（断った後に、誰もいないランが残らない）
     if (req.profileToken && !this.profiles.store.resolve(req.profileToken)) return { error: unknownProfileError() };
-    if (req.season !== undefined) return this.createSeasonRun(req as NewRunRequest & { controller: Controller; season: string });
     const session = RunSession.create(this.deps, { seed: req.seed, mode: req.mode ?? 'solo' });
     this.sessions.set(session.runId, session);
     // objective を省くとキャンプから始まる（最初の遠征も候補 3 つから選ぶ。V3-2R §14.4）
@@ -134,16 +134,21 @@ export class SessionManager {
    * 参加者（プロフィール）ごとに同時に 1 つ。参加の直後に取り込む（予算・公開された階段・順位）
    */
   private async createSeasonRun(req: NewRunRequest & { controller: Controller; season: string }): Promise<Joined | { error: ActionError }> {
-    const profileId = req.profileToken ? this.profiles.store.resolve(req.profileToken)!.id : null;
+    // 招かれたプロフィールだけ（S0a。SEASON.md §4.1）: トークンは必須。知らないトークンも、理由つきで断る（ランを作る前に）
+    const prof = req.profileToken ? this.profiles.store.resolve(req.profileToken) : null;
+    if (req.profileToken && !prof) {
+      return { error: actionError('season_unavailable', 'そのプロフィールのトークンは見つからない。運用者から受け取った profile_token を確かめる / unknown profile_token; check the token the operator gave you', '運用者に招いてもらう / ask the operator to invite you') };
+    }
+    const profileId = prof?.id ?? null;
     const chk = this.seasons.canStart(req.season, profileId);
-    if ('reason' in chk) return { error: actionError('season_unavailable', chk.reason, 'list_runs の seasons で開いているシーズンを確かめる / check open seasons with list_runs') };
+    if ('reason' in chk) return { error: actionError('season_unavailable', chk.reason, profileId ? 'list_runs の seasons で開いているシーズンを確かめる / check open seasons with list_runs' : '運用者から受け取った profile_token を渡す / pass the profile_token the operator gave you') };
     const def = chk.def;
     const session = RunSession.create(this.deps, { seed: def.seed, mode: 'solo', season: { id: def.id, name: def.name } });
     this.sessions.set(session.runId, session);
     const joined = await this.joinSession(session, { name: req.name, classId: req.classId, locale: req.locale, controller: req.controller, atCamp: true, profileToken: req.profileToken, legacy: false }, req.controller.kind === 'agent' ? 'mcp' : 'ws');
     if ('error' in joined) { this.sessions.delete(session.runId); session.discard(); return joined; }
-    const pname = this.profiles.store.get(joined.profile.id)?.name ?? req.name;
-    this.seasons.registerRun(def.id, joined.profile.id, pname, session.runId);
+    // 順位の表の名前は、招いたときの表示名（S0a）
+    this.seasons.registerRun(def.id, joined.profile.id, chk.name, session.runId);
     await session.syncSeason(joined.playerId, 'join');
     return joined;
   }

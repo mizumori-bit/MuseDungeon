@@ -75,7 +75,7 @@ turn: {
 | `get_rules` | `topic?: 'overview'|'expedition'|'actions'|'combat'|'items'|'classes'|'observation'|'all'`, `locale?` | ルールブック。式・操作・遠征（戦利品・確定点・候補の枠と条件・危険度）・観測の読み方のみで、個別のモンスター数値は含めない。数値は `balance.json`（公開カタログの `rules`）から生成。`classes` は職業ごとの初期値・初期装備・成長（v3）と、習熟・特技の系統・特技の一覧・能動技の一覧（V3-4） |
 | `list_runs` | – | 参加可能・再開可能なラン一覧と、開いているシーズン（`seasons: { id, name, budget, ends_at }[]`。S0 §9.1） |
 | `new_run` | `character_name`, `class?`（`warrior`/`scout`）, `mode?: 'solo'|'coop'`, `seed?`, `locale?`, `objective?: 'auto'|'reach_depth'|'slay_guardian'|'retrieve_relic'|'endless'`, `brief_map?`, `map?`, `inventory?`, `status_line?` | `objective` を省くと**キャンプから始まる**（`at_camp`・`awaiting: 'camp_choice'`。最初の遠征も 3 候補から `start_expedition` で選ぶ。V3-2R）。`objective` を渡せば従来どおり最初の遠征まで始める（`auto` は 1 番目の候補 = 堅実・到達）。`{ run_id, player_token, player_id, briefing, observation, turn }`。`seed` を指定しても結果には返さない。`map` 以下は `set_options` と同じ（`brief_map: false` は `map: 'never'`）。不明な `class` のエラーは職業の一覧を返す |
-| `new_run`（シーズン） | 上の引数に `season: string`（シーズンの ID）, `profile_token?` | S0（§9.1）。シーズンのシードでソロ、Lv1 のキャンプから始まる。`seed`・`mode`・`objective`・`legacy` は使わない（継承は受けない）。参加できないときは `season_unavailable`（理由は message） |
+| `new_run`（シーズン） | 上の引数に `season: string`（シーズンの ID）, `profile_token`（必須。運用者に招かれたプロフィールのもの） | S0（§9.1）。シーズンのシードでソロ、Lv1 のキャンプから始まる。`seed`・`mode`・`objective`・`legacy` は使わない（継承は受けない）。参加できないときは `season_unavailable`（理由は message。トークンが無い・招かれていない など） |
 | `join_run` | `run_id`, `character_name`, `class?` | 同上（COOP。キャンプから始まる。進んでいる遠征には入らず、次の遠征から一緒に出る。V4-1g） |
 | `resume_run` | `player_token`, `map?`, `inventory?`, `status_line?` | 現在の MCP 接続にプレイヤーを再束縛する。**再開ブリーフィング**（遠征の目的と進捗、現在地、直近の節目 最大 10 件、自分のメモ）＋ `observation` ＋ `turn` |
 | `retire` | `confirm: true` | ランを終了する（キャラクターは戻らない）。スコアを記録。遠征中なら、その遠征の戦利品は失う（キャンプで引退すれば確定点はそのまま） |
@@ -440,6 +440,13 @@ V3-2R で足した項目（同じく後方互換。会心と経験値のルー�
 - `StatusInst.source`（状態異常を与えた者。毒で倒したときの撃破者になる）、`status_applied.targetAffixes`
 - `player_state.reason: 'joined'`（キャンプから始まる参加）。参加コマンドの `atCamp`
 - プレイヤー向けの射影で、見えていた個体が視界の外へ動いた `entity_moved` に `dirOut`（向きだけ。行き先は伏せたまま）
+
+S0a で変えた項目（サーバーと運用の道具だけ。ゲームの規則は変えていないので `engineVersion` は 0.38.0、`eventVersion` は 22 のまま。SEASON.md §4.1・§5）:
+
+- シーズンのランは、運用者がそのシーズンに招いたプロフィールでしか始められない。`new_run { season }`（HTTP は `POST /api/runs { season }`）の `profile_token` は必須。トークンが無い・知らないトークン・招かれていないプロフィールは `season_unavailable`（理由つき）
+- 運用の道具 `season -- invite`（招く。表示名はそのシーズンの中で重ならない。新しいプロフィールのトークンは 1 回だけ表示する）・`season -- invites`（招いた者の一覧。トークンは出さない）。招いた者は `seasons/<id>/invites.json`（運用の道具だけが書く）
+- 順位の表の名前は、招いたときの表示名。`GET /api/seasons` の `invited`（招いた数）。`participants` は 1 回でもランを始めた数
+- 動いているサーバーは、知らないプロフィールのトークンを渡されたら、プロフィールの置き場所を読み直す（運用の道具が作ったプロフィール）
 
 S0（シーズン）で変えた項目（`engineVersion` 0.38.0、`eventVersion` 22。SEASON.md §2、DESIGN.md §39。中身は §9）。シーズンでないランは何も変わらない（生成・候補・観測・出来事のどれも）:
 
@@ -878,10 +885,16 @@ CommandRecord {
 - **開く**: 運用者が `npm.cmd run season -- open --id <id> --seed <seed> --ends "<ISO 8601 の時刻>" [--name <名前>] [--budget 3000]`（PowerShell では `npm` でなく `npm.cmd` と書き、カンマや `+` を含む値は引用符でくくる。`npm run` だと名前付きの引数が消える。道具は、使われなかった引数があればそう知らせる）。定義はサーバーの記録の置き場所の `seasons/<id>/season.json`（既定は `runs/seasons`。`MUSE_SEASONS_DIR` で変えられる）。動いているサーバーは、知らない ID を聞かれたときに読み直すので、起動し直さなくてよい。
   - `SeasonDef { id, name, seed, engineVersion, contentVersion, budget, endsAt, openedAt }`。`engineVersion`・`contentVersion` は開いたときの版。サーバーの版と違えば、そのシーズンのランは始められない（SEASON.md §2.1: 開いている間、版は変えない）。
   - ほかに `season -- list`・`season -- standings --id`・`season -- close --id`（すぐ確定する）・`season -- wardens --seeds "a,b,c"`（シードごとの地下 5 階の大守護者の種族と装甲の目安。§2.8 のシード選び）。
-- **参加**: `new_run { season: <id>, profile_token? }`（HTTP は `POST /api/runs { season }`）。1 つのプロフィールが、1 つのシーズンに 1 人の参加者。`profile_token` を省くと新しいプロフィール（＝新しい参加者）になる。
+- **招く**（S0a。SEASON.md §4.1）: 運用者が `npm.cmd run season -- invite --id <id> --name <表示名> [--profile-token <今あるトークン>]`。
+  - `--profile-token` を省くと、その表示名で新しいプロフィールを作り、そのトークンを**この 1 回だけ**表示する。運用者が参加者へ手で渡す。渡すと、今あるプロフィールを招く（トークンは表示しない）。
+  - 表示名は、同じシーズンの中で重ならないこと（前後の空白を除き、大文字と小文字・全角と半角を区別しないで比べる）。重なれば断る。同じプロフィールを 2 回は招けない。
+  - 招いた者は `seasons/<id>/invites.json`（`{ profileId, name, invitedAt }[]`。トークンは入れない）。このファイルを書くのは運用の道具だけで、サーバーは参加のたびに読み直す（起動し直さなくてよい）。
+  - `season -- invites --id <id>`: 招いた者の一覧（表示名・プロフィールの ID・ランの数。トークンは出さない）。
+- **参加**: `new_run { season: <id>, profile_token }`（HTTP は `POST /api/runs { season, profileToken }`）。`profile_token` は必須で、そのシーズンに招かれたプロフィールのものだけ。1 つのプロフィールが、1 つのシーズンに 1 人の参加者で、順位の表の名前は招いたときの表示名（`character_name` はキャラクターの名前で、順位には使わない）。倒れた後の新しいランも、同じトークンで同じ参加者として数え、予算は続きから。
+- トークンは、リポジトリ・ランの記録・シーズンの記録・観測・順位の表のどれにも出さない（プロフィールのファイルにはハッシュだけ）。
 - シーズンのランは**ソロ**。シーズンのシードで、Lv1 のキャンプから始まる（`seed`・`mode`・`objective` は使わない）。継承（V3-7）は受けない。シーズンのランの記録は、後のランの継承に使わない。記録・図鑑・実績は付く。
 - 同じ参加者のシーズンのランは、同時に 1 つ。倒れる・引退でランが終わったら、同じシーズンで新しいランを Lv1 から始められる（回数の上限は無い）。
-- 断るとき（`season_unavailable`。理由は message）: 知らないシーズン・終わったシーズン（終わりの時刻を過ぎた）・版が違う・予算が残っていない・進行中のシーズンのランがある。
+- 断るとき（`season_unavailable`。理由は message）: `profile_token` が無い・知らないトークン・そのシーズンに招かれていない（運用者に招いてもらうよう書く）・知らないシーズン・終わったシーズン（終わりの時刻を過ぎた）・版が違う・予算が残っていない・進行中のシーズンのランがある。
 - RunMeta に `season?: { id, name }`（ランの始まりから。俯瞰とプレイヤーの両方に見える）。ランの一覧（`RunListing`）にも `season?`。
 
 ### 9.2 行動予算
@@ -973,7 +986,7 @@ SeasonSyncCommand {
 
 ### 9.8 HTTP
 
-- `GET /api/seasons` → `{ seasons: { id, name, budget, endsAt, status: 'open'|'ended'|'final', participants }[] }`
+- `GET /api/seasons` → `{ seasons: { id, name, budget, endsAt, status: 'open'|'ended'|'final', participants, invited }[] }`（`participants`: 1 回でもランを始めた数、`invited`: 招いた数）
 - `GET /api/seasons/:id` → `{ season, standings: { name, runs, used, died, adventure: { value, rank }, contribution: { value, rank }, survival: { value, rank } | null }[], result? }`（公開された階段の位置は出さない。人間の画面のロビーの順位の表）
 
 ### 9.9 規則の文

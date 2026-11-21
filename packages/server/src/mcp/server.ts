@@ -160,9 +160,9 @@ export function createMcpServer(ctx: McpContext): McpServer {
       players: r.players.map((p) => ({ name: p.name, class: p.classId, controller: p.controller.kind, state: p.state, depth: p.depth })),
     }));
     // 開いているシーズン（S0 §9.1）: new_run { season } で参加する
-    const seasons = manager.seasons.list().filter((x) => x.status === 'open').map((x) => ({ id: x.id, name: x.name, budget: x.budget, ends_at: new Date(x.endsAt).toISOString(), participants: x.participants }));
+    const seasons = manager.seasons.list().filter((x) => x.status === 'open').map((x) => ({ id: x.id, name: x.name, budget: x.budget, ends_at: new Date(x.endsAt).toISOString(), participants: x.participants, invited: x.invited }));
     const text = (runs.length ? runs.map((r) => `${r.run_id} [${r.mode}${r.season ? ` season ${r.season}` : ''}] ${r.joinable ? 'joinable' : 'full'} — ${r.players.map((p) => `${p.name}(${p.class}, ${p.state}, depth ${p.depth ?? '-'})`).join(', ')}`).join('\n') : 'No active runs. Use new_run.')
-      + (seasons.length ? '\n' + seasons.map((x) => `season ${x.id}「${x.name}」 budget ${x.budget} turns, ends ${x.ends_at}, participants ${x.participants} — new_run { season: "${x.id}" }`).join('\n') : '');
+      + (seasons.length ? '\n' + seasons.map((x) => `season ${x.id}「${x.name}」 budget ${x.budget} turns, ends ${x.ends_at}, participants ${x.participants}/${x.invited} invited — new_run { season: "${x.id}", profile_token } (invited profiles only)`).join('\n') : '');
     return out(text, { runs, seasons });
   });
 
@@ -200,7 +200,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
       objective: z.enum(['auto', 'reach_depth', 'slay_guardian', 'retrieve_relic', 'endless']).optional().describe('最初の遠征の目的（既定 auto = 最初の候補。endless は目的なし）'),
       profile_token: z.string().optional().describe('前のランで受け取った profile_token。記録・図鑑・実績が積まれ、図鑑の知識の一部を引き継ぐ（省くと新しいプロフィールを作り、応答で返す）'),
       legacy: z.boolean().optional().describe('false で図鑑の知識を引き継がない（既定 true）'),
-      season: z.string().max(32).optional().describe('シーズンの ID（list_runs の seasons）。シーズンのシードでソロ、Lv1 のキャンプから始まる。seed・mode・objective・legacy は使わない。profile_token で同じ参加者として数える'),
+      season: z.string().max(32).optional().describe('シーズンの ID（list_runs の seasons）。運用者に招かれたプロフィールの profile_token が要る（無い・招かれていなければ断る）。シーズンのシードでソロ、Lv1 のキャンプから始まる。seed・mode・objective・legacy は使わない。倒れた後の新しいランも、同じ profile_token で同じ参加者として数える'),
       ...optionArgs,
       brief_map: z.boolean().optional().describe('旧引数。false は map: never と同じ'),
     },

@@ -1,5 +1,5 @@
 // S0（シーズン。SEASON.md §2・PROTOCOL.md §9）のテスト（SEASON.md §2.10）
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -30,10 +30,19 @@ function openSeason(m: SessionManager, over: Partial<{ budget: number; endsAt: n
   });
 }
 
+/** 招く（S0a: 招かれたプロフィールだけが参加できる）。新しいプロフィールのトークンを返す */
+function invite(m: SessionManager, name: string): string {
+  const r = m.seasons.invite(SID, name, m.profiles.store);
+  if ('error' in r) throw new Error(r.error);
+  return r.token!;
+}
+
+/** 招いて参加する（profileToken を渡せば、そのプロフィールで） */
 async function seasonRun(m: SessionManager, name: string, extra: { classId?: string; profileToken?: string } = {}) {
-  const r = await m.createRun({ name, controller: agent, season: SID, ...extra });
+  const ptoken = extra.profileToken ?? invite(m, name);
+  const r = await m.createRun({ name, controller: agent, season: SID, ...(extra.classId ? { classId: extra.classId } : {}), profileToken: ptoken });
   if ('error' in r) throw new Error(r.error.message);
-  return r;
+  return Object.assign(r, { ptoken });
 }
 
 const act = (port: PlayerPort, cmd: Command) => port.act(cmd, { source: 'bot' });
@@ -163,7 +172,7 @@ describe('S0 §2.2: the budget', () => {
     expect(o.observation.valid_actions.some((v) => v.startsWith('start_expedition'))).toBe(false);
     expect(o.text).toContain('行動予算を使い切った');
     // 新しいランも始められない（同じ参加者）
-    const again = await m.createRun({ name: 'T2', controller: agent, season: SID, profileToken: r.profile.token });
+    const again = await m.createRun({ name: 'T2', controller: agent, season: SID, profileToken: r.ptoken });
     expect('error' in again && again.error.code).toBe('season_unavailable');
     m.closeAll();
   });
@@ -178,10 +187,10 @@ describe('S0 §2.2: the budget', () => {
     const used1 = r1.session.world.entities[r1.session.world.players[r1.playerId].entityId].actor!.turns;
     expect(used1).toBeGreaterThanOrEqual(25);
     // 進行中のシーズンのランがある間は、新しいランを始められない
-    const busy = await m.createRun({ name: 'R2', controller: agent, season: SID, profileToken: r1.profile.token });
+    const busy = await m.createRun({ name: 'R2', controller: agent, season: SID, profileToken: r1.ptoken });
     expect('error' in busy && busy.error.message).toContain('進行中');
     expect((await r1.port.act({ type: 'retire' }, { source: 'bot' })).ok).toBe(true);
-    const r2 = await seasonRun(m, 'R2', { profileToken: r1.profile.token });
+    const r2 = await seasonRun(m, 'R2', { profileToken: r1.ptoken });
     expect(r2.profile.id).toBe(r1.profile.id);
     expect(seasonBudgetLeft(r2.session.world, r2.playerId)).toBe(500 - used1);
     expect(r2.port.observe().text).toContain(`残りの予算 ${500 - used1}/500`);
@@ -198,7 +207,7 @@ describe('S0 §2.2: the budget', () => {
     const st = await act(r.port, { type: 'start_expedition', offer: 1 });
     expect(st.ok).toBe(false);
     if (!st.ok) expect(st.error.code).toBe('season_ended');
-    const again = await m.createRun({ name: 'E2', controller: agent, season: SID });
+    const again = await m.createRun({ name: 'E2', controller: agent, season: SID, profileToken: invite(m, 'E2') });
     expect('error' in again && again.error.code).toBe('season_unavailable');
     m.closeAll();
   });
@@ -423,5 +432,113 @@ describe('S0: the operator tool', () => {
     expect(seasonCli(content, { sub: 'wardens', dir: null, seeds: ['s0-a', 's0-b'], stray: [] }, (x) => ok.push(x))).toBe(0);
     expect(ok.join(' ')).not.toContain('使われなかった引数');
     expect(ok.length).toBe(4);
+  });
+});
+
+describe('S0a §4.1: only profiles the operator invited may start season runs', () => {
+  it('refuses a request without a token, with an unknown token, and with an uninvited profile; the reasons say so', async () => {
+    const m = manager();
+    openSeason(m);
+    const none = await m.createRun({ name: 'N', controller: agent, season: SID });
+    expect('error' in none && none.error.code).toBe('season_unavailable');
+    expect('error' in none && none.error.message).toContain('profile_token が要る');
+    const unknown = await m.createRun({ name: 'U', controller: agent, season: SID, profileToken: 'no-such-token' });
+    expect('error' in unknown && unknown.error.code).toBe('season_unavailable');
+    expect('error' in unknown && unknown.error.message).toContain('トークンは見つからない');
+    // シーズンでないランで作ったプロフィールは、招かれていない
+    const plain = await m.createRun({ name: 'Plain', controller: agent });
+    if ('error' in plain) throw new Error(plain.error.message);
+    const uninvited = await m.createRun({ name: 'Plain', controller: agent, season: SID, profileToken: plain.profile.token });
+    expect('error' in uninvited && uninvited.error.code).toBe('season_unavailable');
+    expect('error' in uninvited && uninvited.error.message).toContain('招かれていない');
+    expect('error' in uninvited && uninvited.error.message).toContain('運用者');
+    // 断ったときにランは残らない
+    expect([...m.sessions.values()].filter((x) => x.world.meta.season).length).toBe(0);
+    // 今あるプロフィールを招けば、そのトークンのまま参加できる（招いた表示名で順位に載る）
+    const inv = m.seasons.invite(SID, 'Plainly', m.profiles.store, plain.profile.token);
+    expect('error' in inv).toBe(false);
+    expect('token' in inv && inv.token).toBeFalsy();
+    const ok = await m.createRun({ name: 'キャラ名', controller: agent, season: SID, profileToken: plain.profile.token });
+    if ('error' in ok) throw new Error(ok.error.message);
+    expect(m.seasons.standings(SID)!.standings.map((x) => x.name)).toEqual(['Plainly']);
+    m.closeAll();
+  });
+
+  it('a new run after falling is the same participant and the budget carries on', async () => {
+    const m = manager();
+    // このシードの地下 1 階で待ち続けると、ゴブリンに倒される（V4-1m の時点の版）
+    openSeason(m, { budget: 500, seed: 'season-test-1' });
+    const r1 = await seasonRun(m, 'Fall');
+    expect((await act(r1.port, { type: 'start_expedition', offer: 1 })).ok).toBe(true);
+    for (let i = 0; i < 200 && r1.port.view().status === 'your_turn'; i++) await act(r1.port, { type: 'wait' });
+    expect(r1.session.world.players[r1.playerId].state).toBe('dead');
+    const used1 = r1.session.world.entities[r1.session.world.players[r1.playerId].entityId].actor!.turns;
+    const r2 = await seasonRun(m, 'Fall2', { profileToken: r1.ptoken });
+    expect(r2.profile.id).toBe(r1.profile.id);
+    expect(seasonBudgetLeft(r2.session.world, r2.playerId)).toBe(500 - used1);
+    const st = m.seasons.standings(SID)!;
+    expect(st.standings.length).toBe(1);
+    expect(st.standings[0]).toMatchObject({ name: 'Fall', runs: 2, died: true, survival: null });
+    // 倒れたので生還賞の対象外（キャンプの写しにも）
+    expect(r2.session.world.season!.died).toBe(true);
+    expect(r2.session.world.season!.awards.find((a) => a.id === 'survival')!.value).toBeNull();
+    m.closeAll();
+  });
+
+  it('a display name cannot be invited twice in a season (spaces, case and full-width do not make it different); a profile cannot be invited twice', () => {
+    const m = manager();
+    openSeason(m);
+    const a = m.seasons.invite(SID, 'Muse', m.profiles.store);
+    expect('token' in a && a.token).toBeTruthy();
+    for (const name of ['Muse', ' muse ', 'ＭＵＳＥ']) {
+      const b = m.seasons.invite(SID, name, m.profiles.store);
+      expect('error' in b && b.error).toContain('すでに使われている');
+    }
+    const again = m.seasons.invite(SID, 'Muse2', m.profiles.store, 'token' in a ? a.token : '');
+    expect('error' in again && again.error).toContain('もう招いてある');
+    expect(m.seasons.store.invites(SID).map((x) => x.name)).toEqual(['Muse']);
+    m.closeAll();
+  });
+
+  it('the operator tool invites through files the running server reads; the token is shown once and appears in no record, observation or standings', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'muse-season-'));
+    try {
+      const m = manager(dir);
+      openSeason(m, { budget: 300, seed: 'season-token-1' });
+      // 運用の道具（別のプロセスと同じく、ファイルだけを通す）
+      const out: string[] = [];
+      const code = seasonCli(content, { sub: 'invite', dir: join(dir, 'seasons'), profilesDir: join(dir, 'profiles'), id: SID, name: 'Tok' }, (x) => out.push(x));
+      expect(code).toBe(0);
+      const line = out.find((x) => x.startsWith('profile_token: '))!;
+      const token = line.slice('profile_token: '.length);
+      expect(token.length).toBeGreaterThan(10);
+      expect(out.filter((x) => x.includes(token)).length).toBe(1);
+      // 同じ表示名は断る
+      const dup: string[] = [];
+      expect(seasonCli(content, { sub: 'invite', dir: join(dir, 'seasons'), profilesDir: join(dir, 'profiles'), id: SID, name: 'tok' }, (x) => dup.push(x))).toBe(1);
+      // 一覧にトークンは出ない
+      const list: string[] = [];
+      seasonCli(content, { sub: 'invites', dir: join(dir, 'seasons'), id: SID }, (x) => list.push(x));
+      expect(list.join(' ')).toContain('Tok');
+      expect(list.join(' ')).not.toContain(token);
+      // 動いているサーバー（先に作った manager）が、道具の作ったプロフィールと招きを読む
+      const r = await m.createRun({ name: 'Hero', controller: agent, season: SID, profileToken: token });
+      if ('error' in r) throw new Error(r.error.message);
+      await playWithPort(r.port, { kind: 'greedy', seed: 't', maxActs: 300, maxExpeditions: 1 });
+      if (r.port.view().status === 'at_camp' && seasonReportable(r.session.world, r.playerId).length) await act(r.port, { type: 'report_stairs' });
+      const obs = r.port.observe().text;
+      const st = JSON.stringify(m.seasons.standings(SID));
+      expect(st).toContain('"Tok"');
+      expect(st).not.toContain(token);
+      expect(obs).not.toContain(token);
+      m.closeAll();
+      // 記録のどのファイルにも出ない（プロフィールにはハッシュだけ）
+      const walk = (d: string): string[] => readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(join(d, e.name)) : [join(d, e.name)]));
+      const files = walk(dir);
+      expect(files.some((f) => f.endsWith('invites.json'))).toBe(true);
+      for (const f of files) expect(readFileSync(f, 'utf8').includes(token), f).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

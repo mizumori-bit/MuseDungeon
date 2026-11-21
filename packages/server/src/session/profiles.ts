@@ -25,15 +25,20 @@ export class ProfileStore {
   private readonly byHash = new Map<string, string>();
 
   constructor(readonly dir: string | null) {
-    if (dir && existsSync(dir)) {
-      for (const f of readdirSync(dir)) {
-        if (!/^prof_[0-9a-f]+\.json$/.test(f)) continue;
-        try {
-          const p = JSON.parse(readFileSync(join(dir, f), 'utf8')) as ProfileFile;
-          this.byId.set(p.id, p);
-          this.byHash.set(p.tokenHash, p.id);
-        } catch { /* 壊れたファイルは読まない */ }
-      }
+    this.scan();
+  }
+
+  /** まだ読んでいないプロフィールのファイルを読む（起動時と、知らないトークンを渡されたとき。運用の道具が作ったプロフィール。S0a） */
+  private scan(): void {
+    const dir = this.dir;
+    if (!dir || !existsSync(dir)) return;
+    for (const f of readdirSync(dir)) {
+      if (!/^prof_[0-9a-f]+\.json$/.test(f) || this.byId.has(f.slice(0, -5))) continue;
+      try {
+        const p = JSON.parse(readFileSync(join(dir, f), 'utf8')) as ProfileFile;
+        this.byId.set(p.id, p);
+        this.byHash.set(p.tokenHash, p.id);
+      } catch { /* 壊れたファイルは読まない */ }
     }
   }
 
@@ -47,7 +52,9 @@ export class ProfileStore {
   }
 
   resolve(token: string): ProfileData | null {
-    const id = this.byHash.get(hashToken(token));
+    const h = hashToken(token);
+    let id = this.byHash.get(h);
+    if (!id) { this.scan(); id = this.byHash.get(h); }
     return id ? this.byId.get(id) ?? null : null;
   }
 

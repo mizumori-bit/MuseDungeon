@@ -138,7 +138,8 @@ export interface NewRunRequest {
 }
 
 /** シーズンの一覧の 1 行（S0。GET /api/seasons・list_runs の seasons） */
-export interface SeasonListing { id: string; name: string; budget: number; endsAt: number; status: 'open' | 'ended' | 'final'; participants: number }
+/** participants: 1 回でもランを始めた参加者の数、invited: 招いた数（S0a） */
+export interface SeasonListing { id: string; name: string; budget: number; endsAt: number; status: 'open' | 'ended' | 'final'; participants: number; invited: number }
 
 /** シーズンの順位の表の 1 行（S0。GET /api/seasons/:id。公開された階段の位置は入れない） */
 export interface SeasonStandingRow {

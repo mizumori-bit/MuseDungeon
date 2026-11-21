@@ -4,6 +4,7 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renam
 import { join } from 'node:path';
 import type { GameEvent, PlayerId, SeasonAward, SeasonListing, SeasonStandingRow, SeasonSyncCommand } from '@muse/shared';
 import type { RunSession } from '../session/RunSession';
+import type { ProfileStore } from '../session/profiles';
 
 /** シーズンの定義（運用者が開く。season.json） */
 export interface SeasonDef {
@@ -35,6 +36,14 @@ export interface Participant {
   died: boolean;
 }
 
+/** 招いた者（S0a。SEASON.md §4.1）。invites.json は運用の道具だけが書き、サーバーは読むだけ。トークンは入れない */
+export interface SeasonInvite { profileId: string; name: string; invitedAt: number }
+
+/** 表示名の比べ方（前後の空白を除き、全角と半角・大文字と小文字を区別しない） */
+export function nameKey(name: string): string {
+  return name.normalize('NFKC').trim().toLowerCase();
+}
+
 export interface PublicStairsRec { depth: number; x: number; y: number; by: string; profileId: string; runId: string; used: number; wall: number; order: number }
 
 export interface SeasonResult {
@@ -56,6 +65,8 @@ export const SEASON_GRACE_MS = 60 * 60 * 1000;
 export const SEASON_ID_RE = /^[a-z0-9][a-z0-9_-]{0,31}$/;
 
 const used = (p: Participant) => p.runs.reduce((a, r) => a + r.turns, 0);
+/** 順位に数える参加者（1 回でもランを始めた者。招いただけの者は入れない） */
+const started = (ps: readonly Participant[]) => ps.filter((p) => p.runs.length > 0);
 const banked = (p: Participant) => p.runs.reduce((a, r) => a + r.banked, 0);
 
 /** 値の大きい順、同着は使った予算の少ない順。値も予算も同じなら同じ順位（1, 2, 2, 4） */
@@ -106,6 +117,8 @@ export function computeStandings(ps: readonly Participant[]): {
 /** シーズンの記録の置き場所（dir が null ならメモリだけ。テスト用） */
 export class SeasonStore {
   private readonly data = new Map<string, SeasonData>();
+  /** dir が null のとき（テスト）の招いた者 */
+  private readonly memInvites = new Map<string, SeasonInvite[]>();
 
   constructor(readonly dir: string | null) {}
 
@@ -162,6 +175,19 @@ export class SeasonStore {
     return d;
   }
 
+  /** 招いた者（毎回ファイルから読む。書くのは運用の道具だけで、動いているサーバーは読み直すだけ） */
+  invites(id: string): SeasonInvite[] {
+    if (!this.dir) return [...(this.memInvites.get(id) ?? [])];
+    return this.readJson<SeasonInvite[]>(id, 'invites.json') ?? [];
+  }
+
+  /** 招いた者を足す（運用の道具。サーバーは呼ばない） */
+  addInvite(id: string, inv: SeasonInvite): void {
+    const list = [...this.invites(id), inv];
+    if (!this.dir) { this.memInvites.set(id, list); return; }
+    this.writeJson(id, 'invites.json', list);
+  }
+
   saveParticipants(d: SeasonData): void { this.writeJson(d.def.id, 'participants.json', d.participants); }
   savePublic(d: SeasonData): void { this.writeJson(d.def.id, 'public.json', d.public); }
   saveResult(d: SeasonData): void { this.writeJson(d.def.id, 'result.json', d.result); }
@@ -203,9 +229,36 @@ export class SeasonService implements SeasonHooks {
   }
 
   list(): SeasonListing[] {
-    return this.store.ids().map((id) => this.store.get(id)).filter((d): d is SeasonData => !!d).map((d) => ({
-      id: d.def.id, name: d.def.name, budget: d.def.budget, endsAt: d.def.endsAt, status: this.status(d), participants: d.participants.length,
-    }));
+    return this.store.ids().map((id) => this.store.get(id)).filter((d): d is SeasonData => !!d).map((d) => this.listing(d));
+  }
+
+  private listing(d: SeasonData): SeasonListing {
+    return { id: d.def.id, name: d.def.name, budget: d.def.budget, endsAt: d.def.endsAt, status: this.status(d), participants: started(d.participants).length, invited: this.store.invites(d.def.id).length };
+  }
+
+  /**
+   * 招く（S0a。SEASON.md §4.1。運用の道具から）: token を渡せば今あるプロフィールを、無ければその表示名で新しいプロフィールを作って招く。
+   * 新しく作ったときだけトークンを返す（表示はこの 1 回だけ）。表示名はそのシーズンの中で重ならないこと
+   */
+  invite(id: string, name: string, profiles: ProfileStore, token?: string): { profileId: string; name: string; token?: string } | { error: string } {
+    const d = this.store.get(id);
+    if (!d) return { error: `シーズン ${id} は無い / no such season` };
+    if (d.result) return { error: `シーズン ${id} は確定している / season ${id} is final` };
+    const existing = token ? profiles.resolve(token) : null;
+    if (token && !existing) return { error: 'そのプロフィールのトークンは見つからない / unknown profile token' };
+    const display = (name || existing?.name || '').normalize('NFKC').trim().slice(0, 32);
+    if (!display) return { error: '--name が要る（表示名。同じシーズンの中で重ならないこと） / --name is required' };
+    const invites = this.store.invites(id);
+    if (invites.some((x) => nameKey(x.name) === nameKey(display))) return { error: `表示名「${display}」は、このシーズンですでに使われている / the display name is taken in this season` };
+    if (existing && invites.some((x) => x.profileId === existing.id)) return { error: `そのプロフィール（${existing.id}）は、もう招いてある / already invited` };
+    const now = this.now();
+    let profileId: string;
+    let newToken: string | undefined;
+    if (existing) profileId = existing.id;
+    else { const c = profiles.create(display, now); profileId = c.profile.id; newToken = c.token; }
+    this.store.addInvite(id, { profileId, name: display, invitedAt: now });
+    this.store.log(id, { type: 'invited', profileId, name: display, newProfile: !existing });
+    return { profileId, name: display, ...(newToken ? { token: newToken } : {}) };
   }
 
   get(id: string): SeasonData | null { return this.store.get(id); }
@@ -214,10 +267,13 @@ export class SeasonService implements SeasonHooks {
     return profileId ? d.participants.find((p) => p.profileId === profileId) ?? null : null;
   }
 
-  /** 新しいランを始められるか（PROTOCOL §9.1）。理由の文を返す（日本語 / 英語） */
-  canStart(id: string, profileId: string | null): { def: SeasonDef } | { reason: string } {
+  /** 新しいランを始められるか（PROTOCOL §9.1）。理由の文を返す（日本語 / 英語）。招かれたプロフィールだけ（S0a §4.1） */
+  canStart(id: string, profileId: string | null): { def: SeasonDef; name: string } | { reason: string } {
     const d = this.store.get(id);
     if (!d) return { reason: `そのシーズンは無い / no such season: ${id}` };
+    if (!profileId) return { reason: `シーズンのランには profile_token が要る（運用者から受け取った、このシーズンに招かれたプロフィールのもの） / a season run needs the profile_token the operator gave you` };
+    const inv = this.store.invites(id).find((x) => x.profileId === profileId);
+    if (!inv) return { reason: `このプロフィール（${profileId}）は、シーズン ${id} に招かれていない。参加するには、運用者に招いてもらう / this profile is not invited to season ${id}; ask the operator to invite you` };
     if (this.status(d) !== 'open') return { reason: `シーズン ${id} は終わっている / season ${id} has ended` };
     if (d.def.engineVersion !== this.versions.engineVersion || d.def.contentVersion !== this.versions.contentVersion) {
       return { reason: `シーズン ${id} は版 engine ${d.def.engineVersion}・content ${d.def.contentVersion} で開かれた。このサーバーは engine ${this.versions.engineVersion}・content ${this.versions.contentVersion} / version mismatch` };
@@ -228,7 +284,7 @@ export class SeasonService implements SeasonHooks {
       const live = p.runs.find((r) => !r.ended && this.liveRun(r.runId) !== null && this.liveRun(r.runId) !== 'ended');
       if (live) return { reason: `進行中のシーズンのラン ${live.runId} がある。resume_run で続けるか、retire で終えてから / a season run is in progress: ${live.runId}` };
     }
-    return { def: d.def };
+    return { def: d.def, name: inv.name };
   }
 
   /** 参加者に新しいランを足す（その参加者がいなければ、ここで参加） */
@@ -260,7 +316,7 @@ export class SeasonService implements SeasonHooks {
     if (!f) return null;
     const { d, p } = f;
     this.refresh(session, pid, f);
-    const st = computeStandings(d.participants);
+    const st = computeStandings(started(d.participants));
     return {
       id: d.def.id, name: d.def.name,
       budget: { limit: d.def.budget, left: d.def.budget - used(p) },
@@ -358,7 +414,7 @@ export class SeasonService implements SeasonHooks {
   finalize(d: SeasonData, reason: SeasonResult['reason']): SeasonResult {
     if (d.result) return d.result;
     this.flush();
-    const st = computeStandings(d.participants);
+    const st = computeStandings(started(d.participants));
     const winners = { adventure: [], contribution: [], survival: [] } as SeasonResult['winners'];
     for (const r of st.rows) {
       if (r.adventure.rank === 1) winners.adventure.push({ name: r.name, value: r.adventure.value });
@@ -376,7 +432,6 @@ export class SeasonService implements SeasonHooks {
   standings(id: string): { season: SeasonListing; standings: SeasonStandingRow[]; result?: SeasonResult } | null {
     const d = this.store.get(id);
     if (!d) return null;
-    const season: SeasonListing = { id: d.def.id, name: d.def.name, budget: d.def.budget, endsAt: d.def.endsAt, status: this.status(d), participants: d.participants.length };
-    return { season, standings: d.result?.standings ?? computeStandings(d.participants).rows, ...(d.result ? { result: d.result } : {}) };
+    return { season: this.listing(d), standings: d.result?.standings ?? computeStandings(started(d.participants)).rows, ...(d.result ? { result: d.result } : {}) };
   }
 }

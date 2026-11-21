@@ -170,7 +170,7 @@ PowerShell では `npm run <script> -- --flag` の `--` が npm に届かずオ�
 | `npm run builds -- --runs 20` | V3-4 の計測（特技の系統ごとに取り続ける bot の到達深度と、職業ごとの撃破に占める投擲の割合） |
 | `npm run drive -- --token <player_token>` / `--new-run <name>` | 参照ドライバ（ターンフィードを購読してエージェントを呼ぶ） |
 | `npm run pilot -- --token <player_token>` / `--new-run <name>` | 代行 bot の作例（方針の範囲で速く動かし、判断が要るときに AI を起こす。`packages/tools/src/pilot/README.md`） |
-| `npm run season -- open --id <id> --seed <seed> --ends "<ISO 時刻>"` / `list` / `standings --id <id>` / `close --id <id>` / `wardens --seeds "a,b,c"` | シーズン（S0。docs/SEASON.md・PROTOCOL.md §9）を開く・一覧・順位・確定・地下 5 階の大守護者の下見。PowerShell では `npm.cmd run season -- …` |
+| `npm run season -- open --id <id> --seed <seed> --ends "<ISO 時刻>"` / `invite --id <id> --name <表示名>` / `invites --id <id>` / `list` / `standings --id <id>` / `close --id <id>` / `wardens --seeds "a,b,c"` | シーズン（S0・S0a。docs/SEASON.md・PROTOCOL.md §9）を開く・招く（招かれたプロフィールだけが参加できる。トークンは 1 回だけ表示）・招いた者の一覧・シーズンの一覧・順位・確定・地下 5 階の大守護者の下見。PowerShell では `npm.cmd run season -- …` |
 | `npm run assets:checklist` / `npm run assets:check -- <themeDir>` | 画像アセットの発注表 / テーマの検証 |
 | `npm run dev:client` | クライアントの開発サーバー（Vite。API は 7777 へプロキシ） |
 
