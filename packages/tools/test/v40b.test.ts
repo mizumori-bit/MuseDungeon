@@ -75,7 +75,9 @@ describe('V4-0b explore toward the draft does not swing between two frontiers (�
     for (let call = 0; call < 6 && !found; call++) {
       a.clearFloor();
       const me = structuredClone(a.w.entities[a.meId]); me.stats!.hp = me.stats!.maxHp; a.inject({ put: [me] });
-      const res = await a.r.port.act({ type: 'explore', mode: 'steady', hpFloor: 1, toward: 'draft' }, { source: 'bot' });
+      let res = await a.r.port.act({ type: 'explore', mode: 'steady', hpFloor: 1, toward: 'draft' }, { source: 'bot' });
+      // 方角に行ける境界が無くなったら止まる（S1c §14.6 の 2）: ほかの方角は toward を付けない explore で探す（断りの文の勧め）
+      if (!res.ok && res.error.details?.stop === 'toward_exhausted') res = await a.r.port.act({ type: 'explore', mode: 'steady', hpFloor: 1 }, { source: 'bot' });
       const hint = a.w.players[a.pid].knowledge.floorHint;
       found = !!hint && hint.floor === key && hint.draft === null;
       if (!res.ok) break;

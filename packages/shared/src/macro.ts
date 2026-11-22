@@ -6,7 +6,7 @@ import type { ActionError, Command, MacroMode, TravelTarget } from './commands';
 import { actionError } from './commands';
 import type { ProjectedEvent } from './filter';
 import { memoryKey, restCapHp } from './catalog';
-import { worstTurnOf } from './danger';
+import { fightThreats, threatEstimate } from './danger';
 import { abilityStatus, weaponReach } from './build';
 
 /** 能動技が今使えるか（残りの手番 0・遠征ごとの回数が残っている） */
@@ -56,6 +56,8 @@ export type MacroStop =
   | 'hit_and_run' | 'target_shooting'
   // collect: 残りの品はどれも within 歩より遠い（V3-8 §53.4）
   | 'collect_far'
+  // explore toward: その方角（下への風・気配）に行ける未探索の境界が無くなった（S1c §14.6 の 2。ほかの方角を探し続けない）
+  | 'toward_exhausted'
   // steady の移動マクロで、始めてからの被害の合計が最大 HP の 4 分の 1 を超えた（V3-8a §56.1）
   | 'damage_taken'
   // 移動マクロが同じ 2 マスを往復している（見えるものが変わるたびに最短の道が入れ替わった。V3-3 後の bot の計測）
@@ -190,7 +192,7 @@ export interface MacroState {
    * この呼び出しの間に眠っているのを見た敵（S1b §12.4 の 3・4）: 見えなくなっても、そのマスをふさいでいるものとして道を引く
    * （見えるとそのマスを避け、見えないと通る、を繰り返して 2 マスを往復した。試運転 t0）。そのマスが見えて、いなければ忘れる
    */
-  sleepers?: { id: string; kind: string | null; x: number; y: number }[];
+  sleepers?: { id: string; kind: string | null; x: number; y: number; guardian?: true }[];
   /** travel: 道を変えさせる、この呼び出しの間ずっと残る障害（動かない敵・眠っている敵・発見済みの罠）の印。増えたら道のりの最短を数え直す（S1b §12.4 の 3） */
   obstacleKeys?: string[];
   /** explore toward: 始めたときの方角・方角に境界が無かった手・遠回りなので近い境界を先にした手（結果の文で理由を言う。S1b §12.4 の 4） */
@@ -201,6 +203,11 @@ export interface MacroState {
   hadDraft?: boolean;
   /** fight: 投げる物が尽きたが、隣に追ってくる敵がいるので拾いに行かなかった（S1b §12.4 の 5） */
   retrieveHeld?: boolean;
+  /**
+   * 動かない敵の隣を避けた遠回り（S1c §14.6 の 1）: 近道（その隣を通る）より extra 歩長い道を選んだ。最短より 10 歩を超えて長く、かつ 2 倍を超えるときだけ。
+   * around: 避けた敵（見えていた者の名前と ID）
+   */
+  detour?: { extra: number; around: { id: string; name: string }[] };
   /** fight の approach: advance で、直前の手の標的が追跡中でなかった（距離を道のりで数える。S1b §12.4 の 7） */
   advanceQuiet?: boolean;
   /** 手数の上限 */
@@ -330,6 +337,11 @@ function pickable(view: PlayerView, catalog: Catalog, it: { kind: string | null;
   return true;
 }
 
+/** collect の what（S1c §14.4 の 6）: 省くと thrown。ただし kinds を付けて what を省いたら items（品の種類で絞るのは、品を拾うときだけなので） */
+export function collectWhatOf(cmd: { what?: 'thrown' | 'items'; kinds?: readonly string[] }): 'thrown' | 'items' {
+  return cmd.what ?? (cmd.kinds?.length ? 'items' : 'thrown');
+}
+
 /** collect の歩数の上限の既定（V3-8 §53.4） */
 export const COLLECT_WITHIN = 15;
 
@@ -338,7 +350,7 @@ export const COLLECT_WITHIN = 15;
  * 気づいていない守護者の 2 マス以内（travel・collect・explore）と動かない敵の隣を避け、steady・flee は逃走中の敵のマスも最後に通れるものとする。
  * stationaryMem: この呼び出しの間に一度見た動かない敵（見えなくなっても避け続ける）
  */
-function macroRouting(view: PlayerView, catalog: Catalog, kind: MacroState['kind'], mode: MacroMode, stationaryMem: readonly Pos[] | undefined, sleepersMem?: MacroState['sleepers']): { grid: NavGrid; route: (goals: readonly number[]) => Pos[] | null; stationary: Pos[]; sleepers: NonNullable<MacroState['sleepers']> } {
+export function macroRouting(view: PlayerView, catalog: Catalog, kind: MacroState['kind'], mode: MacroMode, stationaryMem: readonly Pos[] | undefined, sleepersMem?: MacroState['sleepers']): { grid: NavGrid; route: (goals: readonly number[]) => Pos[] | null; stationary: Pos[]; sleepers: NonNullable<MacroState['sleepers']>; nearRoute: (goals: readonly number[]) => Pos[] | null } {
   const pos = view.self.pos!;
   const hostiles = view.entities.filter((e) => e.cat === 'monster');
   const grid = buildNavGrid(view, catalog)!;
@@ -365,6 +377,16 @@ function macroRouting(view: PlayerView, catalog: Catalog, kind: MacroState['kind
     const nx = q.x + DIR_VEC[d][0], ny = q.y + DIR_VEC[d][1];
     if (nx >= 0 && ny >= 0 && nx < grid.width && ny < grid.height) grid.hazard[ny * grid.width + nx] = 1;
   }
+  // 動かない敵の隣を避けない近道（S1c §14.6 の 1: 遠回りの大きさを文で言うため。経路そのものは今までどおり避ける）。罠のマスは避けたまま
+  const hazardNear = grid.hazard.slice();
+  {
+    const trapAt = new Set([...view.entities.filter((e) => e.cat === 'trap').map((e) => e.pos), ...view.memory.remembered.filter((r) => r.cat === 'trap').map((r) => r.pos)].map((p) => p.y * grid.width + p.x));
+    for (const q of kept) for (const d of DIRS) {
+      const nx = q.x + DIR_VEC[d][0], ny = q.y + DIR_VEC[d][1];
+      const i = ny * grid.width + nx;
+      if (nx >= 0 && ny >= 0 && nx < grid.width && ny < grid.height && !trapAt.has(i)) hazardNear[i] = 0;
+    }
+  }
   // 眠っている敵（S1b §12.4 の 3・4）: この呼び出しの間に眠っているのを見た敵は、見えなくなってもそのマスをふさいでいるものとする。
   // 起きているのが見えた・そのマスが見えていなくなっていた（動いた・倒した）なら忘れる
   const sleepers: NonNullable<MacroState['sleepers']> = [];
@@ -374,8 +396,19 @@ function macroRouting(view: PlayerView, catalog: Catalog, kind: MacroState['kind
     if (vis.has(s.y * grid.width + s.x)) continue;
     sleepers.push({ ...s });
   }
-  for (const e of visMon.values()) if (e.awareness === 'asleep') sleepers.push({ id: e.id, kind: e.kind, x: e.pos.x, y: e.pos.y });
+  // 気づいていないが動かない敵（持ち場を離れない守護者）も、眠っている敵と同じに覚える（S1c §14.6 の 3）
+  for (const e of visMon.values()) if (e.awareness === 'asleep' || (e.awareness === 'unaware' && e.role === 'guardian')) sleepers.push({ id: e.id, kind: e.kind, x: e.pos.x, y: e.pos.y, ...(e.role === 'guardian' ? { guardian: true as const } : {}) });
   for (const s of sleepers) if (!visMon.has(s.id)) grid.occupied[s.y * grid.width + s.x] = 1;
+  // 覚えている（いま見えていない）気づいていない守護者は、見えているときと同じに 2 マス以内を避ける（travel・collect・explore）
+  if (kind === 'travel' || kind === 'collect' || kind === 'explore') {
+    for (const s of sleepers) {
+      if (!s.guardian || visMon.has(s.id)) continue;
+      for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+        const x = s.x + dx, y = s.y + dy;
+        if (x >= 0 && y >= 0 && x < grid.width && y < grid.height) grid.hazard[y * grid.width + x] = 1;
+      }
+    }
+  }
   // steady・flee は、ほかに道が無ければ逃走中の敵のマスも通れるものとして経路を引く（ふさいでいれば攻撃して進む。V3-2R3 §20.6）
   const fleeGrid = (() => {
     if (mode !== 'steady' && mode !== 'flee') return null;
@@ -388,7 +421,9 @@ function macroRouting(view: PlayerView, catalog: Catalog, kind: MacroState['kind
   const route = (goals: readonly number[]): Pos[] | null =>
     findPath(grid, pos, goals, 'strict') ?? findPath(grid, pos, goals, 'actors')
     ?? (fleeGrid ? findPath(fleeGrid, pos, goals, 'strict') ?? findPath(fleeGrid, pos, goals, 'actors') : null);
-  return { grid, route, stationary: kept, sleepers };
+  const nearGrid = { ...grid, hazard: hazardNear };
+  const nearRoute = (goals: readonly number[]): Pos[] | null => (kept.length ? findPath(nearGrid, pos, goals, 'strict') ?? findPath(nearGrid, pos, goals, 'actors') : null);
+  return { grid, route, stationary: kept, sleepers, nearRoute };
 }
 
 /**
@@ -420,10 +455,14 @@ function collectableItems(view: PlayerView, catalog: Catalog, state: Pick<MacroS
   const list = pickableItems(view, catalog, state.skipItems, !state.collectAll && state.pickUseful !== false);
   const kinds = state.collectKinds;
   const kindOf = (id: string) => view.entities.find((e) => e.id === id)?.kind ?? view.memory.remembered.find((r) => r.id === id)?.kind ?? null;
+  // 未鑑定の品は種類が伏せてあるので、外見の区分（potion・scroll・amulet・ring）で比べる（S1c §14.4 の 6: kinds に potion を渡すと未鑑定の薬が「回収する物が無い」）
+  const appOf = (id: string) => view.entities.find((e) => e.id === id)?.appearanceId ?? view.memory.remembered.find((r) => r.id === id)?.appearanceId ?? null;
   const visible = new Set(view.entities.map((e) => e.id));
   return list.filter((x) => {
     const k = kindOf(x.id);
-    if (kinds && !(k && (kinds.includes(k.replace(/^core:/, '')) || kinds.includes(catalog.items[k]?.category ?? '')))) return false;
+    const app = k ? null : appOf(x.id);
+    const cat = k ? catalog.items[k]?.category : app ? catalog.appearances[app]?.category : undefined;
+    if (kinds && !((k && kinds.includes(k.replace(/^core:/, ''))) || (cat && kinds.includes(cat)))) return false;
     if (!state.collectAll && k && !visible.has(x.id) && catalog.items[k]?.slot && sameOrWorseEquip(view, catalog, { kind: k, affixes: [] })) return false;
     return true;
   });
@@ -542,9 +581,9 @@ export function macroStart(view: PlayerView, cmd: Command, catalog: Catalog): Ma
       // 逃げ（flee）は、始める時点ですでに既定の hp_floor 以下なら 0（V3-5a 後の AI 評価: HP 7/36 で逃げのマクロが拒否された）
       return mode === 'flee' && kind !== 'fight' && view.self.stats.hp <= d ? 0 : d;
     })(),
-    pickup: cmd.type === 'explore' ? (cmd.pickup ?? 'useful') !== false : cmd.type === 'travel' ? (cmd.pickup ?? itemTarget) !== false : cmd.type === 'collect' ? (cmd.what ?? 'thrown') === 'items' : false,
+    pickup: cmd.type === 'explore' ? (cmd.pickup ?? 'useful') !== false : cmd.type === 'travel' ? (cmd.pickup ?? itemTarget) !== false : cmd.type === 'collect' ? collectWhatOf(cmd) === 'items' : false,
     pickUseful: !((cmd.type === 'explore' || cmd.type === 'travel') && cmd.pickup === true),
-    collectWhat: cmd.type === 'collect' ? (cmd.what ?? 'thrown') : 'thrown',
+    collectWhat: cmd.type === 'collect' ? collectWhatOf(cmd) : 'thrown',
     ...(cmd.type === 'collect' ? { collectWithin: cmd.within ?? COLLECT_WITHIN, ...(cmd.kinds?.length ? { collectKinds: cmd.kinds.map((k) => k.replace(/^core:/, '')) } : {}), ...(cmd.all ? { collectAll: true } : {}) } : {}),
     ...(cmd.type === 'fight' ? {
       fightTarget: cmd.target, engaged: false, waits: 0, apart: 0, blocked: 0,
@@ -627,6 +666,31 @@ export interface MacroTrap { id: string; kind: string; name: string; pos: Pos }
  * state は破壊的に更新される。
  */
 /** 見えている予備動作（id:kind） */
+/**
+ * 動かない敵の隣を避けた遠回り（S1c §14.6 の 1）を覚える: 選んだ道が、その隣を通る近道より 10 歩を超えて長く、かつ 2 倍を超えるとき。
+ * 呼び出しの間で、いちばん大きいものを残す（結果の文で、何を避けて何歩遠回りしたかを言う）
+ */
+function noteDetour(state: MacroState, view: PlayerView, catalog: Catalog, path: readonly Pos[], near: readonly Pos[] | null): void {
+  if (!near || !(path.length > near.length + 10 && path.length > near.length * 2)) return;
+  const extra = path.length - near.length;
+  if (state.detour && state.detour.extra >= extra) return;
+  const around = view.entities.filter((e) => e.cat === 'monster' && isStationary(catalog, e) && near.some((c) => cheb(c, e.pos) <= 1))
+    .map((e) => ({ id: e.id, name: kindName(catalog, view.locale, e.kind) }));
+  state.detour = { extra, around };
+}
+
+/** 見えている予備動作のうち、自分のマスを的にしたもの（大振りのマス・突進の直線の 6 マス以内）があるか（S1c §14.4 の 3） */
+export function intentOnMe(view: PlayerView, pos: Pos): boolean {
+  return view.entities.some((e) => {
+    if (e.cat !== 'monster' || !e.intent) return false;
+    if (e.intent.kind === 'swinging' && e.intent.pos) return e.intent.pos.x === pos.x && e.intent.pos.y === pos.y;
+    if (e.intent.kind === 'winding_up' && e.intent.dir) {
+      for (let k = 1; k <= 6; k++) if (e.pos.x + DIR_VEC[e.intent.dir][0] * k === pos.x && e.pos.y + DIR_VEC[e.intent.dir][1] * k === pos.y) return true;
+    }
+    return false;
+  });
+}
+
 function intentKeys(view: PlayerView): string[] {
   return view.entities.filter((e) => e.cat === 'monster' && e.intent).map((e) => `${e.id}:${e.intent!.kind}`);
 }
@@ -785,6 +849,9 @@ function macroStep(state: MacroState, view: PlayerView, catalog: Catalog, events
   const newIntent = state.steps > 0 && intents.some((k) => !(state.intents ?? []).includes(k));
   state.intents = intents;
   if (newIntent) return { stop: 'intent' };
+  // fight: 自分を的にした予備動作（大振りのマス・突進の直線）が見えている間は、続けて殴らない（S1c §14.4 の 3: 始めたときから見えていた構えは
+  // 「新しく」ならないので、朦朧で大振りが遅れた間も殴り続け、4 手目に大振りを受けた）。始めの 1 手は、構えを見て決めた手として出す
+  if (kind === 'fight' && state.steps > 0 && intentOnMe(view, pos)) return { stop: 'intent' };
   const before = new Set(state.knownHostiles);
   const pursuing = (h: EntityView) => h.awareness === 'hunting' && !h.fleeing;
   // 自分に届く: 動かない種族は隣にいるときだけ
@@ -844,12 +911,11 @@ function macroStep(state: MacroState, view: PlayerView, catalog: Catalog, events
   if (kind === 'fight') {
     if (state.fightAbilityError) return { stop: state.fightAbilityError === 'unknown' ? 'ability_unknown' : state.fightAbilityError === 'needs_with' ? 'ability_needs_with' : 'ability_not_allowed' };
     if (state.steps >= state.limit) return { stop: 'step_limit' };
-    // 被弾の前に止まる（V3-2R3 §20.4）: 次の手番に届く追跡中の敵（隣・飛び道具）の 1 手の最悪の被害を受けると hp_floor を割るなら止まる
+    // 被弾の前に止まる（V3-2R3 §20.4）: 次の手番に届く追跡中の敵（隣・飛び道具）の被害の見込みを受けると hp_floor を割るなら止まる
     // 隣にいる逃走中の敵も数える（追い詰められると殴ってくる。V3-5a 後の AI 評価: 逃走中の小悪魔に殴られ続けて hp_floor を割った）
-    const threats = hostiles.filter((h) => (pursuing(h) && (cheb(h.pos, pos) <= 1 || (!!h.kind && !!catalog.monsters[h.kind]?.tags.includes('ranged'))))
-      || (h.awareness === 'hunting' && !!h.fleeing && cheb(h.pos, pos) <= 1));
-    const incoming = threats.reduce((a, h) => a + (worstTurnOf(view, catalog, h) ?? 0), 0);
-    if (incoming > 0 && hp - incoming < state.hpFloor) return { stop: 'hp_risk' };
+    // 見込みは、いちばん重い 1 体を記録の最大の一撃、残りを記録の平均の被害にした合計（S1c §14.4 の 1。全員が最大の一撃の「最悪」は文に並べる）
+    const risk = threatEstimate(view, catalog, fightThreats(catalog, hostiles, pos));
+    if (risk.expected > 0 && hp - risk.expected < state.hpFloor) return { stop: 'hp_risk' };
     state.lastHp = hp;
     state.waited = false;
     const wait = (): MacroDecision => { state.steps += 1; state.waited = true; return { command: { type: 'wait' } }; };
@@ -1125,6 +1191,8 @@ function macroStep(state: MacroState, view: PlayerView, catalog: Catalog, events
     if (draft) {
       const along = fr.filter(inDraft);
       if (along.length) fr = along;
+      // その方角に行ける境界が無い: 止まる（S1c §14.6 の 2。方角を渡すのはその方角へ行きたいから。逃げる flee は今までどおり、ほかの方角の境界へ）
+      else if (mode !== 'flee') return { stop: 'toward_exhausted' };
       else state.towardNoAlong = (state.towardNoAlong ?? 0) + 1;
     }
     const itemCells = state.pickup && !draft ? pickableItems(view, catalog, state.skipItems, state.pickUseful !== false).map((x) => x.cell) : [];
@@ -1160,7 +1228,9 @@ function macroStep(state: MacroState, view: PlayerView, catalog: Catalog, events
         const near = any.length ? route(any) : null;
         if (near && near.length + DRAFT_DETOUR < path.length && !crossesTrap(near)) { path = near; state.towardDetour = (state.towardDetour ?? 0) + 1; }
       }
-      // 風の方角の境界へは、敵にふさがれた道か罠を通る道しか無い: ほかの境界へ回る（方角の優先は、行ける境界の中での優先）
+      // 風の方角の境界へは、敵にふさがれた道か罠を通る道しか無い: その方角に行ける境界が無いので止まる（S1c §14.6 の 2）。
+      // flee は今までどおり、ほかの境界へ回る（方角の優先は、行ける境界の中での優先）
+      if (draft && (path === null || crossesTrap(path)) && fr !== allFrontiers && mode !== 'flee') return { stop: 'toward_exhausted' };
       if (draft && (path === null || crossesTrap(path))) {
         const rest = [...new Set([...allFrontiers, ...itemCells])].filter((i) => i !== here && !others.includes(i));
         const alt = rest.length ? route(rest) : null;
@@ -1185,6 +1255,7 @@ function macroStep(state: MacroState, view: PlayerView, catalog: Catalog, events
       return loose ? { stop: 'blocked', blockedBy: blockersOn(loose) } : { stop: 'unreachable' };
     }
     if (path.length === 0) return { stop: 'collected' };
+    noteDetour(state, view, catalog, path, routing.nearRoute(free.length ? free : goals));
     // 歩数の上限（V3-8 §53.4。いちばん近い品が上限より遠ければ、残りも遠い）
     if (state.collectWithin !== undefined && path.length > state.collectWithin) return { stop: state.fightDone ?? 'collect_far' };
   } else {
@@ -1202,12 +1273,15 @@ function macroStep(state: MacroState, view: PlayerView, catalog: Catalog, events
       return loose ? { stop: 'blocked', blockedBy: blockersOn(loose) } : { stop: 'unreachable' };
     }
     if (path.length === 0) return { stop: 'arrived' };
+    noteDetour(state, view, catalog, path, routing.nearRoute(goal.goals));
     if (goal.adjacentOk && path.length === 1) return { stop: 'arrived' };
     // この呼び出しの間ずっと残る障害（動かない敵・眠っている敵・発見済みの罠）が新しく見えたら、道のりの最短を数え直す
     // （S1b §12.4 の 3: 通路をふさぐ毒カビが見えて遠回りに変わった後、前の短い道のりと比べて 20 手で no_progress になり、往復に見えた）
+    // 比べるのは、この呼び出しの間に一度でも見た印（S1c §14.10 の 1: 背の高い草の中で眠る敵は隣でないと見えず、見えた → 空と見えて忘れる → また見える、
+    // のたびに「1 手前の印」と比べて数え直していた。20 手の歯止めが効かず、1 回の上限 200 手までさまよえた）
     const keys = [...routing.stationary.map((q) => `s${q.x},${q.y}`), ...routing.sleepers.map((s) => `z${s.x},${s.y}`), ...[...trapCells].map((i) => `t${i}`)];
     if (state.obstacleKeys && keys.some((k) => !state.obstacleKeys!.includes(k))) { delete state.bestLen; delete state.sinceBest; }
-    state.obstacleKeys = keys;
+    state.obstacleKeys = [...new Set([...(state.obstacleKeys ?? []), ...keys])];
     // 目的地までの道のりが TRAVEL_NO_PROGRESS 手のあいだ一度も縮まなければ止まる（2 マスの往復でない行き来も止める）
     if (state.bestLen === undefined || path.length < state.bestLen) { state.bestLen = path.length; state.sinceBest = 0; }
     else if ((state.sinceBest = (state.sinceBest ?? 0) + 1) >= TRAVEL_NO_PROGRESS) return { stop: 'no_progress' };
@@ -1272,7 +1346,7 @@ function macroStopErrorBase(L: Locale, stop: MacroStop, cmd: Command, dir?: Dir)
     case 'hp_floor':
       return actionError('hp_floor', t(L, 'HP がすでに hp_floor 以下。', 'HP is already at or below hp_floor.'), t(L, 'hp_floor を下げるか、回復してから。', 'Lower hp_floor or heal first.'));
     case 'hp_risk':
-      return actionError('hp_floor', t(L, '次の手番に、届く敵から最悪の被害（1 手の最悪の合計）を受けると hp_floor を割る。', 'One more turn of the worst damage from enemies in reach would drop you below hp_floor.'),
+      return actionError('hp_floor', t(L, '次の手番に、届く敵から見込みの被害を受けると hp_floor を割る。', 'One more turn of the expected damage from enemies in reach would drop you below hp_floor.'),
         t(L, 'それでも戦うなら hp_floor を下げる。退くなら mode: flee か帰還の綱。', 'Lower hp_floor to fight anyway, or retreat (mode: flee or the lifeline).'));
     case 'blocked':
       return actionError('blocked', t(L, '既知の経路が敵にふさがれていて進めない（マクロは攻撃しない）。', 'Your known route is blocked by a monster (macros never attack).'), t(L, 'fight で倒すか、別の経路を選ぶ。', 'Use fight, or choose another route.'));
@@ -1315,8 +1389,15 @@ function macroStopErrorBase(L: Locale, stop: MacroStop, cmd: Command, dir?: Dir)
       return actionError('no_line_of_sight', t(L, '相手まで投擲の経路が通っていない。', 'No clear throwing line to the target.'), t(L, '位置を変えるか、近接で戦う。', 'Move, or fight in melee.'));
     case 'explored':
       return actionError('nothing_to_do', t(L, 'この階で辿り着ける未見の区画も、拾うアイテムも無い。', 'Nothing reachable left to explore or pick up on this floor.'), t(L, 'travel_to stairs_down か extract。', 'travel_to stairs_down, or extract.'));
+    case 'toward_exhausted': {
+      const what = cmd.type === 'explore' && cmd.toward === 'sense' ? t(L, '気配', 'the sense') : t(L, '下への風', 'the draft');
+      return { ...actionError('nothing_to_do', t(L, `${what}の方角に、行ける未探索の境界が無い（ほかの方角は探さずに止まった）。`, `No reachable unexplored edge lies toward ${what} (stopped instead of searching other directions).`),
+        t(L, 'ほかの方角も探すなら toward を付けない explore。分かっている場所へは travel_to。', 'To search other directions, explore without toward; to go somewhere known, travel_to.')), details: { stop: 'toward_exhausted' } };
+    }
     case 'collected':
-      return actionError('nothing_to_do', t(L, '回収する物が無い。', 'Nothing to collect.'), cmd.type === 'collect' && cmd.kinds?.length ? t(L, 'kinds の種類の品が見えていない・記憶に無い（kinds を外すと他の品も拾う）。', 'No item of those kinds is visible or remembered (drop kinds to pick up other items).') : '');
+      return actionError('nothing_to_do', t(L, '回収する物が無い。', 'Nothing to collect.'), cmd.type === 'collect' && cmd.kinds?.length ? t(L, 'kinds の種類の品が見えていない・記憶に無い（kinds を外すと他の品も拾う。未鑑定の品は区分 potion・scroll・amulet・ring で指す）。', 'No item of those kinds is visible or remembered (drop kinds to pick up other items; name unidentified items by category: potion, scroll, amulet, ring).')
+        // 既定の what は thrown（自分が投げた物だけ。S1c §14.4 の 6: 薬や宝が残っているのに「回収する物が無い」と読まれた）
+        : cmd.type === 'collect' && collectWhatOf(cmd) === 'thrown' ? t(L, "既定の collect は自分が投げた物だけを拾う。ほかの品を拾うなら collect { what: 'items' }。", "Plain collect only picks up your own thrown items. For other items, collect { what: 'items' }.") : '');
     case 'collect_far': {
       const w = cmd.type === 'collect' ? (cmd.within ?? COLLECT_WITHIN) : COLLECT_WITHIN;
       return actionError('nothing_to_do', t(L, `${w} 歩以内に回収する物が無い。`, `Nothing to collect within ${w} steps.`), t(L, 'もっと遠くまで拾うなら within を大きくする（例 within: 40）。', 'Raise within to go farther (e.g. within: 40).'));

@@ -131,7 +131,7 @@ export interface PilotResult {
 interface CallResult { ok: boolean; data: Record<string, unknown>; text: string }
 
 /** 断りのエラー（details.blocked_by: じゃまをしている見えている敵。V4-1a §12.3。blocked_by_traps: 道をふさいでいる罠。V4-1d §18.1） */
-type CallError = { code: string; message: string; details?: { blocked_by?: string[]; blocked_by_traps?: TrapRef[] } };
+type CallError = { code: string; message: string; details?: { blocked_by?: string[]; blocked_by_traps?: TrapRef[]; stop?: string } };
 /** 命令の結果から観測・turn・止まった理由を取り出す */
 function payload(r: CallResult): { obs?: Observation; turn?: TurnBlock; stop?: string; outcome?: string; error?: CallError } {
   const d = r.data as { observation?: Observation; turn?: TurnBlock; interrupted_by?: string; outcome?: string; error?: CallError };
@@ -1118,6 +1118,8 @@ export async function runPilot(opts: PilotOptions): Promise<PilotResult> {
       // この手番のうちに別の見回り先を試す（断りで起こさない。同じ決まりの手番が進まない命令は 3 回までなので、くり返しは止まる）
       if (decision.seek && decision.tool === 'travel_to' && (code === 'unreachable' || code === 'unknown_destination')) continue;
       // 探す（toward: sense）が sense_found で断られた: 目的でない遺物を覚えているだけで止まる（マクロの判定。V4-1i B9）。この階では方角なしで探索する
+      // explore の toward が、その方角に境界が無いので断られた（S1c §14.6 の 2）: この階では方角なしで探索する（知らせない。今までの探索と同じ動き）
+      if (decision.tool === 'explore' && decision.args.toward && r.error?.details?.stop === 'toward_exhausted' && !mem.towardOff) { mem.towardOff = true; continue; }
       if (decision.tool === 'explore' && decision.args.toward === 'sense' && code === 'nothing_to_do' && !mem.senseOff) {
         mem.senseOff = true;
         note('sense_off', `explore toward: sense が断られた（${lastOutcome.split('\n')[0]}）。目的の相手・品はまだ見えていないので、この階では方角を付けずに探索する`);

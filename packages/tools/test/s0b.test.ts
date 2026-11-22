@@ -292,7 +292,7 @@ describe('S0b §6.2-6: the call tool', () => {
     expect(tokenFiles({ MUSE_TOKEN_FILE: 'a.txt', MUSE_PROFILE_TOKEN_FILE: 'b.txt' }, '/repo').profile.replace(/\\/g, '/')).toMatch(/\/b\.txt$/);
   });
 
-  it('saves the tokens to files and masks them; later calls (resume_run too) carry them; a season run takes the saved profile token; wrong argument names get the SDK error that names the missing argument', async () => {
+  it('saves the tokens to files and masks them; later calls (resume_run too) carry them; a season run takes the saved profile token; wrong argument names get the game-form error that names the right argument', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'muse-call-'));
     const m = new SessionManager(content, loadConfig({ runsDir: null, profilesDir: null, seasonsDir: null, waitOthersMs: 100 }));
     const app = createApp(m, m.config);
@@ -322,12 +322,13 @@ describe('S0b §6.2-6: the call tool', () => {
       expect(rs.text).not.toContain(ptok);
       const tools = await call('--tools');
       expect(tools.text).toContain('## travel_to');
-      // §6.2 の 3: 引数の名前を間違えると、MCP の SDK の入力の検査が断る（足りない引数の名前が文に出る。structuredContent は無い）
+      // §6.2 の 3（S1c §14.4 の 2 で改めた）: 引数の名前を間違えると、ゲームの断りの形で、無い名前と正しい名前と呼び方の例が出る
       const bad1 = await call('travel_to', 'target=stairs_down');
       expect(bad1.code).toBe(1);
-      expect(bad1.text).toMatch(/Invalid arguments for tool travel_to: .* at to\b/);
+      expect(bad1.text).toContain('travel_to に target という名前の引数は無い。このツールの引数: 要る: to');
+      expect(bad1.text).toContain("例: travel_to { to: 'stairs_down' }");
       const bad2 = await call('choose_perk', 'choice=1');
-      expect(bad2.text).toMatch(/Invalid arguments for tool choose_perk: .* at option\b/);
+      expect(bad2.text).toContain('choose_perk に choice という名前の引数は無い。このツールの引数: 要る: option');
       // 2 つ目のラン: 上書きする前のトークンは *.old.txt に残る
       expect((await call('new_run', 'character_name=Aki2')).code).toBe(0);
       expect(readFileSync(files.player.replace(/\.txt$/, '.old.txt'), 'utf8')).toContain(ptok);

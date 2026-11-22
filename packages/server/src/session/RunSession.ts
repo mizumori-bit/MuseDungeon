@@ -10,7 +10,7 @@ import type {
 } from '@muse/shared';
 import {
   actionError, applyEvent, buildExpeditionReport, canonicalHash, guardianDisplayName, compareReports, emptyWorld, filterEventsForPlayer, FREE_COMMANDS, MACRO_COMMANDS,
-  macroNext, macroStart, macroStopError, narrate, projectPlayerView, publicStairsAt, seasonReportable, seasonReportableSpots, selfTurnMarks, t,
+  macroNext, macroStart, macroStopError, narrate, projectPlayerView, publicStairsAt, riskText, seasonReportable, seasonReportableSpots, selfTurnMarks, t,
 } from '@muse/shared';
 import type { SeasonHooks } from '../season/SeasonService';
 import type { ServerConfig } from '../config';
@@ -71,6 +71,10 @@ export interface MacroReport {
   toward?: { kind: 'draft' | 'sense'; dir: Dir | null; start: Pos; noAlong: number; detour: number };
   /** fight: 投げる物が尽きたが、隣に追ってくる敵がいるので床の投げ物を拾いに行かなかった（S1b §12.4 の 5） */
   retrieveHeld?: boolean;
+  /** fight・steady・flee: 実際に使った hp_floor（渡した値か既定。S1c §14.4 の 1: 文と食い違わないように） */
+  hpFloor?: number;
+  /** travel・collect: 動かない敵の隣を避けた遠回り（S1c §14.6 の 1） */
+  detour?: { extra: number; around: { id: string; name: string }[] };
 }
 
 export type SubmitResult =
@@ -637,6 +641,8 @@ export class RunSession {
       const d0 = macroNext(probe, startView, this.deps.catalog, []);
       if ('stop' in d0) {
         const err = macroStopError(startView.locale, d0.stop, cmd, d0.dir, d0.blockedBy, d0.traps);
+        // fight の被弾の前の断り（S1c §14.4 の 1）: 見込みと最悪の 2 つの数・いまの HP・実際に使った hp_floor
+        if (d0.stop === 'hp_risk' && startView.self.pos) err.message += ' ' + riskText(startView, this.deps.catalog, probe.hpFloor);
         // 公開された階段（S0 §9.4）: 地図に載っていても途中の道は分からない。下への風の方角を探す手を出す
         const pub = startView.floor ? publicStairsAt(startView.season, startView.floor.depth) : null;
         if (pub && d0.stop === 'unreachable' && cmd.type === 'travel' && cmd.to === 'stairs_down' && (startView.memory.unsighted ?? []).includes(pub.y * startView.floor!.width + pub.x)) {
@@ -698,6 +704,8 @@ export class RunSession {
       ...(state.targetSeenAt ? { targetSeenAt: { ...state.targetSeenAt } } : {}),
       ...(cmd.type === 'explore' && cmd.toward && startView.self.pos ? { toward: { kind: cmd.toward, dir: state.towardDir ?? null, start: { ...startView.self.pos }, noAlong: state.towardNoAlong ?? 0, detour: state.towardDetour ?? 0 } } : {}),
       ...(state.retrieveHeld ? { retrieveHeld: true } : {}),
+      hpFloor: state.hpFloor,
+      ...(state.detour ? { detour: structuredClone(state.detour) } : {}),
     };
     return { ok: true, events: all, startSeq, steps: state.steps, interruptedBy: stop, macro };
   }

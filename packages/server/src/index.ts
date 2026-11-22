@@ -5,7 +5,7 @@ export type { App } from './http/api';
 export { SessionManager } from './session/SessionManager';
 export { RunSession } from './session/RunSession';
 export type { SessionDeps, SubmitResult } from './session/RunSession';
-export { SessionPlayerPort, towardNote } from './session/PlayerPort';
+export { intentStopText, SessionPlayerPort, towardNote } from './session/PlayerPort';
 export type { PlayerPort, ActionPayload } from './session/PlayerPort';
 export { SpectatorPort } from './session/SpectatorPort';
 export { RunStore, spectatorEvent } from './log/RunStore';

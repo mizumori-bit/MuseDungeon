@@ -37,7 +37,8 @@ ActionError {
 
 エラー時の結果: `{ ok: false, error, valid_actions, turn }`（プレイヤーが束縛されていない `no_session` と、復旧に失敗したランの `recovery_failed` には `turn` が無い）。
 
-**引数の形がツールの定義に合わないとき**（要る引数が無い・型が違う。たとえば `travel_to` に `to` でなく `target`、`choose_perk` に `option` でなく `choice` を渡した）は、ゲームに届く前に MCP の SDK の入力の検査が断る（S0b で確かめた。SEASON.md §7.3）。結果は `isError: true` で、`content` の文は `MCP error -32602: Input validation error: Invalid arguments for tool travel_to: Invalid input at to`（型が単純な引数は `Required at dir`）。**足りない引数の名前は文に出る**が、`structuredContent`・`turn`・`valid_actions` は付かない（§1 の「両方を返す」の例外）。定義に無い名前の引数（`target`）は、黙って捨てられる。別名は受け付けない。
+**引数の名前がツールの定義に合わないとき**（S1c で改めた。SEASON.md §14.4 の 2・§15.11）: 定義に無い名前の引数が来た・要る引数が無いときは、MCP の SDK の入力の検査の前にサーバーが受けて、**ゲームの断りの形**（`bad_request`・`structuredContent`・`valid_actions`・`turn`）で返す。`message` に、無い名前（「travel_to に target という名前の引数は無い」）か足りない名前（「move には dir が要る（渡されていない）」）と、このツールの引数の一覧（要る・要らない・共通）、`hint` に呼び方の例（`travel_to { to: 'stairs_down' } / …`）。無い名前が先（両方あれば、無い名前を言う）。別名は受け付けない。ツール一覧（tools/list）の「要る引数」は変えない。
+- 名前は合っていて形が違う（型・値の範囲。`move { dir: 'north' }`）ときは、今までどおり SDK の入力の検査が断る（`isError: true`、文は `MCP error -32602: Input validation error: Invalid arguments for tool move: …`。`structuredContent` は付かない。S0b で確かめた。SEASON.md §7.3）。
 
 `recovery_failed`（V4-1m）: サーバーの起動時の復旧（記録の再生）に失敗したランのトークンで再開・行動しようとした（MCP の `resume_run` とトークンを使うツール、`GET /api/player/feed`、WebSocket の `hello`（プレイヤー・観戦）、`join_run`・`POST /api/runs/:id/join`）。「見つからない」（`no_session`）とは分ける。`message` に、そのランの ID と失敗の理由（1 行）。ランの記録は消えていないので、サーバーを直して起動し直せば、同じトークンで再開できる。HTTP は 503
 
@@ -127,7 +128,7 @@ turn: {
 | `use_ability` | `ability`（または `id`）, `target?: dir | entity_id`, `slot?` | 能動技（V3-4 §4.2。V4-1g で `ability` を足した。どちらも無ければ、要る引数の名前を言うエラー）。`id` は `self.abilities` の短い ID（`bash`）か完全な ID（`core:bash`）。資源は無く、再使用までの手番（`cooldown`）と、立て直しだけ遠征ごとの回数で管理する。覚えていない・残りの手番がある・回数を使い切った・対象が無いときは手番を使わずに拒否（`cannot_use` / `no_target` / `invalid_direction` / `blocked`）。対象: 隣の敵（強打。ID か方向、隣に 1 体なら省略可）、投擲の対象（狙い撃ち。射程と射線は `throw_item` と同じ検証、`slot` 省略時は投擲用の品の最初のスロット）、方向（身をかわす）、なし（なぎ払い・立て直し）。結果のイベントに `ability_used`（`cooldownLeft` はこの手番の後の残り） |
 | `wait` | `turns?: 1..10` | 追跡中の敵が見えなければ休息（回復が `restMultiplier` 倍）。`turns` が 2 以上ならマクロ（V3-2R2）: 敵が新たに見えた（`hostile_in_view`）・起きている敵が隣に来た（`hostile_adjacent`）・攻撃や毒以外の被害・状態異常で止まり、指定の手数で `max_turns` |
 | `rest` | `until_hp?`, `max_turns?` | マクロ。全快（かつ毒が抜ける）か、指定の HP・手数か、中断まで（上限 `rest.maxTurns`） |
-| `explore` | `mode?`, `hp_floor?`, `pickup?`（既定 true）, `toward?: 'draft'`, `max_steps?: 1..200` | マクロ。`max_steps`（S1b）はその手数で止まる（`max_turns`。既定は 1 回の上限 200）。`toward: 'draft'` は下への風が消えたら（公開された階段を自分の目で見たら。S1b）`stairs_seen` で止まる。方角に行ける境界が無い・遠回り・道が回り込んでいるために方角と違う向きへ歩いたら、結果の文に理由を書く（S1b）。未見の区画（地図の巻物で地形だけ知った区画を含む）へ自動移動。pickup（既定 'useful'。V3-4b）なら通り道と見えている・記憶したアイテムも拾う（'useful' は、鑑定済みで接辞の無い武器・防具のうち公開の数字が装備中の品以下のものを種類が違っても拾わない。true は全部。遺物・鑑定済みの有害品・装備中の品と同じ種類で接辞が含まれる＝同じか劣る装備は拾わない。V3-2R3）。`toward: 'draft'` は下への風の方角、`'sense'`（V3-4b）は遺物・守護者の気配の方角（と隣り合う方角）の未探索を優先する（V3-2R3）。決めた行き先は境界である間は追い続け、見えて消えたらそのすぐ近くの境界を追う（風の方角が歩くたびに変わっても往復しない。2026-11-17） |
+| `explore` | `mode?`, `hp_floor?`, `pickup?`（既定 true）, `toward?: 'draft'`, `max_steps?: 1..200` | マクロ。`max_steps`（S1b）はその手数で止まる（`max_turns`。既定は 1 回の上限 200）。`toward: 'draft'` は下への風が消えたら（公開された階段を自分の目で見たら。S1b）`stairs_seen` で止まる。**その方角に行ける未探索の境界が無くなったら止まる**（`toward_exhausted`。始める前なら手番を使わずに断る。`mode: 'flee'` は止まらずに、ほかの方角の境界へ。S1c）。遠回り・道が回り込んでいるために方角と違う向きへ歩いたら、結果の文に理由を書く（S1b）。未見の区画（地図の巻物で地形だけ知った区画を含む）へ自動移動。pickup（既定 'useful'。V3-4b）なら通り道と見えている・記憶したアイテムも拾う（'useful' は、鑑定済みで接辞の無い武器・防具のうち公開の数字が装備中の品以下のものを種類が違っても拾わない。true は全部。遺物・鑑定済みの有害品・装備中の品と同じ種類で接辞が含まれる＝同じか劣る装備は拾わない。V3-2R3）。`toward: 'draft'` は下への風の方角、`'sense'`（V3-4b）は遺物・守護者の気配の方角（と隣り合う方角）の未探索を優先する（V3-2R3）。決めた行き先は境界である間は追い続け、見えて消えたらそのすぐ近くの境界を追う（風の方角が歩くたびに変わっても往復しない。2026-11-17） |
 | `travel_to` | `to: {x,y} | 'stairs_down' | 'stairs_up' | entity_id`, `mode?`, `hp_floor?`, `pickup?` | マクロ。既知地図上のみ。目的地がアイテムなら着いて拾う |
 | `collect` | `what?: 'thrown'|'items'`, `within?: 1..200`, `kinds?: string[]`, `all?: boolean`, `mode?`, `hp_floor?` | マクロ（v3）。`thrown`（既定）は既知の自分が投げた物、`items` は見えている・記憶したアイテムを近い順に回って拾う。結果に `collected: { picked, remaining }`。V3-8: `within` は歩数の上限（既定 15。残りがどれも遠ければ `collect_far`）、`kinds` は種類 ID か区分、`items` は鑑定済みで今の装備より劣る装備を飛ばす（`all: true` で拾う） |
 | `fight` | `target: entity_id`, `with?: slot`, `hp_floor?`, `abilities?: string[]`, `until?: 'target'\|'clear'`, `adjacent?: 'throw'\|'melee'\|'stop'`, `approach?: 'wait'\|'advance'` | マクロ（V3-2R、V3-2R2 で拡張）。`approach`（V4-1a、`with` なし）: `wait`（既定）は相手が隣に来るのを待つ。`advance` は相手へ向かって歩き、隣に着いたら殴る（歩く間に撃たれても止まらない。`hp_floor`・`hp_risk`・新しい敵・予備動作・見失いなどの止まり方はそのまま。経路がふさがれていれば `blocked`）。`until: 'clear'`（V3-4b）: 標的を倒した後も、隣の追跡中の敵、いなければ最も近い追跡中の敵へ続け、いなくなれば `cleared`。`adjacent`（V3-4b、with のとき）: 相手が隣に来たら stop（既定）／throw（投げ続ける）／melee（近接に切り替える）。新しく見えた追跡中の敵で止まるのは被弾の記録の無い種族だけ。追跡中で逃げていない標的が見えなくなったら `fight.lostWait`（5）手番まで待つ（逃げて見えなくなったら `target_fled`）。待つ手番に標的以外の射撃で被弾したら `shot_while_waiting`。`abilities`（V3-4a）: 並べた能動技を使える手番ごとに使う。強打は標的が隣、なぎ払いは起きている敵が隣に 2 体以上、狙い撃ちは `with` の品で射程と射線が通るとき（それ以外の手番は通常の攻撃）。立て直し・身をかわすは載せられない、覚えていない、`with` の無い狙い撃ちは手番を使わずに `cannot_use`。結果の文に使った能動技と回数。その相手と決着を付ける。`with` なし: 隣なら近接攻撃を繰り返す。相手が追跡中で届かない間は隣に来るまで待つ（最大 10 手番、`target_not_approaching`）。当てて逃げる相手は追跡中で 2 マス以内なら 2 手番まで待つ（追わない）。`with`: そのスロットの品を投げて戦う（射程と射線が通るまで待つ）。止まるのは: 相手が倒れた（`target_down`）・離れた／逃げて射程を出た（`target_moved`）・見えなくなった（`target_gone`）・（`with`）隣に来た（`target_adjacent`）・品が尽きた（`out_of_ammo`）・射線が 3 手番続けて通らない（`no_line_of_sight`）・HP が `hp_floor`（既定 50%）以下・**次の手番に、届く追跡中の敵（隣・飛び道具）から 1 手の最悪の被害（`worst_turn` の合計）を受けると `hp_floor` を割る（`hp_risk`。被弾の前に止まる。始める前なら `hp_floor` のエラーで拒否）**・被弾の記録の無い種族から初めて被弾した（`first_hit`。一度だけ）・追跡中の別の敵・状態異常（V3-2R3）。眠っている・気付いていない相手は待たない（`target_not_hunting` で拒否。断りの文に `approach: 'advance'`）。**`approach: 'advance'` なら、眠っている・気付いていない相手にも寄って殴る**（S1b。途中で気づかれたらそのまま続ける。近づけたかは、追跡中の相手は直線の距離、そうでない相手は道のりで数える）。`with` の品が尽きたとき、自分の投擲物を拾いに行くのは隣に追ってくる敵がいない間だけ（いれば `out_of_ammo`。S1b）。結果の `outcome` に与えた攻撃（投げた）回数・命中・合計・待った手番 |
@@ -443,6 +444,20 @@ V3-2R で足した項目（同じく後方互換。会心と経験値のルー�
 - `StatusInst.source`（状態異常を与えた者。毒で倒したときの撃破者になる）、`status_applied.targetAffixes`
 - `player_state.reason: 'joined'`（キャンプから始まる参加）。参加コマンドの `atCamp`
 - プレイヤー向けの射影で、見えていた個体が視界の外へ動いた `entity_moved` に `dirOut`（向きだけ。行き先は伏せたまま）
+
+S1c（2 つ目）で変えた項目（試運転 t1 を受けた直しのうち、すべてのランに同じに効くもの。`engineVersion` 0.42.0、思い出の `dmgOnYou`・予備動作の `hold`・品の `droppedBy` が増えたので `eventVersion` 27。SEASON.md §14.4・§14.6・§14.10・§15.10〜）:
+
+- **fight の止まり方の見積もり**（§2.3）: `hp_floor` で止める・断る判定は、次の手番の**被害の見込み**＝いちばん重い 1 体（1 手の最悪が最大の者）は記録の最大の一撃×行動の回数、残りの敵は記録の平均の被害（攻撃で受けた被害の合計 ÷ 攻撃された回数。外れは 0。装甲の後）×行動の回数、の合計（shared の `threatEstimate`）。平均の記録が無い敵は最大で数える。被弾の記録の無い敵は、今までどおり数えない（別に止まる）。止まった文・断りの文に「見込み 12・最悪 40（HP 50・hp_floor 45。…）」（`riskText`。最悪は全員が最大の一撃）と、実際に使った `hp_floor`。観測の `incoming` に `expected_sum` と文の 2 つの数、`escape` に `expected_if_chased`（逃げの見込みも同じ考え）。`valid_actions` の「HP N 未満で止まる」に「（既定の hp_floor）」
+- 思い出（`MonsterMemory`）に `dmgOnYou: [合計, 当たった回数]`（その種族の近接・射撃で受けた被害。毒・罠は入れない）
+- **予備動作**: 速い敵の大振り・突進は、構えた相手（プレイヤー）が構えの後に 1 回動くまで出さない（`Intent.hold { id, turns }`。構えたまま待つ）。`fight` は、見えている構えが自分のマス（大振りのマス・突進の直線の 6 マス以内）を的にしている間は、2 手目から `intent` で止まる（始めたときから見えていた構えでも）。予備動作で止まった応答に、的のマス（大振りのマス・突進の直線の始めと終わり）と自分がそこにいるか、外れる一歩（`intentStopText`）
+- **公開された下り階段の文**: 遠征の戦利品の行の「地下N階の下り階段に着けば +M」は、公開された階段が地図にあって道が分からないとき「（公開されている: ○○ が報告 (x,y)。途中の道はまだ分からない）」（「未発見」と書かない）
+- **collect**: `kinds` は、未鑑定の品を外見の区分（`potion`・`scroll`・`amulet`・`ring`）で比べる。`kinds` を付けて `what` を省くと `items`。既定（`thrown`）の結果と断りに「自分が投げた物だけを拾う（ほかに拾える品 N 個: collect { what: 'items' }）」。ツールの説明に `kinds` に渡せる区分の名前
+- **pickup**: `item` を省くと、足元にほかの品があれば、自分の置いた品（`item.droppedBy`）は拾い直さない（置いた品だけなら拾う）
+- **遠回りの文**（§2.3）: `travel_to`・`collect` が動かない敵の隣を避けた道を選び、それが隣を通る近道より 10 歩を超えて長く、かつ 2 倍を超えるときは、結果の文に「動かない 毒カビ e_x の隣を通らない道を選んだ（隣を通る近道より N 歩長い）」
+- **`explore` の `toward`**（§2.3）: その方角（下への風・気配と隣り合う方角）に行ける未探索の境界が無くなったら止まる（`toward_exhausted`。始める前なら手番を使わずに `nothing_to_do` で断り、`details.stop: 'toward_exhausted'`）。`mode: 'flee'` は今までどおり、ほかの方角の境界へ
+- **覚える敵**（§2.3）: 気づいていない守護者（持ち場を離れない）も、眠っている敵と同じに、その呼び出しの間は見えなくなってもマスをふさいでいるものとし、2 マス以内を避ける
+- `travel_to` の「20 手縮まない」の数え直しは、その呼び出しの間に一度も見たことの無い障害の印が増えたときだけ（見え隠れする眠っている敵で、何度も数え直していた）
+- **引数の名前の断り**（§1.1）
 
 S1c で変えた項目（試運転 t1 を受けた直しのうち、シーズンのランだけに効くもの。`engineVersion` 0.41.0、出来事 `fire_return` と `knowledge_updated.publicSpot`・`stairs_reported.spots` が増えたので `eventVersion` 26。SEASON.md §14・§15、DESIGN.md §40.2）。シーズンでないランは何も変わらない（`extract` の断りの文も今のまま）:
 
@@ -934,7 +949,7 @@ CommandRecord {
 
 ## 9. シーズン（S0。SEASON.md §2）
 
-シーズンのランだけの決まり。**シーズンでないランは何も変わらない**（SEASON.md §1.2 の 5。生成・候補・観測・出来事のどれも）。版は `engineVersion` 0.38.0・`eventVersion` 22（S1 で 0.39.0・23、S1a で 0.39.1・24、S1b で 0.40.0・25、S1c で 0.41.0・26。§5 のそれぞれの「変えた項目」）。
+シーズンのランだけの決まり。**シーズンでないランは何も変わらない**（SEASON.md §1.2 の 5。生成・候補・観測・出来事のどれも）。版は `engineVersion` 0.38.0・`eventVersion` 22（S1 で 0.39.0・23、S1a で 0.39.1・24、S1b で 0.40.0・25、S1c で 0.41.0・26（シーズン）と 0.42.0・27（すべてのラン）。§5 のそれぞれの「変えた項目」）。
 
 ### 9.1 シーズンと参加
 

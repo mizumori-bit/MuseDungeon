@@ -4,16 +4,17 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { loadContent } from '@muse/content';
+import { buildCatalog, loadContent } from '@muse/content';
 import { ENGINE_VERSION, generateFloor } from '@muse/engine';
 import { loadConfig, RunSession, SessionManager } from '@muse/server';
 import type { PlayerPort } from '@muse/server';
-import { applyEvent, findPath, isSeasonSpot, seasonReportableSpots } from '@muse/shared';
+import { applyEvent, buildObservation, findPath, isSeasonSpot, seasonReportableSpots } from '@muse/shared';
 import type { Command, Entity, GameEvent, Pos, World } from '@muse/shared';
 import { playWithPort } from '../src/bot';
 import { verifyRunDir } from '../src/replay';
 
 const content = loadContent();
+const catalog = buildCatalog(content);
 const agent = { kind: 'agent' as const, label: 'test' };
 const SID = 's1ct';
 const N = content.balance.season.fireReturnTurns;
@@ -573,5 +574,37 @@ describe('S1c §14.10 の 3: trails on a floor made after the sync, and recovery
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+// ================= 2 つ目: すべてのランに同じに効く直し（§14.4 の 1〜6・§14.6 の 1〜3・§14.10 の 1） =================
+
+describe('S1c §14.4 の 5: the expedition text says published stairs are published (not "not found")', () => {
+  it('the next-overreach line names the reporter when the published stairs are on the map but the way is unknown', async () => {
+    const m = manager();
+    openSeason(m, 's1c-season-8');
+    await publishStairs(m, [1]);
+    const c = await seasonRun(m, 'Cid');
+    const wc = c.session.world;
+    const cf = wc.floors['main:1'];
+    const s = cf.stairs.down[0];
+    // 道しるべを引けない世界（階段のまわりを壁にする）: 階段のマスだけが載る
+    const wall = wc.meta.terrainTable.indexOf('core:wall');
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      if (!dx && !dy) continue;
+      const x = s.x + dx, y = s.y + dy;
+      if (x >= 0 && y >= 0 && x < cf.width && y < cf.height) cf.terrain[y * cf.width + x] = wall;
+    }
+    expect((await act(c.port, { type: 'start_expedition', offer: 1 })).ok).toBe(true);
+    const v = structuredClone(c.port.view());
+    // 次の踏破の階を今いる地下 1 階にする（見え方だけの書き換え）
+    v.expedition!.objective = { ...v.expedition!.objective, targetDepth: 0 };
+    v.expedition!.crossedDepth = 0;
+    const o = buildObservation(v, catalog, { detail: 'brief', map: false });
+    expect(o.navigation.known_stairs.find((k) => k.type === 'down')?.public_by).toBe('Aya');
+    expect(o.expedition?.haul?.text).toContain(`地下1階の下り階段に着けば`);
+    expect(o.expedition?.haul?.text).toContain(`（公開されている: Aya が報告 (${s.x},${s.y})。途中の道はまだ分からない`);
+    expect(o.expedition?.haul?.text).not.toContain('（未発見');
+    m.closeAll();
   });
 });

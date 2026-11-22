@@ -1,7 +1,7 @@
 // 守護者の型と弱点の振る舞い（V3-3 §3.1・§28.9）。登録は index.ts の読み込みで行う（guardians.ts のレジストリへ）。
 import type { Entity, Pos } from '@muse/shared';
 import { cheb, DIR_VEC, floorDiv } from '@muse/shared';
-import { approach, flee, freeNeighbors, hpPct, stepTo } from './ai';
+import { approach, flee, freeNeighbors, hpPct, intentHeld, intentHold, stepTo } from './ai';
 import { melee } from './combat';
 import type { Ctx } from './ctx';
 import { pickMonster } from './gen/generate';
@@ -65,6 +65,8 @@ guardianTypeHandlers.register('charger', {
     const range = params.range ?? 6;
     const key = m.pos!.floor;
     if (ai.intent?.kind === 'winding_up' && ai.intent.dir) {
+      // 構えた相手が、まだ 1 回も動いていない（速い守護者）: 構えたまま待つ（S1c §14.4 の 3）
+      if (intentHeld(ctx, ai.intent)) return 100;
       const dir = ai.intent.dir;
       setIntent(ctx, m, null);
       let hit = false;
@@ -89,7 +91,7 @@ guardianTypeHandlers.register('charger', {
     if (target?.pos) {
       const d = cheb(m.pos!, target.pos);
       const dir = lineDir(m.pos!, target.pos);
-      if (dir && d >= 2 && d <= range && clearLine(ctx, key, m.pos!, dir, d)) { setIntent(ctx, m, { kind: 'winding_up', dir }); return 100; }
+      if (dir && d >= 2 && d <= range && clearLine(ctx, key, m.pos!, dir, d)) { setIntent(ctx, m, { kind: 'winding_up', dir, ...intentHold(target) }); return 100; }
     }
     return null;
   },

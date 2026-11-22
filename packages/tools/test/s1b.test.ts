@@ -378,7 +378,9 @@ describe('S1b §12.4 の 4: explore toward', () => {
   it('counts the steps with no reachable edge toward the hint, and the result says why it walked another way', async () => {
     const a = await room('s1b-toward', true);
     const v = withDraft(projectPlayerView(a.world, a.pid), 'e');
-    const st = macroStart(v, { type: 'explore', toward: 'draft' }, catalog);
+    // S1c §14.6 の 2: 方角に行ける境界が無ければ止まる（flee は今までどおり、ほかの方角の境界へ）
+    expect(macroNext(macroStart(v, { type: 'explore', toward: 'draft' }, catalog), v, catalog, [])).toEqual({ stop: 'toward_exhausted' });
+    const st = macroStart(v, { type: 'explore', toward: 'draft', mode: 'flee' }, catalog);
     const d = macroNext(st, v, catalog, []);
     expect('command' in d && d.command.type === 'move' && ['w', 'nw', 'sw'].includes(d.command.dir)).toBe(true);
     expect(st.towardNoAlong).toBe(1);
@@ -393,7 +395,12 @@ describe('S1b §12.4 の 4: explore toward', () => {
     const f = a2.world.floors[a2.key];
     a2.world.players[a2.pid].knowledge.floorHint = { floor: a2.key, draft: 'e', explored: 1 };
     void f;
-    const res = await a2.r.port.act({ type: 'explore', toward: 'draft', maxSteps: 3 }, { source: 'bot' });
+    // flee でなければ、手番を使わずに理由を言って断る（S1c §14.6 の 2）
+    const no = await a2.r.port.act({ type: 'explore', toward: 'draft' }, { source: 'bot' });
+    expect(!no.ok && no.error.code).toBe('nothing_to_do');
+    expect(!no.ok && no.error.message).toContain('下への風の方角に、行ける未探索の境界が無い');
+    expect(!no.ok && no.error.details?.stop).toBe('toward_exhausted');
+    const res = await a2.r.port.act({ type: 'explore', toward: 'draft', mode: 'flee', maxSteps: 3 }, { source: 'bot' });
     expect(res.ok && res.outcome).toContain('行ける未探索の境界が無い手が');
     a.manager.closeAll();
     a2.manager.closeAll();

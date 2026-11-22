@@ -50,6 +50,10 @@ export interface BotMemo {
   restFails: number; avoid: Set<string>; blocked: number; descend: boolean; gaveUp: number | null;
   /** 探索を終えた目標階で、気配の方角の既知のマスへ向かい直した回数（遠征ごと） */
   senseTries: number; senseNo: number;
+  /** avoid を空にした遠征の番号（S1c §14.10 の 4: hp_floor で断られただけの標的を、ランの終わりまで避けていた） */
+  avoidNo: number;
+  /** explore の toward が toward_exhausted で止まった・断られた階（S1c §14.6 の 2）: その階では方角なしで探索する（今までの動き） */
+  towardOff?: string;
   /** 方針: 目的を達成した後、目標より何階深く潜ってから帰るか */
   overreach: number;
   /** 方針: キャンプで選ぶ枠（無ければ 1 番目） */
@@ -66,7 +70,7 @@ export interface BotMemo {
 
 export function newMemo(policy: { overreach?: number; offerSlot?: OfferSlot; cautious?: boolean; levelAware?: boolean; direct?: boolean; perkLineage?: string } = {}): BotMemo {
   return {
-    restFails: 0, avoid: new Set<string>(), blocked: 0, descend: false, gaveUp: null, senseTries: 0, senseNo: 0, overreach: policy.overreach ?? 0, offerSlot: policy.offerSlot,
+    restFails: 0, avoid: new Set<string>(), blocked: 0, descend: false, gaveUp: null, senseTries: 0, senseNo: 0, avoidNo: 0, overreach: policy.overreach ?? 0, offerSlot: policy.offerSlot,
     cautious: policy.cautious ?? true, levelAware: policy.levelAware ?? false, direct: policy.direct ?? false,
     ...(policy.perkLineage ? { perkLineage: policy.perkLineage } : {}),
   };
@@ -118,7 +122,10 @@ function neighborDir(a: Dir | null, b: Dir): boolean {
   return d === 1 || d === 7;
 }
 
-/** 気配の方角にある、既知で歩いて届く遠いマス（5 マス以上先。無ければ null） */
+/**
+ * 気配の方角にある、既知で歩いて届くマス（5 歩以上先のうち、いちばん近いもの。無ければ null）。
+ * S1c §14.10 の 4: いちばん遠いマスへ向かい直していたので、動く守護者が視界に入らないまま撤退をくり返した。近いマスへ寄って、気配を見直す
+ */
 function senseCell(port: PlayerPort, dir: Dir): { x: number; y: number } | null {
   const v = port.view();
   const f = v.floor;
@@ -128,14 +135,13 @@ function senseCell(port: PlayerPort, dir: Dir): { x: number; y: number } | null 
   if (!grid) return null;
   const dist = distanceField(grid, me, false);
   let best: { x: number; y: number } | null = null;
-  let bestD = 0;
+  let bestD = Infinity;
   for (let i = 0; i < dist.length; i++) {
     if (dist[i] < 5) continue;
     const p = { x: i % f.width, y: Math.trunc(i / f.width) };
     const d = compassDir(me, p);
     if (d !== dir && !neighborDir(d, dir)) continue;
-    const c = cheb(me, p);
-    if (c > bestD) { bestD = c; best = p; }
+    if (dist[i] < bestD) { bestD = dist[i]; best = p; }
   }
   return best;
 }
@@ -289,13 +295,13 @@ export function greedyDecide(port: PlayerPort, rng: Rng, memo: BotMemo): Command
   if (x && onTarget && !done && x.objective.type === 'reach_depth' && !x.progress.reached) {
     const down = port.observe({ map: false }).observation.navigation.known_stairs.find((s) => s.type === 'down' && s.reachable);
     if (down) return { type: 'travel', to: 'stairs_down', ...steadyIf(hp) };
-    if (v.floorHint?.draft) return { type: 'explore', toward: 'draft', ...steadyIf(hp) };
+    if (v.floorHint?.draft && memo.towardOff !== v.floor?.key) return { type: 'explore', toward: 'draft', ...steadyIf(hp) };
   }
   // 直行: 目標より上の階では、下り階段を知っていればすぐ降りる（知らなければ下への風の方角を探す）
   if (memo.direct && x && !done && x.objective.targetDepth !== null && (v.floor?.depth ?? 0) < x.objective.targetDepth && !hunting.length) {
     const down = port.observe({ map: false }).observation.navigation.known_stairs.find((s) => s.type === 'down' && s.reachable);
     if (down) { memo.descend = true; return { type: 'travel', to: 'stairs_down', ...steadyIf(hp) }; }
-    if (v.floorHint?.draft) return { type: 'explore', toward: 'draft', ...steadyIf(hp) };
+    if (v.floorHint?.draft && memo.towardOff !== v.floor?.key) return { type: 'explore', toward: 'draft', ...steadyIf(hp) };
   }
   if (x && onTarget && !done) {
     if ((x.objective.type === 'slay_guardian' || x.objective.type === 'slay_warden') && !x.progress.guardianSlain) {
@@ -476,6 +482,9 @@ export async function playWithPort(port: PlayerPort, opts: BotOptions): Promise<
       brief.push(JSON.stringify(port.observe({ detail: 'brief', map: true }).observation).length);
       full.push(JSON.stringify(port.observe({ detail: 'full', map: true }).observation).length);
     }
+    // 避ける標的は遠征ごとに空にする（S1c §14.10 の 4: hp_floor で断られただけの標的を、ランの終わりまで避けていた）
+    const xNow = v.expedition?.no ?? 0;
+    if (memo.avoidNo !== xNow) { memo.avoidNo = xNow; memo.avoid.clear(); }
     let cmd: Command = opts.kind === 'greedy' ? greedyDecide(port, rng, memo) : randomDecide(port, rng);
     if (cmd.type === 'explore' && explored) {
       const x = v.expedition && v.expedition.status !== 'ended' ? v.expedition : null;
@@ -504,6 +513,9 @@ export async function playWithPort(port: PlayerPort, opts: BotOptions): Promise<
       expTurns.set(xno, { first: tt?.first ?? v.self.turns, last: v.self.turns });
     }
     const out = await port.act(cmd, { source: 'bot' });
+    // explore toward が、その方角に境界が無いので止まった・断られた（S1c §14.6 の 2）: この階では方角なしで探索する
+    if (cmd.type === 'explore' && cmd.toward && ((out.ok && out.interrupted_by === 'toward_exhausted') || (!out.ok && out.error.details?.stop === 'toward_exhausted'))) memo.towardOff = v.floor?.key;
+    if (!out.ok && cmd.type === 'explore' && cmd.toward && out.error.details?.stop === 'toward_exhausted') continue;
     if (out.ok && out.steps !== undefined && cmd.type !== 'rest') macroSteps.push(out.steps);
     if (out.ok && cmd.type === 'travel' && typeof cmd.to === 'string' && cmd.to.startsWith('e_') && (out.steps ?? 0) === 0 && out.interrupted_by !== 'arrived') memo.avoid.add(cmd.to);
     if (out.ok && cmd.type === 'rest' && (out.steps ?? 0) === 0) memo.restFails = 3;

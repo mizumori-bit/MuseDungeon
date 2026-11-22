@@ -34,7 +34,11 @@ export interface AiState {
 }
 
 /** 予備動作: winding_up（突進の構え）/ summoning（手下を呼ぶ）/ enraging（怒る）/ swinging（大振りの構え。pos: 打つマス。V3-5b） */
-export interface Intent { kind: 'winding_up' | 'summoning' | 'enraging' | 'swinging'; dir?: Dir; pos?: Pos }
+/**
+ * hold（S1c §14.4 の 3）: 構えたときの相手（プレイヤー）とその手番の数。相手が 1 回動くまで、突進・大振りを出さない
+ * （速い敵が、構えと大振りを相手の 1 手番の間に続けて出し、予備動作が一度も見えなかった）
+ */
+export interface Intent { kind: 'winding_up' | 'summoning' | 'enraging' | 'swinging'; dir?: Dir; pos?: Pos; hold?: { id: EntityId; turns: number } }
 
 /**
  * 守護者の型と名前（V3-3 §3.1）。name・types は公開（候補にも出る）。weakness はプレイヤーには渡さない（試して分かったら knowledge.guardianIntel）。
@@ -95,7 +99,8 @@ export interface Entity {
    * hidden: まだ見えていない接辞（呪い。V3-4 §4.4）。装備するか鑑定すると affixes へ移る。プレイヤーには渡さない。
    * inspected: 呪いの有無を確かめた（装備した・鑑定した・初期装備）。武器・防具・装飾品だけが使う
    */
-  item?: { qty: number; affixes: string[]; heldBy?: EntityId; slot?: string; thrownBy?: PlayerId; value?: number; hidden?: string[]; inspected?: boolean };
+  /** droppedBy（S1c §14.4 の 6）: 床に置いた者（拾えば消える）。引数なしの pickup は、足元にほかの品があれば、自分の置いた品を拾い直さない */
+  item?: { qty: number; affixes: string[]; heldBy?: EntityId; slot?: string; thrownBy?: PlayerId; droppedBy?: PlayerId; value?: number; hidden?: string[]; inspected?: boolean };
   statuses?: StatusInst[];
   trap?: { revealedTo: PlayerId[] };
   /** expiresAt: この階の時刻を過ぎたら消える（毒の雲。V3-5 §5.2） */
@@ -218,6 +223,8 @@ export interface MonsterMemory {
   hitsByYou?: { melee?: [number, number]; thrown?: [number, number] };
   /** この種族から自分への攻撃の [命中, 回数] */
   hitsOnYou?: [number, number];
+  /** この種族の攻撃（近接・射撃）で受けた被害の [合計, 当たった回数]（S1c §14.4 の 1。平均の被害 = 合計 ÷ hitsOnYou の回数。外れは 0） */
+  dmgOnYou?: [number, number];
   /** 前の潜る者の覚え書き（継承。V3-7 §7.3）: 前のランまでに倒した数。能力・体力の記録・最大の一撃は、この記録に最初から入っている */
   legacy?: { kills: number };
   /** 守護者の記録だけ: 見た型（図鑑。V3-7 §7.2） */

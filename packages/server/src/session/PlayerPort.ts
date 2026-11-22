@@ -6,7 +6,7 @@ import type {
 import {
   actionError, briefingLines, briefingShort, buildObservation, buildTurnBlock, campLines, changesLine, compareLines, describeInventory, describeTarget, diffChanges, progressLines, reportLines,
   cheb, compassDir, dirLabel, formatObservationText, guardianDisplayName, kindName, lastWithoutXp, MACRO_COMPLETED_STOPS, mapTextLines, memoryCombatText, memoryKey, mineCount, nameOf, nearDirs, pickableItems, progressText, renderAsciiMap, resultText, t,
-  turnLine, turnSnapshot, turnStateOf,
+  turnLine, turnSnapshot, turnStateOf, fightThreats, riskText, threatEstimate, DIR_VEC, collectTargets, collectWhatOf,
 } from '@muse/shared';
 import type { MacroReport } from './RunSession';
 import { compareVersions, ENGINE_VERSION } from '@muse/engine';
@@ -109,6 +109,42 @@ export function towardNote(L: Locale, tw: NonNullable<MacroReport['toward']>, en
   return '';
 }
 
+/**
+ * 予備動作で止まった応答の文（S1c §14.4 の 4）: 見えている予備動作ごとに、だれが・何の構えか・的のマス（突進は直線の始めと終わり）・自分がそこにいるか。
+ * 的から外れる一歩（valid_actions の「外れる」の move）も添える
+ */
+export function intentStopText(L: Locale, view: PlayerView, catalog: Catalog): string {
+  const me = view.self.pos;
+  const f = view.floor;
+  if (!me || !f) return '';
+  const obs = buildObservation(view, catalog, { detail: 'brief', map: false });
+  const parts: string[] = [];
+  for (const m of obs.visible.monsters) {
+    const e = view.entities.find((x) => x.id === m.id);
+    if (!m.intent || !e?.intent) continue;
+    if (e.intent.kind === 'winding_up' && e.intent.dir) {
+      // 突進の直線（6 マス以内。覚えている地形で通れないマスの手前まで）
+      const cells: Pos[] = [];
+      for (let k = 1; k <= 6; k++) {
+        const x = e.pos.x + DIR_VEC[e.intent.dir][0] * k, y = e.pos.y + DIR_VEC[e.intent.dir][1] * k;
+        if (x < 0 || y < 0 || x >= f.width || y >= f.height) break;
+        const tr = catalog.terrain[view.terrainTable[view.memory.terrain[y * f.width + x]]];
+        if (tr && !tr.passable && !tr.door) break;
+        cells.push({ x, y });
+      }
+      const on = cells.some((c) => c.x === me.x && c.y === me.y);
+      const span = cells.length ? `(${cells[0].x},${cells[0].y})〜(${cells[cells.length - 1].x},${cells[cells.length - 1].y})` : '-';
+      parts.push(t(L, `${m.name} ${m.id} が突進の構え: ${dirLabel(L, e.intent.dir)}の直線 ${span}。あなたは${on ? 'その直線の上にいる' : '直線の上にいない'}`, `${m.name} ${m.id} braces to charge: the ${e.intent.dir} line ${span}; you are ${on ? 'on' : 'off'} that line`));
+    } else if (e.intent.kind === 'swinging' && e.intent.pos) {
+      const on = e.intent.pos.x === me.x && e.intent.pos.y === me.y;
+      parts.push(t(L, `${m.name} ${m.id} が大振りの構え: 打つマス (${e.intent.pos.x},${e.intent.pos.y})。あなたは${on ? 'そのマスにいる' : 'そのマスにいない'}`, `${m.name} ${m.id} winds up a heavy swing at (${e.intent.pos.x},${e.intent.pos.y}); you are ${on ? 'on' : 'off'} that cell`));
+    } else parts.push(`${m.name} ${m.id}: ${m.intent.text}`);
+  }
+  if (!parts.length) return '';
+  const steps = obs.valid_actions.filter((v) => v.startsWith('move ') && (v.includes('大振りの的から外れる') || v.includes('突進の直線から外れる') || v.includes('step out of the heavy swing') || v.includes('step off the charge line'))).map((v) => v.split(' (')[0]);
+  return ' ' + t(L, `予備動作: ${parts.join('／')}。${steps.length ? `外れる一歩: ${steps.join('・')}。` : ''}`, `Telegraphs: ${parts.join(' / ')}.${steps.length ? ` Steps out: ${steps.join(', ')}.` : ''}`);
+}
+
 /** シーズンの決まりの短い説明（S0。参加したとき・再開したとき） */
 function seasonBriefing(L: Locale, s: NonNullable<PlayerView['season']>, fire?: { costPerDepth: number; returnTurns?: number; perSeason: number }): string[] {
   const cost = fire?.costPerDepth ?? 100;
@@ -126,7 +162,7 @@ const STOP_TEXT: Record<string, [string, string]> = {
   hostile_in_view: ['敵が視界に入った', 'a hostile came into view'],
   hostile_adjacent: ['隣に起きている敵がいる（退くなら mode: flee、戦うなら fight）', "an awake enemy is adjacent (retreat with mode: 'flee', or fight)"],
   hp_floor: ['HP が hp_floor 以下になった', 'HP fell to hp_floor or below'],
-  hp_risk: ['次の手番に最悪の被害を受けると hp_floor を割る（被弾の前に止まった）', 'one more turn of the worst damage would drop you below hp_floor (stopped before being hit)'],
+  hp_risk: ['次の手番に見込みの被害を受けると hp_floor を割る（被弾の前に止まった）', 'one more turn of the expected damage would drop you below hp_floor (stopped before being hit)'],
   first_hit: ['被弾の記録の無い相手から初めて被弾した（数字を見てから続けるかを決める）', 'first hit from a creature with no record (check the numbers before continuing)'],
   hostile_alerted: ['見えている敵が追跡に変わった', 'a visible enemy started hunting you'],
   hp_threshold: ['HP が 50%・25% の線をまたいだ', 'HP crossed the 50% / 25% line'],
@@ -176,6 +212,7 @@ const STOP_TEXT: Record<string, [string, string]> = {
   error: ['行動できなかった', 'an action failed'],
   attacked: ['攻撃を受けた', 'you were attacked'],
   collected: ['回収し終えた', 'nothing left to collect'],
+  toward_exhausted: ['その方角（下への風・気配）に行ける未探索の境界が無くなった（ほかの方角を探すなら toward を付けない explore）', 'no reachable unexplored edge left toward the hint (to search other directions, explore without toward)'],
 };
 
 const LONG_REASONS: ReadonlySet<TurnReason> = new Set<TurnReason>(['run_started', 'resumed', 'expedition_started']);
@@ -456,6 +493,11 @@ export class SessionPlayerPort implements PlayerPort {
         if (m?.slowChasers) outcome += ' ' + t(L, `遅い敵 ${m.slowChasers} 体に追われたまま探索した。`, `Explored with ${m.slowChasers} slow hunter${m.slowChasers > 1 ? 's' : ''} on your trail.`);
         // explore toward: 方角と違う向きに歩いた理由（S1b §12.4 の 4。仕様どおりの動きだが、逆へ進んだと読まれた）
         if (m?.toward) { const note = towardNote(L, m.toward, view.self.pos); if (note) outcome += ' ' + note; }
+        // 動かない敵の隣を避けた遠回り（S1c §14.6 の 1。最短より 10 歩を超えて長く、かつ 2 倍を超えるときだけ）
+        if (m?.detour) {
+          const who = m.detour.around.length ? m.detour.around.map((x) => `${x.name} ${x.id}`).join('・') : t(L, '動かない敵', 'a stationary enemy');
+          outcome += ' ' + t(L, `動かない ${who} の隣を通らない道を選んだ（隣を通る近道より ${m.detour.extra} 歩長い）。`, `Took a way that avoids passing next to the stationary ${who} (${m.detour.extra} steps longer than the shortcut past it).`);
+        }
         // fight: 床の投げ物を拾いに行かなかった（S1b §12.4 の 5）
         if (m?.retrieveHeld) outcome += ' ' + t(L, '床の投げ物を拾いに行くと隣の追ってくる敵から離れるので、拾いに行かなかった（隣の相手と戦うなら fight { target }）。', 'Did not go for your thrown items on the floor: that would mean stepping away from an adjacent hunter (to fight it, fight { target }).');
         // fight で見失った・逃げられた: 最後に見た場所（V4-0b §1.4。マクロが覚えた場所。V4-0c §4.2）
@@ -464,21 +506,25 @@ export class SessionPlayerPort implements PlayerPort {
           const me = view.self.pos;
           if (at && me) outcome += ' ' + t(L, `最後に見た場所: (${at.x},${at.y})・${dirLabel(L, compassDir(me, at))}${cheb(at, me)} マス。`, `Last seen at (${at.x},${at.y}), ${dirLabel(L, compassDir(me, at))} ${cheb(at, me)}.`);
         }
-        // hp_risk: 何にすれば、あと 1 回の最悪の被害まで続けられるか（V3-3a §35.6）
+        // hp_risk: 見込みと最悪の 2 つの数と、実際に使った hp_floor（S1c §14.4 の 1）。何にすれば、あと 1 回の見込みの被害まで続けられるか（V3-3a §35.6）
         if (r.interruptedBy === 'hp_risk' && cmd.type === 'fight') {
           const after = this.view();
           const obsNow = buildObservation(after, this.catalog, { detail: 'brief', map: false });
-          const inc = obsNow.visible.monsters.filter((x) => x.awareness === 'hunting' && !x.fleeing && (x.dist <= 1 || x.traits.includes('ranged'))).reduce((a, x) => a + (x.worst_turn ?? 0), 0);
+          outcome += ' ' + riskText(after, this.catalog, m?.hpFloor ?? cmd.hpFloor ?? 0);
+          const est = after.self.pos ? threatEstimate(after, this.catalog, fightThreats(this.catalog, after.entities.filter((e) => e.cat === 'monster'), after.self.pos)) : { expected: 0, worst: 0 };
+          const inc = est.expected;
           const nf = after.self.stats.hp - inc;
-          // 最悪の 1 手を受けても 1 以上残るときだけ、続けられる値を出す（V3-7 の評価: HP 8 で「0 にすれば 22 まで」と出た）
-          if (inc > 0 && nf >= 1) outcome += t(L, ` hp_floor を ${nf} にすれば、あと 1 回の最悪の被害（${inc}）まで続けられる。`, ` With hp_floor ${nf} you can take one more worst turn (${inc}).`);
-          else if (inc > 0) outcome += t(L, ` いまの HP ${after.self.stats.hp} では、次の最悪の被害（${inc}）で倒れうる。`, ` At HP ${after.self.stats.hp}, the next worst turn (${inc}) could kill you.`);
+          // 見込みの 1 手を受けても 1 以上残るときだけ、続けられる値を出す（V3-7 の評価: HP 8 で「0 にすれば 22 まで」と出た）
+          if (inc > 0 && nf >= 1) outcome += t(L, ` hp_floor を ${nf} にすれば、あと 1 回の見込みの被害（${inc}）まで続けられる。`, ` With hp_floor ${nf} you can take one more expected turn (${inc}).`);
+          else if (inc > 0) outcome += t(L, ` いまの HP ${after.self.stats.hp} では、次の見込みの被害（${inc}）で倒れうる。`, ` At HP ${after.self.stats.hp}, the next expected turn (${inc}) could kill you.`);
           // 囲まれている: この hp_floor では毎手番止まる。何にすれば何手番続くか（V3-3c §44.6）
           const adj = obsNow.visible.monsters.filter((x) => x.awareness === 'hunting' && !x.fleeing && x.dist <= 1).length;
           const hpNow = after.self.stats.hp;
           const k = inc > 0 ? Math.min(3, Math.trunc((hpNow - 1) / inc)) : 0;
           if (adj >= 2 && k >= 2) outcome += t(L, ` 隣に ${adj} 体いるので、この hp_floor では毎手番止まる。hp_floor を ${hpNow - k * inc} にすれば ${k} 手番続く。`, ` ${adj} enemies are adjacent, so this hp_floor stops every turn; hp_floor ${hpNow - k * inc} keeps going for ${k} turns.`);
         }
+        // 予備動作で止まった（S1c §14.4 の 4）: 的になっているマス（大振りのマス・突進の直線）と、自分がそこにいるか、外れる一歩。observe を呼び直さなくて済むように
+        if (r.interruptedBy === 'intent') outcome += intentStopText(L, view, this.catalog);
         // 投げた物の在りか（V3-8 §53.3）: 手元の数と床の数（敵の足元の分を含む）
         if (cmd.type === 'fight' && (cmd.with || r.events.some((e) => e.type === 'item_thrown' && e.actor === view.self.id))) {
           const hand = view.inventory.filter((i) => i.kind && this.catalog.items[i.kind]?.category === 'throwing').reduce((a, i) => a + i.qty, 0);
@@ -511,13 +557,18 @@ export class SessionPlayerPort implements PlayerPort {
         if (cmd.type === 'collect') {
           // 実際に拾った数（イベントから）と、まだ拾える数
           const picked = r.events.filter((e) => e.type === 'item_picked_up' && e.actor === view.self.id).length;
-          const remaining = (cmd.what ?? 'thrown') === 'items' ? pickableItems(view, this.catalog).length : mineCount(view);
+          const what = collectWhatOf(cmd);
+          const remaining = what === 'items' ? pickableItems(view, this.catalog).length : mineCount(view);
           collected = { picked, remaining };
+          // 既定（thrown）は自分が投げた物だけ（S1c §14.4 の 6: 薬や宝が残っているのに「回収し終えた」と読まれた）。ほかに拾える品があれば、そう書く
+          const others = what === 'thrown' ? collectTargets(view, this.catalog).length : 0;
+          const thrownNote = what === 'thrown'
+            ? t(L, `（自分が投げた物だけを拾う${others ? `。ほかに拾える品 ${others} 個: collect { what: 'items' }` : ''}）`, ` (only your own thrown items${others ? `; ${others} other items to pick up: collect { what: 'items' }` : ''})`) : '';
           // 遺物は拾わない（拾うと階の敵が目を覚ます判断なので、マクロに任せない）。知っている遺物が床にあれば、「残り 0 個」ではなく対象外と書く（V4-0b §1.5）
           const relic = view.entities.find((e) => e.cat === 'item' && e.role === 'relic') ?? view.memory.remembered.find((r) => r.cat === 'item' && (r.role === 'relic' || r.kind === 'core:relic'));
-          const relicNote = (cmd.what ?? 'thrown') === 'items' && relic
+          const relicNote = what === 'items' && relic
             ? t(L, `遺物は対象外（拾うと階の敵が目を覚ます。拾うなら travel_to ${relic.id} で着いて pickup）`, `the relic is not included (picking it up wakes the floor; travel_to ${relic.id}, then pickup)`) : '';
-          outcome += t(L, ` 回収 ${collected.picked} 個、残り ${remaining} 個。${relicNote ? `${relicNote}。` : ''}`, ` Recovered ${collected.picked}, ${remaining} left.${relicNote ? ` ${relicNote[0].toUpperCase()}${relicNote.slice(1)}.` : ''}`);
+          outcome += t(L, ` 回収 ${collected.picked} 個、残り ${remaining} 個${thrownNote}。${relicNote ? `${relicNote}。` : ''}`, ` Recovered ${collected.picked}, ${remaining} left${thrownNote}.${relicNote ? ` ${relicNote[0].toUpperCase()}${relicNote.slice(1)}.` : ''}`);
         }
       }
       // 経験値の文（S0b）は最後の 2 件に入れない（直前の出来事に出る。倒した文・レベルアップの文を押し出さない）

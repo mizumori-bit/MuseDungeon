@@ -200,6 +200,8 @@ actions.register('pickup', (ctx, e, pr, cmd: Extract<Command, { type: 'pickup' }
   const key = e.pos!.floor;
   let items = ctx.itemsAt(key, e.pos!.x, e.pos!.y);
   if (cmd.item) items = items.filter((i) => i.id === cmd.item);
+  // 引数なし: 足元にほかの品があれば、自分の置いた品は拾い直さない（S1c §14.4 の 6: 捨てたばかりの品を拾い直した）。置いた品だけなら拾う
+  else if (items.some((i) => i.item?.droppedBy !== pr.id)) items = items.filter((i) => i.item?.droppedBy !== pr.id);
   if (!items.length) return fail(pr, 'nothing_here', '足元に拾えるものは無い。', 'There is nothing here to pick up.', 'visible.items の位置へ travel_to してから pickup する。', 'travel_to an item in visible.items first.');
   const canTakeAny = items.some((it) => {
     const def = ctx.content.items[it.kind];
@@ -247,6 +249,7 @@ export function pickUpItems(ctx: Ctx, e: Entity, items: Entity[], auto: boolean)
     held.item!.heldBy = e.id;
     held.item!.slot = slot;
     delete held.item!.thrownBy;
+    delete held.item!.droppedBy;
     const actor = structuredClone(me);
     actor.inv!.items.push(it.id);
     ctx.emit({ ...base, slot, put: [held, actor] });
@@ -292,12 +295,13 @@ actions.register('drop', (ctx, e, pr, cmd: Extract<Command, { type: 'drop' }>) =
         const stack = structuredClone(it);
         stack.item!.qty -= qty;
         const id = ctx.newEntityId();
-        const piece: Entity = { id, kind: it.kind, sid: ctx.nextSid(), pos: { floor: key, ...pos }, item: { qty, affixes: [...it.item!.affixes] } };
+        const piece: Entity = { id, kind: it.kind, sid: ctx.nextSid(), pos: { floor: key, ...pos }, item: { qty, affixes: [...it.item!.affixes], droppedBy: pr.id } };
         ctx.emit({ ...base, item: id, put: [stack, piece] });
       } else {
         const dropped = structuredClone(it);
         delete dropped.item!.heldBy;
         delete dropped.item!.slot;
+        dropped.item!.droppedBy = pr.id;
         dropped.pos = { floor: key, ...pos };
         const actor = structuredClone(me);
         actor.inv!.items = actor.inv!.items.filter((x) => x !== it.id);

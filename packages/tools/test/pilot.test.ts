@@ -905,7 +905,8 @@ describe('pilot をサーバーにつないで動かす（§10.8）', () => {
     // キャンプから作り、2 体とも入ってから、どちらかの返事役が遠征を始める（V4-1g G1・wait_for_join）
     const a = await manager.createRun({ name: 'A', seed: 'pilot-two', classId: 'core:warrior', controller: { kind: 'agent', label: 'pilot' }, mode: 'coop' });
     if ('error' in a) throw new Error(a.error.message);
-    a.session.world.meta.options.turnTimeoutMs = 2000;
+    // 手番の時間切れ（待つ上限）に余裕を持たせる（S1c §14.10 の 5: 重いときに 1 回落ちた。実時間に頼るテスト）
+    a.session.world.meta.options.turnTimeoutMs = 8000;
     const b = await manager.joinRun(a.session.runId, { name: 'B', classId: 'core:scout', controller: { kind: 'agent', label: 'pilot' } });
     if ('error' in b) throw new Error(b.error.message);
     const mk = (token: string): Harness => ({ base, token, dir: mkdtempSync(join(tmpdir(), 'muse-pilot-test-')), wakes: [], close: async () => undefined });
@@ -925,7 +926,7 @@ describe('pilot をサーバーにつないで動かす（§10.8）', () => {
     const ai = (ev: WakeEvent) => simpleResponder(ev.level === 'escalate' ? { ...ev, level: 'wake' } : ev);
     const pa = start(ha, { responder: ai, mode: 'coop', maxActions: 300 });
     const pb = start(hb, { responder: ai, mode: 'coop', maxActions: 300 });
-    await until(() => rows(ha.dir).filter((x) => x.tool).length >= 60 && rows(hb.dir).filter((x) => x.tool).length >= 60, 50000);
+    await until(() => rows(ha.dir).filter((x) => x.tool).length >= 60 && rows(hb.dir).filter((x) => x.tool).length >= 60, 110000);
     clearInterval(timer);
     await pa.stop();
     await pb.stop();
@@ -947,7 +948,7 @@ describe('pilot をサーバーにつないで動かす（§10.8）', () => {
     expect(followDeeper, info).toBe(0);
     manager.closeAll();
     await new Promise<void>((r2) => app.server.close(() => r2()));
-  }, 60000);
+  }, 130000);
 
   it('V4-1e §19.5: 目的でない遺物は、ランを通して 1 回だけ知らせる（pilot を起動し直しても、memory.json の記録で知らせない）', async () => {
     const relicAt = (ar: Ar, x: number, y: number): Entity => ({ id: 'e_rlc001', kind: 'core:relic_hunter', sid: ++esid, role: 'relic', pos: { floor: ar.key, x: ar.ox + x, y: ar.oy + y }, item: { qty: 1, affixes: [] } } as unknown as Entity);

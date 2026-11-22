@@ -236,6 +236,8 @@ function heavySwing(ctx: Ctx, m: Entity, target: Entity | null, def: MonsterDef 
   const key = m.pos.floor;
   const turns = m.actor.turns;
   if (ai.intent?.kind === 'swinging' && ai.intent.pos) {
+    // 構えた相手が、まだ 1 回も動いていない（速い敵）: 構えたまま待つ（S1c §14.4 の 3: 予備動作を相手が見られるように）
+    if (intentHeld(ctx, ai.intent)) return 100;
     const p = ai.intent.pos;
     const next: AiState = { ...ai, targetPos: ai.targetPos ? { ...ai.targetPos } : null, swingAt: turns };
     delete next.intent;
@@ -250,11 +252,23 @@ function heavySwing(ctx: Ctx, m: Entity, target: Entity | null, def: MonsterDef 
     return 100;
   }
   if (target?.pos && cheb(target.pos, m.pos) <= 1 && turns - (ai.swingAt ?? -999) >= (ai.params.swingEvery ?? 3)) {
-    const next: AiState = { ...ai, targetPos: ai.targetPos ? { ...ai.targetPos } : null, intent: { kind: 'swinging', pos: { x: target.pos.x, y: target.pos.y } } };
+    const next: AiState = { ...ai, targetPos: ai.targetPos ? { ...ai.targetPos } : null, intent: { kind: 'swinging', pos: { x: target.pos.x, y: target.pos.y }, ...intentHold(target) } };
     ctx.emit({ type: 'ai_state_changed', id: m.id, ai: next, dormant: false, nextActAt: m.actor.nextActAt, seenBy: [], floor: key });
     return 100;
   }
   return null;
+}
+
+/** 構えの相手（プレイヤーだけ）と、その手番の数（S1c §14.4 の 3） */
+export function intentHold(target: Entity | null | undefined): { hold?: { id: string; turns: number } } {
+  return target?.player && target.actor ? { hold: { id: target.id, turns: target.actor.turns } } : {};
+}
+
+/** 構えた相手が、まだ盤面にいて、構えてから 1 回も動いていない */
+export function intentHeld(ctx: Ctx, intent: { hold?: { id: string; turns: number } }): boolean {
+  if (!intent.hold) return false;
+  const t = ctx.world.entities[intent.hold.id];
+  return !!t?.pos && (t.stats?.hp ?? 0) > 0 && (t.actor?.turns ?? 0) <= intent.hold.turns;
 }
 
 /** 射撃の経路: 視線が通り、投擲と同じ経路（双方向）が通ること。プレイヤーの shots と同じ判定 */

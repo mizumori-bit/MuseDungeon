@@ -256,7 +256,12 @@ export function applyDamage(ctx: Ctx, target: Entity, amount: number, source: En
   // 思い出（受けたダメージは脅威の見積もり用に出目どおり、与えたダメージは実ダメージ）
   // 種族の思い出に残すのは、相手が見えているときだけ（見えない射手の種族を記憶に出さない。V4-0c §4.4）
   if (source && t.player && !source.player && ctx.seesActor(t.player, source)) {
-    updateMemory(ctx, t.player, source, (m) => { m.maxDamageToYou = Math.max(m.maxDamageToYou, amount); });
+    // 攻撃で受けた被害の合計と回数（S1c §14.4 の 1: fight の見込みの「平均の被害」。毒・罠は入れない）
+    const byAttack = via === 'melee' || via === 'ranged';
+    updateMemory(ctx, t.player, source, (m) => {
+      m.maxDamageToYou = Math.max(m.maxDamageToYou, amount);
+      if (byAttack) { const cur = m.dmgOnYou ?? [0, 0]; m.dmgOnYou = [cur[0] + amount, cur[1] + 1]; }
+    });
   }
   if (source?.player && !t.player && t.actor && ctx.seesActor(source.player, t)) {
     // 通りの記録（V3-2R3 §20.4）: 当たったときの実ダメージの合計と回数（近接・投擲）

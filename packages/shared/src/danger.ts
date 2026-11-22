@@ -79,3 +79,55 @@ export function worstTurnOf(view: PlayerView, catalog: Catalog, e: Pick<EntityVi
   if (!mem || mem.maxDamageToYou <= 0) return null;
   return mem.maxDamageToYou * attacksPerTurn(view, catalog, e);
 }
+
+/**
+ * 1 回の攻撃の平均の被害（S1c §14.4 の 1）= 攻撃で受けた被害の合計 ÷ 攻撃された回数（外れは 0 に数える。装甲を引いた後）を、times 回分。
+ * 整数で切り上げる（重い側）。記録が無ければ null（攻撃された回数か被害の合計が無い: S1c より前の記録・継承した記録）
+ */
+export function avgHitsOf(view: PlayerView, e: Pick<EntityView, 'kind' | 'role'>, times: number): number | null {
+  const mem = memoryOf(view, e);
+  const tries = mem?.hitsOnYou?.[1] ?? 0;
+  if (!mem?.dmgOnYou || tries <= 0) return null;
+  return ceilDiv(mem.dmgOnYou[0] * times, tries);
+}
+
+/** 1 手番あたりの平均の被害（avgHitsOf × 行動の回数）。記録が無ければ null */
+export function avgTurnOf(view: PlayerView, catalog: Catalog, e: Pick<EntityView, 'kind' | 'role' | 'speed' | 'statuses' | 'paceAgo'>): number | null {
+  return avgHitsOf(view, e, attacksPerTurn(view, catalog, e));
+}
+
+/**
+ * fight の止まり方の見積もり（S1c §14.4 の 1）: 次の手番の被害の見込み expected と、今までの最悪 worst（全員が記録の最大の一撃）。
+ * expected = いちばん重い 1 体（1 手の最悪が最大の者）は最悪、残りは 1 手の平均（平均の記録が無ければ最悪。重い側）の合計。
+ * 被弾の記録の無い敵は、どちらにも数えない（今までどおり。fight は記録の無い種族で別に止まる）。unrecorded はその数
+ */
+export function threatEstimate(view: PlayerView, catalog: Catalog, threats: readonly Pick<EntityView, 'kind' | 'role' | 'speed' | 'statuses' | 'paceAgo'>[]): { expected: number; worst: number; unrecorded: number } {
+  const per = threats.map((h) => ({ w: worstTurnOf(view, catalog, h), a: avgTurnOf(view, catalog, h) }));
+  const known = per.filter((x): x is { w: number; a: number | null } => x.w !== null).sort((a, b) => b.w - a.w);
+  const worst = known.reduce((s, x) => s + x.w, 0);
+  const expected = known.length ? known[0].w + known.slice(1).reduce((s, x) => s + Math.min(x.w, x.a ?? x.w), 0) : 0;
+  return { expected, worst, unrecorded: per.length - known.length };
+}
+
+/** fight の脅威（hp_risk の判定に入れる敵。マクロ・観測・pilot が同じものを使う）: 追跡中で逃げていない敵の、隣か射撃する種族と、隣の逃走中の追跡者 */
+export function fightThreats<T extends Pick<EntityView, 'cat' | 'kind' | 'awareness' | 'fleeing' | 'pos'>>(catalog: Catalog, hostiles: readonly T[], pos: { x: number; y: number }): T[] {
+  const near = (h: T) => Math.max(Math.abs(h.pos.x - pos.x), Math.abs(h.pos.y - pos.y)) <= 1;
+  return hostiles.filter((h) => (h.awareness === 'hunting' && !h.fleeing && (near(h) || (!!h.kind && !!catalog.monsters[h.kind]?.tags.includes('ranged'))))
+    || (h.awareness === 'hunting' && !!h.fleeing && near(h)));
+}
+
+/**
+ * 止まった・断った文の数（S1c §14.4 の 1）:「見込み 12・最悪 40（HP 50・hp_floor 45）」。どちらで止めたか（見込み）が分かるように並べる。
+ * hpFloor は実際に使った値（渡した値か既定）
+ */
+export function riskText(view: PlayerView, catalog: Catalog, hpFloor: number): string {
+  const pos = view.self.pos;
+  const L = view.locale;
+  const est = pos ? threatEstimate(view, catalog, fightThreats(catalog, view.entities.filter((e) => e.cat === 'monster'), pos)) : { expected: 0, worst: 0, unrecorded: 0 };
+  const ja = L !== 'en';
+  const head = est.expected === est.worst
+    ? (ja ? `見込み ${est.expected}（最悪も ${est.worst}）` : `expected ${est.expected} (worst also ${est.worst})`)
+    : (ja ? `見込み ${est.expected}・最悪 ${est.worst}` : `expected ${est.expected}, worst ${est.worst}`);
+  return ja ? `${head}（HP ${view.self.stats.hp}・hp_floor ${hpFloor}。見込みは、いちばん重い 1 体を記録の最大の一撃、残りを記録の平均の被害で数える。最悪は全員が最大の一撃）`
+    : `${head} (HP ${view.self.stats.hp}, hp_floor ${hpFloor}; expected counts the heaviest enemy at its recorded worst hit and the rest at their recorded average; worst has everyone at their worst)`;
+}

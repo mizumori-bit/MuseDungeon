@@ -86,6 +86,8 @@ export interface PilotMemory {
   fled: string[];
   /** この階では explore の toward: sense が sense_found で断られる（目的でない遺物を覚えているため。V4-1i B9）: 方角なしで探索する */
   senseOff: boolean;
+  /** この階では explore の toward が toward_exhausted で断られた（S1c §14.6 の 2。マクロがその方角に境界が無いと止まるようになった）: 方角なしで探索する（今までの探索と同じ動きに戻す） */
+  towardOff?: boolean;
   /** 相手を助けに行っている・着いた（V4-1g §24.4 assist。知らせを 1 回にするため。階を移っても残す） */
   assisting: boolean;
   assistArrived: boolean;
@@ -1208,7 +1210,7 @@ export function decide(obs: Observation, ctx: DecideContext): DecideResult {
         if (st.dist > 0 && can('travel_to')) return act('travel_to', { to: `stairs_${way}`, ...steady });
       }
       if (can('explore') && (obs.navigation.frontiers.length || (obs.navigation.unsighted ?? 0) > 0)) {
-        return act('explore', { pickup: p.collect ? 'useful' : false, ...(way === 'down' && obs.self.floor?.draft ? { toward: 'draft' } : {}), ...steady });
+        return act('explore', { pickup: p.collect ? 'useful' : false, ...(way === 'down' && obs.self.floor?.draft && !mem.towardOff ? { toward: 'draft' } : {}), ...steady });
       }
     } else if (leader.pos) {
       // 相手の今の位置（同じ階なら見えていなくても出る。V4-1k §32.3 の 1。最後に見た位置は使わない）
@@ -1336,7 +1338,7 @@ export function decide(obs: Observation, ctx: DecideContext): DecideResult {
   why = seeking ? 'seek' : 'explore';
   // 17. 探索できる所が残っている（目的の階より浅く、下り階段を知らなければ、下への風の方角へ。探す間は、気配の方角へ: §22.1 の 2）
   if ((!homeward || seekStairs) && can('explore') && (obs.navigation.frontiers.length || (obs.navigation.unsighted ?? 0) > 0)) {
-    const toward = seeking && x?.sense && !mem.senseOff ? { toward: 'sense' } : (targetDepth === null || depth < targetDepth) && !down && obs.self.floor?.draft ? { toward: 'draft' } : {};
+    const toward = mem.towardOff ? {} : seeking && x?.sense && !mem.senseOff ? { toward: 'sense' } : (targetDepth === null || depth < targetDepth) && !down && obs.self.floor?.draft ? { toward: 'draft' } : {};
     return out({ kind: 'act', tool: 'explore', args: { pickup: p.collect ? 'useful' : false, ...toward, ...steady }, ...(seeking ? { seek: true } : {}) });
   }
   // 探す（§22.1 の 4）: 探索し終えた階を見回る（この階で立ったことのあるマスのうち、探し始めてから行っていない、いちばん遠い所。気配の方角を先に）
@@ -1367,7 +1369,7 @@ export function decide(obs: Observation, ctx: DecideContext): DecideResult {
 /** マクロの止まり方（interrupted_by）のうち、表を上から見直せば済むもの */
 export const CONTINUE_STOPS = new Set([
   'hostile_in_view', 'hostile_adjacent', 'hostile_alerted', 'attacked', 'damaged', 'item_seen', 'stairs_seen', 'explored', 'step_limit',
-  'arrived', 'collected', 'collect_far', 'chaser_near', 'intent', 'sense_found', 'status_changed', 'floor_changed', 'hp_threshold',
+  'arrived', 'collected', 'collect_far', 'chaser_near', 'intent', 'sense_found', 'status_changed', 'floor_changed', 'hp_threshold', 'toward_exhausted',
   'hp_floor', 'hp_risk', 'first_hit', 'max_turns', 'full_hp', 'rest_cap', 'target_hp', 'hit_while_waiting', 'shot_while_waiting',
   'not_your_turn', 'dead', 'run_ended', 'left_board', 'time_up',
 ]);

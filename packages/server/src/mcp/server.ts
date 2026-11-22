@@ -2,6 +2,8 @@
 // 1 MCP 接続 = 1 プレイヤー（接続に束縛）。ステートレスなクライアント向けに全ツールが player_token も受け付ける。
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import type { ZodTypeAny } from 'zod';
+import { argListText, argProblems, argShape, exampleOf } from './args';
 import type { ActionError, Command, Controller, ObjectiveChoice, TurnBlock } from '@muse/shared';
 import { actionError, CommandSchema, t } from '@muse/shared';
 import type { PlayerPort, ActionPayload } from '../session/PlayerPort';
@@ -468,7 +470,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
     inputSchema: { ...actionCommon, to: z.union([PosZ, z.enum(['stairs_down', 'stairs_up']), z.string().regex(/^e_[0-9a-z]{6}$/)]), ...moveArgs, pickup: z.union([z.boolean(), z.literal('useful')]).optional().describe("通り道のアイテムも拾う（既定: 目的地がアイテムのとき true。'useful' は使える物だけ）") },
   }, async (a) => act('travel_to', a, { type: 'travel', to: a.to, mode: a.mode, hpFloor: a.hp_floor, pickup: a.pickup }));
   server.registerTool('collect', {
-    title: '回収', description: "マクロ: what: 'thrown'（既定）は既知の自分が投げた物を、'items' は見えている・記憶したアイテム（遺物と鑑定済みの有害品、鑑定済みで今の装備より劣る装備を除く）を近い順に回って拾う。within は歩数の上限（既定 15。それより遠い品へは行かない）、kinds は品の種類（種類 ID か区分。例 [\"potion\",\"javelin\"]）、all: true で劣る装備も拾う。結果に回収数と残り。",
+    title: '回収', description: "マクロ: what: 'thrown'（既定）は既知の自分が投げた物を、'items' は見えている・記憶したアイテム（遺物と鑑定済みの有害品、鑑定済みで今の装備より劣る装備を除く）を近い順に回って拾う。within は歩数の上限（既定 15。それより遠い品へは行かない）、kinds は品の種類（種類 ID か区分。例 [\"potion\",\"javelin\"]。区分は potion・scroll・amulet・ring・weapon・armor・throwing・treasure・page。未鑑定の品は区分で指す）、all: true で劣る装備も拾う。kinds を付けて what を省くと 'items'（kinds の無い既定の thrown は自分が投げた物だけ）。結果に回収数と残り。",
     inputSchema: { ...actionCommon, what: z.enum(['thrown', 'items']).optional(), within: z.number().int().min(1).max(200).optional(), kinds: z.array(z.string()).max(8).optional(), all: z.boolean().optional(), ...moveArgs },
   }, async (a) => act('collect', a, { type: 'collect', what: a.what, mode: a.mode, hpFloor: a.hp_floor, ...(a.within !== undefined ? { within: a.within } : {}), ...(a.kinds ? { kinds: a.kinds } : {}), ...(a.all ? { all: true } : {}) }));
   server.registerTool('fight', {
@@ -520,7 +522,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
     title: '加護を選ぶ', description: '節目の大守護者を倒したときの加護の候補から 1 つ選ぶ（self.boon_choice。手番を消費しない）。option は候補の番号（1 から）か加護の ID。',
     inputSchema: { ...common, option: z.union([z.number().int().min(1).max(9), z.string().min(1)]) },
   }, async (a) => act('choose_boon', a, { type: 'choose_boon', option: a.option }));
-  server.registerTool('pickup', { title: '拾う', description: '足元のアイテムを拾う（省略時は全て）。', inputSchema: { ...actionCommon, item: z.string().regex(/^e_[0-9a-z]{6}$/).optional() } },
+  server.registerTool('pickup', { title: '拾う', description: '足元のアイテムを拾う（item を省くと足元の全て。ただし自分が置いた品は、ほかの品があれば拾わない。拾い直すなら item を渡す）。', inputSchema: { ...actionCommon, item: z.string().regex(/^e_[0-9a-z]{6}$/).optional() } },
     async (a) => act('pickup', a, { type: 'pickup', item: a.item }));
   server.registerTool('drop', { title: '置く', description: '所持品を足元に置く。', inputSchema: { ...actionCommon, slot: SlotZ, qty: z.number().int().positive().optional() } },
     async (a) => act('drop', a, { type: 'drop', slot: a.slot, qty: a.qty }));
@@ -560,5 +562,45 @@ export function createMcpServer(ctx: McpContext): McpServer {
   server.registerTool('say', { title: '発言', description: 'COOP 用チャット。手番を消費しない。', inputSchema: { ...common, text: z.string().min(1).max(280) } },
     async (a) => act('say', a, { type: 'say', text: a.text }));
 
+  interceptArgs(server, (tool, args, kind, names, shape) => {
+    // 引数の名前の断り（S1c §14.4 の 2）: ゲームの断りの形で返す。束縛されていなければ、本文と structuredContent だけ
+    const port = portOf(args.player_token as string | undefined);
+    const L = port?.locale() ?? 'ja';
+    const ja = L !== 'en';
+    const list = argListText(shape, ja);
+    const ex = exampleOf(tool, shape);
+    const msg = kind === 'unknown'
+      ? (ja ? `${tool} に ${names.join('・')} という名前の引数は無い。このツールの引数: ${list}。` : `${tool} has no argument named ${names.join(', ')}. Its arguments: ${list}.`)
+      : (ja ? `${tool} には ${names.join('・')} が要る（渡されていない）。このツールの引数: ${list}。` : `${tool} needs ${names.join(', ')} (not given). Its arguments: ${list}.`);
+    const err = actionError('bad_request', msg, ja ? `例: ${ex}（valid_actions の行は、書いてある形のまま呼べる。別の名前は受け付けない）` : `e.g. ${ex} (valid_actions lines can be called as written; other names are not accepted)`);
+    if (!port) return out(`Error [${err.code}] ${err.message}\nHint: ${err.hint}`, { ok: false, error: err }, true);
+    const tb = port.turnBlock('action_rejected');
+    const va = port.observe({ map: false }).observation.valid_actions;
+    record(port, tool, args, `${err.code} ${err.message}`);
+    return errOut(err, va, { block: tb, line: port.turnLine(tb) });
+  });
   return server;
+}
+
+/**
+ * ツールの呼び出しを、SDK の入力の検査の前に受ける（S1c §14.4 の 2）。定義に無い名前の引数か、足りない要る引数があれば onBad の結果を返し、
+ * 無ければ SDK の処理（検査・ハンドラ）へそのまま渡す。ツール一覧（tools/list）は変えない。
+ * SDK 1.32.2 の内部（McpServer の _registeredTools・Server の _requestHandlers）を使う。形が違えば何もしない（今までどおり SDK が断る）
+ */
+function interceptArgs(server: McpServer, onBad: (tool: string, args: Record<string, unknown>, kind: 'unknown' | 'missing', names: string[], shape: Record<string, ZodTypeAny>) => ToolResult | Promise<ToolResult>): void {
+  const inner = server.server as unknown as { _requestHandlers?: Map<string, (req: unknown, extra: unknown) => Promise<unknown>> };
+  const tools = (server as unknown as { _registeredTools?: Record<string, { inputSchema?: unknown }> })._registeredTools;
+  const orig = inner._requestHandlers?.get('tools/call');
+  if (!inner._requestHandlers || !tools || !orig) return;
+  inner._requestHandlers.set('tools/call', async (req, extra) => {
+    const p = (req as { params?: { name?: string; arguments?: Record<string, unknown> } }).params;
+    const tool = p?.name ? tools[p.name] : undefined;
+    const shape = tool ? argShape(tool.inputSchema) : null;
+    if (p?.name && shape) {
+      const pr = argProblems(shape, p.arguments);
+      if (pr.unknown.length) return onBad(p.name, p.arguments ?? {}, 'unknown', pr.unknown, shape);
+      if (pr.missing.length) return onBad(p.name, p.arguments ?? {}, 'missing', pr.missing, shape);
+    }
+    return orig(req, extra);
+  });
 }
