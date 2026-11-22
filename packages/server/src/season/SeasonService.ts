@@ -4,7 +4,7 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { readJsonStable, writeFileAtomicLogged } from '../log/atomicWrite';
 import type {
-  GameEvent, PlayerId, SeasonAward, SeasonListing, SeasonResultView, SeasonSectionRow, SeasonSlay, SeasonStandingRow, SeasonStandingsResponse, SeasonSyncCommand, SeasonTitle, SupplyPlace,
+  GameEvent, PlayerId, SeasonAward, SeasonListing, SeasonResultView, SeasonSectionRow, SeasonSlay, SeasonSlayBrief, SeasonStandingRow, SeasonStandingsResponse, SeasonSyncCommand, SeasonTitle, SupplyPlace,
 } from '@muse/shared';
 import { awardName, SeasonSlaySchema } from '@muse/shared';
 import type { RunSession } from '../session/RunSession';
@@ -683,12 +683,13 @@ export class SeasonService implements SeasonHooks {
   }
 
   /**
-   * 討伐の記録（S4。SEASON.md §35.5）: このランで倒した節目の大守護者のうち、まだ載っていないもの（runId と深さで見る）を、そのランの出来事の記録から作って載せる。
-   * やり直しても同じ（載せたかは runId と depth で決まる）。変わったら true
+   * 討伐の記録（S4。SEASON.md §35.5）: このランで倒した節目の大守護者のうち、その参加者の記録がまだ無い節目のもの（プロフィールと深さで見る。S4a）を、
+   * そのランの出来事の記録から作って載せる。やり直しても同じ（載せたかはプロフィールと depth で決まる）。変わったら true
    */
   private settleSlays(d: SeasonData, p: Participant, session: RunSession, pid: PlayerId): boolean {
     if (d.result) return false;
-    const done = new Set(d.slays.filter((x) => x.runId === session.runId).map((x) => x.depth));
+    // 参加者（プロフィール）ごと・節目ごとに 1 件（S4a §46）: 倒れてやり直した参加者が同じ大守護者をまた倒しても、最初の 1 件を残す
+    const done = new Set(d.slays.filter((x) => x.profileId === p.profileId).map((x) => x.depth));
     // 畳み始めは、まだ載っていない最初の討伐より前（境目のキーフレームがあれば、それより前の最後の境目から）
     const first = session.history.find((e) => e.type === 'warden_slain' && !done.has(e.depth));
     if (!first) return false;
@@ -995,7 +996,11 @@ export class SeasonService implements SeasonHooks {
    * 順位の表（GET /api/seasons/:id。公開された階段の位置は入れない）。S2: 参加者ごとの確定点と称号、確定した結果の称号と初討伐、坑の断面。
    * プロフィールの ID とトークンは出さない
    */
-  standings(id: string): SeasonStandingsResponse | null {
+  /**
+   * full（S4a §46）: 討伐の記録の中身（装備・手に入れた階・被害の内訳・使った品・仕掛け・手番）を出すか。確定したシーズンでは、いつも出す。
+   * 開催中は、同じ機械からの接続（運用者。観戦の決まり PROTOCOL §9.7 と同じ判定）と運用の道具だけ。ほかは、節目・名前・レベル・職業・順まで（slaysBrief）
+   */
+  standings(id: string, opts: { full?: boolean } = {}): SeasonStandingsResponse | null {
     const d = this.store.get(id);
     if (!d) return null;
     const pOf = (name: string) => d.participants.find((p) => nameKey(p.name) === nameKey(name));
@@ -1013,10 +1018,26 @@ export class SeasonService implements SeasonHooks {
         ...(deeds ? { deeds: deeds.map((x) => ({ depth: x.depth, name: x.name })) } : {}),
       };
     }
-    // 討伐の記録（S4 §35.5）: 節目ごとに、最初の 1 件といちばん少ない被害の 1 件（載ったもの。位置は無い）
-    const slays = slaysView(d.slays, null);
-    return { season: this.listing(d), standings: rows, ...(result ? { result } : {}), section: this.section(d), ...(slays.length ? { slays } : {}) };
+    // 討伐の記録（S4 §35.5）: 節目ごとに、最初の 1 件といちばん少ない被害の 1 件（載ったもの。位置は無い）。
+    // 開催中に外から読む口には中身を出さない（S4a §46: 参加者はキャンプで受け取る。遠征の途中の者・招かれていない者が HTTP から先に読む道を作らない）
+    const full = !!d.result || !!opts.full;
+    const slays = full ? slaysView(d.slays, null) : [];
+    const brief = full ? [] : slaysBrief(d.slays);
+    return {
+      season: this.listing(d), standings: rows, ...(result ? { result } : {}), section: this.section(d),
+      ...(slays.length ? { slays } : {}), ...(brief.length ? { slaysBrief: brief } : {}),
+    };
   }
+}
+
+/** 開催中の外向けの討伐の記録（S4a §46）: 節目ごとに、載った順（1 が初討伐）・倒した者の名前・レベル・職業だけ */
+export function slaysBrief(recs: readonly SeasonSlayRec[]): SeasonSlayBrief[] {
+  const out: SeasonSlayBrief[] = [];
+  for (const depth of [...new Set(recs.map((r) => r.depth))].sort((a, b) => a - b)) {
+    recs.filter((r) => r.depth === depth).sort((a, b) => a.order - b.order)
+      .forEach((r, i) => out.push({ depth, warden: { ja: r.warden.ja, en: r.warden.en }, by: r.name, level: r.level, classId: r.classId, order: i + 1 }));
+  }
+  return out;
 }
 
 /**

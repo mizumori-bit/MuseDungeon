@@ -1,7 +1,7 @@
 // シーズンの結果を見返す画面（S2。SEASON.md §18.3）: 4 つの賞の順位・称号・参加者ごとの最深と確定点と使った予算と倒れたか・坑の断面。
 // 中身は GET /api/seasons/:id だけ（サーバーが公開されたものと順位の表の最深だけで作る。位置は来ない）。進行中のシーズンも同じ画面で見る。
-import type { SeasonAward, SeasonStandingRow, SeasonStandingsResponse } from '@muse/shared';
-import { awardName, guardianDisplayName, kindName, slayGroupText, slayObs } from '@muse/shared';
+import type { Catalog, SeasonAward, SeasonStandingRow, SeasonStandingsResponse } from '@muse/shared';
+import { awardName, guardianDisplayName, kindName, nameOf, slayGroupText, slayObs } from '@muse/shared';
 import { useEffect, useState } from 'preact/hooks';
 import { api, errorText } from '../api';
 import { ErrorBanner, Header, useCatalog, useLocaleRefresh } from '../ui/common';
@@ -13,6 +13,10 @@ function awardCell(r: SeasonStandingRow, id: SeasonAward['id']): { value: number
   if (id === 'survival') return r.survival;
   if (id === 'support') return r.support ?? null;
   return r[id];
+}
+
+function nameOfClass(catalog: Catalog, classId: string, L: 'ja' | 'en'): string {
+  return nameOf(catalog.classes[classId]?.name, L, classId.split(':')[1] ?? classId);
 }
 
 function valueText(id: SeasonAward['id'], v: number): string {
@@ -136,6 +140,20 @@ export function Season({ id }: { id: string }) {
                   const warden = guardianDisplayName(L, { name: recs[0].warden });
                   const obs = recs.map((x) => slayObs(L, catalog, x)).sort((a, b) => Number(!!b.first) - Number(!!a.first));
                   return <li key={depth}><b>{tr(`地下${depth}階「${warden}」`, `Depth ${depth} "${warden}"`)}</b>{obs.map((r, i) => <div key={i} class="slay">{slayGroupText(L, [r])}</div>)}</li>;
+                })}
+              </ul>
+            </section>
+          )}
+          {/* 開催中（S4a）: だれがどの節目を何番目に倒したかだけ。中身はシーズンが確定してから（参加者はキャンプの記録庫で読める） */}
+          {(data.slaysBrief ?? []).length > 0 && (
+            <section class="panel">
+              <h3>{tr('討伐の記録', 'Warden kills')}</h3>
+              <p class="muted">{tr('開催中は、だれがどの節目を倒したかだけを出す。戦いの中身（装備・被害・使った品など）は、シーズンが確定してから。参加者は、キャンプの記録庫で読める。', 'While the season is open only who slew which milestone is shown. The fight records (gear, damage, items...) come once the season is final; participants read them in the camp archive.')}</p>
+              <ul class="slays">
+                {[...new Set((data.slaysBrief ?? []).map((x) => x.depth))].sort((a, b) => a - b).map((depth) => {
+                  const recs = (data.slaysBrief ?? []).filter((x) => x.depth === depth).sort((a, b) => a.order - b.order);
+                  const warden = guardianDisplayName(L, { name: recs[0].warden });
+                  return <li key={depth}><b>{tr(`地下${depth}階「${warden}」`, `Depth ${depth} "${warden}"`)}</b>: {recs.map((r) => tr(`${r.order}. ${r.by}（Lv${r.level}・${catalog ? nameOfClass(catalog, r.classId, L) : r.classId}）${r.order === 1 ? '初討伐' : ''}`, `${r.order}. ${r.by} (Lv${r.level} ${catalog ? nameOfClass(catalog, r.classId, L) : r.classId})${r.order === 1 ? ' first kill' : ''}`)).join(tr('／', ' / '))}</li>;
                 })}
               </ul>
             </section>

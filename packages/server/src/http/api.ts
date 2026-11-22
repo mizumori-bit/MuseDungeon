@@ -102,7 +102,8 @@ export function createApp(manager: SessionManager, config: ServerConfig): App {
     {
       const sm = /^\/api\/seasons\/([a-z0-9][a-z0-9_-]{0,31})$/.exec(p);
       if (sm && m === 'GET') {
-        const st = manager.seasons.standings(sm[1]);
+        // 討伐の記録の中身は、確定の後か、同じ機械からの接続にだけ（S4a §46。観戦の決まりと同じ判定）
+        const st = manager.seasons.standings(sm[1], { full: isLocalRequest(req) });
         return st ? json(res, 200, st) : fail(res, 404, actionError('no_session', `unknown season ${sm[1]}`, 'GET /api/seasons'));
       }
       // いま観戦できる進行中のラン（S3。SEASON.md §25.1）: 参加者のトークンは Authorization の見出しでだけ受ける（URL に出さない）

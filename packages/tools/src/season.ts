@@ -87,7 +87,8 @@ export function seasonCli(content: Content, a: SeasonCliArgs, log: (s: string) =
       return 0;
     }
     case 'standings': {
-      const st = a.id ? svc.standings(a.id) : null;
+      // 運用の道具（運用者）は、開催中でも討伐の記録の中身まで読める（S4a §46）
+      const st = a.id ? svc.standings(a.id, { full: true }) : null;
       if (!st) { log(`シーズン ${a.id ?? '(--id)'} は無い`); return 1; }
       log(`${st.season.id}「${st.season.name}」 ${st.season.status}${st.result ? `（確定 ${new Date(st.result.finalizedAt).toISOString()}・${st.result.reason}）` : ''}`);
       log('| 名前 | ラン | 使った予算 | 冒険（最深） | 貢献（最初の報告） | 生還（確定点） | 支援（火が使われた・預けた品が取られた） |');

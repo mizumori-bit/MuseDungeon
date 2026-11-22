@@ -5,8 +5,9 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { buildCatalog, loadContent } from '@muse/content';
 import { ENGINE_VERSION } from '@muse/engine';
-import { loadConfig, SessionManager } from '@muse/server';
+import { createApp, loadConfig, SessionManager } from '@muse/server';
 import type { PlayerPort } from '@muse/server';
+import type { AddressInfo } from 'node:net';
 import { applyEvent, buildObservation, describeTarget, formatObservationText, projectPlayerView, slayGroupText, slayObs } from '@muse/shared';
 import type { Command, CommandRecord, Entity, GameEvent, PlayerView, Pos, World } from '@muse/shared';
 import { verifyRunDir } from '../src/replay';
@@ -234,7 +235,7 @@ describe('S4 §35.5: warden kill records', () => {
       expect(tb).toContain('投擲 2 回');
       expect(tb).toContain('使った品: 回復の薬 1');
       expect(tb).toContain('投げた品: 投げナイフ 2');
-      expect(tb).toContain('このランで 1 回目の挑戦');
+      expect(tb).toContain('倒したランの中で 1 回目の挑戦（それより前のランの挑戦は数えない）');
       expect(slayGroupText('en', [slayObs('en', catalog, sl[0])])).toContain('first to slay it (1 recorded kill): Aya (Lv');
       // 大守護者の候補（まだ倒していない者だけ）: 候補を 1 つ大守護者を倒す遠征に書き換えて、観測を作り直す
       const withOffer = (v: PlayerView, cleared: number[]): PlayerView => {
@@ -250,7 +251,7 @@ describe('S4 §35.5: warden kill records', () => {
       expect(o2.camp!.offers[0].slays).toBeUndefined();
       expect(o2.camp!.offers[0].text).not.toContain('先に倒した者');
       // HTTP の順位の表にも（位置は無い）
-      expect(m.seasons.standings(SID)!.slays!.map((x) => x.by)).toEqual(['Aya']);
+      expect(m.seasons.standings(SID, { full: true })!.slays!.map((x) => x.by)).toEqual(['Aya']);
       // 再生は記録だけで一致する（取り込みの命令に記録の中身がある）
       const cmds = readFileSync(join(dir, b.session.runId, 'commands.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l) as CommandRecord);
       expect(cmds.some((x) => x.command.type === 'season_sync' && (x.command.season.slays?.length ?? 0) > 0)).toBe(true);
@@ -281,8 +282,62 @@ describe('S4 §35.5: warden kill records', () => {
     expect(recs.map((x) => x.name)).toEqual(['Aya', 'Cid']);
     expect(recs[1].used).toEqual([]);
     // 見せるのは、最初の 1 件（Aya）といちばん少ない被害の 1 件（Cid）
-    const view = m.seasons.standings(SID)!.slays!;
+    const view = m.seasons.standings(SID, { full: true })!.slays!;
     expect(view.map((x) => `${x.by}:${x.first ? 'F' : ''}${x.least ? 'L' : ''}:${x.of}`)).toEqual(['Aya:F:2', 'Cid:L:2']);
+    m.closeAll();
+  }, 60_000);
+});
+
+describe('S4a (SEASON.md §46): the open season shows only who slew what over HTTP; one record per participant per milestone', () => {
+  it('while open, HTTP from outside has no contents (name, level, class and order only); from the server machine it has them; after the season is final everyone does', async () => {
+    const m = manager();
+    openSeason(m);
+    const a = await seasonRun(m, 'Aya');
+    await seasonRun(m, 'Ben');
+    await slayWarden5(a);
+    await lifelineHome(a);
+    const app = createApp(m, m.config);
+    await new Promise<void>((res) => app.server.listen(0, '127.0.0.1', () => res()));
+    try {
+      const base = `http://127.0.0.1:${(app.server.address() as AddressInfo).port}`;
+      const get = async (headers: Record<string, string>) => (await fetch(`${base}/api/seasons/${SID}`, { headers })).text();
+      const outside = await get({ 'x-forwarded-for': '203.0.113.7' });
+      const o = JSON.parse(outside) as { slays?: unknown; slaysBrief?: { depth: number; by: string; level: number; classId: string; order: number }[] };
+      expect(o.slays).toBeUndefined();
+      expect(o.slaysBrief).toEqual([{ depth: 5, warden: expect.any(Object), by: 'Aya', level: expect.any(Number), classId: 'core:scout', order: 1 }]);
+      for (const secret of ['core:mace', 'dealt', 'lowestPct', 'core:potion_healing', 'core:throwing_knife', 'wardFires', 'turns', 'attempt']) expect(outside).not.toContain(secret);
+      const local = JSON.parse(await get({})) as { slays?: { weapon: { kind: string } }[]; slaysBrief?: unknown };
+      expect(local.slays?.[0].weapon.kind).toBe('core:mace');
+      expect(local.slaysBrief).toBeUndefined();
+      // 直に呼ぶときも、既定は中身なし
+      expect(m.seasons.standings(SID)!.slays).toBeUndefined();
+      // 確定の後は、外からも中身
+      m.seasons.finalize(m.seasons.get(SID)!, 'operator');
+      const after = JSON.parse(await get({ 'x-forwarded-for': '203.0.113.7' })) as { slays?: { weapon: { kind: string } }[]; slaysBrief?: unknown };
+      expect(after.slays?.[0].weapon.kind).toBe('core:mace');
+      expect(after.slaysBrief).toBeUndefined();
+    } finally {
+      await app.close();
+      m.closeAll();
+    }
+  }, 60_000);
+
+  it('a participant who dies, starts over and slays the same warden again keeps the first record', async () => {
+    const m = manager();
+    openSeason(m);
+    const a = await seasonRun(m, 'Aya');
+    await slayWarden5(a);
+    await lifelineHome(a);
+    const first = m.seasons.get(SID)!.slays;
+    expect(first.map((x) => [x.name, x.runId])).toEqual([['Aya', a.session.runId]]);
+    expect((await act(a, { type: 'retire' })).ok).toBe(true);
+    const r2 = await m.createRun({ name: 'Aya', controller: agent, season: SID, classId: 'core:scout', profileToken: a.ptoken });
+    if ('error' in r2) throw new Error(r2.error.message);
+    const b = Object.assign(r2, { ptoken: a.ptoken }) as Run;
+    await slayWarden5(b);
+    await lifelineHome(b);
+    expect(b.session.world.milestones?.cleared).toEqual([5]);
+    expect(m.seasons.get(SID)!.slays.map((x) => [x.name, x.runId])).toEqual([['Aya', a.session.runId]]);
     m.closeAll();
   }, 60_000);
 });

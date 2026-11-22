@@ -4,7 +4,7 @@ import type { ActionError, Command, CommandRecord } from './commands';
 import type { GameEvent } from './events';
 import type { PerceivedEvent } from './filter';
 import type { TurnBlock } from './turn';
-import type { Controller, ExpeditionBrief, Locale, ObjectiveType, PlayerId, PlayerState, RunSummary, SeasonSlay, World } from './types';
+import type { Controller, ExpeditionBrief, Locale, Names, ObjectiveType, PlayerId, PlayerState, RunSummary, SeasonSlay, World } from './types';
 import type { PlayerView } from './view';
 
 export type SpectatorPolicy = 'omniscient' | 'follow_only' | 'delayed';
@@ -215,9 +215,16 @@ export interface SeasonStandingsResponse {
   standings: SeasonStandingRow[];
   result?: SeasonResultView;
   section: SeasonSectionRow[];
-  /** 討伐の記録（S4。SEASON.md §35.5）: 節目ごとに、最初の 1 件といちばん少ない被害の 1 件。位置は無い。記録が無ければ無い */
+  /**
+   * 討伐の記録（S4。SEASON.md §35.5）: 節目ごとに、最初の 1 件といちばん少ない被害の 1 件。位置は無い。記録が無ければ無い。
+   * 開催中のシーズンでは、同じ機械からの接続にだけ（S4a §46）。ほかは slaysBrief だけ（中身はシーズンが確定してから）
+   */
   slays?: SeasonSlay[];
+  slaysBrief?: SeasonSlayBrief[];
 }
+
+/** 開催中の外向けの討伐の記録（S4a §46）: 節目・倒した者の名前・レベル・職業・その階で載った順（1 が初討伐）だけ */
+export interface SeasonSlayBrief { depth: number; warden: Names; by: string; level: number; classId: string; order: number }
 
 // ---- ターンフィード（GET /api/player/feed、SSE） ----
 export type FeedEvent =
