@@ -450,7 +450,8 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
             const tried = k.guardianTried?.[e.id];
             v.guardian = { name: { ...e.guardian.name }, ...(e.guardian.title ? { title: { ...e.guardian.title } } : {}), types: [...e.guardian.types], ...(known ? { weakness: known } : {}), ...(e.guardian.warden ? { warden: true } : {}), ...(e.guardian.heavy ? { heavy: true } : {}), ...(!known && tried?.length ? { notWeak: [...tried] } : {}) };
           }
-          if (e.actor?.ai?.intent) v.intent = { ...e.actor.ai.intent };
+          // hold（構えた相手と手番の数。S1c）はプレイヤーに出さない（S1d §17.4）
+          if (e.actor?.ai?.intent) { const { hold: _hold, ...intent } = e.actor.ai.intent; v.intent = intent; }
           // 持っている品（宝物庫の鍵。見れば分かる。V3-5 §5.1）
           if (e.carries) v.carries = e.carries;
           // 名前付きの強敵（V3-5 §5.4）

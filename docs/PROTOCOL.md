@@ -37,7 +37,10 @@ ActionError {
 
 エラー時の結果: `{ ok: false, error, valid_actions, turn }`（プレイヤーが束縛されていない `no_session` と、復旧に失敗したランの `recovery_failed` には `turn` が無い）。
 
-**引数の名前がツールの定義に合わないとき**（S1c で改めた。SEASON.md §14.4 の 2・§15.11）: 定義に無い名前の引数が来た・要る引数が無いときは、MCP の SDK の入力の検査の前にサーバーが受けて、**ゲームの断りの形**（`bad_request`・`structuredContent`・`valid_actions`・`turn`）で返す。`message` に、無い名前（「travel_to に target という名前の引数は無い」）か足りない名前（「move には dir が要る（渡されていない）」）と、このツールの引数の一覧（要る・要らない・共通）、`hint` に呼び方の例（`travel_to { to: 'stairs_down' } / …`）。無い名前が先（両方あれば、無い名前を言う）。別名は受け付けない。ツール一覧（tools/list）の「要る引数」は変えない。
+**引数の名前がツールの定義に合わないとき**（S1c で改め、S1d で直した。SEASON.md §14.4 の 2・§15.11・§17.1）: MCP の SDK の入力の検査の前にサーバーが受けて、**ゲームの断りの形**（`bad_request`・`structuredContent`・`valid_actions`・`turn`）で返す。
+- **共通の名前**（`thought`・`player_token`・`expect_seq`・`map`・`inventory`・`status_line`）は、どのツールでも受ける（そのツールの定義に無ければ捨てる。`thought` は、記録できるツールでは今までどおり記録する）。
+- 断るのは、**要る引数が足りないとき**（「move には dir が要る（渡されていない）」。知らない名前もあわせて書く）と、**共通でない知らない名前が来たとき**（「travel_to に target という名前の引数は無い」）。`message` にこのツールの引数の一覧（要る・要らない・共通。定義の上では任意でも実際に要るもの（`throw_item` の `target`）は「要る」に書く）、`hint` に呼び方の例（`travel_to { to: 'stairs_down' } / …`）。別名は受け付けない。ツール一覧（tools/list）の「要る引数」は変えない。
+- 断った呼び出しの活動の記録（観戦の AI パネル）には、知らない名前の引数の**値**を残さない（名前だけ `unknown_args` に）。名前違いでトークンを渡された場合のため。
 - 名前は合っていて形が違う（型・値の範囲。`move { dir: 'north' }`）ときは、今までどおり SDK の入力の検査が断る（`isError: true`、文は `MCP error -32602: Input validation error: Invalid arguments for tool move: …`。`structuredContent` は付かない。S0b で確かめた。SEASON.md §7.3）。
 
 `recovery_failed`（V4-1m）: サーバーの起動時の復旧（記録の再生）に失敗したランのトークンで再開・行動しようとした（MCP の `resume_run` とトークンを使うツール、`GET /api/player/feed`、WebSocket の `hello`（プレイヤー・観戦）、`join_run`・`POST /api/runs/:id/join`）。「見つからない」（`no_session`）とは分ける。`message` に、そのランの ID と失敗の理由（1 行）。ランの記録は消えていないので、サーバーを直して起動し直せば、同じトークンで再開できる。HTTP は 503
@@ -444,6 +447,18 @@ V3-2R で足した項目（同じく後方互換。会心と経験値のルー�
 - `StatusInst.source`（状態異常を与えた者。毒で倒したときの撃破者になる）、`status_applied.targetAffixes`
 - `player_state.reason: 'joined'`（キャンプから始まる参加）。参加コマンドの `atCamp`
 - プレイヤー向けの射影で、見えていた個体が視界の外へ動いた `entity_moved` に `dirOut`（向きだけ。行き先は伏せたまま）
+
+S1d で変えた項目（S1c の検査の指摘の直しと、設計の判断 SEASON.md §16.2。`engineVersion` 0.42.1、思い出の `maxPlainToYou` と `dmgOnYou` の 3 つ目の欄、`fire_return.reason: 'damaged'` が増えたので `eventVersion` 28。SEASON.md §17）:
+
+- **すべてのラン**
+  - 引数の名前の断り（§1.1）: 共通の名前はどのツールでも受ける。断るのは要る引数が足りないときと、共通でない知らない名前のとき。断った呼び出しの活動の記録に、知らない名前の値を残さない
+  - fight の判定を 2 つに（§2.3）: **死にうるなら止まる**（今の HP が最悪＝全員が記録の最大の一撃・会心を含む、以下なら、`hp_floor` によらず止まる・始めない）／**`hp_floor` の判定は見込み**（いちばん重い 1 体は記録の**会心でない**最大の一撃、残りは平均。会心でない記録が無ければ最大）。止まった文・断りの文に、どちらで止まったか（「死にうるので止まった: HP 20 が最悪 20 以下」「hp_floor で止まった: HP 35 − 見込み 12 が hp_floor 25 を下回る」）
+  - 思い出の `dmgOnYou` は `[合計, 当たった回数, 攻撃された回数]`。平均の分母は 3 つ目（同じ時から数える。0.42.0 の 2 つの欄の記録は平均に使わず、最大で数える）。`maxPlainToYou`（会心でない最大の一撃）
+  - 予備動作の `hold` は、プレイヤー向けの射影（`EntityView.intent`）に出さない
+- **シーズンのランだけ**
+  - 帰り支度の間に**被害を受けたら取りやめ**（`fire_return { phase: 'cancel', reason: 'damaged' }`。毒も・見えない相手に撃たれた場合も）
+  - 火からの帰還・撤退を支援賞に数えるのは、**その帰還・撤退で確定した点が 1 以上のとき**だけ（続く `expedition_ended` の `payout.players[].banked`）
+  - 特別な場所から、節目の階（大守護者の間）を外す
 
 S1c（2 つ目）で変えた項目（試運転 t1 を受けた直しのうち、すべてのランに同じに効くもの。`engineVersion` 0.42.0、思い出の `dmgOnYou`・予備動作の `hold`・品の `droppedBy` が増えたので `eventVersion` 27。SEASON.md §14.4・§14.6・§14.10・§15.10〜）:
 
@@ -990,7 +1005,7 @@ CommandRecord {
 - **`report_stairs`**（MCP のツール、WS の `{ type: 'report_stairs' }`）。キャンプでだけ。手番を使わない。このランで**自分の目で見た**下り階段と特別な場所（S1c。下）（地図の巻物や公開で知っただけのものは入らない）のうち、このランでまだ報告していないものを全部送る。サーバーに届いた順で、その階の下り階段・そのマスの特別な場所を最初に報告した参加者に**貢献 1**（その場で付く）。2 人目からは付かない。
 - 結果: 出来事 `stairs_reported { player, stairs: { depth, x, y, first }[], spots?: { depth, x, y, kind, first }[], gained }`（本人だけ。`gained` は両方の最初の報告の数）と、取り込み（`season_synced`）。
 - 断る: シーズンでないラン（`bad_request`）、キャンプでない（`not_at_camp`）、送るものが無い（`nothing_to_do`）。倒れた・ランが終わった後は送れない（そのランの報告していないものは、報告できなくなる）。
-- **特別な場所**（S1c。SEASON.md §14.5・§15）: 種類 `core:altar`・`core:gamble_altar`・`core:inscription`（shared の `SEASON_SPOT_KINDS`）の地物のうち、**部屋の作り（prefab）の中にあるもの**（`isSeasonSpot`: 階の `regions` の `kind: 'prefab'` の範囲。守護者の棲み処の地物 `lairOf` と野営の火は除く）。シーズンの生成では、部屋の作りは目的・条件より前に置くので、だれの世界でも同じ階の同じマスにある（`season.test.ts` の §2.3 のテストで守る）。泉は対象にしない（条件「静か」で、その遠征で初めて作る階から消える）。部屋の外にばらまかれる祭壇も対象にしない（条件の敵・品の数で場所が変わる）。
+- **特別な場所**（S1c。SEASON.md §14.5・§15）: 種類 `core:altar`・`core:gamble_altar`・`core:inscription`（shared の `SEASON_SPOT_KINDS`）の地物のうち、**部屋の作り（prefab）の中にあるもの**（節目の階は除く。S1d）（`isSeasonSpot`: 階の `regions` の `kind: 'prefab'` の範囲。守護者の棲み処の地物 `lairOf` と野営の火は除く）。シーズンの生成では、部屋の作りは目的・条件より前に置くので、だれの世界でも同じ階の同じマスにある（`season.test.ts` の §2.3 のテストで守る）。泉は対象にしない（条件「静か」で、その遠征で初めて作る階から消える）。部屋の外にばらまかれる祭壇も対象にしない（条件の敵・品の数で場所が変わる）。
   - 自分の目で見た: そのマスを見た（覚えている地図の地形があり、地図の巻物・道しるべで知っただけの `mapped` でない）。このランで報告したものは `SeasonState.reportedSpots`（深さと座標）。
   - 公開された特別な場所は、取り込み（`season_sync` の `season.spots: { depth, x, y, kind, by }[]`。報告の順）で届き、その階に入ると、自分の世界のそのマスに同じ種類の特別な場所があれば、覚えている地図に載る（`knowledge_updated { rememberedSet: [その地物], publicSpot: <報告した者> }`。地形・途中の道は載せない。いま見えていれば、目で見て覚える）。観測の `visible.features[].public_by`（そのマスをまだ自分の目で見ていない間）と、文の「（公開: ○○ が報告）」。使い方は変えない（泉・祭壇はその世界で 1 回）。
   - キャンプの観測: `season.spots { unreported, unpublished }` と「まだ報告していない特別な場所 N（うち、まだだれも公開していないもの M）」（見つけたものがあるときだけ）。`valid_actions` の `report_stairs` に件数。
@@ -1100,7 +1115,7 @@ SeasonSyncCommand {
 
 - 断る（手番を使わない）: 追ってくる敵が見えている（`hostile_in_view`。休憩と同じ判定: 隣にいない動かない敵は数えない。文に「階段の上なら、追われていても帰れる」）・予算の残りが帰り支度の手番に足りない（`cannot_extract`）・目的が未達成で `confirm` が無い（`confirm_required`。階段と同じ）。
 - 帰り支度: `balance.season.fireReturnTurns`（5）手番（`extract` の手番を含む）。`extract` の手番に `fire_return { phase: 'start', turns }` と状態 `core:fire_return`（行動できない。残り `turns − 1`。`power` は `confirm` なら 1）。残りの手番は行動できずに過ぎ（1 回の `extract` の呼び出しで済む）、状態が切れた手番に `fire_return { phase: 'done', completed }` と、階段と同じ確定（`player_state { state: 'at_camp', reason: 'extracted' | 'withdrew' }`。綱ではない。遺物は納める）。
-- 取りやめ: 帰り支度の手番の始めに、追ってくる敵が見えた（休憩と同じ判定）・火のそばから離された・（切れたときに）目的が未達成で `confirm` が無かった、なら `fire_return { phase: 'cancel', reason: 'hostile' | 'moved' | 'not_complete' }` で状態を外し、その手番から行動できる。過ごした手番は戻らない。もう一度帰るなら、最初から。
+- 取りやめ: 帰り支度の手番の始めに、追ってくる敵が見えた（休憩と同じ判定）・火のそばから離された・（切れたときに）目的が未達成で `confirm` が無かった、帰り支度の間に被害を受けた（S1d。毒も・見えない相手に撃たれた場合も）、なら `fire_return { phase: 'cancel', reason: 'hostile' | 'moved' | 'not_complete' | 'damaged' }` で状態を外し、その手番から行動できる。過ごした手番は戻らない。もう一度帰るなら、最初から。
 - 次の遠征は、帰ったマス（火の上か隣。`player_state.extractPos`）から始まる（階段で帰ったときと同じ決まり）。
 - 階段での帰還は、今までどおり、追われていてもすぐできる。階段の上なら階段が先（隣に火があっても）。置いた本人の火でも、ほかの者の火でも同じ。帰還は遠征に 1 回なので、回数の上限は無い。
 - 観測: `expedition.can_extract`・`extract_via { type: 'fire', by, turns }`・`extract_blocked_by`（`hunted_at_fire`・`budget_at_fire`）。`valid_actions` の `extract` の行に「○○ の野営の火から。帰り支度 5 手番（この手番を含む。その間に追ってくる敵が見えたら取りやめ）・次の遠征はこのマスから始まる」。
@@ -1111,6 +1126,6 @@ SeasonSyncCommand {
 - 使えない（手番を使わない）: HP がもう上限以上・追ってくる敵が見えている（休憩と同じ判定）・**この遠征で、この階の火をもう使った**（`SeasonState.fireUses` の `{ no, depth }`。火がいくつあっても、だれの火でも）。
 - 同じマスにその世界の地物があるとき: 火が今使えるなら火を使い、使えないなら、その世界の地物を今までどおり操作する。
 
-**支援賞**（`support`）: 自分の火を、ほかの参加者が使った人数（延べ。S1c で改めた）。数えるのは、(1) 置いた本人でない、(2) その参加者がその火で数えられるのはシーズンを通して 1 回だけ、(3) 「使った」＝その使用で最大 HP の `supportMinHealPct`（10）% 以上が戻った（`fire_used`）か、**その火から帰還・撤退した**（`fire_return` の `done`。S1c）、のすべてを満たす使用だけ。火から帰った者は、その場でキャンプに着くので、その場で数える。サーバーが、使った者がキャンプに着いたとき（遠征の終わり）か、そのランが終わったときに、そのランの `fire_used` をまとめて数える（S1a。その場では数えない: 置いた者に「今その階にだれかいる」と分からないように）。同着は使った予算の少ないほう。共有層の火は `seasons/<id>/fires.json`（`{ order, depth, x, y, by, profileId, runId, wall, used, uses, users, dup? }`）。参加者ごとの支援の数は、ここの `uses` から作る（S1a）。
+**支援賞**（`support`）: 自分の火を、ほかの参加者が使った人数（延べ。S1c で改めた）。数えるのは、(1) 置いた本人でない、(2) その参加者がその火で数えられるのはシーズンを通して 1 回だけ、(3) 「使った」＝その使用で最大 HP の `supportMinHealPct`（10）% 以上が戻った（`fire_used`）か、**その火から帰還・撤退し、それで確定した点が 1 以上**（`fire_return` の `done` と、続く `expedition_ended` の `payout`。S1c・S1d）、のすべてを満たす使用だけ。火から帰った者は、その場でキャンプに着くので、その場で数える。サーバーが、使った者がキャンプに着いたとき（遠征の終わり）か、そのランが終わったときに、そのランの `fire_used` をまとめて数える（S1a。その場では数えない: 置いた者に「今その階にだれかいる」と分からないように）。同着は使った予算の少ないほう。共有層の火は `seasons/<id>/fires.json`（`{ order, depth, x, y, by, profileId, runId, wall, used, uses, users, dup? }`）。参加者ごとの支援の数は、ここの `uses` から作る（S1a）。
 
 観測: 火は `visible.features`（`by`）と覚えている地図に出る。`valid_actions` に `place_fire（置いた本人の得・費用・確定点・残りの数。置けないときは不可と理由）`、火の隣と上で `interact <dir>（野営の火: HP を N まで戻す）`。迷宮では `season.fire_used`（この遠征で火を使った階）と、いま火を置けるマスにいれば `season.support`（支援賞の行と「あなたの火 N/3・あと M つ置ける」。S1c）。キャンプでは `season.fires`（自分の火ごとに、使われた回数。まだ載っていない火も）・`season.fire_news`（S1c。「知らせ: あなたの野営の火（地下4階 (x,y)）を ○○ が使った（支援賞 +1）」。前の取り込みから新しく使った者。遠征を始める取り込みで、キャンプで見せた分を捨てる）と、賞の 4 行（支援賞の行に自分の火の数）。

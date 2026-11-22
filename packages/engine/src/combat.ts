@@ -3,6 +3,7 @@
 import type { DamageVia, Dir, Entity, PlayerId, PlayerRecord, RunSummary, RunSummaryPlayer } from '@muse/shared';
 import { ceilDiv, cheb, currentExpedition, diceMax, dirTo, inCover, xpForLevel } from '@muse/shared';
 import type { Ctx } from './ctx';
+import { fireReturnHurt } from './campfire';
 import { applyEffects } from './effects';
 import { displayName, maybeEndExpedition } from './expedition';
 import { pickLoot } from './gen/generate';
@@ -112,6 +113,9 @@ export function recordHit(ctx: Ctx, attacker: Entity, target: Entity, hit: boole
     updateMemory(ctx, target.player, attacker, (m) => {
       const cur = m.hitsOnYou ?? [0, 0];
       m.hitsOnYou = [cur[0] + (hit ? 1 : 0), cur[1] + 1];
+      // 平均の被害の分母（S1d §17.2）: 被害の合計と同じ時から数える（0.42.0 の 2 つの欄の記録は、ここから数え直す）
+      const d = m.dmgOnYou && m.dmgOnYou.length >= 3 ? m.dmgOnYou : [0, 0, 0];
+      m.dmgOnYou = [d[0], d[1], d[2] + 1];
     });
   }
 }
@@ -152,7 +156,7 @@ export function melee(ctx: Ctx, attacker: Entity, target: Entity, opts: MeleeOpt
     if (ls > 0) notePerk(ctx, attacker, perkWithHook(ctx, attacker, 'last_stand'), 'might', { amount: ls });
     if (brace && !o.crit) notePerk(ctx, target, perkWithHook(ctx, target, 'brace'), 'braced', { amount: brace });
     if (brace) removeStatus(ctx, target, 'core:braced');
-    const dealt = applyDamage(ctx, ctx.world.entities[target.id], dmg, attacker, 'melee');
+    const dealt = applyDamage(ctx, ctx.world.entities[target.id], dmg, attacker, 'melee', { crit: o.crit });
     // 血を吸う（V3-5b §44.7）: 与えた分だけ回復する
     if (dealt > 0 && !attacker.player) drainHeal(ctx, attacker, dealt);
     if ((ctx.world.entities[target.id]?.stats?.hp ?? 0) > 0) onHitEffects(ctx, attacker, ctx.world.entities[target.id]);
@@ -189,7 +193,7 @@ export function rangedAttack(ctx: Ctx, attacker: Entity, target: Entity, dice: s
     const dmg = o.crit ? Math.max(1, diceMax(dice)) : Math.max(1, heavyFloor(attacker, raw, raw - armor - brace));
     if (brace && !o.crit) notePerk(ctx, target, perkWithHook(ctx, target, 'brace'), 'braced', { amount: brace });
     if (brace) removeStatus(ctx, target, 'core:braced');
-    applyDamage(ctx, ctx.world.entities[target.id], dmg, attacker, 'ranged');
+    applyDamage(ctx, ctx.world.entities[target.id], dmg, attacker, 'ranged', { crit: o.crit });
   } else provoke(ctx, target, attacker);
 }
 
@@ -222,7 +226,8 @@ function provoke(ctx: Ctx, target: Entity, attacker: Entity): void {
   }
 }
 
-export function applyDamage(ctx: Ctx, target: Entity, amount: number, source: Entity | null, via: DamageVia): number {
+/** hit.crit: 会心の一撃（S1d §17.2: 思い出の「会心でない最大の一撃」に入れない） */
+export function applyDamage(ctx: Ctx, target: Entity, amount: number, source: Entity | null, via: DamageVia, hit: { crit?: boolean } = {}): number {
   const t = ctx.world.entities[target.id];
   if (!t?.stats || t.stats.hp <= 0) return 0;
   let hpAfter = Math.max(0, t.stats.hp - amount);
@@ -256,11 +261,16 @@ export function applyDamage(ctx: Ctx, target: Entity, amount: number, source: En
   // 思い出（受けたダメージは脅威の見積もり用に出目どおり、与えたダメージは実ダメージ）
   // 種族の思い出に残すのは、相手が見えているときだけ（見えない射手の種族を記憶に出さない。V4-0c §4.4）
   if (source && t.player && !source.player && ctx.seesActor(t.player, source)) {
-    // 攻撃で受けた被害の合計と回数（S1c §14.4 の 1: fight の見込みの「平均の被害」。毒・罠は入れない）
+    // 攻撃で受けた被害の合計と当たった回数（S1c §14.4 の 1: fight の見込みの「平均の被害」。毒・罠は入れない）。攻撃された回数は recordHit が同じ欄で数える（S1d §17.2）。
+    // 会心でない最大の一撃（S1d §17.2: hp_floor の見込みの、いちばん重い 1 体）
     const byAttack = via === 'melee' || via === 'ranged';
     updateMemory(ctx, t.player, source, (m) => {
       m.maxDamageToYou = Math.max(m.maxDamageToYou, amount);
-      if (byAttack) { const cur = m.dmgOnYou ?? [0, 0]; m.dmgOnYou = [cur[0] + amount, cur[1] + 1]; }
+      if (byAttack) {
+        const cur = m.dmgOnYou && m.dmgOnYou.length >= 3 ? m.dmgOnYou : [0, 0, 0];
+        m.dmgOnYou = [cur[0] + amount, cur[1] + 1, cur[2]];
+        if (!hit.crit) m.maxPlainToYou = Math.max(m.maxPlainToYou ?? 0, amount);
+      }
     });
   }
   if (source?.player && !t.player && t.actor && ctx.seesActor(source.player, t)) {
@@ -274,6 +284,8 @@ export function applyDamage(ctx: Ctx, target: Entity, amount: number, source: En
       }
     });
   }
+  // 野営の火の帰り支度の間に被害を受けた（S1d §17.3）: 取りやめ（その手番から動ける）
+  if (t.player && dealt > 0) fireReturnHurt(ctx, ctx.world.entities[t.id] ?? t);
   if (standing && stand) {
     const body = structuredClone(ctx.world.entities[t.id]);
     body.boonUsed = { ...(body.boonUsed ?? {}), [stand.boon]: xNo };

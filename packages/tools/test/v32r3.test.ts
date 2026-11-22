@@ -218,6 +218,8 @@ describe('V3-2R3 lifeline and reading danger (§20.3, §20.4)', () => {
     t.inject({ put: [me] });
     await t.act({ type: 'wait' });
     if (!t.obs().visible.monsters.some((m) => m.id === 'e_r3ft01' && m.dist === 1)) return;
+    // 待つ間の小さい被弾で「会心でない最大の一撃」が付くので、記録を置き直す（S1d §17.2: hp_floor の見込みは会心でない最大）
+    setMemory(t, 'core:goblin', { maxDamageToYou: 6, maxPlainToYou: 6 });
     // HP 20 − 最悪 6 = 14 < hp_floor 15 → 被弾の前に止まる（始める前なら手番を使わずに拒否）
     const refused = await t.act({ type: 'fight', target: 'e_r3ft01', hpFloor: 15 });
     expect(refused.ok).toBe(false);

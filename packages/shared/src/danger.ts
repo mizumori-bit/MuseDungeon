@@ -85,10 +85,18 @@ export function worstTurnOf(view: PlayerView, catalog: Catalog, e: Pick<EntityVi
  * 整数で切り上げる（重い側）。記録が無ければ null（攻撃された回数か被害の合計が無い: S1c より前の記録・継承した記録）
  */
 export function avgHitsOf(view: PlayerView, e: Pick<EntityView, 'kind' | 'role'>, times: number): number | null {
+  const d = memoryOf(view, e)?.dmgOnYou;
+  // 分母は、被害の合計と同じ時から数えた攻撃された回数（S1d §17.2: 前の版から数えた hitsOnYou で割ると軽く出た）
+  if (!d || d.length < 3 || d[2] <= 0) return null;
+  return ceilDiv(d[0] * times, d[2]);
+}
+
+/** 1 手番あたりの「ふつうの」最大の被害（S1d §17.2）= 会心でない最大の一撃 × 行動の回数。会心でない記録が無ければ、最大の一撃（会心を含む）で */
+export function plainTurnOf(view: PlayerView, catalog: Catalog, e: Pick<EntityView, 'kind' | 'role' | 'speed' | 'statuses' | 'paceAgo'>): number | null {
   const mem = memoryOf(view, e);
-  const tries = mem?.hitsOnYou?.[1] ?? 0;
-  if (!mem?.dmgOnYou || tries <= 0) return null;
-  return ceilDiv(mem.dmgOnYou[0] * times, tries);
+  if (!mem || mem.maxDamageToYou <= 0) return null;
+  const hit = mem.maxPlainToYou && mem.maxPlainToYou > 0 ? mem.maxPlainToYou : mem.maxDamageToYou;
+  return hit * attacksPerTurn(view, catalog, e);
 }
 
 /** 1 手番あたりの平均の被害（avgHitsOf × 行動の回数）。記録が無ければ null */
@@ -97,16 +105,24 @@ export function avgTurnOf(view: PlayerView, catalog: Catalog, e: Pick<EntityView
 }
 
 /**
- * fight の止まり方の見積もり（S1c §14.4 の 1）: 次の手番の被害の見込み expected と、今までの最悪 worst（全員が記録の最大の一撃）。
- * expected = いちばん重い 1 体（1 手の最悪が最大の者）は最悪、残りは 1 手の平均（平均の記録が無ければ最悪。重い側）の合計。
+ * fight の止まり方の見積もり（S1c §14.4 の 1・S1d §17.2）: 次の手番の被害の見込み expected と、最悪 worst（全員が記録の最大の一撃。会心を含む）。
+ * expected = いちばん重い 1 体（1 手の「ふつうの」最大が最大の者）は会心でない最大の一撃、残りは 1 手の平均（平均の記録が無ければ、ふつうの最大。重い側）の合計。
+ * fight は、HP が worst 以下なら止まり（死にうる）、HP − expected が hp_floor を下回れば止まる。
  * 被弾の記録の無い敵は、どちらにも数えない（今までどおり。fight は記録の無い種族で別に止まる）。unrecorded はその数
  */
 export function threatEstimate(view: PlayerView, catalog: Catalog, threats: readonly Pick<EntityView, 'kind' | 'role' | 'speed' | 'statuses' | 'paceAgo'>[]): { expected: number; worst: number; unrecorded: number } {
-  const per = threats.map((h) => ({ w: worstTurnOf(view, catalog, h), a: avgTurnOf(view, catalog, h) }));
-  const known = per.filter((x): x is { w: number; a: number | null } => x.w !== null).sort((a, b) => b.w - a.w);
+  const per = threats.map((h) => ({ w: worstTurnOf(view, catalog, h), p: plainTurnOf(view, catalog, h), a: avgTurnOf(view, catalog, h) }));
+  const known = per.filter((x): x is { w: number; p: number; a: number | null } => x.w !== null && x.p !== null).sort((a, b) => b.p - a.p);
   const worst = known.reduce((s, x) => s + x.w, 0);
-  const expected = known.length ? known[0].w + known.slice(1).reduce((s, x) => s + Math.min(x.w, x.a ?? x.w), 0) : 0;
+  const expected = known.length ? known[0].p + known.slice(1).reduce((s, x) => s + Math.min(x.p, x.a ?? x.p), 0) : 0;
   return { expected, worst, unrecorded: per.length - known.length };
+}
+
+/** fight が止まる理由（S1d §17.2）: lethal＝今の HP が最悪以下（死にうる。hp_floor によらない）、floor＝HP − 見込みが hp_floor を下回る。止まらなければ null */
+export function fightRiskStop(hp: number, hpFloor: number, est: { expected: number; worst: number }): 'lethal' | 'floor' | null {
+  if (est.worst > 0 && hp <= est.worst) return 'lethal';
+  if (est.expected > 0 && hp - est.expected < hpFloor) return 'floor';
+  return null;
 }
 
 /** fight の脅威（hp_risk の判定に入れる敵。マクロ・観測・pilot が同じものを使う）: 追跡中で逃げていない敵の、隣か射撃する種族と、隣の逃走中の追跡者 */
@@ -125,9 +141,15 @@ export function riskText(view: PlayerView, catalog: Catalog, hpFloor: number): s
   const L = view.locale;
   const est = pos ? threatEstimate(view, catalog, fightThreats(catalog, view.entities.filter((e) => e.cat === 'monster'), pos)) : { expected: 0, worst: 0, unrecorded: 0 };
   const ja = L !== 'en';
+  const hp = view.self.stats.hp;
+  const by = fightRiskStop(hp, hpFloor, est);
   const head = est.expected === est.worst
     ? (ja ? `見込み ${est.expected}（最悪も ${est.worst}）` : `expected ${est.expected} (worst also ${est.worst})`)
     : (ja ? `見込み ${est.expected}・最悪 ${est.worst}` : `expected ${est.expected}, worst ${est.worst}`);
-  return ja ? `${head}（HP ${view.self.stats.hp}・hp_floor ${hpFloor}。見込みは、いちばん重い 1 体を記録の最大の一撃、残りを記録の平均の被害で数える。最悪は全員が最大の一撃）`
-    : `${head} (HP ${view.self.stats.hp}, hp_floor ${hpFloor}; expected counts the heaviest enemy at its recorded worst hit and the rest at their recorded average; worst has everyone at their worst)`;
+  // どちらで止まったか（S1d §17.2）
+  const why = by === 'lethal'
+    ? (ja ? `死にうるので止まった: HP ${hp} が最悪 ${est.worst} 以下（hp_floor によらない）。` : `Stopped because one turn could kill you: HP ${hp} is at or below the worst ${est.worst} (whatever hp_floor is). `)
+    : by === 'floor' ? (ja ? `hp_floor で止まった: HP ${hp} − 見込み ${est.expected} が hp_floor ${hpFloor} を下回る。` : `Stopped at hp_floor: HP ${hp} minus expected ${est.expected} falls below hp_floor ${hpFloor}. `) : '';
+  return ja ? `${why}${head}（HP ${hp}・hp_floor ${hpFloor}。見込みは、いちばん重い 1 体を記録の会心でない最大の一撃、残りを記録の平均の被害で数える。最悪は全員が最大の一撃・会心を含む）`
+    : `${why}${head} (HP ${hp}, hp_floor ${hpFloor}; expected counts the heaviest enemy at its recorded worst non-critical hit and the rest at their recorded average; worst has everyone at their worst hit, criticals included)`;
 }

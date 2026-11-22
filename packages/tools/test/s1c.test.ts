@@ -220,8 +220,9 @@ describe('S1c §14.3 の 1・2: returning home from a campfire', () => {
     expect(turnsOf(a)).toBeLessThan(t0 + N);
     const cancel = a.session.history.filter((e) => e.type === 'fire_return').at(-1);
     expect(cancel?.type === 'fire_return' && cancel.phase).toBe('cancel');
-    expect(cancel?.type === 'fire_return' && cancel.reason).toBe('hostile');
-    expect(a.port.formatActionText(r)).toContain('帰り支度を取りやめた（追ってくる敵が見えた）');
+    // 速い敵は見えたその手番に殴ることがあるので、被害での取りやめ（S1d §17.3）にもなりうる
+    expect(['hostile', 'damaged']).toContain(cancel?.type === 'fire_return' && cancel.reason);
+    expect(a.port.formatActionText(r)).toMatch(/帰り支度を取りやめた（(追ってくる敵が見えた|被害を受けた)）/);
     expect(meOf(w, a.playerId).statuses!.some((s) => s.id === 'core:fire_return')).toBe(false);
     // 階段の上なら、追われていてもすぐ帰れる（今までどおり）
     const down = w.floors[k1].stairs.down[0];
@@ -264,11 +265,19 @@ describe('S1c §14.3 の 1・2: returning home from a campfire', () => {
     expect(meOf(wb, b.playerId).pos).toMatchObject({ floor: 'main:1', x: side.x, y: side.y });
     expect((await act(b.port, { type: 'extract', confirm: true })).ok).toBe(true);
     expect(support()).toBe(1);
-    // 帰還による使用だけ（回復しない）でも数える: C
+    // 帰還による使用だけ（回復しない）: 何も持たずに撤退しただけ（確定 0）は数えない（S1d §17.5）。点を確定させて帰れば数える: C
     const cc = await seasonRun(m, 'Cid');
     await startAndClear(cc);
     place(cc, c);
     expect((await act(cc.port, { type: 'extract', confirm: true })).ok).toBe(true);
+    expect(support()).toBe(1);
+    await startAndClear(cc);
+    const wcc = cc.session.world;
+    const xc = wcc.expeditions!.at(-1)!;
+    xc.objective = { ...xc.objective, type: 'reach_depth' };
+    applyEvent(wcc, { type: 'objective_progress', no: xc.no, progressAfter: { ...xc.progress, reached: true, guardianSlain: true }, statusAfter: 'objective_complete', seq: wcc.seq + 1, cause: null, floor: null, ft: 0, wall: 0, seenBy: [] } as unknown as GameEvent);
+    place(cc, c);
+    expect((await act(cc.port, { type: 'extract' })).ok).toBe(true);
     expect(support()).toBe(2);
     // A 自身が自分の火から帰っても数えない
     await startAndClear(a);
@@ -606,5 +615,114 @@ describe('S1c §14.4 の 5: the expedition text says published stairs are publis
     expect(o.expedition?.haul?.text).toContain(`（公開されている: Aya が報告 (${s.x},${s.y})。途中の道はまだ分からない`);
     expect(o.expedition?.haul?.text).not.toContain('（未発見');
     m.closeAll();
+  });
+});
+
+describe('S1d §17.3〜§17.5: returning from a fire', () => {
+  it('damage while packing up calls it off (poison too, or a shooter you cannot see)', async () => {
+    const m = manager();
+    openSeason(m, 's1d-season-1');
+    const a = await seasonRun(m, 'Aya');
+    await startAndClear(a);
+    const w = a.session.world;
+    const c = await fireOnDepth1(a);
+    place(a, c);
+    editMe(w, a.playerId, (e) => { e.stats!.hp = 200; e.stats!.maxHp = 200; e.statuses = [{ id: 'core:poison', turnsLeft: 9, power: 1 }]; });
+    const t0 = turnsOf(a);
+    const r = await act(a.port, { type: 'extract', confirm: true });
+    expect(r.ok ? '' : JSON.stringify(r.error)).toBe('');
+    expect(a.port.view().status).toBe('your_turn');
+    expect(turnsOf(a)).toBeLessThan(t0 + N);
+    const cancel = a.session.history.filter((e) => e.type === 'fire_return').at(-1);
+    expect(cancel?.type === 'fire_return' && cancel.phase).toBe('cancel');
+    expect(cancel?.type === 'fire_return' && cancel.reason).toBe('damaged');
+    expect(a.port.formatActionText(r)).toContain('帰り支度を取りやめた（被害を受けた）');
+    m.closeAll();
+  });
+
+  it('a relic carried home from a fire is delivered as on stairs (the boon is granted)', async () => {
+    const m = manager();
+    openSeason(m, 's1d-season-2');
+    const a = await seasonRun(m, 'Aya');
+    await startAndClear(a);
+    const w = a.session.world;
+    const c = await fireOnDepth1(a);
+    place(a, c);
+    // 遺物を持って、目的（遺物を持ち帰る）を達成したことにする（テストの中だけ）
+    const me = meOf(w, a.playerId);
+    const relic = { id: 'e_s1drl1', kind: 'core:relic_breath', sid: ++sid, role: 'relic', item: { qty: 1, affixes: [], heldBy: me.id, slot: 'q' } } as unknown as Entity;
+    editMe(w, a.playerId, (e) => { e.inv!.items.push(relic.id); });
+    inject(w, { put: [relic] });
+    const x = w.expeditions!.at(-1)!;
+    x.objective = { ...x.objective, type: 'retrieve_relic' };
+    x.targets = { ...x.targets, relic: relic.id };
+    applyEvent(w, { type: 'objective_progress', no: x.no, progressAfter: { ...x.progress, relicHeldBy: me.id }, statusAfter: 'objective_complete', seq: w.seq + 1, cause: null, floor: null, ft: 0, wall: 0, seenBy: [] } as unknown as GameEvent);
+    const r = await act(a.port, { type: 'extract' });
+    expect(r.ok ? '' : JSON.stringify(r.error)).toBe('');
+    expect(a.port.view().status).toBe('at_camp');
+    expect(a.session.history.some((e) => e.type === 'boon_granted')).toBe(true);
+    expect(meOf(w, a.playerId).inv!.items).not.toContain(relic.id);
+    const ended = a.session.history.filter((e) => e.type === 'expedition_ended').at(-1);
+    expect(ended?.type === 'expedition_ended' && ended.reason).toBe('completed');
+    m.closeAll();
+  });
+
+  it('a run that returned from a fire recovers after the server stops, with a matching hash; the next expedition starts there', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'muse-s1d-'));
+    try {
+      const m = manager(dir);
+      openSeason(m, 's1-replay-1');
+      const a = await seasonRun(m, 'Rin');
+      await playWithPort(a.port, { kind: 'greedy', seed: 'a', maxActs: 900, maxExpeditions: 1 });
+      expect(a.port.view().status).toBe('at_camp');
+      expect((await act(a.port, { type: 'start_expedition', offer: 1 })).ok).toBe(true);
+      const o = a.port.observe().observation;
+      const step1 = o.navigation.passable_dirs.find((d) => !o.valid_actions.some((v) => v.startsWith(`move ${d} (`) && v.includes('攻撃')));
+      if (step1) await act(a.port, { type: 'move', dir: step1 });
+      expect((await act(a.port, { type: 'place_fire' })).ok).toBe(true);
+      const at = { ...meOf(a.session.world, a.playerId).pos! };
+      for (let i = 0; i < 6 && a.port.view().status !== 'at_camp'; i++) {
+        const r = await act(a.port, { type: 'extract', confirm: true });
+        if (!r.ok) await act(a.port, { type: 'wait' });
+      }
+      expect(a.port.view().status).toBe('at_camp');
+      const season = JSON.stringify(a.session.world.season);
+      const runId = a.session.runId;
+      m.closeAll();
+      const m2 = manager(dir);
+      const rec = RunSession.recover(m2.deps, runId);
+      expect(rec.verified).toBe(true);
+      expect(JSON.stringify((rec.session.world as World).season)).toBe(season);
+      m2.closeAll();
+      const m3 = manager(dir);
+      m3.recoverAll();
+      const live = m3.get(runId)!;
+      const pid = live.world.playerOrder[0];
+      const port = m3.portForToken(a.token)!;
+      expect((await port.act({ type: 'start_expedition', offer: 1 }, { source: 'bot' })).ok).toBe(true);
+      expect(live.world.entities[live.world.players[pid].entityId].pos).toMatchObject(at);
+      m3.closeAll();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('S1d §17.4: special places on milestone floors do not count', () => {
+  it('isSeasonSpot is false on a warden hall', () => {
+    const table = content.terrain.map((t) => t.id);
+    let checked = 0;
+    for (let s = 0; s < 30 && !checked; s++) {
+      const g = generateFloor(content, `s1d-ms-${s}`, 'main', 5, table, undefined, undefined, { season: true });
+      expect(g.floor.floorType).toBe('core:warden_hall');
+      const w = { floors: { 'main:5': g.floor }, entities: {} } as unknown as World;
+      // 節目の階の部屋の作りの中に祭壇があったことにする
+      const r = g.floor.regions.find((x) => x.kind === 'prefab') ?? { x: 1, y: 1, w: 1, h: 1, kind: 'prefab' };
+      const e = { id: 'e_s1dms1', kind: 'core:altar', sid: 1, pos: { floor: 'main:5', x: r.x, y: r.y }, feature: { state: 'idle' } } as unknown as Entity;
+      if (!g.floor.regions.some((x) => x.kind === 'prefab')) (g.floor.regions as unknown[]).push(r);
+      expect(isSeasonSpot(w, e)).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(1);
   });
 });

@@ -562,21 +562,26 @@ export function createMcpServer(ctx: McpContext): McpServer {
   server.registerTool('say', { title: '発言', description: 'COOP 用チャット。手番を消費しない。', inputSchema: { ...common, text: z.string().min(1).max(280) } },
     async (a) => act('say', a, { type: 'say', text: a.text }));
 
-  interceptArgs(server, (tool, args, kind, names, shape) => {
+  interceptArgs(server, (tool, args, names, shape) => {
     // 引数の名前の断り（S1c §14.4 の 2）: ゲームの断りの形で返す。束縛されていなければ、本文と structuredContent だけ
     const port = portOf(args.player_token as string | undefined);
     const L = port?.locale() ?? 'ja';
     const ja = L !== 'en';
-    const list = argListText(shape, ja);
+    const list = argListText(shape, ja, tool);
     const ex = exampleOf(tool, shape);
-    const msg = kind === 'unknown'
-      ? (ja ? `${tool} に ${names.join('・')} という名前の引数は無い。このツールの引数: ${list}。` : `${tool} has no argument named ${names.join(', ')}. Its arguments: ${list}.`)
-      : (ja ? `${tool} には ${names.join('・')} が要る（渡されていない）。このツールの引数: ${list}。` : `${tool} needs ${names.join(', ')} (not given). Its arguments: ${list}.`);
-    const err = actionError('bad_request', msg, ja ? `例: ${ex}（valid_actions の行は、書いてある形のまま呼べる。別の名前は受け付けない）` : `e.g. ${ex} (valid_actions lines can be called as written; other names are not accepted)`);
+    // 足りない要る引数があれば、それを先に言い、知らない名前もあわせて書く（S1d §17.1）
+    const unknown = names.unknown, missing = names.missing;
+    const unk = unknown.length ? (ja ? `${tool} に ${unknown.join('・')} という名前の引数は無い。` : `${tool} has no argument named ${unknown.join(', ')}. `) : '';
+    const msg = missing.length
+      ? (ja ? `${tool} には ${missing.join('・')} が要る（渡されていない）。${unk}このツールの引数: ${list}。` : `${tool} needs ${missing.join(', ')} (not given). ${unk}Its arguments: ${list}.`)
+      : (ja ? `${unk}このツールの引数: ${list}。` : `${unk}Its arguments: ${list}.`);
+    const err = actionError('bad_request', msg, ja ? `例: ${ex}（valid_actions の行は、書いてある形のまま呼べる。別の名前は受け付けない。thought・player_token など共通の名前は、どのツールにも付けてよい）` : `e.g. ${ex} (valid_actions lines can be called as written; other names are not accepted; common names such as thought and player_token are fine on any tool)`);
     if (!port) return out(`Error [${err.code}] ${err.message}\nHint: ${err.hint}`, { ok: false, error: err }, true);
     const tb = port.turnBlock('action_rejected');
     const va = port.observe({ map: false }).observation.valid_actions;
-    record(port, tool, args, `${err.code} ${err.message}`);
+    // 活動の記録には、知らない名前の引数の値を残さない（名前違いでトークンを渡された場合のため。S1d §17.1）。名前だけ残す
+    const known: Record<string, unknown> = Object.fromEntries(Object.entries(args).filter(([k]) => !unknown.includes(k)));
+    record(port, tool, { ...known, ...(unknown.length ? { unknown_args: [...unknown] } : {}) }, `${err.code} ${err.message}`);
     return errOut(err, va, { block: tb, line: port.turnLine(tb) });
   });
   return server;
@@ -587,7 +592,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
  * 無ければ SDK の処理（検査・ハンドラ）へそのまま渡す。ツール一覧（tools/list）は変えない。
  * SDK 1.32.2 の内部（McpServer の _registeredTools・Server の _requestHandlers）を使う。形が違えば何もしない（今までどおり SDK が断る）
  */
-function interceptArgs(server: McpServer, onBad: (tool: string, args: Record<string, unknown>, kind: 'unknown' | 'missing', names: string[], shape: Record<string, ZodTypeAny>) => ToolResult | Promise<ToolResult>): void {
+function interceptArgs(server: McpServer, onBad: (tool: string, args: Record<string, unknown>, names: { unknown: string[]; missing: string[] }, shape: Record<string, ZodTypeAny>) => ToolResult | Promise<ToolResult>): void {
   const inner = server.server as unknown as { _requestHandlers?: Map<string, (req: unknown, extra: unknown) => Promise<unknown>> };
   const tools = (server as unknown as { _registeredTools?: Record<string, { inputSchema?: unknown }> })._registeredTools;
   const orig = inner._requestHandlers?.get('tools/call');
@@ -598,8 +603,7 @@ function interceptArgs(server: McpServer, onBad: (tool: string, args: Record<str
     const shape = tool ? argShape(tool.inputSchema) : null;
     if (p?.name && shape) {
       const pr = argProblems(shape, p.arguments);
-      if (pr.unknown.length) return onBad(p.name, p.arguments ?? {}, 'unknown', pr.unknown, shape);
-      if (pr.missing.length) return onBad(p.name, p.arguments ?? {}, 'missing', pr.missing, shape);
+      if (pr.unknown.length || pr.missing.length) return onBad(p.name, p.arguments ?? {}, pr, shape);
     }
     return orig(req, extra);
   });

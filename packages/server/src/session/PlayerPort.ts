@@ -162,7 +162,7 @@ const STOP_TEXT: Record<string, [string, string]> = {
   hostile_in_view: ['敵が視界に入った', 'a hostile came into view'],
   hostile_adjacent: ['隣に起きている敵がいる（退くなら mode: flee、戦うなら fight）', "an awake enemy is adjacent (retreat with mode: 'flee', or fight)"],
   hp_floor: ['HP が hp_floor 以下になった', 'HP fell to hp_floor or below'],
-  hp_risk: ['次の手番に見込みの被害を受けると hp_floor を割る（被弾の前に止まった）', 'one more turn of the expected damage would drop you below hp_floor (stopped before being hit)'],
+  hp_risk: ['次の手番に、最悪の 1 手で倒れうるか、見込みの被害で hp_floor を割る（被弾の前に止まった）', 'one worst turn could kill you, or the expected damage would drop you below hp_floor (stopped before being hit)'],
   first_hit: ['被弾の記録の無い相手から初めて被弾した（数字を見てから続けるかを決める）', 'first hit from a creature with no record (check the numbers before continuing)'],
   hostile_alerted: ['見えている敵が追跡に変わった', 'a visible enemy started hunting you'],
   hp_threshold: ['HP が 50%・25% の線をまたいだ', 'HP crossed the 50% / 25% line'],
@@ -514,8 +514,10 @@ export class SessionPlayerPort implements PlayerPort {
           const est = after.self.pos ? threatEstimate(after, this.catalog, fightThreats(this.catalog, after.entities.filter((e) => e.cat === 'monster'), after.self.pos)) : { expected: 0, worst: 0 };
           const inc = est.expected;
           const nf = after.self.stats.hp - inc;
+          // 死にうるので止まった（S1d §17.2）: hp_floor を下げても続けられない。退くか回復する
+          if (est.worst > 0 && after.self.stats.hp <= est.worst) outcome += t(L, ' hp_floor を下げても、最悪の 1 手で倒れうる間は止まる（退くか、回復してから）。', ' Lowering hp_floor does not help while one worst turn could kill you (retreat or heal first).');
           // 見込みの 1 手を受けても 1 以上残るときだけ、続けられる値を出す（V3-7 の評価: HP 8 で「0 にすれば 22 まで」と出た）
-          if (inc > 0 && nf >= 1) outcome += t(L, ` hp_floor を ${nf} にすれば、あと 1 回の見込みの被害（${inc}）まで続けられる。`, ` With hp_floor ${nf} you can take one more expected turn (${inc}).`);
+          else if (inc > 0 && nf >= 1) outcome += t(L, ` hp_floor を ${nf} にすれば、あと 1 回の見込みの被害（${inc}）まで続けられる。`, ` With hp_floor ${nf} you can take one more expected turn (${inc}).`);
           else if (inc > 0) outcome += t(L, ` いまの HP ${after.self.stats.hp} では、次の見込みの被害（${inc}）で倒れうる。`, ` At HP ${after.self.stats.hp}, the next expected turn (${inc}) could kill you.`);
           // 囲まれている: この hp_floor では毎手番止まる。何にすれば何手番続くか（V3-3c §44.6）
           const adj = obsNow.visible.monsters.filter((x) => x.awareness === 'hunting' && !x.fleeing && x.dist <= 1).length;

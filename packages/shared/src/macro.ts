@@ -6,7 +6,7 @@ import type { ActionError, Command, MacroMode, TravelTarget } from './commands';
 import { actionError } from './commands';
 import type { ProjectedEvent } from './filter';
 import { memoryKey, restCapHp } from './catalog';
-import { fightThreats, threatEstimate } from './danger';
+import { fightRiskStop, fightThreats, threatEstimate } from './danger';
 import { abilityStatus, weaponReach } from './build';
 
 /** 能動技が今使えるか（残りの手番 0・遠征ごとの回数が残っている） */
@@ -914,8 +914,9 @@ function macroStep(state: MacroState, view: PlayerView, catalog: Catalog, events
     // 被弾の前に止まる（V3-2R3 §20.4）: 次の手番に届く追跡中の敵（隣・飛び道具）の被害の見込みを受けると hp_floor を割るなら止まる
     // 隣にいる逃走中の敵も数える（追い詰められると殴ってくる。V3-5a 後の AI 評価: 逃走中の小悪魔に殴られ続けて hp_floor を割った）
     // 見込みは、いちばん重い 1 体を記録の最大の一撃、残りを記録の平均の被害にした合計（S1c §14.4 の 1。全員が最大の一撃の「最悪」は文に並べる）
+    // S1d §17.2: 死にうる（HP が最悪以下）なら hp_floor によらず止まり、hp_floor の判定は見込み（いちばん重い 1 体は会心でない最大の一撃）で
     const risk = threatEstimate(view, catalog, fightThreats(catalog, hostiles, pos));
-    if (risk.expected > 0 && hp - risk.expected < state.hpFloor) return { stop: 'hp_risk' };
+    if (fightRiskStop(hp, state.hpFloor, risk)) return { stop: 'hp_risk' };
     state.lastHp = hp;
     state.waited = false;
     const wait = (): MacroDecision => { state.steps += 1; state.waited = true; return { command: { type: 'wait' } }; };
@@ -1346,7 +1347,7 @@ function macroStopErrorBase(L: Locale, stop: MacroStop, cmd: Command, dir?: Dir)
     case 'hp_floor':
       return actionError('hp_floor', t(L, 'HP がすでに hp_floor 以下。', 'HP is already at or below hp_floor.'), t(L, 'hp_floor を下げるか、回復してから。', 'Lower hp_floor or heal first.'));
     case 'hp_risk':
-      return actionError('hp_floor', t(L, '次の手番に、届く敵から見込みの被害を受けると hp_floor を割る。', 'One more turn of the expected damage from enemies in reach would drop you below hp_floor.'),
+      return actionError('hp_floor', t(L, '被弾の前の判定で止まった（次の手番に、届く敵の最悪の 1 手で倒れうるか、見込みの被害で hp_floor を割る）。', 'Stopped before being hit (one worst turn from enemies in reach could kill you, or the expected damage would drop you below hp_floor).'),
         t(L, 'それでも戦うなら hp_floor を下げる。退くなら mode: flee か帰還の綱。', 'Lower hp_floor to fight anyway, or retreat (mode: flee or the lifeline).'));
     case 'blocked':
       return actionError('blocked', t(L, '既知の経路が敵にふさがれていて進めない（マクロは攻撃しない）。', 'Your known route is blocked by a monster (macros never attack).'), t(L, 'fight で倒すか、別の経路を選ぶ。', 'Use fight, or choose another route.'));

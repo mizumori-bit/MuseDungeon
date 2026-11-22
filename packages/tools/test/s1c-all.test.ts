@@ -10,6 +10,7 @@ import { createApp, intentStopText, loadConfig, SessionManager } from '@muse/ser
 import type { Entity } from '@muse/shared';
 import { buildObservation, collectWhatOf, intentOnMe, macroNext, macroStart, projectPlayerView, riskText, threatEstimate } from '@muse/shared';
 import { arena, content } from './v33duel';
+import { dummyInvoker } from '../src/drive';
 
 const catalog = buildCatalog(content);
 type Ar = Awaited<ReturnType<typeof arena>>;
@@ -30,8 +31,8 @@ describe('S1c §14.4 の 1: the fight estimate (the heaviest at its worst hit, t
     a.inject({ del: [a.gId] });
     a.inject({ put: [monAt(a, 'e_s1cr01', 'core:goblin', 1, 1, 'hunting'), monAt(a, 'e_s1cr02', 'core:goblin', 3, 1, 'hunting')] });
     // 種族の記録: 最大の一撃 10、攻撃された 10 回のうち 5 回当たって合計 20（平均 2。外れは 0）
-    a.world.players[a.pid].knowledge.monsterMemory['core:goblin'] = { kind: 'core:goblin', encounters: 2, kills: 0, maxDamageToYou: 10, maxDamageByYou: 0, abilities: [], hitsOnYou: [5, 10], dmgOnYou: [20, 5] };
     await a.r.port.act({ type: 'wait' }, { source: 'bot' });
+    a.world.players[a.pid].knowledge.monsterMemory['core:goblin'] = { kind: 'core:goblin', encounters: 2, kills: 0, maxDamageToYou: 10, maxDamageByYou: 0, abilities: [], hitsOnYou: [5, 10], dmgOnYou: [20, 5, 10] };
     setMe(a, (e) => { e.stats!.hp = 40; });
     const v = view(a);
     const threats = v.entities.filter((e) => e.cat === 'monster');
@@ -53,9 +54,23 @@ describe('S1c §14.4 の 1: the fight estimate (the heaviest at its worst hit, t
     const o = buildObservation(v2, catalog, { detail: 'brief', map: false });
     expect(o.alerts.find((x) => x.code === 'incoming')?.text).toContain('1 手の被害の見込み 12・最悪 20');
     expect(o.valid_actions.find((x) => x.startsWith('fight e_s1cr01'))).toContain('未満で止まる（既定の hp_floor）');
-    // 平均の記録が無い（S1c より前の記録）: 残りの敵も最大で数える（重い側）
+    // 平均の記録が無い（S1c より前の記録）・0.42.0 の 2 つの欄の記録（攻撃された回数が昔から）: 残りの敵も最大で数える（重い側。S1d §17.2）
     a.world.players[a.pid].knowledge.monsterMemory['core:goblin'] = { kind: 'core:goblin', encounters: 2, kills: 0, maxDamageToYou: 10, maxDamageByYou: 0, abilities: [] };
     expect(threatEstimate(view(a), catalog, view(a).entities.filter((e) => e.cat === 'monster'))).toEqual({ expected: 20, worst: 20, unrecorded: 0 });
+    a.world.players[a.pid].knowledge.monsterMemory['core:goblin'] = { kind: 'core:goblin', encounters: 2, kills: 0, maxDamageToYou: 10, maxDamageByYou: 0, abilities: [], hitsOnYou: [5, 100], dmgOnYou: [20, 5] };
+    expect(threatEstimate(view(a), catalog, view(a).entities.filter((e) => e.cat === 'monster'))).toEqual({ expected: 20, worst: 20, unrecorded: 0 });
+    // S1d §17.2: いちばん重い 1 体は会心でない最大の一撃（6）。最悪は会心を含む最大（10）のまま
+    a.world.players[a.pid].knowledge.monsterMemory['core:goblin'] = { kind: 'core:goblin', encounters: 2, kills: 0, maxDamageToYou: 10, maxPlainToYou: 6, maxDamageByYou: 0, abilities: [], hitsOnYou: [5, 10], dmgOnYou: [20, 5, 10] };
+    expect(threatEstimate(view(a), catalog, view(a).entities.filter((e) => e.cat === 'monster'))).toEqual({ expected: 8, worst: 20, unrecorded: 0 });
+    // 死にうるなら止まる: HP が最悪（20）以下なら、hp_floor が 0 でも止まる・始めない。文に「死にうるので止まった」
+    setMe(a, (e) => { e.stats!.hp = 20; });
+    const v3 = view(a);
+    expect(macroNext(macroStart(v3, { type: 'fight', target: 'e_s1cr01', hpFloor: 0 }, catalog), v3, catalog, [])).toEqual({ stop: 'hp_risk' });
+    expect(riskText(v3, catalog, 0)).toContain('死にうるので止まった: HP 20 が最悪 20 以下');
+    setMe(a, (e) => { e.stats!.hp = 21; });
+    const v4 = view(a);
+    expect('command' in macroNext(macroStart(v4, { type: 'fight', target: 'e_s1cr01', hpFloor: 0 }, catalog), v4, catalog, [])).toBe(true);
+    expect(riskText(v2, catalog, 25)).toContain('hp_floor で止まった');
     a.manager.closeAll();
   });
 
@@ -66,8 +81,10 @@ describe('S1c §14.4 の 1: the fight estimate (the heaviest at its worst hit, t
     const mem = a.world.players[a.pid].knowledge.monsterMemory['core:goblin'];
     const hits = a.r.session.history.filter((e) => e.type === 'damaged' && e.target === a.meId && e.via === 'melee');
     expect(hits.length).toBeGreaterThan(0);
-    expect(mem.dmgOnYou).toEqual([hits.reduce((s, e) => s + (e.type === 'damaged' ? e.amount : 0), 0), hits.length]);
+    // [合計, 当たった回数, 攻撃された回数]（S1d §17.2: 攻撃された回数を同じ時から数える）
+    expect(mem.dmgOnYou).toEqual([hits.reduce((s, e) => s + (e.type === 'damaged' ? e.amount : 0), 0), hits.length, mem.hitsOnYou![1]]);
     expect(mem.hitsOnYou![0]).toBe(hits.length);
+    expect(mem.maxPlainToYou).toBeLessThanOrEqual(mem.maxDamageToYou);
     a.manager.closeAll();
   });
 });
@@ -86,7 +103,8 @@ describe('S1c §14.4 の 2: wrong argument names get a game-form refusal with th
       const bad = await client.callTool({ name: 'travel_to', arguments: { target: 'stairs_down' } }) as unknown as Res;
       expect(bad.isError).toBe(true);
       expect(bad.structuredContent?.error.code).toBe('bad_request');
-      expect(bad.structuredContent?.error.message).toContain('travel_to に target という名前の引数は無い。このツールの引数: 要る: to／要らない（任意）: mode・hp_floor・pickup');
+      // 要る引数が足りない（to）のを先に言い、知らない名前（target）もあわせて書く（S1d §17.1）
+      expect(bad.structuredContent?.error.message).toContain('travel_to には to が要る（渡されていない）。travel_to に target という名前の引数は無い。このツールの引数: 要る: to／要らない（任意）: mode・hp_floor・pickup');
       expect(bad.structuredContent?.error.hint).toContain("travel_to { to: 'stairs_down' }");
       expect(bad.structuredContent?.valid_actions.length).toBeGreaterThan(0);
       expect(bad.structuredContent?.turn).toBeDefined();
@@ -94,8 +112,29 @@ describe('S1c §14.4 の 2: wrong argument names get a game-form refusal with th
       expect(miss.structuredContent?.error.message).toContain('move には dir が要る（渡されていない）');
       expect(miss.structuredContent?.error.hint).toContain("move { dir: 'n' }");
       const perk = await client.callTool({ name: 'choose_perk', arguments: { choice: 1 } }) as unknown as Res;
-      expect(perk.structuredContent?.error.message).toContain('choose_perk に choice という名前の引数は無い');
+      expect(perk.structuredContent?.error.message).toContain('choose_perk には option が要る（渡されていない）。choose_perk に choice という名前の引数は無い');
       expect(perk.structuredContent?.error.message).toContain('要る: option');
+      // 共通の名前（thought・player_token など）は、定義に無いツールでも受ける（S1d §17.1: AI はどのツールにも thought を付ける）
+      const okCommon = [
+        await client.callTool({ name: 'get_rules', arguments: { topic: 'season', player_token: 'x', thought: 't' } }),
+        await client.callTool({ name: 'list_runs', arguments: { thought: 't', map: 'never' } }),
+        await client.callTool({ name: 'observe', arguments: { thought: 't' } }),
+        await client.callTool({ name: 'inventory', arguments: { thought: 't' } }),
+        await client.callTool({ name: 'records', arguments: { thought: 't' } }),
+      ] as unknown as Res[];
+      for (const r of okCommon) expect(r.structuredContent?.error?.code ?? 'ok', JSON.stringify(r.content?.[0]?.text?.slice(0, 120))).not.toBe('bad_request');
+      // 共通でない知らない名前は断り、その値は活動の記録に残さない（名前違いでトークンを渡された場合のため）
+      const seen: string[] = [];
+      const orig = m.recordActivity.bind(m);
+      m.recordActivity = (runId, a) => { seen.push(JSON.stringify(a.args)); orig(runId, a); };
+      const leak = await client.callTool({ name: 'wait', arguments: { token: 'secret-value-123' } }) as unknown as Res;
+      expect(leak.structuredContent?.error.message).toContain('wait に token という名前の引数は無い');
+      expect(seen.some((x) => x.includes('unknown_args'))).toBe(true);
+      expect(seen.some((x) => x.includes('secret-value-123'))).toBe(false);
+      m.recordActivity = orig;
+      // 実際には要る引数（throw_item の target）は、一覧の「要る」に書く
+      const thr = await client.callTool({ name: 'throw_item', arguments: { slot: 'a', targte: 'n' } }) as unknown as Res;
+      expect(thr.structuredContent?.error.message).toContain('要る: slot・target');
       // 形の違い（型）は、今までどおり SDK が断る
       const typ = await client.callTool({ name: 'move', arguments: { dir: 'north' } }) as unknown as Res;
       expect(typ.isError).toBe(true);
@@ -131,6 +170,8 @@ describe('S1c §14.4 の 3・4: telegraphs', () => {
       const v = view(a);
       const og = v.entities.find((e) => e.id === 'e_s1cog1');
       const winding = og?.intent?.kind === 'swinging';
+      // 構えた相手と手番の数（hold）は、プレイヤーに出さない（S1d §17.4）
+      if (og?.intent) expect('hold' in og.intent).toBe(false);
       const n0 = a.r.session.history.length;
       await a.r.port.act({ type: 'wait' }, { source: 'bot' });
       const swung = a.r.session.history.slice(n0).some((e) => e.type === 'monster_acted' && e.id === 'e_s1cog1' && (e.act === 'swing_hit' || e.act === 'swing_missed'));
@@ -312,5 +353,29 @@ describe('S1c §14.10 の 1: travel recounts only for obstacles never seen in th
     expect(st.sinceBest).toBeGreaterThan(before ?? 0);
     expect(st.obstacleKeys).toEqual(expect.arrayContaining(keys));
     a.manager.closeAll();
+  });
+});
+
+describe('S1d §17.1: the sample agent in drive is not refused', () => {
+  it('the dummy invoker (thought on every call) gets through on every call', async () => {
+    const m = new SessionManager(content, loadConfig({ runsDir: null, profilesDir: null, seasonsDir: null, waitOthersMs: 100 }));
+    const app = createApp(m, m.config);
+    await new Promise<void>((res) => app.server.listen(0, '127.0.0.1', () => res()));
+    const mcpUrl = `http://127.0.0.1:${(app.server.address() as AddressInfo).port}/mcp`;
+    try {
+      const r = await m.createRun({ name: 'Dum', seed: 's1d-drive', controller: { kind: 'agent', label: 'dummy' }, atCamp: true } as never);
+      if ('error' in r) throw new Error(r.error.message);
+      const texts: string[] = [];
+      const orig = m.recordActivity.bind(m);
+      m.recordActivity = (runId, a) => { texts.push(`${a.tool} ${a.text.slice(0, 80)}`); orig(runId, a); };
+      const inv = dummyInvoker();
+      for (let i = 0; i < 6; i++) await inv.invoke({ event: 'turn', token: r.token, mcpUrl, turn: {} as never, observationText: '', seq: 0 });
+      expect(texts.length).toBeGreaterThan(5);
+      expect(texts.filter((x) => x.includes('bad_request'))).toEqual([]);
+      m.recordActivity = orig;
+    } finally {
+      m.closeAll();
+      await new Promise<void>((r2) => app.server.close(() => r2()));
+    }
   });
 });

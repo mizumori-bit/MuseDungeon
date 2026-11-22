@@ -37,6 +37,9 @@ async function scene(seed: string, o: { fleeing?: boolean; myHp?: number; armor?
 describe('V3-5a evaluation fixes: fight (macro)', () => {
   it('hp_risk counts an adjacent fleeing enemy (a cornered one still hits)', async () => {
     const { a, view } = await scene('v35e-flee-risk', { fleeing: true, myHp: 20 });
+    // 待つ間の小さい被弾で「会心でない最大の一撃」が付くので、最大と同じに置き直す（S1d §17.2）
+    const mm = a.world.players[a.pid].knowledge.monsterMemory['core:goblin'];
+    mm.maxPlainToYou = mm.maxDamageToYou;
     const v = view();
     expect(v.entities.find((e) => e.id === a.gId)?.fleeing).toBe(true);
     const st = macroStart(v, { type: 'fight', target: a.gId, hpFloor: 15 }, catalog);

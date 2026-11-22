@@ -7,7 +7,7 @@ import type {
 } from './types';
 
 /** 2: 遠征・実ダメージ・回復の蓄積値（IMPROVEMENTS_V2）。3: ビルド（特技・能動技・呪い。V3-4）。22: シーズン（S0）。古いログもそのまま畳み込める */
-export const EVENT_VERSION = 27;
+export const EVENT_VERSION = 28;
 
 export interface EventBase {
   seq: number;
@@ -223,7 +223,7 @@ export type GameEvent =
    * 野営の火から帰る（S1c §14.3 の 1。本人だけ）。start: 帰り支度を始めた（turns は extract の手番を含む全部）、cancel: 取りやめ（reason）、
    * done: 帰り支度が済み、この火から帰還・撤退した（completed。続く player_state が at_camp）。depth・x・y・by はその火（cancel で火から離されたときは -1）
    */
-  | E<'fire_return', { player: PlayerId; phase: 'start' | 'cancel' | 'done'; depth: number; x: number; y: number; by: string; turns?: number; reason?: 'hostile' | 'moved' | 'not_complete'; completed?: boolean }>
+  | E<'fire_return', { player: PlayerId; phase: 'start' | 'cancel' | 'done'; depth: number; x: number; y: number; by: string; turns?: number; reason?: 'hostile' | 'moved' | 'not_complete' | 'damaged'; completed?: boolean }>
   | E<'notes_updated', { player: PlayerId; notesAfter: string[] }>
   // 遠征
   | E<'expedition_offered', { camp: CampState }>

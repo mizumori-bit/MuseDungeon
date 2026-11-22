@@ -39,12 +39,15 @@ export function seasonReportable(world: World, pid: PlayerId): { depth: number; 
  * 祭壇は、部屋の作り（prefab。祠など）に組み込まれたものだけ（ばらまかれる祭壇は、条件の敵・品の数で場所が変わる）。賭けの祭壇と碑文は、どれも部屋の作りにある
  */
 export const SEASON_SPOT_KINDS: readonly string[] = ['core:altar', 'core:gamble_altar', 'core:inscription'];
+/** 節目の階（大守護者の間）の階の種類（コンテンツの floorTypes。節目の深さの階は、いつもこの種類） */
+const MILESTONE_FLOOR_TYPE = 'core:warden_hall';
 
 /** その地物が、報告できる特別な場所か（種類・部屋の作りの中・守護者の棲み処の地物でない） */
 export function isSeasonSpot(world: World, e: Entity): boolean {
   if (!e.feature || !e.pos || e.lairOf || e.campfire || !SEASON_SPOT_KINDS.includes(e.kind)) return false;
   const f = world.floors[e.pos.floor];
-  if (!f || f.branch !== 'main') return false;
+  // 節目の階（大守護者の間。5 の倍数の深さ）は外す（S1d §17.4: 倒していない節目の階は作り直されることがある）
+  if (!f || f.branch !== 'main' || f.floorType === MILESTONE_FLOOR_TYPE) return false;
   const { x, y } = e.pos;
   return f.regions.some((r) => r.kind === 'prefab' && x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h);
 }

@@ -480,6 +480,7 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
       if (ev.phase === 'start') return ja ? `${ev.by} の野営の火で帰り支度を始めた（${ev.turns} 手番。この手番を含む。その間に追ってくる敵が見えたら取りやめになる）。` : `You start packing up at ${ev.by}'s campfire (${ev.turns} turns including this one; it is called off if a hunting enemy comes into view).`;
       if (ev.phase === 'done') return ja ? `${ev.by} の野営の火から${ev.completed ? '帰還した（遠征達成）' : '撤退した'}。次の遠征は、この火のそばから始まる。` : `You ${ev.completed ? 'return home (expedition complete)' : 'withdraw'} from ${ev.by}'s campfire. The next expedition starts beside this fire.`;
       const why = ev.reason === 'hostile' ? (ja ? '追ってくる敵が見えた' : 'a hunting enemy came into view')
+        : ev.reason === 'damaged' ? (ja ? '被害を受けた' : 'you took damage')
         : ev.reason === 'moved' ? (ja ? '火のそばから離された' : 'you were moved away from the fire')
           : (ja ? '目的が未達成になった（撤退するなら extract confirm: true）' : 'the objective is no longer complete (to withdraw, extract confirm: true)');
       return ja ? `帰り支度を取りやめた（${why}）。過ごした手番は戻らない。帰るなら、もう一度 extract（最初から）。` : `Packing up is called off (${why}). The turns spent are gone; extract again to start over.`;

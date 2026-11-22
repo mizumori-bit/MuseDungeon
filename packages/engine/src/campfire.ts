@@ -64,7 +64,15 @@ function finishFireReturn(ctx: Ctx, e: Entity, pr: PlayerRecord, fire: Entity, x
   doExtract(ctx, ctx.world.entities[e.id], pr, completed, x);
 }
 
-function cancelFireReturn(ctx: Ctx, e: Entity, pr: PlayerRecord, reason: 'hostile' | 'moved' | 'not_complete', fire: Entity | undefined): void {
+/** 帰り支度の間に被害を受けた（S1d §17.3。見えない相手に撃たれた場合も・毒も）: 取りやめ。combat の applyDamage が呼ぶ */
+export function fireReturnHurt(ctx: Ctx, e: Entity): void {
+  const cur = ctx.world.entities[e.id];
+  const pr = cur?.player ? ctx.world.players[cur.player] : undefined;
+  if (!cur?.pos || !pr || !(cur.statuses ?? []).some((s) => s.id === FIRE_RETURN)) return;
+  cancelFireReturn(ctx, cur, pr, 'damaged', campfireNear(ctx, cur));
+}
+
+function cancelFireReturn(ctx: Ctx, e: Entity, pr: PlayerRecord, reason: 'hostile' | 'moved' | 'not_complete' | 'damaged', fire: Entity | undefined): void {
   removeStatus(ctx, e, FIRE_RETURN);
   const f = e.pos ? ctx.world.floors[e.pos.floor] : undefined;
   ctx.emit({
@@ -80,7 +88,8 @@ function cancelFireReturn(ctx: Ctx, e: Entity, pr: PlayerRecord, reason: 'hostil
 export function fireReturnTick(ctx: Ctx, e0: Entity): void {
   const e = ctx.world.entities[e0.id] ?? e0;
   const pr = e.player ? ctx.world.players[e.player] : undefined;
-  if (!pr || !e.pos) return;
+  // 同じ手番の毒などの被害で、もう取りやめになっている（S1d §17.3）
+  if (!pr || !e.pos || !(e.statuses ?? []).some((s) => s.id === FIRE_RETURN)) return;
   const fire = campfireNear(ctx, e);
   if (!fire) { cancelFireReturn(ctx, e, pr, 'moved', undefined); return; }
   if (huntingInView(ctx, pr, true)) cancelFireReturn(ctx, e, pr, 'hostile', fire);

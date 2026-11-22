@@ -555,11 +555,19 @@ export class SeasonService implements SeasonHooks {
   private countFireUses(d: SeasonData, user: Participant, run: SeasonRunRec, session: RunSession, pid: PlayerId): boolean {
     if (d.result) return false;
     // そのランの火の使用をすべて見る（やり直しても同じ: 数えたかどうかは火ごとの users で決まる）。記録の順のまま（firesSeen は、その順で記録に書いた数）
-    type Use = { depth: number; x: number; y: number; amount: number | null; maxHp: number | null; via: 'heal' | 'return' };
+    // 火から帰った使用は、その帰還・撤退で確定した点が 1 以上のときだけ数える（S1d §17.5: 何も持たずに、ほかの者の火の隣で撤退するだけでは数えない）。
+    // 確定した点は、続く expedition_ended の payout（その参加者の banked）
+    type Use = { depth: number; x: number; y: number; amount: number | null; maxHp: number | null; via: 'heal' | 'return'; banked?: number };
     const uses: Use[] = [];
+    let pendingReturn: Use | null = null;
     for (const e of session.history) {
       if (e.type === 'fire_used' && e.player === pid) uses.push({ depth: e.depth, x: e.x, y: e.y, amount: e.amount, maxHp: e.maxHp, via: 'heal' });
-      else if (e.type === 'fire_return' && e.player === pid && e.phase === 'done') uses.push({ depth: e.depth, x: e.x, y: e.y, amount: null, maxHp: null, via: 'return' });
+      else if (e.type === 'fire_return' && e.player === pid && e.phase === 'done') { pendingReturn = { depth: e.depth, x: e.x, y: e.y, amount: null, maxHp: null, via: 'return', banked: 0 }; uses.push(pendingReturn); }
+      else if (e.type === 'expedition_ended' && pendingReturn) {
+        const share = e.result?.payout?.players?.find((x) => x.player === pid);
+        pendingReturn.banked = share?.banked ?? 0;
+        pendingReturn = null;
+      }
     }
     const placed = session.world.season?.placed ?? [];
     const seen = run.firesSeen ?? 0;
@@ -569,9 +577,9 @@ export class SeasonService implements SeasonHooks {
       const fire = d.fires.find((x) => !x.dup && cell(x));
       // 使った者の火（自分の置いた火・取り合いで載らなかった火）は、同じマスにほかの者の火があっても数えない（S1a §10.1 の 5）
       const own = !!fire && (fire.profileId === user.profileId || d.fires.some((x) => x.profileId === user.profileId && cell(x)) || placed.some(cell));
-      const enough = e.via === 'return' || e.amount! * 100 >= e.maxHp! * this.supportMinHealPct;
+      const enough = e.via === 'return' ? (e.banked ?? 0) >= 1 : e.amount! * 100 >= e.maxHp! * this.supportMinHealPct;
       const counted = !!fire && !own && !fire.users.includes(user.profileId) && enough;
-      if (i >= seen) this.store.log(d.def.id, { type: 'fire_used', via: e.via, profileId: user.profileId, runId: session.runId, depth: e.depth, x: e.x, y: e.y, ...(e.via === 'heal' ? { amount: e.amount, maxHp: e.maxHp } : {}), counted, ...(fire ? { holder: fire.profileId } : {}) });
+      if (i >= seen) this.store.log(d.def.id, { type: 'fire_used', via: e.via, profileId: user.profileId, runId: session.runId, depth: e.depth, x: e.x, y: e.y, ...(e.via === 'heal' ? { amount: e.amount, maxHp: e.maxHp } : { banked: e.banked ?? 0 }), counted, ...(fire ? { holder: fire.profileId } : {}) });
       if (!counted || !fire) return;
       fire.uses++;
       fire.users.push(user.profileId);

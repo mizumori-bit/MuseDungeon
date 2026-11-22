@@ -325,10 +325,10 @@ describe('S0b §6.2-6: the call tool', () => {
       // §6.2 の 3（S1c §14.4 の 2 で改めた）: 引数の名前を間違えると、ゲームの断りの形で、無い名前と正しい名前と呼び方の例が出る
       const bad1 = await call('travel_to', 'target=stairs_down');
       expect(bad1.code).toBe(1);
-      expect(bad1.text).toContain('travel_to に target という名前の引数は無い。このツールの引数: 要る: to');
+      expect(bad1.text).toContain('travel_to には to が要る（渡されていない）。travel_to に target という名前の引数は無い。このツールの引数: 要る: to');
       expect(bad1.text).toContain("例: travel_to { to: 'stairs_down' }");
       const bad2 = await call('choose_perk', 'choice=1');
-      expect(bad2.text).toContain('choose_perk に choice という名前の引数は無い。このツールの引数: 要る: option');
+      expect(bad2.text).toContain('choose_perk には option が要る（渡されていない）。choose_perk に choice という名前の引数は無い。このツールの引数: 要る: option');
       // 2 つ目のラン: 上書きする前のトークンは *.old.txt に残る
       expect((await call('new_run', 'character_name=Aki2')).code).toBe(0);
       expect(readFileSync(files.player.replace(/\.txt$/, '.old.txt'), 'utf8')).toContain(ptok);
