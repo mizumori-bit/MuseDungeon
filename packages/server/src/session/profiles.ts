@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFile
 import { join } from 'node:path';
 import type { Content } from '@muse/content';
 import type {
-  Catalog, CodexIndex, CodexRun, FeatContext, FeatDefLite, FeatRecord, GameEvent, LegacyMonster, Locale, PlayerId, ProfileData, ProfileRecords, ProfileRun,
+  Catalog, CodexIndex, CodexRun, FeatContext, FeatDefLite, FeatRecord, GameEvent, LegacyMonster, Locale, PlayerId, ProfileData, ProfileRecords, ProfileRun, SeasonTitle,
 } from '@muse/shared';
 import { abilityName, buildRecords, codexCount, emptyCodex, evalFeatCond, expeditionBest, floorsUnhurt, kindName, legacyFrom, mergeCodex, recordsCampLine, recordsLines, t } from '@muse/shared';
 import type { RunSession } from './RunSession';
@@ -99,27 +99,33 @@ export function buildCodexIndex(content: Content): CodexIndex {
  * 書き換えは表示名だけ（記録はサーバーがランから作る）
  */
 export class ProfilePort {
-  constructor(private readonly service: ProfileService, readonly id: string, private readonly liveRun: (runId: string) => boolean) {}
+  constructor(
+    private readonly service: ProfileService, readonly id: string, private readonly liveRun: (runId: string) => boolean,
+    /** シーズンの称号（S2 §18.2）。確定したシーズンの結果から作る（プロフィールのファイルには書かない） */
+    private readonly titles: () => SeasonTitle[] = () => [],
+  ) {}
 
   records(L: Locale): { text: string; data: ProfileRecords } | null {
     const r = this.service.records(this.id, L);
     return r ? { text: r.lines.join('\n'), data: r.records } : null;
   }
 
-  /** 表示名・記録の要約・進行中で再開できるラン（run_id だけ。player_token は返さない） */
-  info(L: Locale): { text: string; data: { profile_id: string; name: string; summary: string; runs: { run_id: string; character: string; status: 'active' | 'ended'; resumable: boolean }[] } } | null {
+  /** 表示名・記録の要約・称号（S2）・進行中で再開できるラン（run_id だけ。player_token は返さない） */
+  info(L: Locale): { text: string; data: { profile_id: string; name: string; summary: string; titles: { name: string; season: string; season_name: string; kind: SeasonTitle['kind']; award?: SeasonTitle['award']; depth?: number }[]; runs: { run_id: string; character: string; status: 'active' | 'ended'; resumable: boolean }[] } } | null {
     const p = this.service.store.get(this.id);
     const r = this.service.records(this.id, L);
     if (!p || !r) return null;
     const runs = [...p.runs].sort((a, b) => b.startedAt - a.startedAt).map((x) => ({ run_id: x.runId, character: x.character, status: x.status, resumable: x.status === 'active' && this.liveRun(x.runId) }));
     const summary = recordsCampLine(L, r.records);
     const open = runs.filter((x) => x.resumable);
+    const titles = this.titles().map((x) => ({ name: L === 'en' ? x.name.en : x.name.ja, season: x.season, season_name: x.seasonName, kind: x.kind, ...(x.award ? { award: x.award } : {}), ...(x.depth !== undefined ? { depth: x.depth } : {}) }));
     const lines = [
       t(L, `プロフィール: ${p.name}（${p.id}）`, `Profile: ${p.name} (${p.id})`),
       summary,
+      ...(titles.length ? [t(L, `称号: ${titles.map((x) => x.name).join('・')}`, `Titles: ${titles.map((x) => x.name).join(', ')}`)] : []),
       open.length ? t(L, `進行中のラン: ${open.map((x) => `${x.run_id}（${x.character}）`).join('・')}（resume_run は player_token で）`, `Runs in progress: ${open.map((x) => `${x.run_id} (${x.character})`).join(', ')} (resume_run takes the player_token)`) : t(L, '進行中のランは無い', 'No run in progress'),
     ];
-    return { text: lines.join('\n'), data: { profile_id: p.id, name: p.name, summary, runs } };
+    return { text: lines.join('\n'), data: { profile_id: p.id, name: p.name, summary, titles, runs } };
   }
 
   rename(name: string): boolean {

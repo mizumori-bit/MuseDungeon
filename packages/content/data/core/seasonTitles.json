@@ -1,0 +1,7 @@
+[
+  {"id": "core:title_adventure", "kind": "award", "award": "adventure", "name": {"ja": "冒険賞（{season}）", "en": "Adventure award ({season})"}},
+  {"id": "core:title_contribution", "kind": "award", "award": "contribution", "name": {"ja": "貢献賞（{season}）", "en": "Contribution award ({season})"}},
+  {"id": "core:title_survival", "kind": "award", "award": "survival", "name": {"ja": "生還賞（{season}）", "en": "Survival award ({season})"}},
+  {"id": "core:title_support", "kind": "award", "award": "support", "name": {"ja": "支援賞（{season}）", "en": "Support award ({season})"}},
+  {"id": "core:title_first_warden", "kind": "first_warden", "name": {"ja": "地下{depth}階の初討伐（{season}）", "en": "First to slay the depth {depth} warden ({season})"}}
+]

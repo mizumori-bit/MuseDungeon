@@ -2,7 +2,10 @@
 // ランに入るのは、キャンプでの取り込み（システムの命令 season_sync）だけ。ここはその中身を作り、ランの出来事から参加者の記録を書き直す。
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { GameEvent, PlayerId, SeasonAward, SeasonListing, SeasonStandingRow, SeasonSyncCommand } from '@muse/shared';
+import type {
+  GameEvent, PlayerId, SeasonAward, SeasonListing, SeasonResultView, SeasonSectionRow, SeasonStandingRow, SeasonStandingsResponse, SeasonSyncCommand, SeasonTitle,
+} from '@muse/shared';
+import { awardName } from '@muse/shared';
 import type { RunSession } from '../session/RunSession';
 import type { ProfileStore } from '../session/profiles';
 
@@ -60,12 +63,28 @@ export interface PublicFireRec {
   dup?: boolean;
 }
 
+/** 称号の記録（S2 §18.2。result.json の titles）。profileId は HTTP に出さない */
+export interface SeasonTitleRec extends SeasonTitle { profileId: string; holder: string }
+
 export interface SeasonResult {
   finalizedAt: number;
   reason: 'all_back' | 'grace_over' | 'operator';
   winners: Record<SeasonAward['id'], { name: string; value: number }[]>;
   standings: SeasonStandingRow[];
+  /** 称号（S2 §18.2）。S2 より前の結果には無い */
+  titles?: SeasonTitleRec[];
+  /** 節目の大守護者の初討伐（S2 §18.2。深さの順） */
+  deeds?: { depth: number; name: string; profileId: string }[];
 }
+
+/**
+ * 節目の大守護者の初討伐（S2 §18.2。deeds.json）: その階の大守護者を倒した後に、最初にキャンプへ着いた参加者（§1.2 の 2: 外との出入りはキャンプでだけ）。
+ * 1 つの階に 1 人。used はキャンプに着いたときまでに使った予算
+ */
+export interface SeasonDeedRec { depth: number; profileId: string; name: string; runId: string; used: number; wall: number; order: number }
+
+/** 称号の定義（content の seasonTitles と同じ形。サーバーと運用の道具が渡す） */
+export interface SeasonTitleDefLite { id: string; kind: 'award' | 'first_warden'; award?: SeasonAward['id']; name: { ja: string; en: string } }
 
 interface SeasonData {
   def: SeasonDef;
@@ -74,8 +93,14 @@ interface SeasonData {
   /** 公開された特別な場所（S1c §14.5） */
   spots: PublicSpotRec[];
   fires: PublicFireRec[];
+  /** 節目の大守護者の初討伐（S2 §18.2） */
+  deeds: SeasonDeedRec[];
   result: SeasonResult | null;
 }
+
+const AWARD_IDS = ['adventure', 'contribution', 'survival', 'support'] as const;
+/** 称号を付けるのに要る、ランを始めた参加者の数（S2 §18.2） */
+export const TITLE_MIN_ENTRANTS = 2;
 
 /** 終わりの時刻の後、全員がキャンプに戻らなくても、この時間で確定する（SEASON.md §2.1） */
 export const SEASON_GRACE_MS = 60 * 60 * 1000;
@@ -128,6 +153,7 @@ export function computeStandings(ps: readonly Participant[], fires: readonly Pub
     contribution: { value: p.firstReports, rank: con.get(p)! },
     survival: p.died ? null : { value: banked(p), rank: sur.get(p)! },
     support: { value: support(p), rank: sup.get(p)! },
+    banked: banked(p),
   })).sort((a, b) => a.adventure.rank - b.adventure.rank || a.name.localeCompare(b.name));
   const award = (p: Participant, id: SeasonAward['id']): SeasonAward => {
     if (id === 'support') return { id, value: support(p), rank: sup.get(p) ?? null, entrants: list.length, leader: supLead, gap: supLead ? supLead.value - support(p) : null };
@@ -178,6 +204,7 @@ export class SeasonStore {
       public: this.readJson<PublicStairsRec[]>(id, 'public.json') ?? [],
       spots: this.readJson<PublicSpotRec[]>(id, 'spots.json') ?? [],
       fires: this.readJson<PublicFireRec[]>(id, 'fires.json') ?? [],
+      deeds: this.readJson<SeasonDeedRec[]>(id, 'deeds.json') ?? [],
       result: this.readJson<SeasonResult>(id, 'result.json'),
     };
     this.data.set(id, d);
@@ -195,7 +222,7 @@ export class SeasonStore {
   open(def: SeasonDef): SeasonData {
     if (!SEASON_ID_RE.test(def.id)) throw new Error(`bad season id ${def.id} (a-z 0-9 _ -, up to 32)`);
     if (this.get(def.id)) throw new Error(`season ${def.id} already exists`);
-    const d: SeasonData = { def, participants: [], public: [], spots: [], fires: [], result: null };
+    const d: SeasonData = { def, participants: [], public: [], spots: [], fires: [], deeds: [], result: null };
     this.data.set(def.id, d);
     this.writeJson(def.id, 'season.json', def);
     this.log(def.id, { type: 'opened', def });
@@ -229,6 +256,7 @@ export class SeasonStore {
   savePublic(d: SeasonData): void { this.writeJson(d.def.id, 'public.json', d.public); }
   saveSpots(d: SeasonData): void { this.writeJson(d.def.id, 'spots.json', d.spots); }
   saveFires(d: SeasonData): void { this.writeJson(d.def.id, 'fires.json', d.fires); }
+  saveDeeds(d: SeasonData): void { this.writeJson(d.def.id, 'deeds.json', d.deeds); }
   saveResult(d: SeasonData): void { this.writeJson(d.def.id, 'result.json', d.result); }
 
   log(id: string, rec: Record<string, unknown>): void {
@@ -264,6 +292,8 @@ export class SeasonService implements SeasonHooks {
     private readonly now: () => number = Date.now,
     /** 支援賞に数える使用の戻りの下限（最大 HP の %。balance.season.supportMinHealPct） */
     private readonly supportMinHealPct = 10,
+    /** 称号の定義（S2 §18.2。content の seasonTitles）。無ければ賞の名前から作る */
+    private readonly titleDefs: readonly SeasonTitleDefLite[] = [],
   ) {}
 
   status(d: SeasonData): SeasonListing['status'] {
@@ -479,6 +509,8 @@ export class SeasonService implements SeasonHooks {
       // 野営の火（S1 §8.4・§8.5。S1a §10.1 の 1）: キャンプに着いた・ランが終わったコミットで、このランで置いた火を載せ、このランの火の使用をまとめて数える
       const arrived = events.some((e) => e.type === 'expedition_ended' || e.type === 'run_ended' || (e.type === 'player_state' && e.player === pid));
       const fires = arrived && this.isHome(session, pid) ? this.settleFires(session, pid, f) : false;
+      // 節目の大守護者の初討伐（S2 §18.2）: 倒した後にキャンプへ着いた順
+      if (arrived) this.recordDeeds(session, pid, f);
       if (big || fires) this.store.saveParticipants(f.d);
       if (big || events.some((e) => e.type === 'expedition_ended' || e.type === 'run_ended')) this.tick();
     }
@@ -508,7 +540,26 @@ export class SeasonService implements SeasonHooks {
       if (!f) continue;
       this.refresh(session, pid, f);
       if (this.isHome(session, pid) && this.settleFires(session, pid, f)) this.store.saveParticipants(f.d);
+      this.recordDeeds(session, pid, f);
     }
+  }
+
+  /**
+   * 節目の大守護者の初討伐（S2 §18.2）: キャンプにいる参加者のランで倒した節目の階（milestones.cleared）のうち、
+   * まだだれの記録にも無い階を、その参加者の偉業にする（「最初」は倒した後にキャンプへ着いた順。倒れて帰れなかった討伐は数えない）
+   */
+  private recordDeeds(session: RunSession, pid: PlayerId, f: { d: SeasonData; p: Participant; run: SeasonRunRec }): void {
+    const { d, p } = f;
+    if (d.result || session.world.players[pid]?.state !== 'at_camp') return;
+    let n = 0;
+    for (const depth of session.world.milestones?.cleared ?? []) {
+      if (d.deeds.some((x) => x.depth === depth)) continue;
+      const rec: SeasonDeedRec = { depth, profileId: p.profileId, name: p.name, runId: session.runId, used: used(p), wall: this.now(), order: d.deeds.length + 1 };
+      d.deeds.push(rec);
+      this.store.log(d.def.id, { type: 'first_warden', profileId: p.profileId, runId: session.runId, depth, used: rec.used, order: rec.order });
+      n++;
+    }
+    if (n) this.store.saveDeeds(d);
   }
 
   /** 開いているシーズンのうち、版（engine・コンテンツ）がこのサーバーと違うもの（S1a: 起動時の警告） */
@@ -614,17 +665,108 @@ export class SeasonService implements SeasonHooks {
       if (r.survival?.rank === 1) winners.survival.push({ name: r.name, value: r.survival.value });
       if (r.support?.rank === 1 && r.support.value > 0) winners.support.push({ name: r.name, value: r.support.value });
     }
-    d.result = { finalizedAt: this.now(), reason, winners, standings: st.rows };
+    const at = this.now();
+    const titles = this.titlesFor(d, st, at);
+    const deeds = [...d.deeds].sort((a, b) => a.depth - b.depth).map((x) => ({ depth: x.depth, name: x.name, profileId: x.profileId }));
+    d.result = { finalizedAt: at, reason, winners, standings: st.rows, titles, deeds };
     this.store.saveParticipants(d);
     this.store.saveResult(d);
-    this.store.log(d.def.id, { type: 'finalized', reason, winners });
+    this.store.log(d.def.id, { type: 'finalized', reason, winners, titles: titles.map((x) => ({ id: x.id, profileId: x.profileId, ...(x.award ? { award: x.award } : {}), ...(x.depth ? { depth: x.depth } : {}) })) });
     return d.result;
   }
 
-  /** 順位の表（GET /api/seasons/:id。公開された階段の位置は入れない） */
-  standings(id: string): { season: SeasonListing; standings: SeasonStandingRow[]; result?: SeasonResult } | null {
+  /**
+   * 称号（S2 §18.2）: 賞ごとの 1 位（同じ順位の 1 位は全員）と、節目の大守護者の初討伐（階ごと）。
+   * ランを始めた参加者が TITLE_MIN_ENTRANTS 人に満たないシーズンでは付けない。値が 0 の賞（と対象外）にも付けない
+   */
+  private titlesFor(d: SeasonData, st: ReturnType<typeof computeStandings>, at: number): SeasonTitleRec[] {
+    const ps = started(d.participants);
+    if (ps.length < TITLE_MIN_ENTRANTS) return [];
+    const out: SeasonTitleRec[] = [];
+    const base = { season: d.def.id, seasonName: d.def.name, at };
+    for (const id of AWARD_IDS) {
+      for (const p of ps) {
+        const a = st.award(p, id);
+        if (a.rank !== 1 || !a.value) continue;
+        const def = this.titleDefs.find((x) => x.kind === 'award' && x.award === id);
+        out.push({ ...base, id: def?.id ?? `core:title_${id}`, kind: 'award', award: id, name: titleName(def, d.def.name, null, awardName('ja', id), awardName('en', id)), profileId: p.profileId, holder: p.name });
+      }
+    }
+    const def = this.titleDefs.find((x) => x.kind === 'first_warden');
+    for (const x of [...d.deeds].sort((a, b) => a.depth - b.depth)) {
+      out.push({ ...base, id: def?.id ?? 'core:title_first_warden', kind: 'first_warden', depth: x.depth, name: titleName(def, d.def.name, x.depth, `地下${x.depth}階の初討伐`, `First to slay the depth ${x.depth} warden`), profileId: x.profileId, holder: x.name });
+    }
+    return out;
+  }
+
+  /** そのプロフィールの称号（S2 §18.2。確定したすべてのシーズンの結果から。付いた順） */
+  titlesOf(profileId: string): SeasonTitle[] {
+    const out: SeasonTitle[] = [];
+    for (const id of this.store.ids()) {
+      const d = this.store.get(id);
+      for (const x of d?.result?.titles ?? []) if (x.profileId === profileId) out.push(publicTitle(x));
+    }
+    return out.sort((a, b) => a.at - b.at || (a.season < b.season ? -1 : a.season > b.season ? 1 : 0));
+  }
+
+  /**
+   * 坑の断面（S2 §18.3）: 階ごとの最深の印・公開された階段と特別な場所・共有層の火（取り合いで載らなかった火は除く）。位置は出さない。
+   * 確定したシーズンでは、節目の大守護者の初討伐も
+   */
+  section(d: SeasonData): SeasonSectionRow[] {
+    const ps = started(d.participants);
+    const fires = d.fires.filter((f) => !f.dup);
+    const deeds = d.result ? d.deeds : [];
+    const max = Math.max(1, ...ps.map((p) => p.best.depth), ...d.public.map((x) => x.depth), ...d.spots.map((x) => x.depth), ...fires.map((x) => x.depth), ...deeds.map((x) => x.depth));
+    const out: SeasonSectionRow[] = [];
+    for (let depth = 1; depth <= max; depth++) {
+      const st = d.public.find((x) => x.depth === depth);
+      const deed = deeds.find((x) => x.depth === depth);
+      out.push({
+        depth,
+        deepest: ps.filter((p) => p.best.depth === depth).map((p) => p.name),
+        stairs: st ? { by: st.by } : null,
+        spots: d.spots.filter((x) => x.depth === depth).sort((a, b) => a.order - b.order).map((x) => ({ kind: x.kind, by: x.by })),
+        fires: fires.filter((x) => x.depth === depth).sort((a, b) => a.order - b.order).map((x) => ({ by: x.by, uses: x.uses })),
+        ...(deed ? { firstWarden: deed.name } : {}),
+      });
+    }
+    return out;
+  }
+
+  /**
+   * 順位の表（GET /api/seasons/:id。公開された階段の位置は入れない）。S2: 参加者ごとの確定点と称号、確定した結果の称号と初討伐、坑の断面。
+   * プロフィールの ID とトークンは出さない
+   */
+  standings(id: string): SeasonStandingsResponse | null {
     const d = this.store.get(id);
     if (!d) return null;
-    return { season: this.listing(d), standings: d.result?.standings ?? computeStandings(started(d.participants), d.fires).rows, ...(d.result ? { result: d.result } : {}) };
+    const pOf = (name: string) => d.participants.find((p) => nameKey(p.name) === nameKey(name));
+    const decorate = (r: SeasonStandingRow): SeasonStandingRow => {
+      const p = pOf(r.name);
+      return { ...r, banked: r.banked ?? (p ? banked(p) : 0), titles: p ? this.titlesOf(p.profileId) : [] };
+    };
+    const rows = (d.result?.standings ?? computeStandings(started(d.participants), d.fires).rows).map(decorate);
+    let result: SeasonResultView | undefined;
+    if (d.result) {
+      const { titles, deeds, standings: _s, ...rest } = d.result;
+      result = {
+        ...rest, standings: rows,
+        ...(titles ? { titles: titles.map((x) => ({ ...publicTitle(x), holder: x.holder })) } : {}),
+        ...(deeds ? { deeds: deeds.map((x) => ({ depth: x.depth, name: x.name })) } : {}),
+      };
+    }
+    return { season: this.listing(d), standings: rows, ...(result ? { result } : {}), section: this.section(d) };
   }
+}
+
+/** 称号の名前（データの {season}・{depth} を置き換える。定義が無ければ賞の名前から） */
+function titleName(def: SeasonTitleDefLite | undefined, season: string, depth: number | null, ja: string, en: string): { ja: string; en: string } {
+  const fill = (s: string) => s.split('{season}').join(season).split('{depth}').join(depth === null ? '' : String(depth));
+  return def ? { ja: fill(def.name.ja), en: fill(def.name.en) } : { ja: `${ja}（${season}）`, en: `${en} (${season})` };
+}
+
+/** 外へ出す称号（プロフィールの ID と持ち主の名前を外す） */
+function publicTitle(x: SeasonTitleRec): SeasonTitle {
+  return { id: x.id, season: x.season, seasonName: x.seasonName, kind: x.kind, ...(x.award ? { award: x.award } : {}), ...(x.depth !== undefined ? { depth: x.depth } : {}), name: { ...x.name }, at: x.at };
 }

@@ -149,6 +149,61 @@ export interface SeasonStandingRow {
   survival: { value: number; rank: number } | null;
   /** 支援賞（S1）: 自分の火がほかの参加者に使われた回数。古い記録には無い */
   support?: { value: number; rank: number };
+  /** 確定した点の合計（S2 §18.3。倒れた者も。火の費用を引いた後。生還賞の数字と同じ式）。古い記録には無い（HTTP は参加者の記録から埋める） */
+  banked?: number;
+  /** その参加者の称号（S2 §18.2。確定したシーズンのすべてで付いたもの。HTTP の応答で付ける） */
+  titles?: SeasonTitle[];
+}
+
+/**
+ * シーズンの称号（S2。SEASON.md §18.2）。表示だけで、力は足さない。name はデータ（content の seasonTitles）から確定のときに作った名前。
+ * kind: award は賞の 1 位（award）、first_warden は節目の大守護者の初討伐（depth）
+ */
+export interface SeasonTitle {
+  id: string;
+  season: string;
+  seasonName: string;
+  kind: 'award' | 'first_warden';
+  award?: 'adventure' | 'contribution' | 'survival' | 'support';
+  depth?: number;
+  name: { ja: string; en: string };
+  /** 付いた時刻（シーズンの確定） */
+  at: number;
+}
+
+/**
+ * 坑の断面の 1 行（S2 §18.3）: 階ごとに、最深の印・公開された階段と特別な場所（報告した者）・共有層に載った火（置いた者・使われた回数）。
+ * 位置は出さない（階だけ）。進行中のシーズンでも、順位の表に出ているもの（最深）と、もう公開されているものだけ
+ */
+export interface SeasonSectionRow {
+  depth: number;
+  /** その階が最深の参加者（順位の表の冒険賞の値） */
+  deepest: string[];
+  stairs: { by: string } | null;
+  spots: { kind: string; by: string }[];
+  fires: { by: string; uses: number }[];
+  /** 節目の大守護者を最初に倒した者（倒した後にキャンプへ着いた順。確定したシーズンだけ） */
+  firstWarden?: string;
+}
+
+/** 確定した結果（S2 §18.3。GET /api/seasons/:id の result） */
+export interface SeasonResultView {
+  finalizedAt: number;
+  reason: 'all_back' | 'grace_over' | 'operator';
+  winners: Record<'adventure' | 'contribution' | 'survival' | 'support', { name: string; value: number }[]>;
+  standings: SeasonStandingRow[];
+  /** このシーズンで付いた称号（holder: 付いた参加者の表示名）。称号の無い古い結果には無い */
+  titles?: (SeasonTitle & { holder: string })[];
+  /** 節目の大守護者の初討伐（深さの順） */
+  deeds?: { depth: number; name: string }[];
+}
+
+/** GET /api/seasons/:id（S0 §9.8・S2 §18.3） */
+export interface SeasonStandingsResponse {
+  season: SeasonListing;
+  standings: SeasonStandingRow[];
+  result?: SeasonResultView;
+  section: SeasonSectionRow[];
 }
 
 // ---- ターンフィード（GET /api/player/feed、SSE） ----

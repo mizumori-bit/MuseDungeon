@@ -945,7 +945,7 @@ CommandRecord {
 | `POST /api/runs` / `POST /api/runs/:id/join` | ランを開始・参加（`{ name, classId?, seed?, mode?, locale?, objective?, controller?, season?, profileToken? }`。`season` は S0 §9.1 → `{ runId, playerId, token }`。`controller` を省くと `{ kind: 'unknown' }`。V4-1g。ブラウザの画面は `human` を送る。参加はキャンプから始まる）。開始時は最初の遠征まで始める |
 | `GET /api/runs/:id/commands` | commands.jsonl（AI パネルのツール呼び出し・thought 表示用） |
 | `GET /api/runs/:id/summary` | 終了時サマリー |
-| `GET /api/seasons` / `GET /api/seasons/:id` | S0（§9.8）。シーズンの一覧 / 1 つのシーズンの順位の表（公開された階段の位置は出さない） |
+| `GET /api/seasons` / `GET /api/seasons/:id` | S0（§9.8）。シーズンの一覧 / 1 つのシーズンの順位の表・確定した結果・坑の断面（S2 §9.11。公開された階段の位置は出さない） |
 
 ### 8.1 ターンフィード（`GET /api/player/feed`）
 
@@ -1089,7 +1089,11 @@ SeasonSyncCommand {
 ### 9.8 HTTP
 
 - `GET /api/seasons` → `{ seasons: { id, name, budget, endsAt, status: 'open'|'ended'|'final', participants, invited }[] }`（`participants`: 1 回でもランを始めた数、`invited`: 招いた数）
-- `GET /api/seasons/:id` → `{ season, standings: { name, runs, used, died, adventure: { value, rank }, contribution: { value, rank }, survival: { value, rank } | null }[], result? }`（公開された階段の位置は出さない。人間の画面のロビーの順位の表）
+- `GET /api/seasons/:id` → `SeasonStandingsResponse { season, standings: SeasonStandingRow[], result?: SeasonResultView, section: SeasonSectionRow[] }`（公開された階段の位置は出さない。人間の画面のロビーの順位の表と、結果の画面。S2 §9.11）
+  - `SeasonStandingRow { name, runs, used, died, adventure: { value, rank }, contribution: { value, rank }, survival: { value, rank } | null, support?, banked?, titles? }`。`banked`（S2）は確定した点の合計（倒れた者も。火の費用を引いた後）。`titles`（S2）は、その参加者が確定したすべてのシーズンで得た称号（`SeasonTitle`）。
+  - `result`（確定したシーズンだけ）: `{ finalizedAt, reason, winners, standings, titles?: (SeasonTitle & { holder })[], deeds?: { depth, name }[] }`。
+  - `section`（S2。坑の断面）: 階ごとの `{ depth, deepest: string[], stairs: { by } | null, spots: { kind, by }[], fires: { by, uses }[], firstWarden? }`。位置は出さない（階だけ）。`deepest` は順位の表の冒険賞の値、`stairs`・`spots` は公開されたもの、`fires` は共有層に載った火（取り合いで載らなかった火 `dup` は除く）、`firstWarden` は確定したシーズンだけ。進行中のシーズンでも同じ決まり（公開されていないものは出さない）。
+  - プロフィールの ID・トークンは出さない。
 
 ### 9.9 規則の文
 
@@ -1129,3 +1133,19 @@ SeasonSyncCommand {
 **支援賞**（`support`）: 自分の火を、ほかの参加者が使った人数（延べ。S1c で改めた）。数えるのは、(1) 置いた本人でない、(2) その参加者がその火で数えられるのはシーズンを通して 1 回だけ、(3) 「使った」＝その使用で最大 HP の `supportMinHealPct`（10）% 以上が戻った（`fire_used`）か、**その火から帰還・撤退し、それで確定した点が 1 以上**（`fire_return` の `done` と、続く `expedition_ended` の `payout`。S1c・S1d）、のすべてを満たす使用だけ。火から帰った者は、その場でキャンプに着くので、その場で数える。サーバーが、使った者がキャンプに着いたとき（遠征の終わり）か、そのランが終わったときに、そのランの `fire_used` をまとめて数える（S1a。その場では数えない: 置いた者に「今その階にだれかいる」と分からないように）。同着は使った予算の少ないほう。共有層の火は `seasons/<id>/fires.json`（`{ order, depth, x, y, by, profileId, runId, wall, used, uses, users, dup? }`）。参加者ごとの支援の数は、ここの `uses` から作る（S1a）。
 
 観測: 火は `visible.features`（`by`）と覚えている地図に出る。`valid_actions` に `place_fire（置いた本人の得・費用・確定点・残りの数。置けないときは不可と理由）`、火の隣と上で `interact <dir>（野営の火: HP を N まで戻す）`。迷宮では `season.fire_used`（この遠征で火を使った階）と、いま火を置けるマスにいれば `season.support`（支援賞の行と「あなたの火 N/3・あと M つ置ける」。S1c）。キャンプでは `season.fires`（自分の火ごとに、使われた回数。まだ載っていない火も）・`season.fire_news`（S1c。「知らせ: あなたの野営の火（地下4階 (x,y)）を ○○ が使った（支援賞 +1）」。前の取り込みから新しく使った者。遠征を始める取り込みで、キャンプで見せた分を捨てる）と、賞の 4 行（支援賞の行に自分の火の数）。
+
+### 9.11 称号と結果（S2。SEASON.md §18.2・§18.3）
+
+**ゲームの規則は変えない**（観測・出来事の形も変えない。`engineVersion`・`eventVersion` はそのまま）。称号は表示だけで、力は足さない。
+
+- **賞の称号**: シーズンの結果が確定したとき（`finalize`）、4 つの賞ごとに 1 位の参加者（同じ順位の 1 位は全員）に、その賞の称号（「冒険賞（シーズンの名前）」）。**ランを始めた参加者が 2 人に満たないシーズンでは付けない。** 値が 0 の賞・対象外（倒れた者の生還賞）にも付けない。
+- **初討伐**（一度きりの偉業。順位の賞にしない）: そのシーズンで、節目の大守護者を倒した後に、**最初にキャンプへ着いた**参加者に、階ごとに称号（「地下5階の初討伐（シーズンの名前）」）。サーバーは、参加者がキャンプに着いたコミット（と、起動し直して復旧したキャンプのラン）で、そのランの `world.milestones.cleared` のうち、まだだれの記録にも無い階を `seasons/<id>/deeds.json`（`{ depth, profileId, name, runId, used, wall, order }`）に残す（`log.jsonl` に `first_warden`）。倒して帰る前に倒れた討伐は数えない。称号は確定のときに付ける（参加者 2 人の決まりも同じ）。
+- **名前**: データ `packages/content/data/core/seasonTitles.json`（`{ id, kind: 'award' | 'first_warden', award?, name: { ja, en } }`。`{season}` はシーズンの名前、`{depth}` は階）。コンテンツの版のハッシュには入れない（実績と同じ。表示だけなので、開いているシーズンの版を変えない）。確定のときに名前を作り、結果に残す（後でデータを変えても、付いた称号の名前は変わらない）。
+- **残す場所**: 確定した結果 `seasons/<id>/result.json` の `titles`（`SeasonTitle & { profileId, holder }`）。プロフィールのファイルには書かない（運用の道具の `close` とサーバーは別のプロセスで、両方がプロフィールのファイルを書くと上書きし合うため）。プロフィールの称号は、確定したすべてのシーズンの結果から作る（`SeasonService.titlesOf`）。
+
+```ts
+SeasonTitle { id, season, seasonName, kind: 'award' | 'first_warden', award?, depth?, name: { ja, en }, at }
+```
+
+- **見える所**: 順位の表（`GET /api/seasons/:id` の `standings[].titles`。人間の画面のロビーでは名前の横）・プロフィール（MCP の `profile` の文に「称号: …」と `titles: { name, season, season_name, kind, award?, depth? }[]`。HTTP の `GET /api/profile` も同じ。人間の画面のロビーの「記録と図鑑」）・結果の画面（`result.titles`）・運用の道具（`standings` の名前の横、`close` の出力）。キャンプの観測の賞の行（取り込み）には出さない（取り込みの形を変えない）。
+- **結果を見返す**: `GET /api/seasons/:id` の `result`・`standings[].banked`・`section`（§9.8）。人間の画面は `#/season/<id>`。

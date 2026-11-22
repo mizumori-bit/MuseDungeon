@@ -379,6 +379,17 @@ export const FeatSchema = z.object({
   cond: FeatCondSchema,
 });
 
+/**
+ * シーズンの称号（S2。SEASON.md §18.2）。表示だけで、力は足さない。name の {season} はシーズンの名前、{depth} は階の深さに置き換える。
+ * kind: award は賞の 1 位（award がどの賞か）、first_warden は節目の大守護者の初討伐（一度きりの偉業）
+ */
+export const SeasonTitleSchema = z.object({
+  id: IdSchema,
+  kind: z.enum(['award', 'first_warden']),
+  award: z.enum(['adventure', 'contribution', 'survival', 'support']).optional(),
+  name: NamesSchema,
+});
+
 /** 守護者の名前の音節（V3-3 §3.1。シードで 2〜3 個つなぐ） */
 export const GuardianNamesSchema = z.object({
   id: IdSchema,
@@ -586,6 +597,7 @@ export type BoonDef = z.infer<typeof BoonSchema>;
 export type LoreDef = z.infer<typeof LoreSchema>;
 export type FloorEventDef = z.infer<typeof FloorEventSchema>;
 export type FeatDef = z.infer<typeof FeatSchema>;
+export type SeasonTitleDef = z.infer<typeof SeasonTitleSchema>;
 
 /** ファイル名 → スキーマ。新しい定義ファイル種別はここに 1 行足す */
 export const FILE_SCHEMAS = {
@@ -614,6 +626,7 @@ export const FILE_SCHEMAS = {
   lore: LoreSchema,
   floorEvents: FloorEventSchema,
   feats: FeatSchema,
+  seasonTitles: SeasonTitleSchema,
 } as const;
 
 export type FileKind = keyof typeof FILE_SCHEMAS;

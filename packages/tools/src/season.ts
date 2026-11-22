@@ -32,7 +32,7 @@ export function strayArgsHint(stray: readonly string[]): string {
 export function seasonCli(content: Content, a: SeasonCliArgs, log: (s: string) => void = console.log): number {
   if (a.stray?.length) log(strayArgsHint(a.stray));
   const store = new SeasonStore(a.dir);
-  const svc = new SeasonService(store, { engineVersion: ENGINE_VERSION, contentVersion: content.version });
+  const svc = new SeasonService(store, { engineVersion: ENGINE_VERSION, contentVersion: content.version }, () => null, Date.now, content.balance.season.supportMinHealPct, content.lists.seasonTitles);
   switch (a.sub) {
     case 'open': {
       if (!a.id || !SEASON_ID_RE.test(a.id)) { log('--id が要る（英小文字・数字・_・-、32 文字まで）'); return 1; }
@@ -90,7 +90,7 @@ export function seasonCli(content: Content, a: SeasonCliArgs, log: (s: string) =
       log('| 名前 | ラン | 使った予算 | 冒険（最深） | 貢献（最初の報告） | 生還（確定点） | 支援（火が使われた回数） |');
       log('|---|---|---|---|---|---|---|');
       for (const r of st.standings) {
-        log(`| ${r.name}${r.died ? '（倒れた）' : ''} | ${r.runs} | ${r.used} | ${r.adventure.rank}位 地下${r.adventure.value}階 | ${r.contribution.rank}位 ${r.contribution.value} | ${r.survival ? `${r.survival.rank}位 ${r.survival.value}` : '対象外'} | ${r.support ? `${r.support.rank}位 ${r.support.value}` : '-'} |`);
+        log(`| ${r.name}${r.died ? '（倒れた）' : ''}${r.titles?.length ? `［${r.titles.map((x) => x.name.ja).join('・')}］` : ''} | ${r.runs} | ${r.used} | ${r.adventure.rank}位 地下${r.adventure.value}階 | ${r.contribution.rank}位 ${r.contribution.value} | ${r.survival ? `${r.survival.rank}位 ${r.survival.value}` : '対象外'} | ${r.support ? `${r.support.rank}位 ${r.support.value}` : '-'} |`);
       }
       return 0;
     }
@@ -100,6 +100,8 @@ export function seasonCli(content: Content, a: SeasonCliArgs, log: (s: string) =
       if (d.result) { log(`シーズン ${d.def.id} はもう確定している`); return 0; }
       const r = svc.finalize(d, 'operator');
       log(`シーズン ${d.def.id} を確定した。冒険 ${r.winners.adventure.map((w) => w.name).join('・') || '-'}／貢献 ${r.winners.contribution.map((w) => w.name).join('・') || '-'}／生還 ${r.winners.survival.map((w) => w.name).join('・') || '-'}／支援 ${(r.winners.support ?? []).map((w) => w.name).join('・') || '-'}`);
+      // 称号（S2 §18.2）: ランを始めた参加者が 2 人に満たなければ付かない
+      log(r.titles?.length ? `称号: ${r.titles.map((x) => `${x.holder}「${x.name.ja}」`).join('・')}` : '称号: なし（ランを始めた参加者が 2 人に満たない・1 位の値が 0・初討伐が無い）');
       return 0;
     }
     case 'wardens': {

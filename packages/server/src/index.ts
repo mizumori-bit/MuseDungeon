@@ -11,6 +11,6 @@ export { SpectatorPort } from './session/SpectatorPort';
 export { RunStore, spectatorEvent } from './log/RunStore';
 export { createMcpServer } from './mcp/server';
 export { rulesText } from './mcp/rules';
-export { computeStandings, nameKey, SeasonService, SeasonStore, SEASON_ID_RE, SEASON_GRACE_MS } from './season/SeasonService';
-export type { Participant, SeasonDef, SeasonHooks, SeasonInvite, SeasonResult } from './season/SeasonService';
+export { computeStandings, nameKey, SeasonService, SeasonStore, SEASON_ID_RE, SEASON_GRACE_MS, TITLE_MIN_ENTRANTS } from './season/SeasonService';
+export type { Participant, SeasonDeedRec, SeasonDef, SeasonHooks, SeasonInvite, SeasonResult, SeasonTitleDefLite, SeasonTitleRec } from './season/SeasonService';
 export { ProfileStore } from './session/profiles';

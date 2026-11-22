@@ -3,7 +3,7 @@ import { canonicalHash } from '@muse/shared';
 import type {
   AbilityDef, AffixDef, AppearanceDef, BalanceDef, BiomeDef, ClassDef, ExpeditionTraitDef, FeatureDef, FileKind, FloorTypeDef, ItemDef,
   LootTableDef, MonsterDef, PerkDef, PrefabDef, SpawnTableDef, StatusDef, TerrainDef, WeaponTraitDef,
-  GuardianTypeDef, GuardianWeaknessDef, GuardianNamesDef, BoonDef, LoreDef, FloorEventDef, FeatDef,
+  GuardianTypeDef, GuardianWeaknessDef, GuardianNamesDef, BoonDef, LoreDef, FloorEventDef, FeatDef, SeasonTitleDef,
 } from './schema';
 import { FILE_SCHEMAS } from './schema';
 
@@ -43,12 +43,14 @@ export interface Content {
   /** 階の異変（V3-5 §5.3） */
   floorEvents: Record<string, FloorEventDef>;
   feats: Record<string, FeatDef>;
+  /** シーズンの称号（S2。表示だけ。版のハッシュに入れない: 実績と同じ） */
+  seasonTitles: Record<string, SeasonTitleDef>;
   /** 各表の ID 昇順リスト（決定的な走査用） */
   lists: {
     monsters: MonsterDef[]; items: ItemDef[]; appearances: AppearanceDef[]; affixes: AffixDef[];
     biomes: BiomeDef[]; floorTypes: FloorTypeDef[]; prefabs: PrefabDef[]; classes: ClassDef[]; features: FeatureDef[];
     expeditionTraits: ExpeditionTraitDef[]; perks: PerkDef[]; abilities: AbilityDef[]; weaponTraits: WeaponTraitDef[];
-    guardianTypes: GuardianTypeDef[]; guardianWeaknesses: GuardianWeaknessDef[]; boons: BoonDef[]; lore: LoreDef[]; floorEvents: FloorEventDef[]; feats: FeatDef[];
+    guardianTypes: GuardianTypeDef[]; guardianWeaknesses: GuardianWeaknessDef[]; boons: BoonDef[]; lore: LoreDef[]; floorEvents: FloorEventDef[]; feats: FeatDef[]; seasonTitles: SeasonTitleDef[];
     /** 加護を持つ遺物（category: relic で boon のある品） */
     relics: ItemDef[];
   };
@@ -129,6 +131,7 @@ export function buildContent(packs: RawPack[]): Content {
     lore: table(list('lore') as LoreDef[], 'lore'),
     floorEvents: table(list('floorEvents') as FloorEventDef[], 'floorEvents'),
     feats: table(list('feats') as FeatDef[], 'feats'),
+    seasonTitles: table(list('seasonTitles') as SeasonTitleDef[], 'seasonTitles'),
     lists: {
       monsters: list('monsters') as MonsterDef[], items: list('items') as ItemDef[], appearances: list('appearances') as AppearanceDef[],
       affixes: list('affixes') as AffixDef[], biomes: list('biomes') as BiomeDef[], floorTypes: list('floorTypes') as FloorTypeDef[],
@@ -140,6 +143,7 @@ export function buildContent(packs: RawPack[]): Content {
       lore: list('lore') as LoreDef[],
       floorEvents: list('floorEvents') as FloorEventDef[],
       feats: list('feats') as FeatDef[],
+      seasonTitles: list('seasonTitles') as SeasonTitleDef[],
       relics: (list('items') as ItemDef[]).filter((it) => it.category === 'relic' && !!it.boon),
     },
     deepestDefined: 1,
@@ -168,6 +172,7 @@ function crossValidate(c: Content): void {
     need(c.balance.wander.intervalMax >= c.balance.wander.intervalMin, 'balance.wander: intervalMax >= intervalMin');
   }
   need(!!c.items['core:relic'], '遠征の遺物 core:relic が必要');
+  for (const t of c.lists.seasonTitles) need(t.kind !== 'award' || !!t.award, `${t.id}: kind award には award が必要`);
   for (const it of c.lists.items) if (it.boon) need(!!c.boons[it.boon], `${it.id}: 未定義の加護 ${it.boon}`);
   need(!!c.items['core:lifeline']?.bound, '帰還の綱 core:lifeline（bound）が必要');
   need(!!c.statuses['core:recall'], '帰還中の状態 core:recall が必要');
