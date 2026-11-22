@@ -3,10 +3,10 @@
 import { randomBytes } from 'node:crypto';
 import type { Catalog } from '@muse/shared';
 import type { Content } from '@muse/content';
-import { createRun, isPlayersTurn, joinPlayer, seasonSync, step } from '@muse/engine';
+import { createRun, isPlayersTurn, joinPlayer, resumeSeq, seasonSync, step } from '@muse/engine';
 import type {
   ActionError, AgentActivity, Command, CommandRecord, CommandSource, Dir, Expedition, ExpeditionReport, GameEvent, JoinCommand, LegacyMonster, MacroStop, ProjectedEvent,
-  PerceivedEvent, PlayerId, PlayerView, Pos, ReportCall, RunMetaFile, RunSummary, SeasonSyncCommand, TurnSnapshot, World,
+  PerceivedEvent, PlayerId, PlayerView, Pos, ReportCall, RunMetaFile, RunSummary, SeasonSyncCommand, SeqResumeCommand, TurnSnapshot, World,
 } from '@muse/shared';
 import {
   actionError, applyEvent, buildExpeditionReport, canonicalHash, guardianDisplayName, compareReports, emptyWorld, filterEventsForPlayer, FREE_COMMANDS, MACRO_COMMANDS,
@@ -16,7 +16,7 @@ import type { SeasonHooks } from '../season/SeasonService';
 import type { ServerConfig } from '../config';
 import { LogWriter } from '../log/LogWriter';
 import { readJsonl } from '../log/RunStore';
-import { cutEventsAfter, isRunMeta, keyframeFromEvents, latestKeyframe, logBounds, metaFromWorld } from '../log/repair';
+import { cutEventsAfter, isRunMeta, keyframeFromEvents, latestKeyframe, logBounds, metaFromWorld, resumeSeqTarget } from '../log/repair';
 import { readJsonStable } from '../log/atomicWrite';
 import { summaryMarkdown } from './summary';
 import type { ProfileHooks } from './profiles';
@@ -128,6 +128,11 @@ export class RunSession {
   private lastKeyframeSeq = 0;
   private metaFile: RunMetaFile;
   private closed = false;
+  /**
+   * 食い違ったランの続きの番号の送り先（SEASON.md §40.2 の 2。復旧で食い違ったときだけ）。続けて最初に記録へ書く前に、
+   * システムの命令 seq_resume として確定する（resumeSeqIfNeeded）。null なら送らない
+   */
+  private pendingSeqResume: number | null = null;
 
   private constructor(readonly deps: SessionDeps, runId: string, world: World, createdAt: number) {
     this.runId = runId;
@@ -198,7 +203,11 @@ export class RunSession {
     // 目標の宣言（V3-7a）は V3-8 §53.5 で外した。古いランの goals.jsonl は読まない（再実行は commands.jsonl だけで、宣言はゲームに影響しない）
     const logged = kept.filter((e) => e.seq > kf.seq);
     const strip = (es: GameEvent[]) => es.map((e) => ({ ...e, wall: 0 }));
-    const verified = canonicalHash(strip(logged)) === canonicalHash(strip(replayed.filter((e) => e.seq <= lastKept)));
+    // 一致と見るのは、照合する範囲の出来事が同じで、かつ再生の終わりの番号が、命令の記録の覆う最後の番号と同じときだけ（SEASON.md §40.2 の 1:
+    // 再生が記録より先まで進んだ分を、比べずに捨てていた。今の engine が最後の命令について記録より多くの出来事を出すと、一致と出ていた。
+    // 覆う番号まで届かないときも、命令の記録の言う結果と違うので食い違い）
+    const replayEnd = s.world.seq;
+    const verified = replayEnd === bounds.covered && canonicalHash(strip(logged)) === canonicalHash(strip(replayed.filter((e) => e.seq <= lastKept)));
     // 命令は記録にあるのに、出来事の記録が先に欠けていた（出来事の追記だけが届かなかった）: 照合が一致し、命令の記録の覆う最後の番号が
     // 出来事の記録の最後より大きいときだけ、その番号までの再実行の出来事を足す（§38.2 の 1。食い違いのときは、今の engine の出来事なので足さない）
     const missing = verified && bounds.covered > lastKept ? replayed.filter((e) => e.seq > lastKept && e.seq <= bounds.covered) : [];
@@ -218,8 +227,16 @@ export class RunSession {
       if (!found.kf) notes.push('読めるキーフレームが無いので、出来事の記録だけから作った');
       // 出来事の記録から作ったとき・キーフレームを避けたときは、キーフレームを書き直す（次に起動し直したときに使う）
       if (!found.kf || aside.moved.length || aside.ahead.length) s.writeKeyframe();
-    } else if (orphans || found.skipped) {
-      notes.push(`食い違ったので、記録のファイルは直していない（${[orphans ? `命令の記録が覆っていない出来事 ${orphans} 件` : '', found.skipped ? `使えないキーフレーム ${found.skipped} 個` : ''].filter(Boolean).join('・')}は、そのまま）`);
+    } else {
+      if (orphans || found.skipped) notes.push(`食い違ったので、記録のファイルは直していない（${[orphans ? `命令の記録が覆っていない出来事 ${orphans} 件` : '', found.skipped ? `使えないキーフレーム ${found.skipped} 個` : ''].filter(Boolean).join('・')}は、そのまま）`);
+      if (replayEnd > bounds.covered) notes.push(`再生が記録より先まで進んだ（再生の終わり ${replayEnd}、命令の記録の覆う最後 ${bounds.covered}）`);
+      else if (replayEnd < bounds.covered) notes.push(`再生が記録の覆う番号まで届かなかった（再生の終わり ${replayEnd}、命令の記録の覆う最後 ${bounds.covered}）`);
+      // 続きの出来事の番号を、記録の中のどの番号とも重ねない（SEASON.md §40.2 の 2）。送るのは、続けて最初に記録へ書くとき（読むだけなら何も書かない。§38.1）
+      const next = resumeSeqTarget(dir, allEvents, bounds.covered);
+      if (next > s.world.seq + 1) {
+        s.pendingSeqResume = next;
+        notes.push(`続けると、出来事の番号を ${s.world.seq + 1} からでなく ${next} から振る（記録の番号と重ならないように。最初に記録へ書くときに seq_resume として残す）`);
+      }
     }
     const message = verified ? `recovered ${runId} (${replayed.length} events re-executed, hash ok)` : `recovered ${runId} with mismatch (logged ${logged.length}, replayed ${replayed.length})`;
     return { session: s, verified, message: notes.length ? `${message}。${notes.join('。')}` : message };
@@ -257,6 +274,8 @@ export class RunSession {
     }
     // シーズンの取り込み（S0 §9.7）: 中身は記録に全部ある（シーズンの記録は読まない）
     if (cmd.type === 'season_sync') return seasonSync(this.world, this.deps.content, rec.player!, cmd, { cseq: rec.cseq, wall: rec.wall, thought: rec.thought }).events;
+    // 食い違ったランの続きの番号（S3f §40.2 の 2）: 記録の番号で出す
+    if (cmd.type === 'seq_resume') return resumeSeq(this.world, this.deps.content, cmd, { cseq: rec.cseq, wall: rec.wall }).events;
     const r = step(this.world, this.deps.content, rec.player!, cmd, { cseq: rec.cseq, wall: rec.wall, thought: rec.thought, auto: rec.source === 'timeout' || rec.source === 'system' });
     return r.events;
   }
@@ -266,6 +285,32 @@ export class RunSession {
   }
 
   // ---------- 記録 ----------
+
+  /**
+   * 食い違ったランを続けるとき（SEASON.md §40.2 の 2）: 最初に記録へ書く前に（キューの中から。命令・取り込み・参加・マクロの呼び出しの記録の前）、
+   * 出来事の番号を記録の最後の次へ送る。システムの命令 seq_resume を記録し、engine が出来事 seq_resumed をその番号で出す（再実行でも同じ番号）。
+   * 送った直後にキーフレームを書く（次の起動では、そこから再生するので一致する）。1 回だけ
+   */
+  private resumeSeqIfNeeded(): void {
+    const next = this.pendingSeqResume;
+    // 再生で終わったラン（記録では進行中でも）には書かない: 命令は engine が断る（§40.3 の run_92d0d0cd26 の形）
+    if (next === null || this.world.status === 'ended') return;
+    this.pendingSeqResume = null;
+    if (next <= this.world.seq) return;
+    const cseq = this.cseq + 1;
+    const wall = Date.now();
+    const cmd: SeqResumeCommand = { type: 'seq_resume', next };
+    const r = resumeSeq(this.world, this.deps.content, cmd, { cseq, wall });
+    if (!r.events.length) return;
+    this.cseq = cseq;
+    this.commit({ cseq, player: null, command: cmd, source: 'system', wall }, r.events);
+    if (this.lastKeyframeSeq !== this.world.seq) this.writeKeyframe();
+  }
+
+  /** 続けて最初に記録へ書くときに、出来事の番号を送るか（その送り先。テストと記録の確かめ用） */
+  seqResumePending(): number | null {
+    return this.pendingSeqResume;
+  }
 
   private writeKeyframe(): void {
     this.lastKeyframeSeq = this.world.seq;
@@ -357,6 +402,8 @@ export class RunSession {
 
   join(req: JoinCommand, source: CommandSource): Promise<{ ok: true; playerId: PlayerId; token: string } | { ok: false; error: ActionError }> {
     return this.enqueue(() => {
+      // 食い違ったランの続き（§40.2 の 2）: 参加の前に番号を送る（参加者の番号・ID は送った後の World から）
+      if (!this.closed) this.resumeSeqIfNeeded();
       const cseq = ++this.cseq;
       const wall = Date.now();
       const token = newToken();
@@ -614,6 +661,7 @@ export class RunSession {
     const season = this.deps.season.sync(this, pid);
     if (!season) return { ok: false, error: actionError('bad_request', 'this player is not a participant of the season', '') };
     const cmd: SeasonSyncCommand = { type: 'season_sync', reason, season, ...(report ? { report } : {}) };
+    this.resumeSeqIfNeeded();
     const startSeq = this.world.seq;
     const cseq = this.cseq + 1;
     const wall = Date.now();
@@ -643,6 +691,7 @@ export class RunSession {
 
   private stepNow(pid: PlayerId, cmd: Command, source: CommandSource, thought?: string, parent?: number): SubmitResult {
     if (this.closed) return { ok: false, error: actionError('no_session', 'session closed', '') };
+    this.resumeSeqIfNeeded();
     const startSeq = this.world.seq;
     const cseq = this.cseq + 1;
     const wall = Date.now();
@@ -692,6 +741,8 @@ export class RunSession {
     }
     // 元の呼び出し 1 件（イベント無し）を記録
     const parent = await this.enqueue(() => {
+      // 食い違ったランの続き（§40.2 の 2）: マクロの呼び出しの記録より前に番号を送る
+      if (!this.closed) this.resumeSeqIfNeeded();
       const c = ++this.cseq;
       this.log?.appendCommand({ cseq: c, player: pid, command: cmd, source: opts.source, macro: true, thought: opts.thought, wall: Date.now(), resultSeq: null });
       this.macroKinds.set(c, cmd.type);

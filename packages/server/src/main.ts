@@ -6,6 +6,7 @@ import { loadContent } from '@muse/content';
 import { validateContentHandlers } from '@muse/engine';
 import { loadConfig } from './config';
 import { createApp } from './http/api';
+import { portInUse } from './log/atomicWrite';
 import { SessionManager } from './session/SessionManager';
 
 const config = loadConfig();
@@ -13,6 +14,14 @@ const content = loadContent();
 const errs = validateContentHandlers(content);
 if (errs.length) {
   console.error('content handler errors:\n' + errs.join('\n'));
+  process.exit(1);
+}
+const hosts = config.host.split(',').map((h) => h.trim()).filter(Boolean);
+// 待ち受けるポートが空いているかを、印を取る前・復旧の前に確かめる（SEASON.md §40.2 の 5: 印を持たない前の版のサーバーが同じ置き場所で動いていると、
+// 復旧を最後まで走らせてから、ポートの重なりで止まっていた）。空いていなければ、記録の置き場所に何も書かずに止まる
+const portBusy = await portInUse(hosts, config.port);
+if (portBusy) {
+  console.error(`[port] ${portBusy}。ほかのサーバーが動いていないか確かめる（同じポートで 2 つ動かさない）。別のポートなら MUSE_PORT で。記録の置き場所には何も書いていない`);
   process.exit(1);
 }
 const manager = new SessionManager(content, config);
@@ -27,7 +36,6 @@ manager.recoverAll((m) => console.log(`[recover] ${m}`));
 // 版の違う開いているシーズン（S1a）: 新しいランを始められないので、はっきり知らせる
 for (const w of manager.seasons.versionWarnings()) console.warn(`[season] 警告: ${w}`);
 const app = createApp(manager, config);
-const hosts = config.host.split(',').map((h) => h.trim()).filter(Boolean);
 const extras: Server[] = [];
 const listenErr = (host: string) => (e: Error) => {
   console.error(`cannot listen on ${host}:${config.port}: ${e.message}`);

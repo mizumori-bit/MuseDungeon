@@ -143,6 +143,16 @@ export const SeasonSyncSchema = z.object({
 });
 export type SeasonSyncCommand = z.infer<typeof SeasonSyncSchema>;
 
+/**
+ * システムの命令（S3f。SEASON.md §40.2 の 2）: 起動時の再生が記録と食い違ったランを続けるとき、最初に記録へ書く前に 1 回だけ入る。
+ * next は出来事 seq_resumed の番号（記録の最後の番号の次）。続きの出来事の番号が、記録の中の番号と重ならないようにする
+ */
+export const SeqResumeSchema = z.object({
+  type: z.literal('seq_resume'),
+  next: z.number().int().positive(),
+});
+export type SeqResumeCommand = z.infer<typeof SeqResumeSchema>;
+
 /** システムコマンド（参加・離脱）。commands.jsonl に記録し、決定論的再実行で流す */
 export const JoinSchema = z.object({
   type: z.literal('join'),
@@ -164,7 +174,7 @@ export type CommandSource = 'mcp' | 'ws' | 'macro' | 'timeout' | 'bot' | 'system
 export interface CommandRecord {
   cseq: number;
   player: PlayerId | null;
-  command: Command | JoinCommand | SeasonSyncCommand;
+  command: Command | JoinCommand | SeasonSyncCommand | SeqResumeCommand;
   source: CommandSource;
   /** マクロ展開元の cseq */
   parent?: number;

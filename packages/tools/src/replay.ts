@@ -4,16 +4,12 @@ import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync,
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { Content } from '@muse/content';
-import { createRun, joinPlayer, seasonSync, step } from '@muse/engine';
+import { createRun, joinPlayer, resumeSeq, seasonSync, step } from '@muse/engine';
 import type { CommandRecord, GameEvent, RunMetaFile, World } from '@muse/shared';
 import { applyEvent, canonicalHash, emptyWorld } from '@muse/shared';
-import { loadConfig, SessionManager } from '@muse/server';
+// 記録の読み方はサーバーと同じ（SEASON.md §40.2 の 3: 読めない行（欠けた最後の行など）を飛ばす。行の頭の空のバイトは除く）
+import { loadConfig, readJsonl, SessionManager } from '@muse/server';
 import { playWithPort } from './bot';
-
-function readJsonl<T>(p: string): T[] {
-  if (!existsSync(p)) return [];
-  return readFileSync(p, 'utf8').split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l) as T);
-}
 
 const noWall = (es: GameEvent[]) => es.map((e) => ({ ...e, wall: 0 }));
 
@@ -59,6 +55,8 @@ export function verifyRunDir(content: Content, dir: string): VerifyResult {
     if (rec.command.type === 'join') re.push(...joinPlayer(world, content, rec.command, { cseq: rec.cseq, wall: rec.wall }).events);
     // シーズンの取り込み（S0 §9.7）: 中身は記録に全部ある
     else if (rec.command.type === 'season_sync') re.push(...seasonSync(world, content, rec.player!, rec.command, { cseq: rec.cseq, wall: rec.wall, thought: rec.thought }).events);
+    // 食い違ったランの続きの番号（S3f §40.2 の 2）: 記録の番号で出す
+    else if (rec.command.type === 'seq_resume') re.push(...resumeSeq(world, content, rec.command, { cseq: rec.cseq, wall: rec.wall }).events);
     else re.push(...step(world, content, rec.player!, rec.command, { cseq: rec.cseq, wall: rec.wall, thought: rec.thought }).events);
   }
   const reexecMatches = canonicalHash(noWall(re)) === canonicalHash(noWall(events));

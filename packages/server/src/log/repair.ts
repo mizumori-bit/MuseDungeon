@@ -83,6 +83,18 @@ export function logBounds(events: readonly GameEvent[], commands: readonly CmdLi
 }
 
 /**
+ * 食い違ったランの続きの番号の送り先（S3f。SEASON.md §40.2 の 2）: 出来事の記録の最大の番号（命令の記録が覆っていない出来事も。並びが崩れていても）・
+ * 命令の記録の覆う最後の番号・キーフレームのファイルの番号（使わなかったものも）の、いちばん大きいものの次。続きの出来事の番号を、記録の中のどの番号とも重ねない
+ */
+export function resumeSeqTarget(dir: string, events: readonly GameEvent[], covered: number): number {
+  let max = covered;
+  for (const e of events) if (e.seq > max) max = e.seq;
+  const kfDir = join(dir, 'keyframes');
+  if (existsSync(kfDir)) for (const f of readdirSync(kfDir)) { const m = /^(\d+)\.json/.exec(f); if (m) max = Math.max(max, parseInt(m[1], 10)); }
+  return max + 1;
+}
+
+/**
  * 出来事の記録から、番号が seq より後ろの出来事を切る（命令の記録が覆っていない出来事。§35.7 の 2）。切った分は `<名前>.uncommitted` に足して残す。
  * 切った件数（無ければ 0）。出来事は番号の順に追記されているので、最初に seq を越えた行から後ろを切る
  */
