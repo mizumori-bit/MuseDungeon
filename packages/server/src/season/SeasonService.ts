@@ -217,7 +217,11 @@ export class SeasonStore {
       // 確定は 1 回だけ（S2a §20.10 の 1）: 運用の道具（別のプロセス）が確定して result.json を書いていれば、それを確定済みとして使う（上書きしない）
       if (!have.result && this.dir) {
         const r = this.readJson<SeasonResult>(id, 'result.json');
-        if (r) have.result = r;
+        if (r) {
+          have.result = r;
+          // 確定した側の参加者の記録（公開の値を含む）も読み直す（S2b: 古い写しで断面を作らない・書き戻さない）
+          have.participants = this.readJson<Participant[]>(id, 'participants.json') ?? have.participants;
+        }
       }
       return have;
     }
@@ -408,7 +412,8 @@ export class SeasonService implements SeasonHooks {
   /** 参加者に新しいランを足す（その参加者がいなければ、ここで参加） */
   registerRun(id: string, profileId: string, name: string, runId: string): void {
     const d = this.store.get(id);
-    if (!d) return;
+    // 始めてよいかを見た後（canStart）に、ほかのプロセスで確定していたら、足さない（S2b）
+    if (!d || d.result) return;
     let p = this.participant(d, profileId);
     const wall = this.now();
     if (!p) {
@@ -526,7 +531,8 @@ export class SeasonService implements SeasonHooks {
 
   flush(): void {
     if (this.saveTimer) { clearTimeout(this.saveTimer); this.saveTimer = null; }
-    for (const id of this.dirty) { const d = this.store.get(id); if (d) this.store.saveParticipants(d); }
+    // 確定したシーズンは書かない（S2b: ほかのプロセスが確定した後に、保存待ちの古い写しで上書きしない）
+    for (const id of this.dirty) { const d = this.store.get(id); if (d && !d.result) this.store.saveParticipants(d); }
     this.dirty.clear();
   }
 
@@ -768,14 +774,17 @@ export class SeasonService implements SeasonHooks {
     const ps = started(d.participants);
     const fires = d.fires.filter((f) => !f.dup);
     const deeds = d.result ? d.deeds : [];
-    const max = Math.max(1, ...ps.map((p) => shownOf(p).best.depth), ...d.public.map((x) => x.depth), ...d.spots.map((x) => x.depth), ...fires.map((x) => x.depth), ...deeds.map((x) => x.depth));
+    // 確定したシーズンの最深は、確定した結果から（S2b）。進行中は公開の値
+    const finalDepth = new Map((d.result?.standings ?? []).map((r) => [nameKey(r.name), r.adventure.value]));
+    const depthOf = (p: Participant) => finalDepth.get(nameKey(p.name)) ?? shownOf(p).best.depth;
+    const max = Math.max(1, ...ps.map(depthOf), ...d.public.map((x) => x.depth), ...d.spots.map((x) => x.depth), ...fires.map((x) => x.depth), ...deeds.map((x) => x.depth));
     const out: SeasonSectionRow[] = [];
     for (let depth = 1; depth <= max; depth++) {
       const st = d.public.find((x) => x.depth === depth);
       const deed = deeds.find((x) => x.depth === depth);
       out.push({
         depth,
-        deepest: ps.filter((p) => shownOf(p).best.depth === depth).map((p) => p.name),
+        deepest: ps.filter((p) => depthOf(p) === depth).map((p) => p.name),
         stairs: st ? { by: st.by } : null,
         spots: d.spots.filter((x) => x.depth === depth).sort((a, b) => a.order - b.order).map((x) => ({ kind: x.kind, by: x.by })),
         fires: fires.filter((x) => x.depth === depth).sort((a, b) => a.order - b.order).map((x) => ({ by: x.by, uses: x.uses })),

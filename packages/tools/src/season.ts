@@ -99,6 +99,7 @@ export function seasonCli(content: Content, a: SeasonCliArgs, log: (s: string) =
       if (!d) { log(`シーズン ${a.id ?? '(--id)'} は無い`); return 1; }
       if (d.result) { log(`シーズン ${d.def.id} はもう確定している`); return 0; }
       const r = svc.finalize(d, 'operator');
+      log('（シーズンを手で閉じるときは、サーバーを止めてから close する。動いているサーバーに任せるなら、終わりの時刻を待つ。保存待ちの手番を取りこぼさないため。SEASON.md §22）');
       log(`シーズン ${d.def.id} を確定した。冒険 ${r.winners.adventure.map((w) => w.name).join('・') || '-'}／貢献 ${r.winners.contribution.map((w) => w.name).join('・') || '-'}／生還 ${r.winners.survival.map((w) => w.name).join('・') || '-'}／支援 ${(r.winners.support ?? []).map((w) => w.name).join('・') || '-'}`);
       // 称号（S2 §18.2）: ランを始めた参加者が 2 人に満たなければ付かない
       log(r.titles?.length ? `称号: ${r.titles.map((x) => `${x.holder}「${x.name.ja}」`).join('・')}` : '称号: なし（ランを始めた参加者が 2 人に満たない・1 位の値が 0・初討伐が無い）');
@@ -119,7 +120,7 @@ export function seasonCli(content: Content, a: SeasonCliArgs, log: (s: string) =
       return 0;
     }
     default:
-      log('使い方（PowerShell）: npm.cmd run season -- open --id <id> --seed <seed> --ends "<ISO 時刻>" [--name <名前>] [--budget 3000] / invite --id <id> --name <表示名> [--profile-token <今あるトークン>] / uninvite --id <id> (--name <表示名> | --profile <profile_id>) / invites --id <id> / list / standings --id <id> / close --id <id> / wardens --seeds "a,b,c" [--depth 5]  （共通: --dir <置き場所>・--profiles-dir <プロフィールの置き場所>。bash では npm run）');
+      log('使い方（PowerShell）: npm.cmd run season -- open --id <id> --seed <seed> --ends "<ISO 時刻>" [--name <名前>] [--budget 3000] / invite --id <id> --name <表示名> [--profile-token <今あるトークン>] / uninvite --id <id> (--name <表示名> | --profile <profile_id>) / invites --id <id> / list / standings --id <id> / close --id <id>（サーバーを止めてから） / wardens --seeds "a,b,c" [--depth 5]  （共通: --dir <置き場所>・--profiles-dir <プロフィールの置き場所>。bash では npm run）');
       return 1;
   }
 }

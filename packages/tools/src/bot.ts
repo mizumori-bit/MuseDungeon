@@ -577,8 +577,20 @@ export async function playWithPort(port: PlayerPort, opts: BotOptions): Promise<
       const tg = cmd.type === 'fight' && out.error.code === 'hp_floor' ? nv.entities.find((e) => e.id === cmd.target) : undefined;
       // 死にうる（最悪の 1 手で倒れうる）ときは殴らない（S2a §20.10 の 5。マクロの 1 つ目の判定と同じ）
       const lethal = !!nv.self.pos && fightRiskStop(nv.self.stats.hp, 0, threatEstimate(nv, port.catalog, fightThreats(port.catalog, nv.entities.filter((e) => e.cat === 'monster'), nv.self.pos))) === 'lethal';
-      if (tg && !lethal && nv.self.pos && cheb(tg.pos, nv.self.pos) <= 1 && nv.status === 'your_turn') {
-        await port.act({ type: 'move', dir: dirTo(nv.self.pos, tg.pos)! }, { source: 'bot' });
+      if (tg && nv.self.pos && cheb(tg.pos, nv.self.pos) <= 1 && nv.status === 'your_turn') {
+        // 死にうるときは、逃げる手を先に試す（S2b: 階段へ flee → 回復の薬 → 帰還の綱）。どれも無ければ、前のとおり 1 発殴る
+        if (lethal) {
+          let fled = false;
+          for (const to of ['stairs_up', 'stairs_down'] as const) {
+            if ((await port.act({ type: 'travel', to, mode: 'flee' }, { source: 'bot' })).ok) { fled = true; break; }
+          }
+          const inv = port.view().inventory;
+          const escape = fled ? undefined : inv.find((i) => i.kind === 'core:potion_healing') ?? inv.find((i) => i.kind === 'core:lifeline');
+          if (!fled && escape && port.view().status === 'your_turn') fled = (await port.act({ type: 'use', slot: escape.slot }, { source: 'bot' })).ok;
+          if (fled) continue;
+        }
+        const v2 = port.view();
+        if (v2.self.pos && v2.status === 'your_turn' && cheb(tg.pos, v2.self.pos) <= 1) await port.act({ type: 'move', dir: dirTo(v2.self.pos, tg.pos)! }, { source: 'bot' });
         continue;
       }
       if (nv.status === 'your_turn') await port.act({ type: 'wait' }, { source: 'bot' });

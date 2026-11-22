@@ -166,21 +166,25 @@ function firstSeen(prev: TurnSnapshot, cur: TurnSnapshot, view: PlayerView, cata
  * events: 前回の要約以降に知覚した出来事（撃破・死亡の区別に使う）
  */
 export function diffChanges(prev: TurnSnapshot | null, cur: TurnSnapshot, view: PlayerView, obs: Observation, events: readonly PerceivedEvent[] = [], catalog?: Catalog): Change[] {
-  if (!prev) return [];
-  const firsts = catalog ? firstSeen(prev, cur, view, catalog) : [];
   const L = view.locale;
+  // 公開された下り階段（シーズン。S2a §20.6 の 1）: 着いたとき・遠征を始めたときに、道しるべが地図にあることを 1 回言う（自分の目で見る前だけ）
+  const ks = cur.depth !== null ? obs.navigation.known_stairs.find((s) => s.type === 'down' && s.public_by) : undefined;
+  const pub = !ks ? ''
+    : ks.path_len !== null
+      ? t(L, `この階の下り階段は公開されている（${ks.public_by} が報告）。入口からの道しるべが地図にある（travel_to stairs_down で向かえる。経路 ${ks.path_len}）`, `This floor's down stairs are published (reported by ${ks.public_by}); a trail from the entrance is on your map (travel_to stairs_down goes there; path ${ks.path_len})`)
+      : t(L, `この階の下り階段は公開されている（${ks.public_by} が報告）。地図に載っているが、途中の道はまだ分からない（explore { toward: 'draft' }）`, `This floor's down stairs are published (reported by ${ks.public_by}); they are on your map, but the way there is unknown (explore { toward: 'draft' })`);
+  // 前の要約が無い（キャンプで観測を見ずに遠征を始めた・つなぎ直した）: 公開の知らせだけ（S2b）
+  if (!prev) return pub ? [{ code: 'floor_changed', text: pub }] : [];
+  const firsts = catalog ? firstSeen(prev, cur, view, catalog) : [];
   const out: Change[] = [];
   const sameFloor = prev.floorKey === cur.floorKey;
   if (!sameFloor && cur.depth !== null) {
     // この階を作ったときに効いた条件（V4-0e §8.1）: 着いたときに 1 回
     const tt = obs.self.floor?.trait_text;
-    // 公開された下り階段（シーズン。S2a §20.6 の 1）: 着いたときに、道しるべが地図にあることを 1 回言う（自分の目で見る前だけ）
-    const ks = obs.navigation.known_stairs.find((s) => s.type === 'down' && s.public_by);
-    const pub = !ks ? ''
-      : ks.path_len !== null
-        ? t(L, `。この階の下り階段は公開されている（${ks.public_by} が報告）。入口からの道しるべが地図にある（travel_to stairs_down で向かえる。経路 ${ks.path_len}）`, `. This floor's down stairs are published (reported by ${ks.public_by}); a trail from the entrance is on your map (travel_to stairs_down goes there; path ${ks.path_len})`)
-        : t(L, `。この階の下り階段は公開されている（${ks.public_by} が報告）。地図に載っているが、途中の道はまだ分からない（explore { toward: 'draft' }）`, `. This floor's down stairs are published (reported by ${ks.public_by}); they are on your map, but the way there is unknown (explore { toward: 'draft' })`);
-    out.push({ code: 'floor_changed', text: t(L, `地下${cur.depth}階に移った${tt ? `。この階は${tt}` : ''}${pub}`, `Now on depth ${cur.depth}${tt ? `. This floor: ${tt}` : ''}${pub}`) });
+    out.push({ code: 'floor_changed', text: t(L, `地下${cur.depth}階に移った${tt ? `。この階は${tt}` : ''}${pub ? `。${pub}` : ''}`, `Now on depth ${cur.depth}${tt ? `. This floor: ${tt}` : ''}${pub ? `. ${pub}` : ''}`) });
+  } else if (pub && cur.expNo !== null && cur.expNo !== prev.expNo) {
+    // 遠征を始めた階が、キャンプの前と同じ階（階が変わらない）: 公開の知らせだけ（S2b）
+    out.push({ code: 'floor_changed', text: pub });
   }
   if (cur.expNo !== null && cur.expNo === prev.expNo) {
     if (cur.expStatus === 'objective_complete' && prev.expStatus !== 'objective_complete') {

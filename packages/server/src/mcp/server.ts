@@ -161,11 +161,12 @@ export function createMcpServer(ctx: McpContext): McpServer {
   }, async () => {
     const runs = manager.listRuns().filter((r) => r.status === 'active').map((r) => ({
       run_id: r.runId, mode: r.mode, joinable: r.joinable && !r.season, seq: r.seq, ...(r.season ? { season: r.season } : {}),
-      players: r.players.map((p) => ({ name: p.name, class: p.classId, controller: p.controller.kind, state: p.state, depth: p.depth })),
+      // 進行中のシーズンのラン（S2a・S2b）: 名前とシーズンのランであることだけ（状態と深さを出さない）
+      players: r.players.map((p) => (p.hidden ? { name: p.name, class: p.classId, controller: p.controller.kind, hidden: true as const } : { name: p.name, class: p.classId, controller: p.controller.kind, state: p.state, depth: p.depth })),
     }));
     // 開いているシーズン（S0 §9.1）: new_run { season } で参加する
     const seasons = manager.seasons.list().filter((x) => x.status === 'open').map((x) => ({ id: x.id, name: x.name, budget: x.budget, ends_at: new Date(x.endsAt).toISOString(), participants: x.participants, invited: x.invited }));
-    const text = (runs.length ? runs.map((r) => `${r.run_id} [${r.mode}${r.season ? ` season ${r.season}` : ''}] ${r.joinable ? 'joinable' : 'full'} — ${r.players.map((p) => `${p.name}(${p.class}, ${p.state}, depth ${p.depth ?? '-'})`).join(', ')}`).join('\n') : 'No active runs. Use new_run.')
+    const text = (runs.length ? runs.map((r) => `${r.run_id} [${r.mode}${r.season ? ` season ${r.season}` : ''}] ${r.joinable ? 'joinable' : 'full'} — ${r.players.map((p) => ('hidden' in p ? `${p.name}(${p.class})` : `${p.name}(${p.class}, ${p.state}, depth ${p.depth ?? '-'})`)).join(', ')}`).join('\n') : 'No active runs. Use new_run.')
       + (seasons.length ? '\n' + seasons.map((x) => `season ${x.id}「${x.name}」 budget ${x.budget} turns, ends ${x.ends_at}, participants ${x.participants}/${x.invited} invited — new_run { season: "${x.id}", profile_token } (invited profiles only)`).join('\n') : '');
     return out(text, { runs, seasons });
   });

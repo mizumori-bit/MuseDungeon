@@ -400,6 +400,10 @@ describe('S1b §12.4 の 4: explore toward', () => {
     expect(!no.ok && no.error.code).toBe('nothing_to_do');
     expect(!no.ok && no.error.message).toContain('下への風の方角に、行ける未探索の境界が無い');
     expect(!no.ok && no.error.details?.stop).toBe('toward_exhausted');
+    // 断った応答の「できること」に、同じ行を出さない（S2a §20.6 の 2）。観測の行そのものは出ている（境界の数と風だけで出すため）
+    expect(a2.r.port.observe().observation.valid_actions.some((l) => l.startsWith('explore toward:draft'))).toBe(true);
+    expect(!no.ok && no.valid_actions.some((l) => l.startsWith('explore toward:draft'))).toBe(false);
+    expect(!no.ok && no.valid_actions.some((l) => l === 'explore' || l.startsWith('explore ('))).toBe(true);
     const res = await a2.r.port.act({ type: 'explore', toward: 'draft', mode: 'flee', maxSteps: 3 }, { source: 'bot' });
     expect(res.ok && res.outcome).toContain('行ける未探索の境界が無い手が');
     a.manager.closeAll();
