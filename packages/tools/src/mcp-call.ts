@@ -12,7 +12,7 @@
 //   保存したプレイヤーのトークンは、player_token を受け取るツールに自動で付く（resume_run も）。プロフィールのトークンは new_run・join_run に自動で付く
 //   （シーズンの参加には、運用者から受け取ったプロフィールのトークンを profile-token.txt に置く）。
 // つなぐ先: MUSE_MCP_URL か、MUSE_PORT のポートの 127.0.0.1。どちらも無ければ断る（既定の 7777 は依頼者のサーバー。S0b §7.9）。
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -82,7 +82,8 @@ export function tokenFiles(env: NodeJS.ProcessEnv = process.env, cwd = process.c
 
 function readToken(file: string): string | undefined {
   if (!existsSync(file)) return undefined;
-  const v = readFileSync(file, 'utf8').trim();
+  // 空のバイトだけのファイル（書いている最中に機械が落ちた形）は、無いのと同じ
+  const v = readFileSync(file, 'utf8').replace(/\0/g, '').trim();
   return v || undefined;
 }
 
@@ -91,7 +92,11 @@ function saveToken(file: string, token: string): void {
   mkdirSync(dirname(file), { recursive: true });
   const prev = readToken(file);
   if (prev && prev !== token) appendFileSync(file.replace(/(\.txt)?$/, '.old.txt'), `${prev}\n`);
-  writeFileSync(file, `${token}\n`);
+  // 書き切ってから名前を替える（SEASON.md §33.1 の 1。サーバーの writeFileAtomic と同じ考え。呼び出しごとに起動する道具なので、サーバーを読み込まない）
+  const tmp = `${file}.${process.pid}.tmp`;
+  const fd = openSync(tmp, 'w');
+  try { writeFileSync(fd, `${token}\n`); fsyncSync(fd); } finally { closeSync(fd); }
+  renameSync(tmp, file);
 }
 
 /** 文の中のトークンを伏せる */

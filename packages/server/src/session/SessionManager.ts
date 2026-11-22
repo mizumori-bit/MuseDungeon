@@ -1,6 +1,6 @@
 // 複数ランの管理。参加時にプレイヤートークンを発行し、再接続・再開はトークンで行う。
-import { existsSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync } from 'node:fs';
+import { basename, join } from 'node:path';
 import type { Content } from '@muse/content';
 import { buildCatalog } from '@muse/content';
 import { checkRunGaps, compareVersions, ENGINE_VERSION } from '@muse/engine';
@@ -11,6 +11,8 @@ import type {
 import { actionError } from '@muse/shared';
 import type { ServerConfig } from '../config';
 import { RunStore } from '../log/RunStore';
+import { readTokensStrict, repairMeta, repairSummary } from '../log/repair';
+import type { MetaRepair } from '../log/repair';
 import { SessionPlayerPort } from './PlayerPort';
 import type { PlayerPort } from './PlayerPort';
 import { RunSession } from './RunSession';
@@ -79,11 +81,52 @@ export class SessionManager {
   /** 起動時: 進行中だったランをキーフレーム＋コマンド再実行で復旧する */
   recoverAll(log: (msg: string) => void = () => undefined): void {
     const dir = this.config.runsDir;
+    // 読めなかったプロフィールとシーズンの記録（SEASON.md §33.1 の 4: 黙って飛ばさない。読まずに残し、上書きしない）
+    for (const f of this.profiles.store.brokenFiles()) log(`プロフィールのファイル ${f} が読めない（読まずに残す。上書きしない。そのプロフィールのトークンは使えない）`);
+    for (const b of this.seasons.brokenSeasons()) log(`シーズン ${b.id} の記録が読めない（${b.files.join('・')}）。このシーズンは読まず、書き戻さない。シーズンのランは復旧に失敗したランとして出す`);
     if (!dir || !existsSync(dir)) return;
-    for (const runId of readdirSync(dir)) {
-      if (!runId.startsWith('run_')) continue;
-      const meta = this.store!.meta(runId);
-      if (!meta || meta.status !== 'active') continue;
+    for (const runId of this.store!.listRunDirs()) {
+      const runDir0 = join(dir, runId);
+      let meta = this.store!.meta(runId);
+      // meta.json が読めない・形が違う・消えた（SEASON.md §33.1 の 2）: ほかの記録から作り直す。作り直せなければ、復旧に失敗したランとして出す
+      if (!meta) {
+        let r: MetaRepair;
+        try { r = repairMeta(runDir0, runId); } catch (e) { r = { error: `meta.json を作り直せない: ${String((e as Error).message ?? e).split('\n')[0].slice(0, 160)}` }; }
+        if ('error' in r) {
+          log(`failed to recover ${runId}: ${r.error}`);
+          this.markFailed(runId, r.error, r.season);
+          continue;
+        }
+        meta = r.meta;
+        log(`rebuilt meta.json of ${runId} from the ${r.from === 'keyframe' ? 'latest keyframe and the event log' : 'event log'}（${r.moved ? `壊れた元は ${basename(r.moved)} に残した` : 'meta.json は無かった'}）`);
+      }
+      // 要約（SEASON.md §33.1 の 4）: あるのに読めなければ、出来事の記録の最後の要約から作り直す
+      try {
+        const sr = repairSummary(runDir0, this.catalog);
+        if (sr) log(`${sr.rebuilt ? 'rebuilt summary.json/.md' : 'moved aside unreadable summary.json'} of ${runId}${sr.moved ? `（壊れた元は ${basename(sr.moved)}）` : ''}`);
+      } catch (e) { log(`summary.json of ${runId} を作り直せない: ${String((e as Error).message ?? e).split('\n')[0]}`); }
+      if (meta.status !== 'active') continue;
+      // 再開用のトークン（tokens.json）は作り直せない。読めない・無い・どの参加者のものも無いなら、復旧に失敗したランとして出す
+      if (meta.players.length) {
+        const tk = readTokensStrict(runDir0);
+        const have = 'tokens' in tk ? new Set(Object.values(tk.tokens)) : new Set<string>();
+        if ('error' in tk || !meta.players.some((p) => have.has(p.id))) {
+          const reason = 'error' in tk && tk.error === 'broken' ? 'tokens.json が読めない（再開用のトークンは、ほかの記録から作り直せない）'
+            : 'error' in tk ? 'tokens.json が無い（再開用のトークンは、ほかの記録から作り直せない）' : 'tokens.json に、このランの参加者のトークンが無い';
+          log(`failed to recover ${runId}: ${reason}`);
+          this.markFailed(runId, reason, meta.season);
+          continue;
+        }
+        const lost = meta.players.filter((p) => !have.has(p.id));
+        if (lost.length) log(`  ${runId}: tokens.json に ${lost.map((p) => p.name).join('・')} のトークンが無い（その参加者は再開できない）`);
+      }
+      // シーズンのランで、そのシーズンの記録が読めない（読まずに続けると、取り込みと参加者の記録が狂う）
+      if (meta.season && this.seasons.isBroken(meta.season)) {
+        const reason = `シーズン ${meta.season} の記録が読めない`;
+        log(`failed to recover ${runId}: ${reason}`);
+        this.markFailed(runId, reason, meta.season);
+        continue;
+      }
       try {
         const r = RunSession.recover(this.deps, runId);
         this.sessions.set(runId, r.session);
@@ -99,10 +142,15 @@ export class SessionManager {
       } catch (e) {
         const reason = String((e as Error).message ?? e).split('\n')[0].slice(0, 200);
         log(`failed to recover ${runId}: ${reason}`);
-        this.failed.set(runId, { reason, at: Date.now(), ...(meta.season ? { season: meta.season } : {}) });
-        for (const tok of Object.keys(this.store!.tokens(runId))) this.failedTokens.set(tok, runId);
+        this.markFailed(runId, reason, meta.season);
       }
     }
+  }
+
+  /** 復旧に失敗したランを覚える（一覧と再開のエラーに出す。V4-1m §37.1）。読めるトークンがあれば、そのトークンでの再開にも */
+  private markFailed(runId: string, reason: string, season: string | undefined): void {
+    this.failed.set(runId, { reason, at: Date.now(), ...(season ? { season } : {}) });
+    for (const tok of Object.keys(this.store!.tokens(runId))) this.failedTokens.set(tok, runId);
   }
 
   get(runId: string): RunSession | undefined {
@@ -290,7 +338,16 @@ export class SessionManager {
           expeditions: summary?.expeditions,
           ...(this.failed.has(id) ? { recoveryFailed: this.failedShown(id)! } : {}),
         });
+        seen.add(id);
       }
+    }
+    // meta.json が読めず、作り直せもしなかったラン（SEASON.md §33.1 の 3）: ランの ID と失敗だけ（参加者・状態は分からない）
+    for (const [id, f] of this.failed) {
+      if (seen.has(id) || (this.store && this.store.meta(id))) continue;
+      out.push({
+        runId: id, status: 'active', mode: 'solo', ...(f.season ? { season: f.season } : {}), createdAt: f.at, updatedAt: f.at, seq: 0,
+        live: false, joinable: false, players: [], recoveryFailed: this.failedShown(id)!,
+      });
     }
     return out.sort((a, b) => b.updatedAt - a.updatedAt);
   }

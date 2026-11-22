@@ -79,7 +79,10 @@ export function seasonCli(content: Content, a: SeasonCliArgs, log: (s: string) =
     }
     case 'list': {
       const list = svc.list();
-      if (!list.length) log('シーズンは無い');
+      const broken = svc.brokenSeasons();
+      if (!list.length && !broken.length) log('シーズンは無い');
+      // 記録が読めないシーズン（SEASON.md §33.1 の 4）: 読まず、書き戻さない。どのファイルかを出す
+      for (const b of broken) log(`${b.id} 記録が読めない: ${b.files.join('・')}（直すまで、このシーズンは読まない・書かない）`);
       for (const s of list) log(`${s.id}「${s.name}」 ${s.status} 予算 ${s.budget} 終わり ${new Date(s.endsAt).toISOString()} 招いた ${s.invited}・始めた ${s.participants}`);
       return 0;
     }

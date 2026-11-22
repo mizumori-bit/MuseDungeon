@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import type { CommandRecord, ExpeditionBrief, GameEvent, LeaderboardEntry, Marker, RunIndex, RunMetaFile, RunSummary, World } from '@muse/shared';
 import { INTERNAL_EVENT_TYPES, stripSecret } from '@muse/shared';
 import type { KeyframeFile } from './LogWriter';
+import { isRunMeta } from './repair';
 
 /**
  * 観戦者・HTTP 向けのイベント: 進行中は secret を伏せる。
@@ -26,7 +27,9 @@ export function spectatorWorld(world: World): World {
 export function readJsonl<T>(path: string): T[] {
   if (!existsSync(path)) return [];
   const out: T[] = [];
-  for (const line of readFileSync(path, 'utf8').split('\n')) {
+  for (const raw of readFileSync(path, 'utf8').split('\n')) {
+    // 頭の空のバイトは、落ちて中身が届かなかった追記の残り（その後ろにつながった行は読める。SEASON.md §33.1）
+    const line = raw.replace(/^\0+/, '');
     if (!line.trim()) continue;
     try { out.push(JSON.parse(line) as T); } catch { /* 末尾の書きかけ行は無視 */ }
   }
@@ -140,12 +143,26 @@ export class RunStore {
     return readdirSync(this.runsDir).filter((d) => d.startsWith('run_') && existsSync(join(this.runsDir, d, 'meta.json')));
   }
 
+  /** ランの記録のフォルダ（meta.json が消えていても、出来事の記録があれば。起動時の復旧が作り直す。SEASON.md §33.1） */
+  listRunDirs(): string[] {
+    if (!existsSync(this.runsDir)) return [];
+    return readdirSync(this.runsDir).filter((d) => /^run_[0-9a-z]+$/.test(d)
+      && (existsSync(join(this.runsDir, d, 'meta.json')) || existsSync(join(this.runsDir, d, 'events.jsonl'))));
+  }
+
+  /** meta.json（読めない・形が違うものは null。起動時の復旧が作り直す） */
   meta(runId: string): RunMetaFile | null {
-    try { return JSON.parse(readFileSync(join(this.dir(runId), 'meta.json'), 'utf8')); } catch { return null; }
+    try {
+      const m: unknown = JSON.parse(readFileSync(join(this.dir(runId), 'meta.json'), 'utf8'));
+      return isRunMeta(m) ? m : null;
+    } catch { return null; }
   }
 
   summary(runId: string): RunSummary | null {
-    try { return JSON.parse(readFileSync(join(this.dir(runId), 'summary.json'), 'utf8')); } catch { return null; }
+    try {
+      const s = JSON.parse(readFileSync(join(this.dir(runId), 'summary.json'), 'utf8')) as RunSummary | null;
+      return s && typeof s === 'object' && Array.isArray(s.players) ? s : null;
+    } catch { return null; }
   }
 
   mtime(runId: string): number {

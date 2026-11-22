@@ -2,8 +2,9 @@
 // World の外にあり、サーバーが profiles/<id>.json に持つ（既定は runs/profiles）。トークンはハッシュだけを残す。
 // ランの記録は、遠征が終わるたび・ランが終わるたびに、そのプレイヤー本人の知識と出来事から作り直す（他人の情報・シードは入らない）。
 import { createHash, randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { writeFileAtomicLogged } from '../log/atomicWrite';
 import type { Content } from '@muse/content';
 import type {
   Catalog, CodexIndex, CodexRun, FeatContext, FeatDefLite, FeatRecord, GameEvent, LegacyMonster, Locale, PlayerId, ProfileData, ProfileRecords, ProfileRun, SeasonTitle,
@@ -30,6 +31,7 @@ function firePaid(session: RunSession, pid: PlayerId): number {
 export class ProfileStore {
   private readonly byId = new Map<string, ProfileFile>();
   private readonly byHash = new Map<string, string>();
+  private readonly broken = new Set<string>();
 
   constructor(readonly dir: string | null) {
     this.scan();
@@ -43,10 +45,20 @@ export class ProfileStore {
       if (!/^prof_[0-9a-f]+\.json$/.test(f) || this.byId.has(f.slice(0, -5))) continue;
       try {
         const p = JSON.parse(readFileSync(join(dir, f), 'utf8')) as ProfileFile;
+        if (!p || typeof p !== 'object' || typeof p.id !== 'string' || typeof p.tokenHash !== 'string' || !Array.isArray(p.runs)) throw new Error('bad shape');
         this.byId.set(p.id, p);
         this.byHash.set(p.tokenHash, p.id);
-      } catch { /* 壊れたファイルは読まない */ }
+        this.broken.delete(f);
+      } catch {
+        // 壊れたファイルは読まず、上書きもしない（トークンのハッシュは、ほかの記録から作り直せない。SEASON.md §33.1 の 4）。起動時の記録に出す
+        this.broken.add(f);
+      }
     }
+  }
+
+  /** 読めなかったプロフィールのファイル（起動時に知らせる） */
+  brokenFiles(): string[] {
+    return [...this.broken].sort();
   }
 
   create(name: string, wall: number): { token: string; profile: ProfileData } {
@@ -75,9 +87,8 @@ export class ProfileStore {
     if (f !== p) Object.assign(f, p);
     if (!this.dir) return;
     if (!existsSync(this.dir)) mkdirSync(this.dir, { recursive: true });
-    const path = join(this.dir, `${p.id}.json`);
-    writeFileSync(`${path}.tmp`, JSON.stringify(f, null, 1));
-    renameSync(`${path}.tmp`, path);
+    // 書き切ってから名前を替える（SEASON.md §33.1 の 1）。書けなければ知らせて、前の中身のまま（次の書き込みでまた試す）
+    writeFileAtomicLogged(join(this.dir, `${p.id}.json`), JSON.stringify(f, null, 1));
   }
 }
 

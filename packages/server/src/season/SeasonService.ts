@@ -1,7 +1,8 @@
 // シーズン（S0。SEASON.md §2・PROTOCOL.md §9）: 同じシードの個別ダンジョン＋共有層。World の外にあり、サーバーが seasons/<id>/ に持つ。
 // ランに入るのは、キャンプでの取り込み（システムの命令 season_sync）だけ。ここはその中身を作り、ランの出来事から参加者の記録を書き直す。
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { writeFileAtomicLogged } from '../log/atomicWrite';
 import type {
   GameEvent, PlayerId, SeasonAward, SeasonListing, SeasonResultView, SeasonSectionRow, SeasonStandingRow, SeasonStandingsResponse, SeasonSyncCommand, SeasonTitle, SupplyPlace,
 } from '@muse/shared';
@@ -125,6 +126,10 @@ export const TITLE_MIN_ENTRANTS = 2;
 export const SEASON_GRACE_MS = 60 * 60 * 1000;
 export const SEASON_ID_RE = /^[a-z0-9][a-z0-9_-]{0,31}$/;
 
+/** 読めないファイルの印（無いファイルの null と分ける。SEASON.md §33.1 の 4） */
+const BROKEN: unique symbol = Symbol('broken');
+const isObj = (v: unknown): boolean => !!v && typeof v === 'object' && !Array.isArray(v);
+
 const used = (p: Participant) => p.runs.reduce((a, r) => a + r.turns, 0);
 /** 順位に数える参加者（1 回でもランを始めた者。招いただけの者は入れない） */
 const started = (ps: readonly Participant[]) => ps.filter((p) => p.runs.length > 0);
@@ -211,20 +216,38 @@ export class SeasonStore {
 
   private path(id: string, file: string): string { return join(this.dir!, id, file); }
 
-  private readJson<T>(id: string, file: string): T | null {
+  /** 読めなかったシーズンと、そのファイル（SEASON.md §33.1 の 4。読まず、書き戻さない） */
+  private readonly brokenFiles = new Map<string, string[]>();
+
+  /** 無ければ null。あるのに読めない・形が違えば、壊れたファイルとして覚えて BROKEN */
+  private readJson<T>(id: string, file: string, shape: (v: unknown) => boolean = () => true): T | null | typeof BROKEN {
     if (!this.dir) return null;
     const p = this.path(id, file);
     if (!existsSync(p)) return null;
-    try { return JSON.parse(readFileSync(p, 'utf8')) as T; } catch { return null; }
+    try {
+      const v: unknown = JSON.parse(readFileSync(p, 'utf8'));
+      if (shape(v)) return v as T;
+    } catch { /* 下で壊れたファイルとして覚える */ }
+    return BROKEN;
   }
 
-  private writeJson(id: string, file: string, v: unknown): void {
-    if (!this.dir) return;
+  /** 書き切ってから名前を替える（§33.1 の 1）。書けなければ知らせて false（前の中身のまま。次の書き込みでまた試す） */
+  private writeJson(id: string, file: string, v: unknown): boolean {
+    if (!this.dir) return true;
     const d = join(this.dir, id);
     if (!existsSync(d)) mkdirSync(d, { recursive: true });
-    const p = join(d, file);
-    writeFileSync(`${p}.tmp`, JSON.stringify(v, null, 1));
-    renameSync(`${p}.tmp`, p);
+    return writeFileAtomicLogged(join(d, file), JSON.stringify(v, null, 1));
+  }
+
+  /** 読めなかったシーズン（起動時に知らせる。そのシーズンのランは、復旧に失敗したランとして出す） */
+  broken(): { id: string; files: string[] }[] {
+    for (const id of this.ids()) this.get(id);
+    return [...this.brokenFiles].map(([id, files]) => ({ id, files })).sort((a, b) => (a.id < b.id ? -1 : 1));
+  }
+
+  isBroken(id: string): boolean {
+    this.get(id);
+    return this.brokenFiles.has(id);
   }
 
   /** そのシーズン（知らない ID はディスクを読み直す。動いているサーバーで、後から開いたシーズン） */
@@ -233,30 +256,40 @@ export class SeasonStore {
     if (have) {
       // 確定は 1 回だけ（S2a §20.10 の 1）: 運用の道具（別のプロセス）が確定して result.json を書いていれば、それを確定済みとして使う（上書きしない）
       if (!have.result && this.dir) {
-        const r = this.readJson<SeasonResult>(id, 'result.json');
-        if (r) {
+        const r = this.readJson<SeasonResult>(id, 'result.json', isObj);
+        if (r && r !== BROKEN) {
           have.result = r;
           // 確定した側の参加者の記録（公開の値を含む）も読み直す（S2b: 古い写しで断面を作らない・書き戻さない）
-          have.participants = this.readJson<Participant[]>(id, 'participants.json') ?? have.participants;
+          const ps = this.readJson<Participant[]>(id, 'participants.json', Array.isArray);
+          if (ps && ps !== BROKEN) have.participants = ps;
         }
       }
       return have;
     }
     if (!SEASON_ID_RE.test(id)) return null;
-    const def = this.readJson<SeasonDef>(id, 'season.json');
-    if (!def) return null;
-    const d: SeasonData = {
-      def,
-      participants: this.readJson<Participant[]>(id, 'participants.json') ?? [],
-      public: this.readJson<PublicStairsRec[]>(id, 'public.json') ?? [],
-      spots: this.readJson<PublicSpotRec[]>(id, 'spots.json') ?? [],
-      fires: this.readJson<PublicFireRec[]>(id, 'fires.json') ?? [],
-      deeds: this.readJson<SeasonDeedRec[]>(id, 'deeds.json') ?? [],
-      supplies: this.readJson<PublicSupplyRec[]>(id, 'supplies.json') ?? [],
-      result: this.readJson<SeasonResult>(id, 'result.json'),
+    // 1 つでも読めないファイルがあれば、そのシーズンは読まない（空として読むと、次に書くときに中身を消してしまう。§33.1 の 4）
+    const bad: string[] = [];
+    const read = <T>(file: string, shape: (v: unknown) => boolean): T | null => {
+      const v = this.readJson<T>(id, file, shape);
+      if (v === BROKEN) { bad.push(file); return null; }
+      return v;
     };
-    this.data.set(id, d);
-    return d;
+    const def = read<SeasonDef>('season.json', (v) => isObj(v) && typeof (v as SeasonDef).id === 'string' && typeof (v as SeasonDef).seed === 'string');
+    const d = {
+      participants: read<Participant[]>('participants.json', Array.isArray) ?? [],
+      public: read<PublicStairsRec[]>('public.json', Array.isArray) ?? [],
+      spots: read<PublicSpotRec[]>('spots.json', Array.isArray) ?? [],
+      fires: read<PublicFireRec[]>('fires.json', Array.isArray) ?? [],
+      deeds: read<SeasonDeedRec[]>('deeds.json', Array.isArray) ?? [],
+      supplies: read<PublicSupplyRec[]>('supplies.json', Array.isArray) ?? [],
+      result: read<SeasonResult>('result.json', isObj),
+    };
+    if (bad.length) { this.brokenFiles.set(id, bad); return null; }
+    this.brokenFiles.delete(id);
+    if (!def) return null;
+    const out: SeasonData = { def, ...d };
+    this.data.set(id, out);
+    return out;
   }
 
   /** 開いているシーズンの ID（ディスクにあるものも） */
@@ -269,34 +302,47 @@ export class SeasonStore {
   /** シーズンを開く（運用者。CLI とテスト） */
   open(def: SeasonDef): SeasonData {
     if (!SEASON_ID_RE.test(def.id)) throw new Error(`bad season id ${def.id} (a-z 0-9 _ -, up to 32)`);
-    if (this.get(def.id)) throw new Error(`season ${def.id} already exists`);
+    // 読めないシーズン（§33.1）も「ある」と数える（上書きして消さない）
+    if (this.get(def.id) || (this.dir && existsSync(this.path(def.id, 'season.json')))) throw new Error(`season ${def.id} already exists`);
     const d: SeasonData = { def, participants: [], public: [], spots: [], fires: [], deeds: [], supplies: [], result: null };
+    if (!this.writeJson(def.id, 'season.json', def)) throw new Error(`season ${def.id}: season.json を書けなかった`);
     this.data.set(def.id, d);
-    this.writeJson(def.id, 'season.json', def);
     this.log(def.id, { type: 'opened', def });
     return d;
   }
 
-  /** 招いた者（毎回ファイルから読む。書くのは運用の道具だけで、動いているサーバーは読み直すだけ） */
+  /** 招いた者（毎回ファイルから読む。書くのは運用の道具だけで、動いているサーバーは読み直すだけ）。読めなければ空（だれも始められない。§33.1） */
   invites(id: string): SeasonInvite[] {
-    if (!this.dir) return [...(this.memInvites.get(id) ?? [])];
-    return this.readJson<SeasonInvite[]>(id, 'invites.json') ?? [];
+    const v = this.invitesOrBroken(id);
+    return v === BROKEN ? [] : v;
   }
 
-  /** 招いた者を足す（運用の道具。サーバーは呼ばない） */
+  /** invites.json が読めないか（§33.1 の 4: 読めないまま足すと、ほかの招きを消してしまう） */
+  invitesBroken(id: string): boolean {
+    return this.invitesOrBroken(id) === BROKEN;
+  }
+
+  private invitesOrBroken(id: string): SeasonInvite[] | typeof BROKEN {
+    if (!this.dir) return [...(this.memInvites.get(id) ?? [])];
+    return this.readJson<SeasonInvite[]>(id, 'invites.json', Array.isArray) ?? [];
+  }
+
+  /** 招いた者を足す（運用の道具。サーバーは呼ばない）。invites.json が読めない・書けなければ例外（前の中身のまま） */
   addInvite(id: string, inv: SeasonInvite): void {
+    if (this.invitesBroken(id)) throw new Error(`シーズン ${id} の invites.json が読めない。直してから招く / invites.json of season ${id} is unreadable`);
     const list = [...this.invites(id), inv];
     if (!this.dir) { this.memInvites.set(id, list); return; }
-    this.writeJson(id, 'invites.json', list);
+    if (!this.writeJson(id, 'invites.json', list)) throw new Error(`シーズン ${id} の invites.json を書けなかった`);
   }
 
   /** 招いた者を外す（運用の道具。S0b §6.2 の 5）。外したら true */
   removeInvite(id: string, profileId: string): boolean {
+    if (this.invitesBroken(id)) throw new Error(`シーズン ${id} の invites.json が読めない。直してから取り消す / invites.json of season ${id} is unreadable`);
     const list = this.invites(id);
     const next = list.filter((x) => x.profileId !== profileId);
     if (next.length === list.length) return false;
     if (!this.dir) { this.memInvites.set(id, next); return true; }
-    this.writeJson(id, 'invites.json', next);
+    if (!this.writeJson(id, 'invites.json', next)) throw new Error(`シーズン ${id} の invites.json を書けなかった`);
     return true;
   }
 
@@ -364,8 +410,10 @@ export class SeasonService implements SeasonHooks {
    */
   invite(id: string, name: string, profiles: ProfileStore, token?: string): { profileId: string; name: string; token?: string } | { error: string } {
     const d = this.store.get(id);
+    if (!d && this.store.isBroken(id)) return { error: `シーズン ${id} の記録が読めない（起動時の記録か season -- list で、どのファイルかを見る） / the records of season ${id} are unreadable` };
     if (!d) return { error: `シーズン ${id} は無い / no such season` };
     if (d.result) return { error: `シーズン ${id} は確定している / season ${id} is final` };
+    if (this.store.invitesBroken(id)) return { error: `シーズン ${id} の invites.json が読めない。直してから / invites.json of season ${id} is unreadable` };
     const existing = token ? profiles.resolve(token) : null;
     if (token && !existing) return { error: 'そのプロフィールのトークンは見つからない / unknown profile token' };
     const display = (name || existing?.name || '').normalize('NFKC').trim().slice(0, 32);
@@ -389,8 +437,10 @@ export class SeasonService implements SeasonHooks {
    */
   uninvite(id: string, by: { name?: string; profileId?: string }): { profileId: string; name: string } | { error: string } {
     const d = this.store.get(id);
+    if (!d && this.store.isBroken(id)) return { error: `シーズン ${id} の記録が読めない（起動時の記録か season -- list で、どのファイルかを見る） / the records of season ${id} are unreadable` };
     if (!d) return { error: `シーズン ${id} は無い / no such season` };
     if (d.result) return { error: `シーズン ${id} は確定している / season ${id} is final` };
+    if (this.store.invitesBroken(id)) return { error: `シーズン ${id} の invites.json が読めない。直してから / invites.json of season ${id} is unreadable` };
     if (!by.name && !by.profileId) return { error: '--name（招いたときの表示名）か --profile（プロフィールの ID）が要る。一覧は season -- invites --id <id> / --name or --profile is required' };
     const invites = this.store.invites(id);
     const inv = by.profileId ? invites.find((x) => x.profileId === by.profileId) : invites.find((x) => nameKey(x.name) === nameKey(by.name!));
@@ -411,8 +461,10 @@ export class SeasonService implements SeasonHooks {
   /** 新しいランを始められるか（PROTOCOL §9.1）。理由の文を返す（日本語 / 英語）。招かれたプロフィールだけ（S0a §4.1） */
   canStart(id: string, profileId: string | null): { def: SeasonDef; name: string } | { reason: string } {
     const d = this.store.get(id);
+    if (!d && this.store.isBroken(id)) return { reason: `シーズン ${id} の記録が読めない。運用者に知らせる / the records of season ${id} are unreadable; tell the operator` };
     if (!d) return { reason: `そのシーズンは無い / no such season: ${id}` };
     if (!profileId) return { reason: `シーズンのランには profile_token が要る（運用者から受け取った、このシーズンに招かれたプロフィールのもの） / a season run needs the profile_token the operator gave you` };
+    if (this.store.invitesBroken(id)) return { reason: `シーズン ${id} の招いた者の記録（invites.json）が読めない。運用者に知らせる / invites.json of season ${id} is unreadable; tell the operator` };
     const inv = this.store.invites(id).find((x) => x.profileId === profileId);
     if (!inv) return { reason: `このプロフィール（${profileId}）は、シーズン ${id} に招かれていない。参加するには、運用者に招いてもらう / this profile is not invited to season ${id}; ask the operator to invite you` };
     if (this.status(d) !== 'open') return { reason: `シーズン ${id} は終わっている / season ${id} has ended` };
@@ -685,6 +737,15 @@ export class SeasonService implements SeasonHooks {
   }
 
   /** 開いているシーズンのうち、版（engine・コンテンツ）がこのサーバーと違うもの（S1a: 起動時の警告） */
+  /** 記録のファイルが読めないシーズン（SEASON.md §33.1 の 4。起動時に知らせる） */
+  brokenSeasons(): { id: string; files: string[] }[] {
+    return this.store.broken();
+  }
+
+  isBroken(id: string): boolean {
+    return this.store.isBroken(id);
+  }
+
   versionWarnings(): string[] {
     const out: string[] = [];
     for (const id of this.store.ids()) {

@@ -1,8 +1,9 @@
-// ラン記録の書き出し。追記のみ、イベント適用と同じ順序で書く。キーフレームは一時ファイル→リネーム。
+// ラン記録の書き出し。追記のみ、イベント適用と同じ順序で書く。上書きするファイルは一時ファイル→ディスクまで書き切る→リネーム（SEASON.md §33.1）。
 // runs/<runId>/ meta.json, commands.jsonl, events.jsonl, keyframes/<seq>.json, summary.json/.md, tokens.json
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { CommandRecord, GameEvent, RunMetaFile, World } from '@muse/shared';
+import { writeFileAtomicLogged } from './atomicWrite';
 
 export interface KeyframeFile { seq: number; cseq: number; world: World }
 
@@ -14,10 +15,9 @@ export class LogWriter {
     mkdirSync(join(this.dir, 'keyframes'), { recursive: true });
   }
 
+  /** 書けなかったら知らせて続ける（命令の確定の途中。前の中身は残り、起動し直したときにほかの記録から作り直せる） */
   private atomic(path: string, data: string): void {
-    const tmp = `${path}.tmp`;
-    writeFileSync(tmp, data, 'utf8');
-    renameSync(tmp, path);
+    writeFileAtomicLogged(path, data);
   }
 
   writeMeta(meta: RunMetaFile): void {

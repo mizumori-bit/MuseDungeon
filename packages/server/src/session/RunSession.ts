@@ -3,7 +3,7 @@
 import { randomBytes } from 'node:crypto';
 import type { Catalog } from '@muse/shared';
 import type { Content } from '@muse/content';
-import { createRun, ENGINE_VERSION, isPlayersTurn, joinPlayer, seasonSync, step } from '@muse/engine';
+import { createRun, isPlayersTurn, joinPlayer, seasonSync, step } from '@muse/engine';
 import type {
   ActionError, AgentActivity, Command, CommandRecord, CommandSource, Dir, Expedition, ExpeditionReport, GameEvent, JoinCommand, LegacyMonster, MacroStop, ProjectedEvent,
   PerceivedEvent, PlayerId, PlayerView, Pos, ReportCall, RunMetaFile, RunSummary, SeasonSyncCommand, TurnSnapshot, World,
@@ -15,12 +15,12 @@ import {
 import type { SeasonHooks } from '../season/SeasonService';
 import type { ServerConfig } from '../config';
 import { LogWriter } from '../log/LogWriter';
-import type { KeyframeFile } from '../log/LogWriter';
 import { readJsonl } from '../log/RunStore';
+import { keyframeFromEvents, latestKeyframe, metaFromWorld, repairJsonlTail } from '../log/repair';
 import { summaryMarkdown } from './summary';
 import type { ProfileHooks } from './profiles';
-import { join } from 'node:path';
-import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { basename, join } from 'node:path';
+import { readFileSync, rmSync } from 'node:fs';
 
 export interface SessionDeps {
   content: Content;
@@ -154,16 +154,24 @@ export class RunSession {
   static recover(deps: SessionDeps, runId: string): { session: RunSession; verified: boolean; message: string } {
     const dir = join(deps.config.runsDir!, runId);
     const meta = JSON.parse(require_read(join(dir, 'meta.json'))) as RunMetaFile;
-    const kfDir = join(dir, 'keyframes');
-    const seqs = existsSync(kfDir) ? readdirSync(kfDir).filter((f) => /^\d+\.json$/.test(f)).map((f) => parseInt(f, 10)).sort((a, b) => a - b) : [];
-    if (!seqs.length) throw new Error(`no keyframe for ${runId}`);
-    const kf = JSON.parse(require_read(join(kfDir, `${seqs[seqs.length - 1]}.json`))) as KeyframeFile;
+    // 追記するファイルの最後の欠けた行を切る（この後にまた追記する。SEASON.md §33.1）
+    const notes: string[] = [];
+    for (const f of ['events.jsonl', 'commands.jsonl']) {
+      const t0 = repairJsonlTail(join(dir, f));
+      if (t0) notes.push('cut' in t0 ? `${f} の最後の欠けた行（${t0.cut} バイト）を切った（${f}.broken-tail に残した）` : `${f} の最後の行に改行を足した`);
+    }
+    // いちばん新しい、読めるキーフレーム（読めないものは名前を替えて残し、1 つ前を使う）。1 つも無ければ、出来事の記録だけから作る
+    const found = latestKeyframe(dir, { moveBroken: true });
+    if (found.moved.length) notes.push(`読めないキーフレーム ${found.moved.length} 個の名前を替えた（${found.moved.map((p) => basename(p)).join(', ')}）`);
+    const allEvents = readJsonl<GameEvent>(join(dir, 'events.jsonl'));
+    const commands = readJsonl<CommandRecord>(join(dir, 'commands.jsonl'));
+    const kf = found.kf ?? keyframeFromEvents(allEvents, commands);
+    if (!kf) throw new Error(`no keyframe for ${runId}`);
+    if (!found.kf) notes.push('読めるキーフレームが無いので、出来事の記録だけから作った');
     const s = new RunSession(deps, runId, kf.world, meta.createdAt);
     s.metaFile = meta;
-    const allEvents = readJsonl<GameEvent>(join(dir, 'events.jsonl'));
     // 履歴はキーフレーム時点までのログ＋再実行分
     appendAll(s.history, allEvents.filter((e) => e.seq <= kf.seq));
-    const commands = readJsonl<CommandRecord>(join(dir, 'commands.jsonl'));
     s.cseq = commands.length ? commands[commands.length - 1].cseq : 0;
     // 参加者のプロフィールと継承（参加の命令から）。参加の直後にキーフレームが書かれるので、キーフレームより前の参加も読む
     // （読んでいなかったので、起動し直して復旧したランでは、プロフィールの記録が書き直されず、シーズンの取り込みも止まった。S0 で見つけた）
@@ -188,7 +196,10 @@ export class RunSession {
     for (const [tok, pid] of Object.entries(s.log?.readTokens() ?? {})) s.tokens.set(tok, pid);
     for (const pid of s.world.playerOrder) s.rebuildMessages(pid);
     s.lastKeyframeSeq = kf.seq;
-    return { session: s, verified, message: verified ? `recovered ${runId} (${replayed.length} events re-executed, hash ok)` : `recovered ${runId} with mismatch (logged ${logged.length}, replayed ${replayed.length})` };
+    // 出来事の記録から作ったときは、キーフレームを書き直す（次に起動し直したときに使う）
+    if (!found.kf || found.moved.length) s.writeKeyframe();
+    const message = verified ? `recovered ${runId} (${replayed.length} events re-executed, hash ok)` : `recovered ${runId} with mismatch (logged ${logged.length}, replayed ${replayed.length})`;
+    return { session: s, verified, message: notes.length ? `${message}。${notes.join('。')}` : message };
   }
 
   /** コマンドの記録から、プレイヤーごとの呼び出しの記録を作り直す（復元時） */
@@ -228,26 +239,7 @@ export class RunSession {
   }
 
   private buildMeta(): RunMetaFile {
-    const w = this.world;
-    return {
-      runId: this.runId,
-      createdAt: this.createdAt,
-      endedAt: w.status === 'ended' ? this.updatedAt : undefined,
-      mode: w.meta.mode,
-      contentVersion: w.meta.contentVersion,
-      engineVersion: w.meta.engineVersion || ENGINE_VERSION,
-      eventVersion: w.meta.eventVersion,
-      options: { ...w.meta.options },
-      status: w.status,
-      players: w.playerOrder.map((pid) => {
-        const p = w.players[pid];
-        return { id: pid, name: p.name, classId: p.classId, controller: { ...p.controller }, joinedSeq: p.joinedSeq };
-      }),
-      // シーズンのラン（S0）は終わってもシードを出さない
-      seed: w.status === 'ended' && !w.meta.season ? w.secret.seed : undefined,
-      lastSeq: w.seq,
-      ...(w.meta.season ? { season: w.meta.season.id } : {}),
-    };
+    return metaFromWorld(this.world, this.runId, this.createdAt, this.updatedAt);
   }
 
   // ---------- 記録 ----------

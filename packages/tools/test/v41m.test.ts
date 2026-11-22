@@ -120,8 +120,9 @@ describe('V4-1m §37.1: 長いランの復旧・復旧に失敗したランを�
   it('a run that fails to recover shows in the run list with the reason; its token gets recovery_failed (MCP, feed, join) instead of "not found"', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'muse-v41m-fail-'));
     const run = await playedRun(dir, 'v41m-fail', 1);
-    // キーフレームを壊す（復旧が例外で落ちる）
+    // キーフレームを壊し、出来事の記録も消す（復旧が例外で落ちる。S3c §33.1 からは、キーフレームが読めなくても出来事の記録から復旧するので、両方）
     for (const f of readdirSync(join(dir, run.runId, 'keyframes'))) writeFileSync(join(dir, run.runId, 'keyframes', f), '{ broken');
+    rmSync(join(dir, run.runId, 'events.jsonl'));
     const m = new SessionManager(content, loadConfig({ runsDir: dir, profilesDir: null, waitOthersMs: 100 }));
     const logs: string[] = [];
     m.recoverAll((s) => logs.push(s));
@@ -129,7 +130,7 @@ describe('V4-1m §37.1: 長いランの復旧・復旧に失敗したランを�
     const row = m.listRuns().find((x) => x.runId === run.runId)!;
     expect(row.live).toBe(false);
     expect(row.joinable).toBe(false);
-    expect(row.recoveryFailed?.reason).toMatch(/JSON|Unexpected|Expected/);
+    expect(row.recoveryFailed?.reason).toMatch(/no keyframe/);
     expect(m.portForToken(run.token)).toBeNull();
     // MCP: resume_run と、トークンを使うツール
     const call = await mcpOf(m);
