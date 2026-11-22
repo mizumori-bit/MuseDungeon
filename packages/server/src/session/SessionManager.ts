@@ -12,7 +12,7 @@ import { actionError } from '@muse/shared';
 import type { ServerConfig } from '../config';
 import { RunStore } from '../log/RunStore';
 import { readTokensStrict, repairMeta, repairSummary } from '../log/repair';
-import { acquireLock, releaseLock, retryPendingWrites, RUNS_LOCK, scrubPaths, sweepTmpFiles } from '../log/atomicWrite';
+import { acquireLock, markLockListening, releaseLock, retryPendingWrites, RUNS_LOCK, scrubPaths, sweepTmpFiles } from '../log/atomicWrite';
 import type { MetaRepair } from '../log/repair';
 import { SessionPlayerPort } from './PlayerPort';
 import type { PlayerPort } from './PlayerPort';
@@ -143,19 +143,25 @@ export class SessionManager {
       try {
         const r = RunSession.recover(this.deps, runId);
         log(r.message);
-        // 管理ファイルを World と比べて、違えば書き直す（§36.1 の 3: 書けなかった古い meta.json が、終わったランを進行中として残していた）
-        const fixed = r.session.reconcileFiles();
-        if (fixed.length) log(`  ${runId}: ${fixed.join('・')} を World に合わせて書き直した`);
-        // 終わっていたラン（meta.json だけが進行中のまま残っていた）: 動いているランにしない（記録の一覧から、終わったランとして出る）
-        if (r.session.world.status === 'ended') {
-          if (r.session.world.meta.season) this.seasons.onRecovered(r.session);
-          r.session.close();
-          log(`  ${runId} は終わっていた（進行中として読み込まない）`);
-          continue;
+        // 管理ファイル・シーズンの記録を直すのは、再生が記録と一致したときだけ（SEASON.md §38.1。食い違いは版の違いでも起きる。
+        // 食い違った World から要約・meta・シーズンの数え直しを作ると、正しい記録を書き換える。食い違ったランは、今までどおり知らせて続ける）
+        if (r.verified) {
+          // 管理ファイルを World と比べて、違えば書き直す（§36.1 の 3: 書けなかった古い meta.json が、終わったランを進行中として残していた）
+          const fixed = r.session.reconcileFiles();
+          if (fixed.length) log(`  ${runId}: ${fixed.join('・')} を World に合わせて書き直した`);
+          // 終わっていたラン（meta.json だけが進行中のまま残っていた）: 動いているランにしない（記録の一覧から、終わったランとして出る）
+          if (r.session.world.status === 'ended') {
+            if (r.session.world.meta.season) this.seasons.onRecovered(r.session);
+            r.session.close();
+            log(`  ${runId} は終わっていた（進行中として読み込まない）`);
+            continue;
+          }
+        } else {
+          log(`  ${runId}: 再生が記録と食い違ったので、記録のファイル・管理ファイル・シーズンの記録は直していない`);
         }
         this.sessions.set(runId, r.session);
-        // シーズン（S1a §10.1 の 4）: キャンプにいるかランが終わっていれば、火を載せて支援を数え直す（落ちる前に保存できなかった分）
-        if (r.session.world.meta.season) this.seasons.onRecovered(r.session);
+        // シーズン（S1a §10.1 の 4）: キャンプにいるかランが終わっていれば、火を載せて支援を数え直す（落ちる前に保存できなかった分。一致したときだけ）
+        if (r.verified && r.session.world.meta.season) this.seasons.onRecovered(r.session);
         // 古い版で始まったラン（V4-0b §1.2。World は変えない。記録だけ）: 分かっている不整合（遠征の開始時の検査で直るもの）
         const created = r.session.world.meta.engineVersion;
         if (created && compareVersions(created, ENGINE_VERSION) < 0) {
@@ -176,15 +182,22 @@ export class SessionManager {
    * 生きている別のサーバーの印があれば、理由の文を返す（呼ぶ側が止まる）。古い印（プロセスがもう居ない・機械の起動より前）は掃除する。
    * 運用の道具（season など）は印を取らない（サーバーが動いていても使える）
    */
-  acquireRunsLock(log: (msg: string) => void = () => undefined): string | null {
+  async acquireRunsLock(log: (msg: string) => void = () => undefined, probe?: (host: string | undefined, port: number) => Promise<boolean>): Promise<string | null> {
     const dir = this.config.runsDir;
     if (!dir) return null;
-    mkdirSync(dir, { recursive: true });
-    const r = acquireLock(join(dir, RUNS_LOCK));
-    if ('busy' in r) return `この記録の置き場所（${dir}）は、ほかのサーバー（プロセス ${r.busy.pid}、${new Date(r.busy.startedAt).toISOString()} に起動）が使っている。同じ置き場所で 2 つ動かすと、記録を壊しうるので止まる。そのサーバーを止めるか、別の置き場所（MUSE_RUNS_DIR）で起動する。そのサーバーがもう居ないのに止まるなら、${join(dir, RUNS_LOCK)} を消す`;
+    try { mkdirSync(dir, { recursive: true }); } catch (e) { return `記録の置き場所（${dir}）を作れない（${(e as NodeJS.ErrnoException).code ?? ''}）`; }
+    const host = this.config.host.split(',')[0]?.trim();
+    const r = await acquireLock(join(dir, RUNS_LOCK), { port: this.config.port, host }, probe);
+    if ('error' in r) return `${r.error}。同じ記録の置き場所で 2 つのサーバーを動かさないための印（${RUNS_LOCK}）なので、取れないまま起動しない`;
+    if ('busy' in r) return `この記録の置き場所（${dir}）は、ほかのサーバー（プロセス ${r.busy.pid}${r.busy.port ? `・ポート ${r.busy.port}` : ''}、${new Date(r.busy.startedAt).toISOString()} に起動）が使っている。同じ置き場所で 2 つ動かすと、記録を壊しうるので止まる。そのサーバーを止めるか、別の置き場所（MUSE_RUNS_DIR）で起動する。そのサーバーがもう居ないのに止まるなら、${join(dir, RUNS_LOCK)} を消す`;
     if (r.stale) log(`古いサーバーの印（プロセス ${r.stale.pid}）を掃除した`);
     this.lockPath = join(dir, RUNS_LOCK);
     return null;
+  }
+
+  /** 待ち受けを始めたことを印に書く（それからは、印のプロセスが生きていても、ポートが応えなければ古い印と見る） */
+  markRunsLockListening(): void {
+    if (this.lockPath) markLockListening(this.lockPath);
   }
 
   /** 印を外す（自分のものだけ） */

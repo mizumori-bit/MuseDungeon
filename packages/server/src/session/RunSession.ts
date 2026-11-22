@@ -16,7 +16,7 @@ import type { SeasonHooks } from '../season/SeasonService';
 import type { ServerConfig } from '../config';
 import { LogWriter } from '../log/LogWriter';
 import { readJsonl } from '../log/RunStore';
-import { cutEventsAfter, isRunMeta, keyframeFromEvents, latestKeyframe, logBounds, metaFromWorld, repairJsonlTail } from '../log/repair';
+import { cutEventsAfter, isRunMeta, keyframeFromEvents, latestKeyframe, logBounds, metaFromWorld } from '../log/repair';
 import { readJsonStable } from '../log/atomicWrite';
 import { summaryMarkdown } from './summary';
 import type { ProfileHooks } from './profiles';
@@ -159,31 +159,25 @@ export class RunSession {
     const mr = readJsonStable<RunMetaFile>(join(dir, 'meta.json'), isRunMeta);
     if (!('value' in mr)) throw new Error('meta.json が読めない');
     const meta = mr.value;
-    // 追記するファイルの最後の欠けた行を切る（この後にまた追記する。SEASON.md §33.1）
+    // 原則（SEASON.md §38.1）: 記録のファイルは、再生が記録と一致したときにだけ直す。ここでは読むだけで、直すことは決めておき、照合の後に行う
     const notes: string[] = [];
-    for (const f of ['events.jsonl', 'commands.jsonl']) {
-      const t0 = repairJsonlTail(join(dir, f));
-      if (t0) notes.push('cut' in t0 ? `${f} の最後の欠けた行（${t0.cut} バイト）を切った（${f}.broken-tail に残した）` : `${f} の最後の行に改行を足した`);
-    }
     const commands = readJsonl<CommandRecord>(join(dir, 'commands.jsonl'));
-    // 命令の記録が覆っていない出来事（出来事を追記した後、命令を書く前に落ちた）を切る（SEASON.md §36.1 の 1・§35.7 の 2。切った分は残す）
-    const bounds0 = logBounds(readJsonl<GameEvent>(join(dir, 'events.jsonl')), commands);
-    const cut = cutEventsAfter(join(dir, 'events.jsonl'), bounds0.covered);
-    if (cut) notes.push(`命令の記録が覆っていない出来事 ${cut} 件を events.jsonl から切った（events.jsonl.uncommitted に残した）`);
-    const allEvents = cut ? readJsonl<GameEvent>(join(dir, 'events.jsonl')) : bounds0.events;
-    const bounds = cut ? logBounds(allEvents, commands) : bounds0;
-    // いちばん新しい、読めて、記録が覆っているキーフレーム（§36.1 の 1: 出来事の番号・命令の番号が、どちらも記録の最後以下）。
-    // 読めないものは名前を替えて残し、記録より先のものも名前を替えて残す。1 つも無ければ、出来事の記録だけから作る
-    const found = latestKeyframe(dir, { moveBroken: true, maxSeq: bounds.lastEventSeq, maxCseq: bounds.lastCseq });
-    if (found.moved.length) notes.push(`読めないキーフレーム ${found.moved.length} 個の名前を替えた（${found.moved.map((p) => basename(p)).join(', ')}）`);
-    if (found.ahead.length) notes.push(`記録より先に進んだキーフレーム ${found.ahead.length} 個の名前を替えた（${found.ahead.map((p) => basename(p)).join(', ')}）`);
-    const kf = found.kf ?? keyframeFromEvents(allEvents, commands, bounds.covered);
+    const allEvents = readJsonl<GameEvent>(join(dir, 'events.jsonl'));
+    // 記録の範囲（§36.1 の 1）。命令の記録が覆っていない出来事（出来事を追記した後、命令を書く前に落ちた）は、照合にも履歴にも入れない
+    const bounds = logBounds(allEvents, commands);
+    const orphans = allEvents.filter((e) => e.seq > bounds.covered).length;
+    const kept = orphans ? allEvents.filter((e) => e.seq <= bounds.covered) : allEvents;
+    const lastKept = kept.length ? kept[kept.length - 1].seq : 0;
+    // いちばん新しい、読めて、記録が覆っているキーフレーム（出来事の番号・命令の番号が、どちらも記録の最後以下）。範囲の中で最新のものが
+    // 一時的に読めなければ、古いものへ下がらずに失敗する（§38.2 の 2: 長い再実行になり、版をまたいだランでは食い違いに入る）
+    const found = latestKeyframe(dir, { moveBroken: false, maxSeq: Math.min(lastKept, bounds.covered), maxCseq: bounds.lastCseq });
+    if (found.unreadable) throw new Error(`キーフレーム ${basename(found.unreadable)} を一時的に読めない（ほかのプログラムが開いている）。次の起動で直る`);
+    const kf = found.kf ?? keyframeFromEvents(kept, commands, bounds.covered);
     if (!kf) throw new Error(`no keyframe for ${runId}`);
-    if (!found.kf) notes.push('読めるキーフレームが無いので、出来事の記録だけから作った');
     const s = new RunSession(deps, runId, kf.world, meta.createdAt);
     s.metaFile = meta;
     // 履歴はキーフレーム時点までのログ＋再実行分
-    appendAll(s.history, allEvents.filter((e) => e.seq <= kf.seq));
+    appendAll(s.history, kept.filter((e) => e.seq <= kf.seq));
     // 命令の番号は、キーフレームと記録の大きいほうから続ける（§36.1 の 1）
     s.cseq = Math.max(kf.cseq, bounds.lastCseq);
     // 参加者のプロフィールと継承（参加の命令から）。参加の直後にキーフレームが書かれるので、キーフレームより前の参加も読む
@@ -202,21 +196,31 @@ export class RunSession {
     appendAll(s.history, replayed);
     s.rebuildCalls(commands);
     // 目標の宣言（V3-7a）は V3-8 §53.5 で外した。古いランの goals.jsonl は読まない（再実行は commands.jsonl だけで、宣言はゲームに影響しない）
-    const logged = allEvents.filter((e) => e.seq > kf.seq);
-    // 命令は記録にあるのに、出来事の記録が先に欠けていた（機械が止まって、出来事の追記だけが届かなかった）: 再実行で出た分を足す（再実行は決定論的）
-    const lastLogged = allEvents.length ? allEvents[allEvents.length - 1].seq : 0;
-    const missing = replayed.filter((e) => e.seq > lastLogged);
-    if (missing.length && s.log) { s.log.appendEvents(missing); notes.push(`出来事の記録に欠けていた ${missing.length} 件を、再実行から足した`); }
+    const logged = kept.filter((e) => e.seq > kf.seq);
     const strip = (es: GameEvent[]) => es.map((e) => ({ ...e, wall: 0 }));
-    const verified = canonicalHash(strip(logged)) === canonicalHash(strip(replayed.filter((e) => e.seq <= lastLogged)));
+    const verified = canonicalHash(strip(logged)) === canonicalHash(strip(replayed.filter((e) => e.seq <= lastKept)));
+    // 命令は記録にあるのに、出来事の記録が先に欠けていた（出来事の追記だけが届かなかった）: 照合が一致し、命令の記録の覆う最後の番号が
+    // 出来事の記録の最後より大きいときだけ、その番号までの再実行の出来事を足す（§38.2 の 1。食い違いのときは、今の engine の出来事なので足さない）
+    const missing = verified && bounds.covered > lastKept ? replayed.filter((e) => e.seq > lastKept && e.seq <= bounds.covered) : [];
     // トークン
     for (const [tok, pid] of Object.entries(s.log?.readTokens() ?? {})) s.tokens.set(tok, pid);
     for (const pid of s.world.playerOrder) s.rebuildMessages(pid);
     s.lastKeyframeSeq = kf.seq;
     const last = s.history[s.history.length - 1];
     if (last) s.updatedAt = last.wall;
-    // 出来事の記録から作ったとき・キーフレームを避けたときは、キーフレームを書き直す（次に起動し直したときに使う）
-    if (!found.kf || found.moved.length || found.ahead.length) s.writeKeyframe();
+    if (verified) {
+      // 一致したときだけ、記録を直す（§38.1）: この後にまた追記するので、命令の無い出来事を切り、欠けた出来事を足し、使えないキーフレームを避ける
+      if (orphans) { const n = cutEventsAfter(join(dir, 'events.jsonl'), bounds.covered); if (n) notes.push(`命令の記録が覆っていない出来事 ${n} 件を events.jsonl から切った（events.jsonl.uncommitted に残した）`); }
+      if (missing.length && s.log) { s.log.appendEvents(missing); notes.push(`出来事の記録に欠けていた ${missing.length} 件を、再実行から足した`); }
+      const aside = latestKeyframe(dir, { moveBroken: true, maxSeq: Math.min(lastKept, bounds.covered), maxCseq: bounds.lastCseq, ...(found.kf ? { stopAt: kf.seq } : {}) });
+      if (aside.moved.length) notes.push(`読めないキーフレーム ${aside.moved.length} 個の名前を替えた（${aside.moved.map((p) => basename(p)).join(', ')}）`);
+      if (aside.ahead.length) notes.push(`記録より先に進んだキーフレーム ${aside.ahead.length} 個の名前を替えた（${aside.ahead.map((p) => basename(p)).join(', ')}）`);
+      if (!found.kf) notes.push('読めるキーフレームが無いので、出来事の記録だけから作った');
+      // 出来事の記録から作ったとき・キーフレームを避けたときは、キーフレームを書き直す（次に起動し直したときに使う）
+      if (!found.kf || aside.moved.length || aside.ahead.length) s.writeKeyframe();
+    } else if (orphans || found.skipped) {
+      notes.push(`食い違ったので、記録のファイルは直していない（${[orphans ? `命令の記録が覆っていない出来事 ${orphans} 件` : '', found.skipped ? `使えないキーフレーム ${found.skipped} 個` : ''].filter(Boolean).join('・')}は、そのまま）`);
+    }
     const message = verified ? `recovered ${runId} (${replayed.length} events re-executed, hash ok)` : `recovered ${runId} with mismatch (logged ${logged.length}, replayed ${replayed.length})`;
     return { session: s, verified, message: notes.length ? `${message}。${notes.join('。')}` : message };
   }

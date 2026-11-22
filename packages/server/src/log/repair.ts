@@ -110,32 +110,40 @@ export function cutEventsAfter(path: string, seq: number): number {
 }
 
 /**
- * いちばん新しい、読めるキーフレーム。無ければ null。壊れたものは名前を替えて残す（moved）。
- * maxSeq・maxCseq: 記録の最後（§36.1 の 1）。キーフレームの出来事の番号か命令の番号がそれより先なら、使わずに名前を替えて残す（ahead。`.ahead`）。
- * ほかのプログラムが開いていて一時的に読めないものは、名前を替えずに 1 つ前を使う
+ * いちばん新しい、読めるキーフレーム。無ければ null。
+ * maxSeq・maxCseq: 記録の最後（§36.1 の 1）。キーフレームの出来事の番号か命令の番号がそれより先なら、使わない（ahead）。壊れたものも使わない（moved）。
+ * moveBroken なら、使わないものの名前を替えて残す（壊れたものは `.broken`、先に進んだものは `.ahead`。照合が一致した後だけ。§38.1）。
+ * stopAt: そのキーフレームまで来たら止まる（名前を替えるときに、使うと決めたものより古いものを見ない）。
+ * 範囲の中で最新の読めるはずのものが、一時的に読めなければ、古いものへ下がらずに unreadable を返す（§38.2 の 2）。skipped は使わなかった数
  */
-export function latestKeyframe(dir: string, opts: { moveBroken: boolean; maxSeq?: number; maxCseq?: number }): { kf: KeyframeFile | null; moved: string[]; ahead: string[] } {
+export function latestKeyframe(dir: string, opts: { moveBroken: boolean; maxSeq?: number; maxCseq?: number; stopAt?: number }): { kf: KeyframeFile | null; moved: string[]; ahead: string[]; unreadable?: string; skipped: number } {
   const kfDir = join(dir, 'keyframes');
   const seqs = existsSync(kfDir) ? readdirSync(kfDir).filter((f) => /^\d+\.json$/.test(f)).map((f) => parseInt(f, 10)).sort((a, b) => b - a) : [];
   const moved: string[] = [];
   const ahead: string[] = [];
+  let skipped = 0;
   for (const seq of seqs) {
     const p = join(kfDir, `${seq}.json`);
+    if (opts.stopAt !== undefined && seq <= opts.stopAt) break;
     if (opts.maxSeq !== undefined && seq > opts.maxSeq) {
+      skipped++;
       if (opts.moveBroken) { const to = moveAside(p, 'ahead'); if (to) ahead.push(to); }
       continue;
     }
     const r = readJsonStable<KeyframeFile>(p, (v) => isKeyframe(v) && v.seq === seq);
+    if ('unreadable' in r) return { kf: null, moved, ahead, unreadable: p, skipped };
     if ('value' in r) {
       if (opts.maxCseq !== undefined && r.value.cseq > opts.maxCseq) {
+        skipped++;
         if (opts.moveBroken) { const to = moveAside(p, 'ahead'); if (to) ahead.push(to); }
         continue;
       }
-      return { kf: r.value, moved, ahead };
+      return { kf: r.value, moved, ahead, skipped };
     }
-    if ('broken' in r && opts.moveBroken) { const to = moveAside(p); if (to) moved.push(to); }
+    skipped++;
+    if (opts.moveBroken) { const to = moveAside(p); if (to) moved.push(to); }
   }
-  return { kf: null, moved, ahead };
+  return { kf: null, moved, ahead, skipped };
 }
 
 /**

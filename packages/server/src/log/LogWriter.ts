@@ -2,7 +2,7 @@
 // キーフレームと管理ファイルを書く前に、追記するファイル（命令と出来事の記録）もディスクまで書き切る（§36.1 の 1: 機械が止まったとき、
 // キーフレームだけが記録より先に進んで残らないように）。
 // runs/<runId>/ meta.json, commands.jsonl, events.jsonl, keyframes/<seq>.json, summary.json/.md, tokens.json
-import { appendFileSync, mkdirSync } from 'node:fs';
+import { appendFileSync, closeSync, mkdirSync, openSync, readSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { CommandRecord, GameEvent, RunMetaFile, World } from '@muse/shared';
 import { fsyncFile, readJsonStable, writeFileAtomic, writeFileAtomicLogged } from './atomicWrite';
@@ -34,7 +34,7 @@ export class LogWriter {
   /** 書けなかったら知らせて続ける（命令の確定の途中。前の中身は残り、次の書き込みと閉じるときにやり直す。起動し直したときにも作り直せる） */
   private atomic(path: string, data: string): boolean {
     this.syncLogs();
-    return writeFileAtomicLogged(path, data);
+    return writeFileAtomicLogged(path, data, { remember: true });
   }
 
   writeMeta(meta: RunMetaFile): boolean {
@@ -43,13 +43,37 @@ export class LogWriter {
 
   appendEvents(events: readonly GameEvent[]): void {
     if (!events.length) return;
-    appendFileSync(join(this.dir, 'events.jsonl'), events.map((e) => JSON.stringify(e)).join('\n') + '\n', 'utf8');
+    const p = join(this.dir, 'events.jsonl');
+    appendFileSync(p, this.lead(p) + events.map((e) => JSON.stringify(e)).join('\n') + '\n', 'utf8');
     this.appended = true;
   }
 
   appendCommand(rec: CommandRecord): void {
-    appendFileSync(join(this.dir, 'commands.jsonl'), JSON.stringify(rec) + '\n', 'utf8');
+    const p = join(this.dir, 'commands.jsonl');
+    appendFileSync(p, this.lead(p) + JSON.stringify(rec) + '\n', 'utf8');
     this.appended = true;
+  }
+
+  /** 追記したことのあるファイル（最後が改行かを確かめるのは、このプロセスで最初に追記するときだけ） */
+  private readonly tailChecked = new Set<string>();
+
+  /**
+   * 最初の追記の前に、ファイルが改行で終わっていなければ、改行から始める（SEASON.md §38.1: 欠けた最後の行は切らずに残し、次の行がつながって
+   * 読めなくならないようにする。読むときは欠けた行を飛ばす）
+   */
+  private lead(path: string): string {
+    if (this.tailChecked.has(path)) return '';
+    this.tailChecked.add(path);
+    try {
+      const st = statSync(path);
+      if (!st.size) return '';
+      const fd = openSync(path, 'r');
+      try {
+        const b = Buffer.alloc(1);
+        readSync(fd, b, 0, 1, st.size - 1);
+        return b[0] === 0x0a ? '' : '\n';
+      } finally { closeSync(fd); }
+    } catch { return ''; }
   }
 
   writeKeyframe(kf: KeyframeFile): void {

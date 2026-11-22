@@ -17,7 +17,7 @@ if (errs.length) {
 }
 const manager = new SessionManager(content, config);
 // 同じ記録の置き場所で、サーバーを 2 つ動かさない（SEASON.md §36.1 の 6）: 復旧を始める前に印を取る。生きている別のサーバーの印があれば止まる
-const busy = manager.acquireRunsLock((m) => console.log(`[lock] ${m}`));
+const busy = await manager.acquireRunsLock((m) => console.log(`[lock] ${m}`));
 if (busy) {
   console.error(`[lock] ${busy}`);
   process.exit(1);
@@ -35,6 +35,8 @@ const listenErr = (host: string) => (e: Error) => {
 };
 app.server.on('error', listenErr(hosts[0]));
 app.server.listen(config.port, hosts[0], () => {
+  // 待ち受けを始めたことを印に書く（SEASON.md §38.2 の 4）
+  manager.markRunsLockListening();
   for (const h of hosts) {
     const base = `http://${h}:${config.port}`;
     console.log(`MuseDungeon server  ${base}`);

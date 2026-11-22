@@ -6,6 +6,8 @@
 //   サーバーの中の書き込みは、書けなかった中身を覚えておき、次の書き込みのときと閉じるときにやり直す（`writeFileAtomicLogged`）
 // 追記するファイル（events.jsonl・commands.jsonl・log.jsonl）は、ここを通さない（`fsyncFile` で、キーフレームと管理ファイルより先に書き切る）
 import { closeSync, existsSync, fsyncSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import { connect as netConnect } from 'node:net';
 import { uptime } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 
@@ -70,8 +72,15 @@ export function writeFileAtomic(path: string, data: string): void {
 /** 書けなかった中身（同じファイルは新しいほう）。次の書き込みのときと、閉じるときにやり直す（§36.1 の 3・5） */
 const pending = new Map<string, string>();
 
-/** 書けなかった中身をやり直す（置き場所が消えていれば捨てる）。残った数 */
-export function retryPendingWrites(warn: (msg: string) => void = (m) => console.error(m)): number {
+/** やり直しの間隔の下限（ミリ秒。§38.2 の 3: 1 つのファイルが開かれたままでも、すべての書き込みが遅くならないように） */
+export const PENDING_RETRY_GAP_MS = 2000;
+let lastRetryAt = 0;
+
+/** 書けなかった中身をやり直す（置き場所が消えていれば捨てる）。force でなければ、前のやり直しから間隔の下限が過ぎたときだけ。残った数 */
+export function retryPendingWrites(warn: (msg: string) => void = (m) => console.error(m), force = true): number {
+  if (!pending.size) return 0;
+  if (!force && Date.now() - lastRetryAt < PENDING_RETRY_GAP_MS) return pending.size;
+  lastRetryAt = Date.now();
   for (const [path, data] of [...pending]) {
     if (!existsSync(dirname(path))) { pending.delete(path); continue; }
     try {
@@ -94,18 +103,21 @@ export function dropPendingWrites(): void {
 }
 
 /**
- * サーバーの中の書き込み（命令の確定の途中から呼ばれる）: 失敗しても例外を投げずに知らせて false。前の中身は残り、書けなかった中身は覚えておいて、
- * 次の書き込みのときと閉じるときにやり直す。記録（meta.json・要約・キーフレーム）は、起動し直したときに、ほかの記録からも作り直せる
+ * サーバーの中の書き込み（命令の確定の途中から呼ばれる）: 失敗しても例外を投げずに知らせて false。前の中身は残る。
+ * remember なら、書けなかった中身を覚えておいて、後の書き込みのとき（間隔の下限つき）と閉じるときにやり直す（ランの記録だけ。§38.2 の 3:
+ * シーズンとプロフィールは、覚えた古い中身を書く前の検査を通さずに書き戻すと、ほかのプロセスが書いた新しい中身を上書きしうるので、覚えない。次の書き込みが新しい中身で書く）
  */
-export function writeFileAtomicLogged(path: string, data: string, warn: (msg: string) => void = (m) => console.error(m)): boolean {
+export function writeFileAtomicLogged(path: string, data: string, opts: { remember?: boolean; warn?: (msg: string) => void } = {}): boolean {
+  const warn = opts.warn ?? ((m: string) => console.error(m));
   pending.delete(path);
-  if (pending.size) retryPendingWrites(warn);
+  if (pending.size) retryPendingWrites(warn, false);
   try {
     writeFileAtomic(path, data);
     return true;
   } catch (e) {
-    pending.set(path, data);
-    warn(`[write] ${path} を書けなかった（前の中身のまま。次に書くときと閉じるときにまた試す）: ${String((e as Error).message ?? e).split('\n')[0]}`);
+    // 覚えたら、やり直しは間隔の下限が過ぎてから（すぐ次の書き込みで、同じ待ちをくり返さない）
+    if (opts.remember) { pending.set(path, data); lastRetryAt = Date.now(); }
+    warn(`[write] ${path} を書けなかった（前の中身のまま。${opts.remember ? '次に書くときと閉じるときにまた試す' : '次の書き込みで新しい中身を書く'}）: ${String((e as Error).message ?? e).split('\n')[0]}`);
     return false;
   }
 }
@@ -149,11 +161,10 @@ export function readJsonStable<T>(path: string, shape: (v: unknown) => boolean =
   }
 }
 
-/** 一時のファイルの名前（`<名前>.<pid>.<回数>.tmp`）から、書いたプロセスの番号。古い形（`<名前>.tmp`）は 0 */
+/** 一時のファイルの名前（`<名前>.<pid>.<回数>.tmp`）から、書いたプロセスの番号。今の書き方の名前でなければ null（古い形の `<名前>.tmp` は、だれが書いたか分からないので消さない。§38.2 の 5） */
 export function tmpWriterPid(name: string): number | null {
   const m = /\.(\d+)\.\d+\.tmp$/.exec(name);
-  if (m) return parseInt(m[1], 10);
-  return /\.tmp$/.test(name) ? 0 : null;
+  return m ? parseInt(m[1], 10) : null;
 }
 
 /** そのプロセスが動いているか */
@@ -175,7 +186,7 @@ export function sweepTmpFiles(roots: readonly (string | null | undefined)[]): nu
       const p = join(d, f);
       const pid = tmpWriterPid(f);
       if (pid !== null) {
-        if (pid && processAlive(pid)) continue;
+        if (processAlive(pid)) continue;
         try { if (statSync(p).isFile()) { rmSync(p, { force: true }); n++; } } catch { /* 消せなくてもよい */ }
         continue;
       }
@@ -189,30 +200,71 @@ export function sweepTmpFiles(roots: readonly (string | null | undefined)[]): nu
 /** 記録の置き場所の印の名前（`.` で始まるので、ランの並び（`run_…`）と間違えない） */
 export const RUNS_LOCK = '.server.lock';
 
-interface LockBody { pid: number; startedAt: number }
+export interface LockBody { pid: number; startedAt: number; port?: number; host?: string; listening?: boolean; nonce?: string }
+
+/** 起動して待ち受けを始めるまでの猶予（ミリ秒）。この間は、印のプロセスが生きていれば、待ち受けていなくても使っているものと見る */
+export const LOCK_STARTUP_GRACE_MS = 10 * 60_000;
+
+/** そのポートで、だれかが待ち受けているか（TCP でつないでみる） */
+export function portAnswers(host: string | undefined, port: number, timeoutMs = 1000): Promise<boolean> {
+  return new Promise((res) => {
+    const h = !host || host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host;
+    const sock = netConnect({ host: h, port });
+    const done = (v: boolean) => { sock.destroy(); res(v); };
+    sock.setTimeout(timeoutMs, () => done(false));
+    sock.once('connect', () => done(true));
+    sock.once('error', () => done(false));
+  });
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * 印を取る（§36.1 の 6）。生きている別のプロセスの印があれば busy。古い印（プロセスがもう居ない・機械の起動より前に置かれた）は掃除して取る（stale）
+ * 印を取る（§36.1 の 6・§38.2 の 4）。印にはプロセスの番号・起動の時刻・ポートを書く。
+ * - 生きている別のプロセスの印で、まだ待ち受けていない（起動の途中。猶予の内）か、そのポートで待ち受けが応えるなら busy
+ * - プロセスがもう居ない・プロセスは居るがポートが応えない（番号の使い回し・高速スタートアップで起動からの時間が戻らない）・機械の起動より前の印は、古い印として掃除して取る（stale）
+ * - 作った後に少し待って読み直し、自分のものでなくなっていれば（同時に起動した別のサーバーが取った）busy（2 つとも起動しない形を防ぐ）
+ * - 印を作れない・読めない・取り直せないときは error（説明つき）
  */
-export function acquireLock(path: string): { ok: true; stale?: LockBody } | { busy: LockBody } {
-  const body: LockBody = { pid: process.pid, startedAt: Date.now() };
+export async function acquireLock(path: string, me: { port?: number; host?: string } = {}, probe: (host: string | undefined, port: number) => Promise<boolean> = portAnswers): Promise<{ ok: true; stale?: LockBody } | { busy: LockBody } | { error: string }> {
+  const body: LockBody = { pid: process.pid, startedAt: Date.now(), ...(me.port ? { port: me.port } : {}), ...(me.host ? { host: me.host } : {}), listening: false, nonce: randomBytes(6).toString('hex') };
   let stale: LockBody | undefined;
   for (let i = 0; i < 2; i++) {
     try {
       const fd = openSync(path, 'wx');
       try { writeFileSync(fd, JSON.stringify(body)); fsyncSync(fd); } finally { closeSync(fd); }
+      await sleep(100);
+      const again = readJsonStable<LockBody>(path);
+      if (!('value' in again) || again.value.pid !== process.pid || again.value.nonce !== body.nonce) {
+        return 'value' in again ? { busy: again.value } : { error: `印 ${path} を取った後に読めなくなった（同時に起動したサーバーがある？）` };
+      }
       return stale ? { ok: true, stale } : { ok: true };
     } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
-      const r = readJsonStable<LockBody>(path, (v) => !!v && typeof v === 'object' && typeof (v as LockBody).pid === 'number');
+      const code = (e as NodeJS.ErrnoException).code;
+      if (code !== 'EEXIST') return { error: `印 ${path} を作れない（${code ?? String((e as Error).message ?? e)}）` };
+      const r = readJsonStable<LockBody>(path, (v) => !!v && typeof v === 'object' && typeof (v as LockBody).pid === 'number' && typeof (v as LockBody).startedAt === 'number');
+      if ('unreadable' in r) return { error: `印 ${path} を一時的に読めない（${r.unreadable}）。少し待って起動し直す` };
       const cur = 'value' in r ? r.value : null;
-      const bootAt = Date.now() - uptime() * 1000;
-      if (cur && cur.pid !== process.pid && processAlive(cur.pid) && !(cur.startedAt < bootAt)) return { busy: cur };
+      if (!cur) {
+        // 書きかけの印（同時に起動したサーバーが作った直後）かもしれない: 新しいものは古い印と見ない
+        let young = false;
+        try { young = Date.now() - statSync(path).mtimeMs < 10_000; } catch { /* 消えていれば次の試みで作る */ }
+        if (young) return { error: `印 ${path} が書きかけ（同時に起動したサーバーがある？）。少し待って起動し直す` };
+      } else if (cur.pid !== process.pid && processAlive(cur.pid) && !(cur.startedAt < Date.now() - uptime() * 1000)) {
+        if (!cur.listening && Date.now() - cur.startedAt < LOCK_STARTUP_GRACE_MS) return { busy: cur };
+        if (cur.port && await probe(cur.host, cur.port)) return { busy: cur };
+      }
       stale = cur ?? { pid: 0, startedAt: 0 };
-      try { rmSync(path, { force: true }); } catch { /* 次の試みで、また EEXIST になれば busy と見ない */ }
+      try { rmSync(path, { force: true }); } catch (e2) { return { error: `古い印 ${path} を消せない（${(e2 as NodeJS.ErrnoException).code ?? ''}）` }; }
     }
   }
-  throw new Error(`印 ${path} を取れなかった`);
+  return { error: `印 ${path} を取り直せなかった（同時に起動したサーバーがある？）。少し待って起動し直す` };
+}
+
+/** 待ち受けを始めたことを印に書く（自分の印だけ） */
+export function markLockListening(path: string): void {
+  const r = readJsonStable<LockBody>(path);
+  if ('value' in r && r.value.pid === process.pid) { try { writeFileAtomic(path, JSON.stringify({ ...r.value, listening: true })); } catch { /* 書けなくても、起動の猶予が過ぎれば、ポートで確かめられる */ } }
 }
 
 /** 印を外す（自分のものだけ） */

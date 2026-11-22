@@ -9,7 +9,7 @@ export { intentStopText, SessionPlayerPort, towardNote } from './session/PlayerP
 export type { PlayerPort, ActionPayload } from './session/PlayerPort';
 export { SpectatorPort } from './session/SpectatorPort';
 export { RunStore, spectatorEvent } from './log/RunStore';
-export { acquireLock, atomicWriteHooks, dropPendingWrites, pendingWrites, RUNS_LOCK, scrubPaths, writeFileAtomic } from './log/atomicWrite';
+export { acquireLock, atomicWriteHooks, dropPendingWrites, pendingWrites, RUNS_LOCK, scrubPaths, writeFileAtomic, writeFileAtomicLogged } from './log/atomicWrite';
 export { createMcpServer } from './mcp/server';
 export { rulesText } from './mcp/rules';
 export { computeStandings, nameKey, SeasonService, SeasonStore, SEASON_ID_RE, SEASON_GRACE_MS, TITLE_MIN_ENTRANTS } from './season/SeasonService';

@@ -172,13 +172,16 @@ describe('S3c §33.1: other files', () => {
     m.closeAll();
   });
 
-  it('a torn tail of events.jsonl (zero bytes after a crash) is cut, so the next record is not glued onto it', async () => {
+  it('a torn tail of events.jsonl (zero bytes after a crash) is left as it is, and the next record starts on a new line (S3e §38.1: not cut)', async () => {
     const dir = tmp();
     const run = await campRun(dir);
     const ep = join(run.runDir, 'events.jsonl');
-    writeFileSync(ep, Buffer.concat([readFileSync(ep), Buffer.alloc(77)]));
+    const torn = Buffer.concat([readFileSync(ep), Buffer.alloc(77)]);
+    writeFileSync(ep, torn);
     const { m, logs } = restart(dir);
-    expect(logs.find((l) => l.startsWith(`recovered ${run.runId}`))).toContain('events.jsonl の最後の欠けた行（77 バイト）を切った');
+    expect(logs.find((l) => l.startsWith(`recovered ${run.runId}`))).toContain('hash ok');
+    // 復旧は記録を切らない（読むときに飛ばす）
+    expect(readFileSync(ep).equals(torn)).toBe(true);
     const offer = m.get(run.runId)!.world.camp!.offers[0].index;
     expect((await act(m.portForToken(run.token)!, { type: 'start_expedition', offer })).ok).toBe(true);
     const seq = m.get(run.runId)!.world.seq;

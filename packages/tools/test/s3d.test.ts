@@ -219,33 +219,51 @@ describe('S3d §36.1 の 2〜6: management files', () => {
     const mine = `summary.json.${process.pid}.77.tmp`;
     writeFileSync(join(run.rd, mine), 'x');
     const a = restart(dir);
-    expect(a.logs.some((l) => l.startsWith('残っていた一時のファイル 3 個を消した'))).toBe(true);
-    expect(readdirSync(run.rd).filter((f) => f.endsWith('.tmp'))).toEqual([mine]);
+    // 今の書き方の名前（プロセスの番号つき）で、書いたプロセスが居ないものだけ（古い形の .tmp は消さない。S3e §38.2 の 5）
+    expect(a.logs.some((l) => l.startsWith('残っていた一時のファイル 2 個を消した'))).toBe(true);
+    expect(readdirSync(run.rd).filter((f) => f.endsWith('.tmp')).sort()).toEqual(['meta.json.tmp', mine].sort());
     a.m.closeAll();
     expect(scrubPaths(`ENOENT: open '${join(dir, 'run_x', 'keyframes', '1.json')}'`, dir)).toBe(`ENOENT: open '${join('run_x', 'keyframes', '1.json')}'`);
     expect(scrubPaths("open 'C:\\Users\\someone\\x\\y.json'", dir)).toBe("open 'y.json'");
   });
 
-  it('6: a second server on the same runs folder stops before recovering; a stale lock (dead process) is cleaned; the lock is not taken for a run', async () => {
+  it('6: a second server on the same runs folder stops before recovering; a stale lock (dead process, or a live pid whose port does not answer) is cleaned; the lock is not taken for a run', async () => {
     const dir = tmp();
-    // 生きている別のプロセス（このテストを動かしている親）の印
-    writeFileSync(join(dir, RUNS_LOCK), JSON.stringify({ pid: process.ppid, startedAt: Date.now() }));
     const m = mgr(dir);
-    const busy = m.acquireRunsLock();
-    expect(busy).toContain('ほかのサーバー');
-    expect(JSON.parse(readFileSync(join(dir, RUNS_LOCK), 'utf8')).pid).toBe(process.ppid);
-    // 古い印（もう居ないプロセス）は掃除して取る
-    writeFileSync(join(dir, RUNS_LOCK), JSON.stringify({ pid: 999999, startedAt: Date.now() }));
+    const lock = join(dir, RUNS_LOCK);
+    const yes = async () => true;
+    const no = async () => false;
+    // 生きている別のプロセス（このテストを動かしている親）が、起動の途中（まだ待ち受けていない）
+    writeFileSync(lock, JSON.stringify({ pid: process.ppid, startedAt: Date.now(), port: 7, listening: false }));
+    expect(await m.acquireRunsLock(() => undefined, no)).toContain('ほかのサーバー');
+    // 待ち受けていて、ポートが応える
+    writeFileSync(lock, JSON.stringify({ pid: process.ppid, startedAt: Date.now() - 1000, port: 7, listening: true }));
+    expect(await m.acquireRunsLock(() => undefined, yes)).toContain('ほかのサーバー');
+    expect(JSON.parse(readFileSync(lock, 'utf8')).pid).toBe(process.ppid);
+    // プロセスは居るが、ポートが応えない（番号の使い回し・高速スタートアップ）: 古い印
     const logs: string[] = [];
-    expect(m.acquireRunsLock((s) => logs.push(s))).toBeNull();
+    expect(await m.acquireRunsLock((s) => logs.push(s), no)).toBeNull();
     expect(logs.some((l) => l.includes('古いサーバーの印'))).toBe(true);
-    expect(JSON.parse(readFileSync(join(dir, RUNS_LOCK), 'utf8')).pid).toBe(process.pid);
+    expect(JSON.parse(readFileSync(lock, 'utf8')).pid).toBe(process.pid);
+    m.markRunsLockListening();
+    expect(JSON.parse(readFileSync(lock, 'utf8')).listening).toBe(true);
+    m.releaseRunsLock();
+    // もう居ないプロセスの印
+    writeFileSync(lock, JSON.stringify({ pid: 999999, startedAt: Date.now(), port: 7, listening: false }));
+    expect(await m.acquireRunsLock(() => undefined, yes)).toBeNull();
     expect(m.store!.listRunDirs()).toEqual([]);
     m.recoverAll();
     expect(m.listRuns()).toEqual([]);
     m.releaseRunsLock();
-    expect(existsSync(join(dir, RUNS_LOCK))).toBe(false);
+    expect(existsSync(lock)).toBe(false);
+    // 同時に 2 つ起動しても、両方は起動しない
+    const m2 = mgr(dir);
+    const [x, y] = await Promise.all([m.acquireRunsLock(() => undefined, no), m2.acquireRunsLock(() => undefined, no)]);
+    expect([x, y].filter((v) => v === null).length).toBeLessThanOrEqual(1);
+    m.releaseRunsLock();
+    m2.releaseRunsLock();
     m.closeAll();
+    m2.closeAll();
   });
 
   it('6: an unreadable result.json is not taken as "not final": the season is not loaded nor written, nor finalized again', () => {
