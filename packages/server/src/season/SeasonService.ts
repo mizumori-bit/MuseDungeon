@@ -2,7 +2,6 @@
 // ランに入るのは、キャンプでの取り込み（システムの命令 season_sync）だけ。ここはその中身を作り、ランの出来事から参加者の記録を書き直す。
 import { appendFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { isDeepStrictEqual } from 'node:util';
 import { readJsonStable, writeFileAtomicLogged } from '../log/atomicWrite';
 import type {
   GameEvent, PlayerId, SeasonAward, SeasonListing, SeasonResultView, SeasonSectionRow, SeasonSlay, SeasonSlayBrief, SeasonStandingRow, SeasonStandingsResponse, SeasonSyncCommand, SeasonTitle, SupplyPlace,
@@ -755,17 +754,6 @@ export class SeasonService implements SeasonHooks {
    * 起動し直して復旧したラン（S1a §10.1 の 4）: キャンプにいるかランが終わっていれば、載せて数え直す。
    * 数える処理はやり直しても同じなので、記録を書いた後・保存の前に落ちた使用も、ここで数えられる
    */
-  /**
-   * キャンプにいる参加者の、取り込んである討伐の記録（World の season.slays）が、今の記録（slaysView）と違うか（S5 §48.5）。
-   * 起動し直して記録を作り直したとき（slays.json を消した）、キャンプで取り込み直すかを決める。確定したシーズンは見ない
-   */
-  slaysStale(session: RunSession, pid: PlayerId): boolean {
-    const f = this.find(session, pid);
-    const pr = session.world.players[pid];
-    if (!f || f.d.result || !pr || pr.state !== 'at_camp' || session.world.status === 'ended') return false;
-    return !isDeepStrictEqual(slaysView(f.d.slays, f.p.profileId), session.world.season?.slays ?? []);
-  }
-
   onRecovered(session: RunSession): void {
     if (!session.world.meta.season) return;
     for (const pid of session.world.playerOrder) {

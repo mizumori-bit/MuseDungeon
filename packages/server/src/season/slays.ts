@@ -61,8 +61,8 @@ interface WardenTrack {
   missStun: boolean;
 }
 
-/** 自分の手番 1 つ（相手が動けなかった手番）の数えかけ。o: 数える所（外させた後か、それ以外か） */
-interface Win { wid: string; o: SlayOpening; action: boolean; dealt: number }
+/** 自分の手番 1 つ（相手が動けなかった手番）の数えかけ。o: 数える所（外させた後か、それ以外か）。閉じるときに、戦いが始まっていれば数える（S5a） */
+interface Win { wid: string; o: SlayOpening; action: boolean; dealt: number; taken: number }
 
 /** 載せる時点の装備・レベル・手番 */
 interface Snap { level: number; classId: string; weapon: SlayGear | null; armor: SlayGear | null; hidden: boolean; turns: number }
@@ -91,6 +91,8 @@ class FightScan {
   private readonly keys: Set<string>;
   private readonly tracks = new Map<string, WardenTrack>();
   private wins: Win[] = [];
+  /** この遠征で、攻撃・被害の出来事があった大守護者（戦いが始まった。S5a §48.9 の 2: それより前の手番は、動けなかった手番に数えない） */
+  private readonly engaged = new Set<string>();
   /** その遠征で、その大守護者と最後に戦った時点の装備など（倒さずに帰った挑戦に使う） */
   readonly lastFight = new Map<string, { no: number; snap: Snap }>();
 
@@ -137,12 +139,18 @@ class FightScan {
     return actorSeen(w, wE.pos.floor, wE.pos, meE.pos, vis.includes(wE.pos.y * f.width + wE.pos.x));
   }
 
-  /** 数えかけの手番を閉じる（次の自分の手番・階を離れた・遠征が終わった・倒した） */
+  /**
+   * 数えかけの手番を閉じる（次の自分の手番・階を離れた・遠征が終わった・倒した）。その手番の終わりまでに戦いが始まっていなければ数えない
+   * （眠っている相手を見ていただけの手番。戦いを始めた一手の手番は数える）
+   */
   private closeWins(wid?: string): void {
     const keep: Win[] = [];
     for (const x of this.wins) {
       if (wid !== undefined && x.wid !== wid) { keep.push(x); continue; }
+      if (!this.engaged.has(x.wid)) continue;
+      x.o.turns++;
       x.o.dealt += x.dealt;
+      x.o.taken += x.taken;
       if (x.dealt > 0) x.o.hitTurns++;
     }
     this.wins = keep;
@@ -167,6 +175,8 @@ class FightScan {
           rec = acc.tells.get(k) ?? { kind: k as Intent['kind'], n: 0, seen: 0, missed: 0, hit: 0 };
           rec.n++;
           acc.tells.set(k, rec);
+          // 構えたら戦いが始まった（突進が空を切ると、攻撃の出来事は出ない。S5a）
+          this.engaged.add(wid);
         }
         t.intent = k; t.tell = rec; t.seen = false; t.resolving = null;
       } else if (!k && t.intent) {
@@ -223,6 +233,7 @@ class FightScan {
     if (ev.type === 'expedition_started') {
       this.curNo = ev.expedition.no;
       this.startTurns.set(this.curNo, this.myTurns);
+      this.engaged.clear();
     } else if (ev.type === 'expedition_ended') { this.closeWins(); this.curNo = null; }
     // 品を手に入れた（拾った・置き場から取った）
     if (ev.type === 'item_picked_up' && ev.actor === meId) this.got.set(ev.item, { got: 'picked', depth: depthOfKey(ev.floor) });
@@ -242,6 +253,7 @@ class FightScan {
         const s = this.attempts.get(d) ?? new Set<number>();
         s.add(this.curNo);
         this.attempts.set(d, s);
+        this.engaged.add(id!);
         if (ev.type !== 'warden_slain' && this.floor === `main:${d}`) this.lastFight.set(id!, { no: this.curNo, snap: this.snap() });
       }
     }
@@ -273,7 +285,7 @@ class FightScan {
       const amount = ev.dealt ?? ev.amount;
       for (const x of this.wins) {
         if (ev.target === x.wid && x.action && amount > 0) x.dealt += amount;
-        if (ev.target === meId) x.o.taken += amount;
+        if (ev.target === meId) x.taken += amount;
       }
     }
     // 自分の手番の初め: 見えている構えを「見た」に、相手が動けなければ、その手番を数え始める
@@ -287,8 +299,7 @@ class FightScan {
         const helpless = t.asleep || [...t.statuses].some((s) => this.incap.has(s));
         if (helpless && visible) {
           const o = t.missStun ? a.openings.missed : a.openings.other;
-          o.turns++;
-          this.wins.push({ wid, o, action: true, dealt: 0 });
+          this.wins.push({ wid, o, action: true, dealt: 0, taken: 0 });
         }
       }
     }

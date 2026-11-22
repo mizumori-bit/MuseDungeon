@@ -6,7 +6,7 @@ import type {
 } from '@muse/shared';
 import {
   bountyForecastText, briefingLines, buildObservation, campDepthOf, gearVsArmorText, offerGuardianHp, currentExpedition, dirLabel, endReasonText, guardianForecastText, haulTotal, latestExpedition, multText, nameOf,
-  nextCampOf, nextOverreach, objectiveText, offerFloorTraitsText, offerGap, offerText, offerWardenExtra, overreachPoints, partsText, progressText, recordsCampLine, resultText, slaysAt, slayGroupText, slotName,
+  nextCampOf, nextOverreach, objectiveText, offerFloorTraitsText, offerGap, offerText, offerWardenExtra, overreachPoints, partsText, progressText, recordsCampLine, resultText, slaysAt, slayGroupText, slayShortGroupText, slotName,
 } from '@muse/shared';
 import { api } from '../api';
 import type { RefObject } from 'preact';
@@ -442,10 +442,10 @@ function OfferCard({ o, rules, level, onStart, view, catalog }: { o: ExpeditionO
           ? gearVsArmorText(L, catalog, view, o.bounty.armor, Math.max(1, o.bounty.hp - (o.scar ?? 0)))
           : gearVsArmorText(L, catalog, view, o.guardian!.armor!, offerGuardianHp(view, o), o.guardian!.types ?? [])}</span></div>
       )}
-      {/* 討伐の記録（S4 §35.5）: まだ倒していない大守護者を倒す候補に、先に倒した参加者の戦いの事実（AI の候補の文と同じ） */}
+      {/* 討伐の記録（S4 §35.5）: まだ倒していない大守護者を倒す候補に、先に倒した参加者の戦いの事実（AI の候補の文と同じ短い形。S5a。全文はキャンプの記録庫の枠） */}
       {view && catalog && o.objective.type === 'slay_warden' && o.objective.targetDepth !== null && !(view.milestonesCleared ?? []).includes(o.objective.targetDepth)
         && slaysAt(L, catalog, view, o.objective.targetDepth).length > 0 && (
-        <div class="ometa slay"><span>{slayGroupText(L, slaysAt(L, catalog, view, o.objective.targetDepth))}</span></div>
+        <div class="ometa slay"><span>{slayShortGroupText(L, slaysAt(L, catalog, view, o.objective.targetDepth))}</span></div>
       )}
       <TraitList traits={o.traits ?? []} rules={rules} />
     </li>

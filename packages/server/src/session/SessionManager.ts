@@ -86,7 +86,6 @@ export class SessionManager {
     for (const f of this.profiles.store.brokenFiles()) log(`プロフィールのファイル ${f} が読めない（読まずに残す。上書きしない。そのプロフィールのトークンは使えない）`);
     for (const b of this.seasons.brokenSeasons()) log(`シーズン ${b.id} の記録が読めない（${b.files.join('・')}）。このシーズンは読まず、書き戻さない。シーズンのランは復旧に失敗したランとして出す`);
     if (!dir || !existsSync(dir)) return;
-    const seasonRuns: RunSession[] = [];
     // 残っている一時のファイルを掃除する（SEASON.md §36.1 の 6。書いたプロセスがもう居ないものだけ: 運用の道具が書いている最中のものは消さない）
     const swept = sweepTmpFiles([dir, this.config.profilesDir, this.config.seasonsDir]);
     if (swept) log(`残っていた一時のファイル ${swept} 個を消した`);
@@ -162,7 +161,7 @@ export class SessionManager {
         }
         this.sessions.set(runId, r.session);
         // シーズン（S1a §10.1 の 4）: キャンプにいるかランが終わっていれば、火を載せて支援を数え直す（落ちる前に保存できなかった分。一致したときだけ）
-        if (r.verified && r.session.world.meta.season) { this.seasons.onRecovered(r.session); seasonRuns.push(r.session); }
+        if (r.verified && r.session.world.meta.season) this.seasons.onRecovered(r.session);
         // 古い版で始まったラン（V4-0b §1.2。World は変えない。記録だけ）: 分かっている不整合（遠征の開始時の検査で直るもの）
         const created = r.session.world.meta.engineVersion;
         if (created && compareVersions(created, ENGINE_VERSION) < 0) {
@@ -174,15 +173,6 @@ export class SessionManager {
         const reason = scrubPaths(String((e as Error).message ?? e).split('\n')[0], dir).slice(0, 200);
         log(`failed to recover ${runId}: ${reason}`);
         this.markFailed(runId, reason, meta.season);
-      }
-    }
-    // S5（SEASON.md §48.5）: キャンプにいる参加者の取り込んである討伐の記録が、今の記録と違えば（止まっている間に作り直した・載った）、キャンプで 1 回取り込み直す。
-    // すべてのランを復旧した後に見る（ほかのランの記録が作り直されるのを待つ）。再生が記録と一致したランだけ。違わなければ何も書かない
-    for (const s of seasonRuns) {
-      for (const pid of s.world.playerOrder) {
-        if (!this.seasons.slaysStale(s, pid)) continue;
-        void s.syncSeason(pid, 'camp');
-        log(`  ${s.runId}: 討伐の記録が変わっていたので、キャンプで取り込み直した`);
       }
     }
   }

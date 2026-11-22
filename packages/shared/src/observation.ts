@@ -939,13 +939,30 @@ function tellsText(L: Locale, tells: SeasonSlayFacts['tells']): string {
   }).join(t(L, '・', ', '));
 }
 
-/** 相手が動けなかった手番の文（S5）。記録に項目が無ければ空 */
+/**
+ * 相手が動けなかった手番の文（S5・S5a）: 「予備動作を外させた後の 11 手番: 与えた被害 23（当てた手番 7）・受けた被害 0。それ以外の手番: 与えた被害 67・受けた被害 61」。
+ * 手番が 0 の区分は出さない（どちらも 0 なら文ごと出さない）。記録に項目が無ければ空
+ */
 function openingsText(L: Locale, op: ObsSlay['openings']): string {
-  if (!op) return '';
-  const one = (o: ObsOpening) => t(L, `与えた被害 ${o.dealt}・被害を与えた手番 ${o.hit_turns}・受けた被害 ${o.taken}`, `dealt ${o.dealt} in ${o.hit_turns} of them, took ${o.taken}`);
-  return t(L,
-    `相手が動けなかった手番: 予備動作を外させた後 ${op.missed.turns}（${one(op.missed)}）、眠りなど ${op.other.turns}（${one(op.other)}）。それ以外の手番: 与えた被害 ${op.rest.dealt}・受けた被害 ${op.rest.taken}`,
-    `Turns it could not act: after a missed wind-up ${op.missed.turns} (${one(op.missed)}), asleep etc. ${op.other.turns} (${one(op.other)}). Other turns: dealt ${op.rest.dealt}, took ${op.rest.taken}`);
+  if (!op || (!op.missed.turns && !op.other.turns)) return '';
+  const one = (o: ObsOpening) => t(L, `与えた被害 ${o.dealt}${o.hit_turns ? `（当てた手番 ${o.hit_turns}）` : ''}・受けた被害 ${o.taken}`, `dealt ${o.dealt}${o.hit_turns ? ` (landed in ${o.hit_turns})` : ''}, took ${o.taken}`);
+  const parts = [
+    op.missed.turns ? t(L, `予備動作を外させた後の ${op.missed.turns} 手番: ${one(op.missed)}`, `${op.missed.turns} turn${op.missed.turns > 1 ? 's' : ''} after a missed wind-up: ${one(op.missed)}`) : '',
+    op.other.turns ? t(L, `眠りなどで相手が動けなかった ${op.other.turns} 手番: ${one(op.other)}`, `${op.other.turns} turn${op.other.turns > 1 ? 's' : ''} it could not act otherwise (asleep etc.): ${one(op.other)}`) : '',
+    t(L, `それ以外の手番: 与えた被害 ${op.rest.dealt}・受けた被害 ${op.rest.taken}`, `other turns: dealt ${op.rest.dealt}, took ${op.rest.taken}`),
+  ].filter(Boolean);
+  return parts.join(t(L, '。', '. '));
+}
+
+/** 予備動作の短い文（S5a。候補に出す）: 「突進の構えを 11 回見て 11 回外させた」。構えが無い・項目が無ければ空 */
+function tellsShortText(L: Locale, tells: readonly { kind: string; n: number; seen: number; missed: number }[] | undefined): string {
+  return (tells ?? []).filter((x) => x.n > 0).map((x) => {
+    const name = tellName(L, x.kind);
+    const strike = x.kind === 'winding_up' || x.kind === 'swinging';
+    const saw = x.seen === x.n ? t(L, `${name}を ${x.n} 回見`, `saw ${x.n} ${name}${x.n === 1 ? '' : 's'}`) : t(L, `${name} ${x.n} 回（見えていたのは ${x.seen} 回）`, `${x.n} ${name}${x.n === 1 ? '' : 's'} (${x.seen} seen)`);
+    if (!strike || !x.missed) return x.seen === x.n ? t(L, `${saw}た`, saw) : saw;
+    return x.seen === x.n ? t(L, `${saw}て ${x.missed} 回外させた`, `${saw}, made ${x.missed} miss`) : t(L, `${saw}、${x.missed} 回外させた`, `${saw}, made ${x.missed} miss`);
+  }).join(t(L, '・', ', '));
 }
 
 /**
@@ -1038,6 +1055,22 @@ function slayLabel(L: Locale, r: ObsSlay): string {
 export function slayGroupText(L: Locale, recs: readonly ObsSlay[]): string {
   if (!recs.length) return '';
   return recs.map((r) => `${slayLabel(L, r)}: ${r.text}`).join(t(L, '／', ' / '));
+}
+
+/** 討伐の記録 1 件の短い文（S5a。大守護者の候補に出す）: 「アカネ（Lv6・戦士・鋭い小剣）。与えた被害 90・受けた被害 61・突進の構えを 11 回見て 11 回外させた・79 手番目に倒した」 */
+export function slayShortText(L: Locale, r: ObsSlay): string {
+  const total = r.dealt.melee.total + r.dealt.thrown.total + r.dealt.poison.total + r.dealt.feature.total;
+  const who = `${r.by}${r.mine ? t(L, '（あなた）', ' (you)') : ''}`;
+  const tells = tellsShortText(L, r.tells);
+  return t(L,
+    `${who}（Lv${r.level}・${r.class}${r.weapon ? `・${r.weapon.name}` : ''}）。与えた被害 ${total}・受けた被害 ${r.taken}${tells ? `・${tells}` : ''}・${r.turns} 手番目に倒した`,
+    `${who} (Lv${r.level} ${r.class}${r.weapon ? `, ${r.weapon.name}` : ''}): dealt ${total}, took ${r.taken}${tells ? `, ${tells}` : ''}, slain ${r.turns} turns in`);
+}
+
+/** 大守護者の候補に出す短い文（S5a）: 「先に倒した者（倒した記録 2 件）: …／いちばん少ない被害で倒した者: …。詳しくは記録庫」。全文は記録庫（camp.archive.slays）と offers[].slays */
+export function slayShortGroupText(L: Locale, recs: readonly ObsSlay[]): string {
+  if (!recs.length) return '';
+  return `${recs.map((r) => `${slayLabel(L, r)}: ${slayShortText(L, r)}`).join(t(L, '／', ' / '))}${t(L, '。詳しくは記録庫', '. Details in the archive')}`;
 }
 
 /**
@@ -1861,12 +1894,16 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       if (!slayCache.has(dep)) slayCache.set(dep, slaysAt(L, catalog, view, dep));
       return slayCache.get(dep)!;
     };
+    // 倒さずに帰った節目の大守護者への挑戦と、先に倒した者の記録（S5 §47.4 の 2）
+    const cmpWardens = opts.campCompare?.wardens?.length && view.status === 'at_camp'
+      ? opts.campCompare.wardens.map((s) => wardenAttemptCompare(L, catalog, view, opts.campCompare!.no, s)) : undefined;
+    // 並べに記録の全文を出している節目（S5a: 記録庫の側は 1 行にする）
+    const inCompare = new Set((cmpWardens ?? []).filter((x) => x.records.length).map((x) => x.depth));
     camp = {
       ...(view.camp.milestone ? { milestone: milestoneObs(L, catalog, view.camp.milestone, view.milestonesCleared ?? [], view.wardenIntel?.[String(view.camp.milestone.depth)], view) } : {}),
       ...(opts.campCompare && view.status === 'at_camp' ? { compare: {
         no: opts.campCompare.no, lines: opts.campCompare.lines.slice(0, 2), ...(opts.campCompare.compare ?? {}),
-        // 倒さずに帰った節目の大守護者への挑戦と、先に倒した者の記録（S5 §47.4 の 2）
-        ...(opts.campCompare.wardens?.length ? { wardens: opts.campCompare.wardens.map((s) => wardenAttemptCompare(L, catalog, view, opts.campCompare!.no, s)) } : {}),
+        ...(cmpWardens ? { wardens: cmpWardens } : {}),
       } } : {}),
       ...(opts.versionNote && view.status === 'at_camp' ? { version_note: opts.versionNote } : {}),
       ...(opts.records && view.status === 'at_camp' ? { records: { line: opts.records.line, ...(opts.records.featsNew?.length ? { feats_new: [...opts.records.featsNew] } : {}) } } : {}),
@@ -1880,7 +1917,9 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
             const records = slaysAt(L, catalog, view, depth);
             const s0 = (view.season?.slays ?? []).find((s) => s.depth === depth)!;
             const warden = guardianDisplayName(L, { name: s0.warden });
-            return { depth, warden, count: records[0]?.of ?? 0, records, text: t(L, `記録庫・討伐の記録 地下${depth}階の大守護者「${warden}」: ${slayGroupText(L, records)}`, `Archive, warden kills on depth ${depth} ("${warden}"): ${slayGroupText(L, records)}`) };
+            // 同じ観測の並べ（退いた後のキャンプ）に全文を出していれば、ここは 1 行（S5a。構造化した records は全部持つ）
+            const body = inCompare.has(depth) ? t(L, '（上の挑戦の並べに出している）', '(shown with your attempt above)') : slayGroupText(L, records);
+            return { depth, warden, count: records[0]?.of ?? 0, records, text: t(L, `記録庫・討伐の記録 地下${depth}階の大守護者「${warden}」: ${body}`, `Archive, warden kills on depth ${depth} ("${warden}"): ${body}`) };
           }) };
         })(),
       },
@@ -1900,8 +1939,9 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
           // 守護者の候補（格 1〜3。再挑戦を含む）にも通る目安（V3-8a §56.1。大守護者は記録庫の記憶の装甲で出す）
           // 大守護者は、記録庫で体力が分かっていれば命中の回数も（S3b §30.3 の 4）。護られし者は、火が灯っている間の装甲を 1 句
           + (o.guardian?.armor !== undefined ? ` / ${gearVsArmorText(L, catalog, view, o.guardian.armor, offerGuardianHp(view, o), o.guardian.types ?? [])}` : '')
-          // 討伐の記録（S4 §35.5）: まだ倒していない大守護者を倒す候補に、先に倒した参加者の戦いの事実
-          + (offerSlays(o).length ? ` / ${slayGroupText(L, offerSlays(o))}` : ''),
+          // 討伐の記録（S4 §35.5）: まだ倒していない大守護者を倒す候補に、先に倒した参加者の戦いの事実。
+          // 文は短い形（S5a: 全文は記録庫に。同じ記録の全文を 1 つの観測に 3 回出さない）。offers[].slays は全部持つ
+          + (offerSlays(o).length ? ` / ${slayShortGroupText(L, offerSlays(o))}` : ''),
         ...(offerSlays(o).length ? { slays: offerSlays(o) } : {}),
         ...(o.bounty ? { bounty: { kind: o.bounty.kind, name: nameOf(o.bounty.name, L, ''), hp: o.bounty.hp, ...(o.bounty.hpRange ? { hp_range: { ...o.bounty.hpRange } } : {}), max_hit: o.bounty.maxHit } } : {}),
         ...(o.vault ? { vault: true } : {}), ...(o.scar ? { scar: o.scar } : {}),

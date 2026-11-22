@@ -7,7 +7,7 @@ import { buildCatalog, loadContent } from '@muse/content';
 import { ENGINE_VERSION } from '@muse/engine';
 import { loadConfig, SessionManager } from '@muse/server';
 import type { PlayerPort } from '@muse/server';
-import { applyEvent, emptyWorld, formatObservationText, SeasonSlaySchema, SeasonSyncSchema, slayObs } from '@muse/shared';
+import { applyEvent, buildObservation, emptyWorld, formatObservationText, SeasonSlaySchema, SeasonSyncSchema, slayObs } from '@muse/shared';
 import type { Command, Entity, GameEvent, SeasonSlay, World } from '@muse/shared';
 import { buildAttempts, buildSlays, incapStatuses } from '../../server/src/season/slays';
 import { rulesText } from '../../server/src/mcp/rules';
@@ -144,7 +144,10 @@ describe('S5 §47.4 の 1: telegraphs and the turns the warden could not act, co
       ev('expedition_started', null, { expedition: { no: 1 } }),
       ev('entity_changed_floor', F, { id: 'e_me0001', to: { floor: F, x: 1, y: 1 } }),
       ev('entity_spawned', F, { entity: { id: 'e_ward01', kind: 'core:orc_brute', pos: { floor: F, x: 4, y: 1 }, guardian: { name: { ja: '試し', en: 'Trial' }, types: ['core:charger'], warden: true }, actor: { ai: ai('asleep') }, statuses: [] } }),
-      // 眠っている相手を、自分の手番に殴る（眠りなどの手番。強打で 4）
+      // 眠っている相手を見ているだけの 2 手番（戦いが始まる前なので数えない。S5a）
+      ev('turn_began', F, { actor: 'e_me0001', time: 0 }), ev('actor_scheduled', F, { id: 'e_me0001', nextActAt: 0, turns: 0 }),
+      ev('turn_began', F, { actor: 'e_me0001', time: 0 }), ev('actor_scheduled', F, { id: 'e_me0001', nextActAt: 0, turns: 0 }),
+      // 眠っている相手を、自分の手番に殴る（眠りなどの手番。戦いを始めた一手の手番は数える。強打で 4）
       ev('turn_began', F, { actor: 'e_me0001', time: 1 }),
       ev('attack', F, { attacker: 'e_me0001', target: 'e_ward01', hit: true, crit: true }),
       ev('damaged', F, { target: 'e_ward01', via: 'melee', source: 'e_me0001', amount: 4, dealt: 4 }),
@@ -195,8 +198,16 @@ describe('S5 §47.4 の 1: telegraphs and the turns the warden could not act, co
     // 文: 数と事実だけ
     const text = slayObs('ja', catalog, { ...s, by: 'X', of: 1 }).text;
     expect(text).toContain('突進の構えを 2 回見て、1 回外させ、1 回受けた');
-    expect(text).toContain('相手が動けなかった手番: 予備動作を外させた後 1（与えた被害 5・被害を与えた手番 1・受けた被害 0）、眠りなど 1（与えた被害 4・被害を与えた手番 1・受けた被害 0）。それ以外の手番: 与えた被害 3・受けた被害 8');
+    expect(text).toContain('予備動作を外させた後の 1 手番: 与えた被害 5（当てた手番 1）・受けた被害 0。眠りなどで相手が動けなかった 1 手番: 与えた被害 4（当てた手番 1）・受けた被害 0。それ以外の手番: 与えた被害 3・受けた被害 8');
     expect(SeasonSlaySchema.parse({ ...s, by: 'X', of: 1 })).toMatchObject({ tells: s.tells, openings: s.openings });
+    // 手番が 0 の区分は文に出さない（S5a）。どちらも 0 なら文ごと出さない
+    const z = { missed: s.openings!.missed, other: { turns: 0, dealt: 0, hitTurns: 0, taken: 0 } };
+    const t1 = slayObs('ja', catalog, { ...s, openings: z, by: 'X', of: 1 }).text;
+    expect(t1).toContain('予備動作を外させた後の 1 手番');
+    expect(t1).not.toContain('眠りなど');
+    const t0 = slayObs('ja', catalog, { ...s, openings: { missed: z.other, other: z.other }, by: 'X', of: 1 }).text;
+    expect(t0).not.toContain('手番: 与えた被害');
+    expect(t0).not.toContain('それ以外の手番');
   });
 
   it('a record from before S5 (no telegraph items) still reads: the schema takes it, and the text leaves the items out', () => {
@@ -263,12 +274,25 @@ describe('S5 §47.4 の 2: after coming back from a warden without slaying it, c
     expect(x.lines[1]).toMatch(/^ {2}先に倒した者（倒した記録 1 件）: Aya（Lv\d+・戦士）: /);
     expect(x.lines[1]).toContain('突進の構えを 1 回見て、1 回外させ、0 回受けた');
     // 同じ項目の並び: 2 つの文の「与えた被害 → 受けた被害 → 予備動作 → 動けなかった手番」の順が同じ
-    const order = (s: string) => ['与えた被害', '受けた被害', '突進の構え', '相手が動けなかった手番', 'それ以外の手番'].map((k) => s.indexOf(k));
+    const order = (s: string) => ['与えた被害', '受けた被害', '突進の構え', '予備動作を外させた後の 1 手番: 与えた被害', 'それ以外の手番'].map((k) => s.indexOf(k));
     expect(order(x.lines[0]).every((v, i, xs) => v > 0 && (i === 0 || v > xs[i - 1]))).toBe(true);
     expect(order(x.lines[1]).every((v, i, xs) => v > 0 && (i === 0 || v > xs[i - 1]))).toBe(true);
     const text = formatObservationText(ob, 'ja');
     expect(text).toContain(x.lines[0]);
     expect(text).toContain(x.lines[1]);
+    // 同じ記録の全文は 1 回だけ（S5a）: 記録庫の側は 1 行
+    const arch = ob.camp!.archive!.slays!.find((s) => s.depth === 5)!;
+    expect(arch.text).toBe(`記録庫・討伐の記録 地下5階の大守護者「${x.warden}」: （上の挑戦の並べに出している）`);
+    expect(arch.records.map((r) => r.by)).toEqual(['Aya']);
+    expect(text.split(x.records[0].text).length - 1).toBe(1);
+    // 大守護者の候補は短い形（候補を 1 つ大守護者を倒す遠征に書き換えて、観測を作り直す）。構造化した slays は全部
+    const vb = structuredClone(b.port.view());
+    vb.camp!.offers = [{ ...vb.camp!.offers[0], objective: { type: 'slay_warden', targetDepth: 5 } }];
+    vb.milestonesCleared = [];
+    const offer = buildObservation(vb, catalog, { detail: 'full', map: false }).camp!.offers[0];
+    expect(offer.slays![0].text).toBe(x.records[0].text);
+    expect(offer.text).toMatch(/ \/ 先に倒した者（倒した記録 1 件）: Aya（Lv\d+・戦士・小剣）。与えた被害 \d+・受けた被害 \d+・突進の構えを 1 回見て 1 回外させた・\d+ 手番目に倒した。詳しくは記録庫$/);
+    expect(offer.text).not.toContain('使った品');
     // 共有しない: シーズンの記録は Aya の 1 件だけ（Ben の挑戦は外へ出ない）
     expect(m.seasons.get(SID)!.slays.map((s) => s.name)).toEqual(['Aya']);
     // observe し直しても出る
@@ -281,6 +305,8 @@ describe('S5 §47.4 の 2: after coming back from a warden without slaying it, c
     expect(ob2.camp!.compare).toBeTruthy();
     expect(ob2.camp!.compare!.wardens).toBeUndefined();
     expect(formatObservationText(ob2, 'ja')).not.toContain('の挑戦（倒さずに帰った）');
+    // 並べが無ければ、記録庫は全文
+    expect(ob2.camp!.archive!.slays![0].text).toContain(`: 先に倒した者（倒した記録 1 件）: ${x.records[0].text}`);
     m.closeAll();
   }, 120_000);
 
@@ -301,7 +327,7 @@ describe('S5 §47.4 の 2: after coming back from a warden without slaying it, c
     m.closeAll();
   }, 120_000);
 
-  it('a restart re-imports the kill records at camp when they changed while the server was down (records rebuilt after slays.json was removed); a second restart writes nothing', async () => {
+  it('a restart writes nothing (S5a: no intake at start-up); a participant at camp keeps the previous records until the next intake (starting an expedition)', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'muse-s5-'));
     try {
       const m = manager(dir);
@@ -326,21 +352,18 @@ describe('S5 §47.4 の 2: after coming back from a warden without slaying it, c
       const cmds = () => readFileSync(join(dir, b.session.runId, 'commands.jsonl'), 'utf8').trim().split('\n').length;
       const n0 = cmds();
       const m2 = manager(dir);
-      const log: string[] = [];
-      m2.recoverAll((s) => log.push(s));
+      m2.recoverAll();
       await new Promise((res) => setTimeout(res, 20));
       const s2 = m2.get(b.session.runId)!;
-      expect(log.some((l) => l.includes('討伐の記録が変わっていたので、キャンプで取り込み直した'))).toBe(true);
+      expect(s2).toBeTruthy();
+      // 起動では書かない。キャンプにいる参加者には、前の記録（ここでは無し）のまま
+      expect(cmds()).toBe(n0);
+      expect(s2.world.season!.slays).toBeUndefined();
+      // 次の取り込み（遠征を始める）で届く
+      const p2 = m2.portForToken(b.token)!;
+      expect((await p2.act({ type: 'start_expedition', offer: 1 }, { source: 'bot' })).ok).toBe(true);
       expect(s2.world.season!.slays!.map((x) => [x.by, x.tells?.[0].missed])).toEqual([['Aya', 11]]);
-      expect(cmds()).toBe(n0 + 1);
       m2.closeAll();
-      // もう一度起動し直しても、記録が同じなら何も書かない
-      const m3 = manager(dir);
-      m3.recoverAll();
-      await new Promise((res) => setTimeout(res, 20));
-      expect(m3.get(b.session.runId)).toBeTruthy();
-      expect(cmds()).toBe(n0 + 1);
-      m3.closeAll();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
