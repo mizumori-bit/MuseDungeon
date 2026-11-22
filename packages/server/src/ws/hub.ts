@@ -6,6 +6,7 @@ import type { WebSocket } from 'ws';
 import type { ClientMsg, ServerMsg } from '@muse/shared';
 import { actionError } from '@muse/shared';
 import type { ServerConfig } from '../config';
+import { isLocalRequest } from '../http/local';
 import type { SessionManager } from '../session/SessionManager';
 import { SpectatorPort } from '../session/SpectatorPort';
 import { attachPlayerSocket } from './playerSocket';
@@ -14,14 +15,15 @@ export class WsHub {
   readonly wss = new WebSocketServer({ noServer: true });
 
   constructor(private readonly manager: SessionManager, private readonly config: ServerConfig) {
-    this.wss.on('connection', (ws) => this.onConnection(ws));
+    this.wss.on('connection', (ws, req: IncomingMessage) => this.onConnection(ws, req));
   }
 
   handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
     this.wss.handleUpgrade(req, socket, head, (ws) => this.wss.emit('connection', ws, req));
   }
 
-  private onConnection(ws: WebSocket): void {
+  private onConnection(ws: WebSocket, req: IncomingMessage): void {
+    const local = req ? isLocalRequest(req) : false;
     const send = (m: ServerMsg) => { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(m)); };
     const timeout = setTimeout(() => ws.close(4000, 'hello timeout'), 10000);
     ws.once('message', (raw) => {
@@ -37,9 +39,12 @@ export class WsHub {
       }
       const session = this.manager.get(msg.runId);
       if (!session) { send({ t: 'error', error: this.manager.recoveryFailedError(msg.runId) ?? actionError('no_session', 'run is not live', 'リプレイ画面で見る') }); ws.close(); return; }
+      // 開催中のシーズンのランは、その参加者のトークンか、同じ機械からの接続だけ（S3。SEASON.md §25.1）。確定した後は、だれでも
+      const gate = this.manager.seasonWatchAccess(session, { local, profileToken: typeof msg.profileToken === 'string' ? msg.profileToken : undefined });
+      if ('error' in gate) { send({ t: 'error', error: gate.error }); ws.close(); return; }
       // シーズンのランは follow_only（S0 §9.7: 俯瞰から公開されていない階段が分からないように）
-      const spec = new SpectatorPort(session, session.world.meta.season ? 'follow_only' : this.config.spectatorPolicy, this.config.spectatorDelaySeq);
-      this.attachSpectator(ws, spec, msg.mode, msg.follow);
+      const spec = new SpectatorPort(session, session.world.meta.season ? 'follow_only' : this.config.spectatorPolicy, this.config.spectatorDelaySeq, gate.access === 'owner' ? gate.pid : null);
+      this.attachSpectator(ws, spec, msg.mode, gate.access === 'owner' ? gate.pid : msg.follow);
     });
   }
 
@@ -53,7 +58,7 @@ export class WsHub {
       return;
     }
     send({ t: 'welcome', role: 'spectator', runId: spec.runId, contentVersion: spec.contentVersion, policy, mode });
-    if (policy === 'follow_only' && spec.summary() === null) {
+    if (spec.viewOnly()) {
       // 追従のみ: World ではなく PlayerView 相当だけを送る
       const pid = follow ?? spec.players()[0];
       let timer: NodeJS.Timeout | null = null;

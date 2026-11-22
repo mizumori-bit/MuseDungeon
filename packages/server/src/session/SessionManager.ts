@@ -6,7 +6,7 @@ import { buildCatalog } from '@muse/content';
 import { checkRunGaps, compareVersions, ENGINE_VERSION } from '@muse/engine';
 import type {
   ActionError, AgentActivity, Catalog, Controller, ExpeditionOffer, JoinCommand, Locale, NewRunRequest, ObjectiveChoice, PlayerId, RunListing,
-  RunListingPlayer,
+  RunListingPlayer, SeasonWatchResponse,
 } from '@muse/shared';
 import { actionError } from '@muse/shared';
 import type { ServerConfig } from '../config';
@@ -18,6 +18,20 @@ import { RunSession } from './RunSession';
 /** 知らないプロフィールのトークン（V3-7 §7.1。黙って別のプロフィールに積まない） */
 function unknownProfileError(): ActionError {
   return actionError('no_session', 'そのプロフィールのトークンは見つからない / unknown profile_token', 'profile_token を省くと新しいプロフィールを作る / omit profile_token to create a new profile');
+}
+
+/** 開催中のシーズンのランの観戦を断る（S3。SEASON.md §25.1）。withToken: トークンは渡されたが、そのランの参加者のものでない */
+export function seasonWatchError(withToken: boolean): ActionError {
+  return actionError('season_unavailable',
+    `${withToken ? 'そのトークンは、このランの参加者のものではない。' : ''}開催中のシーズンのランは、その参加者のトークン（招かれたプロフィールのもの）が要る。シーズンの結果が確定した後は、だれでも見返せる / ${withToken ? 'that token is not this run\'s participant\'s; ' : ''}a run of a season in progress can be watched only with its participant's profile token; once the season is finalized, anyone can watch it`,
+    'ロビーのシーズンの欄に、招かれたプロフィールのトークンを覚えさせてから観戦する / save your invited profile token in the lobby\'s season box, then watch');
+}
+
+/** 確定する前のシーズンのランの巻き戻しを断る（S3。巻き戻しは World を見せ、まだ見ていない地図と階段が分かる） */
+export function seasonReplayError(): ActionError {
+  return actionError('season_unavailable',
+    '開催中のシーズンのランの巻き戻しは、シーズンの結果が確定した後に、だれでも見られる（その場の観戦は、参加者が招かれたプロフィールのトークンで） / runs of a season in progress can be rewound once the season is finalized (participants can watch their own run live with their profile token)',
+    'ロビーのシーズンの欄から観戦する / watch from the lobby\'s season box');
 }
 import type { SessionDeps } from './RunSession';
 import { ProfilePort, ProfileService, ProfileStore } from './profiles';
@@ -248,7 +262,8 @@ export class SessionManager {
         if (!meta) continue;
         const summary = this.store.summary(id) ?? undefined;
         out.push({
-          runId: id, status: meta.status, mode: meta.mode, createdAt: meta.createdAt, updatedAt: meta.endedAt ?? this.store.mtime(id), seq: meta.lastSeq ?? 0,
+          // シーズンのラン（S3: ロビーが、確定する前のシーズンのランの巻き戻しを出し分ける）
+          runId: id, status: meta.status, mode: meta.mode, ...(meta.season ? { season: meta.season } : {}), createdAt: meta.createdAt, updatedAt: meta.endedAt ?? this.store.mtime(id), seq: meta.lastSeq ?? 0,
           live: false, joinable: false,
           players: meta.players.map((p) => {
             const sp = summary?.players.find((x) => x.id === p.id);
@@ -261,6 +276,43 @@ export class SessionManager {
       }
     }
     return out.sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
+  /** シーズンの結果が確定しているか（S3 §25.1: 確定した後は、だれでも観戦・巻き戻しできる） */
+  seasonFinal(seasonId: string | undefined | null): boolean {
+    return !!seasonId && !!this.seasons.get(seasonId)?.result;
+  }
+
+  /**
+   * そのランを観戦できるか（S3。SEASON.md §25.1・PROTOCOL §9.7）。確定する前のシーズンのランは、そのランの参加者のトークン（owner: その参加者を追う）か、
+   * サーバーと同じ機械からの接続（local）だけ。シーズンのランでない・確定したシーズンのランは public（今までどおり）
+   */
+  seasonWatchAccess(session: RunSession, o: { local: boolean; profileToken?: string }): { access: 'public' | 'local' } | { access: 'owner'; pid: PlayerId } | { error: ActionError } {
+    const sid = session.world.meta.season?.id;
+    if (!sid || this.seasonFinal(sid)) return { access: 'public' };
+    if (o.local) return { access: 'local' };
+    const prof = o.profileToken ? this.profiles.store.resolve(o.profileToken) : null;
+    const pid = prof ? session.world.playerOrder.find((p) => session.profileOf(p) === prof.id) : undefined;
+    if (pid) return { access: 'owner', pid };
+    return { error: seasonWatchError(!!o.profileToken) };
+  }
+
+  /** いま観戦できる、そのシーズンの進行中のラン（S3。GET /api/seasons/:id/watch。人間の画面のロビーの「観戦」） */
+  seasonWatchable(seasonId: string, o: { local: boolean; profileToken?: string }): SeasonWatchResponse | null {
+    const d = this.seasons.get(seasonId);
+    if (!d) return null;
+    const final = !!d.result;
+    const prof = o.profileToken ? this.profiles.store.resolve(o.profileToken) : null;
+    const runs: SeasonWatchResponse['runs'] = [];
+    for (const s of this.sessions.values()) {
+      const w = s.world;
+      if (w.meta.season?.id !== seasonId || w.status !== 'active') continue;
+      const owners = w.playerOrder.map((p) => s.profileOf(p));
+      if (!final && !o.local && !(prof && owners.includes(prof.id))) continue;
+      const name = d.participants.find((p) => owners.includes(p.profileId))?.name ?? w.players[w.playerOrder[0]]?.name ?? '?';
+      runs.push({ runId: s.runId, name });
+    }
+    return { local: o.local, final, runs: runs.sort((a, b) => a.name.localeCompare(b.name) || (a.runId < b.runId ? -1 : 1)) };
   }
 
   /** AI パネル用のツール呼び出し記録（観戦にのみ流す） */

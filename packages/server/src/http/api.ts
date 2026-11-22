@@ -10,7 +10,9 @@ import { McpHttpHandler } from '../mcp/http';
 import { feedToken, handleFeed } from './feed';
 import { MarkerBuilder, spectatorEvent } from '../log/RunStore';
 import type { SessionManager } from '../session/SessionManager';
+import { seasonReplayError } from '../session/SessionManager';
 import { WsHub } from '../ws/hub';
+import { isLocalRequest } from './local';
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
@@ -60,12 +62,15 @@ export function createApp(manager: SessionManager, config: ServerConfig): App {
     return null;
   };
 
-  const spectatorBlocked = (runId: string): boolean => {
+  const spectatorBlocked = (runId: string, req: IncomingMessage): ActionError | null => {
     const s = manager.get(runId);
+    const season = s?.world.meta.season?.id ?? store?.meta(runId)?.season;
+    // 確定する前のシーズンのランの巻き戻しは、同じ機械からの接続だけ（S3。SEASON.md §25.1: 巻き戻しは World を見せる。参加者のトークンでも開かない）
+    if (season && !manager.seasonFinal(season) && !isLocalRequest(req)) return seasonReplayError();
     // シーズンのランは follow_only（S0 §9.7）
-    if (config.spectatorPolicy !== 'follow_only' && !s?.world.meta.season && !store?.meta(runId)?.season) return false;
+    if (config.spectatorPolicy !== 'follow_only' && !season) return null;
     const ended = s ? s.world.status === 'ended' : store?.meta(runId)?.status === 'ended';
-    return !ended;
+    return ended ? null : actionError('bad_request', 'spectatorPolicy=follow_only: replay data is available after the run ends', '');
   };
 
   const route = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
@@ -98,6 +103,14 @@ export function createApp(manager: SessionManager, config: ServerConfig): App {
       if (sm && m === 'GET') {
         const st = manager.seasons.standings(sm[1]);
         return st ? json(res, 200, st) : fail(res, 404, actionError('no_session', `unknown season ${sm[1]}`, 'GET /api/seasons'));
+      }
+      // いま観戦できる進行中のラン（S3。SEASON.md §25.1）: 参加者のトークンは Authorization の見出しでだけ受ける（URL に出さない）
+      const wm = /^\/api\/seasons\/([a-z0-9][a-z0-9_-]{0,31})\/watch$/.exec(p);
+      if (wm && m === 'GET') {
+        const auth = req.headers.authorization;
+        const tok = auth?.startsWith('Bearer ') ? auth.slice(7).trim() : undefined;
+        const r = manager.seasonWatchable(wm[1], { local: isLocalRequest(req), ...(tok ? { profileToken: tok } : {}) });
+        return r ? json(res, 200, r) : fail(res, 404, actionError('no_session', `unknown season ${wm[1]}`, 'GET /api/seasons'));
       }
     }
     if (p === '/api/runs' && m === 'GET') return json(res, 200, { runs: manager.listRuns() });
@@ -138,7 +151,7 @@ export function createApp(manager: SessionManager, config: ServerConfig): App {
       const live = manager.get(runId);
       if (!live && !store?.exists(runId)) return fail(res, 404, actionError('no_session', `unknown run ${runId}`, ''));
       if (sub === '/meta') return json(res, 200, live ? live.meta() : store!.meta(runId));
-      if (spectatorBlocked(runId)) return fail(res, 403, actionError('bad_request', 'spectatorPolicy=follow_only: replay data is available after the run ends', ''));
+      { const blocked = spectatorBlocked(runId, req); if (blocked) return fail(res, 403, blocked); }
       if (sub === '/events') {
         const src = liveEvents(runId)!;
         const from = Number(url.searchParams.get('from') ?? 0);

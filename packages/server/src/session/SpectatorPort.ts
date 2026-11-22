@@ -6,14 +6,24 @@ import { spectatorEvent } from '../log/RunStore';
 import type { RunSession } from './RunSession';
 
 export class SpectatorPort {
-  constructor(private readonly session: RunSession, readonly policy: SpectatorPolicy, private readonly delaySeq: number) {}
+  /**
+   * owner（S3。SEASON.md §25.1）: 開催中のシーズンのランを、その参加者のトークンで見ている。その参加者の PlayerView だけを送り、
+   * ランが終わった後も俯瞰（World）は送らない（まだ見ていない地図と階段が分かるため）
+   */
+  constructor(private readonly session: RunSession, readonly policy: SpectatorPolicy, private readonly delaySeq: number, readonly owner: PlayerId | null = null) {}
 
   get runId(): string { return this.session.runId; }
   get contentVersion(): string { return this.session.world.meta.contentVersion; }
 
   /** 俯瞰が許可されるか */
   directorAllowed(): boolean {
+    if (this.owner) return false;
     return this.policy !== 'follow_only' || this.session.world.status === 'ended';
+  }
+
+  /** PlayerView だけを送るか（追従のみの方針で進行中か、持ち主の観戦） */
+  viewOnly(): boolean {
+    return !!this.owner || (this.policy === 'follow_only' && this.summary() === null);
   }
 
   private visibleUpTo(): number {

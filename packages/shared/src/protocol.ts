@@ -12,7 +12,8 @@ export type SpectatorPolicy = 'omniscient' | 'follow_only' | 'delayed';
 // ---- WS: client → server ----
 export type ClientMsg =
   | { t: 'hello'; role: 'player'; runId: string; token: string }
-  | { t: 'hello'; role: 'spectator'; runId: string; mode: 'director' | 'follow'; follow?: PlayerId; fromSeq?: number }
+  /** profileToken（S3。SEASON.md §25.1・PROTOCOL §9.7）: 開催中のシーズンのランを観戦する参加者の、招かれたプロフィールのトークン */
+  | { t: 'hello'; role: 'spectator'; runId: string; mode: 'director' | 'follow'; follow?: PlayerId; fromSeq?: number; profileToken?: string }
   | { t: 'command'; command: Command; expectSeq?: number; thought?: string }
   | { t: 'query'; id: string; kind: 'look' | 'recall' | 'map' | 'inventory' | 'messages' | 'observation'; args?: Record<string, unknown> };
 
@@ -199,6 +200,12 @@ export interface SeasonResultView {
   /** 節目の大守護者の初討伐（深さの順） */
   deeds?: { depth: number; name: string }[];
 }
+
+/**
+ * GET /api/seasons/:id/watch（S3。SEASON.md §25.1・PROTOCOL §9.7）: いま観戦できる、そのシーズンの進行中のラン。
+ * local: サーバーと同じ機械からの接続、final: シーズンの結果が確定している（どちらも、すべてのランを見られる）。name は順位の表の名前
+ */
+export interface SeasonWatchResponse { local: boolean; final: boolean; runs: { runId: string; name: string }[] }
 
 /** GET /api/seasons/:id（S0 §9.8・S2 §18.3） */
 export interface SeasonStandingsResponse {

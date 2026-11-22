@@ -74,6 +74,8 @@ export function Watch({ runId }: { runId: string }) {
   const paceRef = useRef(PACE_MAX_MS);
   /** 最後に 1 手を見せた時刻（マクロの 1 歩ずつが数ミリ秒おきに別々に届くので、届いた時ではなく、見せた時から間を数える） */
   const lastPlayRef = useRef(0);
+  /** 開催中のシーズンのランの観戦に渡すトークン（S3 §25.1） */
+  const seasonTokRef = useRef<string | null>(null);
   catalogRef.current = catalog;
   modeRef.current = mode;
   followRef.current = follow;
@@ -86,8 +88,19 @@ export function Watch({ runId }: { runId: string }) {
       const r = rs.find((x) => x.runId === runId) ?? null;
       setListing(r);
       if (r && !followRef.current) setFollow(r.players.find((p) => p.state === 'alive' || p.state === 'at_camp')?.id ?? r.players[0]?.id ?? null);
-      // シーズンのラン（S0 §9.7）は、進行中はサーバーの設定によらず追従視点だけ
-      setPolicy(r?.season && r.status === 'active' ? 'follow_only' : await conf);
+      // 開催中のシーズンのラン（S3 §25.1）: このブラウザに覚えてある、招かれたプロフィールのトークンを hello に入れる（URL には出さない）
+      seasonTokRef.current = r?.season ? getPref(`seasonToken.${r.season}`, '') || null : null;
+      // シーズンのラン（S0 §9.7）は、進行中はサーバーの設定によらず追従視点だけ。
+      // 終わったランも、シーズンが確定する前で同じ機械からでなければ追従だけ（持ち主の観戦は俯瞰を送らない。S3）
+      let pol = await conf;
+      if (r?.season) {
+        if (r.status === 'active') pol = 'follow_only';
+        else {
+          const sw = await api.seasonWatch(r.season, seasonTokRef.current ?? undefined).catch(() => null);
+          if (!sw || !(sw.final || sw.local)) pol = 'follow_only';
+        }
+      }
+      setPolicy(pol);
     }).catch(async (e) => { setError(errorText(e)); setPolicy(await conf); });
   }, [runId]);
 
@@ -173,9 +186,10 @@ export function Watch({ runId }: { runId: string }) {
     worldRef.current = null;
     viewRef.current = null;
     setLog([]);
+    const tok = seasonTokRef.current ? { profileToken: seasonTokRef.current } : {};
     const hello = followOnly
-      ? { t: 'hello' as const, role: 'spectator' as const, runId, mode: 'follow' as const, follow: follow! }
-      : { t: 'hello' as const, role: 'spectator' as const, runId, mode: 'director' as const };
+      ? { t: 'hello' as const, role: 'spectator' as const, runId, mode: 'follow' as const, follow: follow!, ...tok }
+      : { t: 'hello' as const, role: 'spectator' as const, runId, mode: 'director' as const, ...tok };
     /** 1 手を見せる（World に畳んで描く・記録・吹き出し・音） */
     const applyEvents = (events: GameEvent[]) => {
       const c = catalogRef.current;

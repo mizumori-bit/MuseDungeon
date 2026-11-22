@@ -923,7 +923,7 @@ CommandRecord {
 ```ts
 // client → server
 { t: 'hello', role: 'player',    runId, token }
-{ t: 'hello', role: 'spectator', runId, mode: 'director' | 'follow', follow?: PlayerId, fromSeq?: number }
+{ t: 'hello', role: 'spectator', runId, mode: 'director' | 'follow', follow?: PlayerId, fromSeq?: number, profileToken?: string }   // profileToken: S3（§9.7）。開催中のシーズンのランを観戦する参加者のトークン
 { t: 'command', command: Command, expectSeq?: number }        // player のみ
 { t: 'query', id, kind: 'look'|'recall'|'map'|'inventory'|'messages'|'observation', args }   // player のみ・手番消費なし
 
@@ -941,6 +941,7 @@ CommandRecord {
 
 - 人間プレイヤーの `command` は MCP と**同一の `Command` スキーマ**で、同じ `PlayerPort.submit` を通る。
 - 観戦者は書き込み系メッセージを送れない（サーバーが拒否）。`spectatorPolicy` が `follow_only` の場合、サーバーは `director` を拒否し、`follow` には World ではなく PlayerView 相当だけを送る。
+- 開催中のシーズンのランの観戦は、そのランの参加者のトークン（`profileToken`）か、サーバーと同じ機械からの接続だけ（S3。§9.7）。
 
 ## 8. HTTP
 
@@ -961,6 +962,7 @@ CommandRecord {
 | `GET /api/runs/:id/commands` | commands.jsonl（AI パネルのツール呼び出し・thought 表示用） |
 | `GET /api/runs/:id/summary` | 終了時サマリー |
 | `GET /api/seasons` / `GET /api/seasons/:id` | S0（§9.8）。シーズンの一覧 / 1 つのシーズンの順位の表・確定した結果・坑の断面（S2 §9.11。公開された階段の位置は出さない） |
+| `GET /api/seasons/:id/watch` | S3（§9.7）。いま観戦できる、そのシーズンの進行中のラン `{ local, final, runs: { runId, name }[] }`。`Authorization: Bearer <profile_token>`（任意。招かれたプロフィールのもの） |
 
 ### 8.1 ターンフィード（`GET /api/player/feed`）
 
@@ -1100,6 +1102,14 @@ SeasonSyncCommand {
 - シーズンの側の記録は `seasons/<id>/` に残す: `season.json`（定義）・`participants.json`（参加者ごとのラン・使った予算・最深とそのときの予算・最初の報告の数（階段と特別な場所）・倒れたか）・`public.json`（公開された階段と報告の順）・`spots.json`（S1c。公開された特別な場所 `{ order, depth, x, y, kind, by, profileId, runId, used, wall }`）・`log.jsonl`（参加・ランの始まりと終わり・報告・取り込み・順位の移り変わり・確定）・`result.json`（確定した結果）。
 - 確定: 終わりの時刻の後、参加者の全員が迷宮にいない（キャンプにいるかランが終わった）か、終わりから 1 時間たったら。確定の後は記録を変えない。
 - 観戦: シーズンのランは `follow_only`（サーバーの `spectatorPolicy` によらない）。俯瞰の観戦から公開されていない階段が分からないように。
+- **観戦できる者**（S3。SEASON.md §25.1・§26）: シーズンの結果が確定する前（`result.json` が無い間。終わりの時刻を過ぎて確定を待つ間も）のシーズンのランは、次の者だけが観戦できる。
+  1. **そのランの参加者のトークン**を示した者: WS の `hello { role: 'spectator', profileToken }`（招かれたプロフィールのトークン。そのランを始めたプロフィールのものだけ）。見えるのは、その参加者の追従の観戦（PlayerView と、AI の呼び出しの記録）だけで、ランが終わった後も俯瞰（World）は送らない。`follow` は無視して、そのランの参加者を追う。
+  2. **サーバーと同じ機械からの接続**（運用者）: 接続元のアドレスが自分の機械（`127.0.0.1`・`::1`・`::ffff:127.0.0.1`）で、プロキシの印（`X-Forwarded-For`・`Forwarded`・`X-Real-IP` の見出し）が無いもの。今までどおりの追従の観戦（ランが終わった後は俯瞰も）。
+  - それ以外は断る（`season_unavailable`。「開催中のシーズンのランは、その参加者のトークンが要る。確定した後は、だれでも見返せる」）。WS は `error` を送って閉じる。
+  - **巻き戻し**（`GET /api/runs/:id/events`・`keyframes`・`index`・`commands`・`summary`）は、確定する前のシーズンのランでは、同じ機械からの接続だけ（403。参加者のトークンでは開かない: 巻き戻しは World を見せ、まだ見ていない地図・階段が分かるため。持ち主にも、同じシードの次のランで同じ階段がある）。同じ機械からでも、ランが進行中の間は今までどおり見られない。`/meta` は今までどおり。
+  - **シーズンが確定した後は、だれでも、今までどおり**（進行中のランは追従、終わったランは巻き戻し）。
+  - トークンは WS の `hello` の本文と HTTP の `Authorization` の見出しでだけ受ける（URL の `?token=` では受けない）。記録・画面の文には出さない。
+  - `GET /api/seasons/:id/watch`: いま観戦できる、そのシーズンの進行中のラン（`runs`。`name` は順位の表の名前）。確定したシーズン（`final: true`）と同じ機械からの接続（`local: true`）ではすべて、参加者のトークンならその参加者のランだけ、どちらでもなければ空。人間の画面のロビーは、これで「観戦」を出す。
 
 ### 9.8 HTTP
 

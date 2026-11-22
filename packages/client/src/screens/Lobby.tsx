@@ -1,5 +1,5 @@
 // ロビー: 進行中のラン（観戦・参加・再開）、終了したラン（リプレイ）、リーダーボード、新規ラン。
-import type { LeaderboardEntry, Locale, ProfileRecords, RunListing, SeasonStandingRow, SeasonStandingsResponse } from '@muse/shared';
+import type { LeaderboardEntry, Locale, ProfileRecords, RunListing, SeasonStandingRow, SeasonStandingsResponse, SeasonWatchResponse } from '@muse/shared';
 import { endReasonText, kindName, nameOf, objectiveText } from '@muse/shared';
 import { useEffect, useState } from 'preact/hooks';
 import { api, errorText } from '../api';
@@ -21,6 +21,8 @@ export function Lobby() {
   // シーズンの参加（S2 §18.1）: 招かれたプロフィールのトークンは、シーズンごとにこのブラウザに残す（画面には伏せて出す。URL・記録には出さない）
   const [seasonTok, setSeasonTok] = useState<Record<string, string>>({});
   const [tokDraft, setTokDraft] = useState<Record<string, string>>({});
+  // 観戦できるラン（S3 §25.1）: 開催中のシーズンのランは、このブラウザに覚えてあるトークンのランか、同じ機械から開いているときだけ
+  const [watch, setWatch] = useState<Record<string, SeasonWatchResponse>>({});
   const [error, setError] = useState<string | null>(null);
   const [name, setName] = useState(getPref('name', 'Adventurer'));
   const [classId, setClassId] = useState(getPref('class', 'core:warrior'));
@@ -48,9 +50,12 @@ export function Lobby() {
   const refresh = () => {
     api.runs().then((r) => { setRuns(r); setError(null); }).catch((e) => setError(errorText(e)));
     api.leaderboard().then(setBoard).catch(() => undefined);
-    api.seasons().then((list) => Promise.all(list.map((x) => api.season(x.id)))).then((list) => {
+    api.seasons().then((list) => Promise.all(list.map((x) => api.season(x.id)))).then(async (list) => {
       setSeasons(list);
-      setSeasonTok(Object.fromEntries(list.map((x) => [x.season.id, getPref(`seasonToken.${x.season.id}`, '')]).filter(([, v]) => v)));
+      const toks = Object.fromEntries(list.map((x) => [x.season.id, getPref(`seasonToken.${x.season.id}`, '')]).filter(([, v]) => v));
+      setSeasonTok(toks);
+      const ws = await Promise.all(list.map((x) => api.seasonWatch(x.season.id, toks[x.season.id]).then((r) => [x.season.id, r] as const).catch(() => null)));
+      setWatch(Object.fromEntries(ws.filter((x): x is readonly [string, SeasonWatchResponse] => !!x)));
     }).catch(() => undefined);
   };
   useEffect(() => {
@@ -125,6 +130,13 @@ export function Lobby() {
   /** 名前の横の称号（S2 §18.2。表示だけ） */
   const titleBadges = (r: SeasonStandingRow) => (r.titles ?? []).map((x, i) => <span key={i} class="tag title" title={x.seasonName}>{L === 'en' ? x.name.en : x.name.ja}</span>);
 
+  /** シーズンのラン（S3 §25.1）: 観戦できるか（確定する前は、覚えてあるトークンのランか、同じ機械からだけ）・巻き戻せるか（確定する前は、同じ機械から、ランが終わった後だけ） */
+  const canWatch = (r: RunListing) => !r.season || !!watch[r.season]?.runs.some((x) => x.runId === r.runId);
+  const canRewind = (r: RunListing) => {
+    if (!r.season) return true;
+    const sw = watch[r.season];
+    return !!sw && (sw.final || (sw.local && r.status === 'ended'));
+  };
   const active = (runs ?? []).filter((r) => r.status === 'active');
   const ended = (runs ?? []).filter((r) => r.status === 'ended').sort((a, b) => b.updatedAt - a.updatedAt);
   const classes = catalog ? Object.entries(catalog.classes) : [];
@@ -247,8 +259,8 @@ export function Lobby() {
                   {/* 起動時に復旧できなかったラン（V4-1m §37.1）: 理由を出し、観戦・再開は出さない（記録は残っているので巻き戻しは見られる） */}
                   {r.recoveryFailed && <div class="sub warn">{tr(`サーバーの起動時に復旧できなかった（理由: ${r.recoveryFailed.reason}）。記録は残っている`, `Could not be recovered at server start (${r.recoveryFailed.reason}); its records are kept`)}</div>}
                   <div class="row">
-                    {!r.recoveryFailed && <a class="button small" href={`#/watch/${r.runId}`}>{tr('観戦', 'Watch')}</a>}
-                    <a class="button small" href={`#/replay/${r.runId}`}>{tr('巻き戻し', 'Rewind')}</a>
+                    {!r.recoveryFailed && canWatch(r) && <a class="button small" href={`#/watch/${r.runId}`}>{tr('観戦', 'Watch')}</a>}
+                    {canRewind(r) && <a class="button small" href={`#/replay/${r.runId}`}>{tr('巻き戻し', 'Rewind')}</a>}
                     {tok && !r.recoveryFailed && <a class="button small primary" href={`#/play/${r.runId}`}>{tr('再開', 'Resume')}</a>}
                     {r.joinable && !tok && <button class="small" disabled={busy} onClick={() => join(r.runId)}>{tr('参加', 'Join')}</button>}
                   </div>
@@ -267,7 +279,10 @@ export function Lobby() {
                 <div><code>{r.runId}</code> <small>{fmtTime(r.updatedAt)}</small></div>
                 <div class="sub">{playersText(r)}</div>
                 {expeditionText(r) && <div class="sub exp">{expeditionText(r)}</div>}
-                <div class="row"><a class="button small" href={`#/replay/${r.runId}`}>{tr('リプレイ', 'Replay')}</a></div>
+                <div class="row">
+                  {canRewind(r) ? <a class="button small" href={`#/replay/${r.runId}`}>{tr('リプレイ', 'Replay')}</a>
+                    : <span class="muted small">{tr('シーズンの結果が確定した後に見返せる', 'Viewable once the season is finalized')}</span>}
+                </div>
               </li>
             ))}
           </ul>
@@ -286,7 +301,12 @@ export function Lobby() {
                 </h4>
                 <div class="row">
                   <a class="button small" href={`#/season/${s.id}`}>{s.status === 'final' ? tr('結果と坑の断面', 'Results and cross-section') : tr('順位と坑の断面', 'Standings and cross-section')}</a>
+                  {/* 観戦（S3 §25.1）: 開催中は、このブラウザに覚えてあるトークンのランだけ（同じ機械から開いているときは、どのランも）。確定した後は、だれでも */}
+                  {(watch[s.id]?.runs ?? []).map((x) => <a key={x.runId} class="button small" href={`#/watch/${x.runId}`} title={x.runId}>{tr(`観戦: ${x.name}`, `Watch ${x.name}`)}</a>)}
                 </div>
+                {s.status !== 'final' && watch[s.id] && !watch[s.id].local && (
+                  <p class="muted small">{tr('開催中のシーズンのランを観戦できるのは、その参加者（招かれたプロフィールのトークンを覚えさせたブラウザ）と、サーバーと同じ機械からだけ。確定した後は、だれでも見返せる。', 'While the season is running, only its participant (a browser that keeps their invited profile token) and the server machine can watch a run. Once it is finalized, anyone can.')}</p>
+                )}
                 {s.status === 'open' && (
                   <div class="sjoin">
                     {mine ? (

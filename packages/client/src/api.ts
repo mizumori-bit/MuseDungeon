@@ -1,7 +1,7 @@
 // HTTP API（docs/PROTOCOL.md §8）。失敗は ApiError で投げ、画面側でバナー表示する。
 import type {
   ActionError, Catalog, CommandRecord, GameEvent, JoinedResponse, JoinRunRequest, LeaderboardEntry,
-  NewRunRequest, ProfileRecords, RunIndex, RunListing, RunMetaFile, SeasonListing, SeasonStandingsResponse, SpectatorPolicy, World,
+  NewRunRequest, ProfileRecords, RunIndex, RunListing, RunMetaFile, SeasonListing, SeasonStandingsResponse, SeasonWatchResponse, SpectatorPolicy, World,
 } from '@muse/shared';
 
 export class ApiError extends Error {
@@ -72,6 +72,8 @@ export const api = {
   seasons: () => getJSON<{ seasons: SeasonListing[] }>('/api/seasons').then((r) => r.seasons ?? []),
   /** 順位の表・確定した結果・坑の断面（S2 §18.3） */
   season: (id: string) => getJSON<SeasonStandingsResponse>(`/api/seasons/${enc(id)}`),
+  /** いま観戦できる進行中のラン（S3 §25.1）。参加者のトークンは見出しで渡す（URL に出さない） */
+  seasonWatch: async (id: string, profileToken?: string) => (await (await request(`/api/seasons/${enc(id)}/watch`, profileToken ? bearer(profileToken) : undefined)).json()) as SeasonWatchResponse,
   config: () => getJSON<{ spectatorPolicy: SpectatorPolicy }>('/api/config'),
   /** プロフィールの記録（V3-7 §7.2。MCP の records と同じ中身） */
   /** プロフィールの表示名・要約・称号（S2 §18.2。MCP の profile と同じ中身） */
