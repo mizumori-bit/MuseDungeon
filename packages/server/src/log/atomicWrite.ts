@@ -7,7 +7,7 @@
 // 追記するファイル（events.jsonl・commands.jsonl・log.jsonl）は、ここを通さない（`fsyncFile` で、キーフレームと管理ファイルより先に書き切る）
 import { closeSync, existsSync, fsyncSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
-import { connect as netConnect } from 'node:net';
+import { connect as netConnect, createServer as createNetServer } from 'node:net';
 import { uptime } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 
@@ -219,17 +219,44 @@ export function portAnswers(host: string | undefined, port: number, timeoutMs = 
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** そのホストとポートで、試しに待ち受けられるか（すぐ閉じる）。待ち受けられなければ、その理由のコード */
+function tryListen(host: string, port: number): Promise<string | null> {
+  return new Promise((res) => {
+    const srv = createNetServer();
+    srv.once('error', (e: NodeJS.ErrnoException) => res(e.code ?? String(e.message)));
+    srv.listen({ host, port, exclusive: true }, () => srv.close(() => res(null)));
+  });
+}
+
+/**
+ * サーバーを起動する前に、待ち受けるホストとポートが空いているか（SEASON.md §40.2 の 5: 印を持たない前の版のサーバーが同じ置き場所で動いていると、
+ * 復旧を最後まで走らせてから、ポートの重なりで止まっていた）。それぞれのホストで試しに待ち受けてすぐ閉じ、ほかのプロセスが待ち受けていないかも
+ * つないで確かめる（Windows では、ほかのプロセスがすべてのアドレスで待ち受けていても、決まったアドレスでは待ち受けられることがある）。
+ * 空いていれば null、空いていなければ理由の文
+ */
+export async function portInUse(hosts: readonly string[], port: number, probe: (host: string | undefined, port: number) => Promise<boolean> = portAnswers): Promise<string | null> {
+  for (const h of hosts) {
+    const code = await tryListen(h, port);
+    if (code) return `${h}:${port} で待ち受けられない（${code}${code === 'EADDRINUSE' ? '。ほかのプロセスが使っている' : ''}）`;
+    if (await probe(h, port)) return `${h}:${port} で、ほかのプロセスが待ち受けている`;
+  }
+  return null;
+}
+
 /**
  * 印を取る（§36.1 の 6・§38.2 の 4）。印にはプロセスの番号・起動の時刻・ポートを書く。
  * - 生きている別のプロセスの印で、まだ待ち受けていない（起動の途中。猶予の内）か、そのポートで待ち受けが応えるなら busy
  * - プロセスがもう居ない・プロセスは居るがポートが応えない（番号の使い回し・高速スタートアップで起動からの時間が戻らない）・機械の起動より前の印は、古い印として掃除して取る（stale）
+ * - 古い印は消さずに、名前を替えて移す（`<印>.stale.<pid>.<値>`。SEASON.md §40.2 の 4）。移せたほうだけが新しい印を作る。移したものが、読んだ古い印と
+ *   同じ中身でなければ（読んでから移すまでの間に、同時に起動したほかのサーバーが古い印を片付けて自分の印を作った）、元に戻して busy。
+ *   前は消していたので、2 つが同じ古い印を読むと、遅れたほうが、先に取ったほうの新しい印を消して、両方が起動しえた
  * - 作った後に少し待って読み直し、自分のものでなくなっていれば（同時に起動した別のサーバーが取った）busy（2 つとも起動しない形を防ぐ）
  * - 印を作れない・読めない・取り直せないときは error（説明つき）
  */
 export async function acquireLock(path: string, me: { port?: number; host?: string } = {}, probe: (host: string | undefined, port: number) => Promise<boolean> = portAnswers): Promise<{ ok: true; stale?: LockBody } | { busy: LockBody } | { error: string }> {
   const body: LockBody = { pid: process.pid, startedAt: Date.now(), ...(me.port ? { port: me.port } : {}), ...(me.host ? { host: me.host } : {}), listening: false, nonce: randomBytes(6).toString('hex') };
   let stale: LockBody | undefined;
-  for (let i = 0; i < 2; i++) {
+  for (let i = 0; i < 3; i++) {
     try {
       const fd = openSync(path, 'wx');
       try { writeFileSync(fd, JSON.stringify(body)); fsyncSync(fd); } finally { closeSync(fd); }
@@ -242,9 +269,14 @@ export async function acquireLock(path: string, me: { port?: number; host?: stri
     } catch (e) {
       const code = (e as NodeJS.ErrnoException).code;
       if (code !== 'EEXIST') return { error: `印 ${path} を作れない（${code ?? String((e as Error).message ?? e)}）` };
-      const r = readJsonStable<LockBody>(path, (v) => !!v && typeof v === 'object' && typeof (v as LockBody).pid === 'number' && typeof (v as LockBody).startedAt === 'number');
-      if ('unreadable' in r) return { error: `印 ${path} を一時的に読めない（${r.unreadable}）。少し待って起動し直す` };
-      const cur = 'value' in r ? r.value : null;
+      const raw = readFileStable(path);
+      if ('missing' in raw) continue; // 読む前に、ほかのサーバーが片付けた: もう一度作ってみる
+      if ('unreadable' in raw) return { error: `印 ${path} を一時的に読めない（${raw.unreadable}）。少し待って起動し直す` };
+      let cur: LockBody | null = null;
+      try {
+        const v = JSON.parse(raw.text) as unknown;
+        if (!!v && typeof v === 'object' && typeof (v as LockBody).pid === 'number' && typeof (v as LockBody).startedAt === 'number') cur = v as LockBody;
+      } catch { /* 書きかけ・壊れた印 */ }
       if (!cur) {
         // 書きかけの印（同時に起動したサーバーが作った直後）かもしれない: 新しいものは古い印と見ない
         let young = false;
@@ -254,8 +286,24 @@ export async function acquireLock(path: string, me: { port?: number; host?: stri
         if (!cur.listening && Date.now() - cur.startedAt < LOCK_STARTUP_GRACE_MS) return { busy: cur };
         if (cur.port && await probe(cur.host, cur.port)) return { busy: cur };
       }
+      // 古い印は、消さずに名前を替えて移す（§40.2 の 4）。移せたほうだけが進む
+      const aside = `${path}.stale.${process.pid}.${body.nonce}`;
+      try { renameSync(path, aside); } catch (e2) {
+        const c2 = (e2 as NodeJS.ErrnoException).code ?? '';
+        if (c2 === 'ENOENT') continue; // ほかのサーバーが先に移した: その印を読み直す
+        return { error: `古い印 ${path} を移せない（${c2}）` };
+      }
+      // 移したものが、読んだ古い印か（読んでから移すまでの間に、ほかのサーバーが古い印を片付けて、自分の印を作っていないか）
+      const movedRaw = readFileStable(aside);
+      if (!('text' in movedRaw) || movedRaw.text !== raw.text) {
+        let taken: LockBody | null = null;
+        if ('text' in movedRaw) { try { taken = JSON.parse(movedRaw.text) as LockBody; } catch { /* 読めなくても戻す */ } }
+        // 元に戻す（その間に、また別の印が作られていれば、そちらを残す）
+        try { if (!existsSync(path)) renameSync(aside, path); else rmSync(aside, { force: true }); } catch { /* 戻せなくても、そのサーバーの読み直しで分かる */ }
+        return taken && typeof taken.pid === 'number' ? { busy: taken } : { error: `印 ${path} を移している間に、ほかのサーバーが印を作った。少し待って起動し直す` };
+      }
+      try { rmSync(aside, { force: true }); } catch { /* 残っても読まれない（印の名前と違う） */ }
       stale = cur ?? { pid: 0, startedAt: 0 };
-      try { rmSync(path, { force: true }); } catch (e2) { return { error: `古い印 ${path} を消せない（${(e2 as NodeJS.ErrnoException).code ?? ''}）` }; }
     }
   }
   return { error: `印 ${path} を取り直せなかった（同時に起動したサーバーがある？）。少し待って起動し直す` };

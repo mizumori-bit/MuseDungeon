@@ -11,7 +11,7 @@ import './abilities';
 import './guardianBehaviors';
 import { guardianTypeHandlers, weaknessHandlers } from './guardians';
 
-export { createRun, joinPlayer, seasonSync, step, isPlayersTurn, ENGINE_VERSION } from './run';
+export { createRun, joinPlayer, resumeSeq, seasonSync, step, isPlayersTurn, ENGINE_VERSION } from './run';
 export type { CreateRunParams, StepResult } from './run';
 export { generateFloor, guardianCandidates, selectBiome, selectFloorType, specArmor } from './gen/generate';
 export type { GeneratedFloor, GenOptions, SpawnSpec } from './gen/generate';

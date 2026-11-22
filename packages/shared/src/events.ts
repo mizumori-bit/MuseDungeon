@@ -6,8 +6,8 @@ import type {
   RememberedEntity, RngState, RunMeta, RunSummary, SeasonDeposit, SeasonState, SeasonTaken, Sense, Stats, StatusInst, SupplyPlace, WorldSecret, FloorHint, Names,
 } from './types';
 
-/** 2: 遠征・実ダメージ・回復の蓄積値（IMPROVEMENTS_V2）。3: ビルド（特技・能動技・呪い。V3-4）。22: シーズン（S0）。29: 補給の置き場（S3）。30: 帰り支度の取りやめの理由（S3a）。31: 覚えている品の接辞（knowledge_updated.rememberedSet[].affixes。S3c）。古いログもそのまま畳み込める */
-export const EVENT_VERSION = 31;
+/** 2: 遠征・実ダメージ・回復の蓄積値（IMPROVEMENTS_V2）。3: ビルド（特技・能動技・呪い。V3-4）。22: シーズン（S0）。29: 補給の置き場（S3）。30: 帰り支度の取りやめの理由（S3a）。31: 覚えている品の接辞（knowledge_updated.rememberedSet[].affixes。S3c）。32: 食い違ったランの続きの番号（seq_resumed。S3f）。古いログもそのまま畳み込める */
+export const EVENT_VERSION = 32;
 
 export interface EventBase {
   seq: number;
@@ -254,7 +254,12 @@ export type GameEvent =
   | E<'thought', { player: PlayerId; text: string }>
   | E<'chat', { player: PlayerId; name: string; text: string }>
   // 内部（プレイヤー・観戦者には渡さない）
-  | E<'rng_advanced', { states: Record<string, RngState> }>;
+  | E<'rng_advanced', { states: Record<string, RngState> }>
+  /**
+   * 食い違ったランの続き（S3f。SEASON.md §40.2 の 2。システムの命令 seq_resume から）: 出来事の番号を、記録の最後の番号の次へ送った。
+   * この出来事の seq が送った先、fromSeq は送る前の World の番号（再生の終わり）。番号のほかは変えない。プレイヤーには渡さない（観戦にはそのまま）
+   */
+  | E<'seq_resumed', { fromSeq: number }>;
 
 export type EventType = GameEvent['type'];
 export type EventOf<T extends EventType> = Extract<GameEvent, { type: T }>;

@@ -3,10 +3,10 @@
 import { randomBytes } from 'node:crypto';
 import type { Catalog } from '@muse/shared';
 import type { Content } from '@muse/content';
-import { createRun, isPlayersTurn, joinPlayer, seasonSync, step } from '@muse/engine';
+import { createRun, isPlayersTurn, joinPlayer, resumeSeq, seasonSync, step } from '@muse/engine';
 import type {
   ActionError, AgentActivity, Command, CommandRecord, CommandSource, Dir, Expedition, ExpeditionReport, GameEvent, JoinCommand, LegacyMonster, MacroStop, ProjectedEvent,
-  PerceivedEvent, PlayerId, PlayerView, Pos, ReportCall, RunMetaFile, RunSummary, SeasonSyncCommand, TurnSnapshot, World,
+  PerceivedEvent, PlayerId, PlayerView, Pos, ReportCall, RunMetaFile, RunSummary, SeasonSyncCommand, SeqResumeCommand, TurnSnapshot, World,
 } from '@muse/shared';
 import {
   actionError, applyEvent, buildExpeditionReport, canonicalHash, guardianDisplayName, compareReports, emptyWorld, filterEventsForPlayer, FREE_COMMANDS, MACRO_COMMANDS,
@@ -16,7 +16,7 @@ import type { SeasonHooks } from '../season/SeasonService';
 import type { ServerConfig } from '../config';
 import { LogWriter } from '../log/LogWriter';
 import { readJsonl } from '../log/RunStore';
-import { cutEventsAfter, isRunMeta, keyframeFromEvents, latestKeyframe, logBounds, metaFromWorld } from '../log/repair';
+import { cutEventsAfter, isRunMeta, keyframeFromEvents, latestKeyframe, logBounds, metaFromWorld, resumeSeqTarget } from '../log/repair';
 import { readJsonStable } from '../log/atomicWrite';
 import { summaryMarkdown } from './summary';
 import type { ProfileHooks } from './profiles';
@@ -128,6 +128,14 @@ export class RunSession {
   private lastKeyframeSeq = 0;
   private metaFile: RunMetaFile;
   private closed = false;
+  /**
+   * 食い違ったランの続きの番号の送り先（SEASON.md §40.2 の 2。復旧で食い違ったときだけ）。続けて最初に記録へ書く前に、
+   * システムの命令 seq_resume として確定する（resumeSeqIfNeeded）。null なら送らない
+   */
+  private pendingSeqResume: number | null = null;
+  /** 食い違いの後の続きの境目（seq_resumed の番号。S3h §41.10 の中 2）。履歴を空の World から畳む所は、境目のキーフレームから後を畳む */
+  private readonly boundarySeqs: number[] = [];
+  private boundaryCache: { seq: number; world: World } | null = null;
 
   private constructor(readonly deps: SessionDeps, runId: string, world: World, createdAt: number) {
     this.runId = runId;
@@ -163,10 +171,13 @@ export class RunSession {
     const notes: string[] = [];
     const commands = readJsonl<CommandRecord>(join(dir, 'commands.jsonl'));
     const allEvents = readJsonl<GameEvent>(join(dir, 'events.jsonl'));
-    // 記録の範囲（§36.1 の 1）。命令の記録が覆っていない出来事（出来事を追記した後、命令を書く前に落ちた）は、照合にも履歴にも入れない
+    // 記録の範囲（§36.1 の 1）。命令の記録が覆っていない出来事（出来事を追記した後、命令を書く前に落ちた）は、照合にも履歴にも入れない。
+    // 覆うかどうかは、命令の結果の区間の和で見る（S3h §41.10 の中 1: 最後の番号だけで見ると、続けた後に、途中に残った命令の無い出来事が混ざる）。
+    // 読み方だけで、記録のファイルには何も書かない
     const bounds = logBounds(allEvents, commands);
     const orphans = allEvents.filter((e) => e.seq > bounds.covered).length;
-    const kept = orphans ? allEvents.filter((e) => e.seq <= bounds.covered) : allEvents;
+    const kept = allEvents.filter((e) => bounds.covers(e.seq));
+    const inner = allEvents.length - kept.length - orphans;
     const lastKept = kept.length ? kept[kept.length - 1].seq : 0;
     // いちばん新しい、読めて、記録が覆っているキーフレーム（出来事の番号・命令の番号が、どちらも記録の最後以下）。範囲の中で最新のものが
     // 一時的に読めなければ、古いものへ下がらずに失敗する（§38.2 の 2: 長い再実行になり、版をまたいだランでは食い違いに入る）
@@ -198,7 +209,11 @@ export class RunSession {
     // 目標の宣言（V3-7a）は V3-8 §53.5 で外した。古いランの goals.jsonl は読まない（再実行は commands.jsonl だけで、宣言はゲームに影響しない）
     const logged = kept.filter((e) => e.seq > kf.seq);
     const strip = (es: GameEvent[]) => es.map((e) => ({ ...e, wall: 0 }));
-    const verified = canonicalHash(strip(logged)) === canonicalHash(strip(replayed.filter((e) => e.seq <= lastKept)));
+    // 一致と見るのは、照合する範囲の出来事が同じで、かつ再生の終わりの番号が、命令の記録の覆う最後の番号と同じときだけ（SEASON.md §40.2 の 1:
+    // 再生が記録より先まで進んだ分を、比べずに捨てていた。今の engine が最後の命令について記録より多くの出来事を出すと、一致と出ていた。
+    // 覆う番号まで届かないときも、命令の記録の言う結果と違うので食い違い）
+    const replayEnd = s.world.seq;
+    const verified = replayEnd === bounds.covered && canonicalHash(strip(logged)) === canonicalHash(strip(replayed.filter((e) => e.seq <= lastKept)));
     // 命令は記録にあるのに、出来事の記録が先に欠けていた（出来事の追記だけが届かなかった）: 照合が一致し、命令の記録の覆う最後の番号が
     // 出来事の記録の最後より大きいときだけ、その番号までの再実行の出来事を足す（§38.2 の 1。食い違いのときは、今の engine の出来事なので足さない）
     const missing = verified && bounds.covered > lastKept ? replayed.filter((e) => e.seq > lastKept && e.seq <= bounds.covered) : [];
@@ -216,11 +231,26 @@ export class RunSession {
       if (aside.moved.length) notes.push(`読めないキーフレーム ${aside.moved.length} 個の名前を替えた（${aside.moved.map((p) => basename(p)).join(', ')}）`);
       if (aside.ahead.length) notes.push(`記録より先に進んだキーフレーム ${aside.ahead.length} 個の名前を替えた（${aside.ahead.map((p) => basename(p)).join(', ')}）`);
       if (!found.kf) notes.push('読めるキーフレームが無いので、出来事の記録だけから作った');
+      // 途中に残った命令の無い出来事（S3h §41.10 の中 1）: 読まずに、記録のファイルには残す
+      if (inner) notes.push(`命令の記録が覆っていない途中の出来事 ${inner} 件は、読まずに残した`);
       // 出来事の記録から作ったとき・キーフレームを避けたときは、キーフレームを書き直す（次に起動し直したときに使う）
       if (!found.kf || aside.moved.length || aside.ahead.length) s.writeKeyframe();
-    } else if (orphans || found.skipped) {
-      notes.push(`食い違ったので、記録のファイルは直していない（${[orphans ? `命令の記録が覆っていない出来事 ${orphans} 件` : '', found.skipped ? `使えないキーフレーム ${found.skipped} 個` : ''].filter(Boolean).join('・')}は、そのまま）`);
+    } else {
+      if (orphans || inner || found.skipped) notes.push(`食い違ったので、記録のファイルは直していない（${[orphans || inner ? `命令の記録が覆っていない出来事 ${orphans + inner} 件` : '', found.skipped ? `使えないキーフレーム ${found.skipped} 個` : ''].filter(Boolean).join('・')}は、そのまま）`);
+      if (replayEnd > bounds.covered) notes.push(`再生が記録より先まで進んだ（再生の終わり ${replayEnd}、命令の記録の覆う最後 ${bounds.covered}）`);
+      else if (replayEnd < bounds.covered) notes.push(`再生が記録の覆う番号まで届かなかった（再生の終わり ${replayEnd}、命令の記録の覆う最後 ${bounds.covered}）`);
+      // 続けるときは、最初に記録へ書く前に、必ず境目（seq_resume）を残す（S3h §41.10 の中 2）。番号は、記録の中のどの番号とも、
+      // ライブの World の番号とも重ねない（SEASON.md §40.2 の 2）。読むだけなら何も書かない（§38.1）。再生で終わったランには書かない
+      const next = Math.max(resumeSeqTarget(dir, allEvents, bounds.covered), s.world.seq + 1);
+      if (s.world.status !== 'ended') {
+        s.pendingSeqResume = next;
+        notes.push(next > s.world.seq + 1
+          ? `続けると、境目（seq_resume #${next}）を残し、出来事の番号を ${s.world.seq + 1} からでなく ${next} から振る（記録の番号と重ならないように）`
+          : `続けると、境目（seq_resume #${next}）を残してから続ける`);
+      }
     }
+    // 食い違いの後の続きの境目（S3h §41.10 の中 2）: 遅らせた観戦は、境目のキーフレームから後を畳む
+    for (const e of s.history) if (e.type === 'seq_resumed') s.boundarySeqs.push(e.seq);
     const message = verified ? `recovered ${runId} (${replayed.length} events re-executed, hash ok)` : `recovered ${runId} with mismatch (logged ${logged.length}, replayed ${replayed.length})`;
     return { session: s, verified, message: notes.length ? `${message}。${notes.join('。')}` : message };
   }
@@ -257,6 +287,8 @@ export class RunSession {
     }
     // シーズンの取り込み（S0 §9.7）: 中身は記録に全部ある（シーズンの記録は読まない）
     if (cmd.type === 'season_sync') return seasonSync(this.world, this.deps.content, rec.player!, cmd, { cseq: rec.cseq, wall: rec.wall, thought: rec.thought }).events;
+    // 食い違ったランの続きの番号（S3f §40.2 の 2）: 記録の番号で出す
+    if (cmd.type === 'seq_resume') return resumeSeq(this.world, this.deps.content, cmd, { cseq: rec.cseq, wall: rec.wall }).events;
     const r = step(this.world, this.deps.content, rec.player!, cmd, { cseq: rec.cseq, wall: rec.wall, thought: rec.thought, auto: rec.source === 'timeout' || rec.source === 'system' });
     return r.events;
   }
@@ -266,6 +298,58 @@ export class RunSession {
   }
 
   // ---------- 記録 ----------
+
+  /**
+   * 食い違ったランを続けるとき（SEASON.md §40.2 の 2）: 最初に記録へ書く前に（キューの中から。命令・取り込み・参加・マクロの呼び出しの記録の前）、
+   * 出来事の番号を記録の最後の次へ送る。システムの命令 seq_resume を記録し、engine が出来事 seq_resumed をその番号で出す（再実行でも同じ番号）。
+   * 送った直後にキーフレームを書く（次の起動では、そこから再生するので一致する）。1 回だけ
+   */
+  private resumeSeqIfNeeded(): void {
+    const next = this.pendingSeqResume;
+    // 再生で終わったラン（記録では進行中でも）には書かない: 命令は engine が断る（§40.3 の run_92d0d0cd26 の形）
+    if (next === null || this.world.status === 'ended') return;
+    this.pendingSeqResume = null;
+    if (next <= this.world.seq) return;
+    const cseq = this.cseq + 1;
+    const wall = Date.now();
+    const cmd: SeqResumeCommand = { type: 'seq_resume', next };
+    const r = resumeSeq(this.world, this.deps.content, cmd, { cseq, wall });
+    if (!r.events.length) return;
+    this.cseq = cseq;
+    this.commit({ cseq, player: null, command: cmd, source: 'system', wall }, r.events);
+    // 境目のキーフレーム（次の起動は、ここから再生するので一致する。遅らせた観戦と巻き戻しも、ここから畳む）
+    if (this.lastKeyframeSeq !== this.world.seq) this.writeKeyframe();
+    this.boundarySeqs.push(r.events[r.events.length - 1].seq);
+  }
+
+  /** 続けて最初に記録へ書くときに、出来事の番号を送るか（その送り先。テストと記録の確かめ用） */
+  seqResumePending(): number | null {
+    return this.pendingSeqResume;
+  }
+
+  /** 食い違いの後の続きの境目（seq_resumed の番号。古い順） */
+  boundaries(): readonly number[] {
+    return this.boundarySeqs;
+  }
+
+  /**
+   * 履歴を upTo まで畳むときの出発点（S3h §41.10 の中 2）: upTo 以下の最後の境目のキーフレームが読めれば、その World（写し）と番号。
+   * 無ければ空の World と 0（境目より前は、今までどおり最初から畳む）
+   */
+  foldBase(upTo: number): { world: World; from: number } {
+    for (let i = this.boundarySeqs.length - 1; i >= 0; i--) {
+      const b = this.boundarySeqs[i];
+      if (b > upTo) continue;
+      if (this.boundaryCache?.seq !== b) {
+        if (!this.log) break;
+        const r = readJsonStable<{ seq: number; world: World }>(join(this.log.dir, 'keyframes', `${b}.json`), (v) => !!v && typeof v === 'object' && (v as { seq?: number }).seq === b && !!(v as { world?: unknown }).world);
+        if (!('value' in r)) continue;
+        this.boundaryCache = { seq: b, world: r.value.world };
+      }
+      return { world: structuredClone(this.boundaryCache!.world), from: b };
+    }
+    return { world: emptyWorld(), from: 0 };
+  }
 
   private writeKeyframe(): void {
     this.lastKeyframeSeq = this.world.seq;
@@ -357,6 +441,8 @@ export class RunSession {
 
   join(req: JoinCommand, source: CommandSource): Promise<{ ok: true; playerId: PlayerId; token: string } | { ok: false; error: ActionError }> {
     return this.enqueue(() => {
+      // 食い違ったランの続き（§40.2 の 2）: 参加の前に番号を送る（参加者の番号・ID は送った後の World から）
+      if (!this.closed) this.resumeSeqIfNeeded();
       const cseq = ++this.cseq;
       const wall = Date.now();
       const token = newToken();
@@ -628,6 +714,7 @@ export class RunSession {
     const season = this.deps.season.sync(this, pid);
     if (!season) return { ok: false, error: actionError('bad_request', 'this player is not a participant of the season', '') };
     const cmd: SeasonSyncCommand = { type: 'season_sync', reason, season, ...(report ? { report } : {}) };
+    this.resumeSeqIfNeeded();
     const startSeq = this.world.seq;
     const cseq = this.cseq + 1;
     const wall = Date.now();
@@ -657,6 +744,7 @@ export class RunSession {
 
   private stepNow(pid: PlayerId, cmd: Command, source: CommandSource, thought?: string, parent?: number): SubmitResult {
     if (this.closed) return { ok: false, error: actionError('no_session', 'session closed', '') };
+    this.resumeSeqIfNeeded();
     const startSeq = this.world.seq;
     const cseq = this.cseq + 1;
     const wall = Date.now();
@@ -706,6 +794,8 @@ export class RunSession {
     }
     // 元の呼び出し 1 件（イベント無し）を記録
     const parent = await this.enqueue(() => {
+      // 食い違ったランの続き（§40.2 の 2）: マクロの呼び出しの記録より前に番号を送る
+      if (!this.closed) this.resumeSeqIfNeeded();
       const c = ++this.cseq;
       this.log?.appendCommand({ cseq: c, player: pid, command: cmd, source: opts.source, macro: true, thought: opts.thought, wall: Date.now(), resultSeq: null });
       this.macroKinds.set(c, cmd.type);
@@ -796,8 +886,9 @@ export class RunSession {
 
   /** 観戦用の World 畳み込み検証（テスト用） */
   foldHistory(): World {
-    const w = emptyWorld();
-    for (const ev of this.history) applyEvent(w, ev);
+    // 食い違いの後の続き（S3h §41.10 の中 2）: 境目があれば、境目のキーフレームから後を畳む
+    const { world: w, from } = this.foldBase(this.world.seq);
+    for (const ev of this.history) if (ev.seq > from) applyEvent(w, ev);
     return w;
   }
 

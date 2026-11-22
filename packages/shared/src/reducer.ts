@@ -391,6 +391,9 @@ export function applyEvent(world: World, ev: GameEvent): void {
     case 'rng_advanced':
       for (const k of Object.keys(ev.states)) world.secret.rng[k] = clone(ev.states[k]);
       break;
+    // 食い違ったランの続き（S3f）: 番号だけを送る（下の world.seq = ev.seq）
+    case 'seq_resumed':
+      break;
     default: {
       const never: never = ev;
       throw new Error(`applyEvent: unknown event ${(never as { type: string }).type}`);

@@ -65,6 +65,18 @@ export class Ctx {
     return ev;
   }
 
+  /**
+   * 番号を指定して出す（S3f の seq_resumed だけが使う: 食い違ったランの続きの番号を、記録の最後の次へ送る）。
+   * 番号は今の World の番号より大きいこと。applyEvent が World の番号をその値にする
+   */
+  emitAt<D extends EventDraft>(seq: number, d: D): GameEvent {
+    if (!Number.isInteger(seq) || seq <= this.world.seq) throw new Error(`emitAt: seq ${seq} is not after ${this.world.seq}`);
+    const ev = { ...d, seq, cause: this.cause, wall: this.wall, floor: d.floor !== undefined ? d.floor : null, ft: d.ft !== undefined ? d.ft : 0 } as unknown as GameEvent;
+    applyEvent(this.world, ev);
+    this.events.push(ev);
+    return ev;
+  }
+
   /** 使った乱数ストリームの状態を rng_advanced として確定させる */
   finish(): GameEvent[] {
     const states: Record<string, [number, number, number, number]> = {};

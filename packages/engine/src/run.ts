@@ -2,7 +2,7 @@
 // 決定論: 同じシード＋同じコマンド列（wall を含む）→ 同じイベント列。
 import type { Content } from '@muse/content';
 import type {
-  ActionError, Command, Entity, GameEvent, JoinCommand, LegacyMonster, MonsterMemory, PlayerId, PlayerRecord, RunMeta, RunOptions, SeasonState, SeasonSyncCommand, World, WorldSecret,
+  ActionError, Command, Entity, GameEvent, JoinCommand, LegacyMonster, MonsterMemory, PlayerId, PlayerRecord, RunMeta, RunOptions, SeasonState, SeasonSyncCommand, SeqResumeCommand, World, WorldSecret,
 } from '@muse/shared';
 import { actionError, CAMP_COMMANDS, emptyWorld, EVENT_VERSION, FREE_COMMANDS, MACRO_COMMANDS, Rng, seasonBudgetLeft, t } from '@muse/shared';
 import { actions, freeCommand } from './actions';
@@ -18,7 +18,7 @@ import { placeSeasonFires } from './campfire';
 import { advance, endTurn } from './scheduler';
 import { recomputeStats } from './stats';
 
-export const ENGINE_VERSION = '0.45.0';
+export const ENGINE_VERSION = '0.45.1';
 
 export interface CreateRunParams {
   runId: string;
@@ -241,6 +241,18 @@ export function seasonSync(world: World, content: Content, playerId: PlayerId, c
   // 共有層の火を、作ってある階のすべてに置く（まだ作っていない階には、作ったときに置く）
   for (const key of Object.keys(world.floors).sort()) placeSeasonFires(ctx, key);
   return { ok: true, events: ctx.finish() };
+}
+
+/**
+ * 食い違ったランの続き（S3f。SEASON.md §40.2 の 2）: サーバーが記録したシステムの命令 seq_resume を、番号 next の出来事 seq_resumed にする
+ * （World の番号が next になり、続きの出来事は next + 1 から）。World の番号がもう next 以上なら、何も出さない（番号は戻せない）。
+ * 番号は命令の記録にあるので、再実行でも同じ番号を出す
+ */
+export function resumeSeq(world: World, content: Content, cmd: SeqResumeCommand, meta: { cseq: number | null; wall: number }): StepResult {
+  if (!Number.isInteger(cmd.next) || cmd.next <= world.seq) return { ok: true, events: [] };
+  const ctx = new Ctx(world, content, meta.cseq, meta.wall);
+  ctx.emitAt(cmd.next, { type: 'seq_resumed', fromSeq: world.seq, seenBy: [], floor: null, ft: 0 });
+  return { ok: true, events: ctx.events };
 }
 
 /** meta.auto: 時間切れの待機・サーバーが代わりに出した命令（V4-1j §30.6。その手番は、仲間の last_act に数えない） */
