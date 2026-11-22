@@ -53,7 +53,7 @@ describe('S1c §14.4 の 1: the fight estimate (the heaviest at its worst hit, t
     // 観測: 追跡中 2 体の知らせに 2 つの数。既定の hp_floor の行は「既定」と書く
     const o = buildObservation(v2, catalog, { detail: 'brief', map: false });
     expect(o.alerts.find((x) => x.code === 'incoming')?.text).toContain('1 手の被害の見込み 12・最悪 20');
-    expect(o.valid_actions.find((x) => x.startsWith('fight e_s1cr01'))).toContain('未満で止まる（既定の hp_floor）');
+    expect(o.valid_actions.find((x) => x.startsWith('fight e_s1cr01'))).toContain('以下で止まる（既定の hp_floor。HP の値）');
     // 平均の記録が無い（S1c より前の記録）・0.42.0 の 2 つの欄の記録（攻撃された回数が昔から）: 残りの敵も最大で数える（重い側。S1d §17.2）
     a.world.players[a.pid].knowledge.monsterMemory['core:goblin'] = { kind: 'core:goblin', encounters: 2, kills: 0, maxDamageToYou: 10, maxDamageByYou: 0, abilities: [] };
     expect(threatEstimate(view(a), catalog, view(a).entities.filter((e) => e.cat === 'monster'))).toEqual({ expected: 20, worst: 20, unrecorded: 0 });

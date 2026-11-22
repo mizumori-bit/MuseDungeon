@@ -155,6 +155,7 @@ function seasonBriefing(L: Locale, s: NonNullable<PlayerView['season']>, fire?: 
     t(L, '- 階は、ランの間、作られたまま残る（遠征ごとに変わらない）。地形と階段の位置は、だれのランでも同じ。キャンプで report_stairs すると、このランで見た下り階段と特別な場所（部屋の作りにある祭壇・賭けの祭壇・碑文）を報告できる（それぞれ最初の報告者に貢献 1）。倒れると、報告していないものは報告できなくなる。公開された階段は、次の遠征から、入口からの道しるべ（いちばん短い道のマス）と一緒に地図に載る（travel_to stairs_down で向かえる）。', '- Floors persist for the whole run (they do not change between expeditions). Terrain and stairs are the same in every run. At camp, report_stairs reports the down stairs and special places (built-in altars, altars of chance, inscriptions) you saw in this run (1 contribution to the first reporter of each). If you die, what you did not report is lost. Published stairs appear on your map from the next expedition, with a trail from the entrance (the shortest way; travel_to stairs_down goes there).'),
     t(L, '- 賞: 冒険（いちばん深い階）・貢献（最初の報告の数）・生還（一度も倒れていない者の確定点の合計）・支援（自分の野営の火を、ほかの参加者が使った人数）。同着は使った予算の少ないほうが上。順位はキャンプの観測に出る。', '- Awards: adventure (deepest floor), contribution (first reports), survival (banked points of those who never died), support (other participants who used your campfires). Ties go to less budget used. Standings show at camp.'),
     t(L, `- 補給の置き場: 各階の上り・下り階段のマスと野営の火に、消耗品（薬・巻物・投げる武器）を deposit_supply { slot } で預けられる（1 手番。置き場 1 つに ${supply?.cap ?? 5} 個まで）。take_supply { id } で取れる（1 回の遠征で ${supply?.perExpedition ?? 1} つまで）。預けた品はキャンプに着くと共有され、ほかの参加者が取ると支援賞に数える。`, `- Supply caches: at the stairs up and down of each floor and at campfires, deposit_supply { slot } leaves a consumable (potion, scroll, throwing weapon; one turn; ${supply?.cap ?? 5} per cache), take_supply { id } takes one (${supply?.perExpedition ?? 1} per expedition). Deposits are shared once you reach camp, and takes by others count for your support award.`),
+    t(L, '- 討伐の記録: 節目の大守護者を倒した者の、その戦いの事実（装備とそれを手に入れた階・与えた被害・使った品など）が、倒した者がキャンプに着くと記録庫に載り、まだ倒していない者の、その大守護者を倒す候補とキャンプの記録庫に出る。ほかの参加者の残したものは、道しるべ・野営の火・補給の置き場・公開された場所・討伐の記録だけ（書き置きや野営の跡は迷宮に元からある）。', '- Warden kill records: when someone slays a milestone warden, the facts of that fight (gear and where it was found, damage dealt, items used...) go into the archive once they reach camp, and show in that warden\'s offer for those who have not slain it, and in the camp archive. The only things other participants leave are trails, campfires, supply caches, published places and kill records (notes and old camps are part of the dungeon).'),
     t(L, `- 野営の火: 迷宮の中で place_fire（1 手番。費用は 深さ × ${cost} 点を、このランの確定点から。シーズンで ${fire?.perSeason ?? 3} つまで）。置いた本人の得: 火の上か隣から extract で帰れる（追ってくる敵が見えていなければ。帰り支度 ${turns} 手番）・火から帰ると次の遠征はそこから始まる・interact で HP が休憩の上限まで戻る（1 回の遠征で、1 つの階につき 1 回）。キャンプに着くと、ほかの参加者の世界の同じマスにも現れ、使われると支援賞に数える。詳しくは get_rules topic=season。`, `- Campfires: place_fire in the dungeon (one turn; costs depth x ${cost} of this run's banked points; ${fire?.perSeason ?? 3} per season). What you get: extract on or next to it takes you home (with no hunting enemy in view; ${turns} turns packing up), your next expedition then starts there, and interact heals you to the rest cap (once per floor per expedition). Once you reach camp it appears on the same cell in the others' worlds, and their uses count for your support award. Details: get_rules topic=season.`),
   ];
 }
@@ -534,6 +535,28 @@ export class SessionPlayerPort implements PlayerPort {
           const k = inc > 0 ? Math.min(3, Math.trunc((hpNow - 1) / inc)) : 0;
           // 死にうるときは、hp_floor の話をしない（S2a §20.10 の 3）
           if (adj >= 2 && k >= 2 && !(est.worst > 0 && hpNow <= est.worst)) outcome += t(L, ` 隣に ${adj} 体いるので、この hp_floor では毎手番止まる。hp_floor を ${hpNow - k * inc} にすれば ${k} 手番続く。`, ` ${adj} enemies are adjacent, so this hp_floor stops every turn; hp_floor ${hpNow - k * inc} keeps going for ${k} turns.`);
+        }
+        // 相手が離れて止まった（S4 §35.6 の 4）: 離れて撃つ・寄ると下がる・逃げる相手には、寄って殴るより、投げる品か視線を切る（相手の習性は公開の種族の性質と思い出から）
+        if (cmd.type === 'fight' && r.interruptedBy === 'target_moved') {
+          const tg = view.entities.find((e) => e.id === cmd.target && e.cat === 'monster');
+          const kind = tg?.kind ?? null;
+          const mem = kind ? view.monsterMemory[kind] : undefined;
+          const ranged = !!kind && (!!this.catalog.monsters[kind]?.tags.includes('ranged') || !!mem?.abilities.includes('ranged'));
+          const flees = !!tg?.fleeing || !!mem?.abilities.includes('flees');
+          if (ranged || flees) {
+            const name = tg ? kindName(this.catalog, L, tg.kind) : '';
+            outcome += ' ' + (ranged
+              ? t(L, `${name}は離れて撃ち、すぐ近くまで寄られると下がる相手なので、寄って殴るのは難しい。この相手には、投げる品（fight { target, with }）か、視線を切る（曲がり角・扉の陰に入り、寄ってくるのを待つ）。`, `The ${name} shoots from afar and backs off when you get right next to it, so walking up to strike rarely works. Against it, throw things (fight { target, with }) or break its line of sight (step behind a corner or door and let it come to you).`)
+              : t(L, `${name}は手負いになると逃げる相手なので、追っても追いつきにくい。この相手には、投げる品（fight { target, with } は逃げる相手にも投げる）。`, `The ${name} runs when wounded, so chasing it rarely works. Against it, throw things (fight { target, with } throws at fleeing targets too).`));
+          }
+        }
+        // hp_floor で止まった（S4 §35.6 の 1・3）: 使った値と、それが HP の値（割合ではない）であること。1 歩の間に何度も撃たれると、その分だけ下回って止まる
+        if (r.interruptedBy === 'hp_floor' && m?.hpFloor !== undefined) {
+          const given = 'hpFloor' in cmd && cmd.hpFloor !== undefined;
+          const pct = cmd.type === 'fight' ? 50 : 'mode' in cmd && cmd.mode === 'flee' ? 25 : 50;
+          outcome += ' ' + t(L,
+            `HP ${view.self.stats.hp}・hp_floor ${m.hpFloor}（HP の値で、割合ではない。${given ? '渡した値' : `省いたので既定の最大 HP の ${pct}%`}）。判定は 1 歩・1 手ごとの後なので、その間に何度も攻撃されると、その分だけ下回って止まる。`,
+            `HP ${view.self.stats.hp}, hp_floor ${m.hpFloor} (an HP value, not a percentage; ${given ? 'the value you gave' : `omitted, so the default ${pct}% of max HP`}). It is checked after each step or action, so several hits within one step take you below it by that much.`);
         }
         // 予備動作で止まった（S1c §14.4 の 4）: 的になっているマス（大振りのマス・突進の直線）と、自分がそこにいるか、外れる一歩。observe を呼び直さなくて済むように
         if (r.interruptedBy === 'intent') outcome += intentStopText(L, view, this.catalog);

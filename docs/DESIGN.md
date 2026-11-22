@@ -1742,3 +1742,13 @@ engine と出来事の形は変えていない（`engineVersion` 0.38.0・`event
 - **境目**: 食い違ったランは、続けて最初に書く前に、必ず `seq_resume` を確定する（送り先は `max(記録の番号の次, World の番号 + 1)`）。直後のキーフレームが境目のキーフレーム。次の起動はそこから再生するので一致し、一致の側の直しが働く。断られる命令が最初の書き込みでも同じ（その 1 回で、次の起動から一致の側へ移る）。再生で終わったランには残さない。
 - **境目から畳む**: `RunSession.foldBase(upTo)`（`upTo` 以下の最後の境目のキーフレームの World と番号。無ければ空の World）を、`SpectatorPort.snapshot`（遅らせた観戦）と `foldHistory` が使う。人間の巻き戻しの画面は、流している途中で `seq_resumed` に着いたら、境目のキーフレームへ飛ぶ（`seek`）。`replay:verify` は、最後の境目のキーフレームから後だけを照らす。
 - 前の版（engine 0.45.0 以前）は `seq_resume`・`seq_resumed` を知らないので、境目を残したランをその版で起動しない。
+
+### 42.11 S4: 討伐の記録と、報告からの文の直し（SEASON.md §35.5・§35.6・§42.2・§42.3・§45。PROTOCOL.md §9.13・§5 の「S4 で変えた項目」）
+
+`engineVersion` 0.46.0・`eventVersion` 33（取り込みと `SeasonState` に `slays`、観測の形が変わった）。コンテンツの版も変わる（文の直し）。ゲームの規則（生成・戦闘・AI の数）は変えていない。
+
+- **記録は、サーバーがランの出来事の記録だけから作る**（`packages/server/src/season/slays.ts` の `buildSlays`）: 倒した出来事（`warden_slain`）まで、ランの履歴を `applyEvent` で畳んだ World（境目があれば境目のキーフレームから。`RunSession.foldBase`）から装備・レベル・HP の割合を読み、倒した遠征のうちその階にいた間の出来事（`damaged`・`attack`・`item_used`・`item_thrown`・`ability_used`・`feature_state`）を数える。品を手に入れた階は `item_picked_up`・`supply_taken` から（無ければ最初から持っていた）。自由な文（`thought` など）は読まない。
+- **外との出入りはキャンプでだけ**（§1.2 の 2）: 載せるのは、倒した者がキャンプに着いたとき・ランが終わったとき・起動し直して復旧したとき（野営の火・補給の置き場と同じ `settleFires` の中）。シーズンの側の記録は `slays.json`。ほかの参加者には次の取り込み（`season_sync.season.slays`。節目ごとに最初の 1 件といちばん少ない被害の 1 件）で届き、engine は写すだけ。再生は命令の記録だけで一致する。
+- **見える所**: まだ倒していない大守護者を倒す遠征の候補（文と `offers[].slays`）と、キャンプの記録庫（`camp.archive.slays`）。人間の画面も同じ文（キャンプの枠・候補のカード・結果の画面）。取り込みの形（`SeasonSlaySchema`）に合わないものは渡さない（内容の ID の形・長さの上限。名前は招いたときの表示名）。
+- **すべてのランの文**: 書き置き・階の異変・部屋の作りの文は「ずっと昔の探索者」のもの。脆い天井の説明に音の大きさの表。種族の体力の記録は「およそ N（a〜b。M 体の記録）」「N（1 体の記録）」。群れる種族の呼び声の広さと錆の効き目は、公開のカタログ（`packRadius`・`onHitStatus`。engine と同じデータから）で look と種族の説明に出す。`hp_floor` は HP の値で「以下」で止まると書き、止まった文に使った値。`fight` が離れて撃つ相手から離れて止まったら、投げる品か視線を切ると添える。槍の寄り方を説明に書く（実装は変えていない）。
+- **`unreachable` の添え書き**（すべてのラン）: shared の `terrainBlockOn` が、知っている地図の上で格子扉・本棚・瓦礫を通れるものとして道を引き直し、道の上の最初のものを `details.blocked_by_terrain` と hint に添える（`travel_to`・`collect`・`fight` の advance）。

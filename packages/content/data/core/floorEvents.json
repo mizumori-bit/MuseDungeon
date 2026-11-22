@@ -4,7 +4,7 @@
   { "id": "core:event_deep_sleep", "name": { "ja": "深い眠り", "en": "deep sleep" }, "handler": "deep_sleep", "depth": { "min": 2 }, "weight": 2,
     "arrival": { "ja": "この階は静まり返っている。あちこちから寝息が聞こえ、ひとつ騒ぎが起きれば階じゅうが目を覚ましそうだ", "en": "This floor lies utterly still; sleepers breathe all around, and one commotion could wake them all" } },
   { "id": "core:event_ransacked", "name": { "ja": "荒らされた跡", "en": "ransacked" }, "handler": "ransacked", "depth": { "min": 1 }, "weight": 2,
-    "arrival": { "ja": "先に誰かが通ったようだ。敵も宝も少なく、どこかに野営の跡が残っていそうだ", "en": "Someone passed through before you: fewer foes and less loot, and perhaps a campsite left behind" } },
+    "arrival": { "ja": "ずっと昔に、探索者の一行がこの階を荒らしていったようだ。敵も宝も少なく、どこかに古い野営の跡が残っていそうだ", "en": "Long ago a party of delvers ransacked this floor: fewer foes and less loot, and perhaps an old campsite left behind" } },
   { "id": "core:event_glut", "name": { "ja": "溢れた宝", "en": "glut of treasure" }, "handler": "treasure_glut", "depth": { "min": 2 }, "weight": 2,
     "arrival": { "ja": "あちこちで金属が光った。宝が多そうだが、物音に寄ってくる者も早そうだ", "en": "Metal glints all around: plenty of treasure here, but wanderers will come sooner" } },
   { "id": "core:event_patrol", "name": { "ja": "番人の巡回", "en": "patrol" }, "handler": "patrol", "depth": { "min": 4 }, "weight": 2,

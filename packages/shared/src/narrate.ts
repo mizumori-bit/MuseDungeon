@@ -373,7 +373,8 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
       return ja ? `${mine ? '' : '仲間が'}「${nameOf(ev.name, L, ev.room)}」を見つけた（発見${where}）。` : `${mine ? 'Found' : 'An ally found'}: ${nameOf(ev.name, L, ev.room)} (discovery).${where}`;
     }
     case 'inscription_read': {
-      const what = ev.note ? (ja ? '書き置き' : 'the note') : (ja ? '碑文' : 'the inscription');
+      // 書き置きは、ずっと昔の探索者のもの（S4 §42.2 の 1: シーズンのほかの参加者の痕跡と読まれないように）
+      const what = ev.note ? (ja ? '昔の探索者の書き置き' : 'the old delver\'s note') : (ja ? '碑文' : 'the inscription');
       const body = ev.lore ? (ja ? `${nameOf(ev.lore, L, '')}` : ` ${nameOf(ev.lore, L, '')}`) : '';
       const clue = ev.clueText ? (ja ? ` 手がかり: ${nameOf(ev.clueText, L, '')}` : ` Clue: ${nameOf(ev.clueText, L, '')}`) : '';
       return ja ? `${what}を読んだ: ${body}${clue}` : `You read ${what}:${body}${clue}`;

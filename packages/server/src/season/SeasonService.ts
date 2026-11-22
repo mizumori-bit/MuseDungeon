@@ -4,11 +4,13 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { readJsonStable, writeFileAtomicLogged } from '../log/atomicWrite';
 import type {
-  GameEvent, PlayerId, SeasonAward, SeasonListing, SeasonResultView, SeasonSectionRow, SeasonStandingRow, SeasonStandingsResponse, SeasonSyncCommand, SeasonTitle, SupplyPlace,
+  GameEvent, PlayerId, SeasonAward, SeasonListing, SeasonResultView, SeasonSectionRow, SeasonSlay, SeasonStandingRow, SeasonStandingsResponse, SeasonSyncCommand, SeasonTitle, SupplyPlace,
 } from '@muse/shared';
-import { awardName } from '@muse/shared';
+import { awardName, SeasonSlaySchema } from '@muse/shared';
 import type { RunSession } from '../session/RunSession';
 import type { ProfileStore } from '../session/profiles';
+import { buildSlays } from './slays';
+import type { SlayFacts } from './slays';
 
 /** シーズンの定義（運用者が開く。season.json） */
 export interface SeasonDef {
@@ -101,6 +103,12 @@ export interface SeasonResult {
  */
 export interface SeasonDeedRec { depth: number; profileId: string; name: string; runId: string; used: number; wall: number; order: number }
 
+/**
+ * 討伐の記録（S4。SEASON.md §35.5。slays.json）: 節目の大守護者を倒した参加者の、その戦いの事実（そのランの出来事の記録から作る）。
+ * 載せた順に order。runId と depth で同じ記録を 2 回載せない。name は招いたときの表示名、budgetUsed は載せたときまでに使った予算
+ */
+export interface SeasonSlayRec extends SlayFacts { order: number; profileId: string; runId: string; name: string; budgetUsed: number; wall: number }
+
 /** 称号の定義（content の seasonTitles と同じ形。サーバーと運用の道具が渡す） */
 export interface SeasonTitleDefLite { id: string; kind: 'award' | 'first_warden'; award?: SeasonAward['id']; name: { ja: string; en: string } }
 
@@ -115,6 +123,8 @@ interface SeasonData {
   deeds: SeasonDeedRec[];
   /** 補給の置き場の品（S3 §25.2） */
   supplies: PublicSupplyRec[];
+  /** 討伐の記録（S4 §35.5） */
+  slays: SeasonSlayRec[];
   result: SeasonResult | null;
 }
 
@@ -299,6 +309,7 @@ export class SeasonStore {
       fires: read<PublicFireRec[]>('fires.json', Array.isArray) ?? [],
       deeds: read<SeasonDeedRec[]>('deeds.json', Array.isArray) ?? [],
       supplies: read<PublicSupplyRec[]>('supplies.json', Array.isArray) ?? [],
+      slays: read<SeasonSlayRec[]>('slays.json', Array.isArray) ?? [],
       result: read<SeasonResult>('result.json', isObj),
     };
     if (bad.length) { this.brokenFiles.set(id, bad); return null; }
@@ -321,7 +332,7 @@ export class SeasonStore {
     if (!SEASON_ID_RE.test(def.id)) throw new Error(`bad season id ${def.id} (a-z 0-9 _ -, up to 32)`);
     // 読めないシーズン（§33.1）も「ある」と数える（上書きして消さない）
     if (this.get(def.id) || (this.dir && existsSync(this.path(def.id, 'season.json')))) throw new Error(`season ${def.id} already exists`);
-    const d: SeasonData = { def, participants: [], public: [], spots: [], fires: [], deeds: [], supplies: [], result: null };
+    const d: SeasonData = { def, participants: [], public: [], spots: [], fires: [], deeds: [], supplies: [], slays: [], result: null };
     if (!this.writeJson(def.id, 'season.json', def)) throw new Error(`season ${def.id}: season.json を書けなかった`);
     this.data.set(def.id, d);
     this.log(def.id, { type: 'opened', def });
@@ -369,6 +380,7 @@ export class SeasonStore {
   saveFires(d: SeasonData): void { this.writeJson(d.def.id, 'fires.json', d.fires); }
   saveDeeds(d: SeasonData): void { this.writeJson(d.def.id, 'deeds.json', d.deeds); }
   saveSupplies(d: SeasonData): void { this.writeJson(d.def.id, 'supplies.json', d.supplies); }
+  saveSlays(d: SeasonData): void { this.writeJson(d.def.id, 'slays.json', d.slays); }
   saveResult(d: SeasonData): void { this.writeJson(d.def.id, 'result.json', d.result); }
 
   log(id: string, rec: Record<string, unknown>): void {
@@ -556,6 +568,8 @@ export class SeasonService implements SeasonHooks {
       // 自分の預けた品を、ほかの参加者が取ったもの（キャンプの知らせ。engine が前の写しと比べる）
       mine_taken: d.supplies.filter((x) => x.profileId === p.profileId && x.takenBy && x.takenBy !== p.profileId).sort((a, b) => a.order - b.order)
         .map((x) => ({ id: x.id, depth: x.depth, x: x.x, y: x.y, place: x.place, kind: x.kind, identified: x.identified, taker: nameOf(x.takenBy!) })),
+      // 討伐の記録（S4 §35.5）: 節目ごとに、最初の 1 件といちばん少ない被害の 1 件（自分の記録には mine）
+      ...((): { slays?: SeasonSlay[] } => { const s = slaysView(d.slays, p.profileId); return s.length ? { slays: s } : {}; })(),
     };
   }
 
@@ -663,7 +677,37 @@ export class SeasonService implements SeasonHooks {
     const counted = this.countFireUses(f.d, f.p, f.run, session, pid);
     // 補給の置き場（S3 §25.2）も、同じ時機（キャンプに着いたとき・ランが終わったとき・復旧のとき）
     const supplies = this.settleSupplies(f.d, f.p, session);
-    return published > 0 || counted || supplies;
+    // 討伐の記録（S4 §35.5）も、同じ時機（倒した者がキャンプに着いたとき・帰る前に倒れてもランが終わったとき・復旧のとき）
+    const slays = this.settleSlays(f.d, f.p, session, pid);
+    return published > 0 || counted || supplies || slays;
+  }
+
+  /**
+   * 討伐の記録（S4。SEASON.md §35.5）: このランで倒した節目の大守護者のうち、まだ載っていないもの（runId と深さで見る）を、そのランの出来事の記録から作って載せる。
+   * やり直しても同じ（載せたかは runId と depth で決まる）。変わったら true
+   */
+  private settleSlays(d: SeasonData, p: Participant, session: RunSession, pid: PlayerId): boolean {
+    if (d.result) return false;
+    const done = new Set(d.slays.filter((x) => x.runId === session.runId).map((x) => x.depth));
+    // 畳み始めは、まだ載っていない最初の討伐より前（境目のキーフレームがあれば、それより前の最後の境目から）
+    const first = session.history.find((e) => e.type === 'warden_slain' && !done.has(e.depth));
+    if (!first) return false;
+    let facts: SlayFacts[];
+    try {
+      facts = buildSlays(session.history, session.foldBase(first.seq), pid, session.world, done);
+    } catch (err) {
+      console.error(`[season] ${session.runId} の討伐の記録を作れなかった: ${(err as Error).message}`);
+      return false;
+    }
+    let n = 0;
+    for (const f of facts) {
+      const rec: SeasonSlayRec = { ...f, order: d.slays.length + 1, profileId: p.profileId, runId: session.runId, name: p.name, budgetUsed: used(p), wall: this.now() };
+      d.slays.push(rec);
+      this.store.log(d.def.id, { type: 'warden_record', profileId: p.profileId, runId: session.runId, depth: rec.depth, order: rec.order, used: rec.budgetUsed, taken: rec.taken, attempt: rec.attempt });
+      n++;
+    }
+    if (n) this.store.saveSlays(d);
+    return n > 0;
   }
 
   /**
@@ -969,8 +1013,33 @@ export class SeasonService implements SeasonHooks {
         ...(deeds ? { deeds: deeds.map((x) => ({ depth: x.depth, name: x.name })) } : {}),
       };
     }
-    return { season: this.listing(d), standings: rows, ...(result ? { result } : {}), section: this.section(d) };
+    // 討伐の記録（S4 §35.5）: 節目ごとに、最初の 1 件といちばん少ない被害の 1 件（載ったもの。位置は無い）
+    const slays = slaysView(d.slays, null);
+    return { season: this.listing(d), standings: rows, ...(result ? { result } : {}), section: this.section(d), ...(slays.length ? { slays } : {}) };
   }
+}
+
+/**
+ * 討伐の記録の見せる分（S4 §35.5）: 節目ごとに、最初に載った 1 件と、受けた被害がいちばん少ない 1 件（同じなら 1 件）。深さの順。
+ * 取り込みの決まった形（SeasonSlaySchema）に合わないものは渡さない。viewer: 見る者のプロフィールの ID（自分の記録に mine）
+ */
+export function slaysView(recs: readonly SeasonSlayRec[], viewer: string | null): SeasonSlay[] {
+  const out: SeasonSlay[] = [];
+  const depths = [...new Set(recs.map((r) => r.depth))].sort((a, b) => a - b);
+  for (const depth of depths) {
+    const list = recs.filter((r) => r.depth === depth).sort((a, b) => a.order - b.order);
+    const first = list[0];
+    const least = [...list].sort((a, b) => a.taken - b.taken || a.order - b.order)[0];
+    for (const r of first === least ? [first] : [first, least]) {
+      const { order: _o, profileId, runId: _r, name, budgetUsed: _u, wall: _w, ...facts } = r;
+      const v: SeasonSlay = {
+        ...structuredClone(facts), by: name, of: list.length,
+        ...(r === first ? { first: true } : {}), ...(r === least ? { least: true } : {}), ...(viewer && profileId === viewer ? { mine: true } : {}),
+      };
+      if (SeasonSlaySchema.safeParse(v).success) out.push(v);
+    }
+  }
+  return out;
 }
 
 /** 称号の名前（データの {season}・{depth} を置き換える。定義が無ければ賞の名前から） */

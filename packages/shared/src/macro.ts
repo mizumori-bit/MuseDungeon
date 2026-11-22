@@ -5,7 +5,7 @@ import type { Catalog } from './catalog';
 import type { ActionError, Command, MacroMode, TravelTarget } from './commands';
 import { actionError } from './commands';
 import type { ProjectedEvent } from './filter';
-import { memoryKey, restCapHp } from './catalog';
+import { memoryKey, nameOf, restCapHp } from './catalog';
 import { fightRiskStop, fightThreats, threatEstimate } from './danger';
 import { abilityStatus, weaponReach } from './build';
 
@@ -662,9 +662,37 @@ function resolveTravelGoal(view: PlayerView, catalog: Catalog, target: TravelTar
 /** blockedBy: じゃまをしている見えている敵（hostile_adjacent・blocked。V4-1a §12.3。拒否のエラーの details.blocked_by と hint の名前） */
 /** traps: trap_ahead のとき、道の上の発見済みの罠（近い順。V4-1d §18.1。拒否のエラーの details.blocked_by_traps と hint の名前・位置） */
 /** explored（S3a §27.6 の 7）: toward_exhausted で、その階に行ける未探索の境界がもう 1 つも無い（探索し終えている） */
-export type MacroDecision = { command: Command } | { stop: MacroStop; dir?: Dir; blockedBy?: { id: string; name: string }[]; traps?: MacroTrap[]; explored?: boolean };
+/** obstacle: unreachable のとき、分かっている地図の上で道をふさいでいる地形（閉じた格子扉・鍵のかかった格子扉・本棚・瓦礫。S4 §42.3 の 2。拒否のエラーの details.blocked_by_terrain と hint） */
+export type MacroDecision = { command: Command } | { stop: MacroStop; dir?: Dir; blockedBy?: { id: string; name: string }[]; traps?: MacroTrap[]; explored?: boolean; obstacle?: MacroObstacle };
 /** 道をふさいでいる発見済みの罠（V4-1d §18.1） */
 export interface MacroTrap { id: string; kind: string; name: string; pos: Pos }
+/** 道をふさいでいる地形（S4 §42.3 の 2）: 地形の ID・名前・位置 */
+export interface MacroObstacle { kind: string; name: string; pos: Pos }
+
+/** 道をふさぐことのある地形（開ける・押す・どける必要がある。壁・柱は入らない）の印（地形のタグ） */
+const OBSTACLE_TAGS: readonly string[] = ['grate', 'pushable', 'obstacle'];
+
+/**
+ * 道をふさいでいる地形（S4 §42.3 の 2）: 分かっている地図（プレイヤーの知っている地形だけ）の上で、格子扉・本棚・瓦礫を通れるものとして道を引き直し、
+ * その道の上の最初のもの。そうしても届かない・そうした地形が道に無ければ null（すべてのプレイヤーに同じ。品ごとの道は計算しない）
+ */
+export function terrainBlockOn(view: PlayerView, catalog: Catalog, grid: NavGrid, from: Pos, goals: readonly number[]): MacroObstacle | null {
+  if (!goals.length) return null;
+  const passable = Uint8Array.from(grid.passable);
+  const cells = new Set<number>();
+  for (let i = 0; i < passable.length; i++) {
+    if (passable[i] || !grid.known[i]) continue;
+    const tid = view.terrainTable[view.memory.terrain[i] ?? 0];
+    const tr = tid ? catalog.terrain[tid] : undefined;
+    if (tr && OBSTACLE_TAGS.some((tag) => tr.tags.includes(tag))) { passable[i] = 1; cells.add(i); }
+  }
+  if (!cells.size) return null;
+  const path = findPath({ ...grid, passable }, from, [...goals], 'none');
+  const c = path?.find((p) => cells.has(p.y * grid.width + p.x));
+  if (!c) return null;
+  const tid = view.terrainTable[view.memory.terrain[c.y * grid.width + c.x]];
+  return { kind: tid, name: nameOf(catalog.terrain[tid]?.name, view.locale, tid), pos: { x: c.x, y: c.y } };
+}
 
 /**
  * 次の基本行動を決める。events は直前の手で知覚したイベント（中断判定用）。
@@ -876,6 +904,11 @@ function macroStep(state: MacroState, view: PlayerView, catalog: Catalog, events
     ...blockersOf(cells ? hostiles.filter((h) => cells.some((c) => c.x === h.pos.x && c.y === h.pos.y)) : []),
     ...(cells ? (state.sleepers ?? []).filter((s) => !hostiles.some((h) => h.id === s.id) && cells.some((c) => c.x === s.x && c.y === s.y)).map((s) => ({ id: s.id, name: kindName(catalog, view.locale, s.kind) })) : []),
   ];
+  // 届かない: 分かっている地図の上で道をふさいでいる地形があれば添える（S4 §42.3 の 2。travel_to・collect・fight の advance）
+  const unreachable = (g: NavGrid, goals: readonly number[]): MacroDecision => {
+    const obstacle = terrainBlockOn(view, catalog, g, pos, goals);
+    return obstacle ? { stop: 'unreachable', obstacle } : { stop: 'unreachable' };
+  };
   // 予備動作（V3-3 §3.1）: 見えている敵が新しく予備動作を見せたら、どのマクロも止まる（次の手番に大きな行動が来る）
   const intents = intentKeys(view);
   const newIntent = state.steps > 0 && intents.some((k) => !(state.intents ?? []).includes(k));
@@ -1072,7 +1105,7 @@ function macroStep(state: MacroState, view: PlayerView, catalog: Catalog, events
       if (state.noCloser >= FIGHT_NO_CLOSER_MAX) return { stop: 'target_moved' };
       if (!path || !path.length) {
         const loose = findPath(g, pos, goals, 'none');
-        return loose ? { stop: 'blocked', blockedBy: blockersOn(loose) } : { stop: 'unreachable' };
+        return loose ? { stop: 'blocked', blockedBy: blockersOn(loose) } : unreachable(g, goals);
       }
       const dir = dirBetween(pos, path[0]);
       if (!dir) return { stop: 'error' };
@@ -1285,7 +1318,7 @@ function macroStep(state: MacroState, view: PlayerView, catalog: Catalog, events
     path = route(free.length ? free : goals);
     if (path === null) {
       const loose = findPath(grid, pos, goals, 'none');
-      return loose ? { stop: 'blocked', blockedBy: blockersOn(loose) } : { stop: 'unreachable' };
+      return loose ? { stop: 'blocked', blockedBy: blockersOn(loose) } : unreachable(grid, goals);
     }
     if (path.length === 0) return { stop: 'collected' };
     noteDetour(state, view, catalog, path, routing.nearRoute(free.length ? free : goals));
@@ -1303,7 +1336,7 @@ function macroStep(state: MacroState, view: PlayerView, catalog: Catalog, events
     path = route(goal.goals);
     if (path === null) {
       const loose = findPath(grid, pos, goal.goals, 'none');
-      return loose ? { stop: 'blocked', blockedBy: blockersOn(loose) } : { stop: 'unreachable' };
+      return loose ? { stop: 'blocked', blockedBy: blockersOn(loose) } : unreachable(grid, goal.goals);
     }
     if (path.length === 0) return { stop: 'arrived' };
     noteDetour(state, view, catalog, path, routing.nearRoute(goal.goals));
@@ -1344,8 +1377,19 @@ function macroStep(state: MacroState, view: PlayerView, catalog: Catalog, events
  * 1 歩も進めないと分かったマクロの拒否（手番を使わない。V3-2R §14.2「0 歩で終わる呼び出しを作らない」）。
  * 最初の判断が停止なら、その理由をゲームのエラー形式で返す。
  */
-export function macroStopError(L: Locale, stop: MacroStop, cmd: Command, dir?: Dir, blockedBy?: readonly { id: string; name: string }[], traps?: readonly MacroTrap[], explored?: boolean): ActionError {
+export function macroStopError(L: Locale, stop: MacroStop, cmd: Command, dir?: Dir, blockedBy?: readonly { id: string; name: string }[], traps?: readonly MacroTrap[], explored?: boolean, obstacle?: MacroObstacle): ActionError {
   const e = macroStopErrorBase(L, stop, cmd, dir);
+  // 届かない（S4 §42.3 の 2）: 分かっている地図の上で道をふさいでいる地形（閉じた格子扉・鍵のかかった格子扉など）を 1 つ、種類と場所で
+  if (stop === 'unreachable' && obstacle) {
+    const how = obstacle.kind === 'core:grate_locked' ? t(L, '（宝物庫の鍵を持って隣で interact すると開く）', ' (interact next to it with the vault key to open it)')
+      : obstacle.kind === 'core:grate_closed' ? t(L, '（つながっているレバーを引くと開く）', ' (pull the lever it is linked to)')
+        : obstacle.kind === 'core:bookshelf' ? t(L, '（向こうが空いていれば、押して動かせる）', ' (it can be pushed if the cell beyond is free)') : '';
+    return {
+      ...e,
+      hint: `${t(L, `分かっている地図の上では、${obstacle.name} (${obstacle.pos.x},${obstacle.pos.y}) が道をふさいでいる${how}。`, `On your known map, the ${obstacle.name} at (${obstacle.pos.x},${obstacle.pos.y}) blocks the way${how}. `)}${e.hint}`,
+      details: { blocked_by_terrain: { kind: obstacle.kind, pos: { x: obstacle.pos.x, y: obstacle.pos.y } } },
+    };
+  }
   // 探索し終えた階で toward を渡した（S3a §27.6 の 7）: 止まるのは今のまま。気配の方角へは座標を指して向かう
   if (stop === 'toward_exhausted' && explored) {
     e.message += t(L, ' この階は探索し終えている。', ' This floor has been fully explored.');

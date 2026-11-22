@@ -6,7 +6,7 @@ import type {
 } from '@muse/shared';
 import {
   bountyForecastText, briefingLines, buildObservation, campDepthOf, gearVsArmorText, offerGuardianHp, currentExpedition, dirLabel, endReasonText, guardianForecastText, haulTotal, latestExpedition, multText, nameOf,
-  nextCampOf, nextOverreach, objectiveText, offerFloorTraitsText, offerGap, offerText, offerWardenExtra, overreachPoints, partsText, progressText, recordsCampLine, resultText, slotName,
+  nextCampOf, nextOverreach, objectiveText, offerFloorTraitsText, offerGap, offerText, offerWardenExtra, overreachPoints, partsText, progressText, recordsCampLine, resultText, slaysAt, slayGroupText, slotName,
 } from '@muse/shared';
 import { api } from '../api';
 import type { RefObject } from 'preact';
@@ -442,6 +442,11 @@ function OfferCard({ o, rules, level, onStart, view, catalog }: { o: ExpeditionO
           ? gearVsArmorText(L, catalog, view, o.bounty.armor, Math.max(1, o.bounty.hp - (o.scar ?? 0)))
           : gearVsArmorText(L, catalog, view, o.guardian!.armor!, offerGuardianHp(view, o), o.guardian!.types ?? [])}</span></div>
       )}
+      {/* 討伐の記録（S4 §35.5）: まだ倒していない大守護者を倒す候補に、先に倒した参加者の戦いの事実（AI の候補の文と同じ） */}
+      {view && catalog && o.objective.type === 'slay_warden' && o.objective.targetDepth !== null && !(view.milestonesCleared ?? []).includes(o.objective.targetDepth)
+        && slaysAt(L, catalog, view, o.objective.targetDepth).length > 0 && (
+        <div class="ometa slay"><span>{slayGroupText(L, slaysAt(L, catalog, view, o.objective.targetDepth))}</span></div>
+      )}
       <TraitList traits={o.traits ?? []} rules={rules} />
     </li>
   );
@@ -495,6 +500,15 @@ export function CampPanel({ view, catalog, onStart, onRetire, season, canReport,
       </p>
       {camp && <CampRecords nextNo={camp.nextNo} />}
       {season && <SeasonCampPanel season={season} canReport={!!canReport} onReport={() => onReport?.()} />}
+      {/* 討伐の記録（S4 §35.5）: キャンプの記録庫の行（節目ごと。AI のキャンプの観測と同じ文） */}
+      {catalog && (view.season?.slays ?? []).length > 0 && (
+        <div class="slays">
+          <h3>{tr('記録庫・討伐の記録', 'Archive: warden kills')}</h3>
+          <ul>{[...new Set((view.season?.slays ?? []).map((s) => s.depth))].sort((a, b) => a - b).map((depth) => (
+            <li key={depth}><b>{tr(`地下${depth}階`, `Depth ${depth}`)}</b>{slaysAt(getLocale(), catalog, view, depth).map((r, i) => <div key={i} class="slay">{slayGroupText(getLocale(), [r])}</div>)}</li>
+          ))}</ul>
+        </div>
+      )}
       {camp ? (
         <>
           <h3>{first ? tr(`最初の遠征の候補（遠征 ${camp.nextNo}）`, `Offers for expedition ${camp.nextNo}`) : tr(`次の遠征の候補（遠征 ${camp.nextNo}）`, `Offers for expedition ${camp.nextNo}`)}</h3>

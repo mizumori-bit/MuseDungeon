@@ -131,7 +131,7 @@
     }
   },
   {
-    "id": "core:camp_remains", "name": { "ja": "先行者の野営跡", "en": "abandoned camp" }, "tags": ["treasure", "room"], "depth": { "min": 1, "max": 9 }, "weight": 4,
+    "id": "core:camp_remains", "name": { "ja": "昔の探索者の野営跡", "en": "camp of long-gone delvers" }, "tags": ["treasure", "room"], "depth": { "min": 1, "max": 9 }, "weight": 4,
     "map": [
       ".....",
       ".!N!.",

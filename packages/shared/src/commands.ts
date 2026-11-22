@@ -110,6 +110,23 @@ const SeasonAwardSchema = z.object({
   id: z.enum(['adventure', 'contribution', 'survival', 'support']), value: z.number().int().nullable(), rank: z.number().int().nullable(), entrants: z.number().int().nonnegative(),
   leader: z.object({ name: z.string().max(64), value: z.number().int() }).nullable(), gap: z.number().int().nullable(),
 });
+/** 討伐の記録（S4。SEASON.md §35.5）。種類・接辞・職業・能動技の ID は内容の ID の形（英数字と : _ - .）だけ。自由な文は入らない */
+const ContentIdSchema = z.string().max(64).regex(/^[A-Za-z0-9:_.-]+$/);
+const SlayHitsSchema = z.object({ total: z.number().int().nonnegative(), n: z.number().int().nonnegative() });
+const SlayGearSchema = z.object({ kind: ContentIdSchema, affixes: z.array(ContentIdSchema).max(8), got: z.enum(['picked', 'supply', 'start']), depth: z.number().int().positive().optional() });
+const SlayCountSchema = z.array(z.object({ kind: ContentIdSchema, n: z.number().int().positive() })).max(32);
+export const SeasonSlaySchema = z.object({
+  depth: z.number().int().positive(), warden: z.object({ ja: z.string().max(64), en: z.string().max(64) }), by: z.string().max(64),
+  mine: z.boolean().optional(), first: z.boolean().optional(), least: z.boolean().optional(), of: z.number().int().positive(),
+  level: z.number().int().positive(), classId: ContentIdSchema,
+  weapon: SlayGearSchema.nullable(), armor: SlayGearSchema.nullable(), hidden: z.boolean().optional(),
+  dealt: z.object({ melee: SlayHitsSchema, thrown: SlayHitsSchema, poison: SlayHitsSchema, feature: SlayHitsSchema, crits: z.number().int().nonnegative() }),
+  taken: z.number().int().nonnegative(), lowestPct: z.number().int().min(0).max(100),
+  used: SlayCountSchema, thrown: SlayCountSchema,
+  abilities: z.array(z.object({ id: ContentIdSchema, n: z.number().int().positive() })).max(16),
+  wardFires: z.number().int().nonnegative(), attempt: z.number().int().positive(), turns: z.number().int().nonnegative(),
+});
+
 export const SeasonSyncSchema = z.object({
   type: z.literal('season_sync'),
   reason: z.enum(['join', 'camp', 'start', 'report']),
@@ -133,6 +150,8 @@ export const SeasonSyncSchema = z.object({
     deposits_published: z.array(z.number().int().positive()).optional(),
     mine_taken: z.array(z.object({ id: z.string().max(16), depth: z.number().int().positive(), x: z.number().int(), y: z.number().int(), place: z.enum(['stairs_up', 'stairs_down', 'fire']),
       kind: z.string().max(64), identified: z.boolean(), taker: z.string().max(64) })).optional(),
+    /** S4 §35.5: 討伐の記録（節目ごとに、最初の 1 件といちばん少ない被害の 1 件）。中身はゲームの事実だけ（ID は内容の ID の形に限る） */
+    slays: z.array(SeasonSlaySchema).max(64).optional(),
   }),
   /** 報告の結果（reason: report）: 送った階段と、最初の報告だったか */
   report: z.object({
@@ -211,7 +230,8 @@ export interface ActionError {
   /** blocked_by_traps: 道をふさいでいる罠（マクロの blocked。そのプレイヤーが見つけている罠だけ。経路の上で近い順。V4-1d §18.1） */
   /** still_inside: start_expedition が断られたとき、まだ迷宮にいる仲間と、その階（V4-1f §22.4） */
   /** stop: マクロが 1 歩目で断ったときの止まり方（S1c。今は explore toward の toward_exhausted だけに付ける） */
-  details?: { blocked_by?: string[]; blocked_by_traps?: { id: string; kind: string; pos: { x: number; y: number } }[]; still_inside?: { id: string; name: string; floor: number }[]; stop?: string };
+  /** blocked_by_terrain: unreachable のとき、分かっている地図の上で道をふさいでいる地形（閉じた格子扉・鍵のかかった格子扉・本棚・瓦礫）。道の上で最初の 1 つ（S4 §42.3 の 2） */
+  details?: { blocked_by?: string[]; blocked_by_traps?: { id: string; kind: string; pos: { x: number; y: number } }[]; still_inside?: { id: string; name: string; floor: number }[]; stop?: string; blocked_by_terrain?: { kind: string; pos: { x: number; y: number } } };
 }
 
 export function actionError(code: ActionErrorCode, message: string, hint: string): ActionError {

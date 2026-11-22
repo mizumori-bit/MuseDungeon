@@ -1,6 +1,6 @@
 // 公開カタログの生成。能力値・出現条件は含めない（プレイヤーが知り得る性質と表示名だけ）。
 import type { Catalog, CatalogEquipStats, CatalogItem, Names } from '@muse/shared';
-import { HP_BANDS } from '@muse/shared';
+import { HP_BANDS, PACK_ALERT_RADIUS } from '@muse/shared';
 import type { Content } from './content';
 import type { ItemDef } from './schema';
 
@@ -75,7 +75,16 @@ export function buildCatalog(c: Content): Catalog {
     contentVersion: c.version,
     terrain: Object.fromEntries(c.terrain.map((t) => [t.id, { name: t.name, passable: t.passable, opaque: t.opaque, layer: t.layer, door: t.door, stairs: t.stairs, tags: t.tags, ...(t.moveCostPct !== 100 ? { moveCostPct: t.moveCostPct } : {}) }])),
     // size・armored・evasive は見れば分かる性質（V3-2R3 §20.4・V3-3b §40.2）。armored は素の装甲が 3 以上、evasive は素の回避が 5 以上（値そのものは出さない）
-    monsters: Object.fromEntries(c.lists.monsters.map((m) => [m.id, { name: m.name, tags: m.tags, glyph: m.glyph, size: m.size, armored: m.stats.armor >= 3, evasive: m.stats.eva >= 5, ...(m.desc ? { desc: m.desc } : {}) }])),
+    // packRadius: 群れる種族の呼び声の届く広さ（1 体が気づくと、このマス数以内の同じ種族が起きる。engine の ai の pack と同じ値。S4 §42.2 の 4）。
+    // onHitStatus: 殴られて当たったときに付く状態（錆など。見れば分かる性質の効き目。S4 §42.3 の 1）
+    monsters: Object.fromEntries(c.lists.monsters.map((m) => [m.id, {
+      name: m.name, tags: m.tags, glyph: m.glyph, size: m.size, armored: m.stats.armor >= 3, evasive: m.stats.eva >= 5, ...(m.desc ? { desc: m.desc } : {}),
+      ...(m.ai.archetype === 'pack' ? { packRadius: m.ai.alertRadius ?? PACK_ALERT_RADIUS } : {}),
+      ...((): { onHitStatus?: { status: string; turns: string; chancePct?: number }[] } => {
+        const list = m.attack.onHit.filter((e) => e.effect === 'status' && typeof e.status === 'string').map((e) => ({ status: e.status as string, turns: String(e.turns ?? ''), ...(e.chancePct !== undefined ? { chancePct: e.chancePct } : {}) }));
+        return list.length ? { onHitStatus: list } : {};
+      })(),
+    }])),
     classes: Object.fromEntries(c.lists.classes.map((k) => [k.id, {
       name: k.name, desc: k.desc,
       // 自キャラの初期値と成長は公開情報（キー名 hp は使わない: 能力値を出さないカタログの検査に合わせる）

@@ -578,6 +578,53 @@ export interface SeasonTaken { no: number; id: string; depth: number; x: number;
 /** 自分が預けた品を、ほかの参加者が取った（S3 §25.2。取り込みの写し）。taker は取った者の名前 */
 export interface SeasonSupplyTaken { id: string; depth: number; x: number; y: number; place: SupplyPlace; kind: string; identified: boolean; taker: string }
 
+/** 討伐の記録の、与えた被害の 1 つの区分（S4）: 合計と回数（1 回あたりは total ÷ n） */
+export interface SlayHits { total: number; n: number }
+
+/**
+ * 討伐の記録の装備（S4。SEASON.md §35.5 の 2）: 種類と、見えている接辞（隠れた呪いは入らない）。
+ * got: その品を手に入れた方法（picked: 拾った・supply: 補給の置き場から取った・start: 最初から持っていた）。depth: 拾った・取った階（場所の座標は持たない）
+ */
+export interface SlayGear { kind: string; affixes: string[]; got: 'picked' | 'supply' | 'start'; depth?: number }
+
+/**
+ * 討伐の記録（S4。SEASON.md §35.5・PROTOCOL §9.13）: 節目の大守護者を倒した参加者の、その戦いの事実。サーバーがそのランの出来事の記録から作る
+ * （自由な文は入らない。名前は招いたときの表示名）。取り込みの写し。
+ * 戦いの範囲は、倒した遠征のうち、その大守護者の階にいた間（倒すまで）。first: その階で最初に載った記録、least: その階で受けた被害がいちばん少ない記録、
+ * of: その階に載った記録の数、mine: 自分の記録。weapon・armor が null なのは、何も装備していなかった（素手・鎧なし）か、未鑑定で載せなかった（hidden）
+ */
+export interface SeasonSlay {
+  depth: number;
+  /** 大守護者の呼び名（候補に出るものと同じ） */
+  warden: Names;
+  by: string;
+  mine?: boolean;
+  first?: boolean;
+  least?: boolean;
+  of: number;
+  level: number;
+  classId: string;
+  weapon: SlayGear | null;
+  armor: SlayGear | null;
+  /** 装備のうち、未鑑定なので載せなかったものがある */
+  hidden?: boolean;
+  /** 与えた被害（近接・投擲・毒・地物（脆い天井など））と、近接の会心の回数 */
+  dealt: { melee: SlayHits; thrown: SlayHits; poison: SlayHits; feature: SlayHits; crits: number };
+  /** 受けた被害の合計と、いちばん低かった HP の割合（%） */
+  taken: number;
+  lowestPct: number;
+  /** 使った品（飲んだ・読んだ）・投げた品（種類と数。倒した者が鑑定済みのものだけ）・使った能動技 */
+  used: { kind: string; n: number }[];
+  thrown: { kind: string; n: number }[];
+  abilities: { id: string; n: number }[];
+  /** 消した護りの火の数（棲み処の仕掛け） */
+  wardFires: number;
+  /** このランで、その階に入った遠征の何回目で倒したか */
+  attempt: number;
+  /** 倒した遠征の、始めてから倒すまでの自分の手番 */
+  turns: number;
+}
+
 /**
  * シーズンの写し（S0。PROTOCOL §9.6）。キャンプで取り込んだ共有層（season_sync）。
  * budget.left は取り込んだときの残り、budget.at はそのときの自分の手番（残り = left − (手番 − at)）
@@ -617,6 +664,8 @@ export interface SeasonState {
   taken?: SeasonTaken[];
   mineTaken?: SeasonSupplyTaken[];
   supplyNews?: SeasonSupplyTaken[];
+  /** S4（§35.5。古いランの写しには無い）: 討伐の記録（節目ごとに、最初の 1 件といちばん少ない被害の 1 件） */
+  slays?: SeasonSlay[];
 }
 
 export interface WorldSecret {

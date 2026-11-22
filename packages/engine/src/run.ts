@@ -18,7 +18,7 @@ import { placeSeasonFires } from './campfire';
 import { advance, endTurn } from './scheduler';
 import { recomputeStats } from './stats';
 
-export const ENGINE_VERSION = '0.45.1';
+export const ENGINE_VERSION = '0.46.0';
 
 export interface CreateRunParams {
   runId: string;
@@ -230,6 +230,8 @@ export function seasonSync(world: World, content: Content, playerId: PlayerId, c
     ...(world.season?.deposited?.length ? { deposited: world.season.deposited.map((x) => ({ ...x })) } : {}),
     ...(world.season?.taken?.length ? { taken: world.season.taken.map((x) => ({ ...x })) } : {}),
     ...(supplyNews.length ? { supplyNews } : {}),
+    // 討伐の記録（S4 §35.5）: 取り込んだものをそのまま（ゲームの事実だけ。サーバーがそのランの記録から作った）
+    ...(cmd.season.slays?.length ? { slays: structuredClone(cmd.season.slays) } : {}),
   };
   if (meta.thought) ctx.emit({ type: 'thought', player: playerId, text: meta.thought.slice(0, 280), seenBy: [playerId] });
   if (cmd.report) {

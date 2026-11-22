@@ -772,7 +772,7 @@ export class RunSession {
       const probe = macroStart(startView, cmd, this.deps.catalog);
       const d0 = macroNext(probe, startView, this.deps.catalog, []);
       if ('stop' in d0) {
-        const err = macroStopError(startView.locale, d0.stop, cmd, d0.dir, d0.blockedBy, d0.traps, d0.explored);
+        const err = macroStopError(startView.locale, d0.stop, cmd, d0.dir, d0.blockedBy, d0.traps, d0.explored, d0.obstacle);
         // fight の被弾の前の断り（S1c §14.4 の 1）: 見込みと最悪の 2 つの数・いまの HP・実際に使った hp_floor
         if ((d0.stop === 'hp_risk' || (d0.stop === 'hp_floor' && cmd.type === 'fight')) && startView.self.pos) {
           if (d0.stop === 'hp_risk') err.message += ' ' + riskText(startView, this.deps.catalog, probe.hpFloor);

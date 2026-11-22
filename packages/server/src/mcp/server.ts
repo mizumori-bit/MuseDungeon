@@ -456,8 +456,8 @@ export function createMcpServer(ctx: McpContext): McpServer {
     inputSchema: { ...actionCommon, until_hp: z.number().int().positive().optional().describe('この HP に達したら止まる'), max_turns: z.number().int().positive().optional().describe('この手数で止まる') },
   }, async (a) => act('rest', a, { type: 'rest', untilHp: a.until_hp, maxTurns: a.max_turns }));
   const moveArgs = {
-    mode: z.enum(['careful', 'steady', 'flee']).optional().describe("慎重さ: careful（既定。初見の種族・届く追跡中の敵の出現・被攻撃・HP 50%/25% で止まる）/ steady（隣接した追跡中の敵・初見の種族・HP が hp_floor 未満で止まる。弱い射撃や毒を受けながら進む）/ flee（到着・進路をふさがれた・HP が hp_floor 未満で止まる。隣に敵がいても動く＝退却）"),
-    hp_floor: z.number().int().min(0).optional().describe('steady / flee: この HP を下回ったら止まる（既定 steady 50%・flee 25%）'),
+    mode: z.enum(['careful', 'steady', 'flee']).optional().describe("慎重さ: careful（既定。初見の種族・届く追跡中の敵の出現・被攻撃・HP 50%/25% で止まる）/ steady（隣接した追跡中の敵・初見の種族・HP が hp_floor 以下で止まる。弱い射撃や毒を受けながら進む）/ flee（到着・進路をふさがれた・HP が hp_floor 以下で止まる。隣に敵がいても動く＝退却。1 歩ごとの後に見るので、1 歩の間に何度も撃たれると、その分だけ下回って止まる）"),
+    hp_floor: z.number().int().min(0).optional().describe('steady / flee: HP がこの値以下になったら止まる。HP の値（割合ではない。20 なら HP 20）。省くと最大 HP の steady 50%・flee 25%（flee は、始めた時点の HP がそれ以下なら 0）。止まった文に使った値が出る'),
   };
   server.registerTool('explore', {
     title: '自動探索',
@@ -477,12 +477,12 @@ export function createMcpServer(ctx: McpContext): McpServer {
     inputSchema: { ...actionCommon, what: z.enum(['thrown', 'items']).optional(), within: z.number().int().min(1).max(200).optional(), kinds: z.array(z.string()).max(8).optional(), all: z.boolean().optional(), ...moveArgs },
   }, async (a) => act('collect', a, { type: 'collect', what: a.what, mode: a.mode, hpFloor: a.hp_floor, ...(a.within !== undefined ? { within: a.within } : {}), ...(a.kinds ? { kinds: a.kinds } : {}), ...(a.all ? { all: true } : {}) }));
   server.registerTool('fight', {
-    title: '戦う', description: 'マクロ: その相手と決着を付ける。with なしは近接（追跡中の相手が隣に来るまで待つ。最大 10 手番。approach: advance なら寄っていき、隣に着いたら殴る）、with にスロットか品の種類を渡すとその品を投げて戦う（射程と射線が通るまで待つ。品が尽きたら、追跡中の敵の隣を通らずに届く自分の投擲物を拾いに行って続ける。retrieve: false で切れる）。相手が倒れた・離れた・逃げて見えなくなった、（with）隣に来た・品が尽きた、HP が hp_floor（既定 50%）を下回った、被弾の記録の無い種族の追跡中の敵が現れた、待つ間に別の敵に撃たれた、状態異常を受けたら止まる（記録のある種族が新しく見えても止まらない）。物陰に入った相手は数手番待つ。眠っている・気付いていない相手は待たない。until: clear なら、標的を倒した後も届く追跡中の敵（隣の敵、いなければ最も近い敵）へ続ける。adjacent は with の相手が隣に来たとき（stop: 止まる・既定 / throw: 投げ続ける / melee: 近接に切り替える）。abilities に能動技（強打・なぎ払い・狙い撃ち）を並べると、使える手番ごとに使う（強打は標的が隣、なぎ払いは起きている敵が隣に 2 体以上、狙い撃ちは with の品で射程と射線が通るとき。それ以外の手番は通常の攻撃）。結果に与えた・受けた攻撃の回数と合計、使った能動技の回数。',
+    title: '戦う', description: 'マクロ: その相手と決着を付ける。with なしは近接（追跡中の相手が隣に来るまで待つ。最大 10 手番。approach: advance なら寄っていき、隣に着いたら殴る）、with にスロットか品の種類を渡すとその品を投げて戦う（射程と射線が通るまで待つ。品が尽きたら、追跡中の敵の隣を通らずに届く自分の投擲物を拾いに行って続ける。retrieve: false で切れる）。長柄の武器（槍）は、相手が縦・横・斜めの直線で 2 マス先にいて間のマスが空いていれば、そこから突く（待つときは、相手が隣か 2 マス先の直線に来たら突く。approach: advance は相手の隣のマスを目指して歩き、途中で 2 マス先の直線に入ったら、そこで突く。2 マス先の位置を選んで寄るのではない）。相手が倒れた・離れた・逃げて見えなくなった、（with）隣に来た・品が尽きた、HP が hp_floor（HP の値。割合ではない。既定は最大 HP の 50%）以下になった、被弾の記録の無い種族の追跡中の敵が現れた、待つ間に別の敵に撃たれた、状態異常を受けたら止まる（記録のある種族が新しく見えても止まらない）。物陰に入った相手は数手番待つ。眠っている・気付いていない相手は待たない。until: clear なら、標的を倒した後も届く追跡中の敵（隣の敵、いなければ最も近い敵）へ続ける。adjacent は with の相手が隣に来たとき（stop: 止まる・既定 / throw: 投げ続ける / melee: 近接に切り替える）。abilities に能動技（強打・なぎ払い・狙い撃ち）を並べると、使える手番ごとに使う（強打は標的が隣、なぎ払いは起きている敵が隣に 2 体以上、狙い撃ちは with の品で射程と射線が通るとき。それ以外の手番は通常の攻撃）。結果に与えた・受けた攻撃の回数と合計、使った能動技の回数。',
     inputSchema: {
       ...actionCommon, target: z.string().regex(/^e_[0-9a-z]{6}$/),
       with: z.union([z.string().regex(WITH_LIST), z.array(z.string().regex(WITH_ONE)).min(1).max(4)]).optional().describe('投げて戦う品の所持品スロット（self.attack.throws）か品の種類（javelin・throwing_knife など。拾ってスロットが変わっても同じ種類を投げる）。配列なら前の品が尽きて拾い直せる物も無くなったら次の品へ（["javelin", "throwing_knife"]。valid_actions の書き方の "[javelin,throwing_knife]" や "javelin,throwing_knife" の文字列でもよい）'),
       collect_after: z.boolean().optional().describe('決着の後（倒した・until: clear で片付いた）、追跡中の敵が見えていなければ自分の投擲物を拾う（collect と同じ止まり方）'),
-      hp_floor: z.number().int().min(0).optional(),
+      hp_floor: z.number().int().min(0).optional().describe('HP の値（割合ではない。20 なら HP 20）。HP がこの値以下になったら止まり、次の手番の見込みの被害でこれを割るなら殴る前に止まる（最悪の 1 手で倒れうるなら、この値によらず止まる）。省くと最大 HP の 50%'),
       retrieve: z.boolean().optional().describe('with の品が尽きたら、追跡中の敵の隣を通らずに届く自分の投擲物を拾いに行く（既定 true）'),
       until: z.enum(['target', 'clear']).optional().describe('clear: 標的を倒した後も、届く追跡中の敵へ続ける（既定 target: 標的 1 体）'),
       adjacent: z.enum(['throw', 'melee', 'stop']).optional().describe('with の相手が隣に来たとき（既定 stop）'),

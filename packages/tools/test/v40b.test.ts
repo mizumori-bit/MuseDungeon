@@ -179,11 +179,13 @@ describe('V4-0b display fixes (§1.5)', () => {
   });
 
   it('HP estimates: an unhurt foe shows the record, not "left"; a lower bound says where it comes from; species records say they are plain individuals', () => {
-    expect(hpEstimateText('ja', { min: 3, max: 8, samples: 6, record: { min: 3, max: 8 }, untouched: true })).toBe('体力の記録 3〜8（まだ傷を負っていない。記録 6 体）');
-    expect(hpEstimateText('ja', { min: 3, max: null, samples: 1, record: { min: 8, max: 8 } })).toBe('記録どおりなら残り 3 以上（傷の具合と、体力の記録の最小 8 から。記録 1 体。個体差あり）');
-    expect(hpEstimateText('ja', { min: 6, max: 8, samples: 6, record: { min: 8, max: 8 } })).toBe('記録どおりなら残り 6〜8（記録 6 体: 体力 8）');
+    // 2 体以上は「およそ N（a〜b。M 体の記録）」、1 体だけなら「1 体の記録」（S4 §42.2 の 3）
+    expect(hpEstimateText('ja', { min: 3, max: 8, samples: 6, record: { min: 3, max: 8 }, untouched: true })).toBe('体力の記録 およそ 5（3〜8。6 体の記録）／まだ傷を負っていない');
+    expect(hpEstimateText('ja', { min: 3, max: null, samples: 1, record: { min: 8, max: 8 } })).toBe('記録どおりなら残り 3 以上（傷の具合と、体力の記録の最小 8 から）／体力の記録 8（1 体の記録。個体差あり）');
+    expect(hpEstimateText('ja', { min: 6, max: 8, samples: 6, record: { min: 8, max: 8 } })).toBe('記録どおりなら残り 6〜8／体力の記録 8（6 体とも）');
     const mem = { kind: 'core:goblin', encounters: 3, kills: 3, maxDamageToYou: 2, maxDamageByYou: 5, abilities: [], hpSeen: { min: 5, max: 9, samples: 3 } };
-    expect(memoryCombatText('ja', mem)).toContain('体力の記録:5〜9（3 体。個体差あり）（これまでに見た素の個体の範囲。守護者と強敵はこれより多い）');
+    expect(memoryCombatText('ja', mem)).toContain('体力の記録:およそ 7（5〜9。3 体の記録。個体差あり）（これまでに見た素の個体の範囲。守護者と強敵はこれより多い）');
+    expect(memoryCombatText('ja', { ...mem, hpSeen: { min: 7, max: 7, samples: 1 } })).toContain('体力の記録:7（1 体の記録。個体差あり）');
     expect(memoryCombatText('ja', { ...mem, guardian: true })).not.toContain('素の個体');
   });
 

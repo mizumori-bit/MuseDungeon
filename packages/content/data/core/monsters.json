@@ -20,7 +20,7 @@
     "stats": { "hp": "1d6+2", "acc": 2, "eva": 3, "might": 0, "armor": 0, "sight": 8 },
     "speed": 120, "attack": { "dice": "1d4" },
     "ai": { "archetype": "pack", "alertRadius": 7 }, "xp": 2, "group": { "min": 2, "max": 4 }, "abilities": ["fast", "pack"]
-  , "desc": {"ja": "群れで狩る獣。一匹が吠えると仲間が集まる", "en": "A pack hunter. When one howls, the others gather"} },
+  , "desc": {"ja": "群れで狩る獣。1 匹が気づくと吠え、7 マス以内の眠っている・気づいていないジャッカルが目を覚まして、見つけた所へ集まる", "en": "A pack hunter. When one notices you it howls: other jackals within 7 cells that are asleep or unaware wake and head to where you were seen"} },
   {
     "id": "core:spore_mold", "size": "small", "glyph": "m", "name": { "ja": "毒カビ", "en": "spore mold" }, "tags": ["plant", "cave", "stationary"],
     "depth": { "min": 2, "peak": 5, "max": 14 }, "rarity": 2,
@@ -66,14 +66,14 @@
     "stats": { "hp": "3d6+4", "acc": 3, "eva": 3, "might": 1, "armor": 0, "sight": 8 },
     "speed": 120, "attack": { "dice": "1d6" },
     "ai": { "archetype": "pack", "alertRadius": 8 }, "xp": 9, "group": { "min": 2, "max": 3 }, "abilities": ["fast", "pack"]
-  , "desc": {"ja": "群れで動く狼。開けた場所で囲みに来る", "en": "Wolves that move as a pack and try to surround you in the open"} },
+  , "desc": {"ja": "群れで動く狼。1 匹が気づくと、8 マス以内の眠っている・気づいていない洞窟狼も目を覚まして集まる。開けた場所で囲みに来る", "en": "Wolves that move as a pack: when one notices you, other cave wolves within 8 cells that are asleep or unaware wake and gather. They try to surround you in the open"} },
   {
     "id": "core:rust_slime", "size": "medium", "glyph": "u", "name": { "ja": "錆の粘体", "en": "rust slime" }, "tags": ["ooze", "cave", "halls", "rusting"],
     "depth": { "min": 5, "peak": 8, "max": 13 }, "rarity": 2,
     "stats": { "hp": "4d6+6", "acc": 3, "eva": 0, "might": 0, "armor": 1, "sight": 5 },
     "speed": 80, "attack": { "dice": "1d6", "onHit": [{ "effect": "status", "status": "core:rust", "turns": "10", "power": 1 }] },
     "ai": { "archetype": "melee_chaser" }, "xp": 11, "abilities": ["slow"]
-  , "desc": {"ja": "触れた金属を錆びさせる粘体", "en": "An ooze that rusts the metal it touches"} },
+  , "desc": {"ja": "触れた金属を錆びさせる粘体。殴られて当たると、10 手番のあいだ装甲が 2 下がる（0 より下にはならない。重ならず、当たるたびに 10 手番に戻る）。武器・防具そのものは傷まない", "en": "An ooze that rusts the metal it touches. A hit from it lowers your armor by 2 for 10 turns (not below 0; it does not stack, each hit resets it to 10 turns). Your weapon and armor themselves are not damaged"} },
   {
     "id": "core:hexfire_caster", "size": "small", "glyph": "c", "name": { "ja": "呪い火の術者", "en": "hexfire caster" }, "tags": ["humanoid", "ranged", "ruins", "halls", "pierce"],
     "depth": { "min": 6, "peak": 9, "max": 14 }, "rarity": 2,
@@ -104,7 +104,7 @@
     "speed": 140, "attack": { "dice": "1d4" },
     "ai": { "archetype": "pack" }, "xp": 9, "group": { "min": 3, "max": 4 },
     "drops": [], "sleepPct": 50, "abilities": ["fast", "drain"]
-  , "desc": {"ja": "血を吸って傷を癒やす蝙蝠の群れ", "en": "A swarm of bats that heal by drinking blood"} },
+  , "desc": {"ja": "血を吸って傷を癒やす蝙蝠の群れ。1 匹が気づくと、6 マス以内の眠っている・気づいていない仲間も目を覚まして集まる", "en": "A swarm of bats that heal by drinking blood. When one notices you, others within 6 cells that are asleep or unaware wake and gather"} },
   {
     "id": "core:ogre", "size": "large", "glyph": "G", "name": { "ja": "大鬼", "en": "ogre" }, "tags": ["giant", "halls", "cave", "heavy_swing"],
     "depth": { "min": 11, "peak": 14 }, "rarity": 3,

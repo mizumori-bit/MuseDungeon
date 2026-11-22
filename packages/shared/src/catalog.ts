@@ -2,6 +2,12 @@
 // 能力値・出現条件は含まない。content が生成し、client は /api/content/catalog で取得する。
 import type { HaulParts, Names } from './types';
 
+/**
+ * 群れる種族（ai の pack）の呼び声の届く広さの既定（データの alertRadius が無いとき。チェビシェフ距離）。
+ * 1 体が追跡を始めると、この広さの中の、眠っている・気づいていない同じ種族が目を覚まし、見つけた所へ向かう（engine の ai と公開カタログが同じ値を使う）
+ */
+export const PACK_ALERT_RADIUS = 6;
+
 export interface CatalogTerrain {
   name: Names;
   passable: boolean;
@@ -105,7 +111,8 @@ export interface Catalog {
   terrain: Record<string, CatalogTerrain>;
   /** glyph: 地図の 1 文字（種族ごとに一意） */
   /** size・armored: 見れば分かる性質（V3-2R3 §20.4） */
-  monsters: Record<string, { name: Names; tags: string[]; glyph: string; size?: 'small' | 'medium' | 'large'; armored?: boolean; evasive?: boolean; desc?: Names }>;
+  /** packRadius: 群れる種族の呼び声の届く広さ（S4 §42.2 の 4）。onHitStatus: 殴られて当たったときに付く状態（錆など。S4 §42.3 の 1） */
+  monsters: Record<string, { name: Names; tags: string[]; glyph: string; size?: 'small' | 'medium' | 'large'; armored?: boolean; evasive?: boolean; desc?: Names; packRadius?: number; onHitStatus?: { status: string; turns: string; chancePct?: number }[] }>;
   classes: Record<string, CatalogClass>;
   items: Record<string, CatalogItem>;
   appearances: Record<string, { name: Names; category: string }>;

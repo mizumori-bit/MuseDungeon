@@ -2,7 +2,7 @@
 // 行動様式は archetype ID でレジストリから選ぶ。パラメータはデータ側（monsters.json の ai）。
 import type { MonsterDef } from '@muse/content';
 import type { AiState, Entity, Pos } from '@muse/shared';
-import { cheb, DIRS, DIR_VEC } from '@muse/shared';
+import { cheb, DIRS, DIR_VEC, PACK_ALERT_RADIUS } from '@muse/shared';
 import { melee, rangedAttack } from './combat';
 import type { Ctx } from './ctx';
 import { hasLos } from './geom';
@@ -319,7 +319,7 @@ export function monsterTurn(ctx: Ctx, m: Entity): number {
     next.targetPos = { x: target.pos!.x, y: target.pos!.y };
     next.lostTurns = 0;
     if (ai.state !== 'hunting' && ai.archetype === 'pack') {
-      const radius = ai.params.alertRadius ?? 6;
+      const radius = ai.params.alertRadius ?? PACK_ALERT_RADIUS;
       for (const ally of ctx.entitiesOn(key)) {
         if (ally.id === m.id || ally.kind !== m.kind || !ally.actor?.ai || !ally.pos) continue;
         if (cheb(ally.pos, m.pos!) <= radius) wakeMonster(ctx, ally, next.targetPos, { cause: 'pack' });

@@ -47,7 +47,7 @@
   {
     "id": "core:old_note", "name": { "ja": "書き置き", "en": "note" }, "category": "feature",
     "states": ["unread", "read"], "initialState": "unread", "passable": true,
-    "desc": { "ja": "先に潜った誰かの書き置き。読むと（足元か隣で interact）記録の断章が分かる", "en": "A note left by someone who came before. Reading it (interact on or next to it) gives a fragment of the record" },
+    "desc": { "ja": "ずっと昔の探索者が残した書き置き（迷宮に元からある）。読むと（足元か隣で interact）記録の断章が分かる", "en": "A note left by a delver of long ago (part of the dungeon itself). Reading it (interact on or next to it) gives a fragment of the record" },
     "onInteract": [{ "effect": "inscription", "clue": 0 }],
     "afterInteract": "read"
   },
@@ -76,7 +76,7 @@
     "id": "core:brittle_ceiling", "name": { "ja": "脆い天井", "en": "brittle ceiling" }, "category": "feature",
     "states": ["intact", "fallen"], "initialState": "intact", "passable": true,
     "collapse": { "trigger": 3, "loudness": 4, "radius": 1, "dmg": "2d6" },
-    "desc": { "ja": "ひびの入った天井。3 マス以内で大きな音（投げた物が落ちる・戦い・敵が扉を開ける・水の上の音など。自分で扉を開ける音では崩れない）がすると崩れ、真下と周り 1 マスの者に 2d6 のダメージを与え、真下は瓦礫になる", "en": "A cracked ceiling. A loud noise within 3 cells (a thrown item landing, a fight, a monster opening a door, noise over water; not you opening a door) brings it down: 2d6 damage to anyone under it or next to it, and rubble below" },
+    "desc": { "ja": "ひびの入った天井。この天井から 3 マス以内で、大きさ 4 以上の音がすると崩れ、真下と周り 1 マスの者に 2d6 のダメージを与え、真下は瓦礫になる。音の大きさ: 近接の攻撃 5（ふつうの一撃・会心・強打などの能動技、当たりも外れも同じ。だれの攻撃でも。打たれた者のマスで鳴る）・投げた物が落ちる 4（落ちたマスで。当たっても外れても）・レバーを引く 4・本棚を押す 4・敵が扉を開ける 4・警報の罠 18。自分で扉を開け閉めする・鍵で格子扉を開ける音は 3 で、崩れない。敵の射撃（矢・投石など）は音を立てない。水の上で鳴った音は大きさが 2 倍になる（水の上なら扉の音でも崩れる）", "en": "A cracked ceiling. A noise of loudness 4 or more within 3 cells of it brings it down: 2d6 damage to anyone under it or next to it, and rubble below. Loudness: any melee attack 5 (a normal blow, a crit or an ability such as power strike, hit or miss, by anyone; it sounds on the struck one's cell), a thrown item landing 4 (where it lands, hit or miss), pulling a lever 4, pushing a bookshelf 4, a monster opening a door 4, an alarm trap 18. You opening or closing a door, or unlocking a grate, is 3 and does not bring it down. Enemy shots (arrows, sling stones) make no noise. Noise made on water is twice as loud (on water even a door does)" },
     "onInteract": []
   },
   {

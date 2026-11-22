@@ -12,7 +12,7 @@ import type { ReportCompare } from './expeditionStats';
 import { kindName } from './narrate';
 import type { NavGrid } from './nav';
 import { buildNavGrid, distanceField, findFrontiers } from './nav';
-import type { Dir, EntityRole, Expedition, ExpeditionOffer, HaulParts, Locale, MonsterMemory, Names, ObjectiveType, OfferSlot, Pos, SeasonAward, SupplyPlace } from './types';
+import type { Dir, EntityRole, Expedition, ExpeditionOffer, HaulParts, Locale, MonsterMemory, Names, ObjectiveType, OfferSlot, Pos, SeasonAward, SeasonSlay, SupplyPlace } from './types';
 import { awardName, awardText, fireUsedDepths, myCampfires, publicSpotAt, publicStairsAt, seasonBudgetText, SUPPLY_CATEGORIES, supplyPlaceName } from './season';
 import type { SupplyView } from './season';
 import { DIRS, DIR_VEC } from './types';
@@ -198,17 +198,39 @@ export interface ObsCamp {
     floor_traits?: { trait: string; name: string; depths: number[] }[];
     /** 遺物の名前と、持ち帰るとなる加護（V3-3 §3.3）。owned: もう持っている加護（新しくは付かない） */
     relic?: { kind: string; name: string; boon: string | null; boon_name?: string; boon_desc?: string; owned?: boolean };
+    /** 討伐の記録（S4。SEASON.md §35.5。シーズンのランで、まだ倒していない大守護者を倒す遠征の候補だけ）: 先に倒した参加者の戦いの事実 */
+    slays?: ObsSlay[];
   }[];
   /** 次の節目（V3-3 §3.2）: まだ倒していない最も浅い大守護者の階 */
   milestone?: ObsMilestone;
-  /** 記録庫に納めた欠片の数（V3-3a §35.7） */
-  archive?: { delivered: number; total: number };
+  /**
+   * 記録庫に納めた欠片の数（V3-3a §35.7）。slays: 討伐の記録（S4 §35.5。シーズンのランだけ。節目ごとに、最初の 1 件といちばん少ない被害の 1 件。
+   * count はその階に載った記録の数）
+   */
+  archive?: { delivered: number; total: number; slays?: { depth: number; warden: string; count: number; records: ObsSlay[]; text: string }[] };
   /** 直前の遠征の比較（2 行以内。V3-6 §35.9: 候補を選ぶ画面で自分の記録が目に入る） */
   compare?: { no: number; lines: string[] } & ReportCompare;
   /** プロフィールの記録の要約と次の節目（1 行。V3-7 §7.2）・直前の遠征で取った実績 */
   records?: { line: string; feats_new?: string[] };
   /** 古い版で始まったラン（V4-0b §1.2。最初の 1 度だけ） */
   version_note?: string;
+}
+
+/**
+ * 討伐の記録（S4。SEASON.md §35.5。PlayerView の season.slays から）: 名前は招いたときの表示名、ほかはゲームの事実だけ。
+ * weapon・armor: 種類と名前（接辞つき）と、手に入れた方法（picked: 拾った・supply: 補給の置き場から取った・start: 最初から持っていた）と階。null は装備なし（hidden なら未鑑定で載せていないものがある）
+ */
+export interface ObsSlay {
+  depth: number; by: string; mine?: boolean; first?: boolean; least?: boolean; of: number;
+  level: number; class: string;
+  weapon: { kind: string; name: string; got: 'picked' | 'supply' | 'start'; depth?: number } | null;
+  armor: { kind: string; name: string; got: 'picked' | 'supply' | 'start'; depth?: number } | null;
+  hidden?: boolean;
+  dealt: { melee: { total: number; n: number }; thrown: { total: number; n: number }; poison: { total: number; n: number }; feature: { total: number; n: number }; crits: number };
+  taken: number; lowest_pct: number;
+  used: { kind: string; name: string; n: number }[]; thrown: { kind: string; name: string; n: number }[]; abilities: { id: string; name: string; n: number }[];
+  ward_fires: number; attempt: number; turns: number;
+  text: string;
 }
 
 /** 節目の大守護者（V3-3 §3.2）。弱点と種族は伏せる */
@@ -557,19 +579,33 @@ export function hpLeftEstimate(mem: MonsterMemory | undefined, band: HpState, da
 /** 体力の記録を「確かな幅」として扱える標本の数（これ未満は上限を出さず、「個体差あり」を添える） */
 export const HP_RECORD_SURE = 5;
 
+/**
+ * 種族の体力の記録の文（S4 §42.2 の 3）: 2 体以上は「およそ N（a〜b。M 体の記録）」（N は幅のまん中。守護者の候補の「およそ」と同じ形）、
+ * 全部同じなら「7（2 体とも）」、1 体だけなら「7（1 体の記録）」。記録が HP_RECORD_SURE 体未満なら「個体差あり」を添える
+ */
+export function hpRecordText(L: Locale, hs: { min: number; max: number; samples: number }): string {
+  const few = hs.samples < HP_RECORD_SURE;
+  const fewJa = few ? '。個体差あり' : '';
+  const fewEn = few ? '; individuals vary' : '';
+  if (hs.samples <= 1) return t(L, `${hs.max}（1 体の記録${fewJa}）`, `${hs.max} (one recorded${fewEn})`);
+  if (hs.min === hs.max) return t(L, `${hs.min}（${hs.samples} 体とも${fewJa}）`, `${hs.min} (all ${hs.samples} recorded${fewEn})`);
+  const mid = Math.trunc((hs.min + hs.max) / 2);
+  return t(L, `およそ ${mid}（${hs.min}〜${hs.max}。${hs.samples} 体の記録${fewJa}）`, `about ${mid} (${hs.min}-${hs.max}; ${hs.samples} recorded${fewEn})`);
+}
+
 export function hpEstimateText(locale: Locale, est: { min: number; max: number | null; samples: number; record?: { min: number; max: number }; untouched?: boolean }): string {
-  const rec = est.record ? (est.record.min === est.record.max ? `${est.record.min}` : t(locale, `${est.record.min}〜${est.record.max}`, `${est.record.min}-${est.record.max}`)) : '';
+  const recText = est.record ? hpRecordText(locale, { ...est.record, samples: est.samples }) : '';
   const few = est.samples < HP_RECORD_SURE;
   // まだ当てていない相手には「残り」と言わない（V4-0b §1.5）: 体力の記録の範囲をそのまま出す
-  if (est.untouched && rec) return t(locale, `体力の記録 ${rec}（まだ傷を負っていない。記録 ${est.samples} 体${few ? '。個体差あり' : ''}）`, `HP record ${rec} (unhurt so far; ${est.samples} recorded${few ? '; individuals vary' : ''})`);
+  if (est.untouched && recText) return t(locale, `体力の記録 ${recText}／まだ傷を負っていない`, `HP record ${recText} / unhurt so far`);
   // 上限を出さないとき（記録が少ない）は根拠を添える: 見えている傷の具合と、体力の記録の最小から
   if (est.max === null && est.record) {
-    return t(locale, `記録どおりなら残り ${est.min} 以上（傷の具合と、体力の記録の最小 ${est.record.min} から。記録 ${est.samples} 体${few ? '。個体差あり' : ''}）`,
-      `if typical, >= ${est.min} left (from its wounds and the smallest HP on record, ${est.record.min}; ${est.samples} recorded${few ? '; individuals vary' : ''})`);
+    return t(locale, `記録どおりなら残り ${est.min} 以上（傷の具合と、体力の記録の最小 ${est.record.min} から）／体力の記録 ${recText}`,
+      `if typical, >= ${est.min} left (from its wounds and the smallest HP on record, ${est.record.min}) / HP record ${recText}`);
   }
-  const recText = t(locale, `（記録 ${est.samples} 体${rec ? `: 体力 ${rec}` : ''}${few ? '。個体差あり' : ''}）`, ` (${est.samples} recorded${rec ? `, HP ${rec}` : ''}${few ? '; individuals vary' : ''})`);
+  const tail = recText ? t(locale, `／体力の記録 ${recText}`, ` / HP record ${recText}`) : t(locale, `（記録 ${est.samples} 体${few ? '。個体差あり' : ''}）`, ` (${est.samples} recorded${few ? '; individuals vary' : ''})`);
   const range = est.max === null ? t(locale, `${est.min} 以上`, `>= ${est.min}`) : est.min === est.max ? `${est.min}` : t(locale, `${est.min}〜${est.max}`, `${est.min}-${est.max}`);
-  return t(locale, `記録どおりなら残り ${range}${recText}`, `if typical, ${range} left${recText}`);
+  return t(locale, `記録どおりなら残り ${range}${tail}`, `if typical, ${range} left${tail}`);
 }
 
 /** 自分の持ち物の性能（鑑定済みの品だけ。接辞の効果を足す） */
@@ -677,9 +713,9 @@ export function memoryCombatText(locale: Locale, mem: MonsterMemory): string {
   const L = locale;
   const speed = mem.abilities.includes('fast') ? t(L, '速い', 'fast') : mem.abilities.includes('slow') ? t(L, '遅い', 'slow') : t(L, '普通（速さの違いは観測していない）', 'normal (no speed difference observed)');
   const ranged = mem.abilities.includes('ranged') ? t(L, `あり（観測した最長距離 ${mem.rangeMax ?? '?'}）`, `yes (longest seen ${mem.rangeMax ?? '?'})`) : t(L, '観測していない', 'not observed');
-  // 記録が 5 体未満の間は、幅を確定値のように見せない（種族の体力はダイスで振られる。V3-3 の設計の指示）
-  const few = !!mem.hpSeen && mem.hpSeen.samples < HP_RECORD_SURE;
-  const hp = mem.hpSeen ? t(L, `${mem.hpSeen.min === mem.hpSeen.max ? mem.hpSeen.min : `${mem.hpSeen.min}〜${mem.hpSeen.max}`}（${mem.hpSeen.samples} 体${few ? '。個体差あり' : ''}）`, `${mem.hpSeen.min === mem.hpSeen.max ? mem.hpSeen.min : `${mem.hpSeen.min}-${mem.hpSeen.max}`} (${mem.hpSeen.samples} seen${few ? '; individuals vary' : ''})`) : t(L, '記録なし', 'none');
+  // 記録が 5 体未満の間は、幅を確定値のように見せない（種族の体力はダイスで振られる。V3-3 の設計の指示）。
+  // 2 体以上は「およそ N（a〜b）」、1 体だけなら「1 体の記録」と添える（S4 §42.2 の 3）
+  const hp = mem.hpSeen ? hpRecordText(L, mem.hpSeen) : t(L, '記録なし', 'none');
   const ab = mem.abilities.filter((a) => a !== 'fast' && a !== 'slow' && a !== 'ranged').map((a) => abilityName(L, a));
   // 種族の体力の記録は素の個体だけ（接辞付きは混ぜない）。守護者・強敵はこれより多い（V4-0b §1.5）
   const hpNote = mem.hpSeen && !mem.guardian ? t(L, '（これまでに見た素の個体の範囲。守護者と強敵はこれより多い）', ' (plain individuals seen so far; guardians and elites have more)') : '';
@@ -857,6 +893,73 @@ export function milestoneObs(L: Locale, catalog: Catalog, m: { depth: number; na
     text: t(L, `次の節目: 地下${m.depth}階の大守護者「${name}」（型: ${types.map((x) => x.name).join('・') || 'なし'}。${done ? '踏破済み' : `未踏破。倒すまでその階の下り階段は封じられている。倒すと加護を ${opts} つの候補から 1 つ選べる`}${memText}）`,
       `Next milestone: the warden "${name}" on depth ${m.depth} (types: ${types.map((x) => x.name).join('/') || 'none'}; ${done ? 'cleared' : `not cleared; its stairs down stay sealed until it falls; slay it to choose 1 of ${opts} boons`}${memText})`),
   };
+}
+
+/** 1 回あたり（小数 1 桁。整数で数える） */
+function perHit(total: number, n: number): string {
+  const t10 = Math.trunc((total * 10 + Math.trunc(n / 2)) / Math.max(1, n));
+  return `${Math.trunc(t10 / 10)}.${t10 % 10}`;
+}
+
+/** 討伐の記録の 1 件の観測（S4。SEASON.md §35.5）。文は「Aya（Lv6・戦士）: 鎚矛（地下3階で拾った）・革鎧（最初から持っていた）。与えた被害 92（近接 11 回・1 回あたり 8.2…）…」 */
+export function slayObs(L: Locale, catalog: Catalog, s: SeasonSlay): ObsSlay {
+  const cls = nameOf(catalog.classes[s.classId]?.name, L, shortId(s.classId));
+  const gear = (g: SeasonSlay['weapon']) => (g ? { kind: g.kind, name: itemDisplayName(catalog, L, g.kind, null, g.affixes), got: g.got, ...(g.depth !== undefined ? { depth: g.depth } : {}) } : null);
+  const weapon = gear(s.weapon);
+  const armor = gear(s.armor);
+  const gotText = (g: NonNullable<ReturnType<typeof gear>>) => g.got === 'picked'
+    ? t(L, `地下${g.depth ?? '?'}階で拾った`, `picked up on depth ${g.depth ?? '?'}`)
+    : g.got === 'supply' ? t(L, `地下${g.depth ?? '?'}階の補給の置き場から取った`, `taken from a supply cache on depth ${g.depth ?? '?'}`)
+      : t(L, '最初から持っていた', 'carried from the start');
+  const wText = weapon ? `${weapon.name}（${gotText(weapon)}）` : t(L, '素手', 'bare hands');
+  const aText = armor ? `${armor.name}（${gotText(armor)}）` : t(L, '鎧なし', 'no armor');
+  const hiddenText = s.hidden ? t(L, '（未鑑定の装備は載せていない）', ' (unidentified gear not recorded)') : '';
+  const d = s.dealt;
+  const dealtParts: string[] = [];
+  if (d.melee.n) dealtParts.push(t(L, `近接 ${d.melee.n} 回・1 回あたり ${perHit(d.melee.total, d.melee.n)}`, `melee ${d.melee.n} hits, ${perHit(d.melee.total, d.melee.n)} each`));
+  if (d.thrown.n) dealtParts.push(t(L, `投擲 ${d.thrown.n} 回・1 回あたり ${perHit(d.thrown.total, d.thrown.n)}`, `thrown ${d.thrown.n} hits, ${perHit(d.thrown.total, d.thrown.n)} each`));
+  if (d.poison.n) dealtParts.push(t(L, `毒 ${d.poison.total}（${d.poison.n} 回）`, `poison ${d.poison.total} (${d.poison.n} ticks)`));
+  if (d.feature.n) dealtParts.push(t(L, `地物（脆い天井など） ${d.feature.total}（${d.feature.n} 回）`, `features (brittle ceilings etc.) ${d.feature.total} (${d.feature.n})`));
+  if (d.crits) dealtParts.push(t(L, `近接の会心 ${d.crits}`, `${d.crits} melee crits`));
+  const total = d.melee.total + d.thrown.total + d.poison.total + d.feature.total;
+  const names = (xs: { kind: string; n: number }[]) => xs.map((x) => ({ kind: x.kind, name: nameOf(catalog.items[x.kind]?.name, L, shortId(x.kind)), n: x.n }));
+  const used = names(s.used);
+  const thrown = names(s.thrown);
+  const abilities = s.abilities.map((x) => ({ id: x.id, name: nameOf(catalog.abilities[x.id]?.name, L, shortId(x.id)), n: x.n }));
+  const list = (xs: { name: string; n: number }[]) => xs.map((x) => `${x.name} ${x.n}`).join(t(L, '・', ', '));
+  const extra = [
+    s.wardFires ? t(L, `護りの火を ${s.wardFires} つ消した`, `put out ${s.wardFires} ward fire${s.wardFires > 1 ? 's' : ''}`) : '',
+    used.length ? t(L, `使った品: ${list(used)}`, `used: ${list(used)}`) : t(L, '使った品なし', 'no items used'),
+    thrown.length ? t(L, `投げた品: ${list(thrown)}`, `thrown: ${list(thrown)}`) : '',
+    abilities.length ? t(L, `能動技: ${list(abilities)}`, `abilities: ${list(abilities)}`) : '',
+  ].filter(Boolean);
+  const who = `${s.by}${s.mine ? t(L, '（あなた）', ' (you)') : ''}`;
+  const text = t(L,
+    `${who}（Lv${s.level}・${cls}）: ${wText}・${aText}${hiddenText}。与えた被害 ${total}（${dealtParts.join('、') || 'なし'}）。受けた被害 ${s.taken}（HP がいちばん減って ${s.lowestPct}%）。${extra.join('。')}。このランで ${s.attempt} 回目の挑戦・遠征の ${s.turns} 手番目に倒した`,
+    `${who} (Lv${s.level} ${cls}): ${wText}, ${aText}${hiddenText}. Dealt ${total} (${dealtParts.join(', ') || 'none'}). Took ${s.taken} (lowest HP ${s.lowestPct}%). ${extra.join('. ')}. Slain on attempt ${s.attempt} in this run, ${s.turns} turns into the expedition`);
+  return {
+    depth: s.depth, by: s.by, ...(s.mine ? { mine: true } : {}), ...(s.first ? { first: true } : {}), ...(s.least ? { least: true } : {}), of: s.of,
+    level: s.level, class: cls, weapon, armor, ...(s.hidden ? { hidden: true } : {}),
+    dealt: { melee: { ...d.melee }, thrown: { ...d.thrown }, poison: { ...d.poison }, feature: { ...d.feature }, crits: d.crits },
+    taken: s.taken, lowest_pct: s.lowestPct, used, thrown, abilities, ward_fires: s.wardFires, attempt: s.attempt, turns: s.turns, text,
+  };
+}
+
+/** その節目の討伐の記録の文（最初の 1 件と、いちばん少ない被害の 1 件）。「先に倒した者（倒した記録 2 件）: …／いちばん少ない被害で倒した者: …」 */
+export function slayGroupText(L: Locale, recs: readonly ObsSlay[]): string {
+  if (!recs.length) return '';
+  const of = recs[0].of;
+  const count = t(L, `（倒した記録 ${of} 件）`, ` (${of} recorded kill${of > 1 ? 's' : ''})`);
+  return recs.map((r) => {
+    const label = r.first && r.least && of > 1 ? t(L, '先に倒した者（いちばん少ない被害でもある）', 'first to slay it (also the least damage taken)')
+      : r.first ? t(L, '先に倒した者', 'first to slay it') : t(L, 'いちばん少ない被害で倒した者', 'slew it taking the least damage');
+    return `${label}${r.first ? count : ''}: ${r.text}`;
+  }).join(t(L, '／', ' / '));
+}
+
+/** 討伐の記録（S4）: その深さの記録（PlayerView の season.slays から。最初の 1 件が先） */
+export function slaysAt(L: Locale, catalog: Catalog, view: PlayerView, depth: number): ObsSlay[] {
+  return (view.season?.slays ?? []).filter((s) => s.depth === depth).map((s) => slayObs(L, catalog, s)).sort((a, b) => Number(!!b.first) - Number(!!a.first));
 }
 
 /** 加護の一覧（V3-3 §3.3）。遠征に 1 回の加護（執念）は、進行中の遠征で使っていれば used */
@@ -1654,13 +1757,33 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
   let camp: ObsCamp | undefined;
   if (view.camp) {
     const rules = catalog.rules;
+    // 討伐の記録（S4 §35.5）: まだ倒していない節目の大守護者を倒す候補だけ（シーズンのランで、記録が載っていれば）
+    const slayCache = new Map<number, ObsSlay[]>();
+    const offerSlays = (o: ExpeditionOffer): ObsSlay[] => {
+      const dep = o.objective.targetDepth;
+      if (o.objective.type !== 'slay_warden' || dep === null || (view.milestonesCleared ?? []).includes(dep) || !view.season?.slays?.length) return [];
+      if (!slayCache.has(dep)) slayCache.set(dep, slaysAt(L, catalog, view, dep));
+      return slayCache.get(dep)!;
+    };
     camp = {
       ...(view.camp.milestone ? { milestone: milestoneObs(L, catalog, view.camp.milestone, view.milestonesCleared ?? [], view.wardenIntel?.[String(view.camp.milestone.depth)], view) } : {}),
       ...(opts.campCompare && view.status === 'at_camp' ? { compare: { no: opts.campCompare.no, lines: opts.campCompare.lines.slice(0, 2), ...(opts.campCompare.compare ?? {}) } } : {}),
       ...(opts.versionNote && view.status === 'at_camp' ? { version_note: opts.versionNote } : {}),
       ...(opts.records && view.status === 'at_camp' ? { records: { line: opts.records.line, ...(opts.records.featsNew?.length ? { feats_new: [...opts.records.featsNew] } : {}) } } : {}),
-      // 記録庫に納めた欠片の数（V3-3a §35.7）
-      archive: { delivered: view.archive?.length ?? 0, total: Object.values(catalog.items).filter((it) => it.category === 'relic' && it.boon).length },
+      // 記録庫に納めた欠片の数（V3-3a §35.7）。討伐の記録（S4 §35.5。シーズンのランだけ）も節目ごとに
+      archive: {
+        delivered: view.archive?.length ?? 0, total: Object.values(catalog.items).filter((it) => it.category === 'relic' && it.boon).length,
+        ...((): { slays?: NonNullable<ObsCamp['archive']>['slays'] } => {
+          const depths = [...new Set((view.season?.slays ?? []).map((s) => s.depth))].sort((a, b) => a - b);
+          if (!depths.length) return {};
+          return { slays: depths.map((depth) => {
+            const records = slaysAt(L, catalog, view, depth);
+            const s0 = (view.season?.slays ?? []).find((s) => s.depth === depth)!;
+            const warden = guardianDisplayName(L, { name: s0.warden });
+            return { depth, warden, count: records[0]?.of ?? 0, records, text: t(L, `記録庫・討伐の記録 地下${depth}階の大守護者「${warden}」: ${slayGroupText(L, records)}`, `Archive, warden kills on depth ${depth} ("${warden}"): ${slayGroupText(L, records)}`) };
+          }) };
+        })(),
+      },
       next_no: view.camp.nextNo,
       offers: view.camp.offers.map((o) => ({
         index: o.index, type: o.objective.type, target_depth: o.objective.targetDepth, points: o.points,
@@ -1676,7 +1799,10 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
         })() + (o.bounty ? ` / ${gearVsArmorText(L, catalog, view, o.bounty.armor, Math.max(1, o.bounty.hp - (o.scar ?? 0)))}` : '')
           // 守護者の候補（格 1〜3。再挑戦を含む）にも通る目安（V3-8a §56.1。大守護者は記録庫の記憶の装甲で出す）
           // 大守護者は、記録庫で体力が分かっていれば命中の回数も（S3b §30.3 の 4）。護られし者は、火が灯っている間の装甲を 1 句
-          + (o.guardian?.armor !== undefined ? ` / ${gearVsArmorText(L, catalog, view, o.guardian.armor, offerGuardianHp(view, o), o.guardian.types ?? [])}` : ''),
+          + (o.guardian?.armor !== undefined ? ` / ${gearVsArmorText(L, catalog, view, o.guardian.armor, offerGuardianHp(view, o), o.guardian.types ?? [])}` : '')
+          // 討伐の記録（S4 §35.5）: まだ倒していない大守護者を倒す候補に、先に倒した参加者の戦いの事実
+          + (offerSlays(o).length ? ` / ${slayGroupText(L, offerSlays(o))}` : ''),
+        ...(offerSlays(o).length ? { slays: offerSlays(o) } : {}),
         ...(o.bounty ? { bounty: { kind: o.bounty.kind, name: nameOf(o.bounty.name, L, ''), hp: o.bounty.hp, ...(o.bounty.hpRange ? { hp_range: { ...o.bounty.hpRange } } : {}), max_hit: o.bounty.maxHit } } : {}),
         ...(o.vault ? { vault: true } : {}), ...(o.scar ? { scar: o.scar } : {}),
         ...(o.slot ? { slot: o.slot } : {}), ...(o.traits?.length ? { traits: [...o.traits] } : {}),
@@ -1975,7 +2101,8 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
   // 既定の hp_floor の実数（steady・fight は最大 HP の 50%。V3-2R2 §18.5）
   const floor50 = Math.trunc((view.self.stats.maxHp * 50) / 100);
   // 既定の hp_floor であることを書く（S1c §14.4 の 1: hp_floor を渡して呼んだ後も、この行は既定の値のままなので、食い違って読まれた）
-  const stopText = t(L, `HP ${floor50} 未満で止まる（既定の hp_floor）`, `stops below HP ${floor50} (default hp_floor)`);
+  // hp_floor は HP の値（割合ではない。S4 §35.6 の 3）。止まるのは「以下」（マクロの判定と同じ）
+  const stopText = t(L, `HP ${floor50} 以下で止まる（既定の hp_floor。HP の値）`, `stops at HP ${floor50} or below (default hp_floor, an HP value)`);
   // 階段への移動の見込み（V3-2R3b §23.1）: 追跡中の敵が届くなら、歩数と「追われたままなら」の最悪の被害（歩数 × worst_turn の合計）。
   // 記録の無い敵がいれば「不明」
   const hpNow = view.self.stats.hp;
@@ -2248,6 +2375,8 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
     lines.push(boonsText(L, s.boons ?? []));
     if (obs.camp?.milestone) lines.push(obs.camp.milestone.text);
     if (obs.camp?.archive) lines.push(t(L, `記録庫: 欠片 ${obs.camp.archive.delivered}/${obs.camp.archive.total}`, `Archive: shards ${obs.camp.archive.delivered}/${obs.camp.archive.total}`));
+    // 討伐の記録（S4 §35.5）: 節目ごとに 1 行
+    for (const s of obs.camp?.archive?.slays ?? []) lines.push(s.text);
     // プロフィール（V3-7 §7.2・§7.4）: 記録の要約と次の節目、直前の遠征で取った実績
     if (obs.camp?.records?.feats_new?.length) lines.push(t(L, `新しい実績: ${obs.camp.records.feats_new.join('・')}`, `New feats: ${obs.camp.records.feats_new.join(', ')}`));
     if (obs.camp?.records) lines.push(obs.camp.records.line);
@@ -2459,7 +2588,17 @@ export function describeTarget(view: PlayerView, catalog: Catalog, target: Pos |
       const shotText = e.shot === false ? t(L, '・射線: 通らない', ', shot: blocked') : '';
       // 見れば分かる特徴（初見でも分かる。V3-2R2 §18.2・V3-5a §35.10: 錆びさせる・装甲を抜く）
       const cmLook = e.kind ? catalog.monsters[e.kind] : undefined;
-      const lookTraits = [...OBVIOUS_TRAITS.filter((tr) => cmLook?.tags.includes(tr)), ...(cmLook?.armored ? ['armored'] : []), ...(cmLook?.evasive ? ['evasive'] : [])].map((tr) => abilityName(L, tr));
+      // 群れる（呼び声の届く広さ。S4 §42.2 の 4）・錆びさせる（効き目。S4 §42.3 の 1）は、公開カタログの数で中身を添える
+      const traitDetail = (tr: string): string => {
+        if (tr === 'pack' && cmLook?.packRadius) return t(L, `（1 体が気づくと、${cmLook.packRadius} マス以内の眠っている・気づいていない同じ種族も目を覚まして集まる）`, ` (when one notices you, others of its kind within ${cmLook.packRadius} cells that are asleep or unaware wake and gather)`);
+        if (tr === 'rusting') {
+          const st = cmLook?.onHitStatus?.find((s) => catalog.statuses[s.status]?.armor !== undefined);
+          const arm = st ? catalog.statuses[st.status]!.armor! : undefined;
+          if (st && arm !== undefined) return t(L, `（殴られて当たると、${st.turns} 手番のあいだ装甲 ${arm}。0 より下にはならず、重ならない（当たるたびに ${st.turns} 手番に戻る）。武器・防具そのものは傷まない）`, ` (a hit from it: armor ${arm} for ${st.turns} turns; not below 0, does not stack (each hit resets it to ${st.turns} turns); your weapon and armor themselves are not damaged)`);
+        }
+        return '';
+      };
+      const lookTraits = [...OBVIOUS_TRAITS.filter((tr) => cmLook?.tags.includes(tr)), ...(cmLook?.armored ? ['armored'] : []), ...(cmLook?.evasive ? ['evasive'] : [])].map((tr) => abilityName(L, tr) + traitDetail(tr));
       const traitText = lookTraits.length ? t(L, `・見た目: ${lookTraits.join('・')}`, `, looks: ${lookTraits.join(', ')}`) : '';
       // 接辞の効き目（V3-8 §53.3: 強敵の見立て）
       const affText = (e.affixes ?? []).length ? t(L, `・接辞: ${monsterAffixText(L, catalog, e.affixes ?? [])}`, `, affixes: ${monsterAffixText(L, catalog, e.affixes ?? [])}`) : '';
