@@ -10,7 +10,7 @@ import type {
 } from '@muse/shared';
 import {
   actionError, applyEvent, buildExpeditionReport, canonicalHash, guardianDisplayName, compareReports, emptyWorld, filterEventsForPlayer, FREE_COMMANDS, MACRO_COMMANDS,
-  macroNext, macroStart, macroStopError, narrate, projectPlayerView, publicStairsAt, riskText, seasonReportable, seasonReportableSpots, selfTurnMarks, t,
+  macroNext, macroStart, macroStopError, narrate, projectPlayerView, publicStairsAt, riskText, fightRiskStop, fightThreats, threatEstimate, seasonReportable, seasonReportableSpots, selfTurnMarks, t,
 } from '@muse/shared';
 import type { SeasonHooks } from '../season/SeasonService';
 import type { ServerConfig } from '../config';
@@ -642,7 +642,14 @@ export class RunSession {
       if ('stop' in d0) {
         const err = macroStopError(startView.locale, d0.stop, cmd, d0.dir, d0.blockedBy, d0.traps);
         // fight の被弾の前の断り（S1c §14.4 の 1）: 見込みと最悪の 2 つの数・いまの HP・実際に使った hp_floor
-        if (d0.stop === 'hp_risk' && startView.self.pos) err.message += ' ' + riskText(startView, this.deps.catalog, probe.hpFloor);
+        if (d0.stop === 'hp_risk' && startView.self.pos) {
+          err.message += ' ' + riskText(startView, this.deps.catalog, probe.hpFloor);
+          // 死にうる（S1d の 1 つ目の判定）なら、hp_floor を下げても始められない。「hp_floor を下げる」と言わない（S2a §20.10 の 3）
+          const est = threatEstimate(startView, this.deps.catalog, fightThreats(this.deps.catalog, startView.entities.filter((e) => e.cat === 'monster'), startView.self.pos));
+          if (fightRiskStop(startView.self.stats.hp, probe.hpFloor, est) === 'lethal') {
+            err.hint = t(startView.locale, '最悪の 1 手で倒れうる間は、hp_floor によらず始められない。退く（mode: flee・帰還の綱）か、回復してから。', 'While one worst turn could kill you, fight does not start whatever hp_floor is. Retreat (mode: flee, the lifeline) or heal first.');
+          }
+        }
         // 公開された階段（S0 §9.4）: 地図に載っていても途中の道は分からない。下への風の方角を探す手を出す
         const pub = startView.floor ? publicStairsAt(startView.season, startView.floor.depth) : null;
         if (pub && d0.stop === 'unreachable' && cmd.type === 'travel' && cmd.to === 'stairs_down' && (startView.memory.unsighted ?? []).includes(pub.y * startView.floor!.width + pub.x)) {

@@ -174,7 +174,13 @@ export function diffChanges(prev: TurnSnapshot | null, cur: TurnSnapshot, view: 
   if (!sameFloor && cur.depth !== null) {
     // この階を作ったときに効いた条件（V4-0e §8.1）: 着いたときに 1 回
     const tt = obs.self.floor?.trait_text;
-    out.push({ code: 'floor_changed', text: t(L, `地下${cur.depth}階に移った${tt ? `。この階は${tt}` : ''}`, `Now on depth ${cur.depth}${tt ? `. This floor: ${tt}` : ''}`) });
+    // 公開された下り階段（シーズン。S2a §20.6 の 1）: 着いたときに、道しるべが地図にあることを 1 回言う（自分の目で見る前だけ）
+    const ks = obs.navigation.known_stairs.find((s) => s.type === 'down' && s.public_by);
+    const pub = !ks ? ''
+      : ks.path_len !== null
+        ? t(L, `。この階の下り階段は公開されている（${ks.public_by} が報告）。入口からの道しるべが地図にある（travel_to stairs_down で向かえる。経路 ${ks.path_len}）`, `. This floor's down stairs are published (reported by ${ks.public_by}); a trail from the entrance is on your map (travel_to stairs_down goes there; path ${ks.path_len})`)
+        : t(L, `。この階の下り階段は公開されている（${ks.public_by} が報告）。地図に載っているが、途中の道はまだ分からない（explore { toward: 'draft' }）`, `. This floor's down stairs are published (reported by ${ks.public_by}); they are on your map, but the way there is unknown (explore { toward: 'draft' })`);
+    out.push({ code: 'floor_changed', text: t(L, `地下${cur.depth}階に移った${tt ? `。この階は${tt}` : ''}${pub}`, `Now on depth ${cur.depth}${tt ? `. This floor: ${tt}` : ''}${pub}`) });
   }
   if (cur.expNo !== null && cur.expNo === prev.expNo) {
     if (cur.expStatus === 'objective_complete' && prev.expStatus !== 'objective_complete') {

@@ -38,7 +38,14 @@ export interface Participant {
   firstReports: number;
   lastFirstUsed: number;
   died: boolean;
+  /**
+   * 公開の値（S2a §20.10 の 2）: その参加者が最後にキャンプに着いた時点（か、ランが終わった時点）の最深・使った予算・倒れたか・確定点・ランの数。
+   * 順位の表・断面・ほかの参加者の取り込みの写しは、これを使う（外との出入りはキャンプでだけ。§1.2 の 2）。無ければ（S2 より前の記録）今の値
+   */
+  shown?: ShownValues;
 }
+
+export interface ShownValues { best: { depth: number; used: number }; used: number; died: boolean; banked: number; runs: number }
 
 /** 招いた者（S0a。SEASON.md §4.1）。invites.json は運用の道具だけが書き、サーバーは読むだけ。トークンは入れない */
 export interface SeasonInvite { profileId: string; name: string; invitedAt: number }
@@ -110,6 +117,13 @@ const used = (p: Participant) => p.runs.reduce((a, r) => a + r.turns, 0);
 /** 順位に数える参加者（1 回でもランを始めた者。招いただけの者は入れない） */
 const started = (ps: readonly Participant[]) => ps.filter((p) => p.runs.length > 0);
 const banked = (p: Participant) => p.runs.reduce((a, r) => a + r.banked, 0);
+/** 今の値（内部。予算の残り・同着の決め方の元） */
+export function liveShown(p: Participant): ShownValues {
+  return { best: { ...p.best }, used: used(p), died: p.died, banked: banked(p), runs: p.runs.length };
+}
+/** 公開の値（キャンプに着いた時点の写し。無ければ今の値） */
+const shownOf = (p: Participant): ShownValues => p.shown ?? liveShown(p);
+
 /** 支援の数は、火ごとの記録（fires.json の uses）から作る（S1a §10.1 の 4: 参加者ごとの数を別に持たない） */
 const supportOf = (fires: readonly PublicFireRec[]) => (p: Participant) => fires.reduce((a, f) => a + (!f.dup && f.profileId === p.profileId ? f.uses : 0), 0);
 
@@ -130,9 +144,14 @@ export function computeStandings(ps: readonly Participant[], fires: readonly Pub
   award: (p: Participant, id: SeasonAward['id']) => SeasonAward;
 } {
   const list = [...ps];
-  const adv = ranked(list, (p) => p.best.depth, (p) => p.best.used);
+  // 公開の値で数える（S2a §20.10 の 2）。報告と支援は、もともとキャンプでだけ動く
+  const sv = new Map(list.map((p) => [p, shownOf(p)]));
+  const S = (p: Participant) => sv.get(p) ?? shownOf(p);
+  const used = (p: Participant) => S(p).used;
+  const banked = (p: Participant) => S(p).banked;
+  const adv = ranked(list, (p) => S(p).best.depth, (p) => S(p).best.used);
   const con = ranked(list, (p) => p.firstReports, (p) => (p.firstReports ? p.lastFirstUsed : 0));
-  const alive = list.filter((p) => !p.died);
+  const alive = list.filter((p) => !S(p).died);
   const sur = ranked(alive, (p) => banked(p), (p) => used(p));
   const leaderOf = (m: Map<Participant, number>, value: (p: Participant) => number) => {
     const top = [...m.entries()].filter(([, r]) => r === 1).map(([p]) => p);
@@ -140,7 +159,7 @@ export function computeStandings(ps: readonly Participant[], fires: readonly Pub
     const first = top.sort((a, b) => list.indexOf(a) - list.indexOf(b))[0];
     return first ? { name: first.name, value: value(first) } : null;
   };
-  const advLead = leaderOf(adv, (p) => p.best.depth);
+  const advLead = leaderOf(adv, (p) => S(p).best.depth);
   const conLead = leaderOf(con, (p) => p.firstReports);
   const surLead = leaderOf(sur, (p) => banked(p));
   // 支援賞（S1 §8.5）: 自分の火が使われた回数。同着は使った予算の少ないほう
@@ -148,18 +167,18 @@ export function computeStandings(ps: readonly Participant[], fires: readonly Pub
   const sup = ranked(list, (p) => support(p), (p) => used(p));
   const supLead = leaderOf(sup, (p) => support(p));
   const rows: SeasonStandingRow[] = list.map((p) => ({
-    name: p.name, runs: p.runs.length, used: used(p), died: p.died,
-    adventure: { value: p.best.depth, rank: adv.get(p)! },
+    name: p.name, runs: S(p).runs, used: used(p), died: S(p).died,
+    adventure: { value: S(p).best.depth, rank: adv.get(p)! },
     contribution: { value: p.firstReports, rank: con.get(p)! },
-    survival: p.died ? null : { value: banked(p), rank: sur.get(p)! },
+    survival: S(p).died ? null : { value: banked(p), rank: sur.get(p)! },
     support: { value: support(p), rank: sup.get(p)! },
     banked: banked(p),
   })).sort((a, b) => a.adventure.rank - b.adventure.rank || a.name.localeCompare(b.name));
   const award = (p: Participant, id: SeasonAward['id']): SeasonAward => {
     if (id === 'support') return { id, value: support(p), rank: sup.get(p) ?? null, entrants: list.length, leader: supLead, gap: supLead ? supLead.value - support(p) : null };
-    if (id === 'adventure') return { id, value: p.best.depth, rank: adv.get(p) ?? null, entrants: list.length, leader: advLead, gap: advLead ? advLead.value - p.best.depth : null };
+    if (id === 'adventure') return { id, value: S(p).best.depth, rank: adv.get(p) ?? null, entrants: list.length, leader: advLead, gap: advLead ? advLead.value - S(p).best.depth : null };
     if (id === 'contribution') return { id, value: p.firstReports, rank: con.get(p) ?? null, entrants: list.length, leader: conLead, gap: conLead ? conLead.value - p.firstReports : null };
-    if (p.died) return { id, value: null, rank: null, entrants: alive.length, leader: surLead, gap: null };
+    if (S(p).died) return { id, value: null, rank: null, entrants: alive.length, leader: surLead, gap: null };
     return { id, value: banked(p), rank: sur.get(p) ?? null, entrants: alive.length, leader: surLead, gap: surLead ? surLead.value - banked(p) : null };
   };
   return { rows, award };
@@ -194,7 +213,14 @@ export class SeasonStore {
   /** そのシーズン（知らない ID はディスクを読み直す。動いているサーバーで、後から開いたシーズン） */
   get(id: string): SeasonData | null {
     const have = this.data.get(id);
-    if (have) return have;
+    if (have) {
+      // 確定は 1 回だけ（S2a §20.10 の 1）: 運用の道具（別のプロセス）が確定して result.json を書いていれば、それを確定済みとして使う（上書きしない）
+      if (!have.result && this.dir) {
+        const r = this.readJson<SeasonResult>(id, 'result.json');
+        if (r) have.result = r;
+      }
+      return have;
+    }
     if (!SEASON_ID_RE.test(id)) return null;
     const def = this.readJson<SeasonDef>(id, 'season.json');
     if (!def) return null;
@@ -391,6 +417,8 @@ export class SeasonService implements SeasonHooks {
       this.store.log(id, { type: 'joined', profileId, name: p.name });
     }
     p.runs.push({ runId, startedAt: wall, turns: 0, deepest: 1, banked: 0, died: false, ended: false });
+    // 参加はキャンプから（公開の値を今の値にする。S2a §20.10 の 2）
+    p.shown = liveShown(p);
     this.store.log(id, { type: 'run_started', profileId, runId, used: used(p) });
     this.store.saveParticipants(d);
   }
@@ -482,6 +510,8 @@ export class SeasonService implements SeasonHooks {
       big = true;
       this.store.log(d.def.id, { type: 'deepest', profileId: p.profileId, runId: run.runId, depth: run.deepest, used: p.best.used });
     }
+    // 公開の値は、キャンプにいるか、ランが終わったときだけ今の値にする（S2a §20.10 の 2）
+    if ((pr.state === 'at_camp' || ended) && JSON.stringify(p.shown) !== JSON.stringify(liveShown(p))) { p.shown = liveShown(p); big = true; }
     if (big) this.store.saveParticipants(d);
     else if (changed) this.markDirty(d);
     return big;
@@ -551,15 +581,30 @@ export class SeasonService implements SeasonHooks {
   private recordDeeds(session: RunSession, pid: PlayerId, f: { d: SeasonData; p: Participant; run: SeasonRunRec }): void {
     const { d, p } = f;
     if (d.result || session.world.players[pid]?.state !== 'at_camp') return;
+    // 討伐の後にキャンプへ着いた時刻（S2a §20.10 の 4: ランの記録から。起動し直した後でも、記録の順と時刻で決まる）
+    const arrived = new Map<number, number>();
+    const pending = new Set<number>();
+    for (const e of session.history) {
+      if (e.type === 'warden_slain') { if (!arrived.has(e.depth)) pending.add(e.depth); }
+      else if (e.type === 'player_state' && e.player === pid && e.state === 'at_camp' && pending.size) {
+        for (const dep of pending) arrived.set(dep, e.wall);
+        pending.clear();
+      }
+    }
     let n = 0;
     for (const depth of session.world.milestones?.cleared ?? []) {
-      if (d.deeds.some((x) => x.depth === depth)) continue;
-      const rec: SeasonDeedRec = { depth, profileId: p.profileId, name: p.name, runId: session.runId, used: used(p), wall: this.now(), order: d.deeds.length + 1 };
-      d.deeds.push(rec);
-      this.store.log(d.def.id, { type: 'first_warden', profileId: p.profileId, runId: session.runId, depth, used: rec.used, order: rec.order });
+      const at = { wall: arrived.get(depth) ?? this.now() };
+      const cur = d.deeds.find((x) => x.depth === depth);
+      if (cur && (cur.profileId === p.profileId || cur.wall <= at.wall)) continue;
+      const rec: SeasonDeedRec = { depth, profileId: p.profileId, name: p.name, runId: session.runId, used: used(p), wall: at.wall, order: 0 };
+      if (cur) d.deeds[d.deeds.indexOf(cur)] = rec; else d.deeds.push(rec);
+      this.store.log(d.def.id, { type: 'first_warden', profileId: p.profileId, runId: session.runId, depth, used: rec.used, arrivedAt: at.wall, ...(cur ? { replaced: cur.profileId } : {}) });
       n++;
     }
-    if (n) this.store.saveDeeds(d);
+    if (n) {
+      [...d.deeds].sort((a, b) => a.wall - b.wall).forEach((x, i) => { x.order = i + 1; });
+      this.store.saveDeeds(d);
+    }
   }
 
   /** 開いているシーズンのうち、版（engine・コンテンツ）がこのサーバーと違うもの（S1a: 起動時の警告） */
@@ -655,7 +700,12 @@ export class SeasonService implements SeasonHooks {
   }
 
   finalize(d: SeasonData, reason: SeasonResult['reason']): SeasonResult {
+    // ほかのプロセスが先に確定していれば、それを使う（S2a §20.10 の 1。get がディスクを見直す）
+    const cur = this.store.get(d.def.id);
+    if (cur?.result) { d.result = cur.result; return cur.result; }
     if (d.result) return d.result;
+    // 確定は、すべての参加者の今の値を出す（終わりから 1 時間で、迷宮にいる者の分も。S2a §20.10 の 2）
+    for (const p of d.participants) p.shown = liveShown(p);
     this.flush();
     const st = computeStandings(started(d.participants), d.fires);
     const winners = { adventure: [], contribution: [], survival: [], support: [] } as SeasonResult['winners'];
@@ -687,7 +737,8 @@ export class SeasonService implements SeasonHooks {
     for (const id of AWARD_IDS) {
       for (const p of ps) {
         const a = st.award(p, id);
-        if (a.rank !== 1 || !a.value) continue;
+        // 冒険賞は、最深が地下 1 階のままなら付けない（だれも下りていないシーズンで全員に付くのを防ぐ。S2a §20.10 の 6）
+        if (a.rank !== 1 || !a.value || (id === 'adventure' && a.value <= 1)) continue;
         const def = this.titleDefs.find((x) => x.kind === 'award' && x.award === id);
         out.push({ ...base, id: def?.id ?? `core:title_${id}`, kind: 'award', award: id, name: titleName(def, d.def.name, null, awardName('ja', id), awardName('en', id)), profileId: p.profileId, holder: p.name });
       }
@@ -717,14 +768,14 @@ export class SeasonService implements SeasonHooks {
     const ps = started(d.participants);
     const fires = d.fires.filter((f) => !f.dup);
     const deeds = d.result ? d.deeds : [];
-    const max = Math.max(1, ...ps.map((p) => p.best.depth), ...d.public.map((x) => x.depth), ...d.spots.map((x) => x.depth), ...fires.map((x) => x.depth), ...deeds.map((x) => x.depth));
+    const max = Math.max(1, ...ps.map((p) => shownOf(p).best.depth), ...d.public.map((x) => x.depth), ...d.spots.map((x) => x.depth), ...fires.map((x) => x.depth), ...deeds.map((x) => x.depth));
     const out: SeasonSectionRow[] = [];
     for (let depth = 1; depth <= max; depth++) {
       const st = d.public.find((x) => x.depth === depth);
       const deed = deeds.find((x) => x.depth === depth);
       out.push({
         depth,
-        deepest: ps.filter((p) => p.best.depth === depth).map((p) => p.name),
+        deepest: ps.filter((p) => shownOf(p).best.depth === depth).map((p) => p.name),
         stairs: st ? { by: st.by } : null,
         spots: d.spots.filter((x) => x.depth === depth).sort((a, b) => a.order - b.order).map((x) => ({ kind: x.kind, by: x.by })),
         fires: fires.filter((x) => x.depth === depth).sort((a, b) => a.order - b.order).map((x) => ({ by: x.by, uses: x.uses })),

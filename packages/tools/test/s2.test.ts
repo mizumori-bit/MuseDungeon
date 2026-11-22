@@ -95,13 +95,17 @@ describe('S2 §18.2: titles', () => {
     const a = await seasonRun(m, 'Aya');
     const b = await seasonRun(m, 'Bo');
     m.seasons.invite(SID, 'Cid', m.profiles.store); // 招いただけ（ランを始めていない）
-    // 2 人とも地下 1 階・予算 0 で並ぶ: 冒険賞は 2 人とも 1 位。貢献・支援・生還は値 0 なので付かない
+    // 2 人とも地下 1 階・予算 0・確定点 500 で並ぶ: 生還賞は 2 人とも 1 位。冒険賞は最深が地下 1 階なので付かない（S2a §20.10 の 6）。貢献・支援は値 0 なので付かない
+    setBanked(a.session.world, a.playerId, 500);
+    setBanked(b.session.world, b.playerId, 500);
+    m.seasons.onCommit(a.session, []);
+    m.seasons.onCommit(b.session, []);
     finalize(m);
-    expect(titleNames(m)).toEqual(['Aya:冒険賞（S2試し）', 'Bo:冒険賞（S2試し）']);
+    expect(titleNames(m)).toEqual(['Aya:生還賞（S2試し）', 'Bo:生還賞（S2試し）']);
     const t = m.seasons.get(SID)!.result!.titles![0];
-    expect(t.name.en).toBe('Adventure award (S2試し)');
+    expect(t.name.en).toBe('Survival award (S2試し)');
     expect(t.kind).toBe('award');
-    expect(t.award).toBe('adventure');
+    expect(t.award).toBe('survival');
     void a; void b;
     m.closeAll();
   });

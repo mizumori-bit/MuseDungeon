@@ -3,7 +3,7 @@
 // 規則の知識（種族の名前や数値）は持たない。決められることは決めて知らせ（notify）、AI にしか決められないことだけ起こす（wake。§14.0）。
 // #3（rev の読み直し）と #4（queue）は呼ぶ側（pilot.ts）が先に済ませる。
 import type { Dir, ObsMonster, ObsPartyMember, Observation, Pos } from '@muse/shared';
-import { compassDir } from '@muse/shared';
+import { compassDir, fightRiskStop } from '@muse/shared';
 import type { PilotOrders, PilotPolicy } from './orders';
 
 /**
@@ -384,16 +384,15 @@ export function criticalFloor(obs: Observation): number {
 
 /**
  * その hp_floor の fight が、出す前に HP で断られるか（V4-1m C6。マクロの fight の始めの判定と同じ: macro.ts）:
- * hp_floor＝HP がすでに hp_floor 以下 / hp_risk＝次の手番に届く追跡中の敵（隣・飛び道具。隣で逃げている敵も）の 1 手の最悪の被害（観測の worst_turn）の
- * 合計を受けると hp_floor を割る。断られてから気づくのをやめる（Muse のソロで、hp_floor で断られた fight が 103 回）
+ * hp_floor＝HP がすでに hp_floor 以下 / hp_risk＝次の手番に届く追跡中の敵（隣・飛び道具。隣で逃げている敵も）の最悪の 1 手で倒れうるか、
+ * 見込みの被害で hp_floor を割る（S1d の 2 つの判定。S2a で shared の fightRiskStop に揃えた）。断られてから気づくのをやめる（Muse のソロで、hp_floor で断られた fight が 103 回）
  */
 export function fightRefusal(obs: Observation, hpFloor: number): 'hp_floor' | 'hp_risk' | null {
   const hp = obs.self.hp;
   if (hp <= hpFloor) return 'hp_floor';
-  const threats = obs.visible.monsters.filter((m) => (m.awareness === 'hunting' && !m.fleeing && (m.dist <= 1 || !!m.traits?.includes('ranged')))
-    || (m.awareness === 'hunting' && !!m.fleeing && m.dist <= 1));
-  const incoming = threats.reduce((a, m) => a + (m.worst_turn ?? 0), 0);
-  return incoming > 0 && hp - incoming < hpFloor ? 'hp_risk' : null;
+  // S2a §20.10 の 5: マクロと同じ判定（shared の fightRiskStop。数は観測の self.fight_risk＝マクロと同じ threatEstimate）。死にうる・見込みで hp_floor を割る
+  const est = obs.self.fight_risk;
+  return est && fightRiskStop(hp, hpFloor, est) ? 'hp_risk' : null;
 }
 
 function stairsOf(obs: Observation) {

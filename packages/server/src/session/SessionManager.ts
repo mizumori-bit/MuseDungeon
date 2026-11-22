@@ -227,6 +227,14 @@ export class SessionManager {
         };
       });
       const alive = players.filter((p) => p.state === 'alive' || p.state === 'at_camp').length;
+      // 進行中のシーズンのラン（S2a §20.10 の 2）: 名前と、シーズンのランであることだけ（今いる階・レベル・状態・遠征・進み具合を出さない。外との出入りはキャンプでだけ）
+      if (w.meta.season && w.status === 'active') {
+        out.push({
+          runId: s.runId, status: w.status, mode: w.meta.mode, season: w.meta.season.id, createdAt: s.createdAt, updatedAt: s.createdAt, seq: 0, live: true, joinable: false,
+          players: players.map((p) => ({ id: p.id, name: p.name, classId: p.classId, controller: p.controller, state: 'alive', depth: null, level: 0, hidden: true })),
+        });
+        continue;
+      }
       out.push({
         runId: s.runId, status: w.status, mode: w.meta.mode, ...(w.meta.season ? { season: w.meta.season.id } : {}), createdAt: s.createdAt, updatedAt: s.updatedAt, seq: w.seq,
         live: true, joinable: w.status === 'active' && alive < w.meta.options.maxPlayers, players, summary: s.summary() ?? undefined,

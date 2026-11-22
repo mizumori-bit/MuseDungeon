@@ -130,6 +130,8 @@ export function Lobby() {
   const classes = catalog ? Object.entries(catalog.classes) : [];
 
   const playersText = (r: RunListing) => r.players.map((p) => {
+    // 進行中のシーズンのラン（S2a）: サーバーが状態・階・レベルを伏せる。名前とシーズンのランであることだけ
+    if (p.hidden) return `${p.name}(${p.controller.kind === 'agent' ? 'AI' : p.controller.kind === 'unknown' ? '?' : tr('人', 'H')} ${tr(`シーズン ${r.season ?? ''}`, `season ${r.season ?? ''}`)})`;
     const sp = r.summary?.players.find((x) => x.id === p.id);
     const banked = sp?.banked !== undefined ? tr(` 確定${sp.banked}`, ` banked ${sp.banked}`) : '';
     // 復旧できなかったラン（V4-1m §37.1）で要約が無い者は、状態が分からない（一覧の既定の「死亡」を出さない）

@@ -1,7 +1,7 @@
 // ベースライン bot（ランダム／貪欲）。AI と同じ PlayerPort・同じ Command・同じ観測だけを使う。
 // 貪欲 bot は遠征を遊ぶ: 目的を追い、達成したら階段の上で extract、キャンプでは次の遠征を選ぶ。
 import type { Command, Dir, ExpeditionEndReason, OfferSlot, PlayerView } from '@muse/shared';
-import { abilityStatus, buildNavGrid, cheb, compassDir, DIR_VEC, dirTo, DIRS, distanceField, isCursedItem, offerGap, offerWardenExtra, perkChoice, Rng } from '@muse/shared';
+import { abilityStatus, buildNavGrid, cheb, compassDir, DIR_VEC, dirTo, DIRS, distanceField, fightRiskStop, fightThreats, isCursedItem, offerGap, offerWardenExtra, perkChoice, Rng, threatEstimate } from '@muse/shared';
 import type { Catalog } from '@muse/shared';
 import type { PlayerPort, SessionManager } from '@muse/server';
 
@@ -575,7 +575,9 @@ export async function playWithPort(port: PlayerPort, opts: BotOptions): Promise<
       // fight が被弾の前の停止（hp_risk）で断られた: 隣の相手なら 1 発だけ殴る（待つと一方的に殴られる）
       const nv = port.view();
       const tg = cmd.type === 'fight' && out.error.code === 'hp_floor' ? nv.entities.find((e) => e.id === cmd.target) : undefined;
-      if (tg && nv.self.pos && cheb(tg.pos, nv.self.pos) <= 1 && nv.status === 'your_turn') {
+      // 死にうる（最悪の 1 手で倒れうる）ときは殴らない（S2a §20.10 の 5。マクロの 1 つ目の判定と同じ）
+      const lethal = !!nv.self.pos && fightRiskStop(nv.self.stats.hp, 0, threatEstimate(nv, port.catalog, fightThreats(port.catalog, nv.entities.filter((e) => e.cat === 'monster'), nv.self.pos))) === 'lethal';
+      if (tg && !lethal && nv.self.pos && cheb(tg.pos, nv.self.pos) <= 1 && nv.status === 'your_turn') {
         await port.act({ type: 'move', dir: dirTo(nv.self.pos, tg.pos)! }, { source: 'bot' });
         continue;
       }

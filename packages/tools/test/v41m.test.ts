@@ -169,10 +169,16 @@ describe('V4-1m §37.1: 長いランの復旧・復旧に失敗したランを�
 
 // ---- pilot の判断（観測は最小限の写し） ----
 type Over = { monsters?: ObsMonster[]; party?: ObsPartyMember[]; hp?: number; alerts?: Observation['alerts']; frontiers?: number; stairs?: Observation['navigation']['known_stairs']; depth?: number };
+// 観測の self.fight_risk（S2a: pilot はマクロと同じ fightRiskStop をこの数で使う）。作り物の観測では、脅威の worst_turn の合計を最悪と見込みの両方に置く
+function riskOf(monsters: readonly ObsMonster[]): { fight_risk?: { expected: number; worst: number; unrecorded: number } } {
+  const th = monsters.filter((m) => m.awareness === 'hunting' && ((!m.fleeing && (m.dist <= 1 || !!m.traits?.includes('ranged'))) || (!!m.fleeing && m.dist <= 1)));
+  const sum = th.reduce((a, m) => a + (m.worst_turn ?? 0), 0);
+  return th.length ? { fight_risk: { expected: sum, worst: sum, unrecorded: th.filter((m) => m.worst_turn === null).length } } : {};
+}
 function fieldObs(o: Over = {}): Observation {
   return {
     status: 'your_turn', seq: 100, summary: 's', alerts: o.alerts ?? [],
-    self: { name: 'P', class: 'x', level: 5, xp: 0, xp_next: 10, hp: o.hp ?? 40, max_hp: 40, statuses: [], pos: { x: 20, y: 10 }, floor: { depth: o.depth ?? 3 }, attack: { acc: 5, dmg: '1d6', throws: [] }, defense: { eva: 0, armor: 0 }, recovery: [], inventory: [] },
+    self: { name: 'P', class: 'x', level: 5, xp: 0, xp_next: 10, hp: o.hp ?? 40, max_hp: 40, statuses: [], pos: { x: 20, y: 10 }, floor: { depth: o.depth ?? 3 }, attack: { acc: 5, dmg: '1d6', throws: [] }, defense: { eva: 0, armor: 0 }, recovery: [], inventory: [], ...riskOf(o.monsters ?? []) },
     visible: { monsters: o.monsters ?? [], items: [], players: [], features: [] },
     party: o.party ?? [],
     navigation: { known_stairs: o.stairs ?? [], frontiers: Array.from({ length: o.frontiers ?? 0 }, () => ({ pos: { x: 1, y: 1 }, dir: 'w', dist: 3 })), collectable: { count: 0, ids: [] } },

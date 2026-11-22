@@ -142,7 +142,9 @@ describe('S1 §8.1・§8.2: placing a campfire', () => {
     expect(firesOn(w, k1).map((e) => `${e.pos!.x},${e.pos!.y}|${e.campfire!.by}`)).toEqual([`${c1.x},${c1.y}|Aya`]);
     expect(w.season!.placed).toEqual([{ depth: 1, x: c1.x, y: c1.y }]);
     // 生還賞の数字（確定点）も下がる
-    expect(m.seasons.standings(SID)!.standings[0].survival?.value).toBe(900);
+    // 公開の値（順位の表）は、キャンプに着いたときに変わる（S2a §20.10 の 2）。内部の記録は、その場で下がる
+    expect(m.seasons.standings(SID)!.standings[0].survival?.value).toBe(0);
+    expect(m.seasons.get(SID)!.participants[0].runs[0].banked).toBe(900);
     // 見えるもの: 置いた者の名前
     expect(a.port.observe().observation.visible.features.find((f) => f.type === 'core:camp_fire')?.by).toBe('Aya');
     const err = async (p: Pos) => { const r = await placeFireAt(a, p); return r.ok ? 'ok' : r.error.message; };
@@ -763,8 +765,10 @@ describe('S1a §10.1: fixes', () => {
     const k1 = floorOf(a);
     expect((await placeFireAt(a, openCells(w, k1, [w.floors[k1].entry, ...w.floors[k1].stairs.down], 2)[0])).ok).toBe(true);
     expect(w.players[a.playerId].stats.banked).toBe(900);
-    expect(m.seasons.standings(SID)!.standings[0].survival!.value).toBe(900);
     await lifelineHome(a);
+    // 生還賞の数字（公開はキャンプに着いたとき。S2a）は費用を引いた後
+    expect(m.seasons.standings(SID)!.standings[0].survival!.value).toBe(w.players[a.playerId].stats.banked);
+    expect(w.players[a.playerId].stats.banked).toBeLessThan(1000);
     const prof = m.profiles.store.resolve(a.ptoken)!;
     const run = m.profiles.store.get(prof.id)!.runs.find((x) => x.runId === a.session.runId)!;
     expect(run.banked).toBe(1000);

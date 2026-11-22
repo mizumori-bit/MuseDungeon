@@ -5,7 +5,7 @@ import { abilityStatus, accBonuses, curseUnknown, isCursedItem, perkChoice, shor
 import { armorWithStatuses, boonHookSum, haulTotal, isMilestoneOf, nameOf, nextCampOf, nextOverreach, offerGap, offerWardenExtra, overreachPoints, payoutOf, regenInterval, regenStep, restCapHp, stairsSealed } from './catalog';
 import { floorTraitsText, guardianDisplayName, multText, objectiveText, offerText, partsText, progressText, resultText } from './expedition';
 import { COLLECT_WITHIN, collectTargets, isStationary, pickableItems, sameOrWorseEquip, worseEquip } from './macro';
-import { attacksPerTurn, avgHitsOf, chaseAttacks, memoryOf, monsterSpeedOf, selfSpeed, threatEstimate } from './danger';
+import { attacksPerTurn, avgHitsOf, chaseAttacks, fightThreats, memoryOf, monsterSpeedOf, selfSpeed, threatEstimate } from './danger';
 import type { PerceivedEvent } from './filter';
 import { lastWithoutXp } from './filter';
 import type { ReportCompare } from './expeditionStats';
@@ -278,6 +278,11 @@ export interface Observation {
     score: { banked: number; expeditions_completed: number };
     /** HP が減っているときのみ: 全快まで休んだ場合の見積もり */
     rest_estimate?: RestEstimate;
+    /**
+     * fight の被弾の前の判定の数（S2a §20.10 の 5。迷宮で、fight の脅威（追跡中の隣か飛び道具）がいるときだけ）。マクロの fight と同じ shared の threatEstimate:
+     * worst＝全員が記録の最大の一撃（会心を含む）、expected＝いちばん重い 1 体は会心でない最大・残りは平均、unrecorded＝記録の無い敵の数。判定は fightRiskStop
+     */
+    fight_risk?: { expected: number; worst: number; unrecorded: number };
     /** ビルド（V3-4）: 取った特技（ranks は段階）・覚えた能動技（cooldown_left 0 なら使える。uses_left は遠征ごとの回数の残り） */
     perks: { id: string; name: string; ranks: number }[];
     abilities: { id: string; name: string; cooldown_left: number; uses_left?: number; target: 'adjacent' | 'throw' | 'dir' | 'none' }[];
@@ -1685,6 +1690,11 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
     valid_actions,
   };
   if (rest && rest.blocked_by !== 'hostile_hunting') obs.self.rest_estimate = rest;
+  // fight の被弾の前の判定の数（S2a §20.10 の 5: pilot がマクロと同じ判定をするため）
+  if (me.pos && view.status !== 'at_camp') {
+    const threats = fightThreats(catalog, view.entities.filter((e) => e.cat === 'monster'), me.pos);
+    if (threats.length) obs.self.fight_risk = threatEstimate(view, catalog, threats);
+  }
   if (expedition) obs.expedition = expedition;
   if (camp) obs.camp = camp;
   const season = seasonObs(view, catalog.rules.seasonFire?.perSeason);

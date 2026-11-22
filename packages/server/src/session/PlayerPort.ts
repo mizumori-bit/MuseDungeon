@@ -459,7 +459,10 @@ export class SessionPlayerPort implements PlayerPort {
     const view = this.view();
     if (!r.ok) {
       const res = this.render(view, 'action_rejected', { recent: [], changes: true });
-      const payload: ActionFailure = { ok: false, error: r.error, valid_actions: res.observation.valid_actions, turn: res.turn };
+      // その方角に行ける境界が無いと断った explore toward の行は、同じ応答の「できること」に出さない（S2a §20.6 の 2。観測は境界の数だけで出すので、方角の境界までは見ない）
+      const toward = cmd.type === 'explore' && cmd.toward && (r.error.details as { stop?: string } | undefined)?.stop === 'toward_exhausted' ? `explore toward:${cmd.toward}` : null;
+      const valid = toward ? res.observation.valid_actions.filter((l) => !l.startsWith(toward)) : res.observation.valid_actions;
+      const payload: ActionFailure = { ok: false, error: r.error, valid_actions: valid, turn: res.turn };
       return payload;
     }
     const perceived = this.session.consumeFor(this.playerId);
@@ -523,7 +526,8 @@ export class SessionPlayerPort implements PlayerPort {
           const adj = obsNow.visible.monsters.filter((x) => x.awareness === 'hunting' && !x.fleeing && x.dist <= 1).length;
           const hpNow = after.self.stats.hp;
           const k = inc > 0 ? Math.min(3, Math.trunc((hpNow - 1) / inc)) : 0;
-          if (adj >= 2 && k >= 2) outcome += t(L, ` 隣に ${adj} 体いるので、この hp_floor では毎手番止まる。hp_floor を ${hpNow - k * inc} にすれば ${k} 手番続く。`, ` ${adj} enemies are adjacent, so this hp_floor stops every turn; hp_floor ${hpNow - k * inc} keeps going for ${k} turns.`);
+          // 死にうるときは、hp_floor の話をしない（S2a §20.10 の 3）
+          if (adj >= 2 && k >= 2 && !(est.worst > 0 && hpNow <= est.worst)) outcome += t(L, ` 隣に ${adj} 体いるので、この hp_floor では毎手番止まる。hp_floor を ${hpNow - k * inc} にすれば ${k} 手番続く。`, ` ${adj} enemies are adjacent, so this hp_floor stops every turn; hp_floor ${hpNow - k * inc} keeps going for ${k} turns.`);
         }
         // 予備動作で止まった（S1c §14.4 の 4）: 的になっているマス（大振りのマス・突進の直線）と、自分がそこにいるか、外れる一歩。observe を呼び直さなくて済むように
         if (r.interruptedBy === 'intent') outcome += intentStopText(L, view, this.catalog);

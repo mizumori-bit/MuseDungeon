@@ -18,7 +18,7 @@ import { placeSeasonFires } from './campfire';
 import { advance, endTurn } from './scheduler';
 import { recomputeStats } from './stats';
 
-export const ENGINE_VERSION = '0.42.1';
+export const ENGINE_VERSION = '0.42.2';
 
 export interface CreateRunParams {
   runId: string;

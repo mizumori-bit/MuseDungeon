@@ -51,6 +51,8 @@ export interface RunListingPlayer {
   state: PlayerState;
   depth: number | null;
   level: number;
+  /** 進行中のシーズンのラン（S2a）: 状態・階・レベルを伏せた（state・depth・level は意味を持たない） */
+  hidden?: true;
 }
 
 export interface RunListing {
