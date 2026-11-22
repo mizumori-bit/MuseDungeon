@@ -31,7 +31,7 @@ async function openSpectator(port: number, hello: Record<string, unknown>): Prom
       raw.push(String(data));
       const m = JSON.parse(String(data)) as ServerMsg;
       msgs.push(m);
-      if (m.t === 'view') { clearTimeout(timer); resolve(); }
+      if (m.t === 'view' || m.t === 'snapshot') { clearTimeout(timer); resolve(); }
       if (m.t === 'error') { clearTimeout(timer); reject(new Error(m.error.message)); }
     });
     ws.on('error', reject);
@@ -39,7 +39,23 @@ async function openSpectator(port: number, hello: Record<string, unknown>): Prom
   return { msgs, raw, close: () => ws.close() };
 }
 
+/** 1 通送って、閉じるか時間が来るまでに届いたもの */
+function sendOnce(port: number, payload: string, follow?: (ws: WebSocket) => void): Promise<{ msgs: ServerMsg[]; closed: boolean }> {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+    const msgs: ServerMsg[] = [];
+    let closed = false;
+    const done = () => { clearTimeout(timer); try { ws.close(); } catch { /* 閉じている */ } resolve({ msgs, closed }); };
+    const timer = setTimeout(done, 800);
+    ws.on('open', () => { ws.send(payload); follow?.(ws); });
+    ws.on('message', (raw) => msgs.push(JSON.parse(String(raw)) as ServerMsg));
+    ws.on('close', () => { closed = true; done(); });
+    ws.on('error', reject);
+  });
+}
+
 const settle = () => new Promise((r) => setTimeout(r, 200));
+const listenerCount = (s: unknown) => (s as { listeners: Set<unknown> }).listeners.size;
 const views = (msgs: ServerMsg[]) => msgs.filter((m): m is Extract<ServerMsg, { t: 'view' }> => m.t === 'view');
 
 describe('follow-only spectating sends the perceived events of the followed player, one frame per step', () => {
@@ -137,6 +153,114 @@ describe('follow-only spectating sends the perceived events of the followed play
       expect(got.length).toBeGreaterThan(0);
       expect(JSON.stringify(got)).toBe(JSON.stringify(want));
       expect(frames.every((f) => f.view.playerId === a.playerId)).toBe(true);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+describe('WS entry points do not take the server down on odd input', () => {
+  it('a follow that is not a player of the run (toString, __proto__, constructor, unknown ID) is refused; the server keeps running', async () => {
+    for (const policy of ['follow_only', 'omniscient'] as const) {
+      const m = new SessionManager(content, loadConfig({ runsDir: null, profilesDir: null, seasonsDir: null, waitOthersMs: 100, spectatorPolicy: policy }));
+      const a = await m.createRun({ name: 'A', seed: 'wft-bad-1', controller: agent });
+      if ('error' in a) throw new Error(a.error.message);
+      await a.port.act({ type: 'start_expedition', offer: 1 }, { source: 'bot' });
+      const { app, port } = await listen(m);
+      try {
+        for (const follow of ['toString', '__proto__', 'constructor', 'hasOwnProperty', 'p_nobody', 42, { x: 1 }]) {
+          for (const mode of ['follow', 'director']) {
+            const r = await sendOnce(port, JSON.stringify({ t: 'hello', role: 'spectator', runId: a.session.runId, mode, follow }));
+            const e = r.msgs.find((x) => x.t === 'error');
+            expect(e && e.t === 'error' ? e.error.code : null, `${policy} ${mode} ${String(follow)}`).toBe('bad_request');
+            expect(r.msgs.some((x) => x.t === 'view' || x.t === 'snapshot'), `${policy} ${mode} ${String(follow)}`).toBe(false);
+            expect(r.closed).toBe(true);
+          }
+        }
+        // __proto__ をキーに持つ JSON（JSON.parse は自分のキーとして作る）
+        const proto = await sendOnce(port, `{"t":"hello","role":"spectator","runId":"${a.session.runId}","mode":"follow","__proto__":{"follow":"x"},"follow":"__proto__"}`);
+        expect(proto.msgs.some((x) => x.t === 'error')).toBe(true);
+        // 形の崩れた hello（null・数・runId が文字列でない）も、断って閉じる
+        for (const payload of ['null', '5', '"hello"', JSON.stringify({ t: 'hello', role: 'spectator', runId: { a: 1 }, mode: 'follow' }), JSON.stringify({ t: 'hello', role: 'player', runId: a.session.runId, token: { toString: 1 } })]) {
+          const r = await sendOnce(port, payload);
+          expect(r.msgs.some((x) => x.t === 'error'), payload).toBe(true);
+          expect(r.closed, payload).toBe(true);
+        }
+        // follow を省くと、今までどおり最初のプレイヤー。正しい ID も通る
+        const ok1 = await openSpectator(port, { runId: a.session.runId, mode: 'follow' });
+        ok1.close();
+        if (policy === 'follow_only') expect(views(ok1.msgs)[0].view.playerId).toBe(a.playerId);
+        const ok2 = await openSpectator(port, { runId: a.session.runId, mode: 'follow', follow: a.playerId });
+        ok2.close();
+        // サーバーはまだ動いていて、命令も通る
+        const r = await a.port.act({ type: 'wait' }, { source: 'bot' });
+        expect(r.ok).toBe(true);
+      } finally {
+        await app.close();
+      }
+    }
+  });
+
+  it('player WS: odd messages and query arguments get an error frame, not a crash', async () => {
+    const m = new SessionManager(content, loadConfig({ runsDir: null, profilesDir: null, seasonsDir: null, waitOthersMs: 100 }));
+    const a = await m.createRun({ name: 'A', seed: 'wft-bad-2', controller: { kind: 'human', label: 'h' } });
+    if ('error' in a) throw new Error(a.error.message);
+    await a.port.act({ type: 'start_expedition', offer: 1 }, { source: 'bot' });
+    const { app, port } = await listen(m);
+    try {
+      const odd = ['null', '7', JSON.stringify({ t: 'query', id: '1', kind: 'look', args: { target: { x: 1.5, y: 0 } } }), JSON.stringify({ t: 'query', id: '2', kind: 'look', args: { target: 5 } }),
+        JSON.stringify({ t: 'query', id: '3', kind: 'map', args: { region: { x: 0, y: 0, w: 1e9, h: 1e9 } } }), JSON.stringify({ t: 'query', id: '4', kind: 'look', args: { target: 'toString' } }),
+        JSON.stringify({ t: 'command', command: { type: 'wait' }, thought: { a: 1 }, expectSeq: 'x' })];
+      const r = await sendOnce(port, JSON.stringify({ t: 'hello', role: 'player', runId: a.session.runId, token: a.token }), (ws) => { for (const p of odd) ws.send(p); });
+      expect(r.closed).toBe(false);
+      expect(r.msgs[0]?.t).toBe('welcome');
+      expect(r.msgs.filter((x) => x.t === 'error').length).toBeGreaterThanOrEqual(5);
+      // 名前で引く look は、見えない相手として答える
+      expect(r.msgs.some((x) => x.t === 'result' && x.id === '4')).toBe(true);
+      // 形の崩れた thought・expectSeq は捨てて、命令は通る
+      expect(a.session.history.some((e) => e.type === 'thought' && typeof (e as { text?: unknown }).text !== 'string')).toBe(false);
+      const ok = await a.port.act({ type: 'wait' }, { source: 'bot' });
+      expect(ok.ok).toBe(true);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('a listener that throws does not stop the command result or the other listeners; spectator listeners go away on close', async () => {
+    const m = new SessionManager(content, loadConfig({ runsDir: null, profilesDir: null, seasonsDir: null, waitOthersMs: 100 }));
+    const a = await m.createRun({ name: 'A', seed: 'wft-bad-3', controller: agent });
+    if ('error' in a) throw new Error(a.error.message);
+    await a.port.act({ type: 'start_expedition', offer: 1 }, { source: 'bot' });
+    const s = a.session;
+    let calls = 0, macros = 0;
+    const err = console.error;
+    const logged: string[] = [];
+    console.error = (...x: unknown[]) => { logged.push(x.map(String).join(' ')); };
+    try {
+      const off1 = s.addListener({ onEvents: () => { throw new Error('boom'); }, onMacro: () => { throw new Error('boom'); } });
+      const off2 = s.addListener({ onEvents: () => { calls++; }, onMacro: () => { macros++; } });
+      const r1 = await a.port.act({ type: 'wait' }, { source: 'bot' });
+      expect(r1.ok).toBe(true);
+      expect(calls).toBeGreaterThan(0);
+      const r2 = await a.port.act({ type: 'explore' } as Command, { source: 'bot' });
+      expect(r2.ok).toBe(true);
+      expect(macros).toBeGreaterThanOrEqual(2);
+      expect(logged.some((l) => l.includes('boom'))).toBe(true);
+      off1(); off2();
+    } finally {
+      console.error = err;
+    }
+    // 観戦者のリスナーは、切れた後に外れる
+    const { app, port } = await listen(m);
+    try {
+      const n0 = listenerCount(s);
+      for (const hello of [{ runId: s.runId, mode: 'follow', follow: a.playerId }, { runId: s.runId, mode: 'director' }]) {
+        const sp = await openSpectator(port, hello);
+        expect(listenerCount(s)).toBeGreaterThan(n0);
+        sp.close();
+        await settle();
+        expect(listenerCount(s)).toBe(n0);
+      }
     } finally {
       await app.close();
     }

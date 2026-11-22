@@ -64,8 +64,13 @@ export class SpectatorPort {
     return this.session.addListener({ onEvents: flush });
   }
 
+  /** そのランのプレイヤーか（利用者の文字列で World の players を引かない: `toString`・`__proto__` などが真になる） */
+  hasPlayer(pid: unknown): pid is PlayerId {
+    return typeof pid === 'string' && this.session.world.playerOrder.includes(pid) && Object.hasOwn(this.session.world.players, pid);
+  }
+
   followView(pid: PlayerId): PlayerView | null {
-    if (!this.session.world.players[pid]) return null;
+    if (!this.hasPlayer(pid)) return null;
     return projectPlayerView(this.session.world, pid);
   }
 
@@ -74,11 +79,13 @@ export class SpectatorPort {
    * （RunSession が filterEventsForPlayer で作ったその人のメッセージ。ほかの者にしか届かない出来事は入らない）
    */
   followPerceivedSince(pid: PlayerId, seq: number): PerceivedEvent[] {
+    if (!this.hasPlayer(pid)) return [];
     return this.session.messages(pid).filter((m) => m.seq > seq);
   }
 
   /** この出来事の中に、追従の相手が知覚したもの（filterEventsForPlayer に残るもの）があるか。view はその相手の今の PlayerView */
   followPerceives(pid: PlayerId, events: readonly GameEvent[], view: PlayerView): boolean {
+    if (!this.hasPlayer(pid)) return false;
     return filterEventsForPlayer(events, pid, view).length > 0;
   }
 

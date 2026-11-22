@@ -307,7 +307,7 @@ export class RunSession {
         for (const pid of this.world.playerOrder) if (this.world.players[pid].state === 'at_camp') void this.enqueue(() => this.seasonSyncNow(pid, 'camp'));
       }
     }
-    if (events.length) for (const l of this.listeners) l.onEvents?.(events);
+    if (events.length) this.notify((l) => l.onEvents?.(events));
     for (const w of [...this.waiters]) w();
     this.scheduleTimeouts();
   }
@@ -521,6 +521,20 @@ export class RunSession {
     return () => this.listeners.delete(l);
   }
 
+  /**
+   * リスナーに知らせる。1 つのリスナー（観戦者の枠を作る・送るなど）の例外で、ほかのリスナーと、確定の残り（待っている者・手番の時計）と、
+   * 命令の結果を飛ばさない。例外はログに 1 行出して捨てる
+   */
+  private notify(fn: (l: SessionListener) => void): void {
+    for (const l of this.listeners) {
+      try {
+        fn(l);
+      } catch (e) {
+        console.error(`[listener] ${this.runId} のリスナーで例外（捨てた）: ${String((e as Error)?.message ?? e).split('\n')[0]}`);
+      }
+    }
+  }
+
   playerOptions(pid: PlayerId): PlayerOptions {
     return this.options.get(pid) ?? DEFAULT_PLAYER_OPTIONS;
   }
@@ -555,7 +569,7 @@ export class RunSession {
   recordAgentActivity(a: AgentActivity): void {
     this.agentActivity.push(a);
     if (this.agentActivity.length > 50) this.agentActivity.shift();
-    for (const l of this.listeners) l.onAgent?.(a);
+    this.notify((l) => l.onAgent?.(a));
   }
 
   /** 状態が変わるか timeoutMs 経過まで待つ */
@@ -704,7 +718,7 @@ export class RunSession {
     let stop: MacroStop | 'waiting_others' = 'step_limit';
     let firstError: ActionError | null = null;
     this.macroActive.add(pid);
-    for (const l of this.listeners) l.onMacro?.({ playerId: pid, kind: cmd.type, state: 'running', steps: 0 });
+    this.notify((l) => l.onMacro?.({ playerId: pid, kind: cmd.type, state: 'running', steps: 0 }));
     try {
     for (;;) {
       if (!this.isTurn(pid)) {
@@ -725,12 +739,12 @@ export class RunSession {
       if (!r.ok) { firstError = r.error; stop = 'error'; break; }
       appendAll(all, r.events);
       lastEvents = r.events;
-      if (state.steps % 5 === 0) for (const l of this.listeners) l.onMacro?.({ playerId: pid, kind: cmd.type, state: 'running', steps: state.steps });
+      if (state.steps % 5 === 0) this.notify((l) => l.onMacro?.({ playerId: pid, kind: cmd.type, state: 'running', steps: state.steps }));
     }
     } finally {
       this.macroActive.delete(pid);
     }
-    for (const l of this.listeners) l.onMacro?.({ playerId: pid, kind: cmd.type, state: 'stopped', steps: state.steps, reason: stop });
+    this.notify((l) => l.onMacro?.({ playerId: pid, kind: cmd.type, state: 'stopped', steps: state.steps, reason: stop }));
     if (firstError && state.steps <= 1 && !all.length) return { ok: false, error: firstError };
     const end = this.view(pid);
     const sameFloor = end.floor?.key === state.floorKey;
