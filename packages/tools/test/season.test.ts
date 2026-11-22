@@ -137,7 +137,8 @@ describe('S0 §2.3: the stairs are in the same place in every season run', () =>
     await playWithPort(b.port, { kind: 'greedy', seed: 'b', maxActs: 3000, offerSlot: 'ambitious', levelAware: true, direct: true, cautious: false });
     const sa = stairsOf(a.session.history), sb = stairsOf(b.session.history);
     const common = [...sa.keys()].filter((k) => sb.has(k));
-    expect(common.length).toBeGreaterThanOrEqual(4);
+    // 重なる階の数は bot の進み方による（S2b §23.2 で bot が早めに退くようにして、4 から 3 になった）。決まりの確かめには 3 階で足りる
+    expect(common.length).toBeGreaterThanOrEqual(3);
     for (const k of common) expect(sb.get(k), k).toBe(sa.get(k));
     // どちらも同じシーズンのシードで、版も同じ
     expect(a.session.world.secret.seed).toBe(b.session.world.secret.seed);

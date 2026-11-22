@@ -173,6 +173,30 @@ function sidestep(port: PlayerPort, v: PlayerView, from: { x: number; y: number 
   return null;
 }
 
+/**
+ * 退く手（S2b §23.2。計測の bot だけ）: 死にうる・余力が無いときに、本当に助かる見込みのある手だけを返す。
+ * 階段の上なら extract → 回復の薬 → 近い階段（経路 2 歩まで）への flee（隣の追跡中の敵が自分より速くなく、撃ってくる敵もいなければ）→ 帰還の綱（その場で戻る）。
+ * どれも無ければ null（殴る）。「相手が弱っていれば殴る」は入れない（記録: 重傷のオークの荒くれを殴り続けて倒れたランが 2 つあった。§23.2）
+ */
+function retreatCmd(port: PlayerPort, v: PlayerView, o: { onStairs: boolean; complete: boolean }): Command | null {
+  if (o.onStairs) return o.complete ? { type: 'extract' } : { type: 'extract', confirm: true };
+  const healing = v.inventory.find((i) => i.kind === 'core:potion_healing');
+  if (healing) return { type: 'use', slot: healing.slot };
+  const obs = port.observe({ map: false }).observation;
+  const reach = obs.visible.monsters.filter((m) => m.awareness === 'hunting' && !m.fleeing && (m.dist <= 1 || !!m.traits?.includes('ranged')));
+  const fasterAdj = reach.some((m) => m.dist <= 1 && m.speed === 'fast');
+  const st = obs.navigation.known_stairs.filter((x) => x.path_len !== null && x.path_len <= 2).sort((a, b) => a.path_len! - b.path_len!)[0];
+  if (st && !fasterAdj && !reach.some((m) => m.traits?.includes('ranged'))) return { type: 'travel', to: st.type === 'up' ? 'stairs_up' : 'stairs_down', mode: 'flee' };
+  const lifeline = v.inventory.find((i) => i.kind === 'core:lifeline');
+  if (lifeline) return { type: 'use', slot: lifeline.slot };
+  return null;
+}
+
+/** 死にうる（最悪の 1 手で倒れうる。マクロの fight の 1 つ目の判定と同じ） */
+function lethalNow(port: PlayerPort, v: PlayerView): boolean {
+  return !!v.self.pos && fightRiskStop(v.self.stats.hp, 0, threatEstimate(v, port.catalog, fightThreats(port.catalog, v.entities.filter((e) => e.cat === 'monster'), v.self.pos))) === 'lethal';
+}
+
 export function greedyDecide(port: PlayerPort, rng: Rng, memo: BotMemo): Command {
   const v = port.view();
   // 特技は手番を使わずに選べるので、候補が出たらすぐ選ぶ（V3-4）
@@ -231,18 +255,19 @@ export function greedyDecide(port: PlayerPort, rng: Rng, memo: BotMemo): Command
   // 立て直し（遠征ごとに 1 回）は薬より先に使う
   if (hp < 40 && (adj || hostiles.length) && ready(v, port.catalog, 'core:second_wind')) return { type: 'ability', id: 'second_wind' };
   if (hp < 35 && healing && (adj || hostiles.length)) return { type: 'use', slot: healing.slot };
-  if (hp < 25 && unknownPotion && adj) return { type: 'use', slot: unknownPotion.slot };
-  // 退く（V3-2R2 §18.1）: 余力が無く、群れ（追跡中 2 体以上）か一撃で倒されうる相手がいる。
-  // 階段の上なら extract（達成済みなら帰還、未達成なら撤退）、遠ければ帰還の綱。達成済みで階段の上なら相手によらず帰る
+  // 退く（V3-2R2 §18.1。S2b §23.2 で見直し）: 死にうる（最悪の 1 手で倒れうる）か、余力が無く（HP 30% 未満）一撃で倒されうる相手か撃ってくる相手がいる。
+  // 助かる見込みのある手（retreatCmd）を、未鑑定の薬より先に
   const huntingNow = hostiles.filter((h) => h.awareness === 'hunting' && !h.fleeing);
-  if (hp < 30 && huntingNow.length) {
-    if (onStairs && complete) return { type: 'extract' };
-    // 1 手で倒されうる（lethal_range）ときだけ退く（群れでも押し切れるなら戦う）
-    // 階段の上なら extract、そうでなければ綱（§22.2 の「綱の前に階段へ退く」は V3-2R3b §23.1 で取り消し）
-    const danger = port.observe({ map: false }).observation.alerts.some((a) => a.code === 'lethal_range');
-    if (danger && onStairs) return { type: 'extract', confirm: true };
-    if (danger && lifeline) return { type: 'use', slot: lifeline.slot };
+  if (onStairs && complete && hp < 30 && huntingNow.length) return { type: 'extract' };
+  if (huntingNow.length) {
+    // 余力が無い（HP 30% 未満）か、死にうる: 押し切らずに退く（記録: HP 30% 未満で隣の相手と殴り合って倒れたランが多かった。§23.2）
+    if (lethalNow(port, v) || hp < 30) {
+      const r = retreatCmd(port, v, { onStairs, complete });
+      if (r) return r;
+    }
   }
+  if (hp < 25 && unknownPotion && adj) return { type: 'use', slot: unknownPotion.slot };
+  void lifeline;
   // 能動技は fight に載せる（使える手番ごとに fight が使う。V3-4a §25.3）
   const meleeAbilities = v.self.build.abilities.map((a) => a.id).filter((id) => ['strike', 'cleave'].includes(port.catalog.abilities[id]?.handler ?? ''));
   const withAb = (ids: string[]) => (ids.length ? { abilities: ids } : {});
@@ -578,16 +603,12 @@ export async function playWithPort(port: PlayerPort, opts: BotOptions): Promise<
       // 死にうる（最悪の 1 手で倒れうる）ときは殴らない（S2a §20.10 の 5。マクロの 1 つ目の判定と同じ）
       const lethal = !!nv.self.pos && fightRiskStop(nv.self.stats.hp, 0, threatEstimate(nv, port.catalog, fightThreats(port.catalog, nv.entities.filter((e) => e.cat === 'monster'), nv.self.pos))) === 'lethal';
       if (tg && nv.self.pos && cheb(tg.pos, nv.self.pos) <= 1 && nv.status === 'your_turn') {
-        // 死にうるときは、逃げる手を先に試す（S2b: 階段へ flee → 回復の薬 → 帰還の綱）。どれも無ければ、前のとおり 1 発殴る
+        // 死にうるときは、助かる見込みのある退く手を先に（S2b §23.2: retreatCmd）。無ければ、前のとおり 1 発殴る
         if (lethal) {
-          let fled = false;
-          for (const to of ['stairs_up', 'stairs_down'] as const) {
-            if ((await port.act({ type: 'travel', to, mode: 'flee' }, { source: 'bot' })).ok) { fled = true; break; }
-          }
-          const inv = port.view().inventory;
-          const escape = fled ? undefined : inv.find((i) => i.kind === 'core:potion_healing') ?? inv.find((i) => i.kind === 'core:lifeline');
-          if (!fled && escape && port.view().status === 'your_turn') fled = (await port.act({ type: 'use', slot: escape.slot }, { source: 'bot' })).ok;
-          if (fled) continue;
+          const onSt = !!port.catalog.terrain[nv.terrainTable[nv.memory.terrain[nv.self.pos.y * (nv.floor?.width ?? 0) + nv.self.pos.x]]]?.stairs;
+          const xv = nv.expedition;
+          const r = retreatCmd(port, nv, { onStairs: onSt, complete: !!xv && xv.status === 'objective_complete' && (xv.objective.type !== 'retrieve_relic' || xv.progress.relicHeldByYou) });
+          if (r && (await port.act(r, { source: 'bot' })).ok) continue;
         }
         const v2 = port.view();
         if (v2.self.pos && v2.status === 'your_turn' && cheb(tg.pos, v2.self.pos) <= 1) await port.act({ type: 'move', dir: dirTo(v2.self.pos, tg.pos)! }, { source: 'bot' });
