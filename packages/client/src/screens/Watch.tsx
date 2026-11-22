@@ -281,7 +281,15 @@ export function Watch({ runId }: { runId: string }) {
           // 接続前の thought はスナップショットに含まれないので、ツール呼び出し記録から補う
           const text = m.activity.args?.thought;
           const w0 = worldRef.current;
-          if (typeof text === 'string' && text && w0 && m.activity.seq < w0.seq) {
+          // 追従だけの観戦（開催中のシーズンのランなど）には World が来ない: 思考は、ここからだけ分かる（SEASON.md §42.1）。
+          // 名前と吹き出しの相手は、いま持っている view（追従の相手の PlayerView）から取る
+          const v0 = viewRef.current;
+          if (typeof text === 'string' && text && !w0 && v0) {
+            const me = v0.party.find((p) => p.playerId === m.activity.playerId);
+            const line: ThoughtLine = { seq: m.activity.seq + 1, player: m.activity.playerId, name: me?.name ?? m.activity.playerId, text };
+            setThoughts((t) => (t.some((x) => x.text === line.text && x.seq === line.seq) ? t : [...t, line].sort((a, b) => a.seq - b.seq).slice(-100)));
+            if (me?.entityId) bubblesRef.current.push({ id: me.entityId, text, until: performance.now() + 4000 });
+          } else if (typeof text === 'string' && text && w0 && m.activity.seq < w0.seq) {
             const line: ThoughtLine = { seq: m.activity.seq + 1, player: m.activity.playerId, name: w0.players[m.activity.playerId]?.name ?? m.activity.playerId, text };
             setThoughts((t) => (t.some((x) => x.text === line.text && x.seq === line.seq) ? t : [...t, line].sort((a, b) => a.seq - b.seq).slice(-100)));
           }
