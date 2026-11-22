@@ -196,7 +196,8 @@ describe('assets', () => {
     expect(camp).toMatchObject({ required: true, supported: true });
     expect(slotStatus(camp)).toBe('必須');
     const fx = list.filter((a) => a.class === 'fx' || a.class === 'ui');
-    expect(fx.length).toBe(13);
+    // fx 9・ui 6（S2: ui:public_mark・ui:trail を足した）
+    expect(fx.length).toBe(15);
     expect(fx.every((a) => !a.supported && slotStatus(a) === '未対応（作らない）')).toBe(true);
     // 検証: 1 フレームが 16:9 でない・フレーム数で割り切れない・fit の値・未対応の分類
     const dir = mkdtempSync(join(tmpdir(), 'muse-theme-'));

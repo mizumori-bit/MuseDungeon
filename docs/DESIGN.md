@@ -1638,3 +1638,4 @@ engine と出来事の形は変えていない（`engineVersion` 0.38.0・`event
 
 - **称号はサーバーの外の記録から作る**: 賞の称号は確定（`SeasonService.finalize`）で 1 位に、初討伐は参加者がキャンプに着いたコミットで `deeds.json` に順を残し、確定で称号にする。称号は確定した結果（`result.json` の `titles`）にだけ残し、プロフィールの称号は確定したすべてのシーズンの結果から作る（運用の道具の `close` とサーバーが別のプロセスでも、プロフィールのファイルを上書きし合わない）。名前はデータ（`seasonTitles.json`。版のハッシュに入れない）から、確定のときに作って残す。
 - **坑の断面は公開されたものだけ**: `GET /api/seasons/:id` の `section` は、順位の表の最深と、公開された階段・特別な場所・共有層の火（`dup` を除く）だけから作る。位置は出さない。初討伐は確定の後だけ。
+- **人間の画面は観測を並べるだけ**（S2 の 2 つ目）: シーズンの枠・キャンプの賞の表・地図の印は、クライアントが PlayerView から作る観測（`buildObservation`）の `season`・`valid_actions`・`visible.features`・`expedition.extract_via` と、PlayerView の `season.public` だけから作る。命令は AI と同じ `place_fire`・`interact`・`extract`・`report_stairs` を WS の `command` で送る（キャンプの命令として `report_stairs` を `start_expedition` と同じに通す）。参加は `POST /api/runs { season, profileToken }`。シーズンのトークンはブラウザの保存（`seasonToken.<id>`）にだけ置き、画面では伏せる。結果の画面 `#/season/<id>` は `GET /api/seasons/:id` だけを読む。

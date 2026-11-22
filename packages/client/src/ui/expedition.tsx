@@ -1,7 +1,7 @@
 // 遠征まわりの表示部品: 目的と進捗、戦利品（未確定の点）、ブリーフィング、手番の状態行と変化、休憩の見積もり、キャンプ、観戦用の要約、AI の応答待ち。
 // 文章と数値は shared の expedition.ts / turn.ts / catalog.ts / observation.ts で作る。ここでは並べて見せるだけで、ゲームの判定はしない。
 import type {
-  Catalog, CatalogRules, Change, Dir, Expedition, ExpeditionOffer, ExpeditionView, HaulParts, ObsExpedition, Observation, OfferSlot, PlayerView,
+  Catalog, CatalogRules, Change, Dir, Expedition, ExpeditionOffer, ExpeditionView, HaulParts, ObsExpedition, ObsSeason, Observation, OfferSlot, PlayerView,
   RestEstimate, World,
 } from '@muse/shared';
 import {
@@ -13,6 +13,7 @@ import type { RefObject } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
 import { getLocale, getPref, tr } from '../util';
 import { DIR_ARROW, expStatusLabel, extractBlockLabel, lifelineEffectText, worstTurnText } from './labels';
+import { SeasonCampPanel } from './season';
 
 /** 守護者を倒す・遺物を持ち帰る等の目的を、自分が extract したら達成になる状態か（表示用。最終判定はサーバー） */
 export function completesOnExtract(x: ExpeditionView): boolean {
@@ -203,7 +204,12 @@ export function extractConfirmText(ox: ObsExpedition | undefined, complete: bool
   const refs = [info?.next ? nextOverreachText(info.next) : '', info?.nextCamp ? nextCampText(info.nextCamp) : ''].filter(Boolean);
   const next = refs.length ? tr(`\n（参考: ${refs.join(' / ')}）`, `\n(For reference: ${refs.join(' / ')})`) : '';
   // 帰還する階段から次の遠征が始まる（V3-2R3 §20.6）
-  const from = tr('\n次の遠征はこの階段から始まる。その階の敵は追跡をやめて全快する。', '\nThe next expedition starts from these stairs; monsters there stop hunting and heal fully.');
+  // 野営の火から帰るとき（シーズン。S1c §14.3）は、帰り支度の手番と、次はそのマスから
+  const via = ox?.extract_via;
+  const from = via?.type === 'fire'
+    ? tr(`\n${via.by} の野営の火から帰る: 帰り支度 ${via.turns} 手番（この手番を含む。その間に追ってくる敵が見えたり、被害を受けたりしたら取りやめ。過ごした手番は戻らない）。次の遠征は、このマスから始まる。`,
+      `\nReturning from ${via.by}'s campfire: ${via.turns} turns packing up (this one included; cancelled if a hunter comes into view or you are hurt, and the turns spent are not refunded). The next expedition starts from this cell.`)
+    : tr('\n次の遠征はこの階段から始まる。その階の敵は追跡をやめて全快する。', '\nThe next expedition starts from these stairs; monsters there stop hunting and heal fully.');
   if (complete) {
     const pay = h ? tr(`\n確定する点: +${h.if_extract_now}（戦利品 ${h.total} ${multText(h.multiplier_pct)}）`, `\nBanked: +${h.if_extract_now} (haul ${h.total} ${multText(h.multiplier_pct)})`) : '';
     return tr(`帰還して遠征${ox ? ` ${ox.no}` : ''}を終えますか？${pay}${from}${next}`, `Extract and end the expedition?${pay}${from}${next}`);
@@ -323,6 +329,7 @@ export function ExpeditionPanel({ view, obs, catalog, onBriefing, onLifeline }: 
       {active && ox && (
         <div class={`extract ${ox.can_extract ? 'ok' : 'no'}`}
           title={ox.can_extract ? tr('次の遠征はこの階段から始まる（その階の敵は追跡をやめて全快する）', 'The next expedition starts from these stairs (monsters there stop hunting and heal fully)') : undefined}>
+          {ox.can_extract && ox.extract_via?.type === 'fire' && <span class="svia">{tr(`${ox.extract_via.by} の野営の火から・帰り支度 ${ox.extract_via.turns} 手番。`, `From ${ox.extract_via.by}'s campfire, ${ox.extract_via.turns} turns packing up. `)}</span>}
           {ox.can_extract
             ? (done
               ? tr(`extract 可（E）: 今 extract すると帰還（達成）${now !== undefined ? `・+${now} 確定` : ''}`, `extract possible (E): completes the expedition${now !== undefined ? `, banks +${now}` : ''}`)
@@ -456,7 +463,11 @@ function CampRecords({ nextNo }: { nextNo: number }) {
 }
 
 /** キャンプ（遠征と遠征の間）。成績・前の遠征の払い戻し・候補を出し、次の遠征を選ぶか、ここで終える */
-export function CampPanel({ view, catalog, onStart, onRetire }: { view: PlayerView; catalog?: Catalog | null; onStart: (offer: number | 'endless') => void; onRetire: () => void }) {
+export function CampPanel({ view, catalog, onStart, onRetire, season, canReport, onReport }: {
+  view: PlayerView; catalog?: Catalog | null; onStart: (offer: number | 'endless') => void; onRetire: () => void;
+  /** シーズン（S2 §18.1）: キャンプの観測の賞・報告・自分の火。報告は AI と同じ report_stairs */
+  season?: ObsSeason; canReport?: boolean; onReport?: () => void;
+}) {
   const x = view.expedition;
   const camp = view.camp;
   const rules = rulesOf(catalog);
@@ -482,6 +493,7 @@ export function CampPanel({ view, catalog, onStart, onRetire }: { view: PlayerVi
             `You are off the board (time does not pass). HP ${view.self.stats.hp}/${view.self.stats.maxHp}, Lv${view.self.level}. Deepest: ${view.deepestDepth}. You may stop here.`)}
       </p>
       {camp && <CampRecords nextNo={camp.nextNo} />}
+      {season && <SeasonCampPanel season={season} canReport={!!canReport} onReport={() => onReport?.()} />}
       {camp ? (
         <>
           <h3>{first ? tr(`最初の遠征の候補（遠征 ${camp.nextNo}）`, `Offers for expedition ${camp.nextNo}`) : tr(`次の遠征の候補（遠征 ${camp.nextNo}）`, `Offers for expedition ${camp.nextNo}`)}</h3>

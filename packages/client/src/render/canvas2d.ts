@@ -2,6 +2,7 @@
 // 向き・補間・演出は見た目専用の状態で、イベントから導出する（World State には含めない）。
 import type { Dir, Pos } from '@muse/shared';
 import type { AssetRef, Drawable, Facing, GlyphDrawable, Theme } from '../theme/types';
+import { getLocale } from '../util';
 import { bucketFrac } from './scene';
 import type { Renderer, Scene, SceneEntity, ViewEvent } from './types';
 
@@ -194,7 +195,33 @@ export class Canvas2DRenderer implements Renderer {
   entityAt(p: Pos): SceneEntity | null {
     if (!this.scene) return null;
     const list = this.scene.entities.filter((e) => e.x === p.x && e.y === p.y);
-    return list.find((e) => e.layer === 'actor') ?? list.find((e) => e.layer === 'item') ?? list[0] ?? null;
+    const ent = list.find((e) => e.layer === 'actor') ?? list.find((e) => e.layer === 'item') ?? list[0] ?? null;
+    if (ent) return ent;
+    // シーズンの印（公開された階段など。地形の上の印でエンティティが無い）: ツールチップだけのために、名前の入れ物を返す
+    const mk = this.scene.marks?.find((m) => m.x === p.x && m.y === p.y);
+    return mk ? { id: `mark:${mk.kind}`, layer: 'feature', ref: { cls: 'feature', id: mk.kind }, x: mk.x, y: mk.y, label: mk.label, statuses: [], affixes: [] } : null;
+  }
+
+  /** シーズンの印（S2 §18.1。絵は無い: ASSET_SPEC の ui:public_mark） */
+  private drawSeasonMark(ctx: CanvasRenderingContext2D, kind: 'public_stairs' | 'public_spot' | 'fire', px: number, py: number, cs: number): void {
+    const r = Math.max(3, cs * 0.17);
+    const cx = px + cs - r - 1, cy = py + r + 1;
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fillStyle = kind === 'fire' ? '#ff9a3c' : '#4dd0e1';
+    ctx.fill();
+    ctx.lineWidth = Math.max(1, cs * 0.04);
+    ctx.strokeStyle = 'rgba(0,0,0,0.8)';
+    ctx.stroke();
+    if (kind !== 'fire' && cs >= 18) {
+      ctx.fillStyle = '#062a30';
+      ctx.font = `bold ${Math.round(r * 1.4)}px ${FONT_STACK}`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(getLocale() === 'en' ? 'P' : '公', cx, cy + 0.5);
+    }
+    ctx.restore();
   }
 
   private resize(): void {
@@ -405,6 +432,11 @@ export class Canvas2DRenderer implements Renderer {
       ctx.restore();
     }
     // L7 オーバーレイ
+    // シーズンの印（S2 §18.1）: マスの右上に小さな印（公開された階段・特別な場所は水色の「公」、野営の火は橙の点）
+    for (const mk of s.marks ?? []) {
+      if (!inView(mk)) continue;
+      this.drawSeasonMark(ctx, mk.kind, sx(mk.x), sy(mk.y), cs);
+    }
     for (const { e, p } of actors) this.drawOverlay(ctx, e, sx(p.x), sy(p.y), cs, now);
     if ((s.sense || s.draft) && s.focusId) {
       const me = actors.find((a) => a.e.id === s.focusId);

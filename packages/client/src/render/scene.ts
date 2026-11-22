@@ -1,13 +1,13 @@
 // Scene の組み立て。(a) PlayerView（プレイ・追従観戦）と (b) World 全体（俯瞰）。
 // プレイヤー視点では未知セルを描かない。未鑑定アイテムは外見 ID でしか描かない。
-import type { Catalog, EntityView, MonsterTrait, ObsMonster, Pos, PlayerView, World } from '@muse/shared';
+import type { Catalog, EntityView, MonsterTrait, ObsMonster, Observation, Pos, PlayerView, World } from '@muse/shared';
 import {
   dealtText, hitsText, hpEstimateText, hpLeftEstimate, itemDisplayName, kindName, memoryOf, monsterDisplayName, monsterSpeedOf, nameOf, selfSpeed, threatOf, worstTurnOf,
 } from '@muse/shared';
 import type { AssetRef } from '../theme/types';
 import { monsterLooksText, monsterSpeedLabel, threatText, worstTurnText } from '../ui/labels';
 import { getLocale, tr } from '../util';
-import type { Scene, SceneEntity } from './types';
+import type { Scene, SceneEntity, SceneMark } from './types';
 
 export const PLAYER_COLORS = ['#4fc3f7', '#ffb74d', '#ba68c8', '#81c784', '#f06292', '#fff176'];
 
@@ -54,6 +54,40 @@ export interface SceneExtras {
   bubbles?: { id: string; text: string }[];
   /** 観測の visible.monsters（あればツールチップを観測と同じ値で作る: 速さ・特徴・初見・命中の記録） */
   monsters?: readonly ObsMonster[];
+  /** 観測の visible.features（あれば地物の名前を観測と同じに: 野営の火の置いた者・公開された特別な場所の報告者。S2 §18.1） */
+  features?: Observation['visible']['features'];
+}
+
+/**
+ * シーズンの印（S2 §18.1）: 公開された下り階段（その階に入ると地図に載る）・公開された特別な場所（まだ自分の目で見ていない間）・野営の火。
+ * どれも PlayerView にあるもの（公開された階段の一覧 season.public・覚えている地物・見えている地物）だけから作る
+ */
+function seasonMarks(view: PlayerView, catalog: Catalog, features: Observation['visible']['features'] | undefined): SceneMark[] {
+  const f = view.floor;
+  const s = view.season;
+  if (!f || !s || view.status === 'at_camp') return [];
+  const out: SceneMark[] = [];
+  const pub = s.public.find((p) => p.depth === f.depth);
+  // 地図に載っている（覚えている地形がある）ときだけ。道しるべは「地形は分かっているが、まだ見ていない」マス（紫の斜線）として描かれる
+  if (pub && view.memory.terrain[pub.y * f.width + pub.x]) {
+    out.push({
+      x: pub.x, y: pub.y, kind: 'public_stairs',
+      label: tr(`公開された下り階段（${pub.by} が報告）。入口からの道しるべは、紫の斜線のマス（地形は分かっているが、まだ見ていない）`, `Published down stairs (reported by ${pub.by}). The trail from the entrance is the hatched purple cells (terrain known, not yet seen)`),
+    });
+  }
+  for (const ft of features ?? []) {
+    if (ft.public_by) out.push({ x: ft.pos.x, y: ft.pos.y, kind: 'public_spot', label: tr(`${ft.name}（公開: ${ft.public_by} が報告）`, `${ft.name} (published by ${ft.public_by})`) });
+    else if (ft.by) out.push({ x: ft.pos.x, y: ft.pos.y, kind: 'fire', label: ft.name });
+  }
+  if (!features) {
+    // 観測が無いとき（描画の最初）: 見えている・覚えている火だけ
+    const L = getLocale();
+    for (const e of [...view.entities, ...view.memory.remembered]) {
+      if (!e.campfire) continue;
+      out.push({ x: e.pos.x, y: e.pos.y, kind: 'fire', label: tr(`${kindName(catalog, L, e.kind)}（${e.campfire.by} の火）`, `${kindName(catalog, L, e.kind)} (${e.campfire.by}'s)`) });
+    }
+  }
+  return out;
 }
 
 /** 見れば分かる特徴のうち、種族の公開タグから分かるもの（観測の traits と同じ。重装はカタログの armored から） */
@@ -141,6 +175,12 @@ export function sceneFromView(view: PlayerView, catalog: Catalog, extras: SceneE
   };
   const ents: SceneEntity[] = [];
   const visibleIds = new Set(view.entities.map((e) => e.id));
+  // 地物の名前は観測と同じに（野営の火は置いた者の名前つき。公開された特別な場所は報告した者。S2 §18.1）
+  const featureLabel = (id: string): string | undefined => {
+    const ft = extras.features?.find((x) => x.id === id);
+    if (!ft) return undefined;
+    return ft.public_by ? tr(`${ft.name}（公開: ${ft.public_by} が報告）`, `${ft.name} (published by ${ft.public_by})`) : ft.name;
+  };
   for (const r of view.memory.remembered) {
     if (visibleIds.has(r.id)) continue;
     if (vis[r.pos.y * f.width + r.pos.x] === 2) continue;
@@ -151,7 +191,7 @@ export function sceneFromView(view: PlayerView, catalog: Catalog, extras: SceneE
         statuses: [], affixes: [], remembered: true, role: r.role, treasure: r.value !== undefined,
       });
     } else {
-      ents.push({ id: r.id, layer: 'feature', ref: { cls: 'feature', id: r.kind ?? 'unknown', state: r.state }, x: r.pos.x, y: r.pos.y, label: kindName(catalog, L, r.kind), statuses: [], affixes: [], remembered: true });
+      ents.push({ id: r.id, layer: 'feature', ref: { cls: 'feature', id: r.kind ?? 'unknown', state: r.state }, x: r.pos.x, y: r.pos.y, label: featureLabel(r.id) ?? kindName(catalog, L, r.kind), statuses: [], affixes: [], remembered: true });
     }
   }
   for (const e of view.entities) {
@@ -163,7 +203,7 @@ export function sceneFromView(view: PlayerView, catalog: Catalog, extras: SceneE
         treasure: e.value !== undefined,
       });
     } else if (e.cat === 'feature' || e.cat === 'trap') {
-      ents.push({ ...base, layer: 'feature', ref: { cls: 'feature', id: e.kind ?? 'unknown', state: e.state }, label: kindName(catalog, L, e.kind) });
+      ents.push({ ...base, layer: 'feature', ref: { cls: 'feature', id: e.kind ?? 'unknown', state: e.state }, label: featureLabel(e.id) ?? kindName(catalog, L, e.kind) });
     } else if (e.cat === 'monster') {
       ents.push({
         ...base, layer: 'actor', ref: { cls: 'actor', id: e.kind ?? 'unknown' },
@@ -200,7 +240,7 @@ export function sceneFromView(view: PlayerView, catalog: Catalog, extras: SceneE
   return {
     mode: 'player', floorKey: f.key, width: f.width, height: f.height, biome: f.biome, terrain, vis, entities: ents,
     focus: me.pos, focusId: me.id, cursor: extras.cursor ?? null, path: extras.path ?? null, bubbles: extras.bubbles ?? [], catalog,
-    sense, draft,
+    sense, draft, marks: seasonMarks(view, catalog, extras.features),
   };
 }
 

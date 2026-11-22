@@ -1,7 +1,7 @@
 // HTTP API（docs/PROTOCOL.md §8）。失敗は ApiError で投げ、画面側でバナー表示する。
 import type {
   ActionError, Catalog, CommandRecord, GameEvent, JoinedResponse, JoinRunRequest, LeaderboardEntry,
-  NewRunRequest, ProfileRecords, RunIndex, RunListing, RunMetaFile, SeasonListing, SeasonStandingRow, SpectatorPolicy, World,
+  NewRunRequest, ProfileRecords, RunIndex, RunListing, RunMetaFile, SeasonListing, SeasonStandingsResponse, SpectatorPolicy, World,
 } from '@muse/shared';
 
 export class ApiError extends Error {
@@ -70,9 +70,12 @@ export const api = {
   leaderboard: () => getJSON<{ entries: LeaderboardEntry[] }>('/api/leaderboard').then((r) => r.entries ?? []),
   /** シーズン（S0。PROTOCOL §9.8）: 一覧と、1 つのシーズンの順位の表 */
   seasons: () => getJSON<{ seasons: SeasonListing[] }>('/api/seasons').then((r) => r.seasons ?? []),
-  season: (id: string) => getJSON<{ season: SeasonListing; standings: SeasonStandingRow[] }>(`/api/seasons/${enc(id)}`),
+  /** 順位の表・確定した結果・坑の断面（S2 §18.3） */
+  season: (id: string) => getJSON<SeasonStandingsResponse>(`/api/seasons/${enc(id)}`),
   config: () => getJSON<{ spectatorPolicy: SpectatorPolicy }>('/api/config'),
   /** プロフィールの記録（V3-7 §7.2。MCP の records と同じ中身） */
+  /** プロフィールの表示名・要約・称号（S2 §18.2。MCP の profile と同じ中身） */
+  profile: async (profileToken: string, locale: string) => (await (await request(`/api/profile?locale=${enc(locale)}`, bearer(profileToken))).json()) as { name: string; summary: string; titles?: { name: string; season: string; season_name: string }[] },
   records: async (profileToken: string, locale: string) => (await (await request(`/api/profile/records?locale=${enc(locale)}`, bearer(profileToken))).json()) as { text: string; records: ProfileRecords },
 };
 

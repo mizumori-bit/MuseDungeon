@@ -57,7 +57,14 @@ export interface Scene {
   sense?: { what: 'guardian' | 'relic'; dir: Dir; range: 'far' | 'near' } | null;
   /** 下への風: 今いる階の下り階段が未発見のときの方角（V3-2R2 §18.4）。focusId の横に気配とは別の形の矢印を出す（プレイヤー視点のみ） */
   draft?: Dir | null;
+  /**
+   * シーズンの印（S2 §18.1。プレイヤー視点のみ）: 公開された下り階段・公開された特別な場所・野営の火。
+   * テーマに依らずレンダラーがマスの角に小さな印を重ね、ツールチップに label（公開した者・置いた者の名前）を出す
+   */
+  marks?: SceneMark[];
 }
+
+export interface SceneMark { x: number; y: number; kind: 'public_stairs' | 'public_spot' | 'fire'; label: string }
 
 /** 演出用のイベント（クライアントがゲームイベントから導出する。見た目専用） */
 export type ViewEvent =

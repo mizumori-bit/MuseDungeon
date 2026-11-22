@@ -1149,3 +1149,4 @@ SeasonTitle { id, season, seasonName, kind: 'award' | 'first_warden', award?, de
 
 - **見える所**: 順位の表（`GET /api/seasons/:id` の `standings[].titles`。人間の画面のロビーでは名前の横）・プロフィール（MCP の `profile` の文に「称号: …」と `titles: { name, season, season_name, kind, award?, depth? }[]`。HTTP の `GET /api/profile` も同じ。人間の画面のロビーの「記録と図鑑」）・結果の画面（`result.titles`）・運用の道具（`standings` の名前の横、`close` の出力）。キャンプの観測の賞の行（取り込み）には出さない（取り込みの形を変えない）。
 - **結果を見返す**: `GET /api/seasons/:id` の `result`・`standings[].banked`・`section`（§9.8）。人間の画面は `#/season/<id>`。
+- **人間の画面**（S2 の 2 つ目。SEASON.md §19.4）: ロビーのシーズンの表から参加（招かれたプロフィールのトークンを入れる。`POST /api/runs { season, profileToken, controller: human }`。断られたら `error.message` をそのまま出す）。迷宮とキャンプの命令は、AI と同じ `Command` を WS の `command` で送る（`place_fire`・`interact`・`extract`・`report_stairs`）。画面に出すのは、観測（`projectPlayerView` を通った PlayerView からクライアントが作る `buildObservation`）にあるものだけ。

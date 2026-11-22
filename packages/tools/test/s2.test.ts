@@ -1,5 +1,9 @@
 // S2（称号・結果を見返す画面の HTTP。SEASON.md §18.2・§18.3・§18.5）のテスト
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { WebSocket } from 'ws';
 import { loadContent } from '@muse/content';
 import { ENGINE_VERSION } from '@muse/engine';
 import { createApp, loadConfig, SessionManager } from '@muse/server';
@@ -192,6 +196,87 @@ describe('S2 §18.2: titles', () => {
       await app.close();
     }
     m.closeAll();
+  });
+});
+
+describe('S2 §18.1・§18.5: the human screen\'s ports (HTTP and WS) take the same season commands as the AI', () => {
+  it('joins over HTTP, then starts, sets a campfire, heals at it, returns from it and reports over WS; tokens stay out of the records', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 's2ws-'));
+    const m = new SessionManager(content, loadConfig({ runsDir: dir, waitOthersMs: 100 }));
+    openSeason(m);
+    const inv = m.seasons.invite(SID, 'Hito', m.profiles.store);
+    if ('error' in inv) throw new Error(inv.error);
+    const app = createApp(m, m.config);
+    await new Promise<void>((res) => app.server.listen(0, '127.0.0.1', () => res()));
+    const port = (app.server.address() as { port: number }).port;
+    const base = `http://127.0.0.1:${port}`;
+    let ws: WebSocket | null = null;
+    try {
+      // 招かれていないトークンは、サーバーの理由つきで断る（画面はこの文をそのまま出す）
+      const bad = await fetch(`${base}/api/runs`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'X', season: SID, profileToken: 'nope', controller: { kind: 'human', label: 'browser' } }) });
+      expect(bad.status).toBe(409);
+      expect(((await bad.json()) as { error: { message: string } }).error.message).toContain('見つからない');
+      // 人間の画面と同じ参加（POST /api/runs { season, profileToken }）
+      const res = await fetch(`${base}/api/runs`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Adventurer', classId: 'core:warrior', locale: 'ja', season: SID, profileToken: inv.token, controller: { kind: 'human', label: 'browser' } }) });
+      const joined = (await res.json()) as { runId: string; playerId: string; token: string; profileToken?: string };
+      expect(res.status).toBe(200);
+      expect(joined.profileToken).toBeUndefined();
+      const session = m.get(joined.runId)!;
+      const w = session.world;
+      const pid = joined.playerId;
+      ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+      const errors: string[] = [];
+      ws.on('message', (raw) => { const msg = JSON.parse(String(raw)) as { t: string; error?: { message: string } }; if (msg.t === 'error') errors.push(msg.error!.message); });
+      await new Promise<void>((r) => ws!.on('open', () => r()));
+      ws.send(JSON.stringify({ t: 'hello', role: 'player', runId: joined.runId, token: joined.token }));
+      const until = async (ok: () => boolean, what: string) => {
+        for (let i = 0; i < 100 && !ok(); i++) await new Promise((r) => setTimeout(r, 20));
+        expect(ok() ? '' : `${what}: ${errors.join(' / ')}`).toBe('');
+      };
+      const cmd = (command: Command) => ws!.send(JSON.stringify({ t: 'command', command }));
+      cmd({ type: 'start_expedition', offer: 1 });
+      await until(() => w.players[pid].state === 'alive' && !!meOf(w, pid).pos, 'start');
+      clearMonsters(w);
+      setBanked(w, pid, 1000);
+      const k1 = meOf(w, pid).pos!.floor;
+      const c1 = openCells(w, k1, [w.floors[k1].entry, ...w.floors[k1].stairs.down], 2)[0];
+      editMe(w, pid, (e) => { e.pos = { floor: k1, x: c1.x, y: c1.y }; e.stats!.hp = 3; });
+      cmd({ type: 'place_fire' });
+      await until(() => (w.season?.placed ?? []).length === 1, 'place_fire');
+      expect(w.players[pid].stats.banked).toBe(900);
+      cmd({ type: 'interact' });
+      await until(() => (w.season?.fireUses ?? []).length === 1, 'heal at the fire');
+      expect(meOf(w, pid).stats!.hp).toBeGreaterThan(3);
+      // 2 回目は断られ、理由がそのまま届く
+      cmd({ type: 'interact' });
+      await until(() => errors.some((e) => e.includes('この階の')), 'second heal refused');
+      cmd({ type: 'extract', confirm: true });
+      await until(() => w.players[pid].state === 'at_camp', 'return from the fire');
+      expect(session.history.some((e) => e.type === 'fire_return' && e.phase === 'done')).toBe(true);
+      // キャンプの報告（見た階段が無ければ nothing_to_do。どちらも AI と同じ report_stairs）
+      const before = errors.length;
+      cmd({ type: 'report_stairs' });
+      await until(() => errors.length > before || session.history.some((e) => e.type === 'stairs_reported'), 'report_stairs');
+      // 記録（commands.jsonl など）・シーズンの記録に、トークンが出ない
+      m.seasons.flush();
+      const files: string[] = [];
+      const walk = (d: string) => { for (const f of readdirSync(d, { withFileTypes: true })) { const p = join(d, f.name); if (f.isDirectory()) walk(p); else files.push(p); } };
+      walk(dir);
+      expect(files.length).toBeGreaterThan(0);
+      for (const f of files) {
+        const text = readFileSync(f, 'utf8');
+        expect(text.includes(inv.token!) ? f : '').toBe('');
+        // tokens.json は、起動し直したときにランへ戻るための、サーバーのトークンの控え（AI のランも同じ。記録・再生には使わない）
+        if (!f.endsWith('tokens.json')) expect(text.includes(joined.token) ? f : '').toBe('');
+      }
+      // 記録には、AI と同じ命令として残る（source は ws）
+      const cmds = readFileSync(join(dir, joined.runId, 'commands.jsonl'), 'utf8');
+      for (const t of ['place_fire', 'interact', 'extract']) expect(cmds).toContain(`"type":"${t}"`);
+    } finally {
+      ws?.close();
+      await app.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

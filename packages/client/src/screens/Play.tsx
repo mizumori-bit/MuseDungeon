@@ -26,6 +26,7 @@ import {
   reachAttackTitle, viewStatusLabel,
 } from '../ui/labels';
 import { perceivedLines } from '../ui/narration';
+import { placeFireConfirmText, placeFireOf, SeasonDungeonPanel } from '../ui/season';
 import { getLocale, getPref, getToken, setPref, tr } from '../util';
 
 const MOVE_KEYS: Record<string, Dir> = {
@@ -256,7 +257,8 @@ export function Play({ runId }: { runId: string }) {
     if (!v || !c || !r) return;
     // ツールチップは、この view の観測が作り済みならその値で（速さ・特徴・初見・命中の記録）。ここでは作らない
     const monsters = obsRef.current && obsViewRef.current === v ? obsRef.current.visible.monsters : undefined;
-    const scene = sceneFromView(v, c, { cursor: cursorRef.current, path: modeRef.current === 'normal' ? pathRef.current : null, monsters });
+    const features = obsRef.current && obsViewRef.current === v ? obsRef.current.visible.features : undefined;
+    const scene = sceneFromView(v, c, { cursor: cursorRef.current, path: modeRef.current === 'normal' ? pathRef.current : null, monsters, features });
     if (!scene) return;
     r.draw(scene);
     if (evs?.length) void r.animate(toViewEvents(evs.map((e) => e.event), c));
@@ -325,7 +327,8 @@ ${tr('それでも装備しますか？', 'Equip it anyway?')}`)) send({ ...last
   const send = (command: Command) => {
     const v = viewRef.current;
     const free = FREE.has(command.type);
-    const camp = command.type === 'start_expedition';
+    // キャンプの命令: 遠征を始める・階段と特別な場所の報告（シーズン。手番を使わない）
+    const camp = command.type === 'start_expedition' || command.type === 'report_stairs';
     if (!v || !wsRef.current) return;
     if (camp ? v.status !== 'at_camp' || pendingRef.current : !free && (v.status !== 'your_turn' || pendingRef.current || macroRef.current)) return;
     if (!free) {
@@ -369,6 +372,20 @@ ${tr('それでも装備しますか？', 'Equip it anyway?')}`)) send({ ...last
     if (!window.confirm(extractConfirmText(ox, complete, rulesOf(catalogRef.current)))) return;
     send(complete ? { type: 'extract' } : { type: 'extract', confirm: true });
   };
+
+  /**
+   * 野営の火を置く（S2 §18.1。AI と同じ place_fire）: 置ける見込みなら費用（観測の行）を見せて確かめてから送る。
+   * 置けない見込みでも送り、サーバーの断りの理由をそのまま出す（断りは手番を使わない）
+   */
+  const doPlaceFire = () => {
+    const pf = placeFireOf(obsNow());
+    if (!pf) { flash(tr('ここでは野営の火を置けない（シーズンのランの迷宮の中だけ）。', 'You cannot set a campfire here (season runs, in the dungeon only).')); return; }
+    if (pf.ok && !window.confirm(placeFireConfirmText(pf.inner))) return;
+    send({ type: 'place_fire' });
+  };
+
+  /** 火で回復（AI と同じ interact。足元なら向きを省く） */
+  const doFireHeal = (dir: Dir | null) => send(dir ? { type: 'interact', dir } : { type: 'interact' });
 
   /** collect: 既知の「自分が投げた物」を近い順に回収する（マクロ） */
   const doCollect = () => {
@@ -1051,6 +1068,11 @@ ${tr('それでも装備しますか？', 'Equip it anyway?')}`)) send({ ...last
             {tr(`確定 ${view.record.banked}`, `banked ${view.record.banked}`)}
           </span>
         )}
+        {obs?.season && (
+          <span class={`tag budget ${obs.season.budget.left < 100 ? 'low' : ''}`} title={obs.season.text}>
+            {tr(`予算 ${obs.season.budget.left}/${obs.season.budget.limit}`, `budget ${obs.season.budget.left}/${obs.season.budget.limit}`)}
+          </span>
+        )}
         <span class={`ws ${wsStatus}`}>{wsStatus}</span>
         <ThemePicker themes={th.themes} themeId={th.themeId} onChange={th.setThemeId} />
         <SoundControls />
@@ -1136,7 +1158,7 @@ ${tr('それでも装備しますか？', 'Equip it anyway?')}`)) send({ ...last
                 {view && view.status === 'waiting_others' && <div class="macro">{tr('他のプレイヤーの手番を待っています…', 'Waiting for other players…')}</div>}
                 {/* キャンプにいる間は地図を隠してキャンプの絵（ASSET_SPEC §7.7）。パネルはその上 */}
                 {view && atCamp && <CampScene theme={th.theme} />}
-                {view && atCamp && <div class="campwrap"><CampPanel view={view} catalog={catalog} onStart={startExpedition} onRetire={retire} /></div>}
+                {view && atCamp && <div class="campwrap"><CampPanel view={view} catalog={catalog} onStart={startExpedition} onRetire={retire} season={obs?.season} canReport={!!obs?.valid_actions.some((l) => l.startsWith('report_stairs'))} onReport={() => send({ type: 'report_stairs' })} /></div>}
                 {exp && expActive && briefingNo === exp.no && <BriefingCard x={exp} catalog={catalog} onClose={() => setBriefingNo(null)} />}
                 {view && view.status === 'dead' && !summary && (
                   <div class="deadbox">{tr('あなたは倒れた。', 'You have fallen.')} <a href={`#/watch/${runId}`}>{tr('観戦を続ける', 'Keep watching')}</a> / <a href={`#/replay/${runId}`}>{tr('リプレイ', 'Replay')}</a></div>
@@ -1223,7 +1245,7 @@ ${tr('それでも装備しますか？', 'Equip it anyway?')}`)) send({ ...last
             {exp && expActive && (
               <button class={`small ${obs?.expedition?.can_extract ? 'exit' : ''}`} onClick={doExtract}
                 title={tr('階段の上で遠征を終える（追跡中の敵が見えていてもよい）。次の遠征はその階段から始まり、その階の敵は追跡をやめて全快する', 'End the expedition on stairs (even with hunters in view). The next expedition starts from those stairs; monsters there stop hunting and heal fully')}>
-                {completesOnExtract(exp) ? tr('帰還', 'Extract') : tr('撤退', 'Withdraw')} (E)
+                {obs?.expedition?.extract_via?.type === 'fire' ? tr('火から', 'From fire: ') : ''}{completesOnExtract(exp) ? tr('帰還', 'Extract') : tr('撤退', 'Withdraw')} (E)
               </button>
             )}
             <button class="small" onClick={() => setMode('dir')} title="o">{tr('操作', 'Interact')} (o)</button>
@@ -1243,6 +1265,7 @@ ${tr('それでも装備しますか？', 'Equip it anyway?')}`)) send({ ...last
             <ExpeditionPanel view={view} obs={obs} catalog={catalog} onBriefing={exp && expActive ? () => setBriefingNo(exp.no) : undefined}
               onLifeline={expActive && lifeSlot ? doLifeline : undefined} />
           )}
+          {view && obs?.season && !atCamp && expActive && <SeasonDungeonPanel view={view} obs={obs} onPlaceFire={doPlaceFire} onFireHeal={doFireHeal} />}
           {view && catalog && <StatusPanel view={view} catalog={catalog} speed={obs?.self.speed} floor={atCamp ? null : obs?.self.floor} />}
           {obs && <ObsPartyPanel party={obs.party} />}
           {obs && !atCamp && <MonstersPanel monsters={obs.visible.monsters} hp={obs.self.hp} onFight={doFight} throwSlotFor={throwSlotFor} reach={reachIds} onReach={doReach} />}

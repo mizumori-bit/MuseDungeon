@@ -15,7 +15,8 @@ export const SCENE_SIZE = { w: 1280, h: 720 };
 export const UNSUPPORTED_CLASSES = new Set(['fx', 'ui']);
 
 export const FX_IDS = ['fx:hit', 'fx:crit', 'fx:miss', 'fx:heal', 'fx:status', 'fx:levelup', 'fx:teleport', 'fx:projectile', 'fx:trap'];
-export const UI_IDS = ['ui:cursor', 'ui:target', 'ui:path', 'ui:stack'];
+// ui:public_mark（公開された階段・特別な場所の印）・ui:trail（道しるべ）は S2（SEASON.md §18.1）。どれもレンダラーが図形で描く
+export const UI_IDS = ['ui:cursor', 'ui:target', 'ui:path', 'ui:stack', 'ui:public_mark', 'ui:trail'];
 
 export function assetsChecklist(content: Content, catalog: Catalog): AssetSlot[] {
   const out: AssetSlot[] = [];

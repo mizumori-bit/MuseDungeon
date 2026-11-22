@@ -1,5 +1,5 @@
 // ロビー: 進行中のラン（観戦・参加・再開）、終了したラン（リプレイ）、リーダーボード、新規ラン。
-import type { LeaderboardEntry, Locale, ProfileRecords, RunListing, SeasonListing, SeasonStandingRow } from '@muse/shared';
+import type { LeaderboardEntry, Locale, ProfileRecords, RunListing, SeasonStandingRow, SeasonStandingsResponse } from '@muse/shared';
 import { endReasonText, kindName, nameOf, objectiveText } from '@muse/shared';
 import { useEffect, useState } from 'preact/hooks';
 import { api, errorText } from '../api';
@@ -17,7 +17,10 @@ export function Lobby() {
   const [runs, setRuns] = useState<RunListing[] | null>(null);
   const [board, setBoard] = useState<LeaderboardEntry[]>([]);
   // シーズン（S0。PROTOCOL §9.8）: 開いている・終わったシーズンの順位の表
-  const [seasons, setSeasons] = useState<{ season: SeasonListing; standings: SeasonStandingRow[] }[]>([]);
+  const [seasons, setSeasons] = useState<SeasonStandingsResponse[]>([]);
+  // シーズンの参加（S2 §18.1）: 招かれたプロフィールのトークンは、シーズンごとにこのブラウザに残す（画面には伏せて出す。URL・記録には出さない）
+  const [seasonTok, setSeasonTok] = useState<Record<string, string>>({});
+  const [tokDraft, setTokDraft] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [name, setName] = useState(getPref('name', 'Adventurer'));
   const [classId, setClassId] = useState(getPref('class', 'core:warrior'));
@@ -32,17 +35,23 @@ export function Lobby() {
   const [legacy, setLegacy] = useState(getPref('legacy', 'on') !== 'off');
   const [records, setRecords] = useState<{ text: string; records: ProfileRecords } | null>(null);
   const [showRecords, setShowRecords] = useState(false);
+  // 称号（S2 §18.2）: プロフィールの表示（/api/profile）から
+  const [titles, setTitles] = useState<string[]>([]);
   const L = getLocale();
   useEffect(() => {
     if (!profileToken) { setRecords(null); return; }
     api.records(profileToken, L).then(setRecords).catch(() => setRecords(null));
+    api.profile(profileToken, L).then((p) => setTitles((p.titles ?? []).map((x) => x.name))).catch(() => setTitles([]));
   }, [profileToken, L]);
   const keepProfile = (tok?: string) => { if (tok) { setPref('profileToken', tok); setProfileToken(tok); } };
 
   const refresh = () => {
     api.runs().then((r) => { setRuns(r); setError(null); }).catch((e) => setError(errorText(e)));
     api.leaderboard().then(setBoard).catch(() => undefined);
-    api.seasons().then((list) => Promise.all(list.map((x) => api.season(x.id)))).then(setSeasons).catch(() => undefined);
+    api.seasons().then((list) => Promise.all(list.map((x) => api.season(x.id)))).then((list) => {
+      setSeasons(list);
+      setSeasonTok(Object.fromEntries(list.map((x) => [x.season.id, getPref(`seasonToken.${x.season.id}`, '')]).filter(([, v]) => v)));
+    }).catch(() => undefined);
   };
   useEffect(() => {
     refresh();
@@ -82,6 +91,39 @@ export function Lobby() {
       setBusy(false);
     }
   };
+
+  /** シーズンのランを始める（AI の new_run { season, profile_token } と同じ POST /api/runs）。断られたらサーバーの理由をそのまま出す */
+  const joinSeason = async (id: string) => {
+    const tok = seasonTok[id];
+    if (!tok) { setError(tr('招かれたプロフィールのトークン（運用者から受け取ったもの）を入れる', 'Enter the profile token the operator gave you')); return; }
+    setBusy(true);
+    try {
+      setPref('name', name);
+      setPref('class', classId);
+      const r = await api.newRun({ name, classId, locale, controller: { kind: 'human', label: 'browser' }, season: id, profileToken: tok });
+      saveToken(r.runId, { token: r.token, playerId: r.playerId, name });
+      navigate(`#/play/${r.runId}`);
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const keepSeasonTok = (id: string) => {
+    const v = (tokDraft[id] ?? '').trim();
+    if (!v) return;
+    setPref(`seasonToken.${id}`, v);
+    setSeasonTok({ ...seasonTok, [id]: v });
+    setTokDraft({ ...tokDraft, [id]: '' });
+  };
+  const forgetSeasonTok = (id: string) => {
+    setPref(`seasonToken.${id}`, '');
+    const next = { ...seasonTok };
+    delete next[id];
+    setSeasonTok(next);
+  };
+  /** 名前の横の称号（S2 §18.2。表示だけ） */
+  const titleBadges = (r: SeasonStandingRow) => (r.titles ?? []).map((x, i) => <span key={i} class="tag title" title={x.seasonName}>{L === 'en' ? x.name.en : x.name.ja}</span>);
 
   const active = (runs ?? []).filter((r) => r.status === 'active');
   const ended = (runs ?? []).filter((r) => r.status === 'ended').sort((a, b) => b.updatedAt - a.updatedAt);
@@ -182,6 +224,7 @@ export function Lobby() {
                 <button class="small" onClick={() => setShowRecords(!showRecords)}>{showRecords ? tr('閉じる', 'Hide') : tr('すべて見る', 'Show all')}</button>
                 <button class="small" onClick={() => { if (confirm(tr('このブラウザのプロフィールを外す（記録はサーバーに残る）。次のランは新しいプロフィールになる。', 'Forget this profile in this browser (records stay on the server). Your next run starts a new profile.'))) { setPref('profileToken', ''); setProfileToken(''); } }}>{tr('新しいプロフィールにする', 'Start a new profile')}</button>
               </div>
+              {titles.length > 0 && <p class="titles">{tr('称号', 'Titles')}: {titles.map((t, i) => <span key={i} class="tag title">{t}</span>)}</p>}
               {showRecords && <pre class="records">{records.text}</pre>}
             </div>
           )}
@@ -231,11 +274,41 @@ export function Lobby() {
         {seasons.length > 0 && (
           <section class="panel">
             <h3>{tr('シーズン', 'Seasons')}</h3>
-            {seasons.map(({ season: s, standings }) => (
-              <div key={s.id}>
+            {seasons.map(({ season: s, standings }) => {
+              // このブラウザで始めた、このシーズンの進行中のラン（続ける）
+              const mine = (runs ?? []).find((r) => r.status === 'active' && r.season === s.id && getToken(r.runId) && !r.recoveryFailed);
+              return (
+              <div key={s.id} class="seasonbox">
                 <h4 title={tr('同着は、使った予算（手番）の少ないほうが上', 'Ties go to whoever used less budget (turns)')}>
                   {s.name}（{s.status === 'open' ? tr(`開催中・${fmtTime(s.endsAt)} まで`, `open until ${fmtTime(s.endsAt)}`) : s.status === 'ended' ? tr('終わりの時刻を過ぎた（確定待ち）', 'past its end (awaiting results)') : tr('確定', 'final')}・{tr(`予算 ${s.budget} 手番・参加 ${s.participants}（招いた ${s.invited}）`, `budget ${s.budget} turns, ${s.participants} of ${s.invited} invited playing`)}）
                 </h4>
+                <div class="row">
+                  <a class="button small" href={`#/season/${s.id}`}>{s.status === 'final' ? tr('結果と坑の断面', 'Results and cross-section') : tr('順位と坑の断面', 'Standings and cross-section')}</a>
+                </div>
+                {s.status === 'open' && (
+                  <div class="sjoin">
+                    {mine ? (
+                      <a class="button small primary" href={`#/play/${mine.runId}`}>{tr('進行中のシーズンのランを続ける', 'Resume your season run')}</a>
+                    ) : (
+                      <>
+                        {seasonTok[s.id] ? (
+                          <span class="muted">{tr('招かれたプロフィールのトークン: このブラウザに保存済み（••••）', 'Invited profile token: saved in this browser (••••)')} <button class="tiny" onClick={() => forgetSeasonTok(s.id)}>{tr('外す', 'Forget')}</button></span>
+                        ) : (
+                          <span class="row">
+                            <input type="password" autocomplete="off" placeholder={tr('招かれた profile_token', 'invited profile_token')} value={tokDraft[s.id] ?? ''}
+                              onInput={(e) => setTokDraft({ ...tokDraft, [s.id]: (e.target as HTMLInputElement).value })}
+                              onKeyDown={(e) => { if (e.key === 'Enter') keepSeasonTok(s.id); }} />
+                            <button class="small" onClick={() => keepSeasonTok(s.id)}>{tr('覚える', 'Keep')}</button>
+                          </span>
+                        )}
+                        <button class="small primary" disabled={busy || !name.trim() || !seasonTok[s.id]} onClick={() => joinSeason(s.id)}
+                          title={tr('このシーズンのランを始める（名前・クラス・言語は「新しいラン」の欄のもの）。招かれたプロフィールだけが参加できる', 'Start a season run (name, class and language come from the New run form). Only invited profiles can join')}>
+                          {tr('このシーズンに参加', 'Join this season')}
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )}
                 {standings.length === 0 && <div class="muted">{tr('まだだれもランを始めていない（参加は運用者に招かれた者だけ）', 'Nobody has started yet (invited players only)')}</div>}
                 {standings.length > 0 && (
                   <table class="board">
@@ -248,7 +321,7 @@ export function Lobby() {
                     </tr></thead>
                     <tbody>{standings.map((r) => (
                       <tr key={r.name}>
-                        <td>{r.name}</td>
+                        <td>{r.name} {titleBadges(r)}</td>
                         <td>{r.adventure.rank}. {tr(`地下${r.adventure.value}階`, `D${r.adventure.value}`)}</td>
                         <td>{r.contribution.rank}. {r.contribution.value}</td>
                         <td>{r.survival ? `${r.survival.rank}. ${r.survival.value}` : tr('対象外（倒れた）', 'out (fell)')}</td>
@@ -259,7 +332,8 @@ export function Lobby() {
                   </table>
                 )}
               </div>
-            ))}
+              );
+            })}
           </section>
         )}
 
