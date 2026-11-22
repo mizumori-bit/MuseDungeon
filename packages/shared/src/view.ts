@@ -6,7 +6,8 @@ import type {
 } from './types';
 import type { Dir } from './types';
 import { cheb, compassDir } from './util';
-import { seasonBudgetLeft, seasonStairsCounts } from './season';
+import { projectSupplies, seasonBudgetLeft, seasonStairsCounts } from './season';
+import type { SupplyTakenView, SupplyView } from './season';
 
 const clone = <T>(x: T): T => structuredClone(x);
 
@@ -237,7 +238,15 @@ export interface PlayerView {
    * シーズンの写し（S0。PROTOCOL §9.6。シーズンのランだけ）。budgetLeft: 今の予算の残り。
    * unreported・unpublished: まだ報告していない階段と、そのうち取り込んだ一覧でまだだれも公開していないもの
    */
-  season?: SeasonState & { budgetLeft: number; unreported: number; unpublished: number; spotsUnreported: number; spotsUnpublished: number };
+  season?: Omit<SeasonState, 'supplies' | 'deposited' | 'taken' | 'mineTaken' | 'supplyNews'> & {
+    budgetLeft: number; unreported: number; unpublished: number; spotsUnreported: number; spotsUnpublished: number;
+    /**
+     * 補給の置き場（S3。SEASON.md §25.2）。cache: 場所を知っている置き場の今の中身、cacheHidden: 場所をまだ知らない置き場（まだ見ていない下り階段）の深さごとの数、
+     * supplyTaken: このランで取った品（no は遠征）、myDeposits: 自分の預けた品で、まだだれも取っていないもの、cacheNews: 前の取り込みから、ほかの者が取った自分の品。
+     * 種類は、預けた者か見る者が鑑定済みのときだけ（ほかは外見だけ）
+     */
+    cache?: SupplyView[]; cacheHidden?: { depth: number; count: number }[]; supplyTaken?: (SupplyView & { no: number })[]; myDeposits?: SupplyView[]; cacheNews?: SupplyTakenView[];
+  };
 }
 
 export function hpState(hp: number, maxHp: number): HpState {
@@ -595,7 +604,7 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
     campDepth: campDepthOf(world),
     milestonesCleared: [...(world.milestones?.cleared ?? [])],
     record: { banked: rec.stats.banked ?? 0, lost: rec.stats.lost ?? 0, expeditions: rec.stats.expeditions ?? 0 },
-    ...(world.season ? { season: { ...clone(world.season), budgetLeft: seasonBudgetLeft(world, playerId) ?? 0, ...seasonStairsCounts(world, playerId) } } : {}),
+    ...(world.season ? { season: seasonView(world, playerId) } : {}),
   };
 }
 
@@ -609,4 +618,15 @@ export function stripSecret(world: World): World {
 /** 次の XP 閾値（表示用。engine と同じ表を使う） */
 export function xpForLevel(level: number): number {
   return 15 * level * level;
+}
+
+/** PlayerView のシーズン（S0）。補給の置き場の品（S3）は、鑑定の決まりで種類を伏せ、場所を知っている置き場だけにする（projectSupplies） */
+function seasonView(world: World, playerId: PlayerId): NonNullable<PlayerView['season']> {
+  const { supplies: _s, deposited: _d, taken: _t, mineTaken: _m, supplyNews: _n, depositsPublished: _p, ...rest } = world.season!;
+  const sup = projectSupplies(world, playerId);
+  const has = !!(_s?.length || _d?.length || _t?.length || _n?.length);
+  return {
+    ...clone(rest), budgetLeft: seasonBudgetLeft(world, playerId) ?? 0, ...seasonStairsCounts(world, playerId),
+    ...(has ? { cache: sup.cache, cacheHidden: sup.hidden, supplyTaken: sup.taken, myDeposits: sup.mine, cacheNews: sup.news } : {}),
+  };
 }

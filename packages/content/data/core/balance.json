@@ -9,7 +9,7 @@
     "score": { "perDepth": 1000, "perKill": 10, "perLevel": 25 },
     "estimate": { "minSamples": 5 },
     "xp": { "perNewDepth": 4, "perObjective": 8, "killDepthPct": 15 },
-    "season": { "fireCostPerDepth": 100, "firesPerSeason": 3, "fireSpacing": 5, "supportMinHealPct": 10, "fireReturnTurns": 5 },
+    "season": { "fireCostPerDepth": 100, "firesPerSeason": 3, "fireSpacing": 5, "supportMinHealPct": 10, "fireReturnTurns": 5, "supplyCap": 5, "supplyTakesPerExpedition": 1 },
     "haul": {
       "overreachFirst": 600, "overreachStep": 300, "overreachPct": { "first": 25, "step": 10 },
       "killPerXp": 4, "killAffixPct": 150,

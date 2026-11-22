@@ -1265,7 +1265,7 @@ ${tr('それでも装備しますか？', 'Equip it anyway?')}`)) send({ ...last
             <ExpeditionPanel view={view} obs={obs} catalog={catalog} onBriefing={exp && expActive ? () => setBriefingNo(exp.no) : undefined}
               onLifeline={expActive && lifeSlot ? doLifeline : undefined} />
           )}
-          {view && obs?.season && !atCamp && expActive && <SeasonDungeonPanel view={view} obs={obs} onPlaceFire={doPlaceFire} onFireHeal={doFireHeal} />}
+          {view && obs?.season && !atCamp && expActive && <SeasonDungeonPanel view={view} obs={obs} onPlaceFire={doPlaceFire} onFireHeal={doFireHeal} onCommand={send} />}
           {view && catalog && <StatusPanel view={view} catalog={catalog} speed={obs?.self.speed} floor={atCamp ? null : obs?.self.floor} />}
           {obs && <ObsPartyPanel party={obs.party} />}
           {obs && !atCamp && <MonstersPanel monsters={obs.visible.monsters} hp={obs.self.hp} onFight={doFight} throwSlotFor={throwSlotFor} reach={reachIds} onReach={doReach} />}

@@ -53,6 +53,13 @@ function itemName(ctx: NarrateCtx, ev: Record<string, unknown>): string {
 
 const DIR_FROM_JA: Record<string, string> = { n: '北', ne: '北東', e: '東', se: '南東', s: '南', sw: '南西', w: '西', nw: '北西' };
 
+/** 置き場の場所（「地下4階の下り階段 (12,7)」） */
+function supplyWhere(ctx: NarrateCtx, ev: Record<string, unknown>): string {
+  const ja = ctx.locale !== 'en';
+  const p = ev.place === 'stairs_up' ? (ja ? '上り階段' : 'the stairs up') : ev.place === 'stairs_down' ? (ja ? '下り階段' : 'the stairs down') : (ja ? '野営の火' : 'the campfire');
+  return ja ? `地下${ev.depth}階の${p} (${ev.x},${ev.y})` : `${p} on depth ${ev.depth} (${ev.x},${ev.y})`;
+}
+
 function cap(s: string): string {
   return s.length ? s[0].toUpperCase() + s.slice(1) : s;
 }
@@ -461,6 +468,15 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
       return ja ? `野営の火を置いた（地下${ev.depth}階 (${ev.x},${ev.y})。確定点から ${ev.cost} 点を払った。キャンプに着くと、ほかの参加者の世界にも現れる）。` : `You set a campfire (depth ${ev.depth} (${ev.x},${ev.y}); paid ${ev.cost} banked points. It reaches the other participants once you are back at camp).`;
     case 'fire_used':
       return ja ? `${ev.by} の野営の火で休んだ。HP +${ev.amount}（この遠征では、この階の火はもう使えない）。` : `You rest at ${ev.by}'s campfire: HP +${ev.amount} (no more campfires on this floor this expedition).`;
+    // 補給の置き場（S3 §25.2）
+    case 'supply_deposited': {
+      const where = supplyWhere(ctx, ev);
+      return ja ? `${itemName(ctx, ev)}を${where}の置き場に預けた（キャンプに着くと、ほかの参加者の世界の同じ置き場にも現れる。取られると支援賞に数える）。` : `You deposit ${itemName(ctx, ev)} in the cache at ${where} (it reaches the other participants once you are back at camp; their takes count for your support award).`;
+    }
+    case 'supply_taken': {
+      const where = supplyWhere(ctx, ev);
+      return ja ? `${where}の置き場から、${ev.by} が預けた${itemName(ctx, ev)}を取った（${ev.slot}。1 回の遠征で置き場から取れるのは 1 つまで）。` : `You take ${itemName(ctx, ev)} deposited by ${ev.by} from the cache at ${where} (${ev.slot}; one take per expedition).`;
+    }
     case 'stairs_reported': {
       const list = (ev.stairs as { depth: number; first: boolean }[]) ?? [];
       // 特別な場所（S1c §14.5）: 祭壇・賭けの祭壇・碑文

@@ -167,6 +167,8 @@ export function buildCatalog(c: Content): Catalog {
       xp: { ...c.balance.xp },
       lifeline: { ...c.balance.lifeline },
       seasonFire: { costPerDepth: c.balance.season.fireCostPerDepth, perSeason: c.balance.season.firesPerSeason, spacing: c.balance.season.fireSpacing, supportMinHealPct: c.balance.season.supportMinHealPct, returnTurns: c.balance.season.fireReturnTurns },
+      // 補給の置き場（S3 §25.2）
+      seasonSupply: { cap: c.balance.season.supplyCap, perExpedition: c.balance.season.supplyTakesPerExpedition },
       teleport: { ...c.balance.teleport },
       guardianRanks: c.balance.guardian.ranks.map((r) => ({ hpPct: r.hpPct, minHpBase: r.minHpBase, minHpPerDepth: r.minHpPerDepth })),
       perkOptions: c.balance.perks.options,

@@ -24,6 +24,7 @@ import { regenTick } from './scheduler';
 import { recomputeStats } from './stats';
 import { spawnFromSpec } from './spawn';
 import { campfireCheck, placeFire, placeFireCheck, startFireReturn, useCampfire } from './campfire';
+import { depositCheck, depositSupply, takeCheck, takeSupply } from './supply';
 
 export interface ActionOutcome { cost: number; scheduled?: boolean }
 export type Prepared = { error: ActionError } | { run: () => ActionOutcome };
@@ -674,6 +675,18 @@ actions.register('place_fire', (ctx, e, pr) => {
   const c = placeFireCheck(ctx, e, pr);
   if ('error' in c) return { error: c.error };
   return { run: () => { placeFire(ctx, ctx.world.entities[e.id], pr, c.cost); return { cost: 100 }; } };
+});
+
+// 補給の置き場（S3。SEASON.md §25.2）: 預ける・取る（どちらも 1 手番。預けるのは追ってくる敵が見えていてもできる）
+actions.register('deposit_supply', (ctx, e, pr, cmd: Extract<Command, { type: 'deposit_supply' }>) => {
+  const c = depositCheck(ctx, e, pr, cmd.slot);
+  if ('error' in c) return c;
+  return { run: () => { depositSupply(ctx, e, pr, c.item, c.at); return { cost: 100 }; } };
+});
+actions.register('take_supply', (ctx, e, pr, cmd: Extract<Command, { type: 'take_supply' }>) => {
+  const c = takeCheck(ctx, e, pr, cmd.id);
+  if ('error' in c) return c;
+  return { run: () => { takeSupply(ctx, e, pr, c.pick, c.at); return { cost: 100 }; } };
 });
 
 actions.register('interact', (ctx, e, pr, cmd: Extract<Command, { type: 'interact' }>) => {

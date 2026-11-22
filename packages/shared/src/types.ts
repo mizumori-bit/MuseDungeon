@@ -551,6 +551,24 @@ export interface SeasonFire { depth: number; x: number; y: number; by: string; m
 /** 公開された特別な場所（S1c §14.5。祭壇・賭けの祭壇・碑文のうち、部屋の作りに組み込まれたもの）。by は最初に報告した者 */
 export interface SeasonSpot { depth: number; x: number; y: number; kind: string; by: string }
 
+/** 補給の置き場（S3。SEASON.md §25.2）: 各階の上り階段・下り階段のマスと、野営の火（火のマス） */
+export type SupplyPlace = 'stairs_up' | 'stairs_down' | 'fire';
+
+/**
+ * 共有層の補給の品（S3 §25.2。取り込みの写し）。id は共有層の番号 's<番号>'。identified: 預けた者が鑑定済みだった（名前つきで預かる）。
+ * mine: 自分が預けた品。n: このランで預けた品なら、その番号（このランの deposited の n。載った後に、自分の世界の写しと重ねない）
+ */
+export interface SeasonSupply { id: string; depth: number; x: number; y: number; place: SupplyPlace; kind: string; identified: boolean; by: string; mine?: boolean; n?: number }
+
+/** このランで預けた品（S3 §25.2）。n はこのランの通し番号（自分の世界では 'l<n>' の品）。no は預けた遠征 */
+export interface SeasonDeposit { n: number; no: number; depth: number; x: number; y: number; place: SupplyPlace; kind: string; identified: boolean }
+
+/** このランで置き場から取った品（S3 §25.2。1 回の遠征で 1 つまで）。id は 's<番号>'（共有層の品）か 'l<番号>'（このランで預けた品） */
+export interface SeasonTaken { no: number; id: string; depth: number; x: number; y: number; place: SupplyPlace; kind: string; identified: boolean; by: string }
+
+/** 自分が預けた品を、ほかの参加者が取った（S3 §25.2。取り込みの写し）。taker は取った者の名前 */
+export interface SeasonSupplyTaken { id: string; depth: number; x: number; y: number; place: SupplyPlace; kind: string; identified: boolean; taker: string }
+
 /**
  * シーズンの写し（S0。PROTOCOL §9.6）。キャンプで取り込んだ共有層（season_sync）。
  * budget.left は取り込んだときの残り、budget.at はそのときの自分の手番（残り = left − (手番 − at)）
@@ -579,6 +597,17 @@ export interface SeasonState {
   spots?: SeasonSpot[];
   reportedSpots?: { depth: number; x: number; y: number }[];
   fireNews?: { depth: number; x: number; y: number; names: string[] }[];
+  /**
+   * S3（§25.2。古いランの写しには無い）: 取り込んだ共有層の補給の品・このランで預けた品・このランで取った品・
+   * 自分の預けた品をほかの者が取ったもの（取り込みの写し）・前の取り込みから新しく取られたもの（キャンプの知らせ）
+   */
+  supplies?: SeasonSupply[];
+  deposited?: SeasonDeposit[];
+  /** このランで預けた品のうち、もう共有層に載ったものの番号（取り込みの写し。取られて supplies から消えた後も） */
+  depositsPublished?: number[];
+  taken?: SeasonTaken[];
+  mineTaken?: SeasonSupplyTaken[];
+  supplyNews?: SeasonSupplyTaken[];
 }
 
 export interface WorldSecret {

@@ -448,6 +448,16 @@ V3-2R で足した項目（同じく後方互換。会心と経験値のルー�
 - `player_state.reason: 'joined'`（キャンプから始まる参加）。参加コマンドの `atCamp`
 - プレイヤー向けの射影で、見えていた個体が視界の外へ動いた `entity_moved` に `dirOut`（向きだけ。行き先は伏せたまま）
 
+S3 で変えた項目（補給の置き場。SEASON.md §25.2・§26、§9.12。シーズンのランだけに効く。命令・出来事・観測が増えたので `engineVersion` 0.43.0・`eventVersion` 29。調整値が増えたので、コンテンツの版も変わる）。シーズンでないランは何も変わらない（命令は断り、観測にも出ない。生成・候補も同じ）:
+
+- 命令: `deposit_supply { slot }`・`take_supply { id? }`（MCP のツールも同じ名前）
+- イベント: `supply_deposited { player, depth, x, y, place, n, kind, appearanceId, identified, depositedAfter }`・`supply_taken { player, depth, x, y, place, id, kind, appearanceId, by, slot, takenAfter }`（どちらも本人だけ。持ち物は `put`・`del`）。取った品が鑑定済みで預けられていれば、先に `item_identified`
+- `SeasonState` に `supplies`・`deposited`・`depositsPublished`・`taken`・`mineTaken`・`supplyNews`。取り込み `season_sync` の `season` に `supplies`・`deposits_published`・`mine_taken`
+- PlayerView の `season` からは上の 6 つを外し、`cache`・`cacheHidden`・`supplyTaken`・`myDeposits`・`cacheNews` を渡す（種類は鑑定の決まりで伏せる）
+- 観測の `season` に `supply`・`caches`・`caches_hidden`・`caches_text`（迷宮）、`deposits`・`deposits_text`・`supply_news`（キャンプ）。`valid_actions` に `deposit_supply <slot>`・`take_supply <id>`（置き場にいるとき）
+- 公開のカタログの `rules.seasonSupply { cap, perExpedition }`。`balance.season.supplyCap`（5）・`supplyTakesPerExpedition`（1）
+- HTTP: `GET /api/seasons/:id` の `section[].supplies`（共有層に載って、まだだれも取っていない品の数）。支援賞の値に、預けた品が取られた数を足す
+
 S2a で変えた項目（試運転 t2 と S1d・S2 の検査を受けた直し。SEASON.md §20.6・§20.10・§21。観測に `self.fight_risk` が増えたので `engineVersion` 0.42.2。出来事の形は変えていない（`eventVersion` 28 のまま））:
 
 - **すべてのラン**
@@ -981,7 +991,7 @@ CommandRecord {
 
 ## 9. シーズン（S0。SEASON.md §2）
 
-シーズンのランだけの決まり。**シーズンでないランは何も変わらない**（SEASON.md §1.2 の 5。生成・候補・観測・出来事のどれも）。版は `engineVersion` 0.38.0・`eventVersion` 22（S1 で 0.39.0・23、S1a で 0.39.1・24、S1b で 0.40.0・25、S1c で 0.41.0・26（シーズン）と 0.42.0・27（すべてのラン）、S1d で 0.42.1・28、S2a で 0.42.2・28。§5 のそれぞれの「変えた項目」）。
+シーズンのランだけの決まり。**シーズンでないランは何も変わらない**（SEASON.md §1.2 の 5。生成・候補・観測・出来事のどれも）。版は `engineVersion` 0.38.0・`eventVersion` 22（S1 で 0.39.0・23、S1a で 0.39.1・24、S1b で 0.40.0・25、S1c で 0.41.0・26（シーズン）と 0.42.0・27（すべてのラン）、S1d で 0.42.1・28、S2a で 0.42.2・28、S3 で 0.43.0・29。§5 のそれぞれの「変えた項目」）。
 
 ### 9.1 シーズンと参加
 
@@ -1042,7 +1052,7 @@ CommandRecord {
 | `adventure` 冒険賞 | シーズンで着いたいちばん深い階（ランをまたいだ最良。着いた時点で数える。帰れなくてもよい） | その階に初めて着いたときまでに使った予算 |
 | `contribution` 貢献賞 | 最初に報告した階段と特別な場所（S1c）の数（シーズンの合計） | 最後の 1 つを報告したときまでに使った予算 |
 | `survival` 生還賞 | シーズンで一度も倒れていない参加者の、確定した点の合計（シーズンのすべてのランの `banked`） | 使った予算 |
-| `support` 支援賞（S1） | 自分の野営の火を、ほかの参加者が使った人数（延べ。火ごとに同じ参加者は 1 回。§9.10） | 使った予算 |
+| `support` 支援賞（S1） | 自分の野営の火を、ほかの参加者が使った人数（延べ。火ごとに同じ参加者は 1 回。§9.10）＋自分の預けた補給の品を、ほかの参加者が取った数（S3。§9.12） | 使った予算 |
 
 - 順位は値の大きい順。値も同着の決め方も同じなら同じ順位（1, 2, 2, 4）。倒れた参加者は生還賞の対象外（`value: null`・`rank: null`）。時間切れは倒れた扱いにしない。
 - 順位の写しは取り込みのときに入る（キャンプで見るものが、その遠征の間の最新）。
@@ -1176,3 +1186,26 @@ SeasonTitle { id, season, seasonName, kind: 'award' | 'first_warden', award?, de
 - **結果を見返す**: `GET /api/seasons/:id` の `result`・`standings[].banked`・`section`（§9.8）。人間の画面は `#/season/<id>`。
 - **人間の画面**（S2 の 2 つ目。SEASON.md §19.4）: ロビーのシーズンの表から参加（招かれたプロフィールのトークンを入れる。`POST /api/runs { season, profileToken, controller: human }`。断られたら `error.message` をそのまま出す）。迷宮とキャンプの命令は、AI と同じ `Command` を WS の `command` で送る（`place_fire`・`interact`・`extract`・`report_stairs`）。画面に出すのは、観測（`projectPlayerView` を通った PlayerView からクライアントが作る `buildObservation`）にあるものだけ。
 - **S2b（SEASON.md §22・§23）**: サーバーは、ほかのプロセス（運用の道具の `close`）の `result.json` を取り込むとき、`participants.json` も読み直し、確定したシーズンの参加者の記録を書き戻さない（保存待ちも捨てる）。確定したシーズンの断面の最深は、確定した結果の冒険賞の値から作る。確定した後は、ランの登録（`registerRun`）も足さない。運用: シーズンを手で閉じるときは、サーバーを止めてから `close` する（動いているサーバーに任せるなら、終わりの時刻を待つ）。`list_runs` の文は、伏せたシーズンのランを「名前(職業)」だけで出す。HP がもう hp_floor 以下で fight を断るときも、死にうるなら「hp_floor を下げても戦えない」と書く。公開された下り階段の知らせは、遠征を始めた階が前と同じ階のとき・前の要約が無いときも出す。
+
+### 9.12 補給の置き場（S3。SEASON.md §25.2・§26）
+
+共有で変わるのは、手番と危険、それに、上限つきの消耗品まで（SEASON.md §1.2 の 1 を改めた）。シーズンのランだけ。
+
+- **置き場**: 各階（主の枝）の**上り階段・下り階段のマス**と、**野営の火**（だれの火でも。火のマス）。新しい地物は作らない（置き場の中身はエンティティでなく、ランの写し `SeasonState` にある）。置き場 1 つに `balance.season.supplyCap`（5）個まで。いる場所の置き場は、**階段の上なら階段**、ほかは上か隣の野営の火（engine の `supplyPlaceOf`、観測の `supplyPlaceInView`）。
+- **預ける**（`deposit_supply { slot }`。迷宮の中・1 手番）: 持っている品を 1 つ（重ねた品は 1 つずつ）。追ってくる敵が見えていてもできる。預けられるのは区分 `potion`・`scroll`・`throwing`（shared の `SUPPLY_CATEGORIES`。毒薬も薬）だけ。装備・遺物・宝・鍵・帰還の綱・頁は断る（`cannot_use`）。置き場の外（`cannot_use`）・いっぱい（`cannot_use`）・シーズンでない（`bad_request`）も断る（手番を使わない）。
+  - 預けた品は、その場で持ち物から無くなる（`supply_deposited`。`SeasonState.deposited` に `{ n, no, depth, x, y, place, kind, identified }`。自分の世界では品の ID `l<n>`）。倒れても置き場に残る（共有層に載る）。
+  - `identified`: 預けた者が鑑定済みだった（外見の無い品も）。鑑定済みの品は名前つき、未鑑定の品は未鑑定のまま預かる。
+- **共有**: 火と同じ道（§9.10）。預けた品は、預けた者が**キャンプに着いたとき**か、**そのランが終わったとき**（倒れた・引退）に、サーバーが `SeasonState.deposited` を読んで `seasons/<id>/supplies.json` に載せる（`PublicSupplyRec { order, id: 's<order>', depth, x, y, place, kind, identified, by, profileId, runId, n, used, wall, takenBy?, takenRun?, takenUsed?, takenWall?, doubles? }`。`log.jsonl` に `supply_published`）。載る前に自分で取り返した品（`taken` に `l<n>`）は載せない。
+  - ほかの参加者には、次の取り込み（`season_sync` の `season.supplies`: まだだれも取っていない品。`{ id, depth, x, y, place, kind, identified, by, mine?, n? }`。`n` はそのランで預けた品だけ）で届く。`season.deposits_published` は、そのランで預けた品のうち、もう載った番号（取られた後も。自分の世界の写し `l<n>` と重ねない）。
+  - 置き場の今の中身は、shared の `cacheItems`（取り込んだ品のうちこのランで取っていないもの＋このランで預けてまだ載っていない・取り返していないもの）。
+- **取る**（`take_supply { id? }`。1 手番）: 置き場の上（火は上か隣）で、預けられた品を 1 つ。`id` は観測の品の ID（`s12`・`l1`）で、置き場に 1 つだけなら省ける（2 つ以上で省くと `bad_request` で ID を並べる）。**1 回の遠征で、置き場から取れるのは `supplyTakesPerExpedition`（1）つまで**（どの置き場でも、だれの品でも。自分の品を取り返すのも数える。`SeasonState.taken` の `no`）。所持品がいっぱいなら `inventory_full`。
+  - 取った品は、その場で持ち物に作る（`supply_taken`。新しいエンティティの ID の乱数は使うが、生成の乱数は使わない。入口と階段は §9.3 のまま）。鑑定済みで預けられた品を取ると、先に `item_identified`（取った者もその種類を知る。同じシードなので外見の表は同じ）。
+  - 取った品が共有層から消えるのは、取った者が**キャンプに着いたとき**か、そのランが終わったとき（サーバーが `taken` の `s<番号>` を読んで `takenBy` を付ける。`log.jsonl` に `supply_taken`）。それまでに別の参加者が同じ品を取ることはありうる（両方の手元に残る）。後から着いた者は `doubles` に入る（`supply_double`。数えない）。
+- **支援賞**: 自分の預けた品を、ほかの参加者が取った数（`takenBy` が預けた者でない品の数。二重に取られた品は 1 人分）を、火の分（§9.10）に足す。数えるのは、取った者がキャンプに着いたとき（公開の値と同じ）。
+- **観測**（どれも、PlayerView の `season.cache` などから。`projectPlayerView` が種類を伏せる）:
+  - PlayerView の `season.cache`: 見る者が**場所を知っている**置き場（その階のそのマスの地形を知っている（見た・地図の巻物・公開された階段と道しるべ）か、火を覚えている）の中身。種類は、預けた者が鑑定済みか、見る者が鑑定済みのときだけ（ほかは `appearanceId` だけ）。場所をまだ知らない置き場（まだ見ていない下り階段）は出さず、`cacheHidden`（作ってある階の、深さごとの数）だけ。`supplyTaken`（このランで取った品）・`myDeposits`（自分の預けた品で、まだだれも取っていないもの）・`cacheNews`（前の取り込みから、ほかの者が取った自分の品）。
+  - 迷宮: 観測の `season.supply`（置き場にいるとき: `{ place, at, items: { id, name, by, mine }[], count, cap, taken_this_expedition, text }`）と、`season.caches`（この階の知っている置き場のうち品のあるもの）・`caches_hidden`・`caches_text`（「補給の置き場（この階）: 上り階段 (3,4): 回復の薬（Aya）／まだ見ていない下り階段の置き場にも 2 つ（階段を見つけると分かる）」）。`valid_actions` に `deposit_supply <slot> (預ける: …)`（預けられる品ごと。いっぱいなら 1 行の「不可」）・`take_supply <id> (取る: …)`（品ごと。この遠征でもう取ったなら 1 行の「不可」）。
+  - キャンプ: `season.deposits`・`deposits_text`（「あなたの預けた品（まだだれも取っていない）: …」）・`season.supply_news`（「知らせ: あなたが地下4階の下り階段に預けた回復の薬を、Ben が取った（支援賞 +1）」）。知らせの持ち越しは火の知らせと同じ（キャンプ・報告の取り込みでは足し、遠征を始める取り込みで捨てる。そのランの最初の取り込みでは知らせない）。
+- HTTP: `GET /api/seasons/:id` の `section[].supplies`（その階の、共有層に載ってまだだれも取っていない品の数。場所と種類は出さない）。運用の道具の `season -- standings` は、載った品の一覧（階・置き場・座標・種類・預けた者・取った者・二重）を出す（運用者向け）。
+- 規則の文（`get_rules topic=season`）と参加の説明に、置き場・預けられる品・上限・支援賞を書く。
+- 人間の画面: 迷宮の「シーズン」の枠に、置き場の文と、`valid_actions` の行から作った「預ける」「取る」のボタン（AI と同じ命令を WS の `command` で送る）。キャンプの枠に、自分の預けた品と知らせ。

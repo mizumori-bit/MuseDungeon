@@ -3,11 +3,11 @@
 import type {
   AiState, BaseStats, CampState, Dir, Entity, EntityId, EquipSlot, Expedition, ExpeditionHaul, ExpeditionEndReason, ExpeditionResult, Floor,
   FloorKey, FloorPos, MonsterMemory, Objective, ObjectiveProgress, PlayerId, PlayerRecord, PlayerStats, Pos,
-  RememberedEntity, RngState, RunMeta, RunSummary, SeasonState, Sense, Stats, StatusInst, WorldSecret, FloorHint, Names,
+  RememberedEntity, RngState, RunMeta, RunSummary, SeasonDeposit, SeasonState, SeasonTaken, Sense, Stats, StatusInst, SupplyPlace, WorldSecret, FloorHint, Names,
 } from './types';
 
-/** 2: 遠征・実ダメージ・回復の蓄積値（IMPROVEMENTS_V2）。3: ビルド（特技・能動技・呪い。V3-4）。22: シーズン（S0）。古いログもそのまま畳み込める */
-export const EVENT_VERSION = 28;
+/** 2: 遠征・実ダメージ・回復の蓄積値（IMPROVEMENTS_V2）。3: ビルド（特技・能動技・呪い。V3-4）。22: シーズン（S0）。29: 補給の置き場（S3）。古いログもそのまま畳み込める */
+export const EVENT_VERSION = 29;
 
 export interface EventBase {
   seq: number;
@@ -216,6 +216,16 @@ export type GameEvent =
   | E<'fire_placed', { player: PlayerId; depth: number; x: number; y: number; cost: number; placedAfter: { depth: number; x: number; y: number }[] }>
   /** 野営の火を使った（S1。本人だけ）。by: 置いた者、amount: 戻った HP、usesAfter: SeasonState.fireUses の after 値 */
   | E<'fire_used', { player: PlayerId; depth: number; x: number; y: number; by: string; amount: number; maxHp: number; usesAfter: { no: number; depth: number; x: number; y: number }[] }>
+  /**
+   * 補給の置き場に品を 1 つ預けた（S3。SEASON.md §25.2。本人だけ）。n はこのランの通し番号（自分の世界では 'l<n>' の品）、identified は預けた者が鑑定済みだったか。
+   * 持ち物から減らすのは put・del。depositedAfter は SeasonState.deposited の after 値
+   */
+  | E<'supply_deposited', { player: PlayerId; depth: number; x: number; y: number; place: SupplyPlace; n: number; kind: string; appearanceId: string | null; identified: boolean; depositedAfter: SeasonDeposit[] }>
+  /**
+   * 補給の置き場から品を 1 つ取った（S3 §25.2。本人だけ）。id は置き場の品（'s<番号>'・'l<番号>'）、by は預けた者、slot は入ったスロット。
+   * 持ち物に入れるのは put。takenAfter は SeasonState.taken の after 値
+   */
+  | E<'supply_taken', { player: PlayerId; depth: number; x: number; y: number; place: SupplyPlace; id: string; kind: string; appearanceId: string | null; by: string; slot: string; takenAfter: SeasonTaken[] }>
   /** 階段の報告の結果（S0 §9.4。本人だけ）。gained: 最初の報告の数（貢献） */
   /** spots（S1c §14.5）: 報告した特別な場所（祭壇・賭けの祭壇・碑文）と最初の報告だったか。gained は階段と特別な場所の合計 */
   | E<'stairs_reported', { player: PlayerId; stairs: { depth: number; x: number; y: number; first: boolean }[]; spots?: { depth: number; x: number; y: number; kind: string; first: boolean }[]; gained: number }>

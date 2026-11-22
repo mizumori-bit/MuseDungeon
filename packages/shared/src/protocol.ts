@@ -185,6 +185,8 @@ export interface SeasonSectionRow {
   stairs: { by: string } | null;
   spots: { kind: string; by: string }[];
   fires: { by: string; uses: number }[];
+  /** 補給の置き場（S3 §25.2）: 共有層に載って、まだだれも取っていない品の数（場所と種類は出さない）。S3 より前の応答には無い */
+  supplies?: number;
   /** 節目の大守護者を最初に倒した者（倒した後にキャンプへ着いた順。確定したシーズンだけ） */
   firstWarden?: string;
 }

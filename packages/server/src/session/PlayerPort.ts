@@ -146,7 +146,7 @@ export function intentStopText(L: Locale, view: PlayerView, catalog: Catalog): s
 }
 
 /** シーズンの決まりの短い説明（S0。参加したとき・再開したとき） */
-function seasonBriefing(L: Locale, s: NonNullable<PlayerView['season']>, fire?: { costPerDepth: number; returnTurns?: number; perSeason: number }): string[] {
+function seasonBriefing(L: Locale, s: NonNullable<PlayerView['season']>, fire?: { costPerDepth: number; returnTurns?: number; perSeason: number }, supply?: { cap: number; perExpedition: number }): string[] {
   const cost = fire?.costPerDepth ?? 100;
   const turns = fire?.returnTurns ?? 5;
   return [
@@ -154,6 +154,7 @@ function seasonBriefing(L: Locale, s: NonNullable<PlayerView['season']>, fire?: 
     t(L, `- 行動予算: シーズンを通して自分の手番 ${s.budget.limit}（ランをまたいで 1 つ。残り ${Math.max(0, s.budgetLeft)}）。迷宮の中の手番だけ減る。尽きた手番で時間切れ（キャンプへ戻り、未確定の戦利品を失う。倒れた扱いにはしない）。帰る分を残すこと。`, `- Budget: ${s.budget.limit} own turns for the whole season (one budget across runs; ${Math.max(0, s.budgetLeft)} left). Only dungeon turns count. Running out is time up (back to camp, unbanked haul lost; not counted as dying). Keep enough to get home.`),
     t(L, '- 階は、ランの間、作られたまま残る（遠征ごとに変わらない）。地形と階段の位置は、だれのランでも同じ。キャンプで report_stairs すると、このランで見た下り階段と特別な場所（部屋の作りにある祭壇・賭けの祭壇・碑文）を報告できる（それぞれ最初の報告者に貢献 1）。倒れると、報告していないものは報告できなくなる。公開された階段は、次の遠征から、入口からの道しるべ（いちばん短い道のマス）と一緒に地図に載る（travel_to stairs_down で向かえる）。', '- Floors persist for the whole run (they do not change between expeditions). Terrain and stairs are the same in every run. At camp, report_stairs reports the down stairs and special places (built-in altars, altars of chance, inscriptions) you saw in this run (1 contribution to the first reporter of each). If you die, what you did not report is lost. Published stairs appear on your map from the next expedition, with a trail from the entrance (the shortest way; travel_to stairs_down goes there).'),
     t(L, '- 賞: 冒険（いちばん深い階）・貢献（最初の報告の数）・生還（一度も倒れていない者の確定点の合計）・支援（自分の野営の火を、ほかの参加者が使った人数）。同着は使った予算の少ないほうが上。順位はキャンプの観測に出る。', '- Awards: adventure (deepest floor), contribution (first reports), survival (banked points of those who never died), support (other participants who used your campfires). Ties go to less budget used. Standings show at camp.'),
+    t(L, `- 補給の置き場: 各階の上り・下り階段のマスと野営の火に、消耗品（薬・巻物・投げる武器）を deposit_supply { slot } で預けられる（1 手番。置き場 1 つに ${supply?.cap ?? 5} 個まで）。take_supply { id } で取れる（1 回の遠征で ${supply?.perExpedition ?? 1} つまで）。預けた品はキャンプに着くと共有され、ほかの参加者が取ると支援賞に数える。`, `- Supply caches: at the stairs up and down of each floor and at campfires, deposit_supply { slot } leaves a consumable (potion, scroll, throwing weapon; one turn; ${supply?.cap ?? 5} per cache), take_supply { id } takes one (${supply?.perExpedition ?? 1} per expedition). Deposits are shared once you reach camp, and takes by others count for your support award.`),
     t(L, `- 野営の火: 迷宮の中で place_fire（1 手番。費用は 深さ × ${cost} 点を、このランの確定点から。シーズンで ${fire?.perSeason ?? 3} つまで）。置いた本人の得: 火の上か隣から extract で帰れる（追ってくる敵が見えていなければ。帰り支度 ${turns} 手番）・火から帰ると次の遠征はそこから始まる・interact で HP が休憩の上限まで戻る（1 回の遠征で、1 つの階につき 1 回）。キャンプに着くと、ほかの参加者の世界の同じマスにも現れ、使われると支援賞に数える。詳しくは get_rules topic=season。`, `- Campfires: place_fire in the dungeon (one turn; costs depth x ${cost} of this run's banked points; ${fire?.perSeason ?? 3} per season). What you get: extract on or next to it takes you home (with no hunting enemy in view; ${turns} turns packing up), your next expedition then starts there, and interact heals you to the rest cap (once per floor per expedition). Once you reach camp it appears on the same cell in the others' worlds, and their uses count for your support award. Details: get_rules topic=season.`),
   ];
 }
@@ -718,7 +719,7 @@ export class SessionPlayerPort implements PlayerPort {
     const lines: string[] = [];
     const x = view.expedition;
     // シーズン（S0 §9.6）: 参加したときと再開したときに、決まりを短く（詳しくは get_rules topic=season）
-    if (view.season) lines.push(...seasonBriefing(L, view.season, this.catalog.rules.seasonFire));
+    if (view.season) lines.push(...seasonBriefing(L, view.season, this.catalog.rules.seasonFire, this.catalog.rules.seasonSupply));
     if (x && x.status !== 'ended' && view.status !== 'at_camp') {
       // 2 回目以降の遠征の開始は 1 行（ルールは最初の遠征で説明済み。V3-2R3 §20.6）
       if (kind === 'start' && x.no > 1) lines.push(briefingShort(L, x, this.catalog.rules));

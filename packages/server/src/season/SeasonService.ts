@@ -3,7 +3,7 @@
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type {
-  GameEvent, PlayerId, SeasonAward, SeasonListing, SeasonResultView, SeasonSectionRow, SeasonStandingRow, SeasonStandingsResponse, SeasonSyncCommand, SeasonTitle,
+  GameEvent, PlayerId, SeasonAward, SeasonListing, SeasonResultView, SeasonSectionRow, SeasonStandingRow, SeasonStandingsResponse, SeasonSyncCommand, SeasonTitle, SupplyPlace,
 } from '@muse/shared';
 import { awardName } from '@muse/shared';
 import type { RunSession } from '../session/RunSession';
@@ -70,6 +70,16 @@ export interface PublicFireRec {
   dup?: boolean;
 }
 
+/**
+ * 共有層の補給の品（S3。SEASON.md §25.2。supplies.json）。id は 's<order>'。runId・n は預けたランと、そのランの通し番号（同じ品を 2 回載せない）。
+ * takenBy: 最初に取ってキャンプに着いた参加者（支援賞に数えるのは、預けた者でないときだけ）。doubles: その後に、同じ品を取ってキャンプに着いた参加者（世界は別々なので、両方の手元に残る。数えない）
+ */
+export interface PublicSupplyRec {
+  order: number; id: string; depth: number; x: number; y: number; place: SupplyPlace; kind: string; identified: boolean;
+  by: string; profileId: string; runId: string; n: number; used: number; wall: number;
+  takenBy?: string; takenRun?: string; takenUsed?: number; takenWall?: number; doubles?: string[];
+}
+
 /** 称号の記録（S2 §18.2。result.json の titles）。profileId は HTTP に出さない */
 export interface SeasonTitleRec extends SeasonTitle { profileId: string; holder: string }
 
@@ -102,6 +112,8 @@ interface SeasonData {
   fires: PublicFireRec[];
   /** 節目の大守護者の初討伐（S2 §18.2） */
   deeds: SeasonDeedRec[];
+  /** 補給の置き場の品（S3 §25.2） */
+  supplies: PublicSupplyRec[];
   result: SeasonResult | null;
 }
 
@@ -124,8 +136,13 @@ export function liveShown(p: Participant): ShownValues {
 /** 公開の値（キャンプに着いた時点の写し。無ければ今の値） */
 const shownOf = (p: Participant): ShownValues => p.shown ?? liveShown(p);
 
-/** 支援の数は、火ごとの記録（fires.json の uses）から作る（S1a §10.1 の 4: 参加者ごとの数を別に持たない） */
-const supportOf = (fires: readonly PublicFireRec[]) => (p: Participant) => fires.reduce((a, f) => a + (!f.dup && f.profileId === p.profileId ? f.uses : 0), 0);
+/**
+ * 支援の数は、火ごとの記録（fires.json の uses）から作る（S1a §10.1 の 4: 参加者ごとの数を別に持たない）。
+ * S3 §25.2: 自分の預けた補給の品を、ほかの参加者が取った数（supplies.json の takenBy。二重に取られた品は 1 人分）を足す
+ */
+const supportOf = (fires: readonly PublicFireRec[], supplies: readonly PublicSupplyRec[] = []) => (p: Participant) =>
+  fires.reduce((a, f) => a + (!f.dup && f.profileId === p.profileId ? f.uses : 0), 0)
+  + supplies.filter((x) => x.profileId === p.profileId && x.takenBy && x.takenBy !== p.profileId).length;
 
 /** 値の大きい順、同着は使った予算の少ない順。値も予算も同じなら同じ順位（1, 2, 2, 4） */
 function ranked<T>(items: T[], value: (x: T) => number, tie: (x: T) => number): Map<T, number> {
@@ -139,7 +156,7 @@ function ranked<T>(items: T[], value: (x: T) => number, tie: (x: T) => number): 
 }
 
 /** 3 つの賞の順位（PROTOCOL §9.5） */
-export function computeStandings(ps: readonly Participant[], fires: readonly PublicFireRec[] = []): {
+export function computeStandings(ps: readonly Participant[], fires: readonly PublicFireRec[] = [], supplies: readonly PublicSupplyRec[] = []): {
   rows: SeasonStandingRow[];
   award: (p: Participant, id: SeasonAward['id']) => SeasonAward;
 } {
@@ -162,8 +179,8 @@ export function computeStandings(ps: readonly Participant[], fires: readonly Pub
   const advLead = leaderOf(adv, (p) => S(p).best.depth);
   const conLead = leaderOf(con, (p) => p.firstReports);
   const surLead = leaderOf(sur, (p) => banked(p));
-  // 支援賞（S1 §8.5）: 自分の火が使われた回数。同着は使った予算の少ないほう
-  const support = supportOf(fires);
+  // 支援賞（S1 §8.5）: 自分の火が使われた回数（S3: と、預けた品が取られた数）。同着は使った予算の少ないほう
+  const support = supportOf(fires, supplies);
   const sup = ranked(list, (p) => support(p), (p) => used(p));
   const supLead = leaderOf(sup, (p) => support(p));
   const rows: SeasonStandingRow[] = list.map((p) => ({
@@ -235,6 +252,7 @@ export class SeasonStore {
       spots: this.readJson<PublicSpotRec[]>(id, 'spots.json') ?? [],
       fires: this.readJson<PublicFireRec[]>(id, 'fires.json') ?? [],
       deeds: this.readJson<SeasonDeedRec[]>(id, 'deeds.json') ?? [],
+      supplies: this.readJson<PublicSupplyRec[]>(id, 'supplies.json') ?? [],
       result: this.readJson<SeasonResult>(id, 'result.json'),
     };
     this.data.set(id, d);
@@ -252,7 +270,7 @@ export class SeasonStore {
   open(def: SeasonDef): SeasonData {
     if (!SEASON_ID_RE.test(def.id)) throw new Error(`bad season id ${def.id} (a-z 0-9 _ -, up to 32)`);
     if (this.get(def.id)) throw new Error(`season ${def.id} already exists`);
-    const d: SeasonData = { def, participants: [], public: [], spots: [], fires: [], deeds: [], result: null };
+    const d: SeasonData = { def, participants: [], public: [], spots: [], fires: [], deeds: [], supplies: [], result: null };
     this.data.set(def.id, d);
     this.writeJson(def.id, 'season.json', def);
     this.log(def.id, { type: 'opened', def });
@@ -287,6 +305,7 @@ export class SeasonStore {
   saveSpots(d: SeasonData): void { this.writeJson(d.def.id, 'spots.json', d.spots); }
   saveFires(d: SeasonData): void { this.writeJson(d.def.id, 'fires.json', d.fires); }
   saveDeeds(d: SeasonData): void { this.writeJson(d.def.id, 'deeds.json', d.deeds); }
+  saveSupplies(d: SeasonData): void { this.writeJson(d.def.id, 'supplies.json', d.supplies); }
   saveResult(d: SeasonData): void { this.writeJson(d.def.id, 'result.json', d.result); }
 
   log(id: string, rec: Record<string, unknown>): void {
@@ -441,7 +460,8 @@ export class SeasonService implements SeasonHooks {
     if (!f) return null;
     const { d, p } = f;
     this.refresh(session, pid, f);
-    const st = computeStandings(started(d.participants), d.fires);
+    const st = computeStandings(started(d.participants), d.fires, d.supplies);
+    const nameOf = (profileId: string) => d.participants.find((q) => q.profileId === profileId)?.name ?? '?';
     return {
       id: d.def.id, name: d.def.name,
       budget: { limit: d.def.budget, left: d.def.budget - used(p) },
@@ -457,6 +477,16 @@ export class SeasonService implements SeasonHooks {
       fires: [...d.fires].filter((f) => !f.dup || f.profileId === p.profileId).sort((a, b) => a.order - b.order)
         .map((f) => ({ depth: f.depth, x: f.x, y: f.y, by: f.by, ...(f.profileId === p.profileId ? { mine: true, uses: f.uses, ...(f.dup ? { dup: true } : {}), ...(f.users.length ? { users: f.users.map((id) => d.participants.find((q) => q.profileId === id)?.name ?? '?') } : {}) } : {}) })),
       self: p.name,
+      // 補給の置き場（S3 §25.2）: 共有層の品のうち、まだだれも取っていないもの（載せた順）。このランで預けた品には、そのランの番号 n
+      supplies: d.supplies.filter((x) => !x.takenBy).sort((a, b) => a.order - b.order).map((x) => ({
+        id: x.id, depth: x.depth, x: x.x, y: x.y, place: x.place, kind: x.kind, identified: x.identified, by: x.by,
+        ...(x.profileId === p.profileId ? { mine: true } : {}), ...(x.runId === session.runId ? { n: x.n } : {}),
+      })),
+      // このランで預けた品のうち、もう載ったものの番号（取られて supplies から消えた後も、自分の世界の写しと重ねない）
+      deposits_published: d.supplies.filter((x) => x.runId === session.runId).map((x) => x.n).sort((a, b) => a - b),
+      // 自分の預けた品を、ほかの参加者が取ったもの（キャンプの知らせ。engine が前の写しと比べる）
+      mine_taken: d.supplies.filter((x) => x.profileId === p.profileId && x.takenBy && x.takenBy !== p.profileId).sort((a, b) => a.order - b.order)
+        .map((x) => ({ id: x.id, depth: x.depth, x: x.x, y: x.y, place: x.place, kind: x.kind, identified: x.identified, taker: nameOf(x.takenBy!) })),
     };
   }
 
@@ -562,7 +592,48 @@ export class SeasonService implements SeasonHooks {
   private settleFires(session: RunSession, pid: PlayerId, f: { d: SeasonData; p: Participant; run: SeasonRunRec }): boolean {
     const published = this.publishFires(f.d, f.p, session);
     const counted = this.countFireUses(f.d, f.p, f.run, session, pid);
-    return published > 0 || counted;
+    // 補給の置き場（S3 §25.2）も、同じ時機（キャンプに着いたとき・ランが終わったとき・復旧のとき）
+    const supplies = this.settleSupplies(f.d, f.p, session);
+    return published > 0 || counted || supplies;
+  }
+
+  /**
+   * 補給の置き場（S3。SEASON.md §25.2）: このランで預けた品（SeasonState.deposited）のうち、まだ載っていない・取り返していないものを共有層へ載せ、
+   * このランで取った共有層の品（SeasonState.taken の 's<番号>'）を、取られたことにする（先に着いた 1 人が takenBy。後から着いた者は doubles。両方の手元に残る）。
+   * やり直しても同じ（載せたかは runId と n、取ったかは takenBy・doubles で決まる）。変わったら true
+   */
+  private settleSupplies(d: SeasonData, p: Participant, session: RunSession): boolean {
+    if (d.result) return false;
+    const s = session.world.season;
+    if (!s) return false;
+    let changed = false;
+    const taken = new Set((s.taken ?? []).map((x) => x.id));
+    for (const dep of s.deposited ?? []) {
+      if (d.supplies.some((x) => x.runId === session.runId && x.n === dep.n)) continue;
+      // 載せる前に自分で取り返した品は、もう置き場に無い
+      if (taken.has(`l${dep.n}`)) continue;
+      const order = d.supplies.length + 1;
+      const rec: PublicSupplyRec = { order, id: `s${order}`, depth: dep.depth, x: dep.x, y: dep.y, place: dep.place, kind: dep.kind, identified: dep.identified, by: p.name, profileId: p.profileId, runId: session.runId, n: dep.n, used: used(p), wall: this.now() };
+      d.supplies.push(rec);
+      this.store.log(d.def.id, { type: 'supply_published', profileId: p.profileId, runId: session.runId, id: rec.id, depth: rec.depth, x: rec.x, y: rec.y, place: rec.place, kind: rec.kind, identified: rec.identified });
+      changed = true;
+    }
+    for (const tk of s.taken ?? []) {
+      if (!tk.id.startsWith('s')) continue;
+      const rec = d.supplies.find((x) => x.id === tk.id);
+      if (!rec || rec.takenBy === p.profileId || rec.doubles?.includes(p.profileId)) continue;
+      if (!rec.takenBy) {
+        rec.takenBy = p.profileId; rec.takenRun = session.runId; rec.takenUsed = used(p); rec.takenWall = this.now();
+        this.store.log(d.def.id, { type: 'supply_taken', profileId: p.profileId, runId: session.runId, id: rec.id, holder: rec.profileId, counted: rec.profileId !== p.profileId });
+      } else {
+        // 二重に取られた（世界は別々なので、両方の手元に残る）。支援賞は先に着いた 1 人の分だけ
+        rec.doubles = [...(rec.doubles ?? []), p.profileId];
+        this.store.log(d.def.id, { type: 'supply_double', profileId: p.profileId, runId: session.runId, id: rec.id, holder: rec.profileId, first: rec.takenBy });
+      }
+      changed = true;
+    }
+    if (changed) this.store.saveSupplies(d);
+    return changed;
   }
 
   /**
@@ -713,7 +784,7 @@ export class SeasonService implements SeasonHooks {
     // 確定は、すべての参加者の今の値を出す（終わりから 1 時間で、迷宮にいる者の分も。S2a §20.10 の 2）
     for (const p of d.participants) p.shown = liveShown(p);
     this.flush();
-    const st = computeStandings(started(d.participants), d.fires);
+    const st = computeStandings(started(d.participants), d.fires, d.supplies);
     const winners = { adventure: [], contribution: [], survival: [], support: [] } as SeasonResult['winners'];
     for (const r of st.rows) {
       if (r.adventure.rank === 1) winners.adventure.push({ name: r.name, value: r.adventure.value });
@@ -777,7 +848,7 @@ export class SeasonService implements SeasonHooks {
     // 確定したシーズンの最深は、確定した結果から（S2b）。進行中は公開の値
     const finalDepth = new Map((d.result?.standings ?? []).map((r) => [nameKey(r.name), r.adventure.value]));
     const depthOf = (p: Participant) => finalDepth.get(nameKey(p.name)) ?? shownOf(p).best.depth;
-    const max = Math.max(1, ...ps.map(depthOf), ...d.public.map((x) => x.depth), ...d.spots.map((x) => x.depth), ...fires.map((x) => x.depth), ...deeds.map((x) => x.depth));
+    const max = Math.max(1, ...ps.map(depthOf), ...d.public.map((x) => x.depth), ...d.spots.map((x) => x.depth), ...fires.map((x) => x.depth), ...deeds.map((x) => x.depth), ...d.supplies.filter((x) => !x.takenBy).map((x) => x.depth));
     const out: SeasonSectionRow[] = [];
     for (let depth = 1; depth <= max; depth++) {
       const st = d.public.find((x) => x.depth === depth);
@@ -788,6 +859,8 @@ export class SeasonService implements SeasonHooks {
         stairs: st ? { by: st.by } : null,
         spots: d.spots.filter((x) => x.depth === depth).sort((a, b) => a.order - b.order).map((x) => ({ kind: x.kind, by: x.by })),
         fires: fires.filter((x) => x.depth === depth).sort((a, b) => a.order - b.order).map((x) => ({ by: x.by, uses: x.uses })),
+        // 補給の置き場（S3 §25.2）: 共有層に載って、まだだれも取っていない品の数（場所と種類は出さない）
+        supplies: d.supplies.filter((x) => x.depth === depth && !x.takenBy).length,
         ...(deed ? { firstWarden: deed.name } : {}),
       });
     }
@@ -806,7 +879,7 @@ export class SeasonService implements SeasonHooks {
       const p = pOf(r.name);
       return { ...r, banked: r.banked ?? (p ? banked(p) : 0), titles: p ? this.titlesOf(p.profileId) : [] };
     };
-    const rows = (d.result?.standings ?? computeStandings(started(d.participants), d.fires).rows).map(decorate);
+    const rows = (d.result?.standings ?? computeStandings(started(d.participants), d.fires, d.supplies).rows).map(decorate);
     let result: SeasonResultView | undefined;
     if (d.result) {
       const { titles, deeds, standings: _s, ...rest } = d.result;

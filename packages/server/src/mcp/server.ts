@@ -87,6 +87,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
   const waitMs = manager.config.waitOthersMs;
   // 野営の火の数（S1c。ツールの説明に出す）
   const fireRules = manager.catalog.rules.seasonFire;
+  const supplyRules = manager.catalog.rules.seasonSupply;
 
   // 直前の portOf で見つからなかったトークン（復旧に失敗したランなら、そのエラーを返す。V4-1m §37.1。portOf と noSession は同期で続けて呼ぶ）
   let missed: string | undefined;
@@ -515,6 +516,17 @@ export function createMcpServer(ctx: McpContext): McpServer {
     description: `シーズンのランの迷宮の中で、自分のいるマスに野営の火を置く（1 手番）。置いた本人の得: 火の上か隣から帰還・撤退できる（extract。追ってくる敵が見えていなければ。帰り支度 ${fireRules?.returnTurns ?? 5} 手番）・火から帰ると次の遠征はそこから始まる・火の隣か上で interact すると HP が休憩の上限まで戻る（1 回の遠征で 1 つの階につき 1 回）。費用は 深さ × ${fireRules?.costPerDepth ?? 100} 点で、このランの確定した点から払う（戻らない）。キャンプに着くと、ほかの参加者の世界の同じ階の同じマスにも現れ、ほかの参加者に使われると支援賞に数える。置けない所と上限（シーズンで ${fireRules?.perSeason ?? 3} つ）は get_rules topic=season。Set a campfire on your cell (season runs): you can return home from it and start your next expedition there; costs depth x ${fireRules?.costPerDepth ?? 100} banked points.`,
     inputSchema: { ...actionCommon },
   }, async (a) => act('place_fire', a, { type: 'place_fire' }));
+  // 補給の置き場（S3。SEASON.md §25.2）
+  server.registerTool('deposit_supply', {
+    title: '補給の置き場に預ける',
+    description: `シーズンのランの迷宮の中で、補給の置き場（各階の上り階段・下り階段のマス、野営の火の上か隣）に、持っている消耗品（薬・巻物・投げる武器）を 1 つ預ける（1 手番。重ねた品は 1 つずつ。追ってくる敵が見えていてもできる）。装備・遺物・宝・鍵・帰還の綱は預けられない。置き場 1 つに ${supplyRules?.cap ?? 5} 個まで。預けた品は、キャンプに着くと、ほかの参加者の世界の同じ置き場にも現れ、ほかの参加者に取られると支援賞に数える。鑑定済みの品は名前つき、未鑑定の品は外見のまま。Deposit one consumable at a supply cache (stairs or campfire; season runs).`,
+    inputSchema: { ...actionCommon, slot: z.string().regex(/^[a-z]$/).describe('預ける品のスロット（inventory の slot）') },
+  }, async (a) => act('deposit_supply', a, { type: 'deposit_supply', slot: a.slot }));
+  server.registerTool('take_supply', {
+    title: '補給の置き場から取る',
+    description: `シーズンのランの迷宮の中で、補給の置き場（各階の上り階段・下り階段のマス、野営の火の上か隣）から品を 1 つ取る（1 手番）。1 回の遠征で、置き場から取れるのは ${supplyRules?.perExpedition ?? 1} つまで（どの置き場でも、だれの品でも。自分の預けた品を取り返すのも数える）。id は観測の season.supply.items の id（'s12' など）。置き場に品が 1 つだけなら省ける。鑑定済みで預けられた品を取ると、その種類を知る。Take one item from a supply cache (season runs; ${supplyRules?.perExpedition ?? 1} per expedition).`,
+    inputSchema: { ...actionCommon, id: z.string().regex(/^[sl][0-9]{1,6}$/).optional().describe("置き場の品の ID（season.supply.items の id。's12'・'l1'）") },
+  }, async (a) => act('take_supply', a, { type: 'take_supply', ...(a.id ? { id: a.id } : {}) }));
   server.registerTool('choose_perk', {
     title: '特技を選ぶ', description: 'レベルアップの特技の候補から 1 つ選ぶ（self.perk_choice。手番を消費しない。選ぶまで進行は止まらない）。option は候補の番号（1 から）か特技の ID。',
     inputSchema: { ...common, option: z.union([z.number().int().min(1).max(9), z.string().min(1)]) },

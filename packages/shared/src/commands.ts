@@ -73,6 +73,10 @@ export const CommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('report_stairs') }),
   /** 野営の火を置く（S1。SEASON.md §8.2。迷宮の中・1 手番・シーズンのランだけ） */
   z.object({ type: z.literal('place_fire') }),
+  /** 補給の置き場に品を 1 つ預ける（S3。SEASON.md §25.2。置き場の上（火は上か隣）・1 手番・消耗品だけ。重ねた品は 1 つずつ） */
+  z.object({ type: z.literal('deposit_supply'), slot: SlotSchema }),
+  /** 補給の置き場から品を 1 つ取る（S3 §25.2。1 手番・1 回の遠征で 1 つまで）。id は観測の品の ID（'s12'・'l1'）。置き場に 1 つだけなら省ける */
+  z.object({ type: z.literal('take_supply'), id: z.string().regex(/^[sl][0-9]{1,6}$/).optional() }),
 ]);
 
 export type Command = z.infer<typeof CommandSchema>;
@@ -122,6 +126,13 @@ export const SeasonSyncSchema = z.object({
     /** S1c §14.5: 公開された特別な場所（祭壇・賭けの祭壇・碑文。by は最初に報告した者） */
     spots: z.array(z.object({ depth: z.number().int().positive(), x: z.number().int(), y: z.number().int(), kind: z.string().max(64), by: z.string().max(64) })).optional(),
     self: z.string().max(64).optional(),
+    /** S3 §25.2: 共有層の補給の品（取られていないもの。n はこのランで預けた品の番号）と、自分の預けた品をほかの者が取ったもの */
+    supplies: z.array(z.object({ id: z.string().max(16), depth: z.number().int().positive(), x: z.number().int(), y: z.number().int(), place: z.enum(['stairs_up', 'stairs_down', 'fire']),
+      kind: z.string().max(64), identified: z.boolean(), by: z.string().max(64), mine: z.boolean().optional(), n: z.number().int().positive().optional() })).optional(),
+    /** このランで預けた品のうち、もう共有層に載ったものの番号（取られた後も。自分の世界の写しと重ねない） */
+    deposits_published: z.array(z.number().int().positive()).optional(),
+    mine_taken: z.array(z.object({ id: z.string().max(16), depth: z.number().int().positive(), x: z.number().int(), y: z.number().int(), place: z.enum(['stairs_up', 'stairs_down', 'fire']),
+      kind: z.string().max(64), identified: z.boolean(), taker: z.string().max(64) })).optional(),
   }),
   /** 報告の結果（reason: report）: 送った階段と、最初の報告だったか */
   report: z.object({

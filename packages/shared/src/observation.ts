@@ -12,8 +12,9 @@ import type { ReportCompare } from './expeditionStats';
 import { kindName } from './narrate';
 import type { NavGrid } from './nav';
 import { buildNavGrid, distanceField, findFrontiers } from './nav';
-import type { Dir, EntityRole, Expedition, HaulParts, Locale, MonsterMemory, Names, ObjectiveType, OfferSlot, Pos, SeasonAward } from './types';
-import { awardName, awardText, fireUsedDepths, myCampfires, publicSpotAt, publicStairsAt, seasonBudgetText } from './season';
+import type { Dir, EntityRole, Expedition, HaulParts, Locale, MonsterMemory, Names, ObjectiveType, OfferSlot, Pos, SeasonAward, SupplyPlace } from './types';
+import { awardName, awardText, fireUsedDepths, myCampfires, publicSpotAt, publicStairsAt, seasonBudgetText, SUPPLY_CATEGORIES, supplyPlaceName } from './season';
+import type { SupplyView } from './season';
 import { DIRS, DIR_VEC } from './types';
 import { addDiceBonus, cheb, ceilDiv, compassDir, damageRangeVs, dirTo, floorDiv, formatDice, parseDice, t } from './util';
 import type { EntityView, HpState, ItemView, PlayerView, ViewStatus } from './view';
@@ -349,6 +350,20 @@ export interface ObsSeason {
   fires_text?: string;
   /** この遠征で野営の火を使った階（迷宮の中。S1 §8.3） */
   fire_used?: { depths: number[]; text: string };
+  /**
+   * 補給の置き場（S3。SEASON.md §25.2）。迷宮で、置き場（階段の上・火の上か隣）にいるとき: 置き場・中身（id・名前・預けた者）・上限・この遠征で取ったか。
+   * 中身の名前は、預けた者か自分が鑑定済みなら種類、ほかは外見
+   */
+  supply?: { place: SupplyPlace; at: [number, number]; items: { id: string; name: string; by: string; mine: boolean }[]; count: number; cap: number; taken_this_expedition: boolean; text: string };
+  /** 迷宮で、この階の知っている置き場のうち、品のあるもの（S3）。hidden: まだ場所を知らない置き場（下り階段）にある品の数 */
+  caches?: { place: SupplyPlace; at: [number, number]; items: { id: string; name: string; by: string }[] }[];
+  caches_hidden?: number;
+  caches_text?: string;
+  /** キャンプ（S3）: 自分の預けた品のうち、まだだれも取っていないもの（まだ共有層に載っていない品は local） */
+  deposits?: { depth: number; place: SupplyPlace; name: string; local: boolean }[];
+  deposits_text?: string;
+  /** キャンプ（S3）: 前の取り込みから、ほかの参加者が取った自分の品 */
+  supply_news?: { depth: number; place: SupplyPlace; name: string; taker: string; text: string }[];
   /** 予算の 1 行 */
   text: string;
 }
@@ -940,6 +955,99 @@ function placeFireLine(view: PlayerView, catalog: Catalog, hunting: boolean): st
   const left = r.perSeason - myCampfires(view.season).length;
   const n = r.returnTurns ?? 5;
   return `place_fire (${t(L, `野営の火を置く: そこから帰れる（帰り支度 ${n} 手番）・次の遠征はそこから始まる・休憩の上限まで回復（1 回の遠征で 1 つの階に 1 回）。費用 ${cost} 点（このランの確定点 ${view.record.banked} から）・シーズンで残り ${left} つ。キャンプに着くと、ほかの参加者の世界にも現れ、使われると支援賞に数える`, `set a campfire: you can return home from it (${n} turns packing up), the next expedition starts there, and it heals to the rest cap (once per floor per expedition). Costs ${cost} of your ${view.record.banked} banked points; ${left} left this season. It reaches the others once you are back at camp, and their uses count for your support award`)})`;
+}
+
+/** いる場所の補給の置き場（S3 §25.2。engine の supplyPlaceOf と同じ: 階段の上なら階段、ほかは上か隣の野営の火） */
+export function supplyPlaceInView(view: PlayerView, catalog: Catalog): { place: SupplyPlace; x: number; y: number } | null {
+  const f = view.floor;
+  const pos = view.self.pos;
+  if (!view.season || !f || !pos || !f.key.startsWith('main:')) return null;
+  const tr = catalog.terrain[view.terrainTable[view.memory.terrain[pos.y * f.width + pos.x]]];
+  if (tr?.stairs) return { place: tr.stairs === 'up' ? 'stairs_up' : 'stairs_down', x: pos.x, y: pos.y };
+  const fire = view.entities.filter((e) => e.campfire && cheb(e.pos, pos) <= 1).sort((a, b) => cheb(a.pos, pos) - cheb(b.pos, pos))[0];
+  return fire ? { place: 'fire', x: fire.pos.x, y: fire.pos.y } : null;
+}
+
+const supplyName = (catalog: Catalog, L: Locale, c: { kind: string | null; appearanceId: string | null }) => itemDisplayName(catalog, L, c.kind, c.appearanceId);
+
+/** 預けられる品か（区分。未鑑定なら外見の区分） */
+function depositable(catalog: Catalog, it: { kind: string | null; appearanceId: string | null; equipped?: unknown }): boolean {
+  const cat = it.kind ? catalog.items[it.kind]?.category : it.appearanceId ? catalog.appearances?.[it.appearanceId]?.category : undefined;
+  return !!cat && SUPPLY_CATEGORIES.includes(cat) && !it.equipped && !(it.kind && catalog.items[it.kind]?.bound);
+}
+
+/** 補給の置き場の観測（S3 §25.2）: 置き場にいるときの中身、この階の知っている置き場、キャンプの自分の品と知らせ */
+function supplyObs(view: PlayerView, catalog: Catalog): Partial<ObsSeason> {
+  const s = view.season!;
+  const L = view.locale;
+  const r = catalog.rules.seasonSupply!;
+  const out: Partial<ObsSeason> = {};
+  if (view.status === 'at_camp') {
+    const mine = s.myDeposits ?? [];
+    if (mine.length) {
+      out.deposits = mine.map((x) => ({ depth: x.depth, place: x.place, name: supplyName(catalog, L, x), local: x.local }));
+      out.deposits_text = t(L, `あなたの預けた品（まだだれも取っていない）: ${mine.map((x) => `地下${x.depth}階の${supplyPlaceName(L, x.place)} ${supplyName(catalog, L, x)}${x.local ? '（まだ載っていない）' : ''}`).join('・')}`,
+        `Your deposits not yet taken: ${mine.map((x) => `${supplyName(catalog, L, x)} at the ${supplyPlaceName(L, x.place)} on depth ${x.depth}${x.local ? ' (not yet shared)' : ''}`).join(', ')}`);
+    }
+    const news = s.cacheNews ?? [];
+    if (news.length) {
+      out.supply_news = news.map((x) => ({ depth: x.depth, place: x.place, name: supplyName(catalog, L, x), taker: x.taker,
+        text: t(L, `知らせ: あなたが地下${x.depth}階の${supplyPlaceName(L, x.place)}に預けた${supplyName(catalog, L, x)}を、${x.taker} が取った（支援賞 +1）`, `News: ${x.taker} took the ${supplyName(catalog, L, x)} you deposited at the ${supplyPlaceName(L, x.place)} on depth ${x.depth} (support +1)`) }));
+    }
+    return out;
+  }
+  const f = view.floor;
+  if (!f) return out;
+  const cache = (s.cache ?? []).filter((c) => c.depth === f.depth);
+  // この階の知っている置き場（品のあるもの）
+  const byCell = new Map<string, SupplyView[]>();
+  for (const c of cache) { const k = `${c.x},${c.y}`; byCell.set(k, [...(byCell.get(k) ?? []), c]); }
+  const caches = [...byCell.values()].map((list) => ({ place: list[0].place, at: [list[0].x, list[0].y] as [number, number], items: list.map((c) => ({ id: c.id, name: supplyName(catalog, L, c), by: c.by })) }));
+  const hidden = (s.cacheHidden ?? []).find((h) => h.depth === f.depth)?.count ?? 0;
+  if (caches.length || hidden) {
+    out.caches = caches;
+    if (hidden) out.caches_hidden = hidden;
+    const parts = caches.map((c) => t(L, `${supplyPlaceName(L, c.place)} (${c.at[0]},${c.at[1]}): ${c.items.map((x) => `${x.name}（${x.by}）`).join('・')}`, `${supplyPlaceName(L, c.place)} (${c.at[0]},${c.at[1]}): ${c.items.map((x) => `${x.name} (${x.by})`).join(', ')}`));
+    if (hidden) parts.push(t(L, `まだ見ていない下り階段の置き場にも ${hidden} つ（階段を見つけると分かる）`, `${hidden} more at the stairs down you have not seen (find them to learn more)`));
+    out.caches_text = t(L, `補給の置き場（この階）: ${parts.join('／')}`, `Supply caches on this floor: ${parts.join(' / ')}`);
+  }
+  const at = supplyPlaceInView(view, catalog);
+  if (at) {
+    const here = cache.filter((c) => c.x === at.x && c.y === at.y);
+    const xno = view.expedition && view.expedition.status !== 'ended' ? view.expedition.no : null;
+    const took = xno !== null && (s.supplyTaken ?? []).filter((x) => x.no === xno).length >= r.perExpedition;
+    const items = here.map((c) => ({ id: c.id, name: supplyName(catalog, L, c), by: c.by, mine: c.mine }));
+    out.supply = {
+      place: at.place, at: [at.x, at.y], items, count: here.length, cap: r.cap, taken_this_expedition: took,
+      text: t(L, `ここは補給の置き場（${supplyPlaceName(L, at.place)}。${here.length}/${r.cap}）: ${items.length ? items.map((x) => `${x.id} ${x.name}（${x.by}）`).join('・') : '品は無い'}。預けられるのは消耗品（薬・巻物・投げる武器）${took ? '。この遠征では、もう置き場から取った' : `。取れるのは 1 回の遠征で ${r.perExpedition} つまで（どの置き場でも）`}`,
+        `This is a supply cache (${supplyPlaceName(L, at.place)}; ${here.length}/${r.cap}): ${items.length ? items.map((x) => `${x.id} ${x.name} (${x.by})`).join(', ') : 'empty'}. Consumables (potions, scrolls, throwing weapons) can be deposited${took ? '; you have already taken from a cache this expedition' : `; you can take ${r.perExpedition} per expedition (from any cache)`}`),
+    };
+  }
+  return out;
+}
+
+/** 置き場の行（S3 §25.2。置き場にいるときだけ）: deposit_supply <slot>（預けられる品ごと）・take_supply <id>（取れる品ごと）。engine と同じ順の見込み（最後に決めるのは engine） */
+function supplyLines(view: PlayerView, catalog: Catalog): string[] {
+  const at = supplyPlaceInView(view, catalog);
+  if (!at || view.status !== 'your_turn') return [];
+  const L = view.locale;
+  const r = catalog.rules.seasonSupply!;
+  const s = view.season!;
+  const f = view.floor!;
+  const here = (s.cache ?? []).filter((c) => c.depth === f.depth && c.x === at.x && c.y === at.y);
+  const out: string[] = [];
+  const dep = view.inventory.filter((it) => depositable(catalog, it));
+  if (dep.length) {
+    if (here.length >= r.cap) out.push(`deposit_supply (${t(L, `不可: この置き場はいっぱい（${here.length}/${r.cap}）`, `unavailable: this cache is full (${here.length}/${r.cap})`)})`);
+    else for (const it of dep) out.push(`deposit_supply ${it.slot} (${t(L, `預ける: ${supplyName(catalog, L, it)} を 1 つ（${supplyPlaceName(L, at.place)}の置き場 ${here.length}/${r.cap}）。キャンプに着くと、ほかの参加者の世界にも現れ、取られると支援賞に数える`, `deposit one ${supplyName(catalog, L, it)} (${supplyPlaceName(L, at.place)} cache ${here.length}/${r.cap}); it reaches the others once you are back at camp, and their takes count for your support award`)})`);
+  }
+  if (here.length) {
+    const xno = view.expedition && view.expedition.status !== 'ended' ? view.expedition.no : null;
+    const took = xno !== null && (s.supplyTaken ?? []).filter((x) => x.no === xno).length >= r.perExpedition;
+    if (took) out.push(`take_supply (${t(L, `不可: この遠征では、もう置き場から ${r.perExpedition} つ取った`, `unavailable: already took ${r.perExpedition} from caches this expedition`)})`);
+    else for (const c of here) out.push(`take_supply ${c.id} (${t(L, `取る: ${supplyName(catalog, L, c)}（${c.mine ? 'あなたが' : `${c.by} が`}預けた）。1 回の遠征で置き場から取れるのは ${r.perExpedition} つまで`, `take ${supplyName(catalog, L, c)} (deposited by ${c.mine ? 'you' : c.by}); ${r.perExpedition} take per expedition`)})`);
+  }
+  return out;
 }
 
 /** 地物の名前。野営の火は置いた者の名前を添える（S1 §9.10） */
@@ -1706,6 +1814,8 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       const lim = catalog.rules.seasonFire.perSeason;
       season.support = { placed: n, limit: lim, text: `${a ? awardText(L, a) : awardName(L, 'support')}${fireCountText(L, n, lim)}` };
     }
+    // 補給の置き場（S3 §25.2）
+    if (catalog.rules.seasonSupply) Object.assign(season, supplyObs(view, catalog));
     obs.season = season;
   }
   if (opts.detail === 'full') obs.self.inventory = invItems;
@@ -2048,6 +2158,8 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
   }
   // 野営の火を置く（S1 §8.2）: シーズンのランだけ。engine の判定と同じ順で、見えている分から（最後に決めるのは engine）
   if (view.season && catalog.rules.seasonFire) out.push(placeFireLine(view, catalog, hunting));
+  // 補給の置き場（S3 §25.2）: 置き場にいるときだけ。預けられる品と、取れる品
+  if (view.season && catalog.rules.seasonSupply) out.push(...supplyLines(view, catalog));
   // 一番近い階段でも、追われたままなら最悪の被害が今の HP 以上: 綱の候補を階段より前に並べる（V3-2R3b §23.1）。
   // 記録の無い敵がいるときは、記録のある分だけの見込み（下限）で判断する
   const near = x.huntingReach.length ? nearestStairs() : undefined;
@@ -2091,6 +2203,9 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
       for (const a of obs.season.awards ?? []) lines.push(a.text);
       if (obs.season.fires_text) lines.push(obs.season.fires_text);
       for (const n of obs.season.fire_news ?? []) lines.push(n.text);
+      // 補給の置き場（S3 §25.2）: 自分の預けた品と、取られた知らせ
+      if (obs.season.deposits_text) lines.push(obs.season.deposits_text);
+      for (const n of obs.season.supply_news ?? []) lines.push(n.text);
       if (obs.season.stairs) lines.push(t(L, `まだ報告していない階段 ${obs.season.stairs.unreported}（うち、まだだれも公開していないもの ${obs.season.stairs.unpublished}）${obs.season.stairs.unreported ? '。report_stairs で報告できる' : ''}`, `Unreported stairs ${obs.season.stairs.unreported} (not yet published by anyone: ${obs.season.stairs.unpublished})${obs.season.stairs.unreported ? '. Report them with report_stairs' : ''}`));
       // 特別な場所（S1c §14.5）: 見つけたものがあるときだけ
       if (obs.season.spots?.unreported) lines.push(t(L, `まだ報告していない特別な場所（祭壇・賭けの祭壇・碑文） ${obs.season.spots.unreported}（うち、まだだれも公開していないもの ${obs.season.spots.unpublished}）。report_stairs で一緒に報告できる`, `Unreported special places (altars, altars of chance, inscriptions) ${obs.season.spots.unreported} (not yet published by anyone: ${obs.season.spots.unpublished}). report_stairs reports them too`));
@@ -2135,6 +2250,9 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
   if (obs.season) lines.push(obs.season.text);
   if (obs.season?.fire_used) lines.push(obs.season.fire_used.text);
   if (obs.season?.support) lines.push(obs.season.support.text);
+  // 補給の置き場（S3 §25.2）: この階の置き場と、いる置き場
+  if (obs.season?.caches_text) lines.push(obs.season.caches_text);
+  if (obs.season?.supply) lines.push(obs.season.supply.text);
   // 仲間（V4-1f §22.4）
   {
     const pt = partyText(L, obs.party ?? []);

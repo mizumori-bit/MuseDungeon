@@ -24,6 +24,8 @@ const PLAYER_VISIBLE: ReadonlySet<EventType> = new Set<EventType>([
   'stairs_reported',
   // 野営の火（S1 §9.10。本人だけ）
   'fire_placed', 'fire_used', 'fire_return',
+  // 補給の置き場（S3 §25.2。本人だけ）
+  'supply_deposited', 'supply_taken',
 ]);
 
 /** 自分に関するときだけ渡す種別 */
@@ -53,6 +55,8 @@ const SELF_ONLY: Partial<Record<EventType, (ev: any, playerId: PlayerId, selfId:
   fire_placed: (ev, p) => ev.player === p,
   fire_used: (ev, p) => ev.player === p,
   fire_return: (ev, p) => ev.player === p,
+  supply_deposited: (ev, p) => ev.player === p,
+  supply_taken: (ev, p) => ev.player === p,
 };
 
 /** プレイヤー向けに縮約したイベント（seenBy/masks/put/del を除去済み） */

@@ -1,7 +1,7 @@
 // シーズン（S2。SEASON.md §18.1）の表示部品: 迷宮の中の予算・この階の公開と火・火の命令、キャンプの賞の表・報告・自分の火。
 // 文と数値は観測（buildObservation。projectPlayerView を通った PlayerView から作る）のものを並べるだけで、ゲームの判定はしない。
-// 命令は AI と同じもの（place_fire・interact・extract・report_stairs）を送る。
-import type { Dir, ObsSeason, Observation, PlayerView } from '@muse/shared';
+// 命令は AI と同じもの（place_fire・interact・extract・report_stairs・deposit_supply・take_supply）を送る。
+import type { Command, Dir, ObsSeason, Observation, PlayerView } from '@muse/shared';
 import { tr } from '../util';
 
 const DIRS: readonly [Dir, number, number][] = [['n', 0, -1], ['ne', 1, -1], ['e', 1, 0], ['se', 1, 1], ['s', 0, 1], ['sw', -1, 1], ['w', -1, 0], ['nw', -1, -1]];
@@ -44,6 +44,25 @@ export function fireHealsOf(view: PlayerView | null, obs: Observation | null): F
   return out;
 }
 
+/**
+ * 補給の置き場の命令（S3 §25.2）: 観測の valid_actions の deposit_supply・take_supply の行から作る（置き場にいるときだけ出る）。
+ * 押せない行（「不可」）は、理由を出して押せない（断りには害が無いが、行の理由は engine と同じ順で作られている）
+ */
+export interface SupplyAction { label: string; text: string; ok: boolean; command: Command | null }
+
+export function supplyActionsOf(obs: Observation | null): SupplyAction[] {
+  const out: SupplyAction[] = [];
+  for (const line of obs?.valid_actions ?? []) {
+    const m = /^(deposit_supply|take_supply)(?: ([a-z]|[sl][0-9]+))? \(/.exec(line);
+    if (!m) continue;
+    const text = actionInner(line);
+    const ok = !unavailable(text) && !!m[2];
+    const command: Command | null = !ok ? null : m[1] === 'deposit_supply' ? { type: 'deposit_supply', slot: m[2] } : { type: 'take_supply', id: m[2] };
+    out.push({ label: m[1] === 'deposit_supply' ? tr('預ける', 'Deposit') : tr('取る', 'Take'), text, ok, command });
+  }
+  return out;
+}
+
 /** 帰り支度の残り（状態 core:fire_return。S1c §14.3） */
 export function fireReturnLeft(view: PlayerView | null): number | null {
   const st = view?.self.statuses.find((s) => s.id === 'core:fire_return');
@@ -54,8 +73,8 @@ export function fireReturnLeft(view: PlayerView | null): number | null {
  * 迷宮の中のシーズンの枠: 予算の 1 行・この階の公開された階段と特別な場所・野営の火・この遠征で火を使った階・支援賞の行・
  * 火から帰れるか・帰り支度の残り、と命令（火を置く・火で回復）
  */
-export function SeasonDungeonPanel({ view, obs, onPlaceFire, onFireHeal }: {
-  view: PlayerView; obs: Observation; onPlaceFire: () => void; onFireHeal: (dir: Dir | null) => void;
+export function SeasonDungeonPanel({ view, obs, onPlaceFire, onFireHeal, onCommand }: {
+  view: PlayerView; obs: Observation; onPlaceFire: () => void; onFireHeal: (dir: Dir | null) => void; onCommand: (c: Command) => void;
 }) {
   const s = obs.season;
   if (!s || !view.floor) return null;
@@ -67,6 +86,7 @@ export function SeasonDungeonPanel({ view, obs, onPlaceFire, onFireHeal }: {
   const heals = fireHealsOf(view, obs);
   const via = obs.expedition?.extract_via;
   const packing = fireReturnLeft(view);
+  const supply = supplyActionsOf(obs);
   return (
     <section class="panel season">
       <h3>{tr(`シーズン「${s.name}」`, `Season "${s.name}"`)}</h3>
@@ -79,6 +99,9 @@ export function SeasonDungeonPanel({ view, obs, onPlaceFire, onFireHeal }: {
         {fires.map((f) => <li key={f.id} class="sfire">{`${f.name} (${f.pos.x},${f.pos.y})`}</li>)}
         {s.fire_used && <li class="muted">{s.fire_used.text}</li>}
         {s.support && <li class="muted">{s.support.text}</li>}
+        {/* 補給の置き場（S3 §25.2）: この階の置き場と、いる置き場（観測の文のまま） */}
+        {s.caches_text && <li class="ssupply">{s.caches_text}</li>}
+        {s.supply && <li class="ssupply">{s.supply.text}</li>}
       </ul>
       {packing !== null && <div class="spacking">{tr(`帰り支度の残り ${packing} 手番（追ってくる敵が見えたり、被害を受けたりしたら取りやめ）`, `Packing up: ${packing} turns left (cancelled if a hunter comes into view or you are hurt)`)}</div>}
       {via && packing === null && (
@@ -97,6 +120,15 @@ export function SeasonDungeonPanel({ view, obs, onPlaceFire, onFireHeal }: {
         )}
       </div>
       {pf && !pf.ok && <div class="muted small">{pf.inner}</div>}
+      {supply.length > 0 && (
+        <div class="row wrap ssupplyacts">
+          {supply.map((a, i) => (
+            <button key={i} class={`small supply ${a.ok ? '' : 'off'}`} disabled={!a.ok} title={a.text} onClick={() => a.command && onCommand(a.command)}>
+              {a.ok ? a.text : `${a.label}: ${a.text}`}
+            </button>
+          ))}
+        </div>
+      )}
     </section>
   );
 }
@@ -115,6 +147,7 @@ export function SeasonCampPanel({ season: s, canReport, onReport }: { season: Ob
       <h3>{tr(`シーズン「${s.name}」`, `Season "${s.name}"`)}</h3>
       <div class="sbudget">{s.text}{s.ended ? tr('（終わりの時刻を過ぎた: 新しい遠征は始められない）', ' (past its end: no new expeditions)') : ''}</div>
       {(s.fire_news ?? []).map((n, i) => <div key={i} class="snews">{n.text}</div>)}
+      {(s.supply_news ?? []).map((n, i) => <div key={`s${i}`} class="snews">{n.text}</div>)}
       {s.awards && (
         <table class="awards">
           <tbody>
@@ -135,6 +168,7 @@ export function SeasonCampPanel({ season: s, canReport, onReport }: { season: Ob
         </button>
       </div>
       {s.fires_text && <div class="sfires">{s.fires_text}</div>}
+      {s.deposits_text && <div class="sfires">{s.deposits_text}</div>}
     </div>
   );
 }

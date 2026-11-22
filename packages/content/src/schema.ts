@@ -455,7 +455,9 @@ export const BalanceSchema = z.object({
    * 支援賞に数える使用の戻りの下限（最大 HP の %）
    */
   /** fireReturnTurns（S1c §14.3 の 1）: 火から帰還・撤退するときの帰り支度の手番（extract の手番を含む。途中で追ってくる敵が見えたら取りやめ） */
-  season: z.object({ fireCostPerDepth: Int.min(0), firesPerSeason: Int.min(0), fireSpacing: Int.min(0), supportMinHealPct: Int.min(0).max(100), fireReturnTurns: Int.min(1).default(5) })
+  season: z.object({ fireCostPerDepth: Int.min(0), firesPerSeason: Int.min(0), fireSpacing: Int.min(0), supportMinHealPct: Int.min(0).max(100), fireReturnTurns: Int.min(1).default(5),
+    /** 補給の置き場（S3 §25.2）: 置き場 1 つに預けられる数・1 回の遠征で置き場から取れる数 */
+    supplyCap: Int.min(1).default(5), supplyTakesPerExpedition: Int.min(1).default(1) })
     .default({ fireCostPerDepth: 100, firesPerSeason: 3, fireSpacing: 5, supportMinHealPct: 10, fireReturnTurns: 5 }),
   /** 帰還の綱（V3-2R2 §18.1）: 使ってから戻るまでの手番と、確定する戦利品の割合 */
   lifeline: z.object({ turns: Int.min(0), pct: Int.min(0).max(100) }).default({ turns: 0, pct: 50 }),

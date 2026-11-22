@@ -308,6 +308,13 @@ export function applyEvent(world: World, ev: GameEvent): void {
     case 'fire_used':
       if (world.season) world.season.fireUses = clone(ev.usesAfter);
       break;
+    // 補給の置き場（S3 §25.2）: 持ち物は put・del。このランで預けた品・取った品の after 値
+    case 'supply_deposited':
+      if (world.season) world.season.deposited = clone(ev.depositedAfter);
+      break;
+    case 'supply_taken':
+      if (world.season) world.season.taken = clone(ev.takenAfter);
+      break;
     // 火からの帰り支度（S1c）: 状態は status_applied・status_expired と player_state が持つ
     case 'fire_return':
       break;

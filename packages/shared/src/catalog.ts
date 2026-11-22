@@ -184,6 +184,8 @@ export interface CatalogRules {
   lifeline: { turns: number; pct: number };
   /** シーズンの野営の火（S1。SEASON.md §8）: 費用（深さ × 点）・シーズンで置ける数・ほかの火との間・支援賞に数える戻りの下限（最大 HP の %） */
   seasonFire?: { costPerDepth: number; perSeason: number; spacing: number; supportMinHealPct: number; returnTurns?: number };
+  /** 補給の置き場（S3 §25.2）: 置き場 1 つの上限・1 回の遠征で取れる数 */
+  seasonSupply?: { cap: number; perExpedition: number };
   /** 転移の巻物の着地点の最短距離 */
   teleport: { minDistance: number };
   /** 守護者の格ごとの体力の上乗せ（%。V3-2R3 §20.1） */

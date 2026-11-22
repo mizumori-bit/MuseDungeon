@@ -87,10 +87,22 @@ export function seasonCli(content: Content, a: SeasonCliArgs, log: (s: string) =
       const st = a.id ? svc.standings(a.id) : null;
       if (!st) { log(`シーズン ${a.id ?? '(--id)'} は無い`); return 1; }
       log(`${st.season.id}「${st.season.name}」 ${st.season.status}${st.result ? `（確定 ${new Date(st.result.finalizedAt).toISOString()}・${st.result.reason}）` : ''}`);
-      log('| 名前 | ラン | 使った予算 | 冒険（最深） | 貢献（最初の報告） | 生還（確定点） | 支援（火が使われた回数） |');
+      log('| 名前 | ラン | 使った予算 | 冒険（最深） | 貢献（最初の報告） | 生還（確定点） | 支援（火が使われた・預けた品が取られた） |');
       log('|---|---|---|---|---|---|---|');
       for (const r of st.standings) {
         log(`| ${r.name}${r.died ? '（倒れた）' : ''}${r.titles?.length ? `［${r.titles.map((x) => x.name.ja).join('・')}］` : ''} | ${r.runs} | ${r.used} | ${r.adventure.rank}位 地下${r.adventure.value}階 | ${r.contribution.rank}位 ${r.contribution.value} | ${r.survival ? `${r.survival.rank}位 ${r.survival.value}` : '対象外'} | ${r.support ? `${r.support.rank}位 ${r.support.value}` : '-'} |`);
+      }
+      // 補給の置き場（S3 §25.2）: 共有層に載った品（階・置き場・種類・預けた者・取った者・二重に取られたか）。運用者向け（種類も出す）
+      const sup = svc.get(a.id!)?.supplies ?? [];
+      if (sup.length) {
+        const nameOf = (pid: string) => svc.get(a.id!)?.participants.find((p) => p.profileId === pid)?.name ?? pid;
+        const place = (p: string) => (p === 'stairs_up' ? '上り階段' : p === 'stairs_down' ? '下り階段' : '野営の火');
+        const waiting = sup.filter((x) => !x.takenBy).length;
+        const doubles = sup.filter((x) => x.doubles?.length).length;
+        log(`補給の置き場: 載った品 ${sup.length}（置き場にある ${waiting}・取られた ${sup.length - waiting}・二重に取られた ${doubles}）`);
+        for (const x of [...sup].sort((p, q) => p.depth - q.depth || p.order - q.order)) {
+          log(`  ${x.id} 地下${x.depth}階 ${place(x.place)} (${x.x},${x.y}) ${x.kind}${x.identified ? '' : '（未鑑定で預けた）'} 預けた ${x.by}${x.takenBy ? `・取った ${nameOf(x.takenBy)}${x.takenBy === x.profileId ? '（本人）' : ''}` : ''}${x.doubles?.length ? `・二重 ${x.doubles.map(nameOf).join('・')}` : ''}`);
+        }
       }
       return 0;
     }

@@ -1,5 +1,6 @@
 // シーズン（S0。SEASON.md §2・PROTOCOL.md §9）の、World から読むだけの関数。engine・サーバー・観測が同じものを使う。
-import type { Entity, Locale, PlayerId, SeasonAward, SeasonSpot, SeasonState, World } from './types';
+import type { Entity, Locale, PlayerId, SeasonAward, SeasonSpot, SeasonState, SeasonSupplyTaken, SupplyPlace, World } from './types';
+import { floorKey } from './types';
 import { t } from './util';
 
 /** ランの中の予算の残り（取り込んだ残り − その後の自分の手番）。シーズンのランでなければ null */
@@ -150,4 +151,86 @@ export function myCampfires(state: SeasonState | null | undefined): { depth: num
 export function fireUsedDepths(state: SeasonState | null | undefined, expeditionNo: number | null): number[] {
   if (!state || expeditionNo === null) return [];
   return [...new Set((state.fireUses ?? []).filter((u) => u.no === expeditionNo).map((u) => u.depth))].sort((a, b) => a - b);
+}
+
+// ---- 補給の置き場（S3。SEASON.md §25.2・PROTOCOL §9.12） ----
+
+/** 預けられる品の区分（消耗品だけ: 薬・巻物・投げる武器。毒薬も薬として預けられる）。装備・遺物・宝・鍵・帰還の綱・頁は預けられない */
+export const SUPPLY_CATEGORIES: readonly string[] = ['potion', 'scroll', 'throwing'];
+
+/** 置き場の品（その世界の今の中身）。mine: 自分が預けた品。local: このランで預けて、まだ共有層に載っていない品（id 'l<n>'） */
+export interface CacheItem { id: string; depth: number; x: number; y: number; place: SupplyPlace; kind: string; identified: boolean; by: string; mine: boolean; local: boolean }
+
+/**
+ * その世界の置き場の中身（engine と観測が同じものを使う）: 取り込んだ共有層の品のうち、このランで取っていないもの ＋
+ * このランで預けた品のうち、まだ共有層に載っていない（取り込みに同じ番号 n が無い）・取り返していないもの。共有層の品が先、預けた順
+ */
+export function cacheItems(s: SeasonState | null | undefined): CacheItem[] {
+  if (!s) return [];
+  const taken = new Set((s.taken ?? []).map((x) => x.id));
+  const published = new Set([...(s.supplies ?? []).filter((x) => x.n !== undefined).map((x) => x.n!), ...(s.depositsPublished ?? [])]);
+  const out: CacheItem[] = [];
+  for (const x of s.supplies ?? []) {
+    if (taken.has(x.id)) continue;
+    out.push({ id: x.id, depth: x.depth, x: x.x, y: x.y, place: x.place, kind: x.kind, identified: x.identified, by: x.by, mine: !!x.mine, local: false });
+  }
+  for (const d of s.deposited ?? []) {
+    const id = `l${d.n}`;
+    if (published.has(d.n) || taken.has(id)) continue;
+    out.push({ id, depth: d.depth, x: d.x, y: d.y, place: d.place, kind: d.kind, identified: d.identified, by: s.self ?? '', mine: true, local: true });
+  }
+  return out;
+}
+
+/** その置き場（深さと座標）の中身 */
+export function cacheAt(s: SeasonState | null | undefined, depth: number, x: number, y: number): CacheItem[] {
+  return cacheItems(s).filter((c) => c.depth === depth && c.x === x && c.y === y);
+}
+
+/** この遠征で、置き場から取ったか（1 回の遠征で 1 つまで） */
+export function supplyTakenThis(s: SeasonState | null | undefined, expeditionNo: number | null): boolean {
+  return expeditionNo !== null && (s?.taken ?? []).some((x) => x.no === expeditionNo);
+}
+
+/** PlayerView の置き場の品（S3）: 種類は、預けた者が鑑定済みか、見る者が鑑定済みのときだけ（ほかは外見だけ） */
+export interface SupplyView { id: string; depth: number; x: number; y: number; place: SupplyPlace; kind: string | null; appearanceId: string | null; by: string; mine: boolean; local: boolean }
+export interface SupplyTakenView { id: string; depth: number; x: number; y: number; place: SupplyPlace; kind: string | null; appearanceId: string | null; taker: string }
+
+/**
+ * PlayerView の補給の置き場（S3 §25.2）。cache: 見る者が場所を知っている置き場の中身（その階のそのマスの地形を知っている（見た・地図に載った）か、火を覚えている。
+ * 下り階段をまだ知らない階の置き場は、場所が分かってしまうので出さず、hidden に深さごとの数だけ）。種類は鑑定の決まりで伏せる
+ */
+export function projectSupplies(world: World, pid: PlayerId): { cache: SupplyView[]; hidden: { depth: number; count: number }[]; taken: (SupplyView & { no: number })[]; mine: SupplyView[]; news: SupplyTakenView[] } {
+  const s = world.season;
+  const pr = world.players[pid];
+  const empty = { cache: [], hidden: [], taken: [], mine: [], news: [] };
+  if (!s || !pr) return empty;
+  const known = new Set(pr.knowledge.identified);
+  const mask = (kind: string, identified: boolean): { kind: string | null; appearanceId: string | null } => {
+    const app = world.secret.appearances[kind];
+    if (app === undefined) return { kind, appearanceId: null };
+    return identified || known.has(kind) ? { kind, appearanceId: app } : { kind: null, appearanceId: app };
+  };
+  const view = (c: CacheItem): SupplyView => ({ id: c.id, depth: c.depth, x: c.x, y: c.y, place: c.place, ...mask(c.kind, c.identified), by: c.by, mine: c.mine, local: c.local });
+  const knows = (c: { depth: number; x: number; y: number }) => {
+    const key = floorKey('main', c.depth);
+    const f = world.floors[key];
+    const fk = pr.knowledge.floors[key];
+    if (!f || !fk || c.x < 0 || c.y < 0 || c.x >= f.width || c.y >= f.height) return false;
+    if ((fk.seen[c.y * f.width + c.x] ?? 0) !== 0) return true;
+    return fk.remembered.some((r) => r.pos.x === c.x && r.pos.y === c.y && r.kind === 'core:camp_fire');
+  };
+  const all = cacheItems(s);
+  const cache = all.filter(knows).map(view);
+  const hiddenBy = new Map<number, number>();
+  for (const c of all) if (!knows(c) && world.floors[floorKey('main', c.depth)]) hiddenBy.set(c.depth, (hiddenBy.get(c.depth) ?? 0) + 1);
+  const taken = (s.taken ?? []).map((x) => ({ ...view({ ...x, mine: false, local: x.id.startsWith('l') }), no: x.no }));
+  const mine = all.filter((c) => c.mine).map(view);
+  const news = (s.supplyNews ?? []).map((x: SeasonSupplyTaken) => ({ id: x.id, depth: x.depth, x: x.x, y: x.y, place: x.place, ...mask(x.kind, x.identified), taker: x.taker }));
+  return { cache, hidden: [...hiddenBy.entries()].sort((a, b) => a[0] - b[0]).map(([depth, count]) => ({ depth, count })), taken, mine, news };
+}
+
+/** 置き場の名前（「上り階段」「下り階段」「野営の火」） */
+export function supplyPlaceName(L: Locale, p: SupplyPlace): string {
+  return p === 'stairs_up' ? t(L, '上り階段', 'stairs up') : p === 'stairs_down' ? t(L, '下り階段', 'stairs down') : t(L, '野営の火', 'campfire');
 }

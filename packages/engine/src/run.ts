@@ -18,7 +18,7 @@ import { placeSeasonFires } from './campfire';
 import { advance, endTurn } from './scheduler';
 import { recomputeStats } from './stats';
 
-export const ENGINE_VERSION = '0.42.2';
+export const ENGINE_VERSION = '0.43.0';
 
 export interface CreateRunParams {
   runId: string;
@@ -203,6 +203,12 @@ export function seasonSync(world: World, content: Content, playerId: PlayerId, c
       else fireNews.push({ depth: f.depth, x: f.x, y: f.y, names });
     }
   }
+  // 自分の預けた品を、ほかの者が新しく取った（S3 §25.2。火の知らせと同じ持ち越し: 前の取り込みの写しと比べる。このランの最初の取り込みでは知らせない）
+  const supplyNews = cmd.reason === 'camp' || cmd.reason === 'report' ? (world.season?.supplyNews ?? []).map((x) => ({ ...x })) : [];
+  if (world.season) {
+    const before = new Set((world.season.mineTaken ?? []).map((x) => x.id));
+    for (const x of cmd.season.mine_taken ?? []) if (!before.has(x.id) && !supplyNews.some((y) => y.id === x.id)) supplyNews.push({ ...x });
+  }
   const after: SeasonState = {
     id: cmd.season.id, name: cmd.season.name,
     budget: { limit: cmd.season.budget.limit, left: cmd.season.budget.left, at: turns },
@@ -217,6 +223,13 @@ export function seasonSync(world: World, content: Content, playerId: PlayerId, c
     ...(cmd.season.spots ? { spots: cmd.season.spots.map((x) => ({ ...x })) } : {}),
     ...(reportedSpots.length ? { reportedSpots } : {}),
     ...(fireNews.length ? { fireNews } : {}),
+    // 補給の置き場（S3 §25.2）: 取り込んだ共有層の品・自分の品を取られたもの。このランで預けた品・取った品は持ち越す
+    ...(cmd.season.supplies?.length ? { supplies: cmd.season.supplies.map((x) => ({ ...x })) } : {}),
+    ...(cmd.season.mine_taken?.length ? { mineTaken: cmd.season.mine_taken.map((x) => ({ ...x })) } : {}),
+    ...(cmd.season.deposits_published?.length ? { depositsPublished: [...cmd.season.deposits_published] } : {}),
+    ...(world.season?.deposited?.length ? { deposited: world.season.deposited.map((x) => ({ ...x })) } : {}),
+    ...(world.season?.taken?.length ? { taken: world.season.taken.map((x) => ({ ...x })) } : {}),
+    ...(supplyNews.length ? { supplyNews } : {}),
   };
   if (meta.thought) ctx.emit({ type: 'thought', player: playerId, text: meta.thought.slice(0, 280), seenBy: [playerId] });
   if (cmd.report) {
