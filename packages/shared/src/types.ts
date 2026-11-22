@@ -390,8 +390,13 @@ export interface ExpeditionOffer {
   warden?: MilestoneInfo;
   /** 同じ階を目標にした何回目の達成か（2 以上で基礎点に repeatPct が掛かる。V3-3a §35.2） */
   repeatNo?: number;
+  /** くり返しで基礎点（守護者を倒す遠征では守護者の賞金も）に掛けた割合 %（repeatNo があるときだけ。S3b §30.2） */
+  repeatPct?: number;
+  /** 守護者を倒す遠征の、守護者の賞金（S3b §30.2。くり返しで基礎点と同じ割合に減る。再挑戦は残っている守護者の賞金。公開） */
+  guardianBounty?: number;
   /** 再挑戦（V3-3c §44.1）: 目標の階に残っている守護者をもう一度目的にする。no はその守護者を目的にした遠征、guardian はその守護者（賞金首なら bounty。V3-8 §53.3） */
-  rechallenge?: { no: number | null; guardian: EntityId; bounty?: boolean };
+  /** inherits: 基礎点（と守護者の賞金）を、その相手を置いた遠征から引き継いだ（S3b §30.1。遺物を守っていた守護者などは無い） */
+  rechallenge?: { no: number | null; guardian: EntityId; bounty?: boolean; inherits?: boolean };
   /** 賞金首を討つ（V3-8 §53.2）: 種族・接辞・名前・体力と一撃の目安・装甲（公開。守護者の候補と同じ並び） */
   /** hpRange: 体力の幅（体力ダイスの最小と最大に目安と同じ上乗せ。V4-0d §6.1。古い候補には無い） */
   bounty?: BountyInfo & { kindName: Names; affixNames: Names[]; hp: number; hpRange?: { min: number; max: number }; maxHit: number; armor: number };
@@ -502,6 +507,8 @@ export interface Expedition {
   guardianWeakness?: string | null;
   /** 遺物（候補から引き継ぐ。公開。V3-3 §3.3） */
   relic?: RelicInfo;
+  /** 目標階に置く守護者の賞金（候補から引き継ぐ。くり返しで減らした額。無ければ式のまま。S3b §30.2） */
+  guardianBounty?: number;
   /** 開始時点の次の節目（V3-3 §3.2） */
   milestone?: MilestoneInfo;
   /** ブリーフィングの物語の 1 文（V3-3 §3.4。公開） */

@@ -496,7 +496,8 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
     if (objectiveIds.has(r.id)) rv.objective = true;
     if (r.cat === 'item' && we?.item?.thrownBy === playerId && !we.item.heldBy) rv.mine = true;
     if (r.cat === 'item' && we?.item?.value !== undefined) rv.value = we.item.value;
-    if (r.cat === 'item' && rv.kind && we?.item?.affixes.length) rv.affixes = [...we.item.affixes];
+    // 接辞は、品が覚えている位置にあって、だれも持っていないときだけ（S3b §30.3 の 1: 仲間が拾って呪いが見つかる・解けると、見ていないのに名前が変わっていた）
+    if (r.cat === 'item' && rv.kind && we?.item?.affixes.length && !we.item.heldBy && we.pos?.floor === floorKey && we.pos.x === r.pos.x && we.pos.y === r.pos.y) rv.affixes = [...we.item.affixes];
     const lg = we?.lairOf ? world.entities[we.lairOf]?.guardian : undefined;
     if (lg) rv.lair = { name: { ...lg.name }, ...(lg.title ? { title: { ...lg.title } } : {}) };
     if (we?.campfire) rv.campfire = { by: we.campfire.by };

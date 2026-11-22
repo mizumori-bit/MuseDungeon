@@ -123,7 +123,8 @@ export interface Catalog {
   /** reach: 近接の届く距離（長柄）、attackCost: 近接の手番コスト（速い） */
   weaponTraits: Record<string, { name: Names; desc: Names; reach?: number; attackCost?: number }>;
   /** 守護者の型（V3-3 §3.1）。name は称号 */
-  guardianTypes: Record<string, { name: Names; desc: Names; strongVs: 'melee' | 'thrown'; handler: string }>;
+  /** armor: 型の効果で上がる装甲（護られし者: 火が灯っている間。S3b §30.3 の 4。通る目安の 1 句） */
+  guardianTypes: Record<string, { name: Names; desc: Names; strongVs: 'melee' | 'thrown'; handler: string; armor?: number }>;
   /** 守護者の弱点（V3-3 §3.1）。どの守護者が持つかは試すまで伏せる */
   guardianWeaknesses: Record<string, { name: Names; desc: Names; handler: string; short?: Names; /** 付けてよい装甲の目安の上限（V4-1l §34.2） */ maxArmor?: number }>;
   /** 加護（V3-3 §3.3） */
@@ -249,6 +250,22 @@ export function offerPoints(rules: Pick<CatalogRules, 'expedition' | 'slots'>, s
   const typePct = x.typePct[key] ?? 100;
   const depthPct = x.depthPct.base + x.depthPct.perDepth * targetDepth;
   return Math.trunc((Math.trunc((rules.slots[slot].base * typePct) / 100) * depthPct) / 100);
+}
+
+/**
+ * くり返しの割合（V3-3a §35.2・V3-3b §40.6）: 同じ階を目標にした達成が done 回あれば、repeatPct % を done 回掛け、下限 repeatMinPct %。
+ * 基礎点と、守護者を倒す遠征の守護者の賞金（S3b §30.2）に掛ける
+ */
+export function repeatScalePct(x: { repeatPct?: number; repeatMinPct?: number }, done: number): number {
+  if (done <= 0) return 100;
+  let pct = 100;
+  for (let k = 0; k < done; k++) pct = Math.trunc((pct * (x.repeatPct ?? 100)) / 100);
+  return Math.max(pct, x.repeatMinPct ?? 0);
+}
+
+/** 守護者の賞金の満額（生成の式。DESIGN §13: base + perDepth × 深さ） */
+export function guardianBountyFull(h: { guardianBounty: { base: number; perDepth: number } }, depth: number): number {
+  return h.guardianBounty.base + h.guardianBounty.perDepth * depth;
 }
 
 /** 推奨レベル（公開の表。表より深い階は直近 4 階の傾きで外挿する。整数のみ） */

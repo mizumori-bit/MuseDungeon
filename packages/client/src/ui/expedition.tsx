@@ -5,7 +5,7 @@ import type {
   RestEstimate, World,
 } from '@muse/shared';
 import {
-  bountyForecastText, briefingLines, buildObservation, campDepthOf, gearVsArmorText, currentExpedition, dirLabel, endReasonText, guardianForecastText, haulTotal, latestExpedition, multText, nameOf,
+  bountyForecastText, briefingLines, buildObservation, campDepthOf, gearVsArmorText, offerGuardianHp, currentExpedition, dirLabel, endReasonText, guardianForecastText, haulTotal, latestExpedition, multText, nameOf,
   nextCampOf, nextOverreach, objectiveText, offerFloorTraitsText, offerGap, offerText, offerWardenExtra, overreachPoints, partsText, progressText, recordsCampLine, resultText, slotName,
 } from '@muse/shared';
 import { api } from '../api';
@@ -436,10 +436,11 @@ function OfferCard({ o, rules, level, onStart, view, catalog }: { o: ExpeditionO
         {ft ? <span class="oguard" title={tr('前の遠征の条件で作られた階は、その性質のまま残っている（まだ作られていない階については出ない）', 'Floors made under an earlier expedition\'s traits keep them (floors not made yet are not listed)')}>{ft}</span> : null}
       </div>
       {/* いまの持ち物で 1 回に通る目安（守護者・賞金首。AI の候補の文と同じ。V3-8a §56.1） */}
-      {view && catalog && (o.bounty || (o.guardian?.armor !== undefined && o.objective.type !== 'slay_warden')) && (
+      {/* 大守護者も（S3a）。記録庫で体力が分かっていれば命中の回数・護られし者は火の間の装甲（S3b §30.3 の 4） */}
+      {view && catalog && (o.bounty || o.guardian?.armor !== undefined) && (
         <div class="ometa"><span>{o.bounty
           ? gearVsArmorText(L, catalog, view, o.bounty.armor, Math.max(1, o.bounty.hp - (o.scar ?? 0)))
-          : gearVsArmorText(L, catalog, view, o.guardian!.armor!, o.guardian!.hp !== undefined ? Math.max(1, o.guardian!.hp - (o.scar ?? 0)) : undefined)}</span></div>
+          : gearVsArmorText(L, catalog, view, o.guardian!.armor!, offerGuardianHp(view, o), o.guardian!.types ?? [])}</span></div>
       )}
       <TraitList traits={o.traits ?? []} rules={rules} />
     </li>

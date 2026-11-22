@@ -578,10 +578,13 @@ export class SessionPlayerPort implements PlayerPort {
           outcome += t(L, ` 回収 ${collected.picked} 個、残り ${remaining} 個${thrownNote}。${relicNote ? `${relicNote}。` : ''}`, ` Recovered ${collected.picked}, ${remaining} left${thrownNote}.${relicNote ? ` ${relicNote[0].toUpperCase()}${relicNote.slice(1)}.` : ''}`);
         }
       }
+      // 目的を達成した（S3b §30.4 の 1）: 止まった文の先頭に出す（「標的は離れたまま撃ってくる」などの後ろに回り、達成が読み落とされた）
+      const achieved = mine.find((x) => x.type === 'objective_completed');
       // 経験値の文（S0b）は最後の 2 件に入れない（直前の出来事に出る。倒した文・レベルアップの文を押し出さない）
-      const notable = mine.filter((x) => x.type !== 'entity_moved' && x.type !== 'damaged' && x.type !== 'attack' && x.type !== 'xp_gained'
+      const notable = mine.filter((x) => x !== achieved && x.type !== 'entity_moved' && x.type !== 'damaged' && x.type !== 'attack' && x.type !== 'xp_gained'
         && !(cmd.type === 'collect' && x.type === 'item_picked_up')).slice(-2).map((x) => x.text);
       if (notable.length) outcome += ' ' + notable.join(' ');
+      if (achieved) outcome = `${achieved.text}${t(L, '。', '.')} ${outcome}`;
     } else {
       const shown = mine.filter((x) => !(x.type === 'damaged' && (x.event as Record<string, unknown>).target === view.self.id));
       // 最初の 3 件に、倒した文は必ず足す（V3-7 の評価: 薙ぐで倒した 2 体目の「倒した」が無かった）。

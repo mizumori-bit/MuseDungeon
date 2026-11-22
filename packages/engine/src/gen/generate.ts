@@ -4,7 +4,7 @@
 // 生成は純関数: (content, runSeed, branch, depth) → { floor, spawns }。World を読まない。
 import type { BiomeDef, Content, FloorEventDef, FloorTypeDef, MonsterDef, PrefabDef } from '@muse/content';
 import type { BountyInfo, EntityRole, Floor, GuardianInfo, Names, Pos, Region } from '@muse/shared';
-import { cheb, DIRS, DIR_VEC, floorDiv, floorKey, Rng } from '@muse/shared';
+import { cheb, DIRS, DIR_VEC, floorDiv, floorKey, guardianBountyFull, Rng } from '@muse/shared';
 import { Registry, roll } from '../registry';
 import { guardianAsleep, lairPlan, makeName, rollWardenInfo } from '../guardians';
 import { sumAffixMods } from '../spawn';
@@ -23,7 +23,9 @@ export interface ObjectiveSpec { guardian: boolean; relic: boolean; rank?: 1 | 2
   /** 賞金首を討つ（V3-8 §53.2）: 異変「賞金首」を必ず付け、この種族・接辞・名前の強敵にする */
   bounty?: BountyInfo;
   /** 宝物庫を開ける（V3-8 §53.2）: 施錠された宝物庫を必ず置く */
-  vault?: boolean }
+  vault?: boolean;
+  /** 目的の守護者の賞金（S3b §30.2: 同じ階の「守護者を倒す」のくり返しで、基礎点と同じ割合に減らした額）。無ければ式のまま */
+  guardianBounty?: number }
 
 /** 遠征の条件による生成の修飾（目標階までの新しい階に効く） */
 export interface GenMods { monstersPct: number; itemsPct: number; treasurePct: number; noFountain: boolean }
@@ -728,8 +730,7 @@ export function guardianSpec(content: Content, depth: number, kind: string, rank
     const guardAffix = content.lists.affixes.find((a) => a.target === 'guardian');
     spec.affixes = [...(guardAffix ? [guardAffix.id] : []), ...spec.affixes];
     spec.role = 'guardian';
-    const gb = content.balance.haul.guardianBounty;
-    spec.bounty = gb.base + gb.perDepth * depth;
+    spec.bounty = guardianBountyFull(content.balance.haul, depth);
     const ranks = content.balance.guardian.ranks;
     const r = ranks[Math.min(ranks.length, rank) - 1];
     spec.hpBonusPct = r.hpPct;
@@ -891,7 +892,10 @@ function placeObjective(s: GenState, obj: ObjectiveSpec): boolean {
         return c.length ? c[rng.int(c.length)].id : pickGuardianKind(s.content, s.seed, s.branch, s.depth, rank, rng);
       })();
     if (!kind) return false;
-    s.spawns.push(guardianSpec(s.content, s.depth, kind, rank, gx, gy, rng, obj.info, obj.guardianKind === kind ? obj.guardianAffixes : undefined));
+    const gs = guardianSpec(s.content, s.depth, kind, rank, gx, gy, rng, obj.info, obj.guardianKind === kind ? obj.guardianAffixes : undefined);
+    // くり返しの賞金（S3b §30.2。乱数は使わない）
+    if (gs.type === 'monster' && obj.guardianBounty !== undefined) gs.bounty = obj.guardianBounty;
+    s.spawns.push(gs);
     occupied.add(g.idx(gx, gy));
     if (obj.info) placeLair(s, gx, gy, obj.info, rng, occupied);
   }

@@ -61,7 +61,7 @@ describe('V3-3c guardians that are no longer the objective (§44.1)', () => {
       const fires = Object.values(t.world.entities).filter((e) => e.lairOf === g.id).map((e) => e.id);
       await t.lifeline();
       const camp = t.world.camp!;
-      // 守護者を倒す枠の目標がその階なら、再挑戦（同じ名前・繰り返しの減点なし）
+      // 守護者を倒す枠の目標がその階なら、再挑戦（同じ名前。基礎点は置いた遠征のまま: S3b §30.1）
       for (const x of camp.offers) {
         if (x.objective.type === 'slay_guardian' && x.objective.targetDepth === depth) {
           expect(x.rechallenge?.guardian).toBe(g.id);

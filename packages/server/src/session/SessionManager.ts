@@ -73,7 +73,7 @@ export class SessionManager {
   }
 
   /** 起動時に復旧できなかったラン（理由の 1 行と時刻）と、そのランのトークン（V4-1m §37.1: 一覧と再開のエラーに出す） */
-  private readonly failed = new Map<string, { reason: string; at: number }>();
+  private readonly failed = new Map<string, { reason: string; at: number; season?: string }>();
   private readonly failedTokens = new Map<string, string>();
 
   /** 起動時: 進行中だったランをキーフレーム＋コマンド再実行で復旧する */
@@ -99,7 +99,7 @@ export class SessionManager {
       } catch (e) {
         const reason = String((e as Error).message ?? e).split('\n')[0].slice(0, 200);
         log(`failed to recover ${runId}: ${reason}`);
-        this.failed.set(runId, { reason, at: Date.now() });
+        this.failed.set(runId, { reason, at: Date.now(), ...(meta.season ? { season: meta.season } : {}) });
         for (const tok of Object.keys(this.store!.tokens(runId))) this.failedTokens.set(tok, runId);
       }
     }
@@ -109,10 +109,25 @@ export class SessionManager {
     return this.sessions.get(runId);
   }
 
-  /** そのランが起動時に復旧できなかったなら、そのエラー（理由つき。V4-1m §37.1） */
-  recoveryFailedError(runId: string): ActionError | null {
+  /**
+   * 起動時に復旧できなかったランの、外に出す理由と時刻（V4-1m §37.1）。開催中のシーズンのランは、確定するまで理由を伏せる
+   * （S3b §30.3 の 3: 「復旧に失敗した」だけ。理由の文に、ランの中身が出うる。運用者はサーバーのログで見る）
+   */
+  private failedShown(runId: string): { reason: string; at: number } | undefined {
     const f = this.failed.get(runId);
+    if (!f) return undefined;
+    return { reason: this.seasonHidden(f.season) ? HIDDEN_FAILURE : f.reason, at: f.at };
+  }
+
+  /** そのランが起動時に復旧できなかったなら、そのエラー（理由つき。V4-1m §37.1。開催中のシーズンのランは理由を伏せる） */
+  recoveryFailedError(runId: string): ActionError | null {
+    const f = this.failedShown(runId);
     if (!f) return null;
+    if (f.reason === HIDDEN_FAILURE) {
+      return actionError('recovery_failed',
+        `ラン ${runId} は、サーバーの起動時に復旧に失敗した。ランの記録は残っている / run ${runId} failed to recover at server start; its records are kept`,
+        'サーバーの管理者に知らせる。直してサーバーを起動し直せば、同じトークンで再開できる / tell the server operator; once fixed and restarted, resume with the same token');
+    }
     return actionError('recovery_failed',
       `ラン ${runId} は、サーバーの起動時に復旧できなかった（理由: ${f.reason}）。ランの記録は残っている / run ${runId} could not be recovered at server start (${f.reason}); its records are kept`,
       'サーバーの管理者に知らせる。直してサーバーを起動し直せば、同じトークンで再開できる / tell the server operator; once fixed and restarted, resume with the same token');
@@ -259,7 +274,7 @@ export class SessionManager {
         const meta = this.store.meta(id);
         if (!meta) continue;
         if (meta.season && this.seasonHidden(meta.season)) {
-          out.push(hiddenListing(id, meta.status, meta.mode, meta.season, meta.createdAt, false, meta.players.map((p) => ({ id: p.id, name: p.name, classId: p.classId, controller: p.controller })), this.failed.get(id)));
+          out.push(hiddenListing(id, meta.status, meta.mode, meta.season, meta.createdAt, false, meta.players.map((p) => ({ id: p.id, name: p.name, classId: p.classId, controller: p.controller })), this.failedShown(id)));
           continue;
         }
         const summary = this.store.summary(id) ?? undefined;
@@ -273,7 +288,7 @@ export class SessionManager {
           }),
           summary,
           expeditions: summary?.expeditions,
-          ...(this.failed.has(id) ? { recoveryFailed: { ...this.failed.get(id)! } } : {}),
+          ...(this.failed.has(id) ? { recoveryFailed: this.failedShown(id)! } : {}),
         });
       }
     }
@@ -336,6 +351,9 @@ export class SessionManager {
     if (this.seasonTimer) { clearInterval(this.seasonTimer); this.seasonTimer = null; }
   }
 }
+
+/** 開催中のシーズンのランの、復旧に失敗した理由の代わりの文（S3b §30.3 の 3） */
+const HIDDEN_FAILURE = '開催中のシーズンのランは、確定するまで理由を出さない / not shown until the season is final';
 
 /** 開催中のシーズンのランの一覧の行（S2a・S3a）: 名前・職業・操作の種類と、シーズンのランであることだけ（state・depth・level は意味を持たない） */
 function hiddenListing(runId: string, status: RunListing['status'], mode: RunListing['mode'], season: string, createdAt: number, live: boolean,

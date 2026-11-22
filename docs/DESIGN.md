@@ -597,7 +597,7 @@ interface Renderer {
 - スコア版 2: ランのスコア = 確定点（`player.stats.banked`）の合計。払い戻しは帰還 = 戦利品 × 倍率、撤退 = (戦利品 − 目的) × `withdrawPct`%、死亡・引退 = 0（`stats.lost` に記録）。式は `shared/catalog.ts` の `haulTotal`・`payoutOf`・`overreachPoints`・`nextOverreach` で、engine と観測が同じ関数を使う（観測の `if_extract_now` = 実際の払い戻し、をテストで確かめる）。`RunSummary.scoreVersion: 2`。記録の一覧は版ごとに並べ、版 1 の記録は別の表として残す。
 - 戦利品のうち、賞金・発見・撃破は遠征に共有の `expedition.haul` として積む（`haul_changed`。各 step の終わりに、その step のイベント（`died`・`item_identified`）から `accrueHaul` が数える。種族の発見は、思い出の撃破数からその step で倒した数を引いて 0 のとき 1 回）。目的・深追い・宝は World から公開の式で毎回計算する（深追いは `progress.maxDepth`、宝は所持品の `item.value`）。
 - 宝: 分類 `treasure`、`value {dice, mult, perDepthPct}` は生成時に振って `item.value` に入れる（同じシードなら同じ）。初期 6 種。出どころは通常の床（loot の重み 6）・宝物庫（15）・守護者の確定ドロップ（`core:treasure_loot`）・条件 `crowded` の追加分。`extract` で換金し、所持品から消す（`objective_progress.extractedAfter[].treasure`）。
-- 守護者の賞金 = `guardianBounty.base + perDepth × 深度`（生成時に `bounty`）。
+- 守護者の賞金 = `guardianBounty.base + perDepth × 深度`（生成時に `bounty`。shared の `guardianBountyFull`）。守護者を倒す遠征のくり返しでは、候補の `guardianBounty`（基礎点と同じ割合を掛けた額）を遠征が引き継ぎ、目標階に置くとき（生成・生成済みの階のどちらも）に `bounty` を上書きする（S3b §42.4）。
 - 目的達成後の圧力: `slay_guardian`・`retrieve_relic` の達成後は徘徊の湧き間隔 × `afterObjective.wanderIntervalPct`（50%）。遺物を拾うと、その階の眠っている・気づいていない敵が起きて遺物の場所へ向かう。どちらも公開ルールで、`changes` の文章で知らせる。
 - 候補の 3 枠: `balance.expedition.slots` の `aheadMin/Max`（生成済みの最深階からの幅）・`traitsMin/Max`・`pointsPct`。最初の遠征は `firstTargetDepth` から（野心は 1 階深い）。候補は `expedition|通番` のシードから作るので再現する。
 - 条件 `expeditionTraits`（`data/core/expeditionTraits.json`）: `monstersPct`・`itemsPct`・`treasurePct`・`wanderIntervalPct`・`sightDelta`・`noWander`・`noFountain` と倍率・危険度。目標階までに生成する階に効く（`GenMods`、徘徊は scheduler、視界は stats）。`elite`（名前付きの強敵）は V3-5 の名前付きの敵と一緒に入れる（未実装）。`treasurePct` は 150 で宝 1 個、以後 50 ごとに 1 個を追加で置く。
@@ -1049,7 +1049,7 @@ bot の計測（`bot --runs 10`・`npm run budget -- --runs 20`）は IMPROVEMEN
 ### 24.2 節目を候補に入れる（§35.2）
 - 目的の種類 `slay_warden`（節目に挑む）。目的の点はその深さの格 3 の守護者と同じ式。節目が踏破済み（`milestones.cleared`）になれば達成で、どちらの階段で extract してもよい。
 - 候補の目標: 未踏破の節目 M を越える目標は野心だけ。堅実・標準の目標が M 以上になるとき、標準は「節目に挑む」（地下 M 階）、堅実は M − 1 階の格 1 の守護者。野心の目標が M に当たれば M + 1。次の候補の下限（`nextCampOf`）も、未踏破の節目なら M − 1、踏破済みなら飛ばす。
-- 同じ階を目標にした達成を繰り返すと、目的の基礎点に `expedition.repeatPct`（50）% を回数分掛ける（`Offer.repeatNo`。文に「この階は N 回目」）。
+- 同じ階を目標にした達成を繰り返すと、目的の基礎点に `expedition.repeatPct`（50）% を回数分掛ける（`Offer.repeatNo`。文に「この階は N 回目」）。下限は `repeatMinPct`（25）%（V3-3b）。割合は shared の `repeatScalePct` の 1 か所（`Offer.repeatPct`）。守護者を倒す遠征では、守護者の賞金にも同じ割合を掛ける（S3b §42.4）。
 - 推奨レベルと危険度（`offerGap` の `extra`）: 節目に挑む = その深さ + `warden.levelBonus`（2）。節目を越える（`passesWarden`）= 目標と大守護者の大きいほう、危険度 +1。
 - 大守護者の体力に上限 `warden.maxHpBase`（40）+ `maxHpPerDepth`（10）× 深さ（SpawnSpec の `maxHp`）。
 - 節目に挑む候補は `Offer.warden`（名前と型）と見込み（種族は伏せ、見れば分かる特徴だけ。`wardenPreview` で生成と同じ種族を求める）。
@@ -1193,7 +1193,7 @@ bot の計測（`bot --runs 10`・`npm run budget -- --runs 20`）は IMPROVEMEN
 
 - **去る**: 遠征を始めるとき（`expedition_started` の直後、守護者が落ち着く前）、その遠征の目的ではない未討伐の守護者（大守護者を除く）は階から消える。呼んだ手下（`minionOf`）と棲み処の地物（`lairOf`。持ち主の無い古い護りの火は持ち場から 4 マス以内）も消える。その守護者に会ったことのある参加者に `guardian_departed`（「地下4階の守護者「ネミ」は棲み処を去っていた」）。記憶からも火を消す。
 - **棲み処の地物の持ち主**: 生成では、地物の生成仕様に `lair` を付け、直前に置いた守護者を `lairOf` にする。生成済みの階に置くときは、その守護者を渡す。護られし者の装甲は、自分の棲み処の火（持ち主の無い古い火は階のどの守護者のものとも数える）だけで決まる。
-- **再挑戦**: 候補を作るとき、守護者を倒す枠の目標の階に未討伐の守護者が残っていれば（階ごとにいちばん新しい 1 体）、新しい守護者を作らずその守護者を目的にする（名前・型・弱点・種族・接辞はその守護者のもの。格はその守護者を目的にした遠征の格）。繰り返しの減点は掛けない。`offer.rechallenge { no, guardian }`。選ばれれば遠征の `rechallengeOf` に入り、目標階に新しく置かず、開始のときに目的として記録する。外れた弱点の記録（`guardianTried`）は同じ守護者なので残る。
+- **再挑戦**: 候補を作るとき、守護者を倒す枠の目標の階に未討伐の守護者が残っていれば（階ごとにいちばん新しい 1 体）、新しい守護者を作らずその守護者を目的にする（名前・型・弱点・種族・接辞はその守護者のもの。格はその守護者を目的にした遠征の格）。基礎点は、その守護者を置いた遠征（最初にその守護者を目的にした守護者を倒す遠征）の基礎点をそのまま引き継ぐ（くり返しで減った後の値。S3b §42.4。前は繰り返しの減点を掛けずに数え直していたので、戦わずに撤退するだけで満額に戻った）。`offer.rechallenge { no, guardian, inherits }`。選ばれれば遠征の `rechallengeOf` に入り、目標階に新しく置かず、開始のときに目的として記録する。外れた弱点の記録（`guardianTried`）は同じ守護者なので残る。
 - **前回の戦い**: キャンプの候補の文に、本人の遠征レポートの `combat.guardian_fights` から「前回（遠征 N）は与 X・被 Y」（PlayerPort が `offerNotes` で渡す。戦っていなければ「この守護者とはまだ戦っていない」）。
 
 ### 29.2 弱点と型、大守護者（§44.2）
@@ -1677,3 +1677,13 @@ engine と出来事の形は変えていない（`engineVersion` 0.38.0・`event
 - **開催中のシーズンのランは、どの口からも名前だけ**: 判定は `SessionManager.seasonHidden` の 1 か所（ランの一覧・リーダーボード・meta）。
 - **「同じ機械」は、プロキシの見出しの接続元まで見る**: 直の接続元が自分の機械で、見出しの接続元もすべて自分の機械なら同じ機械（開発用の proxy は `xfwd`）。
 - 文: 大守護者の候補の装甲と通る目安、遺物を拾うと階が起きること、特技「重い一撃」、帰り支度の取りやめの相手、探索し終えた階の toward、「あなたの投擲の射程外」、覚えている品の接辞（PlayerView が見えたときの品の不変の性質として添える。役割・価値と同じ）。
+
+### 42.4 S3b: 再挑戦の基礎点・くり返しの賞金と、検査・試運転 t4 からの直し（SEASON.md §30・§31。PROTOCOL.md §5 の「S3b で変えた項目」）
+
+`engineVersion` 0.44.0・`eventVersion` 30（出来事の種類と必須の項目は変えていない。候補と遠征に任意の項目が増えた）。すべてのランに効く。
+
+- **再挑戦の基礎点は引き継ぐ**: 再挑戦（守護者・賞金首）の候補の基礎点は、その相手を置いた遠征（その相手を最初に目的にした、同じ種類の遠征）の `points`。再挑戦で上がることは無い。置いた遠征が同じ種類でない（遺物を守っていた守護者）・見つからないときは、再挑戦でない候補と同じに数える（くり返しの減点も掛かる。`rechallenge.inherits` は付かない）。最初の遠征を見るので、前の版の再挑戦で満額に戻った鎖も、置いた遠征の値に戻る。
+- **くり返しの守護者の賞金**: 守護者を倒す遠征の候補に `guardianBounty`（再挑戦でなければ満額 × くり返しの割合、再挑戦なら残っている守護者の `bounty`）と `repeatPct`。遠征の `guardianBounty` → 目標階の配置（`ObjectivePlacement.guardianBounty`・生成の `ObjectiveSpec.guardianBounty`）→ 守護者の `bounty`。倒したときの賞金は今までどおり個体の `bounty`（観測の bounty もその値）。遺物を守る守護者・大守護者・名前付きの強敵の賞金は変えない。宝と撃破の点も変えない。
+- 文: 候補の「守護者の賞金 +N」「この階は N 回目: 基礎点と守護者の賞金が減っている（N%）」「再挑戦: …（基礎点と賞金は、その守護者を置いた遠征のまま）」。規則の文も。
+- 検査の指摘（SEASON.md §30.3）: 覚えている品の接辞は、品が覚えている位置にあって、だれも持っていないときだけ。置き場の品を取るとき、見る者が未鑑定の種類は重なる前提で数えない（持ち物がいっぱいなら断る）。開催中のシーズンのランの復旧の失敗の理由は、確定するまで外に出さない（`SessionManager.failedShown`）。大守護者の候補の通る目安は、記録庫で体力が分かっていれば命中の回数も（shared の `offerGuardianHp`）。型「護られし者」の相手は、通る目安に、火の間の装甲の上乗せ（公開のカタログの `guardianTypes[].armor`）を 1 句。
+- 文（SEASON.md §30.4）: マクロの止まった文は、その呼び出しで目的を達成していれば、達成の文を先頭に出す。帰還の綱の確定の文に「目的の分 M 点は入らない」。

@@ -228,11 +228,17 @@ export function offerText(L: Locale, o: ExpeditionOffer, ctx?: { rules: Pick<Cat
   }
   // 節目に挑む: 大守護者の名前と型（V3-3a §35.2）。同じ階の繰り返しは基礎点が減る
   const wd = o.warden ? t(L, ` / 大守護者「${guardianDisplayName(L, o.warden)}」（型: ${o.warden.types.length}）`, ` / warden "${guardianDisplayName(L, o.warden)}" (${o.warden.types.length} types)`) : '';
-  const rep = (o.repeatNo ?? 1) > 1 ? t(L, ` / この階は ${o.repeatNo} 回目: 基礎点が減っている`, ` / attempt ${o.repeatNo} at this depth: reduced base`) : '';
-  // 再挑戦（V3-3c §44.1）: 階に残っている守護者をもう一度目的にする（同じ名前・型・弱点。繰り返しの減点なし）
+  // くり返し（S3b §30.2）: 守護者を倒す遠征では、守護者の賞金も基礎点と同じ割合に減る
+  const repPct = o.repeatPct !== undefined ? `${o.repeatPct}%` : '';
+  const rep = (o.repeatNo ?? 1) <= 1 ? ''
+    : o.objective.type === 'slay_guardian' ? t(L, ` / この階は ${o.repeatNo} 回目: 基礎点と守護者の賞金が減っている${repPct ? `（${repPct}）` : ''}`, ` / attempt ${o.repeatNo} at this depth: reduced base and guardian bounty${repPct ? ` (${repPct})` : ''}`)
+      : t(L, ` / この階は ${o.repeatNo} 回目: 基礎点が減っている${repPct ? `（${repPct}）` : ''}`, ` / attempt ${o.repeatNo} at this depth: reduced base${repPct ? ` (${repPct})` : ''}`);
+  // 守護者の賞金の額（S3b §30.2。守護者を倒す遠征。基礎点と別に、倒したときに戦利品に入る）
+  const gb = o.objective.type === 'slay_guardian' && o.guardianBounty !== undefined ? t(L, ` / 守護者の賞金 +${o.guardianBounty}`, ` / guardian bounty +${o.guardianBounty}`) : '';
+  // 再挑戦（V3-3c §44.1）: 階に残っている守護者をもう一度目的にする（同じ名前・型・弱点）。基礎点と賞金は、その相手を置いた遠征のまま（S3b §30.1）
   const rc = !o.rechallenge ? ''
-    : o.rechallenge.bounty ? t(L, ` / 再挑戦: ${o.rechallenge.no ? `遠征 ${o.rechallenge.no} で倒せなかった` : '階に残っている'}賞金首（同じ名前・接辞。繰り返しの減点なし）`, ` / rematch: the bounty ${o.rechallenge.no ? `left standing in expedition ${o.rechallenge.no}` : 'still on that floor'} (same name and affixes; no repeat reduction)`)
-    : t(L, ` / 再挑戦: ${o.rechallenge.no ? `遠征 ${o.rechallenge.no} で倒せなかった` : '階に残っている'}守護者（同じ名前・型・弱点。繰り返しの減点なし）`, ` / rematch: the guardian ${o.rechallenge.no ? `left standing in expedition ${o.rechallenge.no}` : 'still on that floor'} (same name, type and weakness; no repeat reduction)`);
+    : o.rechallenge.bounty ? t(L, ` / 再挑戦: ${o.rechallenge.no ? `遠征 ${o.rechallenge.no} で倒せなかった` : '階に残っている'}賞金首（同じ名前・接辞${o.rechallenge.inherits ? '。基礎点は、その相手を目的にした最初の遠征のまま' : ''}）`, ` / rematch: the bounty ${o.rechallenge.no ? `left standing in expedition ${o.rechallenge.no}` : 'still on that floor'} (same name and affixes${o.rechallenge.inherits ? '; the base stays as in the first expedition against it' : ''})`)
+    : t(L, ` / 再挑戦: ${o.rechallenge.no ? `遠征 ${o.rechallenge.no} で倒せなかった` : '階に残っている'}守護者（同じ名前・型・弱点${o.rechallenge.inherits ? '。基礎点と賞金は、その守護者を置いた遠征のまま' : ''}）`, ` / rematch: the guardian ${o.rechallenge.no ? `left standing in expedition ${o.rechallenge.no}` : 'still on that floor'} (same name, type and weakness${o.rechallenge.inherits ? '; base and bounty stay as in the expedition that placed it' : ''})`);
   // 賞金首と宝物庫（V3-8 §53.2）・傷跡（§53.3）
   const bt = o.bounty ? ` / ${bountyForecastText(L, o.bounty)}` : '';
   const vt = o.vault ? t(L, ' / 宝物庫: 鍵を持つ敵が階にいる', ' / vault: an enemy on the floor carries the key') : '';
@@ -241,7 +247,7 @@ export function offerText(L: Locale, o: ExpeditionOffer, ctx?: { rules: Pick<Cat
   const ft = offerFloorTraitsText(L, ctx?.rules, o);
   // 遺物（S3a §27.6 の 2）: 拾うと階じゅうの敵が起きることを、選ぶ前に
   const rw = o.objective.type === 'retrieve_relic' ? t(L, ' / 遺物を拾うと、その階の敵が目を覚まして集まり、徘徊も増える', ' / picking up the relic wakes the floor and draws more wanderers') : '';
-  const gf = (ft ? ` / ${ft}` : '') + wd + rep + rc + sc + bt + vt + (o.guardian ? ` / ${guardianForecastText(L, o.guardian)}` : '') + (o.relic ? ` / ${relicText(L, o.relic)}` : '') + rw
+  const gf = (ft ? ` / ${ft}` : '') + wd + rep + gb + rc + sc + bt + vt + (o.guardian ? ` / ${guardianForecastText(L, o.guardian)}` : '') + (o.relic ? ` / ${relicText(L, o.relic)}` : '') + rw
     + (o.passesWarden ? t(L, ` / 途中の地下${o.passesWarden.depth}階で大守護者「${guardianDisplayName(L, o.passesWarden)}」を倒す必要がある（倒すまで下り階段が封じられている）`, ` / you must slay the warden "${guardianDisplayName(L, o.passesWarden)}" on depth ${o.passesWarden.depth} on the way (its stairs down are sealed until then)`) : '');
   return t(L, `${head} — 基礎 +${o.points} / 倍率 ${multText(mult)}${traits ? `（${traits}）` : ''}${danger}${gf}`,
     `${head} — base +${o.points} / multiplier ${multText(mult)}${traits ? ` (${traits})` : ''}${danger}${gf}`);

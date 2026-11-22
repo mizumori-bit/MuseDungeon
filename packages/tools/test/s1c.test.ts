@@ -8,7 +8,7 @@ import { buildCatalog, loadContent } from '@muse/content';
 import { ENGINE_VERSION, generateFloor } from '@muse/engine';
 import { loadConfig, RunSession, SessionManager } from '@muse/server';
 import type { PlayerPort } from '@muse/server';
-import { applyEvent, buildObservation, findPath, isSeasonSpot, seasonReportableSpots } from '@muse/shared';
+import { applyEvent, buildObservation, findPath, isSeasonSpot, projectPlayerView, seasonReportableSpots } from '@muse/shared';
 import type { Command, Entity, GameEvent, Pos, World } from '@muse/shared';
 import { playWithPort } from '../src/bot';
 import { verifyRunDir } from '../src/replay';
@@ -640,6 +640,41 @@ describe('S1d §17.3〜§17.5: returning from a fire', () => {
     // 被害の数（S3a §27.6 の 4。毒は相手が分からないので、相手の名前は付かない）
     expect(a.port.formatActionText(r)).toMatch(/帰り支度を取りやめた（被害を受けた: \d+）/);
     expect(cancel?.type === 'fire_return' && cancel.dealt).toBeGreaterThan(0);
+    m.closeAll();
+  });
+
+  it('damage from a shooter you cannot see calls it off without naming the shooter (S3b §30.3 の 5)', async () => {
+    const m = manager();
+    openSeason(m, 's1d-season-1');
+    const a = await seasonRun(m, 'Aya');
+    await startAndClear(a);
+    const w = a.session.world;
+    const c = await fireOnDepth1(a);
+    const key = floorOf(a);
+    // 2 マス先の開けた床（間のマスも開けている）を背の高い草にして、その中に射手を置く（隣でないので見えない）
+    const open = new Set(openCells(w, key).map((p) => `${p.x},${p.y}`));
+    const at = openCells(w, key).find((p) => Math.max(Math.abs(p.x - c.x), Math.abs(p.y - c.y)) === 2 && open.has(`${(p.x + c.x) / 2},${(p.y + c.y) / 2}`))!;
+    expect(at).toBeTruthy();
+    const f = w.floors[key];
+    f.terrain[at.y * f.width + at.x] = w.meta.terrainTable.indexOf('core:tall_grass');
+    place(a, c);
+    editMe(w, a.playerId, (e) => { e.stats!.hp = 300; e.stats!.maxHp = 300; e.stats!.eva = 0; });
+    const archer = monster('e_s3bsh1', key, at, { acc: 60 });
+    archer.kind = 'core:bone_archer';
+    archer.actor!.ai = { archetype: 'ranged_stand', state: 'hunting', targetPos: { x: c.x, y: c.y }, lostTurns: 0, params: {} };
+    archer.stats!.sight = 8; archer.base!.sight = 8;
+    inject(w, { put: [archer] });
+    expect(projectPlayerView(w, a.playerId).entities.some((e) => e.id === archer.id)).toBe(false);
+    const r = await act(a.port, { type: 'extract', confirm: true });
+    expect(r.ok ? '' : JSON.stringify(r.error)).toBe('');
+    const cancel = a.session.history.filter((e) => e.type === 'fire_return').at(-1);
+    expect(cancel?.type === 'fire_return' && cancel.phase).toBe('cancel');
+    expect(cancel?.type === 'fire_return' && cancel.reason).toBe('damaged');
+    expect(cancel?.type === 'fire_return' && cancel.dealt).toBeGreaterThan(0);
+    // 見えない相手: 相手の種族も、追ってくる敵も出ない
+    expect(cancel?.type === 'fire_return' && cancel.sourceKind).toBeNull();
+    expect(cancel?.type === 'fire_return' && cancel.foe).toBeUndefined();
+    expect(a.port.formatActionText(r)).not.toContain(content.monsters['core:bone_archer'].name.ja);
     m.closeAll();
   });
 

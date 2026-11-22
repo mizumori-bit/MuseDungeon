@@ -121,7 +121,7 @@ export function buildCatalog(c: Content): Catalog {
       // 最大 HP の割合の回復（V4-1c §16.2）
       ...(ab.handler === 'heal_pct' && typeof (ab.params as { pct?: unknown } | undefined)?.pct === 'number' ? { heal: { pct: (ab.params as { pct: number }).pct } } : {}),
     }])),
-    guardianTypes: Object.fromEntries(c.lists.guardianTypes.map((g) => [g.id, { name: g.name, desc: g.desc, strongVs: g.strongVs, handler: g.handler }])),
+    guardianTypes: Object.fromEntries(c.lists.guardianTypes.map((g) => [g.id, { name: g.name, desc: g.desc, strongVs: g.strongVs, handler: g.handler, ...(g.handler === 'warded' && typeof g.params?.armor === 'number' ? { armor: g.params.armor } : {}) }])),
     guardianWeaknesses: Object.fromEntries(c.lists.guardianWeaknesses.map((w) => [w.id, { name: w.name, desc: w.desc, handler: w.handler, ...(w.short ? { short: w.short } : {}), ...(w.maxArmor !== undefined ? { maxArmor: w.maxArmor } : {}) }])),
     boons: Object.fromEntries(c.lists.boons.map((b) => [b.id, { name: b.name, desc: b.desc, hooks: b.hooks.map((h) => ({ ...h })) }])),
     lore: { frame: c.lists.lore.filter((l) => l.kind === 'frame').map((l) => ({ ...l.text })) },

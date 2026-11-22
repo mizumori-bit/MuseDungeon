@@ -12,7 +12,7 @@ import type { ReportCompare } from './expeditionStats';
 import { kindName } from './narrate';
 import type { NavGrid } from './nav';
 import { buildNavGrid, distanceField, findFrontiers } from './nav';
-import type { Dir, EntityRole, Expedition, HaulParts, Locale, MonsterMemory, Names, ObjectiveType, OfferSlot, Pos, SeasonAward, SupplyPlace } from './types';
+import type { Dir, EntityRole, Expedition, ExpeditionOffer, HaulParts, Locale, MonsterMemory, Names, ObjectiveType, OfferSlot, Pos, SeasonAward, SupplyPlace } from './types';
 import { awardName, awardText, fireUsedDepths, myCampfires, publicSpotAt, publicStairsAt, seasonBudgetText, SUPPLY_CATEGORIES, supplyPlaceName } from './season';
 import type { SupplyView } from './season';
 import { DIRS, DIR_VEC } from './types';
@@ -185,6 +185,8 @@ export interface ObsCamp {
     slot?: OfferSlot; traits?: string[]; multiplier_pct: number;
     /** 再挑戦（V3-3c §44.1）: その守護者を目的にした遠征の番号 */
     rechallenge?: { no: number | null };
+    /** 守護者を倒す遠征の、守護者の賞金（S3b §30.2。くり返しで基礎点と同じ割合に減る）・くり返しで掛けた割合 % */
+    guardian_bounty?: number; repeat_pct?: number;
     /** 推奨レベルと、自分のレベルとの差（正なら推奨より低い）。条件の危険度の合計は別に出す（V3-2R §14.4） */
     recommended_level: number | null; level_gap: number | null; trait_danger: number;
     /** 守護者の見込み（格と見れば分かる特徴。種族名は会うまで出さない。V3-2R3 §20.1）。hp: 体力の目安（格 1〜3）、hp_range: 体力の幅（V4-0d §6.1。大守護者は式の幅）、armor: 装甲の目安 */
@@ -796,9 +798,19 @@ export function chaseEstimate(view: PlayerView, catalog: Catalog, hunters: reado
   return { recordedWorst: worst, worst, expected, catchers, shooters };
 }
 
+/**
+ * 候補の守護者の、通る目安に使う体力（傷跡の分を引く）。格 1〜3 は候補の目安、大守護者は記録庫の記憶（V3-3a §35.7）で分かっていれば。
+ * 分からなければ undefined（命中の回数を出さない）
+ */
+export function offerGuardianHp(view: PlayerView, o: ExpeditionOffer): number | undefined {
+  const hp = o.guardian?.hp ?? (o.objective.type === 'slay_warden' && o.objective.targetDepth !== null ? view.wardenIntel?.[String(o.objective.targetDepth)]?.hp : undefined);
+  return hp !== undefined ? Math.max(1, hp - (o.scar ?? 0)) : undefined;
+}
+
 /** 節目の文（「次の節目: 地下5階の大守護者「呼び集める者ヴォルン」（型: 呼び集める者・突き進む者。未踏破）」） */
 /** いまの持ち物で、その装甲に 1 回に通るダメージの目安（近接の武器と、持っている投擲物。急所狙いの分を引く。V3-3b §40.1） */
-export function gearVsArmorText(L: Locale, catalog: Catalog, view: PlayerView, armor: number, hp?: number): string {
+/** types: 相手の型（護られし者なら、護りの火が灯っている間に装甲が上がることを 1 句添える。S3b §30.3 の 4） */
+export function gearVsArmorText(L: Locale, catalog: Catalog, view: PlayerView, armor: number, hp?: number, types: readonly string[] = []): string {
   const parts: string[] = [];
   const me = view.self;
   // 体力が分かっていれば、倒すのに要る命中の数（平均で。V3-3c §44.2）
@@ -818,7 +830,9 @@ export function gearVsArmorText(L: Locale, catalog: Catalog, view: PlayerView, a
     const r = damageRangeVs(ci.throwStats.dmg, arm, Math.max(0, armor - pierce));
     parts.push(`${nameOf(ci.name, L, it.kind!)} ${r.min}〜${r.max}${hits(r)}`);
   }
-  return t(L, `いまの持ち物で 1 回に通る目安: ${parts.join('・')}（会心・型の効果を除く）`, `per hit with your gear: ${parts.join(', ')} (before crits and type effects)`);
+  const ward = types.map((id) => catalog.guardianTypes[id]).find((g) => g?.handler === 'warded');
+  const wardText = ward ? t(L, `。護りの火が灯っている間は、装甲がさらに +${ward.armor ?? 4}（その間の通りは、これより少ない）`, `; while a ward fire burns its armor is +${ward.armor ?? 4} more (less gets through meanwhile)`) : '';
+  return t(L, `いまの持ち物で 1 回に通る目安: ${parts.join('・')}（会心・型の効果を除く）${wardText}`, `per hit with your gear: ${parts.join(', ')} (before crits and type effects)${wardText}`);
 }
 
 export function milestoneObs(L: Locale, catalog: Catalog, m: { depth: number; name: Names; title?: Names; types: string[] }, cleared: readonly number[], intel?: { weakness?: string; hp?: number; maxHit?: number; armor?: number }, view?: PlayerView): ObsMilestone {
@@ -835,7 +849,7 @@ export function milestoneObs(L: Locale, catalog: Catalog, m: { depth: number; na
     intel?.armor !== undefined ? t(L, `装甲 ${intel.armor}`, `armor ${intel.armor}`) : '',
   ].filter(Boolean);
   // 装甲が分かっていれば、いまの持ち物で通る目安（V3-3b §40.1）
-  const gear = intel?.armor !== undefined && view && !cleared.includes(m.depth) ? t(L, `。${gearVsArmorText(L, catalog, view, intel.armor, intel.hp)}`, `; ${gearVsArmorText(L, catalog, view, intel.armor, intel.hp)}`) : '';
+  const gear = intel?.armor !== undefined && view && !cleared.includes(m.depth) ? t(L, `。${gearVsArmorText(L, catalog, view, intel.armor, intel.hp, m.types)}`, `; ${gearVsArmorText(L, catalog, view, intel.armor, intel.hp, m.types)}`) : '';
   const memText = mem.length ? t(L, `。記録庫の記憶: ${mem.join('・')}${gear}`, `; the archive remembers: ${mem.join(', ')}${gear}`) : '';
   return {
     depth: m.depth, name, types, cleared: done,
@@ -1621,7 +1635,9 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       const campText = nc ? t(L, ` / 帰ると次の候補は地下${nc.minTargetDepth}階以上（推奨 Lv${nc.recommendedLevel}）`, ` / next offers from depth ${nc.minTargetDepth} (recommended Lv${nc.recommendedLevel})`) : '';
       // 綱は目的の点を運ばない。遺物を持っていれば失う（V3-4b §28.1）
       const relicNote = xv.objective.type === 'retrieve_relic' && xv.progress.relicHeldByYou ? t(L, '（遺物は失う）', ' (the relic is lost)') : '';
-      const lifeText = ifLifeline !== undefined ? t(L, `・綱なら +${ifLifeline}${relicNote}`, `, lifeline +${ifLifeline}${relicNote}`) : '';
+      // 目的の分は綱では入らない（S3b §30.4 の 2）
+      const lifeObj = ifLifeline !== undefined && parts.objective > 0 ? t(L, `（目的の分 ${parts.objective} 点は入らない）`, ` (without the objective's ${parts.objective})`) : '';
+      const lifeText = ifLifeline !== undefined ? t(L, `・綱なら +${ifLifeline}${lifeObj}${relicNote}`, `, lifeline +${ifLifeline}${lifeObj}${relicNote}`) : '';
       // 協力プレイ: 帰った者の点は、遠征の終わり（全員が戻ったとき）に確定する。共有の分はそのときの値で数える（帰った後に仲間が稼いだ分も入る）。V4-1g G4
       const coopNote = view.runMode === 'coop' && view.party.length > 1
         ? t(L, '（協力プレイ: 帰った者の点は、全員が戻って遠征が終わったときに確定する。目的・踏破・発見・撃破・賞金の分はそのときの値で数え、宝は持ち帰った人の分）', ' (co-op: what you bring back is banked when everyone is back and the expedition ends; objective, overreach, discovery, kills and bounty count at that time, treasure goes to who carried it)')
@@ -1649,6 +1665,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       offers: view.camp.offers.map((o) => ({
         index: o.index, type: o.objective.type, target_depth: o.objective.targetDepth, points: o.points,
         ...(o.rechallenge ? { rechallenge: { no: o.rechallenge.no } } : {}),
+        ...(o.guardianBounty !== undefined ? { guardian_bounty: o.guardianBounty } : {}), ...(o.repeatPct !== undefined ? { repeat_pct: o.repeatPct } : {}),
         text: offerText(L, o, rules ? { rules, level: me.level } : undefined) + (opts.offerNotes?.[o.index] ? ` / ${opts.offerNotes[o.index]}` : '') + ((): string => {
           // 遺物を納めると、記録庫が次の節目の番人の記憶を 1 つ返す（V3-3a §35.7）
           const msd = view.camp?.milestone?.depth;
@@ -1658,7 +1675,8 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
           return left > 0 ? t(L, ` / 納めると、記録庫が地下${msd}階の番人の記憶を 1 つ返す（残り ${left}）`, ` / delivering it makes the archive recall one memory of the depth-${msd} keeper (${left} left)`) : '';
         })() + (o.bounty ? ` / ${gearVsArmorText(L, catalog, view, o.bounty.armor, Math.max(1, o.bounty.hp - (o.scar ?? 0)))}` : '')
           // 守護者の候補（格 1〜3。再挑戦を含む）にも通る目安（V3-8a §56.1。大守護者は記録庫の記憶の装甲で出す）
-          + (o.guardian?.armor !== undefined ? ` / ${gearVsArmorText(L, catalog, view, o.guardian.armor, o.guardian.hp !== undefined ? Math.max(1, o.guardian.hp - (o.scar ?? 0)) : undefined)}` : ''),
+          // 大守護者は、記録庫で体力が分かっていれば命中の回数も（S3b §30.3 の 4）。護られし者は、火が灯っている間の装甲を 1 句
+          + (o.guardian?.armor !== undefined ? ` / ${gearVsArmorText(L, catalog, view, o.guardian.armor, offerGuardianHp(view, o), o.guardian.types ?? [])}` : ''),
         ...(o.bounty ? { bounty: { kind: o.bounty.kind, name: nameOf(o.bounty.name, L, ''), hp: o.bounty.hp, ...(o.bounty.hpRange ? { hp_range: { ...o.bounty.hpRange } } : {}), max_hit: o.bounty.maxHit } } : {}),
         ...(o.vault ? { vault: true } : {}), ...(o.scar ? { scar: o.scar } : {}),
         ...(o.slot ? { slot: o.slot } : {}), ...(o.traits?.length ? { traits: [...o.traits] } : {}),
@@ -1739,7 +1757,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
     canExtract: expedition?.can_extract ?? false, objectiveComplete: expedition?.extract_outcome === 'complete', extractVia: expedition?.extract_via, restTurns: rest && !rest.blocked_by ? rest.turns : null,
     attackers, mineCount, pickables, collectable: collectIds.length, huntingReach, worstSum, unrecorded, chaseOf, lifelineShort: !!opts.lifelineShort,
     draft: view.floorHint?.draft ?? null,
-    ifLifeline: expedition?.haul?.if_lifeline_now,
+    ifLifeline: expedition?.haul?.if_lifeline_now, lifelineObjective: expedition?.haul?.parts.objective ?? 0,
     perkChoice: perkChoiceObs, boonChoice: boonChoiceObs, abilities: abilitiesList, bonuses,
   });
 
@@ -1858,6 +1876,8 @@ interface VAInput {
   chaseOf: (steps: number) => ChaseEstimate;
   /** 帰還の綱を今使った場合の確定点 */
   ifLifeline?: number;
+  /** 戦利品のうち目的の分（綱では入らない。S3b §30.4 の 2） */
+  lifelineObjective?: number;
   /** 下への風（今いる階の下り階段が未発見のとき） */
   draft: Dir | null;
   /** ビルド（V3-4） */
@@ -2071,9 +2091,11 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
   const throwGroups: { key: string; slots: string[]; targets: ObsMonster[] }[] = [];
   const lifelineLines: string[] = [];
   /** 綱の確定（協力プレイでは、全員が戻ったときに確定し、共有の分はそのときの値。V4-1g G4） */
+  // 目的を達成していれば、綱の確定に目的の分が入らないことを添える（S3b §30.4 の 2: 「+N 確定」が目的を除いた額だと一目で分からなかった）
+  const objNote = (x.lifelineObjective ?? 0) > 0 ? t(L, `（目的の分 ${x.lifelineObjective} 点は入らない）`, ` (the objective's ${x.lifelineObjective} is not included)`) : '';
   const lifeBank = (n: number) => (view.runMode === 'coop' && view.party.length > 1
-    ? t(L, `・+${n}（協力プレイ: 全員が戻ったときに確定。共有の分はそのときの値）`, `, +${n} (co-op: banked when everyone is back; shared parts count then)`)
-    : t(L, `・+${n} 確定`, `, banks +${n}`));
+    ? t(L, `・+${n}${objNote}（協力プレイ: 全員が戻ったときに確定。共有の分はそのときの値）`, `, +${n}${objNote} (co-op: banked when everyone is back; shared parts count then)`)
+    : t(L, `・+${n} 確定${objNote}`, `, banks +${n}${objNote}`));
   for (const it of view.inventory) {
     const name = itemDisplayName(catalog, L, it.kind, it.appearanceId, it.affixes);
     const cat = itemCategory(catalog, it.kind, it.appearanceId);

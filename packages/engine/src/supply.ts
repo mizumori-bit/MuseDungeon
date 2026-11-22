@@ -103,7 +103,10 @@ export function takeCheck(ctx: Ctx, e: Entity, pr: PlayerRecord, id: string | un
     return { error: actionError('bad_request', id ? t(L, `この置き場に ${id} は無い（あるのは ${items.map((x) => x.id).join('・')}）。`, `No ${id} in this cache (it holds ${items.map((x) => x.id).join(', ')}).`) : t(L, `この置き場には品が ${items.length} つある。id で選ぶ（${items.map((x) => x.id).join('・')}）。`, `This cache holds ${items.length} items; pick one by id (${items.map((x) => x.id).join(', ')}).`), t(L, 'take_supply { id }（observe の season.supply の items）。', 'take_supply { id } (see season.supply.items in observe).')) };
   }
   const me = ctx.world.entities[e.id];
-  const stack = ctx.content.items[pick.kind]?.stack && (me.inv?.items ?? []).some((x) => ctx.world.entities[x]?.kind === pick.kind && !(ctx.world.entities[x]?.item?.affixes ?? []).length);
+  // 見る者が未鑑定の種類は、重なる前提で判定しない（空きを要る。S3b §30.3 の 2: 名前だけ見えている品への断りから、
+  // 自分の未鑑定の品が「その種類でない」と分かり、手番を使わずに何度でも試せた）
+  const knows = (ctx.world.secret.appearances[pick.kind] ?? null) === null ||ctx.world.players[pr.id].knowledge.identified.includes(pick.kind);
+  const stack = knows && ctx.content.items[pick.kind]?.stack && (me.inv?.items ?? []).some((x) => ctx.world.entities[x]?.kind === pick.kind && !(ctx.world.entities[x]?.item?.affixes ?? []).length);
   if (!stack && (invCount(ctx, me) >= me.inv!.capacity || freeSlot(ctx, me) === null)) {
     return { error: actionError('inventory_full', t(L, '所持品がいっぱいだ。', 'Your inventory is full.'), t(L, 'drop か deposit_supply で何かを手放してから取る。', 'Free a slot with drop or deposit_supply first.')) };
   }
