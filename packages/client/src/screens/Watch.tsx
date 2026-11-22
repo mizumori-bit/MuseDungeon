@@ -1,6 +1,6 @@
 // ライブ観戦。スナップショット＋イベントを shared の applyEvent で畳む（リプレイと同じ経路）。
 // 俯瞰: World そのまま。追従: projectPlayerView。spectatorPolicy=follow_only ではサーバーの PlayerView フレームのみ。
-import type { AgentActivity, GameEvent, PlayerView, RunListing, RunSummary, ServerMsg, SpectatorPolicy, World } from '@muse/shared';
+import type { AgentActivity, GameEvent, PerceivedEvent, PlayerView, RunListing, RunSummary, ServerMsg, SpectatorPolicy, World } from '@muse/shared';
 import { applyEvent, buildObservation, filterEventsForPlayer, formatObservationText, projectPlayerView } from '@muse/shared';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { api, errorText } from '../api';
@@ -147,7 +147,8 @@ export function Watch({ runId }: { runId: string }) {
     }
   };
 
-  const render = (events?: GameEvent[]) => {
+  /** events: 俯瞰つきで畳んだ 1 手の出来事。perceived: 追従だけの枠の出来事（追従の相手に届いたもの。サーバーが絞ってある） */
+  const render = (events?: GameEvent[], perceived?: readonly PerceivedEvent[]) => {
     const c = catalogRef.current, r = rRef.current;
     if (!c || !r) return;
     const now = performance.now();
@@ -156,7 +157,11 @@ export function Watch({ runId }: { runId: string }) {
     if (followOnly) {
       const v = viewRef.current;
       const sc = v ? sceneFromView(v, c, { bubbles }) : null;
-      if (sc) r.draw(sc);
+      if (sc) {
+        r.draw(sc);
+        // 遊ぶ画面（Play.tsx）と同じ演出。古いサーバー（出来事が空の枠）では何もしない
+        if (perceived?.length) void r.animate(toViewEvents(perceived.map((e) => e.event), c));
+      }
       return;
     }
     const w = worldRef.current;
@@ -228,7 +233,7 @@ export function Watch({ runId }: { runId: string }) {
         viewRef.current = m.view;
         setLog((l) => [...l, ...perceivedLines(m.events)].slice(-400));
         setTick((n) => n + 1);
-        render();
+        render(undefined, m.events);
         soundDirector.update(m.view, m.events.map((e) => e.event), catalogRef.current);
       } else setSummary(f.summary);
       // 「AI の応答待ち」は、画面が追いついたときから数える

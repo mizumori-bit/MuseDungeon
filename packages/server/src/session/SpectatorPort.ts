@@ -1,7 +1,7 @@
 // SpectatorPort: 観戦者向け。スナップショット（secret の seed/rng 除去）＋イベント購読。書き込み不可。
 // spectatorPolicy: omniscient = 全情報 / follow_only = 特定プレイヤーの PlayerView のみ / delayed = 一定 seq 遅らせた俯瞰
-import type { AgentActivity, GameEvent, PlayerId, PlayerView, SpectatorPolicy, World } from '@muse/shared';
-import { applyEvent, emptyWorld, projectPlayerView, stripSecret } from '@muse/shared';
+import type { AgentActivity, GameEvent, PerceivedEvent, PlayerId, PlayerView, SpectatorPolicy, World } from '@muse/shared';
+import { applyEvent, emptyWorld, filterEventsForPlayer, projectPlayerView, stripSecret } from '@muse/shared';
 import { spectatorEvent } from '../log/RunStore';
 import type { RunSession } from './RunSession';
 
@@ -69,6 +69,19 @@ export class SpectatorPort {
     return projectPlayerView(this.session.world, pid);
   }
 
+  /**
+   * 追従の相手に届いた出来事のうち、seq より後のもの。その人の PlayerPort.perceivedSince（遊ぶ画面の WS の view の枠）と同じ中身
+   * （RunSession が filterEventsForPlayer で作ったその人のメッセージ。ほかの者にしか届かない出来事は入らない）
+   */
+  followPerceivedSince(pid: PlayerId, seq: number): PerceivedEvent[] {
+    return this.session.messages(pid).filter((m) => m.seq > seq);
+  }
+
+  /** この出来事の中に、追従の相手が知覚したもの（filterEventsForPlayer に残るもの）があるか。view はその相手の今の PlayerView */
+  followPerceives(pid: PlayerId, events: readonly GameEvent[], view: PlayerView): boolean {
+    return filterEventsForPlayer(events, pid, view).length > 0;
+  }
+
   players(): PlayerId[] {
     return [...this.session.world.playerOrder];
   }
@@ -87,6 +100,11 @@ export class SpectatorPort {
 
   onChange(cb: () => void): () => void {
     return this.session.addListener({ onEvents: () => cb() });
+  }
+
+  /** 命令が 1 回確定するたび（世界が 1 回進むたび）に、その確定で出た出来事を受け取る。World はもう進んだ後 */
+  onCommit(cb: (events: readonly GameEvent[]) => void): () => void {
+    return this.session.addListener({ onEvents: (events) => cb(events) });
   }
 
   summary() { return this.session.summary(); }

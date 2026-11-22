@@ -1009,7 +1009,7 @@ CommandRecord {
 
 // server → client
 { t: 'welcome', role, runId, contentVersion }
-{ t: 'view', view: PlayerView, events: PerceivedEvent[] }      // player: 状態が進むたび
+{ t: 'view', view: PlayerView, events: PerceivedEvent[] }      // player: 状態が進むたび。spectator（追従だけ）: 追従の相手が知覚した手ごと（下）
 { t: 'snapshot', seq, world: World(secret 除去) }              // spectator: 接続時・シーク時
 { t: 'events', events: Event[] }                               // spectator: 逐次
 { t: 'error', error: ActionError }
@@ -1021,6 +1021,11 @@ CommandRecord {
 
 - 人間プレイヤーの `command` は MCP と**同一の `Command` スキーマ**で、同じ `PlayerPort.submit` を通る。
 - 観戦者は書き込み系メッセージを送れない（サーバーが拒否）。`spectatorPolicy` が `follow_only` の場合、サーバーは `director` を拒否し、`follow` には World ではなく PlayerView 相当だけを送る。
+- 追従だけの観戦（`follow_only`・シーズンのラン・持ち主の観戦）の `view` の枠（2026-11-22）:
+  - `events` は、追従の相手に届いた出来事（その人の `PlayerPort` が受け取るもの。プレイヤーの WS の `view` の `events` と同じ中身で、文になる出来事だけ）。ほかの者にしか届かない出来事・視界の外・トークンは入らない。
+  - 追従の相手が知覚した命令の確定 1 回（世界が 1 回進む）ごとに、その時点の `view` と、その確定までに届いた出来事で 1 枠を送る（マクロの途中の手を 1 枚にまとめない。観戦の画面が 1 手ずつ間を置いて見せ、演出と音を出す）。相手が知覚しない確定（ほかの階の者の手など）と、送りが詰まっている間（送りの残りが 1 MiB 以上）は、40ms でまとめる（その間の出来事は次の枠に入る）。
+  - 接続した直後の最初の枠は、出来事なし（`events: []`）の今の `view`（つなぎ直しで前の出来事をくり返さない）。
+  - 以前のサーバーは `events` をいつも空で送った。クライアントは空の枠でも絵だけ合わせる（壊れない）。
 - 開催中のシーズンのランの観戦は、そのランの参加者のトークン（`profileToken`）か、サーバーと同じ機械からの接続だけ（S3。§9.7）。
 
 ## 8. HTTP

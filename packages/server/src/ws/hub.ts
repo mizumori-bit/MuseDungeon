@@ -3,13 +3,16 @@ import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer } from 'ws';
 import type { WebSocket } from 'ws';
-import type { ClientMsg, ServerMsg } from '@muse/shared';
+import type { ClientMsg, PlayerView, ServerMsg } from '@muse/shared';
 import { actionError } from '@muse/shared';
 import type { ServerConfig } from '../config';
 import { isLocalRequest } from '../http/local';
 import type { SessionManager } from '../session/SessionManager';
 import { SpectatorPort } from '../session/SpectatorPort';
 import { attachPlayerSocket } from './playerSocket';
+
+/** 追従だけの観戦で、送りがこれより詰まっている（遅い回線）間は、手ごとの枠をやめて 40ms でまとめる */
+const FOLLOW_BACKLOG_BYTES = 1 << 20;
 
 export class WsHub {
   readonly wss = new WebSocketServer({ noServer: true });
@@ -59,12 +62,28 @@ export class WsHub {
     }
     send({ t: 'welcome', role: 'spectator', runId: spec.runId, contentVersion: spec.contentVersion, policy, mode });
     if (spec.viewOnly()) {
-      // 追従のみ: World ではなく PlayerView 相当だけを送る
+      // 追従のみ: World ではなく、追従の相手の PlayerView と、その人に届いた出来事（遊ぶ画面の WS と同じ中身）だけを送る。
+      // 追従の相手が知覚した手は、命令の確定 1 回（世界が 1 回進む）ごとに、その時点の view とその手の出来事で 1 枠（マクロの途中の手を 1 枚にまとめない）。
+      // 相手が知覚しない確定（ほかの階の者の手など）と、送りが詰まっている間は、40ms でまとめる（出来事は次の枠に入る）
       const pid = follow ?? spec.players()[0];
       let timer: NodeJS.Timeout | null = null;
-      const flush = () => { timer = null; const v = pid ? spec.followView(pid) : null; if (v) send({ t: 'view', view: v, events: [] }); };
-      flush();
-      unsubs.push(spec.onChange(() => { if (!timer) timer = setTimeout(flush, 40); }));
+      let lastSent = 0;
+      const sendFrame = (v: PlayerView | null, withEvents: boolean) => {
+        if (timer) { clearTimeout(timer); timer = null; }
+        if (!pid || !v) return;
+        const events = withEvents ? spec.followPerceivedSince(pid, lastSent) : [];
+        lastSent = v.seq;
+        send({ t: 'view', view: v, events });
+      };
+      // 接続した直後は、出来事なしの今の view（つなぎ直しで前の出来事をくり返さない）
+      sendFrame(pid ? spec.followView(pid) : null, false);
+      unsubs.push(spec.onCommit((events) => {
+        if (!pid) return;
+        const v = spec.followView(pid);
+        if (v && ws.bufferedAmount < FOLLOW_BACKLOG_BYTES && spec.followPerceives(pid, events, v)) sendFrame(v, true);
+        else if (!timer) timer = setTimeout(() => sendFrame(spec.followView(pid), true), 40);
+      }));
+      unsubs.push(() => { if (timer) clearTimeout(timer); timer = null; });
       unsubs.push(spec.onAgent((a) => { if (a.playerId === pid) send({ t: 'agent', activity: a }); }));
     } else {
       const snap = spec.snapshot();
