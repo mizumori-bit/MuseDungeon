@@ -342,7 +342,9 @@ export class SessionPlayerPort implements PlayerPort {
     if (view.status !== 'at_camp') return undefined;
     const r = this.session.expeditionReport(this.playerId, undefined, { endedOnly: true });
     if (!r) return undefined;
-    return { no: r.no, lines: compareLines(view.locale, r), ...(r.compare ? { compare: r.compare } : {}) };
+    // 倒さずに帰った節目の大守護者への挑戦（S5 §47.4 の 2）: 直前の遠征の振り返りの中に、その遠征の後のキャンプでだけ（次の遠征が終われば、その遠征の振り返りになる）
+    const wardens = this.session.wardenAttempts(this.playerId, r.no);
+    return { no: r.no, lines: compareLines(view.locale, r), ...(r.compare ? { compare: r.compare } : {}), ...(wardens.length ? { wardens } : {}) };
   }
 
   /** expedition ツールに足す行: 進行中なら途中経過（戦闘と進み）、キャンプなら直前の遠征のレポート（V3-6 §6.1・§6.2） */

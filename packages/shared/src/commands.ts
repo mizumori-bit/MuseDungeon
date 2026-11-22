@@ -37,7 +37,7 @@ export const CommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('travel'), to: TravelTargetSchema, mode: MacroModeSchema.optional(), hpFloor: HpFloorSchema.optional(), pickup: z.union([z.boolean(), z.literal('useful')]).optional() }),
   z.object({ type: z.literal('rest'), untilHp: z.number().int().positive().optional(), maxTurns: z.number().int().positive().optional() }),
   /** 既知の「自分が投げた物」（what: 'thrown'、既定）か、見えている・記憶したアイテム（'items'）を近い順に拾う */
-  /** within: 歩数の上限（既定 15）、kinds: 品の種類（種類 ID か区分）、all: 劣る装備も拾う（V3-8 §53.4） */
+  /** within: いま居るマスからいちばん近い品までの歩数の上限（既定 15。拾うたびに数え直す。合計の上限ではない。S5 §47.5 の 1）、kinds: 品の種類（種類 ID か区分）、all: 劣る装備も拾う（V3-8 §53.4） */
   z.object({ type: z.literal('collect'), what: z.enum(['thrown', 'items']).optional(), mode: MacroModeSchema.optional(), hpFloor: HpFloorSchema.optional(),
     within: z.number().int().min(1).max(200).optional(), kinds: z.array(z.string().regex(/^(core:)?[a-z][a-z0-9_]+$/)).max(8).optional(), all: z.boolean().optional() }),
   /**
@@ -114,6 +114,8 @@ const SeasonAwardSchema = z.object({
 const ContentIdSchema = z.string().max(64).regex(/^[A-Za-z0-9:_.-]+$/);
 const SlayHitsSchema = z.object({ total: z.number().int().nonnegative(), n: z.number().int().nonnegative() });
 const SlayGearSchema = z.object({ kind: ContentIdSchema, affixes: z.array(ContentIdSchema).max(8), got: z.enum(['picked', 'supply', 'start']), depth: z.number().int().positive().optional() });
+const SlayN = z.number().int().nonnegative();
+const SlayOpeningSchema = z.object({ turns: SlayN, dealt: SlayN, hitTurns: SlayN, taken: SlayN });
 const SlayCountSchema = z.array(z.object({ kind: ContentIdSchema, n: z.number().int().positive() })).max(32);
 export const SeasonSlaySchema = z.object({
   depth: z.number().int().positive(), warden: z.object({ ja: z.string().max(64), en: z.string().max(64) }), by: z.string().max(64),
@@ -125,6 +127,9 @@ export const SeasonSlaySchema = z.object({
   used: SlayCountSchema, thrown: SlayCountSchema,
   abilities: z.array(z.object({ id: ContentIdSchema, n: z.number().int().positive() })).max(16),
   wardFires: z.number().int().nonnegative(), attempt: z.number().int().positive(), turns: z.number().int().nonnegative(),
+  /** S5（SEASON.md §47.4 の 1）: 予備動作への対し方と、相手が動けなかった手番。S5 より前の記録には無い */
+  tells: z.array(z.object({ kind: z.enum(['winding_up', 'summoning', 'enraging', 'swinging']), n: SlayN, seen: SlayN, missed: SlayN, hit: SlayN })).max(8).optional(),
+  openings: z.object({ missed: SlayOpeningSchema, other: SlayOpeningSchema }).optional(),
 });
 
 export const SeasonSyncSchema = z.object({

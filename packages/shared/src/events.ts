@@ -6,8 +6,8 @@ import type {
   RememberedEntity, RngState, RunMeta, RunSummary, SeasonDeposit, SeasonState, SeasonTaken, Sense, Stats, StatusInst, SupplyPlace, WorldSecret, FloorHint, Names,
 } from './types';
 
-/** 2: 遠征・実ダメージ・回復の蓄積値（IMPROVEMENTS_V2）。3: ビルド（特技・能動技・呪い。V3-4）。22: シーズン（S0）。29: 補給の置き場（S3）。30: 帰り支度の取りやめの理由（S3a）。31: 覚えている品の接辞（knowledge_updated.rememberedSet[].affixes。S3c）。32: 食い違ったランの続きの番号（seq_resumed。S3f）。33: 討伐の記録（season_synced.seasonAfter.slays。S4）。古いログもそのまま畳み込める */
-export const EVENT_VERSION = 33;
+/** 2: 遠征・実ダメージ・回復の蓄積値（IMPROVEMENTS_V2）。3: ビルド（特技・能動技・呪い。V3-4）。22: シーズン（S0）。29: 補給の置き場（S3）。30: 帰り支度の取りやめの理由（S3a）。31: 覚えている品の接辞（knowledge_updated.rememberedSet[].affixes。S3c）。32: 食い違ったランの続きの番号（seq_resumed。S3f）。33: 討伐の記録（season_synced.seasonAfter.slays。S4）。34: 討伐の記録の予備動作と動けなかった手番（slays[].tells・openings。S5）。古いログもそのまま畳み込める */
+export const EVENT_VERSION = 34;
 
 export interface EventBase {
   seq: number;

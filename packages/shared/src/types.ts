@@ -623,7 +623,30 @@ export interface SeasonSlay {
   attempt: number;
   /** 倒した遠征の、始めてから倒すまでの自分の手番 */
   turns: number;
+  /** 予備動作への対し方（S5。SEASON.md §47.4 の 1。予備動作の種類ごと。S5 より前の記録には無い） */
+  tells?: SlayTell[];
+  /** 相手が動けなかった手番と、その手番に与えた・受けた被害（S5。S5 より前の記録には無い） */
+  openings?: SlayOpenings;
 }
+
+/** 討伐の記録の事実（だれのものか・選ばれ方を除いた中身）。倒さずに帰った自分の挑戦（S5 §47.4 の 2）も同じ形 */
+export type SeasonSlayFacts = Omit<SeasonSlay, 'by' | 'mine' | 'first' | 'least' | 'of'>;
+
+/**
+ * 予備動作（構え）への対し方（S5。SEASON.md §47.4 の 1）。kind: 予備動作の種類（Intent の kind: winding_up 突進・swinging 大振り・summoning 手下を呼ぶ・enraging 怒り）。
+ * n: 構えた回数・seen: そのうち、構えの後の自分の手番の初めに相手が見えていた回数・
+ * missed: 外させた（大きな一撃が空を切り、相手が動けなくなった）・hit: 受けた（大きな一撃が自分に届いた）。missed・hit は突進と大振りだけ（ほかは 0）
+ */
+export interface SlayTell { kind: Intent['kind']; n: number; seen: number; missed: number; hit: number }
+
+/**
+ * 相手が動けなかった手番（S5。SEASON.md §47.4 の 1）: 自分の手番の初めに、相手が見えていて、朦朧・睡眠など動けない状態だった手番。
+ * missed: 予備動作を外させた後（外れて動けない）の手番・other: それ以外（眠っている・強打の朦朧が自分の手番まで残った など）。
+ * それ以外の手番（相手が動けた手番）の分は、記録の合計（与えた被害の合計・taken）から 2 つを引いた残り
+ */
+export interface SlayOpenings { missed: SlayOpening; other: SlayOpening }
+/** turns: 手番の数・dealt: その手番の自分の行動で相手に与えた被害・hitTurns: 被害を与えた手番の数・taken: その手番から次の自分の手番までに受けた被害 */
+export interface SlayOpening { turns: number; dealt: number; hitTurns: number; taken: number }
 
 /**
  * シーズンの写し（S0。PROTOCOL §9.6）。キャンプで取り込んだ共有層（season_sync）。

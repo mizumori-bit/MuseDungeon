@@ -6,7 +6,7 @@ import type { Content } from '@muse/content';
 import { createRun, isPlayersTurn, joinPlayer, resumeSeq, seasonSync, step } from '@muse/engine';
 import type {
   ActionError, AgentActivity, Command, CommandRecord, CommandSource, Dir, Expedition, ExpeditionReport, GameEvent, JoinCommand, LegacyMonster, MacroStop, ProjectedEvent,
-  PerceivedEvent, PlayerId, PlayerView, Pos, ReportCall, RunMetaFile, RunSummary, SeasonSyncCommand, SeqResumeCommand, TurnSnapshot, World,
+  PerceivedEvent, PlayerId, PlayerView, Pos, ReportCall, RunMetaFile, RunSummary, SeasonSlayFacts, SeasonSyncCommand, SeqResumeCommand, TurnSnapshot, World,
 } from '@muse/shared';
 import {
   actionError, applyEvent, buildExpeditionReport, canonicalHash, guardianDisplayName, compareReports, emptyWorld, filterEventsForPlayer, FREE_COMMANDS, MACRO_COMMANDS,
@@ -19,6 +19,7 @@ import { readJsonl } from '../log/RunStore';
 import { boundaryKeyframeMissing, cutEventsAfter, isRunMeta, keyframeFromEvents, latestKeyframe, logBounds, metaFromWorld, resumeSeqTarget } from '../log/repair';
 import { readJsonStable } from '../log/atomicWrite';
 import { summaryMarkdown } from './summary';
+import { buildAttempts, incapStatuses } from '../season/slays';
 import type { ProfileHooks } from './profiles';
 import { basename, join } from 'node:path';
 import { rmSync } from 'node:fs';
@@ -122,6 +123,8 @@ export class RunSession {
   private readonly macroKinds = new Map<number, string>();
   /** 終了した遠征のレポート（プレイヤー×遠征） */
   private readonly reports = new Map<string, ExpeditionReport>();
+  /** 倒さずに帰った大守護者への挑戦（S5。プレイヤーと遠征ごと） */
+  private readonly attempts = new Map<string, SeasonSlayFacts[]>();
   /** 参加コマンドのプロフィールの ID と継承した知識（V3-7。参加コマンドから。復元時も作り直す） */
   private readonly joinInfo = new Map<PlayerId, { profile?: string; legacy?: LegacyMonster[] }>();
   private readonly log: LogWriter | null;
@@ -407,6 +410,34 @@ export class RunSession {
     if (events.length) this.notify((l) => l.onEvents?.(events));
     for (const w of [...this.waiters]) w();
     this.scheduleTimeouts();
+  }
+
+  /**
+   * 倒さずに帰った節目の大守護者への自分の挑戦（S5。SEASON.md §47.4 の 2）: 終わった遠征 no で戦った（攻撃・被害の出来事があった）のに、
+   * 倒れなかった大守護者ごとの、討伐の記録と同じ作り方の事実。このランの出来事の記録から作って覚えておく（共有しない。キャンプの観測にだけ出す）
+   */
+  wardenAttempts(pid: PlayerId, no: number): SeasonSlayFacts[] {
+    const key = `${pid}|${no}`;
+    const hit = this.attempts.get(key);
+    if (hit) return hit;
+    const x = (this.world.expeditions ?? []).find((y) => y.no === no && y.participants.includes(pid));
+    if (!x || x.endSeq === null) return [];
+    const end = this.indexOfSeq(x.endSeq + 1);
+    // 大守護者と攻撃・被害の出来事があった遠征だけ畳む（ほとんどの遠征は、ここで済む）
+    const wardens = new Set(this.wardenIds());
+    const isW = (id: string | null | undefined) => !!id && wardens.has(id);
+    const fought = this.history.slice(this.indexOfSeq(x.startSeq), end)
+      .some((e) => (e.type === 'attack' && (isW(e.attacker) || isW(e.target))) || (e.type === 'damaged' && (isW(e.target) || isW(e.source))));
+    let out: SeasonSlayFacts[] = [];
+    if (fought) {
+      try {
+        out = buildAttempts(this.history.slice(0, end), this.foldBase(x.startSeq), pid, this.world, no, incapStatuses(this.deps.content));
+      } catch (err) {
+        console.error(`[season] ${this.runId} の遠征 ${no} の大守護者への挑戦を数えられなかった: ${(err as Error).message}`);
+      }
+    }
+    this.attempts.set(key, out);
+    return out;
   }
 
   /** そのプレイヤーの終わった遠征のレポート（古い順） */

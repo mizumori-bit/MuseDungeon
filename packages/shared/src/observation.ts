@@ -12,7 +12,7 @@ import type { ReportCompare } from './expeditionStats';
 import { kindName } from './narrate';
 import type { NavGrid } from './nav';
 import { buildNavGrid, distanceField, findFrontiers } from './nav';
-import type { Dir, EntityRole, Expedition, ExpeditionOffer, HaulParts, Locale, MonsterMemory, Names, ObjectiveType, OfferSlot, Pos, SeasonAward, SeasonSlay, SupplyPlace } from './types';
+import type { Dir, EntityRole, Expedition, ExpeditionOffer, HaulParts, Locale, MonsterMemory, Names, ObjectiveType, OfferSlot, Pos, SeasonAward, SeasonSlay, SeasonSlayFacts, SlayOpening, SupplyPlace } from './types';
 import { awardName, awardText, fireUsedDepths, myCampfires, publicSpotAt, publicStairsAt, seasonBudgetText, SUPPLY_CATEGORIES, supplyPlaceName } from './season';
 import type { SupplyView } from './season';
 import { DIRS, DIR_VEC } from './types';
@@ -208,8 +208,12 @@ export interface ObsCamp {
    * count はその階に載った記録の数）
    */
   archive?: { delivered: number; total: number; slays?: { depth: number; warden: string; count: number; records: ObsSlay[]; text: string }[] };
-  /** 直前の遠征の比較（2 行以内。V3-6 §35.9: 候補を選ぶ画面で自分の記録が目に入る） */
-  compare?: { no: number; lines: string[] } & ReportCompare;
+  /**
+   * 直前の遠征の比較（2 行以内。V3-6 §35.9: 候補を選ぶ画面で自分の記録が目に入る）。
+   * wardens（S5 §47.4 の 2）: その遠征で節目の大守護者と戦って、倒さずに帰ったときだけ。自分の挑戦（attempt。そのランの記録から。共有しない）と、
+   * シーズンのランでは先に倒した者の記録（records。最初の 1 件といちばん少ない被害の 1 件。同じ項目の並び）。lines: 文（自分の挑戦が先）
+   */
+  compare?: { no: number; lines: string[]; wardens?: { depth: number; warden: string; attempt: ObsSlayAttempt; records: ObsSlay[]; lines: string[] }[] } & ReportCompare;
   /** プロフィールの記録の要約と次の節目（1 行。V3-7 §7.2）・直前の遠征で取った実績 */
   records?: { line: string; feats_new?: string[] };
   /** 古い版で始まったラン（V4-0b §1.2。最初の 1 度だけ） */
@@ -230,8 +234,19 @@ export interface ObsSlay {
   taken: number; lowest_pct?: number;
   used: { kind: string; name: string; n: number }[]; thrown: { kind: string; name: string; n: number }[]; abilities: { id: string; name: string; n: number }[];
   ward_fires: number; attempt: number; turns: number;
+  /** 予備動作への対し方（S5。予備動作の種類ごと。S5 より前の記録には無い）。name: 「突進の構え」など */
+  tells?: { kind: string; name: string; n: number; seen: number; missed: number; hit: number }[];
+  /**
+   * 相手が動けなかった手番（S5。S5 より前の記録には無い）: missed: 予備動作を外させた後・other: 眠りなど。
+   * rest: それ以外の手番（相手が動けた手番）に与えた被害（毒の目盛りを含む）・受けた被害（記録の合計から 2 つを引いた残り）
+   */
+  openings?: { missed: ObsOpening; other: ObsOpening; rest: { dealt: number; taken: number } };
   text: string;
 }
+/** 相手が動けなかった手番の数（S5）: turns・その手番の自分の行動で与えた被害・被害を与えた手番の数・その手番に受けた被害 */
+export interface ObsOpening { turns: number; dealt: number; hit_turns: number; taken: number }
+/** 倒さずに帰った自分の挑戦（S5 §47.4 の 2）: 討伐の記録と同じ項目（だれ・選ばれ方を除く） */
+export type ObsSlayAttempt = Omit<ObsSlay, 'by' | 'mine' | 'first' | 'least' | 'of'>;
 
 /** 節目の大守護者（V3-3 §3.2）。弱点と種族は伏せる */
 export interface ObsMilestone { depth: number; name: string; types: { id: string; name: string }[]; cleared: boolean; text: string; memory?: { weakness?: string; hp?: number; max_hit?: number; armor?: number } }
@@ -402,8 +417,11 @@ export interface ObservationOptions {
   lifelineShort?: boolean;
   /** 加護の行は名前だけ（この遠征で説明を出した。V3-3c §44.6） */
   boonsShort?: boolean;
-  /** キャンプ: 直前の遠征の比較（遠征レポートから。V3-6 §35.9） */
-  campCompare?: { no: number; lines: string[]; compare?: ReportCompare };
+  /**
+   * キャンプ: 直前の遠征の比較（遠征レポートから。V3-6 §35.9）。wardens: その遠征で戦って倒さずに帰った節目の大守護者への自分の挑戦
+   * （S5 §47.4 の 2。サーバーがそのランの出来事の記録から、討伐の記録と同じ作り方で作る。共有しない）
+   */
+  campCompare?: { no: number; lines: string[]; compare?: ReportCompare; wardens?: SeasonSlayFacts[] };
   /** キャンプ: 候補に添える注記（候補の番号 → 文。再挑戦の前回の戦い。V3-3c §44.1） */
   offerNotes?: Record<number, string>;
   /** キャンプ: プロフィールの記録の 1 行と、直前の遠征で取った実績（V3-7 §7.2・§7.4） */
@@ -901,8 +919,40 @@ function perHit(total: number, n: number): string {
   return `${Math.trunc(t10 / 10)}.${t10 % 10}`;
 }
 
-/** 討伐の記録の 1 件の観測（S4。SEASON.md §35.5）。文は「Aya（Lv6・戦士）: 鎚矛（地下3階で拾った）・革鎧（最初から持っていた）。与えた被害 92（近接 11 回・1 回あたり 8.2…）…」 */
-export function slayObs(L: Locale, catalog: Catalog, s: SeasonSlay): ObsSlay {
+/** 予備動作の名前（S5。Intent の kind ごと。観測の intent の文と同じ呼び方） */
+function tellName(L: Locale, kind: string): string {
+  return kind === 'winding_up' ? t(L, '突進の構え', 'charge wind-up') : kind === 'swinging' ? t(L, '大振りの構え', 'heavy-swing wind-up')
+    : kind === 'summoning' ? t(L, '手下を呼ぶ構え', 'minion call') : kind === 'enraging' ? t(L, '怒りの予兆', 'rage sign') : kind;
+}
+
+/** 予備動作への対し方の文（S5）。記録に項目が無ければ空 */
+function tellsText(L: Locale, tells: SeasonSlayFacts['tells']): string {
+  if (!tells) return '';
+  if (!tells.length) return t(L, '予備動作の構え 0 回', 'no wind-ups');
+  return tells.map((x) => {
+    const name = tellName(L, x.kind);
+    const strike = x.kind === 'winding_up' || x.kind === 'swinging';
+    const res = strike ? t(L, `${x.missed} 回外させ、${x.hit} 回受けた`, `made ${x.missed} miss, took ${x.hit}`) : '';
+    if (x.seen === x.n) return strike ? t(L, `${name}を ${x.n} 回見て、${res}`, `saw ${x.n} ${name}${x.n === 1 ? '' : 's'}, ${res}`) : t(L, `${name}を ${x.n} 回見た`, `saw ${x.n} ${name}${x.n === 1 ? '' : 's'}`);
+    const seen = t(L, `${name} ${x.n} 回（見えていたのは ${x.seen} 回）`, `${x.n} ${name}${x.n === 1 ? '' : 's'} (${x.seen} seen)`);
+    return strike ? t(L, `${seen}: ${res}`, `${seen}: ${res}`) : seen;
+  }).join(t(L, '・', ', '));
+}
+
+/** 相手が動けなかった手番の文（S5）。記録に項目が無ければ空 */
+function openingsText(L: Locale, op: ObsSlay['openings']): string {
+  if (!op) return '';
+  const one = (o: ObsOpening) => t(L, `与えた被害 ${o.dealt}・被害を与えた手番 ${o.hit_turns}・受けた被害 ${o.taken}`, `dealt ${o.dealt} in ${o.hit_turns} of them, took ${o.taken}`);
+  return t(L,
+    `相手が動けなかった手番: 予備動作を外させた後 ${op.missed.turns}（${one(op.missed)}）、眠りなど ${op.other.turns}（${one(op.other)}）。それ以外の手番: 与えた被害 ${op.rest.dealt}・受けた被害 ${op.rest.taken}`,
+    `Turns it could not act: after a missed wind-up ${op.missed.turns} (${one(op.missed)}), asleep etc. ${op.other.turns} (${one(op.other)}). Other turns: dealt ${op.rest.dealt}, took ${op.rest.taken}`);
+}
+
+/**
+ * 討伐の記録と自分の挑戦に共通の中身（S4・S5）: 装備・与えた被害・受けた被害・予備動作・動けなかった手番・品。
+ * body は「鎚矛（地下3階で拾った）・革鎧（最初から持っていた）。与えた被害 92（…）。受けた被害 …。…」
+ */
+function fightCore(L: Locale, catalog: Catalog, s: SeasonSlayFacts): { obs: ObsSlayAttempt; cls: string; body: string } {
   const cls = nameOf(catalog.classes[s.classId]?.name, L, shortId(s.classId));
   const gear = (g: SeasonSlay['weapon']) => (g ? { kind: g.kind, name: itemDisplayName(catalog, L, g.kind, null, g.affixes), got: g.got, ...(g.depth !== undefined ? { depth: g.depth } : {}) } : null);
   const weapon = gear(s.weapon);
@@ -933,28 +983,74 @@ export function slayObs(L: Locale, catalog: Catalog, s: SeasonSlay): ObsSlay {
     thrown.length ? t(L, `投げた品: ${list(thrown)}`, `thrown: ${list(thrown)}`) : '',
     abilities.length ? t(L, `能動技: ${list(abilities)}`, `abilities: ${list(abilities)}`) : '',
   ].filter(Boolean);
+  // 予備動作と、相手が動けなかった手番（S5）: 記録に項目が無ければ（S5 より前の記録）出さない
+  const tells = s.tells?.map((x) => ({ kind: x.kind, name: tellName(L, x.kind), n: x.n, seen: x.seen, missed: x.missed, hit: x.hit }));
+  const op = s.openings;
+  const ob = (o: SlayOpening): ObsOpening => ({ turns: o.turns, dealt: o.dealt, hit_turns: o.hitTurns, taken: o.taken });
+  const openings = op ? {
+    missed: ob(op.missed), other: ob(op.other),
+    rest: { dealt: Math.max(0, total - op.missed.dealt - op.other.dealt), taken: Math.max(0, s.taken - op.missed.taken - op.other.taken) },
+  } : undefined;
+  const fight = [tellsText(L, s.tells), openingsText(L, openings)].filter(Boolean);
+  const body = t(L,
+    `${wText}・${aText}${hiddenText}。与えた被害 ${total}（${dealtParts.join('、') || 'なし'}）。受けた被害 ${s.taken}${s.lowestPct !== undefined ? `（HP がいちばん減って ${s.lowestPct}%）` : ''}。${fight.map((x) => `${x}。`).join('')}${extra.join('。')}`,
+    `${wText}, ${aText}${hiddenText}. Dealt ${total} (${dealtParts.join(', ') || 'none'}). Took ${s.taken}${s.lowestPct !== undefined ? ` (lowest HP ${s.lowestPct}%)` : ''}. ${fight.map((x) => `${x}. `).join('')}${extra.join('. ')}`);
+  return {
+    cls, body,
+    obs: {
+      depth: s.depth, level: s.level, class: cls, weapon, armor, ...(s.hidden ? { hidden: true } : {}),
+      dealt: { melee: { ...d.melee }, thrown: { ...d.thrown }, poison: { ...d.poison }, feature: { ...d.feature }, crits: d.crits },
+      taken: s.taken, ...(s.lowestPct !== undefined ? { lowest_pct: s.lowestPct } : {}), used, thrown, abilities, ward_fires: s.wardFires, attempt: s.attempt, turns: s.turns,
+      ...(tells ? { tells } : {}), ...(openings ? { openings } : {}), text: '',
+    },
+  };
+}
+
+/** 討伐の記録の 1 件の観測（S4。SEASON.md §35.5）。文は「Aya（Lv6・戦士）: 鎚矛（地下3階で拾った）・革鎧（最初から持っていた）。与えた被害 92（近接 11 回・1 回あたり 8.2…）…」 */
+export function slayObs(L: Locale, catalog: Catalog, s: SeasonSlay): ObsSlay {
+  const c = fightCore(L, catalog, s);
   const who = `${s.by}${s.mine ? t(L, '（あなた）', ' (you)') : ''}`;
   const text = t(L,
-    `${who}（Lv${s.level}・${cls}）: ${wText}・${aText}${hiddenText}。与えた被害 ${total}（${dealtParts.join('、') || 'なし'}）。受けた被害 ${s.taken}${s.lowestPct !== undefined ? `（HP がいちばん減って ${s.lowestPct}%）` : ''}。${extra.join('。')}。倒したランの中で ${s.attempt} 回目の挑戦（それより前のランの挑戦は数えない）・遠征の ${s.turns} 手番目に倒した`,
-    `${who} (Lv${s.level} ${cls}): ${wText}, ${aText}${hiddenText}. Dealt ${total} (${dealtParts.join(', ') || 'none'}). Took ${s.taken}${s.lowestPct !== undefined ? ` (lowest HP ${s.lowestPct}%)` : ''}. ${extra.join('. ')}. Slain on attempt ${s.attempt} within that run (attempts in earlier runs not counted), ${s.turns} turns into the expedition`);
-  return {
-    depth: s.depth, by: s.by, ...(s.mine ? { mine: true } : {}), ...(s.first ? { first: true } : {}), ...(s.least ? { least: true } : {}), of: s.of,
-    level: s.level, class: cls, weapon, armor, ...(s.hidden ? { hidden: true } : {}),
-    dealt: { melee: { ...d.melee }, thrown: { ...d.thrown }, poison: { ...d.poison }, feature: { ...d.feature }, crits: d.crits },
-    taken: s.taken, ...(s.lowestPct !== undefined ? { lowest_pct: s.lowestPct } : {}), used, thrown, abilities, ward_fires: s.wardFires, attempt: s.attempt, turns: s.turns, text,
-  };
+    `${who}（Lv${s.level}・${c.cls}）: ${c.body}。倒したランの中で ${s.attempt} 回目の挑戦（それより前のランの挑戦は数えない）・遠征の ${s.turns} 手番目に倒した`,
+    `${who} (Lv${s.level} ${c.cls}): ${c.body}. Slain on attempt ${s.attempt} within that run (attempts in earlier runs not counted), ${s.turns} turns into the expedition`);
+  return { ...c.obs, by: s.by, ...(s.mine ? { mine: true } : {}), ...(s.first ? { first: true } : {}), ...(s.least ? { least: true } : {}), of: s.of, text };
+}
+
+/** 倒さずに帰った自分の挑戦の観測（S5 §47.4 の 2）。文は討伐の記録と同じ並び（「あなた（Lv6・戦士）: …。このランの中で 1 回目の挑戦・遠征の 78 手番目まで戦い、倒さずに帰った」） */
+export function slayAttemptObs(L: Locale, catalog: Catalog, s: SeasonSlayFacts): ObsSlayAttempt {
+  const c = fightCore(L, catalog, s);
+  const text = t(L,
+    `あなた（Lv${s.level}・${c.cls}）: ${c.body}。このランの中で ${s.attempt} 回目の挑戦・遠征の ${s.turns} 手番目まで戦い、倒さずに帰った`,
+    `You (Lv${s.level} ${c.cls}): ${c.body}. Attempt ${s.attempt} in this run; fought until turn ${s.turns} of the expedition and came back without slaying it`);
+  return { ...c.obs, text };
+}
+
+/** 討伐の記録 1 件の見出し（「先に倒した者（倒した記録 2 件）」「いちばん少ない被害で倒した者」） */
+function slayLabel(L: Locale, r: ObsSlay): string {
+  const of = r.of;
+  const count = t(L, `（倒した記録 ${of} 件）`, ` (${of} recorded kill${of > 1 ? 's' : ''})`);
+  const label = r.first && r.least && of > 1 ? t(L, '先に倒した者（いちばん少ない被害でもある）', 'first to slay it (also the least damage taken)')
+    : r.first ? t(L, '先に倒した者', 'first to slay it') : t(L, 'いちばん少ない被害で倒した者', 'slew it taking the least damage');
+  return `${label}${r.first ? count : ''}`;
 }
 
 /** その節目の討伐の記録の文（最初の 1 件と、いちばん少ない被害の 1 件）。「先に倒した者（倒した記録 2 件）: …／いちばん少ない被害で倒した者: …」 */
 export function slayGroupText(L: Locale, recs: readonly ObsSlay[]): string {
   if (!recs.length) return '';
-  const of = recs[0].of;
-  const count = t(L, `（倒した記録 ${of} 件）`, ` (${of} recorded kill${of > 1 ? 's' : ''})`);
-  return recs.map((r) => {
-    const label = r.first && r.least && of > 1 ? t(L, '先に倒した者（いちばん少ない被害でもある）', 'first to slay it (also the least damage taken)')
-      : r.first ? t(L, '先に倒した者', 'first to slay it') : t(L, 'いちばん少ない被害で倒した者', 'slew it taking the least damage');
-    return `${label}${r.first ? count : ''}: ${r.text}`;
-  }).join(t(L, '／', ' / '));
+  return recs.map((r) => `${slayLabel(L, r)}: ${r.text}`).join(t(L, '／', ' / '));
+}
+
+/**
+ * 退いた後のキャンプの並べ（S5 §47.4 の 2）: 自分の挑戦の行と、その下に先に倒した者の記録の行（シーズンのランで、記録があれば。最初の 1 件といちばん少ない被害の 1 件）
+ */
+export function wardenAttemptCompare(L: Locale, catalog: Catalog, view: PlayerView, no: number, s: SeasonSlayFacts): { depth: number; warden: string; attempt: ObsSlayAttempt; records: ObsSlay[]; lines: string[] } {
+  const warden = guardianDisplayName(L, { name: s.warden });
+  const attempt = slayAttemptObs(L, catalog, s);
+  const records = view.season ? slaysAt(L, catalog, view, s.depth) : [];
+  const head = t(L, `大守護者「${warden}」（地下${s.depth}階）への遠征 ${no} の挑戦（倒さずに帰った）`, `Your attempt on the warden "${warden}" (depth ${s.depth}) in expedition ${no} (came back without slaying it)`);
+  // 記録が無い（だれも倒していない・シーズンでないラン）ときは、自分の挑戦の行だけ
+  const lines = [`${head}: ${attempt.text}`, ...records.map((r) => `  ${slayLabel(L, r)}: ${r.text}`)];
+  return { depth: s.depth, warden, attempt, records, lines };
 }
 
 /** 討伐の記録（S4）: その深さの記録（PlayerView の season.slays から。最初の 1 件が先） */
@@ -1767,7 +1863,11 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
     };
     camp = {
       ...(view.camp.milestone ? { milestone: milestoneObs(L, catalog, view.camp.milestone, view.milestonesCleared ?? [], view.wardenIntel?.[String(view.camp.milestone.depth)], view) } : {}),
-      ...(opts.campCompare && view.status === 'at_camp' ? { compare: { no: opts.campCompare.no, lines: opts.campCompare.lines.slice(0, 2), ...(opts.campCompare.compare ?? {}) } } : {}),
+      ...(opts.campCompare && view.status === 'at_camp' ? { compare: {
+        no: opts.campCompare.no, lines: opts.campCompare.lines.slice(0, 2), ...(opts.campCompare.compare ?? {}),
+        // 倒さずに帰った節目の大守護者への挑戦と、先に倒した者の記録（S5 §47.4 の 2）
+        ...(opts.campCompare.wardens?.length ? { wardens: opts.campCompare.wardens.map((s) => wardenAttemptCompare(L, catalog, view, opts.campCompare!.no, s)) } : {}),
+      } } : {}),
       ...(opts.versionNote && view.status === 'at_camp' ? { version_note: opts.versionNote } : {}),
       ...(opts.records && view.status === 'at_camp' ? { records: { line: opts.records.line, ...(opts.records.featsNew?.length ? { feats_new: [...opts.records.featsNew] } : {}) } } : {}),
       // 記録庫に納めた欠片の数（V3-3a §35.7）。討伐の記録（S4 §35.5。シーズンのランだけ）も節目ごとに
@@ -2214,7 +2314,7 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
     : `use_stairs (${x.onStairs === 'down' ? t(L, '降りる', 'descend') : t(L, '上る', 'ascend')}${guardWatch}${x.mineCount > 0 ? t(L, `・投げた物が ${x.mineCount} 個、この階の床に残っている`, `; ${x.mineCount} of your thrown items are still on this floor`) : ''})`);
   if (x.itemsHere) out.push(x.relicHere ? `pickup (${t(L, '遺物を拾うと階が目覚める: 眠っている敵がすべて起き、遺物の場所へ向かう', 'picking up the relic wakes the floor: every sleeping enemy wakes and heads for it')})` : 'pickup');
   if (x.mineCount > 0 && !adjAwake.length) out.push(`collect (${t(L, `自分が投げた物 ${x.mineCount} 個を回収`, `pick up ${x.mineCount} thrown items`)})`);
-  if (x.collectable > 0 && !adjAwake.length) out.push(`collect what:items (${t(L, `見えている・記憶したアイテム ${x.collectable} 個を拾って回る（${COLLECT_WITHIN} 歩以内。遺物は除く）`, `pick up ${x.collectable} known items (within ${COLLECT_WITHIN} steps; not the relic)`)})`);
+  if (x.collectable > 0 && !adjAwake.length) out.push(`collect what:items (${t(L, `見えている・記憶したアイテム ${x.collectable} 個を拾って回る（数は、いま居るマスから ${COLLECT_WITHIN} 歩以内の品。1 つ拾うと、そこから次の品までを数え直して続ける。遺物は除く）`, `pick up ${x.collectable} known items (counting those within ${COLLECT_WITHIN} steps of where you stand; after each pickup it counts again from there; not the relic)`)})`);
   const throwGroups: { key: string; slots: string[]; targets: ObsMonster[] }[] = [];
   const lifelineLines: string[] = [];
   /** 綱の確定（協力プレイでは、全員が戻ったときに確定し、共有の分はそのときの値。V4-1g G4） */
@@ -2371,6 +2471,8 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
     if (obs.expedition?.result) lines.push(obs.expedition.result.text);
     // 直前の遠征の比較（1 行。目標の宣言は V3-8 §53.5 で外した）
     if (obs.camp?.compare?.lines.length) lines.push(obs.camp.compare.lines[0]);
+    // 倒さずに帰った節目の大守護者への挑戦と、先に倒した者の記録（S5 §47.4 の 2。その遠征の後のキャンプだけ）
+    for (const x of obs.camp?.compare?.wardens ?? []) lines.push(...x.lines);
     lines.push(t(L, `確定済み ${s.score.banked} 点・達成した遠征 ${s.score.expeditions_completed}`, `Banked ${s.score.banked}, expeditions completed ${s.score.expeditions_completed}`));
     lines.push(boonsText(L, s.boons ?? []));
     if (obs.camp?.milestone) lines.push(obs.camp.milestone.text);
