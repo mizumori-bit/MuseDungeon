@@ -84,16 +84,14 @@ describe('V4-1a collectable items (§12.1)', () => {
         if (o.status !== 'your_turn' || !view.floor || o.visible.monsters.some((m) => m.dist <= 1 && m.awareness !== 'asleep' && !m.fleeing)) return res;
         checked++;
         const has = o.valid_actions.some((v) => v.startsWith('collect what:items'));
-        expect(has).toBe(o.navigation.collectable.count > 0);
         expect(o.navigation.collectable.ids.length).toBe(o.navigation.collectable.count);
-        if (has) {
-          shown++;
-          const d0 = macroNext(macroStart(view, { type: 'collect', what: 'items' }, catalog), view, catalog, []);
-          // 既知の食い違い（S2b §23.2 で見つけた。まだ直していない）: 観測の collectable は遠回りの無い道で 15 歩以内を数え、マクロは動かない敵を避ける遠回りの道で 15 歩を超えると collect_far で止まる。
-          // その形だけは数えて通す（ほかの止まり方は今までどおり落とす）
-          if ('stop' in d0 && d0.stop === 'collect_far') { farMismatch++; return res; }
-          expect('stop' in d0 ? d0.stop : 'go').toBe('go');
-        } else if (pickableItems(view, catalog).length > 0) farOnly++;
+        const d0 = macroNext(macroStart(view, { type: 'collect', what: 'items' }, catalog), view, catalog, []);
+        // S6 §49.6 の 2: 行は、命令が最初の一歩で断らないときだけ出す（断る判定と同じ macroProbe）。S2b §23.2 の食い違い（観測は遠回りの無い道で
+        // 15 歩以内を数え、マクロは遠回りの道で 15 歩を超えると collect_far で止まる）でも、行は出ない
+        expect(has).toBe(o.navigation.collectable.count > 0 && !('stop' in d0));
+        if (has) shown++;
+        else if (o.navigation.collectable.count > 0) farMismatch++;
+        else if (pickableItems(view, catalog).length > 0) farOnly++;
         return res;
       };
       await playWithPort(r.port, { kind: 'greedy', seed: `v41a-bot-${i}`, maxActs: 250 });
@@ -102,7 +100,7 @@ describe('V4-1a collectable items (§12.1)', () => {
     expect(checked).toBeGreaterThan(100);
     expect(shown).toBeGreaterThan(0);
     expect(farOnly).toBeGreaterThanOrEqual(0);
-    // 既知の食い違いは、まれであること（このテストの bot のランで見つかった。直すまでの歯止め）
+    // 数えた品があっても行を出さなかった手番（断られる形。S6 で行を出さなくした）は、まれであること
     expect(farMismatch).toBeLessThanOrEqual(2);
   }, 120000);
 });

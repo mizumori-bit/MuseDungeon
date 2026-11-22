@@ -95,6 +95,8 @@ export interface CatalogAbility {
   handler: string;
   /** 使うと自分の HP が最大 HP のこの割合（%）だけ回復する（効果の定義から。V4-1c §16.2） */
   heal?: { pct: number };
+  /** 動くマスの数（身をかわす: その方向へこのマス数まで動く。効果の定義から。S6 §49.6 の 4） */
+  steps?: number;
 }
 
 export interface CatalogClass {

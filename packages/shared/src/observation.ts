@@ -4,7 +4,9 @@ import type { Catalog, CatalogEquipStats } from './catalog';
 import { abilityStatus, accBonuses, curseUnknown, isCursedItem, perkChoice, shortId, weaponReach } from './build';
 import { armorWithStatuses, boonHookSum, haulTotal, isMilestoneOf, nameOf, nextCampOf, nextOverreach, offerGap, offerWardenExtra, overreachPoints, payoutOf, regenInterval, regenStep, restCapHp, stairsSealed } from './catalog';
 import { floorTraitsText, guardianDisplayName, multText, objectiveText, offerText, partsText, progressText, resultText } from './expedition';
-import { COLLECT_WITHIN, collectTargets, isStationary, macroProbe, pickableItems, sameOrWorseEquip, worseEquip } from './macro';
+import { COLLECT_WITHIN, collectTargets, isStationary, macroProbe, macroStopError, pickableItems, sameOrWorseEquip, worseEquip } from './macro';
+import type { MacroStop } from './macro';
+import type { Command } from './commands';
 import { attacksPerTurn, avgHitsOf, chaseAttacks, fightThreats, memoryOf, monsterSpeedOf, selfSpeed, threatEstimate } from './danger';
 import type { PerceivedEvent } from './filter';
 import { lastWithoutXp } from './filter';
@@ -64,6 +66,8 @@ export interface ObsMonster {
   statuses: string[];
   /** その種族から受けた最大の一撃（会心を見ていれば会心の値）。記録が無ければ null */
   worst_hit: number | null;
+  /** 会心でない最大の一撃（S6 §49.6 の 10。worst_hit が会心の値で、会心でない一撃の記録もあるときだけ） */
+  worst_plain_hit?: number;
   /** 速さ: 自分の今の速さとの比較（見れば分かる。V3-2R2 §18.2） */
   speed: 'slow' | 'normal' | 'fast';
   /** 自分の速さに対する倍率（速い・遅いときだけ。0.8 なら、あなたの 1 手に 0.8 手。V3-7a 後の評価） */
@@ -845,7 +849,7 @@ export interface ChaseEstimate {
 /** 階段まで steps 歩く間の最悪の被害（V3-4b §28.5）: 敵ごとに「歩く間の攻撃回数 × 受けた最大の一撃」の合計 */
 export function chaseEstimate(view: PlayerView, catalog: Catalog, hunters: readonly ObsMonster[], steps: number): ChaseEstimate {
   let worst = 0, catchers = 0, shooters = 0;
-  const per: { w: number; a: number }[] = [];
+  const per: { w: number; p: number; a: number }[] = [];
   for (const m of hunters) {
     const e = view.entities.find((x) => x.id === m.id);
     if (!e) continue;
@@ -857,13 +861,15 @@ export function chaseEstimate(view: PlayerView, catalog: Catalog, hunters: reado
     const mem = memoryOf(view, e);
     if (mem && mem.maxDamageToYou > 0) {
       const w = hits * mem.maxDamageToYou;
+      // 会心でない最大（S6 §49.6 の 10。fight の見込みと同じ: S1d §17.2）
+      const p = hits * (mem.maxPlainToYou && mem.maxPlainToYou > 0 ? mem.maxPlainToYou : mem.maxDamageToYou);
       worst += w;
-      per.push({ w, a: Math.min(w, avgHitsOf(view, e, hits) ?? w) });
+      per.push({ w, p, a: Math.min(p, avgHitsOf(view, e, hits) ?? p) });
     }
   }
-  // 見込み（S1c §14.4 の 1。fight の見込みと同じ考え）: いちばん重い 1 体は最悪、残りは平均の被害
-  per.sort((a, b) => b.w - a.w);
-  const expected = per.length ? per[0].w + per.slice(1).reduce((s, x) => s + x.a, 0) : 0;
+  // 見込み（S1c §14.4 の 1・S6: fight の見込みと同じ）: いちばん重い 1 体は会心でない最大の一撃、残りは平均の被害。最悪は全員が最大の一撃（会心を含む）
+  per.sort((a, b) => b.p - a.p);
+  const expected = per.length ? per[0].p + per.slice(1).reduce((s, x) => s + x.a, 0) : 0;
   return { recordedWorst: worst, worst, expected, catchers, shooters };
 }
 
@@ -1633,6 +1639,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
         hp_state: e.hp ?? 'healthy', awareness: e.awareness ?? 'unaware', threat: threatOf(view, e),
         statuses: (e.statuses ?? []).map((s) => nameOf(catalog.statuses[s]?.name, L, s)),
         worst_hit: mem && mem.maxDamageToYou > 0 ? mem.maxDamageToYou : null,
+        ...(mem && mem.maxPlainToYou && mem.maxPlainToYou > 0 && mem.maxPlainToYou < mem.maxDamageToYou ? { worst_plain_hit: mem.maxPlainToYou } : {}),
         worst_turn: mem && mem.maxDamageToYou > 0 ? mem.maxDamageToYou * attacksPerTurn(view, catalog, e) : null,
         speed: sp === null || sp === mySpeed ? 'normal' : sp > mySpeed ? 'fast' : 'slow',
         ...(sp !== null && sp !== mySpeed && mySpeed > 0 ? { speed_ratio: Math.round((sp * 10) / mySpeed) / 10 } : {}),
@@ -2465,14 +2472,16 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
       ? t(L, `階段まで ${n} 歩。追われたままなら最悪の被害は不明（記録のない敵がいる。HP ${hpNow}）`, `${n} steps to the stairs. If they keep chasing you, worst damage unknown (an enemy has no record; HP ${hpNow})`)
       : (() => {
         const c = x.chaseOf(n);
-        // いま隣にいる近接の敵は、離れる手番に 1 回殴りうる（最悪の被害に入れてある。「追いつけるのは 0 体」を安全と読まれた。S1b §12.4 の 8）
+        // いま隣にいる近接の敵は、離れる前に相手の手番が来れば 1 回殴りうる（最悪の被害に入れてある。engine に離れぎわの攻撃の規則は無い: S6 §49.6 の 3。「追いつけるのは 0 体」を安全と読まれた。S1b §12.4 の 8）
         const adj = x.huntingReach.filter((m) => m.dist <= 1 && !m.traits.includes('ranged')).length;
         // 見込みと最悪を並べる（S1c §14.4 の 1。見込みは、いちばん重い 1 体を最大の一撃、残りを平均の被害で数える）
         const both = c.expected < c.worst ? t(L, `被害の見込み ${c.expected}・最悪 ${c.worst}`, `expected ${c.expected}, worst ${c.worst} damage`) : t(L, `最悪 ${c.worst} の被害`, `worst ${c.worst} damage`);
-        return t(L, `階段まで ${n} 歩。追われたままなら${both}（追いつけるのは ${c.catchers} 体・射撃 ${c.shooters} 体${adj ? `・いま隣の ${adj} 体が離れぎわに殴る 1 回ずつを含む` : ''}。HP ${hpNow}）`,
-          `${n} steps to the stairs. If they keep chasing you, ${both} (${c.catchers} can catch you, ${c.shooters} shooting${adj ? `; includes one hit each from the ${adj} adjacent as you step away` : ''}; HP ${hpNow})`);
+        return t(L, `階段まで ${n} 歩。追われたままなら${both}（追いつけるのは ${c.catchers} 体・射撃 ${c.shooters} 体${adj ? `・いま隣の ${adj} 体は、離れる前に相手の手番が来れば殴られる（最悪の見込みに 1 回ずつ入れてある）` : ''}。HP ${hpNow}）`,
+          `${n} steps to the stairs. If they keep chasing you, ${both} (${c.catchers} can catch you, ${c.shooters} shooting${adj ? `; the worst case includes one hit each from the ${adj} adjacent, if they act before you get away` : ''}; HP ${hpNow})`);
       })();
   };
+  // マクロの行は、命令が最初の一歩で断らないときだけ出す（S5c・S6 §49.6 の 2: 断る判定と同じ macroProbe）
+  const refused = (cmd: Command): MacroStop | null => { const d = macroProbe(view, cmd, catalog).decision; return 'stop' in d ? d.stop : null; };
   const stairsLine = (type: 'down' | 'up'): string => {
     // 最寄りの階段の上に敵がいる: travel_to はふさがれて止まる（V3-7a 後の評価: 「階段まで 1 歩」と勧めて blocked になった）
     const near = nearestStairs(type);
@@ -2482,6 +2491,10 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
     }
     const risk = stairsRisk(type);
     const sep = t(L, '・', '; ');
+    const mode = adjAwake.length ? 'flee' : x.huntingReach.length ? 'steady' : undefined;
+    // 断られる形なら、断りの理由を「不可」として出す（S6 §49.6 の 2。逃げる移動が死にうる: flee_lethal など）
+    const stop = refused({ type: 'travel', to: `stairs_${type}`, ...(mode ? { mode } : {}) });
+    if (stop) return `travel_to stairs_${type}${mode ? ` mode:${mode}` : ''} (${t(L, '不可: ', 'unavailable: ')}${macroStopError(L, stop, { type: 'travel', to: `stairs_${type}` }).message}${risk ? sep + risk : ''})`;
     if (adjAwake.length) return `travel_to stairs_${type} mode:flee${risk ? ` (${risk})` : ''}`;
     if (x.huntingReach.length) return `travel_to stairs_${type} mode:steady (${stopText}${risk ? sep + risk : ''})`;
     return `travel_to stairs_${type}`;
@@ -2490,10 +2503,11 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
   const meleeAb = x.abilities.filter((a) => { const h = abilityHandlerOf(catalog, a.id); return (h === 'strike' || h === 'cleave') && a.uses_left !== 0; });
   const abArg = meleeAb.length ? ` abilities:${meleeAb.map((a) => a.id).join(',')}` : '';
   const abNote = meleeAb.length ? t(L, `・${meleeAb.map((a) => `${a.name}${a.cooldown_left ? `(あと${a.cooldown_left})` : ''}`).join('・')}を使える手番に使う`, `, uses ${meleeAb.map((a) => `${a.name}${a.cooldown_left ? ` (in ${a.cooldown_left})` : ''}`).join(', ')} when ready`) : '';
-  for (const m of x.hostiles.filter((h) => h.dist <= 1)) out.push(`fight ${m.id}${abArg} (${m.name}・${stopText}${abNote})`);
+  const abCmd = meleeAb.length ? { abilities: meleeAb.map((a) => a.id) } : {};
+  for (const m of x.hostiles.filter((h) => h.dist <= 1)) if (!refused({ type: 'fight', target: m.id, ...abCmd })) out.push(`fight ${m.id}${abArg} (${m.name}・${stopText}${abNote})`);
   // 群れ: 追跡中の敵が 2 体以上なら、倒したら次の相手へ続ける形（V3-4b §28.4）
   const pack = x.hostiles.filter((h) => h.awareness === 'hunting' && !h.fleeing).sort((a, b) => a.dist - b.dist);
-  if (pack.length >= 2) out.push(`fight ${pack[0].id} until:clear${abArg} (${t(L, `追跡中の ${pack.length} 体と決着まで: 倒したら次の相手へ・${stopText}`, `settle all ${pack.length} hunters: next one after each kill, ${stopText}`)}${abNote})`);
+  if (pack.length >= 2 && !refused({ type: 'fight', target: pack[0].id, until: 'clear', ...abCmd })) out.push(`fight ${pack[0].id} until:clear${abArg} (${t(L, `追跡中の ${pack.length} 体と決着まで: 倒したら次の相手へ・${stopText}`, `settle all ${pack.length} hunters: next one after each kill, ${stopText}`)}${abNote})`);
   out.unshift(...perkLines);
   // 長柄: 直線で 2 マス先の敵を突ける（間のマスが通れて誰もいない。V3-4 §4.4）
   if (weaponReach(view, catalog) >= 2) {
@@ -2527,7 +2541,10 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
       if (near) {
         // 離れる向きはすべて 1 行に（V3-3 後の AI 評価: 2 つだけ出していたので、ほかの向きは使えないと読めた）
         const away = x.passable_dirs.filter((d) => { const v = DIR_VEC[d]; return cheb({ x: pos.x + v[0], y: pos.y + v[1] }, near.pos) > 1; });
-        if (away.length) out.push(`use_ability ${a.id} target:${away.length > 1 ? `<${away.join('|')}>` : away[0]} (${a.name}: ${desc})`);
+        // 動くマスの数を先に（S6 §49.6 の 4: 1 歩のつもりで、階段を通り越した。1 マス先が階段でも止まらない）
+        const steps = def?.steps;
+        const stepNote = steps && steps > 1 ? t(L, `${steps} マス動く（壁・閉じた扉・ほかの者の手前まで。1 マス先が階段でも止まらない）。`, `moves ${steps} cells (up to a wall, closed door or someone in the way; it does not stop on stairs one cell away). `) : '';
+        if (away.length) out.push(`use_ability ${a.id} target:${away.length > 1 ? `<${away.join('|')}>` : away[0]} (${a.name}: ${stepNote}${desc})`);
       }
     } else if (def && a.target === 'none') {
       if (def.handler === 'cleave') { if (adjFoes.length) out.push(`use_ability ${a.id} (${t(L, `${a.name}: 隣の ${adjFoes.length} 体`, `${a.name}: ${adjFoes.length} adjacent`)})`); }
@@ -2537,14 +2554,17 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
   // 迎え撃つ: 追跡中で届かない相手は、隣に来るまで待って戦う（最大 10 手番）。射撃する相手は待ち受けない（V3-2R3a §22.2）
   if (!adjAwake.length) {
     const comer = x.huntingReach.filter((m) => m.dist > 1 && !m.traits.includes('stationary') && !m.traits.includes('ranged'))[0];
-    if (comer) out.push(`fight ${comer.id}${abArg} (${t(L, `${comer.name} を迎え撃つ: 隣に来るまで待つ・${stopText}`, `meet ${comer.name}: waits until it is adjacent, ${stopText}`)}${abNote})`);
+    if (comer && !refused({ type: 'fight', target: comer.id, ...abCmd })) out.push(`fight ${comer.id}${abArg} (${t(L, `${comer.name} を迎え撃つ: 隣に来るまで待つ・${stopText}`, `meet ${comer.name}: waits until it is adjacent, ${stopText}`)}${abNote})`);
     const shooter = x.huntingReach.filter((m) => m.dist > 1 && m.traits.includes('ranged'))[0];
     // 寄られると下がるのは、すぐ近く（数マス以内）に寄られたときだけ。それより遠い間と、下がれないときは撃ってくる（S3a §27.6 の 5。ai の ranged_kiter）
-    if (shooter) out.push(`travel_to ${shooter.id} (${t(L, `${shooter.name}: 近づく（すぐ近くまで寄られると下がり、下がる間は撃たない。それより遠い間と、下がれないときは撃ってくる）／視線を切る`, `${shooter.name}: close in (it backs off once you are right next to it and does not shoot while backing off; it shoots while you are farther away or when it cannot back off) / break line of sight`)})`);
+    if (shooter && !refused({ type: 'travel', to: shooter.id })) out.push(`travel_to ${shooter.id} (${t(L, `${shooter.name}: 近づく（すぐ近くまで寄られると下がり、下がる間は撃たない。それより遠い間と、下がれないときは撃ってくる）／視線を切る`, `${shooter.name}: close in (it backs off once you are right next to it and does not shoot while backing off; it shoots while you are farther away or when it cannot back off) / break line of sight`)})`);
   }
   if (!adjAwake.length) {
-    if (x.frontiers > 0 || x.pickables > 0) out.push(x.pickables > 0 ? `explore (${t(L, `拾えるアイテム ${x.pickables} 個も拾う`, `also picks up ${x.pickables} items`)})` : 'explore');
-    else out.push(`explore (${t(L, '不可: 探索済み・拾う物なし', 'unavailable: explored, nothing to pick up')})`);
+    const exStop = x.frontiers > 0 || x.pickables > 0 ? refused({ type: 'explore' }) : 'explored';
+    if (!exStop) out.push(x.pickables > 0 ? `explore (${t(L, `拾えるアイテム ${x.pickables} 個も拾う`, `also picks up ${x.pickables} items`)})` : 'explore');
+    else if (exStop === 'explored') out.push(`explore (${t(L, '不可: 探索済み・拾う物なし', 'unavailable: explored, nothing to pick up')})`);
+    // ほかの理由で断られる（S6 §49.6 の 2）: 理由を「不可」として
+    else out.push(`explore (${t(L, '不可: ', 'unavailable: ')}${macroStopError(L, exStop, { type: 'explore' }).message})`);
     // 方角を優先する探索は、命令が最初の一歩で断らないときだけ出す（S5c: 断る判定と同じ macroProbe。前は「境界がある」だけを見ていて、
     // その方角に行ける境界が無いと toward_exhausted で断られた）
     const towardOk = (toward: 'draft' | 'sense') => !('stop' in macroProbe(view, { type: 'explore', toward }, catalog).decision);
@@ -2566,8 +2586,8 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
     ? `use_stairs (${t(L, '不可: 下り階段は封じられている。この階の大守護者を倒すまで降りられない', 'unavailable: the stairs down are sealed until this floor\'s warden falls')})`
     : `use_stairs (${x.onStairs === 'down' ? t(L, '降りる', 'descend') : t(L, '上る', 'ascend')}${guardWatch}${x.mineCount > 0 ? t(L, `・投げた物が ${x.mineCount} 個、この階の床に残っている`, `; ${x.mineCount} of your thrown items are still on this floor`) : ''})`);
   if (x.itemsHere) out.push(x.relicHere ? `pickup (${t(L, '遺物を拾うと階が目覚める: 眠っている敵がすべて起き、遺物の場所へ向かう', 'picking up the relic wakes the floor: every sleeping enemy wakes and heads for it')})` : 'pickup');
-  if (x.mineCount > 0 && !adjAwake.length) out.push(`collect (${t(L, `自分が投げた物 ${x.mineCount} 個を回収`, `pick up ${x.mineCount} thrown items`)})`);
-  if (x.collectable > 0 && !adjAwake.length) out.push(`collect what:items (${t(L, `見えている・記憶したアイテム ${x.collectable} 個を拾って回る（数は、いま居るマスから ${COLLECT_WITHIN} 歩以内の品。1 つ拾うと、そこから次の品までを数え直して続ける。遺物は除く）`, `pick up ${x.collectable} known items (counting those within ${COLLECT_WITHIN} steps of where you stand; after each pickup it counts again from there; not the relic)`)})`);
+  if (x.mineCount > 0 && !adjAwake.length && !refused({ type: 'collect' })) out.push(`collect (${t(L, `自分が投げた物 ${x.mineCount} 個を回収`, `pick up ${x.mineCount} thrown items`)})`);
+  if (x.collectable > 0 && !adjAwake.length && !refused({ type: 'collect', what: 'items' })) out.push(`collect what:items (${t(L, `見えている・記憶したアイテム ${x.collectable} 個を拾って回る（数は、いま居るマスから ${COLLECT_WITHIN} 歩以内の品。1 つ拾うと、そこから次の品までを数え直して続ける。遺物は除く）`, `pick up ${x.collectable} known items (counting those within ${COLLECT_WITHIN} steps of where you stand; after each pickup it counts again from there; not the relic)`)})`);
   const throwGroups: { key: string; slots: string[]; targets: ObsMonster[] }[] = [];
   const lifelineLines: string[] = [];
   /** 綱の確定（協力プレイでは、全員が戻ったときに確定し、共有の分はそのときの値。V4-1g G4） */
@@ -2633,6 +2653,9 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
     // 投げられる種類がほかにもあれば並べる（前の品が尽きたら次へ。V3-3c §44.6）
     const kinds = [...new Set([withKind, ...view.inventory.filter((i) => !i.equipped && i.kind && catalog.items[i.kind]?.category === 'throwing').map((i) => i.kind)].filter((k): k is string => !!k))].map(shortId);
     const withArg = withKind && kinds.length > 1 ? `[${kinds.join(',')}]` : withKind ? shortId(withKind) : g.slots[0];
+    // 断られる形なら出さない（S6 §49.6 の 2）
+    const withCmd = withKind && kinds.length > 1 ? { with: kinds[0], alsoWith: kinds.slice(1) } : { with: withKind ? shortId(withKind) : g.slots[0] };
+    if (refused({ type: 'fight', target: far.id, ...withCmd, ...(aimed ? { abilities: [aimed.id] } : {}) })) continue;
     out.push(`fight ${far.id} with:${withArg}${aimed ? ` abilities:${aimed.id}` : ''} (${t(L, `投擲で決着まで・${stopText}`, `throw until it falls, ${stopText}`)}${kinds.length > 1 ? t(L, '・前の品が尽きたら次の品', ', next item when one runs out') : ''}${aimed ? t(L, `・${aimed.name}を使える手番に使う`, `, uses ${aimed.name} when ready`) : ''})`);
     break;
   }
@@ -2819,9 +2842,11 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
       const outOf = m.shots.filter((x) => x.state === 'out_of_range').map((x) => x.slot);
       // あなたの投擲の射線と射程（S3a §27.6 の 5: 「射程外」を相手の射程と読まれた。相手の射撃は、相手の射程で届く）
       const shot = brief ? '' : m.shot === 'blocked' ? t(L, '  あなたの投擲の射線:通らない', ' your throw: line blocked') : outOf.length && outOf.length === m.shots.length ? t(L, '  あなたの投擲の射程外', ' out of your throwing range') : outOf.length ? t(L, `  あなたの投擲の射程外:${outOf.join(',')}`, ` out of your throwing range:${outOf.join(',')}`) : '';
-      const threat = m.threat === null ? (m.first_seen ? t(L, '不明（初見）', 'unknown (first sighting)') : t(L, '不明（被弾の記録なし）', 'unknown (never hit by it)')) : String(m.threat);
+      const threat = m.threat === null ? (m.first_seen ? t(L, '不明（初見）', 'unknown (first sighting)') : t(L, '不明（当てられた記録なし）', 'unknown (it has never landed a hit on you)')) : String(m.threat);
       const perTurn = m.worst_turn !== null && m.worst_turn !== m.worst_hit ? t(L, `（1 手に最悪 ${m.worst_turn}）`, ` (worst ${m.worst_turn}/turn)`) : '';
-      const worst = m.worst_hit !== null ? t(L, `  最大の一撃:${m.worst_hit}${perTurn}`, ` worst_hit:${m.worst_hit}${perTurn}`) : '';
+      // 最大の一撃が会心の値なら、そう書き、会心でない最大を添える（S6 §49.6 の 10: 骨の射手の 1 が会心で 8 に変わって見えた）
+      const plain = m.worst_plain_hit !== undefined ? t(L, `（会心。会心でない最大 ${m.worst_plain_hit}）`, ` (a crit; worst non-crit ${m.worst_plain_hit})`) : '';
+      const worst = m.worst_hit !== null ? t(L, `  最大の一撃:${m.worst_hit}${plain}${perTurn}`, ` worst_hit:${m.worst_hit}${plain}${perTurn}`) : '';
       // 見れば分かる特徴（速さは自分との比較）と命中の記録
       const looks = [m.size === 'large' ? t(L, '大柄', 'large') : m.size === 'small' ? t(L, '小柄', 'small') : '', m.speed === 'fast' ? t(L, `速い×${m.speed_ratio ?? ''}`, `fast x${m.speed_ratio ?? ''}`) : m.speed === 'slow' ? t(L, `遅い×${m.speed_ratio ?? ''}`, `slow x${m.speed_ratio ?? ''}`) : '', ...m.traits.map((tr) => abilityName(L, tr))].filter(Boolean);
       const looksText = looks.length ? (L === 'en' ? ` [${looks.join(', ')}]` : `  [${looks.join('・')}]`) : '';
@@ -2913,8 +2938,9 @@ export function describeTarget(view: PlayerView, catalog: Catalog, target: Pos |
     if (ent) p = ent.pos;
     else {
       const r = view.memory.remembered.find((x) => x.id === target);
-      if (r) return { text: t(L, `${kindName(catalog, L, r.kind, r.appearanceId)}（最後に見た位置 ${r.pos.x},${r.pos.y}）`, `${kindName(catalog, L, r.kind, r.appearanceId)} (last seen at ${r.pos.x},${r.pos.y})`), data: { remembered: r } };
-      if (target === view.self.id) p = view.self.pos;
+      // 覚えている地物・品・罠（いま見えていない）: 座標で呼んだときと同じもの（説明・賭けの祭壇の表）を出す（S6 §49.6 の 5: 賭けの祭壇を ID で呼ぶと名前しか出なかった）
+      if (r) p = r.pos;
+      else if (target === view.self.id) p = view.self.pos;
       else return { text: t(L, 'それは見えない。', 'You cannot see that.'), data: { visible: false } };
     }
   } else p = target;

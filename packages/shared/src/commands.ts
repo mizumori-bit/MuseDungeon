@@ -225,7 +225,9 @@ export type ActionErrorCode =
   /** シーズン（S0。PROTOCOL §9）: 参加できない（理由は message）・行動予算が残っていない・終わりの時刻を過ぎた */
   | 'season_unavailable' | 'budget_exhausted' | 'season_ended'
   // マクロが 1 歩も進めないと分かったとき（手番を使わない。V3-2R §14.2）
-  | 'hostile_adjacent' | 'hostile_in_view' | 'hp_floor' | 'nothing_to_do';
+  | 'hostile_adjacent' | 'hostile_in_view' | 'hp_floor' | 'nothing_to_do'
+  /** 逃げる移動（mode: flee）が、次の 1 歩の間に届く敵の最悪の 1 手で倒れうるので始めない（S6 §49.6 の 1。hp_floor によらない） */
+  | 'flee_lethal';
 
 export interface ActionError {
   code: ActionErrorCode;

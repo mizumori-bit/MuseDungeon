@@ -6,7 +6,7 @@ import type {
 import {
   actionError, briefingLines, briefingShort, buildObservation, buildTurnBlock, campLines, changesLine, compareLines, describeInventory, describeTarget, diffChanges, progressLines, reportLines,
   cheb, compassDir, dirLabel, formatObservationText, guardianDisplayName, kindName, lastWithoutXp, MACRO_COMPLETED_STOPS, mapTextLines, memoryCombatText, memoryKey, mineCount, nameOf, nearDirs, pickableItems, progressText, renderAsciiMap, resultText, t,
-  turnLine, turnSnapshot, turnStateOf, fightThreats, riskText, threatEstimate, DIR_VEC, collectTargets, collectWhatOf, slayGroupText, slaysAt,
+  turnLine, turnSnapshot, turnStateOf, fightThreats, fleeRiskText, riskText, threatEstimate, DIR_VEC, collectTargets, collectWhatOf, itemDisplayName, slayGroupText, slaysAt,
 } from '@muse/shared';
 import type { MacroReport } from './RunSession';
 import { compareVersions, ENGINE_VERSION } from '@muse/engine';
@@ -185,6 +185,7 @@ const STOP_TEXT: Record<string, [string, string]> = {
   hostile_adjacent: ['隣に起きている敵がいる（退くなら mode: flee、戦うなら fight）', "an awake enemy is adjacent (retreat with mode: 'flee', or fight)"],
   hp_floor: ['HP が hp_floor 以下になった', 'HP fell to hp_floor or below'],
   hp_risk: ['次の手番に、最悪の 1 手で倒れうるか、見込みの被害で hp_floor を割る（被弾の前に止まった）', 'one worst turn could kill you, or the expected damage would drop you below hp_floor (stopped before being hit)'],
+  flee_lethal: ['次の 1 歩の間に、届く敵の最悪の 1 手で倒れうる（逃げる移動。hp_floor によらず止まった）', 'one worst turn from enemies in reach could kill you during the next step (flight; stopped whatever hp_floor is)'],
   first_hit: ['被弾の記録の無い相手から初めて被弾した（数字を見てから続けるかを決める）', 'first hit from a creature with no record (check the numbers before continuing)'],
   hostile_alerted: ['見えている敵が追跡に変わった', 'a visible enemy started hunting you'],
   hp_threshold: ['HP が 50%・25% の線をまたいだ', 'HP crossed the 50% / 25% line'],
@@ -576,6 +577,8 @@ export class SessionPlayerPort implements PlayerPort {
           const me = view.self.pos;
           if (at && me) outcome += ' ' + t(L, `最後に見た場所: (${at.x},${at.y})・${dirLabel(L, compassDir(me, at))}${cheb(at, me)} マス。`, `Last seen at (${at.x},${at.y}), ${dirLabel(L, compassDir(me, at))} ${cheb(at, me)}.`);
         }
+        // 逃げる移動が、死にうるので止まった（S6 §49.6 の 1）: 最悪の見込みと今の HP、取れる手
+        if (r.interruptedBy === 'flee_lethal') outcome += ' ' + fleeRiskText(this.view(), this.catalog);
         // hp_risk: 見込みと最悪の 2 つの数と、実際に使った hp_floor（S1c §14.4 の 1）。何にすれば、あと 1 回の見込みの被害まで続けられるか（V3-3a §35.6）
         if (r.interruptedBy === 'hp_risk' && cmd.type === 'fight') {
           const after = this.view();
@@ -672,6 +675,26 @@ export class SessionPlayerPort implements PlayerPort {
       const keep = new Set([...others.slice(0, 3), ...others.slice(3).filter((x) => x.type === 'died')]);
       const texts = shown.filter((x) => keep.has(x) || x.type === 'xp_gained').map((x) => x.text);
       outcome = texts.length ? texts.join(' ') : defaultOutcome(cmd, L);
+      // 同じ枠の品を外して付けた（S6 §49.6 の 8: 護符を着けると、指輪が黙って外れたと読まれた）: 外れた品と、その枠を先に出す
+      if (cmd.type === 'equip') {
+        const off = r.events.find((e) => e.type === 'item_unequipped' && (e as { actor?: string }).actor === view.self.id) as { item: string; slotName: string } | undefined;
+        const it = off ? view.inventory.find((i) => i.id === off.item) : undefined;
+        if (off && it) {
+          const name = itemDisplayName(this.catalog, L, it.kind, it.appearanceId, it.affixes);
+          const slotNote = off.slotName === 'accessory' ? t(L, '（装飾品の枠は 1 つ: 指輪と護符は同時に付けられない）', ' (one accessory slot: a ring and an amulet cannot be worn together)') : '';
+          outcome = t(L, `外れた品: ${name}${slotNote}。`, `Came off: ${name}${slotNote}.`) + ' ' + outcome;
+        }
+      }
+      // 地形が分かる品（残り頁・地図の巻物）を使った（S6 §49.6 の 9: 「使った」としか出なかった）: 分かったことを 1 文
+      if (cmd.type === 'use') {
+        const maps = r.events.filter((e) => e.type === 'knowledge_updated' && (e as { player?: string }).player === this.playerId && (e as { visible?: unknown }).visible === null) as { newlySeen?: number[]; mappedAdd?: number[] }[];
+        if (maps.length) {
+          const cells = maps.reduce((s, e) => s + Math.floor((e.newlySeen?.length ?? 0) / 2), 0);
+          outcome += ' ' + (cells
+            ? t(L, `地形が地図に載った（新しく ${cells} マス。目で見たのではないので、敵と品はまだ分からない）。`, `The terrain went onto your map (${cells} new cells; you have not seen them, so enemies and items there are still unknown).`)
+            : t(L, '新しく地図に載った地形は無かった（もう知っている範囲だった）。', 'Nothing new went onto your map (you already knew that area).'));
+        }
+      }
       // 鑑定の巻物を対象なしで使い、ほかにも鑑定できる品があった: 対象の選び方を添える（S1b §12.4 の 8: ねらいと違う品に使った）
       if (cmd.type === 'use' && !cmd.targetSlot) {
         const used = before.inventory.find((i) => i.slot === cmd.slot);

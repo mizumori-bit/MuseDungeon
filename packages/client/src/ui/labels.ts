@@ -92,10 +92,10 @@ export function lifelineEffectText(turns: number | undefined): string {
     : tr(`${n} 手番動けず（その間も攻撃は受ける）、その後キャンプへ戻る・達成した遠征には数えない・次の遠征はこの遠征を始めた階段から`, `helpless for ${n} turns (still attacked), then back to camp; not counted as a completed expedition; the next expedition starts where this one began`);
 }
 
-/** 脅威の表示。記録が無い種族は、本当に初めて見たなら「不明（初見）」、そうでなければ「不明（被弾の記録なし）」（V3-2R2 §18.2） */
+/** 脅威の表示。記録が無い種族は、本当に初めて見たなら「不明（初見）」、そうでなければ「不明（当てられた記録なし）」（V3-2R2 §18.2） */
 export function threatText(threat: ObsMonster['threat'], firstSeen?: boolean): string {
   if (threat !== null) return tr(`脅威 ${threat}/5`, `threat ${threat}/5`);
-  return firstSeen ? tr('脅威: 不明（初見）', 'threat: unknown (first sighting)') : tr('脅威: 不明（被弾の記録なし）', 'threat: unknown (never hit by it)');
+  return firstSeen ? tr('脅威: 不明（初見）', 'threat: unknown (first sighting)') : tr('脅威: 不明（当てられた記録なし）', 'threat: unknown (it has never landed a hit on you)');
 }
 
 const EXPLORED_LABEL: Record<number, [string, string]> = { 1: ['約 1/4', 'about 1/4'], 2: ['約半分', 'about half'], 3: ['約 3/4', 'about 3/4'], 4: ['ほぼ全て', 'nearly all'] };

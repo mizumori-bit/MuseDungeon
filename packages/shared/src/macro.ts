@@ -60,6 +60,8 @@ export type MacroStop =
   | 'toward_exhausted'
   // steady の移動マクロで、始めてからの被害の合計が最大 HP の 4 分の 1 を超えた（V3-8a §56.1）
   | 'damage_taken'
+  // flee の移動マクロで、次の 1 歩の間に、届く敵の最悪の 1 手で倒れうる（S6 §49.6 の 1。hp_floor によらない）
+  | 'flee_lethal'
   // 移動マクロが同じ 2 マスを往復している（見えるものが変わるたびに最短の道が入れ替わった。V3-3 後の bot の計測）
   | 'no_progress';
 
@@ -756,7 +758,7 @@ function intentKeys(view: PlayerView): string[] {
 }
 
 /** 足元の目的の品を拾ってから止まる、の対象にしない止まり方（V3-8a §56.1: HP・被弾の前の停止・予備動作と、もう動けないもの） */
-const NO_PICK_STOPS: ReadonlySet<MacroStop> = new Set<MacroStop>(['hp_floor', 'hp_risk', 'intent', 'run_ended', 'dead', 'left_board', 'time_up', 'not_your_turn', 'floor_changed', 'error']);
+const NO_PICK_STOPS: ReadonlySet<MacroStop> = new Set<MacroStop>(['hp_floor', 'hp_risk', 'flee_lethal', 'intent', 'run_ended', 'dead', 'left_board', 'time_up', 'not_your_turn', 'floor_changed', 'error']);
 
 /**
  * マクロの最初の一歩の見込み（S5c）: RunSession が手番を使わずに断るか（最初の一歩で止まるか）の判定と、valid_actions がその行を出すかの判定は、
@@ -906,6 +908,10 @@ function macroStep(state: MacroState, view: PlayerView, catalog: Catalog, events
   if ((kind === 'fight' || mode === 'steady' || mode === 'flee') && kind !== 'rest' && hp <= state.hpFloor) return { stop: 'hp_floor' };
 
   const hostiles = view.entities.filter((e) => e.cat === 'monster');
+  // 逃げる移動（mode: flee）: 次の 1 歩の間に、届く追跡中の敵（隣・射撃）の最悪の 1 手で倒れうるなら、hp_floor に関係なく止まる（S6 §49.6 の 1）。
+  // 判定は fight の「死にうる」と同じ（threatEstimate・fightThreats・fightRiskStop の lethal。S1d §17.2）。綱・薬・向きを変えるかは、プレイヤーが決める
+  if (mode === 'flee' && (kind === 'travel' || kind === 'explore' || kind === 'collect')
+    && fightRiskStop(hp, 0, threatEstimate(view, catalog, fightThreats(catalog, hostiles, pos))) === 'lethal') return { stop: 'flee_lethal' };
   // じゃまをしている敵（V4-1a §12.3）: 見えている敵だけ（view.entities は視界の判定を通った者だけ）
   const blockersOf = (hs: readonly EntityView[]) => hs.map((h) => ({ id: h.id, name: kindName(catalog, view.locale, h.kind) }));
   // この呼び出しの間に眠っているのを見た、いま見えていない敵も（S1b §12.4 の 3。道を引くときにふさいでいるものとした敵）
@@ -1441,6 +1447,9 @@ function macroStopErrorBase(L: Locale, stop: MacroStop, cmd: Command, dir?: Dir)
     case 'hp_risk':
       return actionError('hp_floor', t(L, '被弾の前の判定で止まった（次の手番に、届く敵の最悪の 1 手で倒れうるか、見込みの被害で hp_floor を割る）。', 'Stopped before being hit (one worst turn from enemies in reach could kill you, or the expected damage would drop you below hp_floor).'),
         t(L, 'それでも戦うなら hp_floor を下げる。退くなら mode: flee か帰還の綱。', 'Lower hp_floor to fight anyway, or retreat (mode: flee or the lifeline).'));
+    case 'flee_lethal':
+      return actionError('flee_lethal', t(L, '次の 1 歩の間に、届く敵の最悪の 1 手で倒れうるので、逃げる移動を始めない（hp_floor によらない）。', 'One worst turn from enemies in reach could kill you during the next step, so the flight does not start (whatever hp_floor is).'),
+        t(L, '取れる手: 帰還の綱（use_item）・回復の薬・向きを変える（move で 1 歩ずつ。別の道・視線を切る）。', 'Options: the lifeline (use_item), a healing potion, or another direction (step with move: another way, or break line of sight).'));
     case 'blocked':
       return actionError('blocked', t(L, '既知の経路が敵にふさがれていて進めない（マクロは攻撃しない）。', 'Your known route is blocked by a monster (macros never attack).'), t(L, 'fight で倒すか、別の経路を選ぶ。', 'Use fight, or choose another route.'));
     case 'unreachable':

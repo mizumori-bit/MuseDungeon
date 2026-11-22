@@ -153,3 +153,24 @@ export function riskText(view: PlayerView, catalog: Catalog, hpFloor: number): s
   return ja ? `${why}${head}（HP ${hp}・hp_floor ${hpFloor}。見込みは、いちばん重い 1 体を記録の会心でない最大の一撃、残りを記録の平均の被害で数える。最悪は全員が最大の一撃・会心を含む）`
     : `${why}${head} (HP ${hp}, hp_floor ${hpFloor}; expected counts the heaviest enemy at its recorded worst non-critical hit and the rest at their recorded average; worst has everyone at their worst hit, criticals included)`;
 }
+
+/**
+ * 逃げる移動（mode: flee）が死にうるので止まった・断ったときの数（S6 §49.6 の 1）: 次の 1 歩の間の、届く追跡中の敵（隣・射撃）の最悪の 1 手
+ * （fight の「死にうる」と同じ数: 全員が記録の最大の一撃・会心を含む）と今の HP。withOptions なら取れる手（綱・回復の薬・向きを変える）も
+ */
+export function fleeRiskText(view: PlayerView, catalog: Catalog, withOptions = true): string {
+  const ja = view.locale !== 'en';
+  const pos = view.self.pos;
+  const est = pos ? threatEstimate(view, catalog, fightThreats(catalog, view.entities.filter((e) => e.cat === 'monster'), pos)) : { expected: 0, worst: 0, unrecorded: 0 };
+  const hp = view.self.stats.hp;
+  const head = ja ? `次の 1 歩の間の最悪の見込み ${est.worst}（届く追跡中の敵の、記録の最大の一撃。会心を含む）・いまの HP ${hp}。` : `Worst case during the next step ${est.worst} (the recorded biggest hit of each hunter in reach, crits included); HP now ${hp}.`;
+  if (!withOptions) return head;
+  const lifeline = view.inventory.find((i) => !!i.kind && !!catalog.items[i.kind]?.bound);
+  const potion = view.inventory.find((i) => i.kind === 'core:potion_healing');
+  const opts = [
+    lifeline ? (ja ? `帰還の綱（use_item { slot: '${lifeline.slot}' }）` : `the lifeline (use_item { slot: '${lifeline.slot}' })`) : '',
+    potion ? (ja ? `回復の薬（use_item { slot: '${potion.slot}' }）` : `a healing potion (use_item { slot: '${potion.slot}' })`) : '',
+    ja ? '向きを変える（move で 1 歩ずつ。別の道・視線を切る）' : 'another direction (step with move: another way, or break line of sight)',
+  ].filter(Boolean);
+  return ja ? `${head}取れる手: ${opts.join('・')}。` : `${head} Options: ${opts.join(', ')}.`;
+}

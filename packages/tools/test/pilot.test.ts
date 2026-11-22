@@ -1143,7 +1143,9 @@ describe('V4-1g: pilot の危ないときの順序・協力プレイ・記録・
 
   it('協力プレイで迷宮にいるときに安全装置に達したら、帰ってから終える（closing を知らせ、safety は「帰ってから終えた」）', async () => {
     const h = await harness('coop', { rev: 1, policy: { allow_lifeline: true, coop: { wait_for_join: false } }, queue: [{ tool: 'start_expedition', args: { offer: 1 } }] });
-    const p = start(h, { maxActions: 25 });
+    // S6 §49.6 の 1: 25 手目まで進むと、逃げる移動が死にうるので止まり（flee_lethal）、pilot が危ないときの綱で先に帰ってしまう（安全装置の前に）。
+    // 見たいのは安全装置から帰る形なので、安全装置を早める
+    const p = start(h, { maxActions: 12 });
     const res = await p.done;
     expect(res.outcome).toBe('safety');
     expect(h.wakes.some((w) => w.reason === 'closing' && w.level === 'notify')).toBe(true);

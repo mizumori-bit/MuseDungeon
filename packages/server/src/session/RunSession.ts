@@ -10,7 +10,7 @@ import type {
 } from '@muse/shared';
 import {
   actionError, applyEvent, buildExpeditionReport, canonicalHash, guardianDisplayName, compareReports, emptyWorld, filterEventsForPlayer, FREE_COMMANDS, MACRO_COMMANDS,
-  macroNext, macroProbe, macroStart, macroStopError, narrate, projectPlayerView, publicStairsAt, riskText, fightRiskStop, fightThreats, threatEstimate, seasonReportable, seasonReportableSpots, selfTurnMarks, t,
+  fleeRiskText, macroNext, macroProbe, macroStart, macroStopError, narrate, projectPlayerView, publicStairsAt, riskText, fightRiskStop, fightThreats, threatEstimate, seasonReportable, seasonReportableSpots, selfTurnMarks, t,
 } from '@muse/shared';
 import type { SeasonHooks } from '../season/SeasonService';
 import type { ServerConfig } from '../config';
@@ -892,6 +892,8 @@ export class RunSession {
       if ('stop' in d0) {
         const err = macroStopError(startView.locale, d0.stop, cmd, d0.dir, d0.blockedBy, d0.traps, d0.explored, d0.obstacle);
         // fight の被弾の前の断り（S1c §14.4 の 1）: 見込みと最悪の 2 つの数・いまの HP・実際に使った hp_floor
+        // 逃げる移動の断り（S6 §49.6 の 1）: 最悪の見込みと今の HP（取れる手は hint）
+        if (d0.stop === 'flee_lethal') err.message += ' ' + fleeRiskText(startView, this.deps.catalog, false);
         if ((d0.stop === 'hp_risk' || (d0.stop === 'hp_floor' && cmd.type === 'fight')) && startView.self.pos) {
           if (d0.stop === 'hp_risk') err.message += ' ' + riskText(startView, this.deps.catalog, probe.hpFloor);
           // 死にうる（S1d の 1 つ目の判定）なら、hp_floor を下げても始められない。「hp_floor を下げる」と言わない（S2a §20.10 の 3）。

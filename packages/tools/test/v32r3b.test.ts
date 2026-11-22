@@ -198,7 +198,7 @@ describe('V3-2R3b stairs travel shows the risk of being chased (§23.1)', () => 
     const n = Math.min(...o.navigation.known_stairs.filter((s) => s.type === st.type && s.path_len !== null).map((s) => s.path_len!));
     const sameSpeed = (m!.dist <= 1 ? 1 : 0) * 3;
     // 隣にいるなら、その 1 回が最悪の被害に入っていると書く（S1b §12.4 の 8）
-    const adjNote = m!.dist <= 1 ? '・いま隣の 1 体が離れぎわに殴る 1 回ずつを含む' : '';
+    const adjNote = m!.dist <= 1 ? '・いま隣の 1 体は、離れる前に相手の手番が来れば殴られる（最悪の見込みに 1 回ずつ入れてある）' : '';
     expect(line).toContain(`階段まで ${n} 歩。追われたままなら最悪 ${sameSpeed} の被害（追いつけるのは 0 体・射撃 0 体${adjNote}。HP ${t.me().stats!.hp}）`);
     // 倍の速さの敵は、1 歩ごとに 1 回追加で殴れる
     const f = await chased('v32r3b-risk-1', 3, 200);

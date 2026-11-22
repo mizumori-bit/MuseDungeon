@@ -532,7 +532,7 @@ describe('S1b §12.4 の 8: texts', () => {
     const u = await a.r.port.act({ type: 'use', slot: scroll.slot }, { source: 'bot' });
     expect(u.ok && u.outcome).toContain('target_slot');
     a.manager.closeAll();
-    // 逃げの見込み: 隣の追跡中の敵が離れぎわに殴る 1 回を含むと書く
+    // 逃げの見込み: 隣の追跡中の敵が、離れる前に相手の手番が来れば殴る 1 回を、最悪の見込みに含むと書く（S6 §49.6 の 3）
     const b = await arena('s1b-flee', { map: ['P.......'], guardian: { kind: 'core:goblin', hp: 30, dmg: '1d1', types: [], state: 'hunting' }, player: { hp: 100 } });
     knowKind(b, 'core:goblin', 3);
     b.world.players[b.pid].knowledge.monsterMemory['guardian|core:goblin'] = { kind: 'core:goblin', guardian: true, encounters: 1, kills: 0, maxDamageToYou: 3, maxDamageByYou: 0, abilities: [] } as never;
@@ -544,7 +544,7 @@ describe('S1b §12.4 の 8: texts', () => {
     await b.r.port.act({ type: 'wait' }, { source: 'bot' });
     const va = buildObservation(projectPlayerView(b.world, b.pid), catalog, { detail: 'brief', map: false }).valid_actions;
     const line = va.find((x) => x.startsWith('travel_to stairs_down'));
-    expect(line).toContain('いま隣の 1 体が離れぎわに殴る 1 回ずつを含む');
+    expect(line).toContain('いま隣の 1 体は、離れる前に相手の手番が来れば殴られる（最悪の見込みに 1 回ずつ入れてある）');
     b.manager.closeAll();
     // 遠征の開始: 今いる階と、目的の階が下か上か
     const m = manager();

@@ -1,0 +1,141 @@
+// S6（SEASON.md §49.6・§50.2）のテスト: 逃げる移動の「死にうる」・「できること」と断り・身かわし・look・脅威の文・装備の枠・頁・最大の一撃・眠りが深い
+import { describe, expect, it } from 'vitest';
+import { buildCatalog, loadContent } from '@muse/content';
+import { buildObservation, describeTarget, formatObservationText, macroProbe, memoryKey, projectPlayerView } from '@muse/shared';
+import type { Command, Entity, MonsterMemory } from '@muse/shared';
+import { arena } from './v33duel';
+
+const content = loadContent();
+const catalog = buildCatalog(content);
+type A = Awaited<ReturnType<typeof arena>>;
+
+/** その種族（守護者として置いた相手）の記録を、プレイヤーの知識に入れる（テストの書き換え） */
+function remember(a: A, kind: string, m: Partial<MonsterMemory>): void {
+  const k = a.world.players[a.pid].knowledge;
+  const mem: MonsterMemory = { kind, encounters: 1, kills: 0, maxDamageToYou: 0, maxDamageByYou: 0, abilities: [], ...m };
+  k.monsterMemory = { ...k.monsterMemory, [memoryKey(kind, 'guardian')]: { ...mem, guardian: true }, [kind]: mem };
+}
+function setMe(a: A, fn: (e: Entity) => void): void { const e = structuredClone(a.world.entities[a.meId]); fn(e); a.inject({ put: [e] }); }
+const act = (a: A, cmd: Command) => a.r.port.act(cmd, { source: 'bot' });
+
+describe('S6 §49.6 の 1: a flight (mode flee) stops when one worst turn could kill you, whatever hp_floor is', () => {
+  it('refuses to start with the numbers and the options (the check runs before every step, so it also stops a flight on the way); with HP above the worst case it goes; steady is unchanged', async () => {
+    const a = await arena('s6-flee', { map: ['.G.P.........'], guardian: { kind: 'core:goblin', hp: 50, dmg: '1d1', types: [], state: 'hunting' } });
+    // 隣にいる追跡中の相手の、記録の最大の一撃は 30
+    setMe(a, (e) => { e.pos = { floor: a.key, x: a.ox + 2, y: a.oy }; e.stats!.hp = 20; e.stats!.maxHp = 60; });
+    remember(a, 'core:goblin', { maxDamageToYou: 30, maxPlainToYou: 20, hitsOnYou: [1, 1], dmgOnYou: [30, 1, 1] });
+    await act(a, { type: 'wait' });
+    setMe(a, (e) => { e.stats!.hp = 20; });
+    const to = { x: a.ox + 12, y: a.oy };
+    const v = projectPlayerView(a.world, a.pid);
+    expect(v.entities.some((e) => e.cat === 'monster' && e.awareness === 'hunting')).toBe(true);
+    // 断る判定（valid_actions と同じ macroProbe）
+    const d = macroProbe(v, { type: 'travel', to, mode: 'flee' }, catalog).decision;
+    expect('stop' in d && d.stop).toBe('flee_lethal');
+    const no = await act(a, { type: 'travel', to, mode: 'flee' });
+    expect(no.ok).toBe(false);
+    if (!no.ok) {
+      expect(no.error.code).toBe('flee_lethal');
+      expect(no.error.message).toContain('次の 1 歩の間の最悪の見込み 30');
+      expect(no.error.message).toContain('いまの HP 20');
+      expect(no.error.hint).toContain('帰還の綱');
+    }
+    // steady の移動には、この判定は入らない（今までどおり）
+    expect('stop' in macroProbe(v, { type: 'travel', to, mode: 'steady' }, catalog).decision && (macroProbe(v, { type: 'travel', to, mode: 'steady' }, catalog).decision as { stop: string }).stop).not.toBe('flee_lethal');
+    // 最悪の見込みより HP が多ければ、今までどおり逃げる
+    setMe(a, (e) => { e.stats!.hp = 31; });
+    const go = macroProbe(projectPlayerView(a.world, a.pid), { type: 'travel', to, mode: 'flee' }, catalog).decision;
+    expect('command' in go).toBe(true);
+    a.manager.closeAll();
+  });
+});
+
+describe('S6 §49.6 の 2: valid_actions shows a macro line only when the command would not refuse it (macroProbe)', () => {
+  it('fight against an adjacent hunter that could kill you in one worst turn is not offered (fight refuses with hp_risk); with enough HP it is', async () => {
+    const a = await arena('s6-va', { map: ['.G.P......'], guardian: { kind: 'core:goblin', hp: 50, dmg: '1d1', types: [], state: 'hunting' } });
+    setMe(a, (e) => { e.pos = { floor: a.key, x: a.ox + 2, y: a.oy }; e.stats!.hp = 20; e.stats!.maxHp = 60; });
+    remember(a, 'core:goblin', { maxDamageToYou: 30, maxPlainToYou: 20, hitsOnYou: [1, 1], dmgOnYou: [30, 1, 1] });
+    await act(a, { type: 'wait' });
+    setMe(a, (e) => { e.stats!.hp = 20; });
+    const lines = () => buildObservation(projectPlayerView(a.world, a.pid), catalog, { detail: 'brief', map: false }).valid_actions;
+    expect(lines().some((l) => l.startsWith(`fight ${a.gId}`))).toBe(false);
+    const no = await act(a, { type: 'fight', target: a.gId });
+    expect(!no.ok && no.error.code).toBe('hp_floor');
+    setMe(a, (e) => { e.stats!.hp = 59; });
+    expect(lines().some((l) => l.startsWith(`fight ${a.gId}`))).toBe(true);
+    a.manager.closeAll();
+  });
+});
+
+describe('S6 §49.6 の 4・5・6・8・9・10 and the deep sleeper text', () => {
+  it('slip says how far it moves (2 cells, it does not stop on stairs one cell away)', async () => {
+    const a = await arena('s6-slip', { map: ['.G.P......'], guardian: { kind: 'core:goblin', hp: 50, dmg: '1d1', types: [], state: 'hunting' } });
+    setMe(a, (e) => { e.pos = { floor: a.key, x: a.ox + 2, y: a.oy }; e.build = { perks: [], pending: [], abilities: [{ id: 'core:slip', readyAt: 0 }], offered: [] }; });
+    await act(a, { type: 'wait' });
+    expect(catalog.abilities['core:slip'].steps).toBe(2);
+    const line = buildObservation(projectPlayerView(a.world, a.pid), catalog, { detail: 'brief', map: false }).valid_actions.find((l) => l.startsWith('use_ability slip') || l.startsWith('use_ability core:slip'));
+    expect(line).toContain('2 マス動く（壁・閉じた扉・ほかの者の手前まで。1 マス先が階段でも止まらない）');
+    a.manager.closeAll();
+  });
+
+  it('look by the id of a remembered altar of chance gives the same as by its cell (the table too)', async () => {
+    const a = await arena('s6-look', { map: ['P.....'], guardian: { kind: 'core:goblin', hp: 50, dmg: '1d1', types: [], state: 'asleep' } });
+    a.inject({ del: [a.gId] });
+    const at = { x: a.ox + 4, y: a.oy };
+    const altar: Entity = { id: 'e_s6alt1', kind: 'core:gamble_altar', sid: 995001, pos: { floor: a.key, ...at }, feature: { state: 'idle' } } as Entity;
+    a.inject({ put: [altar] });
+    await act(a, { type: 'wait' });
+    // 離れて見えなくなった（覚えている）
+    const k = a.world.players[a.pid].knowledge;
+    k.floors[a.key].remembered = [...k.floors[a.key].remembered.filter((x) => x.id !== altar.id), { id: altar.id, kind: altar.kind, cat: 'feature', pos: { ...at }, qty: 1, state: 'idle', seenAt: 0 } as never];
+    k.visible = [];
+    const v = projectPlayerView(a.world, a.pid);
+    const byId = describeTarget(v, catalog, altar.id).text;
+    const byPos = describeTarget(v, catalog, at).text;
+    expect(byId).toBe(byPos);
+    expect(byId).toContain('表: ');
+    a.manager.closeAll();
+  });
+
+  it('threat of a species that attacked but never landed a hit reads "never landed a hit"; a worst hit that was a crit says so with the worst non-crit', async () => {
+    const a = await arena('s6-threat', { map: ['P..G..'], guardian: { kind: 'core:bone_archer', hp: 50, dmg: '1d1', types: [], state: 'asleep' } });
+    remember(a, 'core:bone_archer', { encounters: 2, maxDamageToYou: 0, hitsOnYou: [0, 2] });
+    await act(a, { type: 'wait' });
+    let text = formatObservationText(a.r.port.observe().observation, 'ja');
+    expect(text).toContain('不明（当てられた記録なし）');
+    expect(text).not.toContain('被弾の記録なし');
+    remember(a, 'core:bone_archer', { encounters: 2, maxDamageToYou: 8, maxPlainToYou: 1, hitsOnYou: [5, 6], dmgOnYou: [12, 5, 6] });
+    const o = a.r.port.observe().observation;
+    expect(o.visible.monsters[0].worst_hit).toBe(8);
+    expect(o.visible.monsters[0].worst_plain_hit).toBe(1);
+    text = formatObservationText(o, 'ja');
+    expect(text).toContain('最大の一撃:8（会心。会心でない最大 1）');
+    a.manager.closeAll();
+  });
+
+  it('equipping an amulet over a ring: the result names what came off and the shared slot first', async () => {
+    const a = await arena('s6-equip', { map: ['P...'], guardian: { kind: 'core:goblin', hp: 50, dmg: '1d1', types: [], state: 'asleep' }, player: { items: [{ kind: 'core:ring_vigilance' }, { kind: 'core:amulet_iron' }] } });
+    a.inject({ del: [a.gId] });
+    const inv = () => a.r.port.view().inventory;
+    expect((await act(a, { type: 'equip', slot: inv().find((i) => i.kind === 'core:ring_vigilance')!.slot })).ok).toBe(true);
+    const r = await act(a, { type: 'equip', slot: inv().find((i) => i.kind === 'core:amulet_iron')!.slot });
+    expect(r.ok && r.outcome).toMatch(/^外れた品: 見張りの指輪（装飾品の枠は 1 つ: 指輪と護符は同時に付けられない）。 /);
+    a.manager.closeAll();
+  });
+
+  it('reading a loose page says the terrain went onto the map (not just "used")', async () => {
+    const a = await arena('s6-page', { map: ['P...'], guardian: { kind: 'core:goblin', hp: 50, dmg: '1d1', types: [], state: 'asleep' }, player: { items: [{ kind: 'core:loose_page' }] } });
+    a.inject({ del: [a.gId] });
+    const page = a.r.port.view().inventory.find((i) => i.kind === 'core:loose_page')!;
+    const r = await act(a, { type: 'use', slot: page.slot });
+    expect(r.ok && r.outcome).toMatch(/地形が地図に載った（新しく \d+ マス。目で見たのではないので、敵と品はまだ分からない）。/);
+    a.manager.closeAll();
+  });
+
+  it('the deep sleeper weakness text says the weakness is the blow before it notices you, not that it is hard to wake', () => {
+    const w = catalog.guardianWeaknesses['core:weak_sleep'];
+    expect(w.desc.ja).toContain('弱点は、この一撃の効き目のこと');
+    expect(w.desc.ja).toContain('近づくうちに起きることがある');
+    expect(w.desc.ja).not.toContain('起きにくい。');
+  });
+});

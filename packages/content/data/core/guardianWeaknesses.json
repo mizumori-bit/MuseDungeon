@@ -4,7 +4,7 @@
   { "id": "core:weak_thrown", "name": { "ja": "投擲に弱い", "en": "weak to thrown weapons" }, "short": { "ja": "投擲", "en": "thrown" }, "handler": "thrown", "maxArmor": 4,
     "desc": { "ja": "投擲のダメージが 1.5 倍（端数は切り上げ）", "en": "Thrown weapons deal 1.5x damage (rounded up)" }, "params": { "pct": 150 } },
   { "id": "core:weak_sleep", "name": { "ja": "眠りが深い", "en": "a deep sleeper" }, "short": { "ja": "眠り", "en": "sleep" }, "handler": "deep_sleep",
-    "desc": { "ja": "棲み処で眠っていて（落ち着くと眠りに戻る）、起きにくい。気づかれる前の一撃が必ず会心になる", "en": "It sleeps in its lair (and goes back to sleep once it settles) and is hard to wake; a blow struck before it notices you is always a critical hit" }, "params": { "stealthPct": 30 } },
+    "desc": { "ja": "棲み処で眠っていて（落ち着くと眠りに戻る）、気づかれる前の一撃（眠っている・気づいていない間）が必ず会心になる。弱点は、この一撃の効き目のこと。起きにくさは少しだけ（見えている間の、手番ごとの起きる見込みが少し下がるだけ）なので、近づくうちに起きることがある", "en": "It sleeps in its lair (and goes back to sleep once it settles); a blow struck before it notices you (asleep or unaware) is always a critical hit. That blow is the weakness: it is only a little harder to wake (the chance it wakes each turn it can see you is slightly lower), so it may still wake as you close in" }, "params": { "stealthPct": 30 } },
   { "id": "core:weak_water", "name": { "ja": "水場で遅い", "en": "slow in water" }, "short": { "ja": "水場", "en": "water" }, "handler": "water_slow",
     "desc": { "ja": "浅い水の上では速さが半分（棲み処に浅い水がある）", "en": "Moves at half speed in shallow water (its lair has some)" }, "params": { "speedPct": 50 } }
 ]

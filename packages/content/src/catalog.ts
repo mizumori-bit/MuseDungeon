@@ -129,6 +129,8 @@ export function buildCatalog(c: Content): Catalog {
       name: ab.name, desc: ab.desc, target: ab.target, cooldown: ab.cooldown, handler: ab.handler, ...(ab.perExpedition ? { perExpedition: ab.perExpedition } : {}),
       // 最大 HP の割合の回復（V4-1c §16.2）
       ...(ab.handler === 'heal_pct' && typeof (ab.params as { pct?: unknown } | undefined)?.pct === 'number' ? { heal: { pct: (ab.params as { pct: number }).pct } } : {}),
+      // 動くマスの数（身をかわす。S6 §49.6 の 4。engine の slip と同じ既定 2）
+      ...(ab.handler === 'slip' ? { steps: typeof (ab.params as { steps?: unknown } | undefined)?.steps === 'number' ? (ab.params as { steps: number }).steps : 2 } : {}),
     }])),
     guardianTypes: Object.fromEntries(c.lists.guardianTypes.map((g) => [g.id, {
       name: g.name, desc: g.desc, strongVs: g.strongVs, handler: g.handler, ...(g.handler === 'warded' && typeof g.params?.armor === 'number' ? { armor: g.params.armor } : {}),
