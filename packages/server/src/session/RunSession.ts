@@ -16,7 +16,7 @@ import type { SeasonHooks } from '../season/SeasonService';
 import type { ServerConfig } from '../config';
 import { LogWriter } from '../log/LogWriter';
 import { readJsonl } from '../log/RunStore';
-import { cutEventsAfter, isRunMeta, keyframeFromEvents, latestKeyframe, logBounds, metaFromWorld, resumeSeqTarget } from '../log/repair';
+import { boundaryKeyframeMissing, cutEventsAfter, isRunMeta, keyframeFromEvents, latestKeyframe, logBounds, metaFromWorld, resumeSeqTarget } from '../log/repair';
 import { readJsonStable } from '../log/atomicWrite';
 import { summaryMarkdown } from './summary';
 import type { ProfileHooks } from './profiles';
@@ -136,6 +136,8 @@ export class RunSession {
   /** 食い違いの後の続きの境目（seq_resumed の番号。S3h §41.10 の中 2）。履歴を空の World から畳む所は、境目のキーフレームから後を畳む */
   private readonly boundarySeqs: number[] = [];
   private boundaryCache: { seq: number; world: World } | null = null;
+  /** 読めなかった境目のキーフレーム（知らせるのは 1 回だけ） */
+  private readonly foldWarned = new Set<number>();
 
   private constructor(readonly deps: SessionDeps, runId: string, world: World, createdAt: number) {
     this.runId = runId;
@@ -183,6 +185,10 @@ export class RunSession {
     // 一時的に読めなければ、古いものへ下がらずに失敗する（§38.2 の 2: 長い再実行になり、版をまたいだランでは食い違いに入る）
     const found = latestKeyframe(dir, { moveBroken: false, maxSeq: Math.min(lastKept, bounds.covered), maxCseq: bounds.lastCseq });
     if (found.unreadable) throw new Error(`キーフレーム ${basename(found.unreadable)} を一時的に読めない（ほかのプログラムが開いている）。次の起動で直る`);
+    // 食い違いの後の続きのラン（S3i §46.2 の 2）: 読めるキーフレームが 1 つも無いとき、境目があれば、出来事だけから境目をまたいで畳んで作らない
+    // （畳んだ World は本当の続きと違うのに、再実行する命令が無いので「一致」になり、記録を直してしまう）。復旧に失敗したランとして出す（何も書かない）。
+    // 境目より前の古いキーフレームがあるときは、今までどおり、そこから命令を再実行して照合する（食い違えば何も書かない。S3f のテストの形）
+    if (!found.kf) { const miss = boundaryKeyframeMissing(kept, null); if (miss) throw new Error(miss); }
     const kf = found.kf ?? keyframeFromEvents(kept, commands, bounds.covered);
     if (!kf) throw new Error(`no keyframe for ${runId}`);
     const s = new RunSession(deps, runId, kf.world, meta.createdAt);
@@ -337,18 +343,25 @@ export class RunSession {
    * 無ければ空の World と 0（境目より前は、今までどおり最初から畳む）
    */
   foldBase(upTo: number): { world: World; from: number } {
-    for (let i = this.boundarySeqs.length - 1; i >= 0; i--) {
-      const b = this.boundarySeqs[i];
-      if (b > upTo) continue;
-      if (this.boundaryCache?.seq !== b) {
-        if (!this.log) break;
-        const r = readJsonStable<{ seq: number; world: World }>(join(this.log.dir, 'keyframes', `${b}.json`), (v) => !!v && typeof v === 'object' && (v as { seq?: number }).seq === b && !!(v as { world?: unknown }).world);
-        if (!('value' in r)) continue;
-        this.boundaryCache = { seq: b, world: r.value.world };
+    // upTo 以下の最後の境目だけを使う。そのキーフレームが読めなければ、1 つ前の境目へは下がらない（S3i §46.2 の 3: 下がると、新しい境目をまたいで畳む）。
+    // 今までどおり空の World から畳み、合わないことを 1 行知らせる
+    let b = 0;
+    for (const x of this.boundarySeqs) if (x <= upTo && x > b) b = x;
+    if (!b) return { world: emptyWorld(), from: 0 };
+    if (this.boundaryCache?.seq !== b) {
+      const r = this.log
+        ? readJsonStable<{ seq: number; world: World }>(join(this.log.dir, 'keyframes', `${b}.json`), (v) => !!v && typeof v === 'object' && (v as { seq?: number }).seq === b && !!(v as { world?: unknown }).world)
+        : null;
+      if (!r || !('value' in r)) {
+        if (!this.foldWarned.has(b)) {
+          this.foldWarned.add(b);
+          console.error(`[fold] ${this.runId} の境目のキーフレーム（${b}.json）が読めないので、空の World から畳む（境目より前は前の版の出来事なので、畳んだ World は本当の続きと合わないことがある）`);
+        }
+        return { world: emptyWorld(), from: 0 };
       }
-      return { world: structuredClone(this.boundaryCache!.world), from: b };
+      this.boundaryCache = { seq: b, world: r.value.world };
     }
-    return { world: emptyWorld(), from: 0 };
+    return { world: structuredClone(this.boundaryCache!.world), from: b };
   }
 
   private writeKeyframe(): void {
@@ -439,19 +452,41 @@ export class RunSession {
 
   // ---------- 公開 API（PlayerPort / SpectatorPort / Manager から使う） ----------
 
+  /**
+   * 参加を World の写しで試す（S3i §46.2 の 1）: 食い違ったランで番号を送る前なら、写しに先に番号の送り（resumeSeq）を当ててから試す。
+   * 何も書かない。断られるならそのエラー、通るなら参加者の ID（エンジンは決定論的なので、本当の参加と同じ ID）
+   */
+  private probeJoin(req: JoinCommand, wall: number): { ok: true; playerId: PlayerId } | { ok: false; error: ActionError } {
+    const w = structuredClone(this.world);
+    let cseq = this.cseq;
+    const next = this.pendingSeqResume;
+    if (!this.closed && next !== null && w.status !== 'ended' && next > w.seq) resumeSeq(w, this.deps.content, { type: 'seq_resume', next }, { cseq: ++cseq, wall });
+    const r = joinPlayer(w, this.deps.content, req, { cseq: cseq + 1, wall });
+    return r.ok ? { ok: true, playerId: r.playerId } : { ok: false, error: r.error };
+  }
+
+  /** この参加が断られるか（断られるならそのエラー。何も書かない。SessionManager が、断られる参加でプロフィールを作らないために使う。S3i §46.2 の 1） */
+  joinRefusal(req: JoinCommand): ActionError | null {
+    if (this.closed) return actionError('no_session', 'session closed', '');
+    const r = this.probeJoin(req, Date.now());
+    return r.ok ? null : r.error;
+  }
+
   join(req: JoinCommand, source: CommandSource): Promise<{ ok: true; playerId: PlayerId; token: string } | { ok: false; error: ActionError }> {
     return this.enqueue(() => {
+      const wall = Date.now();
+      // 断られる参加では、何も書かない（S3i §46.2 の 1: 食い違ったランに断られる参加を試すと、境目の命令とキーフレームが書かれ、
+      // 次の起動から一致の側へ移っていた）。番号を送る前に、写しで（送りを当ててから）試す
+      const probe = this.probeJoin(req, wall);
+      if (!probe.ok) return { ok: false as const, error: probe.error };
       // 食い違ったランの続き（§40.2 の 2）: 参加の前に番号を送る（参加者の番号・ID は送った後の World から）
       if (!this.closed) this.resumeSeqIfNeeded();
       const cseq = ++this.cseq;
-      const wall = Date.now();
       const token = newToken();
       // 再開用のトークンの控えを、参加を確定する前に書く（SEASON.md §36.1 の 4: 書けなければ参加を断る。World は変えない）。
       // 参加者の ID は、World の写しで同じ参加を試して知る（エンジンは決定論的なので、同じ ID になる）
       let probeId: PlayerId | null = null;
       if (this.log) {
-        const probe = joinPlayer(structuredClone(this.world), this.deps.content, req, { cseq, wall });
-        if (!probe.ok) { this.cseq--; return { ok: false as const, error: probe.error }; }
         probeId = probe.playerId;
         try {
           this.log.writeTokens({ ...Object.fromEntries(this.tokens), [token]: probe.playerId });

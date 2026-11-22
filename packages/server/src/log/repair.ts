@@ -181,6 +181,23 @@ export function latestKeyframe(dir: string, opts: { moveBroken: boolean; maxSeq?
 }
 
 /**
+ * 食い違いの後の続きの、いちばん新しい境目（S3h。覆う出来事の seq_resumed の番号。無ければ 0）。
+ * 境目より前の出来事は前の版の記録なので、境目をまたいで出来事を畳んだ World は、本当の続きの World と違う（S3i §46.2 の 2）
+ */
+export function lastBoundary(events: readonly GameEvent[]): number {
+  let b = 0;
+  for (const e of events) if (e.type === 'seq_resumed' && e.seq > b) b = e.seq;
+  return b;
+}
+
+/** 境目のキーフレームが要るのに、使えるキーフレームがそれより前か無いときの理由の文（S3i §46.2 の 2）。要らなければ null */
+export function boundaryKeyframeMissing(events: readonly GameEvent[], kfSeq: number | null): string | null {
+  const b = lastBoundary(events);
+  if (!b || (kfSeq !== null && kfSeq >= b)) return null;
+  return `境目のキーフレーム（keyframes/${b}.json）が読めない（食い違いの後の続きのラン。出来事だけから作ると境目をまたいで畳み、本当の続きと違う World になるので、作らない。記録には何も書いていない）`;
+}
+
+/**
  * 出来事の記録だけから、キーフレームの代わりを作る（読めるキーフレームが 1 つも無いとき）。
  * 命令の記録が覆っている最後の出来事（upTo）まで畳み、cseq はその最後の命令（それより後の命令は無いので、再実行はしない）
  */
@@ -213,6 +230,9 @@ export function repairMeta(dir: string, runId: string): MetaRepair {
     // 記録が覆っている範囲だけ（§36.1 の 1: 記録より先に進んだキーフレームと、命令の記録が覆っていない出来事は使わない）
     const lastKept = events.length ? events[events.length - 1].seq : 0;
     const { kf } = latestKeyframe(dir, { moveBroken: false, maxSeq: Math.min(lastKept, b.covered), maxCseq: b.lastCseq });
+    // 境目より前のキーフレームか出来事だけから畳むと、境目をまたぐ（S3i §46.2 の 2）: 作らずに、復旧に失敗したランとして出す
+    const miss = boundaryKeyframeMissing(events, kf?.seq ?? null);
+    if (miss) return why(miss);
     if (kf) world = foldOnto(kf.world, events, b.covered);
     else { from = 'events'; world = foldOnto(emptyWorld(), events, b.covered); }
   } catch (e) {

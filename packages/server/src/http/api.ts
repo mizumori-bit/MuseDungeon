@@ -58,7 +58,8 @@ export function createApp(manager: SessionManager, config: ServerConfig): App {
   const liveEvents = (runId: string): { events: GameEvent[]; ended: boolean } | null => {
     const s = manager.get(runId);
     if (s) return { events: s.history, ended: s.world.status === 'ended' };
-    if (store?.exists(runId)) return { events: store.events(runId), ended: store.meta(runId)?.status === 'ended' };
+    // 記録だけのラン: 命令の記録が覆っている出来事だけ（S3i §46.2 の 5。動いているランの履歴は、もともと覆う出来事だけ）
+    if (store?.exists(runId)) return { events: store.coveredEvents(runId), ended: store.meta(runId)?.status === 'ended' };
     return null;
   };
 
@@ -193,7 +194,7 @@ export function createApp(manager: SessionManager, config: ServerConfig): App {
           for (const ev of live.history) mb.add(ev);
           return json(res, 200, { runId, lastSeq: live.world.seq, markers: mb.markers, keyframes: store?.keyframeSeqs(runId) ?? [], expeditions: mb.expeditions });
         }
-        return json(res, 200, store!.index(runId));
+        return json(res, 200, store!.index(runId, store!.coveredEvents(runId)));
       }
       if (sub === '/commands') {
         const recs = store?.commands(runId) ?? [];

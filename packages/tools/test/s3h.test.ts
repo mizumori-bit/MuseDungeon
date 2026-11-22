@@ -122,10 +122,20 @@ async function continueAndCheck(dir: string, run: Run, first: (m: SessionManager
   expect(addedE.every((e) => e.seq > Math.max(oldMax, live))).toBe(true);
   expect(addedC[0]).toMatchObject({ player: null, source: 'system', command: { type: 'seq_resume', next: pending }, resultSeq: [pending, pending] });
   expect(readdirSync(join(run.rd, 'keyframes'))).toContain(`${pending}.json`);
+  // S3i §46.2 の 4: 一致の側で直す 2 回目の起動も、境目より前のバイトと、境目までのキーフレームを変えない
+  const eB = readFileSync(ep), cB = readFileSync(cp);
+  const kfUpTo = () => new Map([...snap(join(run.rd, 'keyframes'))].filter(([f]) => /^\d+\.json$/.test(f) && parseInt(f, 10) <= pending));
+  const kfB = kfUpTo();
   const r2 = restart(dir);
   expect(recLine(r2.logs, run.runId)).toContain('hash ok');
   expect(r2.m.get(run.runId)!.world.seq).toBe(after);
   r2.m.closeAll();
+  const boundaryEnd = eB.indexOf('"seq_resumed"');
+  const lineEnd = eB.indexOf(0x0a, boundaryEnd);
+  expect(boundaryEnd).toBeGreaterThan(0);
+  expect(readFileSync(ep).subarray(0, lineEnd + 1).equals(eB.subarray(0, lineEnd + 1))).toBe(true);
+  expect(readFileSync(cp).subarray(0, c0.length).equals(cB.subarray(0, c0.length))).toBe(true);
+  same(kfB, kfUpTo());
   const sn = snap(dir);
   const r3 = restart(dir);
   expect(recLine(r3.logs, run.runId)).toContain('hash ok');

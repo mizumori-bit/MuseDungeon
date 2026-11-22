@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import type { CommandRecord, ExpeditionBrief, GameEvent, LeaderboardEntry, Marker, RunIndex, RunMetaFile, RunSummary, World } from '@muse/shared';
 import { INTERNAL_EVENT_TYPES, stripSecret } from '@muse/shared';
 import type { KeyframeFile } from './LogWriter';
-import { isRunMeta } from './repair';
+import { isRunMeta, logBounds } from './repair';
 import { readJsonStable } from './atomicWrite';
 
 /**
@@ -177,6 +177,16 @@ export class RunStore {
 
   commands(runId: string): CommandRecord[] {
     return readJsonl<CommandRecord>(join(this.dir(runId), 'commands.jsonl'));
+  }
+
+  /**
+   * 命令の記録が覆っている出来事だけ（S3i §46.2 の 5。起動時の復旧・replay:verify と同じ読み方 logBounds）。
+   * 命令を書く前に落ちた出来事など、区間の外の出来事を巻き戻しの画面に出さない。読み方だけで、ファイルは変えない
+   */
+  coveredEvents(runId: string): GameEvent[] {
+    const events = this.events(runId);
+    const b = logBounds(events, this.commands(runId));
+    return events.filter((e) => b.covers(e.seq));
   }
 
   keyframeSeqs(runId: string): number[] {

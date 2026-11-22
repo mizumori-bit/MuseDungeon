@@ -303,23 +303,23 @@ export class SessionManager {
   }
 
   private async joinSession(session: RunSession, req: { name: string; classId?: string; locale?: Locale; controller: Controller; atCamp?: boolean; profileToken?: string; legacy?: boolean }, source: 'mcp' | 'ws'): Promise<Joined | { error: ActionError }> {
+    const base = { type: 'join' as const, name: req.name.slice(0, 32) || 'Muse', classId: req.classId, controller: req.controller, locale: req.locale ?? 'ja', ...(req.atCamp ? { atCamp: true } : {}) };
     // プロフィール（V3-7 §7.1）: トークンが無ければ新しく作る。知らないトークンは拒否（黙って別のプロフィールに積まない）
+    const known = req.profileToken ? this.profiles.store.resolve(req.profileToken) : null;
+    if (req.profileToken && !known) return { error: unknownProfileError() };
+    // 断られる参加では、プロフィールを作らない（S3i §46.2 の 1。参加の可否はプロフィールの ID・継承によらない）。ここで通っても、本当の参加でもう一度試す
+    const refused = session.joinRefusal({ ...base, profile: known?.id ?? 'prof_probe' });
+    if (refused) return { error: refused };
     let profile: { id: string; token?: string };
-    if (req.profileToken) {
-      const p = this.profiles.store.resolve(req.profileToken);
-      if (!p) return { error: unknownProfileError() };
-      profile = { id: p.id };
-    } else {
+    if (known) profile = { id: known.id };
+    else {
       const c = this.profiles.store.create(req.name, Date.now());
       profile = { id: c.profile.id, token: c.token };
     }
     // 継承（V3-7 §7.3）: 既定であり。サーバーの legacyPolicy が off か、legacy: false なら無し。中身は参加コマンドに入り commands.jsonl に残る
     const useLegacy = this.config.legacyPolicy === 'on' && req.legacy !== false;
     const monsters = useLegacy ? this.profiles.legacyFor(profile.id, session.runId) : [];
-    const join: JoinCommand = {
-      type: 'join', name: req.name.slice(0, 32) || 'Muse', classId: req.classId, controller: req.controller, locale: req.locale ?? 'ja', ...(req.atCamp ? { atCamp: true } : {}),
-      profile: profile.id, ...(monsters.length ? { legacy: { monsters } } : {}),
-    };
+    const join: JoinCommand = { ...base, profile: profile.id, ...(monsters.length ? { legacy: { monsters } } : {}) };
     const r = await session.join(join, source);
     if (!r.ok) return { error: r.error };
     return { session, playerId: r.playerId, token: r.token, port: new SessionPlayerPort(session, r.playerId), profile };
