@@ -227,7 +227,7 @@ export interface ObsSlay {
   armor: { kind: string; name: string; got: 'picked' | 'supply' | 'start'; depth?: number } | null;
   hidden?: boolean;
   dealt: { melee: { total: number; n: number }; thrown: { total: number; n: number }; poison: { total: number; n: number }; feature: { total: number; n: number }; crits: number };
-  taken: number; lowest_pct: number;
+  taken: number; lowest_pct?: number;
   used: { kind: string; name: string; n: number }[]; thrown: { kind: string; name: string; n: number }[]; abilities: { id: string; name: string; n: number }[];
   ward_fires: number; attempt: number; turns: number;
   text: string;
@@ -935,13 +935,13 @@ export function slayObs(L: Locale, catalog: Catalog, s: SeasonSlay): ObsSlay {
   ].filter(Boolean);
   const who = `${s.by}${s.mine ? t(L, '（あなた）', ' (you)') : ''}`;
   const text = t(L,
-    `${who}（Lv${s.level}・${cls}）: ${wText}・${aText}${hiddenText}。与えた被害 ${total}（${dealtParts.join('、') || 'なし'}）。受けた被害 ${s.taken}（HP がいちばん減って ${s.lowestPct}%）。${extra.join('。')}。倒したランの中で ${s.attempt} 回目の挑戦（それより前のランの挑戦は数えない）・遠征の ${s.turns} 手番目に倒した`,
-    `${who} (Lv${s.level} ${cls}): ${wText}, ${aText}${hiddenText}. Dealt ${total} (${dealtParts.join(', ') || 'none'}). Took ${s.taken} (lowest HP ${s.lowestPct}%). ${extra.join('. ')}. Slain on attempt ${s.attempt} within that run (attempts in earlier runs not counted), ${s.turns} turns into the expedition`);
+    `${who}（Lv${s.level}・${cls}）: ${wText}・${aText}${hiddenText}。与えた被害 ${total}（${dealtParts.join('、') || 'なし'}）。受けた被害 ${s.taken}${s.lowestPct !== undefined ? `（HP がいちばん減って ${s.lowestPct}%）` : ''}。${extra.join('。')}。倒したランの中で ${s.attempt} 回目の挑戦（それより前のランの挑戦は数えない）・遠征の ${s.turns} 手番目に倒した`,
+    `${who} (Lv${s.level} ${cls}): ${wText}, ${aText}${hiddenText}. Dealt ${total} (${dealtParts.join(', ') || 'none'}). Took ${s.taken}${s.lowestPct !== undefined ? ` (lowest HP ${s.lowestPct}%)` : ''}. ${extra.join('. ')}. Slain on attempt ${s.attempt} within that run (attempts in earlier runs not counted), ${s.turns} turns into the expedition`);
   return {
     depth: s.depth, by: s.by, ...(s.mine ? { mine: true } : {}), ...(s.first ? { first: true } : {}), ...(s.least ? { least: true } : {}), of: s.of,
     level: s.level, class: cls, weapon, armor, ...(s.hidden ? { hidden: true } : {}),
     dealt: { melee: { ...d.melee }, thrown: { ...d.thrown }, poison: { ...d.poison }, feature: { ...d.feature }, crits: d.crits },
-    taken: s.taken, lowest_pct: s.lowestPct, used, thrown, abilities, ward_fires: s.wardFires, attempt: s.attempt, turns: s.turns, text,
+    taken: s.taken, ...(s.lowestPct !== undefined ? { lowest_pct: s.lowestPct } : {}), used, thrown, abilities, ward_fires: s.wardFires, attempt: s.attempt, turns: s.turns, text,
   };
 }
 

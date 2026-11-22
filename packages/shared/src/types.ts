@@ -610,16 +610,16 @@ export interface SeasonSlay {
   hidden?: boolean;
   /** 与えた被害（近接・投擲・毒・地物（脆い天井など））と、近接の会心の回数 */
   dealt: { melee: SlayHits; thrown: SlayHits; poison: SlayHits; feature: SlayHits; crits: number };
-  /** 受けた被害の合計と、いちばん低かった HP の割合（%） */
+  /** 受けた被害の合計と、いちばん低かった HP の割合（%。記録から分からなければ無い。S4b） */
   taken: number;
-  lowestPct: number;
+  lowestPct?: number;
   /** 使った品（飲んだ・読んだ）・投げた品（種類と数。倒した者が鑑定済みのものだけ）・使った能動技 */
   used: { kind: string; n: number }[];
   thrown: { kind: string; n: number }[];
   abilities: { id: string; n: number }[];
   /** 消した護りの火の数（棲み処の仕掛け） */
   wardFires: number;
-  /** このランで、その階に入った遠征の何回目で倒したか */
+  /** 倒したランで、その大守護者と戦った（攻撃・被害の出来事があった）遠征の何回目で倒したか（S4b: 階に入っただけの遠征は数えない） */
   attempt: number;
   /** 倒した遠征の、始めてから倒すまでの自分の手番 */
   turns: number;

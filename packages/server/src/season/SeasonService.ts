@@ -1022,7 +1022,7 @@ export class SeasonService implements SeasonHooks {
     // 開催中に外から読む口には中身を出さない（S4a §46: 参加者はキャンプで受け取る。遠征の途中の者・招かれていない者が HTTP から先に読む道を作らない）
     const full = !!d.result || !!opts.full;
     const slays = full ? slaysView(d.slays, null) : [];
-    const brief = full ? [] : slaysBrief(d.slays);
+    const brief = full ? [] : slaysBrief(d.slays, d.deeds);
     return {
       season: this.listing(d), standings: rows, ...(result ? { result } : {}), section: this.section(d),
       ...(slays.length ? { slays } : {}), ...(brief.length ? { slaysBrief: brief } : {}),
@@ -1030,12 +1030,20 @@ export class SeasonService implements SeasonHooks {
   }
 }
 
-/** 開催中の外向けの討伐の記録（S4a §46）: 節目ごとに、載った順（1 が初討伐）・倒した者の名前・レベル・職業だけ */
-export function slaysBrief(recs: readonly SeasonSlayRec[]): SeasonSlayBrief[] {
+/**
+ * 開催中の外向けの討伐の記録（S4a §46）: 節目ごとに、載った順・倒した者の名前・レベル・職業だけ。
+ * firstKill（S4b §46.4 の 2）: 初討伐の称号の持ち主（deeds。倒した後に最初にキャンプへ着いた者）の行だけ。載った順の 1 番目とは限らない
+ * （倒して帰る前に倒れた者の記録も載るが、初討伐には数えない）
+ */
+export function slaysBrief(recs: readonly SeasonSlayRec[], deeds: readonly SeasonDeedRec[] = []): SeasonSlayBrief[] {
   const out: SeasonSlayBrief[] = [];
   for (const depth of [...new Set(recs.map((r) => r.depth))].sort((a, b) => a - b)) {
+    const deed = deeds.find((x) => x.depth === depth);
     recs.filter((r) => r.depth === depth).sort((a, b) => a.order - b.order)
-      .forEach((r, i) => out.push({ depth, warden: { ja: r.warden.ja, en: r.warden.en }, by: r.name, level: r.level, classId: r.classId, order: i + 1 }));
+      .forEach((r, i) => out.push({
+        depth, warden: { ja: r.warden.ja, en: r.warden.en }, by: r.name, level: r.level, classId: r.classId, order: i + 1,
+        ...(deed && deed.profileId === r.profileId ? { firstKill: true as const } : {}),
+      }));
   }
   return out;
 }

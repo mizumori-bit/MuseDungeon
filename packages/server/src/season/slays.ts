@@ -95,13 +95,18 @@ export function buildSlays(history: readonly GameEvent[], base: { world: World; 
     // 品を手に入れた（拾った・置き場から取った）
     if (ev.type === 'item_picked_up' && ev.actor === meId) got.set(ev.item, { got: 'picked', depth: depthOfKey(ev.floor) });
     else if (ev.type === 'supply_taken' && ev.player === pid) for (const e of ev.put ?? []) if (e.item && e.id !== meId) got.set(e.id, { got: 'supply', depth: ev.depth });
-    // その階に入った遠征（挑んだ回数）
-    if (floor && keys.has(floor) && curNo !== null) {
-      const d = depthOfKey(floor)!;
-      const s = attempts.get(d) ?? new Set<number>();
-      s.add(curNo);
-      attempts.set(d, s);
-      accFor(d);
+    // その階にいる間の数え始め
+    if (floor && keys.has(floor) && curNo !== null) accFor(depthOfKey(floor)!);
+    // 挑んだ回数（S4b §46.4 の 1）: 大守護者を的・攻撃者・被害の元とする出来事が 1 つでもあった遠征だけ（階に入っただけの遠征は数えない）
+    if (curNo !== null) {
+      const ids = ev.type === 'attack' ? [ev.attacker, ev.target] : ev.type === 'damaged' ? [ev.target, ev.source] : ev.type === 'warden_slain' ? [ev.id] : [];
+      for (const id of ids) {
+        const d = id ? wardenOf.get(id) : undefined;
+        if (d === undefined) continue;
+        const s = attempts.get(d) ?? new Set<number>();
+        s.add(curNo);
+        attempts.set(d, s);
+      }
     }
     const evDepth = depthOfKey(ev.floor);
     const acc = evDepth !== null && keys.has(ev.floor!) && floor === ev.floor ? accFor(evDepth) : null;
@@ -146,7 +151,8 @@ export function buildSlays(history: readonly GameEvent[], base: { world: World; 
         level: body?.level?.level ?? 1, classId: live.players[pid].classId,
         weapon, armor, ...(hidden ? { hidden: true } : {}),
         dealt: { melee: { ...a.melee }, thrown: { ...a.thrown }, poison: { ...a.poison }, feature: { ...a.feature }, crits: a.crits },
-        taken: a.taken, lowestPct: a.lowestPct ?? pctOf(body) ?? 100,
+        // いちばん低かった HP の割合: 畳めない区間しか無く分からないときは、項目を省く（S4b §46.4 の 4。載せる時点の HP で代えない）
+        taken: a.taken, ...(a.lowestPct !== null ? { lowestPct: a.lowestPct } : {}),
         used: counts(a.used), thrown: counts(a.thrownItems), abilities: counts(a.abilities).map((x) => ({ id: x.kind, n: x.n })),
         wardFires: a.wardFires,
         attempt: Math.max(1, attempts.get(ev.depth)?.size ?? 1),

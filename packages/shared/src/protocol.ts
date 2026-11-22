@@ -223,8 +223,11 @@ export interface SeasonStandingsResponse {
   slaysBrief?: SeasonSlayBrief[];
 }
 
-/** 開催中の外向けの討伐の記録（S4a §46）: 節目・倒した者の名前・レベル・職業・その階で載った順（1 が初討伐）だけ */
-export interface SeasonSlayBrief { depth: number; warden: Names; by: string; level: number; classId: string; order: number }
+/**
+ * 開催中の外向けの討伐の記録（S4a §46）: 節目・倒した者の名前・レベル・職業・その階で載った順だけ。
+ * firstKill（S4b）: 初討伐の称号の持ち主（倒した後に最初にキャンプへ着いた者）の行。載った順の 1 番目とは限らない
+ */
+export interface SeasonSlayBrief { depth: number; warden: Names; by: string; level: number; classId: string; order: number; firstKill?: true }
 
 // ---- ターンフィード（GET /api/player/feed、SSE） ----
 export type FeedEvent =

@@ -121,7 +121,7 @@ export const SeasonSlaySchema = z.object({
   level: z.number().int().positive(), classId: ContentIdSchema,
   weapon: SlayGearSchema.nullable(), armor: SlayGearSchema.nullable(), hidden: z.boolean().optional(),
   dealt: z.object({ melee: SlayHitsSchema, thrown: SlayHitsSchema, poison: SlayHitsSchema, feature: SlayHitsSchema, crits: z.number().int().nonnegative() }),
-  taken: z.number().int().nonnegative(), lowestPct: z.number().int().min(0).max(100),
+  taken: z.number().int().nonnegative(), lowestPct: z.number().int().min(0).max(100).optional(),
   used: SlayCountSchema, thrown: SlayCountSchema,
   abilities: z.array(z.object({ id: ContentIdSchema, n: z.number().int().positive() })).max(16),
   wardFires: z.number().int().nonnegative(), attempt: z.number().int().positive(), turns: z.number().int().nonnegative(),

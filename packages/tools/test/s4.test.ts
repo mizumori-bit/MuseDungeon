@@ -8,10 +8,12 @@ import { ENGINE_VERSION } from '@muse/engine';
 import { createApp, loadConfig, SessionManager } from '@muse/server';
 import type { PlayerPort } from '@muse/server';
 import type { AddressInfo } from 'node:net';
-import { applyEvent, buildObservation, describeTarget, formatObservationText, projectPlayerView, slayGroupText, slayObs } from '@muse/shared';
+import { applyEvent, buildObservation, describeTarget, emptyWorld, formatObservationText, projectPlayerView, slayGroupText, slayObs } from '@muse/shared';
 import type { Command, CommandRecord, Entity, GameEvent, PlayerView, Pos, World } from '@muse/shared';
 import { verifyRunDir } from '../src/replay';
 import { arena } from './v33duel';
+import { buildSlays } from '../../server/src/season/slays';
+import { movedAwayNote } from '../../server/src/session/PlayerPort';
 
 const content = loadContent();
 const catalog = buildCatalog(content);
@@ -304,7 +306,7 @@ describe('S4a (SEASON.md §46): the open season shows only who slew what over HT
       const outside = await get({ 'x-forwarded-for': '203.0.113.7' });
       const o = JSON.parse(outside) as { slays?: unknown; slaysBrief?: { depth: number; by: string; level: number; classId: string; order: number }[] };
       expect(o.slays).toBeUndefined();
-      expect(o.slaysBrief).toEqual([{ depth: 5, warden: expect.any(Object), by: 'Aya', level: expect.any(Number), classId: 'core:scout', order: 1 }]);
+      expect(o.slaysBrief).toEqual([{ depth: 5, warden: expect.any(Object), by: 'Aya', level: expect.any(Number), classId: 'core:scout', order: 1, firstKill: true }]);
       for (const secret of ['core:mace', 'dealt', 'lowestPct', 'core:potion_healing', 'core:throwing_knife', 'wardFires', 'turns', 'attempt']) expect(outside).not.toContain(secret);
       const local = JSON.parse(await get({})) as { slays?: { weapon: { kind: string } }[]; slaysBrief?: unknown };
       expect(local.slays?.[0].weapon.kind).toBe('core:mace');
@@ -340,6 +342,89 @@ describe('S4a (SEASON.md §46): the open season shows only who slew what over HT
     expect(m.seasons.get(SID)!.slays.map((x) => [x.name, x.runId])).toEqual([['Aya', a.session.runId]]);
     m.closeAll();
   }, 60_000);
+});
+
+describe('S4b (SEASON.md §46.4)', () => {
+  it('buildSlays on a plain history: an expedition that only entered the floor is no attempt; features, ward fires, abilities; a weapon taken from a supply cache; lowestPct left out when it cannot be known', () => {
+    let seq = 0;
+    const ev = (type: string, floor: string | null, p: Record<string, unknown>) => ({ type, seq: ++seq, cause: seq, floor, ft: 0, wall: 0, seenBy: [], ...p } as unknown as GameEvent);
+    const h: GameEvent[] = [
+      ev('player_joined', null, { player: { id: 'p1' }, entity: { id: 'e_me0001', pos: { floor: 'main:1', x: 1, y: 1 } } }),
+      ev('expedition_started', null, { expedition: { no: 1 } }),
+      ev('entity_changed_floor', 'main:5', { id: 'e_me0001', to: { floor: 'main:5', x: 1, y: 1 } }),
+      ev('player_state', null, { player: 'p1', state: 'at_camp' }),
+      ev('expedition_ended', null, { no: 1 }),
+      ev('expedition_started', null, { expedition: { no: 2 } }),
+      ev('player_state', 'main:4', { player: 'p1', state: 'alive', put: [{ id: 'e_me0001', pos: { floor: 'main:4', x: 1, y: 1 } }] }),
+      ev('supply_taken', 'main:4', { player: 'p1', depth: 4, put: [{ id: 'e_spear01', kind: 'core:spear', item: { qty: 1, affixes: [] } }] }),
+      ev('entity_changed_floor', 'main:5', { id: 'e_me0001', to: { floor: 'main:5', x: 1, y: 1 } }),
+      ev('ability_used', 'main:5', { actor: 'e_me0001', ability: 'core:bash' }),
+      ev('feature_state', 'main:5', { id: 'e_fire01', kind: 'core:ward_fire', state: 'out' }),
+      ev('damaged', 'main:5', { target: 'e_ward01', via: 'effect', source: null, amount: 7, dealt: 7 }),
+      ev('attack', 'main:5', { attacker: 'e_me0001', target: 'e_ward01', hit: true, crit: false }),
+      ev('damaged', 'main:5', { target: 'e_ward01', via: 'melee', source: 'e_me0001', amount: 5, dealt: 5 }),
+      ev('warden_slain', 'main:5', { depth: 5, id: 'e_ward01', guardianName: { ja: '試し', en: 'Trial' }, by: 'e_me0001' }),
+    ];
+    const live = {
+      players: { p1: { entityId: 'e_me0001', classId: 'core:scout', knowledge: { identified: [] } } },
+      entities: { e_me0001: { id: 'e_me0001', equip: { weapon: 'e_spear01' }, level: { level: 4, xp: 0 } }, e_spear01: { id: 'e_spear01', kind: 'core:spear', item: { qty: 1, affixes: [] } } },
+      secret: { appearances: {} },
+    } as unknown as World;
+    const [s] = buildSlays(h, { world: emptyWorld(), from: Number.MAX_SAFE_INTEGER }, 'p1', live, new Set());
+    expect(s.attempt).toBe(1);
+    expect(s.weapon).toEqual({ kind: 'core:spear', affixes: [], got: 'supply', depth: 4 });
+    expect(s.dealt.feature).toEqual({ total: 7, n: 1 });
+    expect(s.dealt.melee).toEqual({ total: 5, n: 1 });
+    expect(s.wardFires).toBe(1);
+    expect(s.abilities).toEqual([{ id: 'core:bash', n: 1 }]);
+    expect('lowestPct' in s).toBe(false);
+    expect(slayObs('ja', catalog, { ...s, by: 'X', of: 1 }).text).not.toContain('HP がいちばん減って');
+    // 1 回目の遠征でも大守護者と攻撃し合っていれば、2 回目の挑戦
+    const h2 = [...h.slice(0, 3), ev('attack', 'main:5', { attacker: 'e_ward01', target: 'e_me0001', hit: false, crit: false }), ...h.slice(3)].map((e, i) => ({ ...e, seq: i + 1 }) as GameEvent);
+    expect(buildSlays(h2, { world: emptyWorld(), from: Number.MAX_SAFE_INTEGER }, 'p1', live, new Set())[0].attempt).toBe(2);
+  });
+
+  it('the open-season brief marks the first kill on the holder of the first-kill title, not on the first record (a slayer who died before camp is recorded first)', async () => {
+    const m = manager();
+    openSeason(m);
+    const a = await seasonRun(m, 'Aya');
+    const b = await seasonRun(m, 'Ben');
+    await slayWarden5(a);
+    expect((await act(a, { type: 'retire' })).ok).toBe(true);
+    await slayWarden5(b);
+    await lifelineHome(b);
+    expect(m.seasons.get(SID)!.deeds.map((x) => x.name)).toEqual(['Ben']);
+    const brief = m.seasons.standings(SID)!.slaysBrief!;
+    expect(brief.map((x) => `${x.order}:${x.by}:${x.firstKill ? 'F' : ''}`)).toEqual(['1:Aya:', '2:Ben:F']);
+    m.closeAll();
+  }, 60_000);
+
+  it('a server restarted while the slayer is still in the dungeon does not publish the record', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'muse-s4b-'));
+    try {
+      const m = manager(dir);
+      openSeason(m);
+      const a = await seasonRun(m, 'Aya');
+      await slayWarden5(a);
+      m.closeAll();
+      const m2 = manager(dir);
+      m2.recoverAll();
+      expect(m2.get(a.session.runId)).toBeTruthy();
+      expect(m2.seasons.get(SID)!.slays).toEqual([]);
+      m2.closeAll();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it('"the target moved away" note says a shooter shoots from afar, never that it backs off (a bone archer does not)', async () => {
+    const a = await arena('s4b-archer', { map: ['PG..'], guardian: { kind: 'core:bone_archer', hp: 20, dmg: '1d1', types: [], state: 'asleep' } });
+    await a.r.port.act({ type: 'wait' }, { source: 'bot' });
+    const note = movedAwayNote('ja', catalog, projectPlayerView(a.world, a.pid), a.gId);
+    expect(note).toContain('離れて撃つ相手');
+    expect(note).not.toContain('下がる');
+    a.manager.closeAll();
+  });
 });
 
 describe('S4 §42.3 の 2: unreachable names what blocks the way on the known map', () => {

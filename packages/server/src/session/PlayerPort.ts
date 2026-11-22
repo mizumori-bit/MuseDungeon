@@ -160,6 +160,24 @@ function seasonBriefing(L: Locale, s: NonNullable<PlayerView['season']>, fire?: 
   ];
 }
 
+/**
+ * fight が「相手が離れた」で止まったときの添え書き（S4 §35.6 の 4）: 離れて撃つ相手・逃げる相手には、寄って殴るより、投げる品か視線を切る。
+ * 言うのは、見れば分かる性質（公開の種族のタグ `ranged`）と思い出（`ranged`・`flees`）の範囲だけ。「寄ると下がる」は種族ごとに違う
+ * （骨の射手は下がらない）ので言わない（S4b §46.4 の 3）
+ */
+export function movedAwayNote(L: Locale, catalog: Catalog, view: PlayerView, targetId: string): string {
+  const tg = view.entities.find((e) => e.id === targetId && e.cat === 'monster');
+  const kind = tg?.kind ?? null;
+  const mem = kind ? view.monsterMemory[kind] : undefined;
+  const ranged = !!kind && (!!catalog.monsters[kind]?.tags.includes('ranged') || !!mem?.abilities.includes('ranged'));
+  const flees = !!tg?.fleeing || !!mem?.abilities.includes('flees');
+  if (!ranged && !flees) return '';
+  const name = tg ? kindName(catalog, L, tg.kind) : '';
+  return ranged
+    ? t(L, `${name}は離れて撃つ相手なので、寄って殴るのは難しいことがある。この相手には、投げる品（fight { target, with }）か、視線を切る（曲がり角・扉の陰に入り、寄ってくるのを待つ）。`, `The ${name} shoots from afar, so walking up to strike may not work. Against it, throw things (fight { target, with }) or break its line of sight (step behind a corner or door and let it come to you).`)
+    : t(L, `${name}は手負いになると逃げる相手なので、追っても追いつきにくい。この相手には、投げる品（fight { target, with } は逃げる相手にも投げる）。`, `The ${name} runs when wounded, so chasing it rarely works. Against it, throw things (fight { target, with } throws at fleeing targets too).`);
+}
+
 const STOP_TEXT: Record<string, [string, string]> = {
   hostile_in_view: ['敵が視界に入った', 'a hostile came into view'],
   hostile_adjacent: ['隣に起きている敵がいる（退くなら mode: flee、戦うなら fight）', "an awake enemy is adjacent (retreat with mode: 'flee', or fight)"],
@@ -538,17 +556,8 @@ export class SessionPlayerPort implements PlayerPort {
         }
         // 相手が離れて止まった（S4 §35.6 の 4）: 離れて撃つ・寄ると下がる・逃げる相手には、寄って殴るより、投げる品か視線を切る（相手の習性は公開の種族の性質と思い出から）
         if (cmd.type === 'fight' && r.interruptedBy === 'target_moved') {
-          const tg = view.entities.find((e) => e.id === cmd.target && e.cat === 'monster');
-          const kind = tg?.kind ?? null;
-          const mem = kind ? view.monsterMemory[kind] : undefined;
-          const ranged = !!kind && (!!this.catalog.monsters[kind]?.tags.includes('ranged') || !!mem?.abilities.includes('ranged'));
-          const flees = !!tg?.fleeing || !!mem?.abilities.includes('flees');
-          if (ranged || flees) {
-            const name = tg ? kindName(this.catalog, L, tg.kind) : '';
-            outcome += ' ' + (ranged
-              ? t(L, `${name}は離れて撃ち、すぐ近くまで寄られると下がる相手なので、寄って殴るのは難しい。この相手には、投げる品（fight { target, with }）か、視線を切る（曲がり角・扉の陰に入り、寄ってくるのを待つ）。`, `The ${name} shoots from afar and backs off when you get right next to it, so walking up to strike rarely works. Against it, throw things (fight { target, with }) or break its line of sight (step behind a corner or door and let it come to you).`)
-              : t(L, `${name}は手負いになると逃げる相手なので、追っても追いつきにくい。この相手には、投げる品（fight { target, with } は逃げる相手にも投げる）。`, `The ${name} runs when wounded, so chasing it rarely works. Against it, throw things (fight { target, with } throws at fleeing targets too).`));
-          }
+          const note = movedAwayNote(L, this.catalog, view, cmd.target);
+          if (note) outcome += ' ' + note;
         }
         // hp_floor で止まった（S4 §35.6 の 1・3）: 使った値と、それが HP の値（割合ではない）であること。1 歩の間に何度も撃たれると、その分だけ下回って止まる
         if (r.interruptedBy === 'hp_floor' && m?.hpFloor !== undefined) {

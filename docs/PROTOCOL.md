@@ -1359,13 +1359,13 @@ SeasonSlay {
   //   melee・thrown: 倒した者の近接・投擲（能動技を含む）、poison: 毒（だれの毒でも）、feature: 地物（脆い天井など。via effect・trap・other で、倒した者でないもの）
   //   SlayHits { total, n }（1 回あたり = total ÷ n。total は実際に減った HP = damaged.dealt）。crits: 近接の会心（attack.crit。投擲の会心は出来事に印が無いので数えない）
   taken: number                  // 受けた被害の合計
-  lowestPct: number              // いちばん低かった HP の割合（%）
+  lowestPct?: number             // いちばん低かった HP の割合（%。記録から分からなければ無い。S4b）
   used: { kind, n }[]            // 使った品（item_used。帰還の綱・鍵を除く）
   thrown: { kind, n }[]          // 投げた品（item_thrown）
   //   used・thrown は、載せる時点で倒した者が鑑定済みの種類（か外見の無い品）だけ
   abilities: { id, n }[]         // 使った能動技
   wardFires: number              // 消した護りの火の数（feature_state の out）
-  attempt: number                // このランで、その階に入った遠征の何回目か
+  attempt: number                // 倒したランで、大守護者と戦った（攻撃・被害の出来事があった）遠征の何回目か（S4b）
   turns: number                  // 倒した遠征の、始めてから倒すまでの自分の手番（倒した一手を含む）
 }
 SlayGear { kind: string; affixes: string[]; got: 'picked' | 'supply' | 'start'; depth?: number }
@@ -1382,4 +1382,6 @@ SlayGear { kind: string; affixes: string[]; got: 'picked' | 'supply' | 'start'; 
 - **HTTP**（S4a で改めた。SEASON.md §46）: `GET /api/seasons/:id` の `slays?: SeasonSlay[]`（見せる分と同じ。`mine` は付かない。位置・プロフィールの ID は無い）は、**シーズンが確定した後か、同じ機械からの接続（運用者。観戦の決まり §9.7 と同じ `isLocalRequest`）にだけ**出す。開催中のほかの接続には、中身の代わりに `slaysBrief?: { depth, warden, by, level, classId, order }[]`（節目ごとに、載った順。`order` 1 が初討伐。すべての記録）だけを出す（外との出入りはキャンプだけ: 参加者はキャンプの取り込みで受け取る。遠征の途中の者・招かれていない者が HTTP から先に読む道を作らない）。運用の道具の `season -- standings` は中身まで。`SeasonService.standings(id, { full })` の既定は中身なし。人間の画面の結果の画面（`#/season/<id>`）に「討伐の記録」の枠（開催中の外からは、だれが何番目に倒したかと「中身はシーズンが確定してから」の 1 行）、キャンプの枠に「記録庫・討伐の記録」、大守護者の候補のカードに同じ文（観測から作るので、キャンプの取り込みの中身）。
 - **参加者ごとに 1 件**（S4a）: 記録は参加者（プロフィール）ごと・節目ごとに 1 件。倒れてやり直した参加者が同じ大守護者をまた倒しても、最初の 1 件を残す（後のランの記録は足さない）。`attempt` の文は「倒したランの中で N 回目の挑戦（それより前のランの挑戦は数えない）」。
 - **再生**: 取り込んだ記録は `season_sync` の命令にあるので、再生は記録だけで一致する（シーズンの記録のファイルを読まない）。
+- **運用**（S4b）: `seasons/<id>/slays.json` が無ければ、空として読む。起動時に作り直すのは、動いているラン（キャンプにいるもの）の、まだ載っていない記録だけで、終わったランの分は戻らない（記録を消したら、そのランの討伐の記録は失われる）。
+- **S4b**: `attempt`（挑んだ回数）は、大守護者を的・攻撃者・被害の元とする出来事（`attack`・`damaged`・`warden_slain`）が 1 つでもあった遠征だけを数える（階に入っただけの遠征は数えない）。`lowestPct` は、記録から分からないとき（畳めない区間しか無い）は省く。開催中の `slaysBrief` の `firstKill` は、初討伐の称号の持ち主（倒した後に最初にキャンプへ着いた者。§9.11）の行だけで、`order`（載った順）の 1 番目とは限らない（倒して帰る前に倒れた者の記録も載るが、初討伐には数えない）。
 - **漏れないもの**: 場所の座標・ほかの参加者の今の位置と進行中の遠征（キャンプに着いた後の確定した事実だけ）・未鑑定の品の正体（装備は鑑定済みだけ、使った品も倒した者が鑑定済みの種類だけ。種類の名前は公開のカタログにある）・トークン・プロフィールの ID。

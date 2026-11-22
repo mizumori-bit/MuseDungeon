@@ -153,7 +153,7 @@ export function Season({ id }: { id: string }) {
                 {[...new Set((data.slaysBrief ?? []).map((x) => x.depth))].sort((a, b) => a - b).map((depth) => {
                   const recs = (data.slaysBrief ?? []).filter((x) => x.depth === depth).sort((a, b) => a.order - b.order);
                   const warden = guardianDisplayName(L, { name: recs[0].warden });
-                  return <li key={depth}><b>{tr(`地下${depth}階「${warden}」`, `Depth ${depth} "${warden}"`)}</b>: {recs.map((r) => tr(`${r.order}. ${r.by}（Lv${r.level}・${catalog ? nameOfClass(catalog, r.classId, L) : r.classId}）${r.order === 1 ? '初討伐' : ''}`, `${r.order}. ${r.by} (Lv${r.level} ${catalog ? nameOfClass(catalog, r.classId, L) : r.classId})${r.order === 1 ? ' first kill' : ''}`)).join(tr('／', ' / '))}</li>;
+                  return <li key={depth}><b>{tr(`地下${depth}階「${warden}」`, `Depth ${depth} "${warden}"`)}</b>: {recs.map((r) => tr(`${r.order} 番目に載った: ${r.by}（Lv${r.level}・${catalog ? nameOfClass(catalog, r.classId, L) : r.classId}）${r.firstKill ? '・初討伐' : ''}`, `recorded #${r.order}: ${r.by} (Lv${r.level} ${catalog ? nameOfClass(catalog, r.classId, L) : r.classId})${r.firstKill ? ', first kill' : ''}`)).join(tr('／', ' / '))}</li>;
                 })}
               </ul>
             </section>
