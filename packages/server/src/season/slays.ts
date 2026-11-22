@@ -20,6 +20,8 @@ interface Acc {
   /** 予備動作（種類ごと。最初に構えた順） */
   tells: Map<string, SlayTell>;
   openings: SlayOpenings;
+  /** 戦いが始まったときの相手（S6） */
+  start?: { scar: number; hp: number; firesLit?: number };
 }
 
 const newAcc = (): Acc => ({
@@ -128,6 +130,23 @@ class FightScan {
   acc(depth: number, no: number): Acc | undefined { return this.accs.get(`${depth}|${no}`); }
   /** 自分が、その大守護者の階で遠征をしているときの数えかけ */
   private accHere(depth: number): Acc | null { return this.floor === `main:${depth}` && this.curNo !== null ? this.accFor(depth) : null; }
+
+  /**
+   * 戦いが始まった（S5a。自分が当事者の攻撃・被害か、自分に向いた構えを見た）。その遠征で初めてなら、そのときの相手の傷跡・始めの体力・
+   * 灯っていた護りの火を控える（S6 §49.5 の 2。畳んだ World から。畳めない区間では控えない）
+   */
+  private engage(wid: string): void {
+    if (this.engaged.has(wid)) return;
+    this.engaged.add(wid);
+    const t = this.tracks.get(wid);
+    const acc = t ? this.accHere(t.depth) : null;
+    if (!acc || acc.start || !this.me()) return;
+    const e = this.w.entities[wid];
+    if (!e?.stats || !e.pos) return;
+    const scar = Math.max(0, e.scar ?? 0);
+    const fires = Object.values(this.w.entities).filter((x) => x.kind === 'core:ward_fire' && x.pos?.floor === e.pos!.floor && (!x.lairOf || x.lairOf === wid));
+    acc.start = { scar, hp: Math.max(0, e.stats.maxHp - scar), ...(fires.length ? { firesLit: fires.filter((x) => x.feature?.state === 'lit').length } : {}) };
+  }
 
   /** 大守護者が自分から見えるか（畳んだ World の視界と、草の中か。畳めないときは見えていたことにする） */
   private sees(wid: string): boolean {
@@ -250,7 +269,7 @@ class FightScan {
       const note = (dep: number) => { const s = this.attempts.get(dep) ?? new Set<number>(); s.add(this.curNo!); this.attempts.set(dep, s); };
       if (wid && d !== undefined && this.floor === `main:${d}`) {
         note(d);
-        this.engaged.add(wid);
+        this.engage(wid);
         this.lastFight.set(wid, { no: this.curNo, snap: this.snap() });
       }
       if (ev.type === 'warden_slain' && this.wardens.has(ev.id)) note(this.wardens.get(ev.id)!);
@@ -300,7 +319,7 @@ class FightScan {
           t.pendingAcc.tells.set(t.intent, rec);
           t.tell = rec;
           // 自分に向いた構えを見たら、戦いが始まった（突進が空を切ると、攻撃の出来事は出ない。S5a）
-          this.engaged.add(wid);
+          this.engage(wid);
         }
         const helpless = t.asleep || [...t.statuses].some((s) => this.incap.has(s));
         if (helpless && visible) {
@@ -349,6 +368,7 @@ class FightScan {
       turns: snap.turns,
       tells: [...x.tells.values()].map((t) => ({ ...t })),
       openings: { missed: { ...x.openings.missed }, other: { ...x.openings.other } },
+      ...(x.start ? { wardenStart: { ...x.start } } : {}),
     };
   }
 

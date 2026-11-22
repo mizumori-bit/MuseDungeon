@@ -268,7 +268,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
   const noProfile = () => errOut(actionError('no_session', 'プロフィールが見つからない / no profile', 'profile_token を渡すか、ランに束縛してから呼ぶ / pass profile_token or bind a run first'));
   server.registerTool('records', {
     title: '記録と図鑑',
-    description: 'プロフィールの記録（ランの数・確定点の最高と平均・最深・達成した遠征・倒した大守護者・死因・直近のラン）、図鑑（種族・鑑定した品・納めた遺物・守護者の型と弱点・断章・特殊部屋。完成度は「見つけた/全部」）、実績、次の節目。ランをまたいで残る。手番を消費しない。profile_token を省くと、この接続のプレイヤーのプロフィール。Records, codex and feats of your profile.',
+    description: 'プロフィールの記録（ランの数・確定点の最高と平均・最深・達成した遠征・倒した大守護者・死因・直近のラン）、図鑑（種族・鑑定した品・納めた遺物・守護者の型と弱点・断章・特殊部屋。完成度は「見つけた/全部」）、実績、次の節目。シーズンのランでは、記録庫の討伐の記録の全文も（キャンプの記録庫は 1 行にたたむ）。ランをまたいで残る。手番を消費しない。profile_token を省くと、この接続のプレイヤーのプロフィール。Records, codex and feats of your profile.',
     inputSchema: { ...common, profile_token: z.string().optional(), locale: z.enum(['ja', 'en']).optional() },
   }, async (args) => {
     const pp = profileOf(args.profile_token, args.player_token);
@@ -276,7 +276,11 @@ export function createMcpServer(ctx: McpContext): McpServer {
     const port = portOf(args.player_token);
     const r = pp.records(args.locale ?? port?.locale() ?? 'ja');
     if (!r) return noProfile();
-    return port && !args.profile_token ? withTurn(port, r.text, { records: r.data }) : out(r.text, { records: r.data });
+    // 討伐の記録の全文（S6 §49.5 の 3・4: キャンプの記録庫は 1 行にたたむ）。この接続のプレイヤーのシーズンのランで、取り込んだもの
+    const sa = port && !args.profile_token ? port.slayArchive() : null;
+    const text = sa?.lines.length ? `${r.text}\n${sa.lines.join('\n')}` : r.text;
+    const data = { records: r.data, ...(sa?.data.length ? { slays: sa.data } : {}) };
+    return port && !args.profile_token ? withTurn(port, text, data) : out(text, data);
   });
   server.registerTool('profile', {
     title: 'プロフィール',

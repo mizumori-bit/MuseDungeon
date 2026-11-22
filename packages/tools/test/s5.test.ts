@@ -8,7 +8,7 @@ import { buildCatalog, loadContent } from '@muse/content';
 import { ENGINE_VERSION } from '@muse/engine';
 import { createApp, loadConfig, SessionManager } from '@muse/server';
 import type { PlayerPort } from '@muse/server';
-import { applyEvent, buildObservation, emptyWorld, formatObservationText, macroProbe, projectPlayerView, SeasonSlaySchema, SeasonSyncSchema, slayObs } from '@muse/shared';
+import { applyEvent, buildObservation, emptyWorld, formatObservationText, macroProbe, projectPlayerView, SeasonSlaySchema, SeasonSyncSchema, slayObs, slayShortText } from '@muse/shared';
 import { arena } from './v33duel';
 import type { Command, Entity, GameEvent, SeasonSlay, World } from '@muse/shared';
 import { buildAttempts, buildSlays, incapStatuses } from '../../server/src/season/slays';
@@ -95,7 +95,7 @@ const CARD: [string, number, number, string, number, number][] = [['e', 1, 0, 's
  * 突進を 1 回外させて、外させた手番に 1 回殴る。大守護者を突き進む者にして、自分の後ろが壁のマス P に置き、大守護者を P から 3 マス先に置く。
  * 構えを見たら横へ 1 歩外れる（突進は P で壁に止まり、隣で朦朧になる）
  */
-async function chargeMiss(r: Run, wid: string, opts: { grass?: boolean } = {}): Promise<void> {
+async function chargeMiss(r: Run, wid: string, opts: { grass?: boolean; scar?: number } = {}): Promise<void> {
   const w = r.session.world;
   const key = floorOf(r);
   const f = w.floors[key];
@@ -123,7 +123,8 @@ async function chargeMiss(r: Run, wid: string, opts: { grass?: boolean } = {}): 
   edit(r, wid, (e) => {
     e.pos = { floor: key, x: p.x + dx * 3, y: p.y + dy * 3 };
     e.guardian!.types = ['core:charger'];
-    e.stats!.hp = 500; e.stats!.maxHp = 500; e.stats!.eva = -99;
+    e.stats!.hp = 500 - (opts.scar ?? 0); e.stats!.maxHp = 500; e.stats!.eva = -99;
+    if (opts.scar) e.scar = opts.scar;
     e.actor!.ai = { ...e.actor!.ai!, state: 'hunting', targetPos: { ...p }, lostTurns: 0 };
     delete e.actor!.ai.intent;
     delete e.actor!.dormant;
@@ -239,7 +240,21 @@ describe('S5 §47.4 の 1: telegraphs and the turns the warden could not act, co
     expect(o.openings).toBeUndefined();
     expect(o.text).not.toContain('予備動作');
     expect(o.text).not.toContain('動けなかった');
+    expect(o.text).not.toContain('戦い始めの相手');
     expect(o.text).toContain('与えた被害 90');
+    // S6 §49.5 の 1・2: 候補の短い形は「何で倒したか」「護りの火」から。傷跡から始めた相手は、そう書く（アオイの 5 回目の形）
+    const aoi = {
+      ...old, by: 'アオイ', level: 7, weapon: { kind: 'core:short_sword', affixes: [], got: 'start' as const },
+      dealt: { melee: { total: 51, n: 9 }, thrown: { total: 0, n: 0 }, poison: { total: 0, n: 0 }, feature: { total: 0, n: 0 }, crits: 0 }, taken: 51, attempt: 5,
+      tells: [{ kind: 'winding_up' as const, n: 5, seen: 5, missed: 5, hit: 0 }], wardenStart: { scar: 39, hp: 51, firesLit: 0 },
+    };
+    expect(SeasonSlaySchema.parse(aoi)).toEqual(aoi);
+    const so = slayObs('ja', catalog, aoi);
+    expect(slayShortText('ja', so)).toBe('アオイ（Lv7・戦士）。小剣の近接だけ・品なし・護りの火は消してから。突進の構えを 5 回外させた。与 51・受 51（相手は傷跡で体力 −39 から。始めの体力 51）。5 回目の挑戦');
+    expect(so.text).toContain('戦い始めの相手: 傷跡で体力 −39（始めの体力 51）・灯っていた護りの火 0');
+    // 灯ったまま・いろいろな出どころ
+    const mix = { ...aoi, dealt: { ...aoi.dealt, poison: { total: 11, n: 11 }, thrown: { total: 1, n: 1 } }, used: [{ kind: 'core:potion_healing', n: 1 }], wardenStart: { scar: 0, hp: 90, firesLit: 1 } };
+    expect(slayShortText('ja', slayObs('ja', catalog, mix))).toMatch(/^アオイ（Lv7・戦士）。小剣の近接 51・投擲 1・毒 11・品: 回復の薬 1・護りの火が 1 つ灯ったまま。/);
   });
 });
 
@@ -262,6 +277,8 @@ describe('S5 §47.4 の 2: after coming back from a warden without slaying it, c
     expect(recs[0].openings!.missed.turns).toBe(1);
     expect(recs[0].openings!.missed.dealt).toBeGreaterThan(0);
     expect(recs[0].openings!.missed.hitTurns).toBe(1);
+    // S6 §49.5 の 2: 戦いが始まったときの相手（傷跡なし。この大守護者の棲み処には護りの火が無い）
+    expect(recs[0].wardenStart).toEqual({ scar: 0, hp: 500 });
     // slays.json を消して起動し直したのと同じ: キャンプにいる、終わっていないランの記録が、新しい項目で作り直される
     const before = structuredClone(recs[0]);
     m.seasons.get(SID)!.slays.length = 0;
@@ -336,7 +353,8 @@ describe('S5 §47.4 の 2: after coming back from a warden without slaying it, c
     vb.milestonesCleared = [];
     const offer = buildObservation(vb, catalog, { detail: 'full', map: false, wardenPrev: { 5: prev } }).camp!.offers[0];
     expect(offer.slays![0].text).toBe(x.records[0].text);
-    expect(offer.text).toMatch(new RegExp(` / 先に倒した者（倒した記録 1 件）: Aya（Lv\\d+・戦士・小剣）。与えた被害 \\d+・受けた被害 \\d+・突進の構えを 1 回見て 1 回外させた・\\d+ 手番目に倒した。／あなたの前の挑戦（遠征 ${cmp.no}）: 与えた被害 \\d+・受けた被害 \\d+・突進の構えを 1 回見て 1 回外させた。詳しくは記録庫$`));
+    // S6: 何で倒したか・護りの火から始める短い形（この大守護者の棲み処には火が無い）
+    expect(offer.text).toMatch(new RegExp(` / 先に倒した者（倒した記録 1 件）: Aya（Lv\\d+・戦士）。小剣の近接だけ・品なし。突進の構えを 1 回外させた。与 \\d+・受 \\d+。1 回目の挑戦。／あなたの前の挑戦（遠征 ${cmp.no}）: 与えた被害 \\d+・受けた被害 \\d+・突進の構えを 1 回見て 1 回外させた。全文は records$`));
     expect(offer.text).not.toContain('使った品');
     // 2 人の列（最初の 1 人・いちばん少ない被害の 1 人）。S5 より前の記録の列は「記録に無い」
     const ws = b.session.wardenAttempts(b.playerId, cmp.no);
@@ -359,7 +377,7 @@ describe('S5 §47.4 の 2: after coming back from a warden without slaying it, c
     expect(le.find((l) => l.includes('made to miss'))).toBe('  charge wind-ups made to miss: 1 (saw 1, 0 hit you) / 1 (saw 1, 0 hit you)');
     expect(le.find((l) => l.startsWith('  turns it could not act after a missed wind-up: '))).toMatch(/: 1 turn: dealt \d+ \(landed in 1\), took 0 \/ 1 turn: dealt \d+ \(landed in 1\), took 0$/);
     expect(le.join('\n')).not.toMatch(/\b1 turns\b|wind-ups miss/);
-    expect(oe.camp!.offers[0].text).toMatch(new RegExp(`your last attempt \\(expedition ${cmp.no}\\): dealt \\d+, took \\d+, charge wind-ups: saw 1, 1 missed\\. Details in the archive$`));
+    expect(oe.camp!.offers[0].text).toMatch(new RegExp(`your last attempt \\(expedition ${cmp.no}\\): dealt \\d+, took \\d+, charge wind-ups: saw 1, 1 missed\\. Full text: records$`));
     expect(oe.camp!.offers[0].text).toContain('charge wind-ups: saw 1, 1 missed');
     expect(oe.season!.slay_news![0].text).toMatch(/^New warden kill record: Aya \(Lv\d+ .+, .+\) slew ".+" on depth 5 \(dealt \d+, took \d+, charge wind-ups: 1 missed\)$/);
     // 記録が無くても、自分の前の挑戦は出す
@@ -378,9 +396,24 @@ describe('S5 §47.4 の 2: after coming back from a warden without slaying it, c
     expect(ob2.camp!.compare).toBeTruthy();
     expect(ob2.camp!.compare!.wardens).toBeUndefined();
     expect(formatObservationText(ob2, 'ja')).not.toContain('の挑戦（倒さずに帰った）');
-    // 並べが無ければ、記録庫は全文。知らせは 2 度出ない
-    expect(ob2.camp!.archive!.slays![0].text).toContain(`: 先に倒した者（倒した記録 1 件）: ${x.records[0].text}`);
+    // 並べも新しい記録も無いキャンプでは、記録庫は 1 行（S6 §49.5 の 4）。全文は records で読める。知らせは 2 度出ない
+    expect(ob2.camp!.archive!.slays![0].text).toBe(`記録庫・討伐の記録 地下5階の大守護者「${x.warden}」: 倒した記録 1 件（最初で、いちばん少ない被害: Aya）。全文は records`);
+    expect(ob2.camp!.archive!.slays![0].records[0].text).toBe(x.records[0].text);
+    const sa = b.port.slayArchive();
+    expect(sa.lines.some((l) => l.includes(x.records[0].text))).toBe(true);
+    expect(sa.data[0].records[0].text).toBe(x.records[0].text);
     expect(ob2.season!.slay_news).toBeUndefined();
+    // 倒した者のキャンプ: もう倒した大守護者の記録は 1 行（S6 §49.5 の 3）
+    expect(a.port.observe().observation.camp!.archive!.slays![0].text).toMatch(/: 倒した記録 1 件（最初で、いちばん少ない被害: Aya）。全文は records$/);
+    // 記録を初めて見るキャンプ（並べが無い）では全文、その次のキャンプからは 1 行（S6 §49.5 の 4）。後から参加した者は、最初のキャンプで全文
+    const c = await seasonRun(m, 'Cal');
+    const oc = c.port.observe().observation;
+    expect(oc.season!.slay_news).toBeUndefined();
+    expect(oc.camp!.archive!.slays![0].text).toContain(`: 先に倒した者（倒した記録 1 件）: ${x.records[0].text}`);
+    expect((await act(c, { type: 'start_expedition', offer: 1 })).ok).toBe(true);
+    clearMonsters(c);
+    await lifelineHome(c);
+    expect(c.port.observe().observation.camp!.archive!.slays![0].text).toMatch(/: 倒した記録 1 件（.+）。全文は records$/);
     // 前の挑戦は、何回前の遠征でも（いちばん新しいもの）
     expect(b.session.lastWardenAttempt(b.playerId, 5)?.no).toBe(cmp.no);
     m.closeAll();
@@ -391,9 +424,12 @@ describe('S5 §47.4 の 2: after coming back from a warden without slaying it, c
     openSeason(m);
     for (const r of [await seasonRun(m, 'Cid'), await plainRun(m, 'Dee')]) {
       const wid = await toWarden(r);
-      await chargeMiss(r, wid);
+      // 前の挑戦で傷跡 −39 が残っている相手（S6 §49.5 の 2）
+      await chargeMiss(r, wid, { scar: 39 });
       await lifelineHome(r);
       const x = r.port.observe().observation.camp!.compare!.wardens!;
+      expect(x[0].attempt.warden_start).toEqual({ scar: 39, hp: 461 });
+      expect(x[0].lines).toContain('  戦い始めの相手: 体力 461（傷跡 −39）');
       expect(x).toHaveLength(1);
       expect(x[0].records).toEqual([]);
       // 自分の列だけ

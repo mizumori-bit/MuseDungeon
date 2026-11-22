@@ -467,13 +467,14 @@ export class RunSession {
    * 取り込みより前の取り込み（前のキャンプまでに見えていたもの）に無かった記録（深さと名前で見る。自分の記録は除く）。
    * キャンプにいて、遠征を 1 つ以上終えているときだけ。ランの記録（取り込みの出来事）から作り、何も書かない
    */
-  slayNews(pid: PlayerId): SeasonSlay[] {
+  slayNews(pid: PlayerId, opts: { firstCamp?: boolean } = {}): SeasonSlay[] {
     const pr = this.world.players[pid];
     const cur = (this.world.season?.slays ?? []).filter((s) => !s.mine);
     if (!pr || pr.state !== 'at_camp' || !cur.length) return [];
     const xs = (this.world.expeditions ?? []).filter((x) => x.participants.includes(pid) && x.endSeq !== null);
     const x = xs[xs.length - 1];
-    if (!x) return [];
+    // ランの最初のキャンプ（まだ遠征を終えていない）: 知らせは出さない。firstCamp なら、取り込んであるものすべてを、そのキャンプで初めて見るものとする（S6 §49.5 の 4）
+    if (!x) return opts.firstCamp ? cur : [];
     const key = `${pid}|${x.no}`;
     let seen = this.slaySeen.get(key);
     if (!seen) {

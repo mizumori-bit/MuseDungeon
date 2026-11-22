@@ -241,6 +241,8 @@ export interface ObsSlay {
    * rest: それ以外の手番（相手が動けた手番）に与えた被害（毒の目盛りを含む）・受けた被害（記録の合計から 2 つを引いた残り）
    */
   openings?: { missed: ObsOpening; other: ObsOpening; rest: { dealt: number; taken: number } };
+  /** 戦いが始まったときの相手（S6）: 傷跡・始めの体力・灯っていた護りの火（棲み処に火のある相手だけ）。S6 より前の記録には無い */
+  warden_start?: { scar: number; hp: number; fires_lit?: number };
   text: string;
 }
 /** 相手が動けなかった手番の数（S5）: turns・その手番の自分の行動で与えた被害・被害を与えた手番の数・その手番に受けた被害 */
@@ -430,6 +432,11 @@ export interface ObservationOptions {
   wardenPrev?: Record<number, { no: number; facts: SeasonSlayFacts }>;
   /** キャンプ: 前のキャンプの後に初めて受け取った討伐の記録（S5b。サーバーがそのランの取り込みの記録から決める。1 つのキャンプの間だけ） */
   slayNews?: SeasonSlay[];
+  /**
+   * キャンプ: 記録庫の討伐の記録を全文で出す節目（S6 §49.5 の 3・4）。そのキャンプで初めて見る記録のある、まだ倒していない節目
+   * （知らせの出る記録と、ランの最初のキャンプで取り込んであった記録）。ほかは 1 行にたたむ
+   */
+  slayFullDepths?: number[];
   /** キャンプ: 候補に添える注記（候補の番号 → 文。再挑戦の前回の戦い。V3-3c §44.1） */
   offerNotes?: Record<number, string>;
   /** キャンプ: プロフィールの記録の 1 行と、直前の遠征で取った実績（V3-7 §7.2・§7.4） */
@@ -965,11 +972,15 @@ function openingsText(L: Locale, op: ObsSlay['openings']): string {
   return parts.join(t(L, '。', '. '));
 }
 
-/** 予備動作の短い文（S5a。候補に出す）: 「突進の構えを 11 回見て 11 回外させた」。構えが無い・項目が無ければ空 */
-function tellsShortText(L: Locale, tells: readonly { kind: string; n: number; seen: number; missed: number }[] | undefined): string {
-  return (tells ?? []).filter((x) => x.seen > 0).map((x) => (isStrike(x.kind) && x.missed
-    ? t(L, `${tellName(L, x.kind)}を ${x.seen} 回見て ${x.missed} 回外させた`, `${tellPlural(L, x.kind)}: saw ${x.seen}, ${x.missed} missed`)
-    : t(L, `${tellName(L, x.kind)}を ${x.seen} 回見た`, `${tellPlural(L, x.kind)}: saw ${x.seen}`))).join(t(L, '・', '; '));
+/** 記録庫の、たたんだ 1 行（S6 §49.5 の 3・4）: 「倒した記録 3 件（最初: アオイ・いちばん少ない被害: ナズナ）。全文は records」 */
+function slayFoldText(L: Locale, recs: readonly ObsSlay[]): string {
+  if (!recs.length) return '';
+  const first = recs.find((r) => r.first);
+  const least = recs.find((r) => r.least);
+  const who = first && least && first === least
+    ? t(L, `最初で、いちばん少ない被害: ${first.by}`, `first and least damage taken: ${first.by}`)
+    : [first ? t(L, `最初: ${first.by}`, `first: ${first.by}`) : '', least ? t(L, `いちばん少ない被害: ${least.by}`, `least damage taken: ${least.by}`) : ''].filter(Boolean).join(t(L, '・', ', '));
+  return t(L, `倒した記録 ${recs[0].of} 件（${who}）。全文は records`, `${recs[0].of} kill record${recs[0].of > 1 ? 's' : ''} (${who}). Full text: records`);
 }
 
 /**
@@ -1015,19 +1026,29 @@ function fightCore(L: Locale, catalog: Catalog, s: SeasonSlayFacts): { obs: ObsS
     missed: ob(op.missed), other: ob(op.other),
     rest: { dealt: Math.max(0, total - op.missed.dealt - op.other.dealt), taken: Math.max(0, s.taken - op.missed.taken - op.other.taken) },
   } : undefined;
-  const fight = [tellsText(L, s.tells), openingsText(L, openings)].filter(Boolean);
+  const fight = [wardenStartText(L, s.wardenStart), tellsText(L, s.tells), openingsText(L, openings)].filter(Boolean);
   const body = t(L,
     `${wText}・${aText}${hiddenText}。与えた被害 ${total}（${dealtParts.join('、') || 'なし'}）。受けた被害 ${s.taken}${s.lowestPct !== undefined ? `（HP がいちばん減って ${s.lowestPct}%）` : ''}。${fight.map((x) => `${x}。`).join('')}${extra.join('。')}`,
     `${wText}, ${aText}${hiddenText}. Dealt ${total} (${dealtParts.join(', ') || 'none'}). Took ${s.taken}${s.lowestPct !== undefined ? ` (lowest HP ${s.lowestPct}%)` : ''}. ${fight.map((x) => `${x}. `).join('')}${extra.join('. ')}`);
+  const ws = s.wardenStart;
   return {
     cls, body,
     obs: {
       depth: s.depth, level: s.level, class: cls, weapon, armor, ...(s.hidden ? { hidden: true } : {}),
       dealt: { melee: { ...d.melee }, thrown: { ...d.thrown }, poison: { ...d.poison }, feature: { ...d.feature }, crits: d.crits },
       taken: s.taken, ...(s.lowestPct !== undefined ? { lowest_pct: s.lowestPct } : {}), used, thrown, abilities, ward_fires: s.wardFires, attempt: s.attempt, turns: s.turns,
-      ...(tells ? { tells } : {}), ...(openings ? { openings } : {}), text: '',
+      ...(tells ? { tells } : {}), ...(openings ? { openings } : {}),
+      ...(ws ? { warden_start: { scar: ws.scar, hp: ws.hp, ...(ws.firesLit !== undefined ? { fires_lit: ws.firesLit } : {}) } } : {}), text: '',
     },
   };
+}
+
+/** 戦いが始まったときの相手の文（S6）: 「戦い始めの相手: 傷跡で体力 −39（始めの体力 51）・灯っていた護りの火 0」。記録に項目が無ければ空 */
+function wardenStartText(L: Locale, ws: SeasonSlayFacts['wardenStart']): string {
+  if (!ws) return '';
+  const hp = ws.scar > 0 ? t(L, `傷跡で体力 −${ws.scar}（始めの体力 ${ws.hp}）`, `scarred −${ws.scar} HP (started at ${ws.hp})`) : t(L, `体力 ${ws.hp}（傷跡なし）`, `${ws.hp} HP (no scar)`);
+  const fires = ws.firesLit !== undefined ? t(L, `・灯っていた護りの火 ${ws.firesLit}`, `, ward fires lit ${ws.firesLit}`) : '';
+  return t(L, `戦い始めの相手: ${hp}${fires}`, `At the start of the fight it had ${hp}${fires}`);
 }
 
 /** 討伐の記録の 1 件の観測（S4。SEASON.md §35.5）。文は「Aya（Lv6・戦士）: 鎚矛（地下3階で拾った）・革鎧（最初から持っていた）。与えた被害 92（近接 11 回・1 回あたり 8.2…）…」 */
@@ -1064,14 +1085,37 @@ export function slayGroupText(L: Locale, recs: readonly ObsSlay[]): string {
   return recs.map((r) => `${slayLabel(L, r)}: ${r.text}`).join(t(L, '／', ' / '));
 }
 
-/** 討伐の記録 1 件の短い文（S5a。大守護者の候補に出す）: 「アカネ（Lv6・戦士・鋭い小剣）。与えた被害 90・受けた被害 61・突進の構えを 11 回見て 11 回外させた・79 手番目に倒した」 */
+/**
+ * 討伐の記録 1 件の短い文（S5a・S6。大守護者の候補に出す）。2 つの事実（何で倒したか・護りの火を先に消したか）から始める:
+ * 「アオイ（Lv7・戦士）。小剣の近接だけ・品なし・護りの火は消してから。突進の構えを 5 回外させた。与 51・受 51（相手は傷跡で体力 −39 から。始めの体力 51）。5 回目の挑戦」
+ */
 export function slayShortText(L: Locale, r: ObsSlay): string {
-  const total = r.dealt.melee.total + r.dealt.thrown.total + r.dealt.poison.total + r.dealt.feature.total;
+  const d = r.dealt;
+  const total = d.melee.total + d.thrown.total + d.poison.total + d.feature.total;
   const who = `${r.by}${r.mine ? t(L, '（あなた）', ' (you)') : ''}`;
-  const tells = tellsShortText(L, r.tells);
+  const weapon = r.weapon ? r.weapon.name : t(L, '素手', 'bare hands');
+  // 何で倒したか: 与えた被害の出どころ（1 つだけなら「…だけ」）
+  const srcs = [
+    d.melee.total ? { only: t(L, `${weapon}の近接だけ`, `${weapon} melee only`), part: t(L, `${weapon}の近接 ${d.melee.total}`, `${weapon} melee ${d.melee.total}`) } : null,
+    d.thrown.total ? { only: t(L, '投擲だけ', 'thrown only'), part: t(L, `投擲 ${d.thrown.total}`, `thrown ${d.thrown.total}`) } : null,
+    d.poison.total ? { only: t(L, '毒だけ', 'poison only'), part: t(L, `毒 ${d.poison.total}`, `poison ${d.poison.total}`) } : null,
+    d.feature.total ? { only: t(L, '地物だけ', 'features only'), part: t(L, `地物 ${d.feature.total}`, `features ${d.feature.total}`) } : null,
+  ].filter((x): x is { only: string; part: string } => !!x);
+  const how = srcs.length === 1 ? srcs[0].only : srcs.map((x) => x.part).join(t(L, '・', ', '));
+  const items = [...r.used, ...r.thrown];
+  const itemText = items.length ? t(L, `品: ${items.map((x) => `${x.name} ${x.n}`).join('・')}`, `items: ${items.map((x) => `${x.name} ${x.n}`).join(', ')}`) : t(L, '品なし', 'no items');
+  // 護りの火を先に消したか（戦い始めに灯っていた火の数。S6 より前の記録は、消した数）
+  const ws = r.warden_start;
+  const fires = ws?.fires_lit !== undefined
+    ? (ws.fires_lit === 0 ? t(L, '護りの火は消してから', 'ward fires out first') : t(L, `護りの火が ${ws.fires_lit} つ灯ったまま`, `${ws.fires_lit} ward fire${ws.fires_lit > 1 ? 's' : ''} still lit`))
+    : r.ward_fires ? t(L, `護りの火を ${r.ward_fires} つ消した`, `put out ${r.ward_fires} ward fire${r.ward_fires > 1 ? 's' : ''}`) : '';
+  const tells = (r.tells ?? []).filter((x) => x.seen > 0).map((x) => (isStrike(x.kind) && x.missed
+    ? t(L, `${x.name}を ${x.missed} 回外させた`, `${tellPlural(L, x.kind)}: ${x.missed} missed`)
+    : t(L, `${x.name}を ${x.seen} 回見た`, `${tellPlural(L, x.kind)}: saw ${x.seen}`))).join(t(L, '・', '; '));
+  const scar = ws && ws.scar > 0 ? t(L, `（相手は傷跡で体力 −${ws.scar} から。始めの体力 ${ws.hp}）`, ` (it started scarred −${ws.scar}, at ${ws.hp} HP)`) : '';
   return t(L,
-    `${who}（Lv${r.level}・${r.class}${r.weapon ? `・${r.weapon.name}` : ''}）。与えた被害 ${total}・受けた被害 ${r.taken}${tells ? `・${tells}` : ''}・${r.turns} 手番目に倒した`,
-    `${who} (Lv${r.level} ${r.class}${r.weapon ? `, ${r.weapon.name}` : ''}): dealt ${total}, took ${r.taken}${tells ? `, ${tells}` : ''}, slain ${r.turns} turns in`);
+    `${who}（Lv${r.level}・${r.class}）。${[how, itemText, fires].filter(Boolean).join('・')}。${tells ? `${tells}。` : ''}与 ${total}・受 ${r.taken}${scar}。${r.attempt} 回目の挑戦`,
+    `${who} (Lv${r.level} ${r.class}): ${[how, itemText, fires].filter(Boolean).join(', ')}. ${tells ? `${tells}. ` : ''}Dealt ${total}, took ${r.taken}${scar}. Attempt ${r.attempt}`);
 }
 
 /** 初めて受け取った討伐の記録の知らせ（S5b）: 「新しい討伐の記録: 地下5階の大守護者「キモルカ」を、アカネ（Lv6・戦士・鋭い小剣）が倒した（与えた被害 90・受けた被害 61・突進の構えを 11 回外させた）」 */
@@ -1088,7 +1132,7 @@ export function slayNewsItem(L: Locale, catalog: Catalog, s: SeasonSlay): { dept
   return { depth: s.depth, by: s.by, text };
 }
 
-/** 大守護者の候補に出す短い文（S5a）:「先に倒した者（倒した記録 2 件）: …／いちばん少ない被害で倒した者: …。詳しくは記録庫」。全文は記録庫（camp.archive.slays）と offers[].slays */
+/** 大守護者の候補に出す短い文（S5a・S6）:「先に倒した者（倒した記録 2 件）: …／いちばん少ない被害で倒した者: …。全文は records」。全文は records ツールと offers[].slays */
 export function slayShortGroupText(L: Locale, recs: readonly ObsSlay[]): string {
   return wardenOfferText(L, recs);
 }
@@ -1115,7 +1159,7 @@ export function wardenOfferText(L: Locale, recs: readonly ObsSlay[], prev?: { no
       `your last attempt (expedition ${prev.no}): dealt ${total}, took ${s.taken}${tells.map((x) => `, ${x}`).join('')}`));
   }
   if (!parts.length) return '';
-  return `${parts.join(t(L, '。／', '. / '))}${recs.length ? t(L, '。詳しくは記録庫', '. Details in the archive') : ''}`;
+  return `${parts.join(t(L, '。／', '. / '))}${recs.length ? t(L, '。全文は records', '. Full text: records') : ''}`;
 }
 
 /**
@@ -1217,6 +1261,13 @@ function compareTable(L: Locale, catalog: Catalog, view: PlayerView, no: number,
     return { text: parts.join(t(L, '・', ', ')) || t(L, 'なし', 'none'), zero: !parts.length };
   });
   row(t(L, '受けた被害', 'damage taken'), (s) => ({ text: `${s.taken}${s.lowestPct !== undefined ? t(L, `（HP の底 ${s.lowestPct}%）`, ` (lowest HP ${s.lowestPct}%)`) : ''}`, zero: s.taken === 0 }));
+  // 戦い始めの相手（S6）: 傷跡と始めの体力・灯っていた護りの火
+  row(t(L, '戦い始めの相手', 'the warden when the fight began'), (s) => {
+    const ws = s.wardenStart;
+    if (!ws) return none();
+    const fires = ws.firesLit !== undefined ? t(L, `・灯っていた護りの火 ${ws.firesLit}`, `, ward fires lit ${ws.firesLit}`) : '';
+    return { text: t(L, `体力 ${ws.hp}${ws.scar ? `（傷跡 −${ws.scar}）` : ''}${fires}`, `${ws.hp} HP${ws.scar ? ` (scar −${ws.scar})` : ''}${fires}`), zero: false };
+  });
   row(t(L, '護りの火を消した', 'ward fires put out'), (s) => ({ text: `${s.wardFires}`, zero: s.wardFires === 0 }));
   const itemList = (xs: readonly { kind: string; n: number }[]) => xs.map((x) => `${nameOf(catalog.items[x.kind]?.name, L, shortId(x.kind))} ${x.n}`);
   row(t(L, '使った品・投げた品', 'items used and thrown'), (s) => {
@@ -2066,8 +2117,10 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
             const records = slaysAt(L, catalog, view, depth);
             const s0 = (view.season?.slays ?? []).find((s) => s.depth === depth)!;
             const warden = guardianDisplayName(L, { name: s0.warden });
-            // 同じ観測の並べ（退いた後のキャンプ）に全文を出していれば、ここは 1 行（S5a。構造化した records は全部持つ）
-            const body = inCompare.has(depth) ? t(L, '（上の挑戦の並べに出している）', '(shown with your attempt above)') : slayGroupText(L, records);
+            // 同じ観測の並べ（退いた後のキャンプ）に全文を出していれば、ここは 1 行（S5a）。全文を出すのは、まだ倒していない大守護者の記録が
+            // 新しく届いたキャンプ（知らせの出るキャンプ）だけ。ほかは 1 行にたたむ（S6 §49.5 の 3・4。構造化した records は全部持つ。全文は records ツール）
+            const news = !(view.milestonesCleared ?? []).includes(depth) && (opts.slayFullDepths ?? []).includes(depth);
+            const body = inCompare.has(depth) ? t(L, '（上の挑戦の並べに出している）', '(shown with your attempt above)') : news ? slayGroupText(L, records) : slayFoldText(L, records);
             return { depth, warden, count: records[0]?.of ?? 0, records, text: t(L, `記録庫・討伐の記録 地下${depth}階の大守護者「${warden}」: ${body}`, `Archive, warden kills on depth ${depth} ("${warden}"): ${body}`) };
           }) };
         })(),

@@ -130,6 +130,8 @@ export const SeasonSlaySchema = z.object({
   /** S5（SEASON.md §47.4 の 1）: 予備動作への対し方と、相手が動けなかった手番。S5 より前の記録には無い */
   tells: z.array(z.object({ kind: z.enum(['winding_up', 'summoning', 'enraging', 'swinging']), n: SlayN, seen: SlayN, missed: SlayN, hit: SlayN })).max(8).optional(),
   openings: z.object({ missed: SlayOpeningSchema, other: SlayOpeningSchema }).optional(),
+  /** S6（SEASON.md §49.5 の 2）: 戦いが始まったときの相手の傷跡・始めの体力・灯っていた護りの火。S6 より前の記録には無い */
+  wardenStart: z.object({ scar: SlayN, hp: SlayN, firesLit: SlayN.optional() }).optional(),
 });
 
 export const SeasonSyncSchema = z.object({

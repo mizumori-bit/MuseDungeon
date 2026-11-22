@@ -1,12 +1,12 @@
 // PlayerPort: プレイヤー（AI・人間とも）への唯一の窓口。PlayerView 経由の情報しか返さない。
 // MCP アダプタと人間用 WS の両方がこれを使う（どちらかを特別扱いしない）。
 import type {
-  ActionError, Catalog, Command, Dir, ExpeditionReport, GameEvent, Locale, Observation, ObservationOptions, PerceivedEvent, PlayerId, PlayerView, Pos, RunSummary, TurnBlock, TurnReason,
+  ActionError, Catalog, Command, Dir, ExpeditionReport, GameEvent, Locale, ObsSlay, Observation, ObservationOptions, PerceivedEvent, PlayerId, PlayerView, Pos, RunSummary, TurnBlock, TurnReason,
 } from '@muse/shared';
 import {
   actionError, briefingLines, briefingShort, buildObservation, buildTurnBlock, campLines, changesLine, compareLines, describeInventory, describeTarget, diffChanges, progressLines, reportLines,
   cheb, compassDir, dirLabel, formatObservationText, guardianDisplayName, kindName, lastWithoutXp, MACRO_COMPLETED_STOPS, mapTextLines, memoryCombatText, memoryKey, mineCount, nameOf, nearDirs, pickableItems, progressText, renderAsciiMap, resultText, t,
-  turnLine, turnSnapshot, turnStateOf, fightThreats, riskText, threatEstimate, DIR_VEC, collectTargets, collectWhatOf,
+  turnLine, turnSnapshot, turnStateOf, fightThreats, riskText, threatEstimate, DIR_VEC, collectTargets, collectWhatOf, slayGroupText, slaysAt,
 } from '@muse/shared';
 import type { MacroReport } from './RunSession';
 import { compareVersions, ENGINE_VERSION } from '@muse/engine';
@@ -82,6 +82,8 @@ export interface PlayerPort {
   review(no?: number): InfoResult;
   /** expedition ツールに足す行（進行中なら途中経過、キャンプなら直前の遠征のレポート） */
   expeditionReportLines(): { lines: string[]; progress?: Pick<ExpeditionReport, 'combat' | 'tempo'>; report?: ExpeditionReport };
+  /** 討伐の記録の全文（S6。records ツール） */
+  slayArchive(): { lines: string[]; data: { depth: number; warden: string; records: ObsSlay[] }[] };
   /** 前回の行動結果以降に知覚した出来事（消費しない） */
   pending(): PerceivedEvent[];
   /** seq より後に知覚した出来事（WS のフレーム用） */
@@ -351,7 +353,7 @@ export class SessionPlayerPort implements PlayerPort {
    * キャンプの観測に添える（S5b）: 大守護者の候補ごとの、そのランでその大守護者に挑んで退いたいちばん新しい挑戦と、
    * 前のキャンプの後に初めて受け取った討伐の記録。どちらもランの記録から作る（書かない。外に出さない）
    */
-  private campSlayExtras(view: PlayerView): Pick<ObservationOptions, 'wardenPrev' | 'slayNews'> {
+  private campSlayExtras(view: PlayerView): Pick<ObservationOptions, 'wardenPrev' | 'slayNews' | 'slayFullDepths'> {
     if (view.status !== 'at_camp' || !view.camp) return {};
     const prev: NonNullable<ObservationOptions['wardenPrev']> = {};
     for (const o of view.camp.offers) {
@@ -361,7 +363,28 @@ export class SessionPlayerPort implements PlayerPort {
       if (a) prev[d] = a;
     }
     const news = this.session.slayNews(this.playerId);
-    return { ...(Object.keys(prev).length ? { wardenPrev: prev } : {}), ...(news.length ? { slayNews: news } : {}) };
+    // 記録庫を全文で出す節目（S6 §49.5 の 3・4）: そのキャンプで初めて見る記録のある節目（ランの最初のキャンプでは、取り込んであるものすべて）
+    const fresh = [...new Set(this.session.slayNews(this.playerId, { firstCamp: true }).map((s) => s.depth))];
+    return { ...(Object.keys(prev).length ? { wardenPrev: prev } : {}), ...(news.length ? { slayNews: news } : {}), ...(fresh.length ? { slayFullDepths: fresh } : {}) };
+  }
+
+  /**
+   * 討伐の記録の全文（S6 §49.5 の 3・4: キャンプの記録庫は 1 行にたたむので、全文はここで読む。records ツール。手番を使わない）。
+   * 取り込み済みの World（season.slays）から。シーズンでないラン・記録が無ければ空
+   */
+  slayArchive(): { lines: string[]; data: { depth: number; warden: string; records: ObsSlay[] }[] } {
+    const view = this.view();
+    const L = view.locale;
+    const all = view.season?.slays ?? [];
+    const depths = [...new Set(all.map((s) => s.depth))].sort((a, b) => a - b);
+    if (!depths.length) return { lines: [], data: [] };
+    const data = depths.map((depth) => ({ depth, warden: guardianDisplayName(L, { name: all.find((s) => s.depth === depth)!.warden }), records: slaysAt(L, this.catalog, view, depth) }));
+    const lines = [t(L, '記録庫・討伐の記録（全文。このシーズンで取り込んだもの）:', 'Archive, warden kill records (full text, as last received this season):')];
+    for (const x of data) {
+      lines.push(t(L, `- 地下${x.depth}階の大守護者「${x.warden}」:`, `- Depth ${x.depth} warden "${x.warden}":`));
+      for (const r of x.records) lines.push(`  ${slayGroupText(L, [r])}`);
+    }
+    return { lines, data };
   }
 
   /** expedition ツールに足す行: 進行中なら途中経過（戦闘と進み）、キャンプなら直前の遠征のレポート（V3-6 §6.1・§6.2） */
