@@ -245,6 +245,8 @@ export interface RememberedEntity {
   /** 最後に見たフロア時刻 */
   ft: number;
   state?: string;
+  /** 品の接辞（見たときのもの。S3c §33.3 の 1: 覚えている地図は見たときのまま。eventVersion 31 より前の記録には無く、名前だけで出る） */
+  affixes?: string[];
 }
 
 export interface FloorKnowledge {
@@ -395,7 +397,7 @@ export interface ExpeditionOffer {
   /** 守護者を倒す遠征の、守護者の賞金（S3b §30.2。くり返しで基礎点と同じ割合に減る。再挑戦は残っている守護者の賞金。公開） */
   guardianBounty?: number;
   /** 再挑戦（V3-3c §44.1）: 目標の階に残っている守護者をもう一度目的にする。no はその守護者を目的にした遠征、guardian はその守護者（賞金首なら bounty。V3-8 §53.3） */
-  /** inherits: 基礎点（と守護者の賞金）を、その相手を置いた遠征から引き継いだ（S3b §30.1。遺物を守っていた守護者などは無い） */
+  /** inherits: 基礎点（と守護者の賞金）・条件と倍率（S3c §33.2）を、その相手を置いた遠征から引き継いだ（S3b §30.1。置いた遠征が同じ種類のときだけ。遺物を守っていた守護者などは無い） */
   rechallenge?: { no: number | null; guardian: EntityId; bounty?: boolean; inherits?: boolean };
   /** 賞金首を討つ（V3-8 §53.2）: 種族・接辞・名前・体力と一撃の目安・装甲（公開。守護者の候補と同じ並び） */
   /** hpRange: 体力の幅（体力ダイスの最小と最大に目安と同じ上乗せ。V4-0d §6.1。古い候補には無い） */

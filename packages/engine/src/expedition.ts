@@ -334,17 +334,30 @@ export function makeOffers(ctx: Ctx, no: number): ExpeditionOffer[] {
     // 再挑戦の基礎点（S3b §30.1）: その相手を置いた遠征（最初にその相手を目的にした、同じ種類の遠征）の基礎点を、そのまま引き継ぐ
     // （くり返しで減った後の値。再挑戦で上がることは無い）。前は再挑戦に繰り返しの減点を掛けず、戦わずに撤退するだけで基礎点が元に戻った。
     // 置いた遠征が同じ種類でない（遺物を守っていた守護者）・見つからないときは、再挑戦でない候補と同じに数える
-    const origin = rematch ? (ctx.world.expeditions ?? []).find((x) => x.targets.guardian === rematch.id && x.objective.type === 'slay_guardian')
-      : bountyRematch ? (ctx.world.expeditions ?? []).find((x) => x.targets.bounty === bountyRematch.id && x.objective.type === 'slay_bounty') : undefined;
+    // 置いた遠征は「その相手を最初に目的にした遠征」で、それが同じ種類のときだけ引き継ぐ（S3c §33.2 の 2: 遺物を守っていた守護者は、
+    // その後の「守護者を倒す」の再挑戦を置いた遠征と数えない。前は、最初の「守護者を倒す」の再挑戦を置いた遠征として引き継いでいた）
+    const placed = rematch ? (ctx.world.expeditions ?? []).find((x) => x.targets.guardian === rematch.id)
+      : bountyRematch ? (ctx.world.expeditions ?? []).find((x) => x.targets.bounty === bountyRematch.id) : undefined;
+    const origin = placed && placed.objective.type === (rematch ? 'slay_guardian' : 'slay_bounty') ? placed : undefined;
     // 同じ階の達成の繰り返しは基礎点を repeatPct % ずつ（2 回目 50%、3 回目 25%）。下限は repeatMinPct %（V3-3b §40.6: 2112 → 1056 → 528 → 264 と細り、選ぶ理由が無くなった）
     const done = origin ? 0 : achievedAt(target);
     const pct = repeatScalePct(b, done);
     if (origin) points = origin.points;
     else if (done > 0) points = Math.trunc((points * pct) / 100);
-    const offer: ExpeditionOffer = { index: i + 1, objective: { type, targetDepth: target }, points, relicGuarded, slot, traits, multiplierPct };
+    // 再挑戦は、置いた遠征の条件と倍率も引き継ぐ（S3c §33.2 の 1: 撤退して倍率の良い条件を引き直す道をふさぐ）。乱数は上で引いたまま（ほかの候補を動かさない）。
+    // 階を作るときだけに効く条件（群れる・乏しい）は外す（目的の階はもう作られている。V4-0e §8.2 と同じ: 倍率だけ付くのを防ぐ）
+    let oTraits = traits;
+    let oMult = multiplierPct;
+    if (origin) {
+      oTraits = (origin.traits ?? []).filter((id) => ctx.content.expeditionTraits[id] && !genOnlyTrait(ctx, id)).sort();
+      oMult = oTraits.length === (origin.traits ?? []).length ? (origin.multiplierPct ?? 100) : oTraits.reduce((m, id) => Math.trunc((m * ctx.content.expeditionTraits[id].multiplierPct) / 100), 100);
+    }
+    const offer: ExpeditionOffer = { index: i + 1, objective: { type, targetDepth: target }, points, relicGuarded, slot, traits: oTraits, multiplierPct: oMult };
     if (done > 0) { offer.repeatNo = done + 1; offer.repeatPct = pct; }
-    // 守護者の賞金（S3b §30.2）: 同じ階の「守護者を倒す」のくり返しは、基礎点と同じ割合。再挑戦は、残っている守護者の賞金のまま（置いたときに減らした額）
-    if (type === 'slay_guardian') offer.guardianBounty = rematch ? (rematch.bounty ?? 0) : Math.trunc((guardianBountyFull(ctx.content.balance.haul, target) * pct) / 100);
+    // 守護者の賞金（S3b §30.2）: 同じ階の「守護者を倒す」のくり返しは、基礎点と同じ割合。再挑戦は、残っている守護者の賞金のまま（置いたときに減らした額）。
+    // 引き継がない再挑戦（遺物を守っていた守護者。S3c §33.2 の 2）は、基礎点と同じ割合を満額に掛ける（個体の賞金がもっと低ければ、低いほう）
+    const fullScaled = Math.trunc((guardianBountyFull(ctx.content.balance.haul, target) * pct) / 100);
+    if (type === 'slay_guardian') offer.guardianBounty = rematch ? (origin ? (rematch.bounty ?? 0) : Math.min(rematch.bounty ?? 0, fullScaled)) : fullScaled;
     // 目標が次の節目より深い: 途中で大守護者を倒す必要がある
     if (ms && target > ms.depth) offer.passesWarden = structuredClone(ms);
     // 目的の階と通り道の階のうち、作られていて性質のある階（V4-0e §8.1。群れている階は危険度に入る）
@@ -1019,6 +1032,7 @@ export function startExpedition(ctx: Ctx, pr: PlayerRecord, offer: number | 'end
   let relic: Expedition['relic'];
   let bounty: BountyInfo | undefined;
   let guardianBounty: number | undefined;
+  let rematchBounty: number | undefined;
   if (offer === 'endless') objective = { type: 'endless', targetDepth: null };
   else {
     const o = camp.offers.find((c) => c.index === offer);
@@ -1036,8 +1050,9 @@ export function startExpedition(ctx: Ctx, pr: PlayerRecord, offer: number | 'end
     if (o.guardian?.name) guardianInfo = { name: { ...o.guardian.name }, ...(o.guardian.title ? { title: { ...o.guardian.title } } : {}), types: [...(o.guardian.types ?? [])], weakness: o.guardianWeakness ?? null };
     if (o.relic) relic = structuredClone(o.relic);
     if (o.bounty) bounty = { kind: o.bounty.kind, name: { ...o.bounty.name }, affixes: [...o.bounty.affixes] };
-    // 守護者の賞金（S3b §30.2）。再挑戦は残っている守護者の賞金なので持たない
+    // 守護者の賞金（S3b §30.2）。再挑戦は残っている守護者の賞金なので持たない（候補の額が低ければ、下で個体の賞金を下げる。S3c §33.2 の 2）
     if (o.guardianBounty !== undefined && !rechallengeOf) guardianBounty = o.guardianBounty;
+    if (o.guardianBounty !== undefined && rechallengeOf) rematchBounty = o.guardianBounty;
   }
   const participants: PlayerId[] = w.playerOrder.filter((pid) => present(w.players[pid]));
   const start: Expedition['start'] = {};
@@ -1122,6 +1137,13 @@ export function startExpedition(ctx: Ctx, pr: PlayerRecord, offer: number | 'end
   // 目標階が生成済みなら、守護者・遺物をこの時点で置く
   const started = currentExpedition(w);
   if (started) placeOnExistingFloor(ctx, started);
+  // 再挑戦の守護者の賞金（S3c §33.2 の 2）: 候補の額が個体の賞金より低ければ（遺物を守っていた守護者のくり返し）、個体の賞金をその額にする
+  const rb = rechallengeOf ? w.entities[rechallengeOf] : undefined;
+  if (started && rb?.pos && rb.guardian && objective.type === 'slay_guardian' && rematchBounty !== undefined && (rb.bounty ?? 0) > rematchBounty) {
+    const body = structuredClone(rb);
+    body.bounty = rematchBounty;
+    ctx.emit({ type: 'guardian_state', id: rb.id, put: [body], seenBy: [], floor: rb.pos.floor });
+  }
   // 再挑戦: 残っていた守護者を目的に記録する
   if (started && rechallengeOf && w.entities[rechallengeOf]) recordTargets(ctx, [w.entities[rechallengeOf]]);
   // 条件（視界など）を能力値に反映

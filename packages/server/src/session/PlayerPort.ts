@@ -502,6 +502,11 @@ export class SessionPlayerPort implements PlayerPort {
           const who = m.detour.around.length ? m.detour.around.map((x) => `${x.name} ${x.id}`).join('・') : t(L, '動かない敵', 'a stationary enemy');
           outcome += ' ' + t(L, `動かない ${who} の隣を通らない道を選んだ（隣を通る近道より ${m.detour.extra} 歩長い）。`, `Took a way that avoids passing next to the stationary ${who} (${m.detour.extra} steps longer than the shortcut past it).`);
         }
+        // 往復で止まった: 近道をふさいで道を変えさせた動く敵を名指す（S3c §33.3 の 2。マクロは、道が入れ替わる往復を直さない）
+        if (m?.routeFoes?.length && r.interruptedBy === 'no_progress') {
+          const who = m.routeFoes.map((x) => `${x.name} ${x.id}`).join(t(L, '・', ', '));
+          outcome += ' ' + t(L, `道を変えさせた相手: ${who}（動いて近道をふさいだり空けたりするので、通る道が入れ替わった。相手を片付けるか、動きを待つか、別の行き先へ）。`, `What kept changing the route: ${who} (it moved on and off the short way, so the route kept switching; deal with it, wait for it to move, or pick another destination).`);
+        }
         // fight: 床の投げ物を拾いに行かなかった（S1b §12.4 の 5）
         if (m?.retrieveHeld) outcome += ' ' + t(L, '床の投げ物を拾いに行くと隣の追ってくる敵から離れるので、拾いに行かなかった（隣の相手と戦うなら fight { target }）。', 'Did not go for your thrown items on the floor: that would mean stepping away from an adjacent hunter (to fight it, fight { target }).');
         // fight で見失った・逃げられた: 最後に見た場所（V4-0b §1.4。マクロが覚えた場所。V4-0c §4.2）

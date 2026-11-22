@@ -75,6 +75,8 @@ export interface MacroReport {
   hpFloor?: number;
   /** travel・collect: 動かない敵の隣を避けた遠回り（S1c §14.6 の 1） */
   detour?: { extra: number; around: { id: string; name: string }[] };
+  /** 往復（no_progress）で止まったとき、近道をふさいで道を変えさせた動く敵（S3c §33.3 の 2） */
+  routeFoes?: { id: string; name: string }[];
 }
 
 export type SubmitResult =
@@ -707,6 +709,7 @@ export class RunSession {
       ...(state.retrieveHeld ? { retrieveHeld: true } : {}),
       hpFloor: state.hpFloor,
       ...(state.detour ? { detour: structuredClone(state.detour) } : {}),
+      ...(stop === 'no_progress' && state.noProgressBy?.length ? { routeFoes: structuredClone(state.noProgressBy) } : {}),
     };
     return { ok: true, events: all, startSeq, steps: state.steps, interruptedBy: stop, macro };
   }

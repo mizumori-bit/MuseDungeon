@@ -7,6 +7,16 @@ import { ErrorBanner, Header, useCatalog, useLocaleRefresh } from '../ui/common'
 import { FIRST_EXPEDITION_CHOICES, playerStateLabel, type FirstExpeditionChoice } from '../ui/labels';
 import { fmtTime, getLocale, getPref, getToken, navigate, saveToken, setPref, tr } from '../util';
 
+/**
+ * 復旧に失敗した理由の文（サーバーの文は「日本語 / English」の 2 つを並べたものがある。伏せた理由など）から、画面の言葉のほうだけ（S3c §33.3 の 3:
+ * 日本語と英語が二重に出ていた）。並べていない文は、そのまま
+ */
+function reasonIn(reason: string, L: Locale): string {
+  const i = reason.indexOf(' / ');
+  if (i < 0) return reason;
+  return L === 'ja' ? reason.slice(0, i) : reason.slice(i + 3);
+}
+
 function firstChoice(v: string): FirstExpeditionChoice {
   return FIRST_EXPEDITION_CHOICES.find((o) => o.id === v)?.id ?? 'camp';
 }
@@ -257,7 +267,7 @@ export function Lobby() {
                   <div class="sub">{playersText(r)}</div>
                   {expeditionText(r) && <div class="sub exp">{expeditionText(r)}</div>}
                   {/* 起動時に復旧できなかったラン（V4-1m §37.1）: 理由を出し、観戦・再開は出さない（記録は残っているので巻き戻しは見られる） */}
-                  {r.recoveryFailed && <div class="sub warn">{tr(`サーバーの起動時に復旧できなかった（理由: ${r.recoveryFailed.reason}）。記録は残っている`, `Could not be recovered at server start (${r.recoveryFailed.reason}); its records are kept`)}</div>}
+                  {r.recoveryFailed && <div class="sub warn">{tr(`サーバーの起動時に復旧できなかった（理由: ${reasonIn(r.recoveryFailed.reason, 'ja')}）。記録は残っている`, `Could not be recovered at server start (${reasonIn(r.recoveryFailed.reason, 'en')}); its records are kept`)}</div>}
                   <div class="row">
                     {!r.recoveryFailed && canWatch(r) && <a class="button small" href={`#/watch/${r.runId}`}>{tr('観戦', 'Watch')}</a>}
                     {canRewind(r) && <a class="button small" href={`#/replay/${r.runId}`}>{tr('巻き戻し', 'Rewind')}</a>}

@@ -150,6 +150,10 @@ export interface MacroState {
   noCloser?: number;
   /** 移動マクロ: 直近の位置（往復の検出） */
   trail?: number[];
+  /** 移動マクロ: 近道をふさいで道を変えさせた、動く敵（その手の数）。往復で止まったときに名指す（S3c §33.3 の 2） */
+  routeFoes?: { id: string; name: string; step: number }[];
+  /** 往復（no_progress）で止まったときの、道を変えさせた相手（結果の文に出す） */
+  noProgressBy?: { id: string; name: string }[];
   /** travel: 目的地までの道のりの最短と、それから縮まないまま進んだ手（V3-5c の bot の計測: 経路が変わり続けて 200 手さまよった） */
   bestLen?: number;
   sinceBest?: number;
@@ -671,6 +675,33 @@ export interface MacroTrap { id: string; kind: string; name: string; pos: Pos }
  * 動かない敵の隣を避けた遠回り（S1c §14.6 の 1）を覚える: 選んだ道が、その隣を通る近道より 10 歩を超えて長く、かつ 2 倍を超えるとき。
  * 呼び出しの間で、いちばん大きいものを残す（結果の文で、何を避けて何歩遠回りしたかを言う）
  */
+/** 往復で止まる（S3c §33.3 の 2）。直近 window 手に近道をふさいだ動く敵がいれば、名指す */
+function noProgress(state: MacroState, window: number): MacroDecision {
+  const by = new Map<string, { id: string; name: string }>();
+  for (const f of state.routeFoes ?? []) if (f.step > state.steps - window) by.set(f.id, { id: f.id, name: f.name });
+  if (by.size) state.noProgressBy = [...by.values()];
+  return { stop: 'no_progress' };
+}
+
+/** 選んだ道が、敵を無視した近道より長い: 近道の上にいる動く敵（逃げていない）を、道を変えさせた相手として覚える */
+function noteRouteFoes(state: MacroState, view: PlayerView, catalog: Catalog, grid: NavGrid, pos: Pos, path: readonly Pos[], hostiles: readonly EntityView[]): void {
+  const movers = hostiles.filter((h) => !isStationary(catalog, h) && !h.fleeing && h.awareness !== 'asleep');
+  if (!movers.length || !path.length) return;
+  const last = path[path.length - 1];
+  const loose = findPath(grid, pos, [last.y * grid.width + last.x], 'none');
+  if (!loose || loose.length >= path.length) return;
+  const onPath = new Set(path.map((c) => c.y * grid.width + c.x));
+  const list = state.routeFoes ?? [];
+  for (const h of movers) {
+    const i = h.pos.y * grid.width + h.pos.x;
+    if (onPath.has(i) || !loose.some((c) => c.x === h.pos.x && c.y === h.pos.y)) continue;
+    const at = list.findIndex((f) => f.id === h.id);
+    const rec = { id: h.id, name: kindName(catalog, view.locale, h.kind), step: state.steps };
+    if (at >= 0) list[at] = rec; else list.push(rec);
+  }
+  if (list.length) state.routeFoes = list.slice(-8);
+}
+
 function noteDetour(state: MacroState, view: PlayerView, catalog: Catalog, path: readonly Pos[], near: readonly Pos[] | null): void {
   if (!near || !(path.length > near.length + 10 && path.length > near.length * 2)) return;
   const extra = path.length - near.length;
@@ -1063,7 +1094,7 @@ function macroStep(state: MacroState, view: PlayerView, catalog: Catalog, events
     if (tr.length > 6) tr.shift();
     state.trail = tr;
     const n = tr.length;
-    if (n >= 5 && tr[n - 1] !== tr[n - 2] && tr[n - 1] === tr[n - 3] && tr[n - 3] === tr[n - 5] && tr[n - 2] === tr[n - 4]) return { stop: 'no_progress' };
+    if (n >= 5 && tr[n - 1] !== tr[n - 2] && tr[n - 1] === tr[n - 3] && tr[n - 3] === tr[n - 5] && tr[n - 2] === tr[n - 4]) return noProgress(state, 6);
   }
   // 隣の敵: careful は起きている敵（逃走中を除く）、steady は追跡中の敵がいれば動かない。flee は動く。
   // 足元に拾う品があれば、止まる前に拾う（1 手番。品の上に着いたのに拾わずに止まった。V3-5a 後の AI 評価）
@@ -1286,8 +1317,10 @@ function macroStep(state: MacroState, view: PlayerView, catalog: Catalog, events
     state.obstacleKeys = [...new Set([...(state.obstacleKeys ?? []), ...keys])];
     // 目的地までの道のりが TRAVEL_NO_PROGRESS 手のあいだ一度も縮まなければ止まる（2 マスの往復でない行き来も止める）
     if (state.bestLen === undefined || path.length < state.bestLen) { state.bestLen = path.length; state.sinceBest = 0; }
-    else if ((state.sinceBest = (state.sinceBest ?? 0) + 1) >= TRAVEL_NO_PROGRESS) return { stop: 'no_progress' };
+    else if ((state.sinceBest = (state.sinceBest ?? 0) + 1) >= TRAVEL_NO_PROGRESS) return noProgress(state, TRAVEL_NO_PROGRESS);
   }
+  // 動く敵が近道をふさいで、道を変えさせた（S3c §33.3 の 2）: 往復で止まったときに名指すため、覚えておく（決める手は変えない）
+  if (kind === 'travel' || kind === 'explore' || kind === 'collect') noteRouteFoes(state, view, catalog, grid, pos, path, hostiles);
   // マクロは発見済みの罠を踏まない: ほかに道が無く、次のマスが罠なら止まる（踏むなら move で）
   if (trapCells.has(path[0].y * grid.width + path[0].x)) return { stop: 'trap_ahead', dir: dirBetween(pos, path[0]) ?? undefined, traps: trapsOn(path) };
   // マクロは攻撃しない: 次のマスに敵がいたら止まる。ただし steady・flee で、ふさいでいる相手が逃走中なら攻撃して進む（V3-2R3 §20.6）

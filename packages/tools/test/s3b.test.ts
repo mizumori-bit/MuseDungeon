@@ -150,7 +150,7 @@ describe('S3b §30.1・§30.2: repeats and rematches of a slay-guardian expediti
 });
 
 describe('S3b §30.3: review fixes', () => {
-  it('1: a remembered item shows its affixes only while it lies where you remember it and nobody holds it', async () => {
+  it('1: a remembered item shows the affixes it had when seen, not the current ones (S3c §33.3 の 1 で、覚えた記録の接辞だけにした)', async () => {
     const m = manager();
     const t = await soloRun(m, 's3b-remember');
     const w = t.w;
@@ -158,14 +158,14 @@ describe('S3b §30.3: review fixes', () => {
     const id = 'e_s3brm1';
     const p: Pos = { x: t.me().pos!.x, y: t.me().pos!.y };
     inject(w, { put: [{ id, kind: 'core:short_sword', sid: ++sid, pos: { floor: key, x: p.x, y: p.y }, item: { qty: 1, affixes: ['core:keen'] } } as Entity] });
-    w.players[t.pid].knowledge.floors[key].remembered.push({ id, kind: 'core:short_sword', cat: 'item', pos: { ...p }, qty: 1, ft: 0 });
+    w.players[t.pid].knowledge.floors[key].remembered.push({ id, kind: 'core:short_sword', cat: 'item', pos: { ...p }, qty: 1, ft: 0, affixes: ['core:keen'] });
     const rem = () => projectPlayerView(w, t.pid).memory.remembered.find((x) => x.id === id)!;
     expect(rem().affixes).toEqual(['core:keen']);
-    // 仲間が拾った（持たれている）・ほかの場所へ動いた: 見ていないので、覚えた名前のまま（接辞を今の World から取らない）
-    const held = structuredClone(w.entities[id]); held.item!.heldBy = 'e_other'; delete held.pos; inject(w, { put: [held] });
-    expect(rem().affixes).toBeUndefined();
+    // 仲間が拾った（持たれている）・呪いが見つかった・ほかの場所へ動いた: 見ていないので、覚えた名前のまま（接辞を今の World から取らない）
+    const held = structuredClone(w.entities[id]); held.item!.heldBy = 'e_other'; held.item!.affixes = ['core:keen', 'core:cursed']; delete held.pos; inject(w, { put: [held] });
+    expect(rem().affixes).toEqual(['core:keen']);
     const moved = structuredClone(w.entities[id]); delete moved.item!.heldBy; moved.pos = { floor: key, x: p.x + 1, y: p.y }; inject(w, { put: [moved] });
-    expect(rem().affixes).toBeUndefined();
+    expect(rem().affixes).toEqual(['core:keen']);
     m.closeAll();
   });
 

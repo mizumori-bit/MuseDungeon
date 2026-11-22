@@ -147,9 +147,13 @@ export function updateKnowledge(ctx: Ctx, key: FloorKey): void {
       const prev = fk?.remembered.find((r) => r.id === e.id);
       const state = e.feature?.state;
       const qty = e.item?.qty ?? 1;
-      if (!prev || prev.pos.x !== e.pos.x || prev.pos.y !== e.pos.y || prev.qty !== qty || prev.state !== state || prev.kind !== e.kind) {
+      // 品の接辞は見たときのものを覚える（S3c §33.3 の 1）。見えている間に変わったら（呪いが分かった品を仲間が置いた、など）覚え直す
+      const affixes = e.item?.affixes.length ? e.item.affixes : undefined;
+      const sameAffixes = (prev?.affixes ?? []).join(',') === (affixes ?? []).join(',');
+      if (!prev || prev.pos.x !== e.pos.x || prev.pos.y !== e.pos.y || prev.qty !== qty || prev.state !== state || prev.kind !== e.kind || !sameAffixes) {
         const r: RememberedEntity = { id: e.id, kind: e.kind, cat, pos: { x: e.pos.x, y: e.pos.y }, qty, ft: f.time };
         if (state !== undefined) r.state = state;
+        if (affixes) r.affixes = [...affixes];
         rememberedSet.push(r);
       }
     }
