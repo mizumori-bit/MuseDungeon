@@ -16,11 +16,12 @@ import type { SeasonHooks } from '../season/SeasonService';
 import type { ServerConfig } from '../config';
 import { LogWriter } from '../log/LogWriter';
 import { readJsonl } from '../log/RunStore';
-import { keyframeFromEvents, latestKeyframe, metaFromWorld, repairJsonlTail } from '../log/repair';
+import { cutEventsAfter, isRunMeta, keyframeFromEvents, latestKeyframe, logBounds, metaFromWorld, repairJsonlTail } from '../log/repair';
+import { readJsonStable } from '../log/atomicWrite';
 import { summaryMarkdown } from './summary';
 import type { ProfileHooks } from './profiles';
 import { basename, join } from 'node:path';
-import { readFileSync, rmSync } from 'node:fs';
+import { rmSync } from 'node:fs';
 
 export interface SessionDeps {
   content: Content;
@@ -155,26 +156,36 @@ export class RunSession {
   /** クラッシュ復旧: 最新キーフレーム＋それ以降の commands.jsonl を再実行し、events.jsonl とハッシュ照合 */
   static recover(deps: SessionDeps, runId: string): { session: RunSession; verified: boolean; message: string } {
     const dir = join(deps.config.runsDir!, runId);
-    const meta = JSON.parse(require_read(join(dir, 'meta.json'))) as RunMetaFile;
+    const mr = readJsonStable<RunMetaFile>(join(dir, 'meta.json'), isRunMeta);
+    if (!('value' in mr)) throw new Error('meta.json が読めない');
+    const meta = mr.value;
     // 追記するファイルの最後の欠けた行を切る（この後にまた追記する。SEASON.md §33.1）
     const notes: string[] = [];
     for (const f of ['events.jsonl', 'commands.jsonl']) {
       const t0 = repairJsonlTail(join(dir, f));
       if (t0) notes.push('cut' in t0 ? `${f} の最後の欠けた行（${t0.cut} バイト）を切った（${f}.broken-tail に残した）` : `${f} の最後の行に改行を足した`);
     }
-    // いちばん新しい、読めるキーフレーム（読めないものは名前を替えて残し、1 つ前を使う）。1 つも無ければ、出来事の記録だけから作る
-    const found = latestKeyframe(dir, { moveBroken: true });
-    if (found.moved.length) notes.push(`読めないキーフレーム ${found.moved.length} 個の名前を替えた（${found.moved.map((p) => basename(p)).join(', ')}）`);
-    const allEvents = readJsonl<GameEvent>(join(dir, 'events.jsonl'));
     const commands = readJsonl<CommandRecord>(join(dir, 'commands.jsonl'));
-    const kf = found.kf ?? keyframeFromEvents(allEvents, commands);
+    // 命令の記録が覆っていない出来事（出来事を追記した後、命令を書く前に落ちた）を切る（SEASON.md §36.1 の 1・§35.7 の 2。切った分は残す）
+    const bounds0 = logBounds(readJsonl<GameEvent>(join(dir, 'events.jsonl')), commands);
+    const cut = cutEventsAfter(join(dir, 'events.jsonl'), bounds0.covered);
+    if (cut) notes.push(`命令の記録が覆っていない出来事 ${cut} 件を events.jsonl から切った（events.jsonl.uncommitted に残した）`);
+    const allEvents = cut ? readJsonl<GameEvent>(join(dir, 'events.jsonl')) : bounds0.events;
+    const bounds = cut ? logBounds(allEvents, commands) : bounds0;
+    // いちばん新しい、読めて、記録が覆っているキーフレーム（§36.1 の 1: 出来事の番号・命令の番号が、どちらも記録の最後以下）。
+    // 読めないものは名前を替えて残し、記録より先のものも名前を替えて残す。1 つも無ければ、出来事の記録だけから作る
+    const found = latestKeyframe(dir, { moveBroken: true, maxSeq: bounds.lastEventSeq, maxCseq: bounds.lastCseq });
+    if (found.moved.length) notes.push(`読めないキーフレーム ${found.moved.length} 個の名前を替えた（${found.moved.map((p) => basename(p)).join(', ')}）`);
+    if (found.ahead.length) notes.push(`記録より先に進んだキーフレーム ${found.ahead.length} 個の名前を替えた（${found.ahead.map((p) => basename(p)).join(', ')}）`);
+    const kf = found.kf ?? keyframeFromEvents(allEvents, commands, bounds.covered);
     if (!kf) throw new Error(`no keyframe for ${runId}`);
     if (!found.kf) notes.push('読めるキーフレームが無いので、出来事の記録だけから作った');
     const s = new RunSession(deps, runId, kf.world, meta.createdAt);
     s.metaFile = meta;
     // 履歴はキーフレーム時点までのログ＋再実行分
     appendAll(s.history, allEvents.filter((e) => e.seq <= kf.seq));
-    s.cseq = commands.length ? commands[commands.length - 1].cseq : 0;
+    // 命令の番号は、キーフレームと記録の大きいほうから続ける（§36.1 の 1）
+    s.cseq = Math.max(kf.cseq, bounds.lastCseq);
     // 参加者のプロフィールと継承（参加の命令から）。参加の直後にキーフレームが書かれるので、キーフレームより前の参加も読む
     // （読んでいなかったので、起動し直して復旧したランでは、プロフィールの記録が書き直されず、シーズンの取り込みも止まった。S0 で見つけた）
     for (const rec of commands) {
@@ -192,14 +203,20 @@ export class RunSession {
     s.rebuildCalls(commands);
     // 目標の宣言（V3-7a）は V3-8 §53.5 で外した。古いランの goals.jsonl は読まない（再実行は commands.jsonl だけで、宣言はゲームに影響しない）
     const logged = allEvents.filter((e) => e.seq > kf.seq);
+    // 命令は記録にあるのに、出来事の記録が先に欠けていた（機械が止まって、出来事の追記だけが届かなかった）: 再実行で出た分を足す（再実行は決定論的）
+    const lastLogged = allEvents.length ? allEvents[allEvents.length - 1].seq : 0;
+    const missing = replayed.filter((e) => e.seq > lastLogged);
+    if (missing.length && s.log) { s.log.appendEvents(missing); notes.push(`出来事の記録に欠けていた ${missing.length} 件を、再実行から足した`); }
     const strip = (es: GameEvent[]) => es.map((e) => ({ ...e, wall: 0 }));
-    const verified = canonicalHash(strip(logged)) === canonicalHash(strip(replayed));
+    const verified = canonicalHash(strip(logged)) === canonicalHash(strip(replayed.filter((e) => e.seq <= lastLogged)));
     // トークン
     for (const [tok, pid] of Object.entries(s.log?.readTokens() ?? {})) s.tokens.set(tok, pid);
     for (const pid of s.world.playerOrder) s.rebuildMessages(pid);
     s.lastKeyframeSeq = kf.seq;
-    // 出来事の記録から作ったときは、キーフレームを書き直す（次に起動し直したときに使う）
-    if (!found.kf || found.moved.length) s.writeKeyframe();
+    const last = s.history[s.history.length - 1];
+    if (last) s.updatedAt = last.wall;
+    // 出来事の記録から作ったとき・キーフレームを避けたときは、キーフレームを書き直す（次に起動し直したときに使う）
+    if (!found.kf || found.moved.length || found.ahead.length) s.writeKeyframe();
     const message = verified ? `recovered ${runId} (${replayed.length} events re-executed, hash ok)` : `recovered ${runId} with mismatch (logged ${logged.length}, replayed ${replayed.length})`;
     return { session: s, verified, message: notes.length ? `${message}。${notes.join('。')}` : message };
   }
@@ -338,12 +355,27 @@ export class RunSession {
     return this.enqueue(() => {
       const cseq = ++this.cseq;
       const wall = Date.now();
+      const token = newToken();
+      // 再開用のトークンの控えを、参加を確定する前に書く（SEASON.md §36.1 の 4: 書けなければ参加を断る。World は変えない）。
+      // 参加者の ID は、World の写しで同じ参加を試して知る（エンジンは決定論的なので、同じ ID になる）
+      let probeId: PlayerId | null = null;
+      if (this.log) {
+        const probe = joinPlayer(structuredClone(this.world), this.deps.content, req, { cseq, wall });
+        if (!probe.ok) { this.cseq--; return { ok: false as const, error: probe.error }; }
+        probeId = probe.playerId;
+        try {
+          this.log.writeTokens({ ...Object.fromEntries(this.tokens), [token]: probe.playerId });
+        } catch (e) {
+          this.cseq--;
+          console.error(`[write] ${this.runId} の tokens.json を書けなかったので、参加を断った: ${String((e as Error).message ?? e).split('\n')[0]}`);
+          return { ok: false as const, error: actionError('bad_request', t(req.locale ?? 'ja', 'サーバーが再開用のトークンを記録できなかったので、参加を断った（ランは変わっていない）。少し待って、もう一度。', 'The server could not record your resume token, so the join was refused (the run is unchanged). Try again shortly.'), t(req.locale ?? 'ja', '続くときは、サーバーの管理者に知らせる。', 'If it keeps happening, tell the server operator.')) };
+        }
+      }
       const r = joinPlayer(this.world, this.deps.content, req, { cseq, wall });
       if (!r.ok) { this.cseq--; return { ok: false as const, error: r.error }; }
-      const token = newToken();
       this.joinInfo.set(r.playerId, { ...(req.profile ? { profile: req.profile } : {}), ...(req.legacy ? { legacy: req.legacy.monsters } : {}) });
       this.tokens.set(token, r.playerId);
-      this.log?.writeTokens(Object.fromEntries(this.tokens));
+      if (this.log && probeId !== r.playerId) { try { this.log.writeTokens(Object.fromEntries(this.tokens)); } catch { /* 次の起動で、復旧に失敗したランとして出る */ } }
       this.messageLogs.set(r.playerId, []);
       this.commit({ cseq, player: null, command: req, source, wall, assigned: r.playerId }, r.events);
       this.lastResultSeq.set(r.playerId, 0);
@@ -760,6 +792,32 @@ export class RunSession {
     return this.metaFile;
   }
 
+  /**
+   * 管理ファイル（meta.json・要約）を World と比べて、違えば書き直す（SEASON.md §36.1 の 3: 書けなかった古い中身が残り続けない。
+   * 終わったランが、起動のたびに進行中として生き返っていた）。起動時の復旧の後に呼ぶ。書き直したファイルの名前
+   */
+  reconcileFiles(): string[] {
+    if (!this.log) return [];
+    const out: string[] = [];
+    const want = this.buildMeta();
+    const disk = readJsonStable<RunMetaFile>(join(this.log.dir, 'meta.json'));
+    // 比べるのは lastSeq のほか（lastSeq は書いたときの番号で、ふだんから World より古い。進行中のランを起動のたびに書き直さない）
+    const key = (m: RunMetaFile) => JSON.stringify({ ...m, lastSeq: 0 });
+    if ((!('value' in disk) || key(disk.value) !== key(want)) && this.log.writeMeta(want)) out.push('meta.json');
+    this.metaFile = want;
+    let at = -1;
+    for (let i = this.history.length - 1; i >= 0; i--) { const ty = this.history[i].type; if (ty === 'run_ended' || ty === 'expedition_ended') { at = i; break; } }
+    if (at >= 0) {
+      const ev = this.history[at] as Extract<GameEvent, { type: 'run_ended' | 'expedition_ended' }>;
+      const ds = readJsonStable<RunSummary>(join(this.log.dir, 'summary.json'));
+      if (!('value' in ds) || JSON.stringify(ds.value) !== JSON.stringify(ev.summary)) {
+        this.log.writeSummary(ev.summary, summaryMarkdown(ev.summary, this.history.slice(0, at + 1), this.deps.catalog));
+        out.push('summary.json');
+      }
+    }
+    return out;
+  }
+
   close(): void {
     this.closed = true;
     for (const t0 of this.timeoutTimers.values()) clearTimeout(t0.timer);
@@ -774,9 +832,6 @@ export class RunSession {
   }
 }
 
-function require_read(p: string): string {
-  return readFileSync(p, 'utf8');
-}
 
 /**
  * 配列の後ろに足す（push(...src) は引数の数に上限があり、長いランの復旧で src が十数万件になると

@@ -2,9 +2,9 @@
 // World の外にあり、サーバーが profiles/<id>.json に持つ（既定は runs/profiles）。トークンはハッシュだけを残す。
 // ランの記録は、遠征が終わるたび・ランが終わるたびに、そのプレイヤー本人の知識と出来事から作り直す（他人の情報・シードは入らない）。
 import { createHash, randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { writeFileAtomicLogged } from '../log/atomicWrite';
+import { readJsonStable, writeFileAtomicLogged } from '../log/atomicWrite';
 import type { Content } from '@muse/content';
 import type {
   Catalog, CodexIndex, CodexRun, FeatContext, FeatDefLite, FeatRecord, GameEvent, LegacyMonster, Locale, PlayerId, ProfileData, ProfileRecords, ProfileRun, SeasonTitle,
@@ -43,15 +43,17 @@ export class ProfileStore {
     if (!dir || !existsSync(dir)) return;
     for (const f of readdirSync(dir)) {
       if (!/^prof_[0-9a-f]+\.json$/.test(f) || this.byId.has(f.slice(0, -5))) continue;
-      try {
-        const p = JSON.parse(readFileSync(join(dir, f), 'utf8')) as ProfileFile;
-        if (!p || typeof p !== 'object' || typeof p.id !== 'string' || typeof p.tokenHash !== 'string' || !Array.isArray(p.runs)) throw new Error('bad shape');
-        this.byId.set(p.id, p);
-        this.byHash.set(p.tokenHash, p.id);
+      // BOM は外し、一時的に読めなければ少し待って読み直す（§36.1 の 2）
+      const r = readJsonStable<ProfileFile>(join(dir, f), (v) => !!v && typeof v === 'object' && typeof (v as ProfileFile).id === 'string' && typeof (v as ProfileFile).tokenHash === 'string' && Array.isArray((v as ProfileFile).runs));
+      if ('value' in r) {
+        this.byId.set(r.value.id, r.value);
+        this.byHash.set(r.value.tokenHash, r.value.id);
         this.broken.delete(f);
-      } catch {
-        // 壊れたファイルは読まず、上書きもしない（トークンのハッシュは、ほかの記録から作り直せない。SEASON.md §33.1 の 4）。起動時の記録に出す
-        this.broken.add(f);
+        this.broken.delete(`${f}（一時的に読めない）`);
+      } else if (!('missing' in r)) {
+        // 壊れたファイル・読めないファイルは読まず、上書きもしない（トークンのハッシュは、ほかの記録から作り直せない。SEASON.md §33.1 の 4）。
+        // 起動時の記録に出す。一時的に読めないものは、次に読むとき（知らないトークンを渡されたとき）にまた試す
+        this.broken.add('unreadable' in r ? `${f}（一時的に読めない）` : f);
       }
     }
   }

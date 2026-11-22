@@ -16,6 +16,13 @@ if (errs.length) {
   process.exit(1);
 }
 const manager = new SessionManager(content, config);
+// 同じ記録の置き場所で、サーバーを 2 つ動かさない（SEASON.md §36.1 の 6）: 復旧を始める前に印を取る。生きている別のサーバーの印があれば止まる
+const busy = manager.acquireRunsLock((m) => console.log(`[lock] ${m}`));
+if (busy) {
+  console.error(`[lock] ${busy}`);
+  process.exit(1);
+}
+process.on('exit', () => manager.releaseRunsLock());
 manager.recoverAll((m) => console.log(`[recover] ${m}`));
 // 版の違う開いているシーズン（S1a）: 新しいランを始められないので、はっきり知らせる
 for (const w of manager.seasons.versionWarnings()) console.warn(`[season] 警告: ${w}`);

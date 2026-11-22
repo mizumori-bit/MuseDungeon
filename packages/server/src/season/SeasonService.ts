@@ -1,8 +1,8 @@
 // シーズン（S0。SEASON.md §2・PROTOCOL.md §9）: 同じシードの個別ダンジョン＋共有層。World の外にあり、サーバーが seasons/<id>/ に持つ。
 // ランに入るのは、キャンプでの取り込み（システムの命令 season_sync）だけ。ここはその中身を作り、ランの出来事から参加者の記録を書き直す。
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { writeFileAtomicLogged } from '../log/atomicWrite';
+import { readJsonStable, writeFileAtomicLogged } from '../log/atomicWrite';
 import type {
   GameEvent, PlayerId, SeasonAward, SeasonListing, SeasonResultView, SeasonSectionRow, SeasonStandingRow, SeasonStandingsResponse, SeasonSyncCommand, SeasonTitle, SupplyPlace,
 } from '@muse/shared';
@@ -219,24 +219,35 @@ export class SeasonStore {
   /** 読めなかったシーズンと、そのファイル（SEASON.md §33.1 の 4。読まず、書き戻さない） */
   private readonly brokenFiles = new Map<string, string[]>();
 
-  /** 無ければ null。あるのに読めない・形が違えば、壊れたファイルとして覚えて BROKEN */
+  /** 一時的に読めなかったファイル（ほかのプログラムが開いていた。§36.1 の 2）。読めない理由の文に添える */
+  private lastUnreadable = new Set<string>();
+
+  /**
+   * 無ければ null。あるのに読めない・形が違えば BROKEN（BOM は外して読む。一時的に読めなければ、少し待って読み直してから。§36.1 の 2）。
+   * 一時的に読めなかったものは lastUnreadable に覚える（壊れているとは書かない。次に読むときにまた試す）
+   */
   private readJson<T>(id: string, file: string, shape: (v: unknown) => boolean = () => true): T | null | typeof BROKEN {
     if (!this.dir) return null;
     const p = this.path(id, file);
-    if (!existsSync(p)) return null;
-    try {
-      const v: unknown = JSON.parse(readFileSync(p, 'utf8'));
-      if (shape(v)) return v as T;
-    } catch { /* 下で壊れたファイルとして覚える */ }
+    const r = readJsonStable<T>(p, shape);
+    if ('missing' in r) return null;
+    if ('value' in r) { this.lastUnreadable.delete(p); return r.value; }
+    if ('unreadable' in r) this.lastUnreadable.add(p); else this.lastUnreadable.delete(p);
     return BROKEN;
   }
 
-  /** 書き切ってから名前を替える（§33.1 の 1）。書けなければ知らせて false（前の中身のまま。次の書き込みでまた試す） */
+  /** 書き切ってから名前を替える（§33.1 の 1）。書けなければ知らせて false（前の中身のまま。次の書き込みでまた試す）。読めないシーズンには書かない */
   private writeJson(id: string, file: string, v: unknown): boolean {
     if (!this.dir) return true;
+    if (this.brokenFiles.has(id)) { console.error(`[season] シーズン ${id} の記録が読めないので、${file} を書かなかった`); return false; }
     const d = join(this.dir, id);
     if (!existsSync(d)) mkdirSync(d, { recursive: true });
     return writeFileAtomicLogged(join(d, file), JSON.stringify(v, null, 1));
+  }
+
+  /** 読めなかったファイルの名前（一時的に読めなかったものは、そう添える） */
+  private fileLabel(id: string, file: string): string {
+    return this.lastUnreadable.has(this.path(id, file)) ? `${file}（一時的に読めない。ほかのプログラムが開いている）` : file;
   }
 
   /** 読めなかったシーズン（起動時に知らせる。そのシーズンのランは、復旧に失敗したランとして出す） */
@@ -257,7 +268,13 @@ export class SeasonStore {
       // 確定は 1 回だけ（S2a §20.10 の 1）: 運用の道具（別のプロセス）が確定して result.json を書いていれば、それを確定済みとして使う（上書きしない）
       if (!have.result && this.dir) {
         const r = this.readJson<SeasonResult>(id, 'result.json', isObj);
-        if (r && r !== BROKEN) {
+        // result.json が読めない: 「確定していない」と見ない（確定し直して上書きしない。§36.1 の 6）。そのシーズンを読まず、書かない
+        if (r === BROKEN) {
+          this.brokenFiles.set(id, [this.fileLabel(id, 'result.json')]);
+          this.data.delete(id);
+          return null;
+        }
+        if (r) {
           have.result = r;
           // 確定した側の参加者の記録（公開の値を含む）も読み直す（S2b: 古い写しで断面を作らない・書き戻さない）
           const ps = this.readJson<Participant[]>(id, 'participants.json', Array.isArray);
@@ -271,7 +288,7 @@ export class SeasonStore {
     const bad: string[] = [];
     const read = <T>(file: string, shape: (v: unknown) => boolean): T | null => {
       const v = this.readJson<T>(id, file, shape);
-      if (v === BROKEN) { bad.push(file); return null; }
+      if (v === BROKEN) { bad.push(this.fileLabel(id, file)); return null; }
       return v;
     };
     const def = read<SeasonDef>('season.json', (v) => isObj(v) && typeof (v as SeasonDef).id === 'string' && typeof (v as SeasonDef).seed === 'string');
@@ -841,6 +858,8 @@ export class SeasonService implements SeasonHooks {
     // ほかのプロセスが先に確定していれば、それを使う（S2a §20.10 の 1。get がディスクを見直す）
     const cur = this.store.get(d.def.id);
     if (cur?.result) { d.result = cur.result; return cur.result; }
+    // 記録が読めないシーズン（result.json が読めないときを含む。§36.1 の 6）は、確定し直さない（書かない）
+    if (!cur && this.store.isBroken(d.def.id)) return d.result ?? { finalizedAt: 0, reason, winners: { adventure: [], contribution: [], survival: [], support: [] }, standings: [] };
     if (d.result) return d.result;
     // 確定は、すべての参加者の今の値を出す（終わりから 1 時間で、迷宮にいる者の分も。S2a §20.10 の 2）
     for (const p of d.participants) p.shown = liveShown(p);

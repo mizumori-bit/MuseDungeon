@@ -5,6 +5,7 @@ import type { CommandRecord, ExpeditionBrief, GameEvent, LeaderboardEntry, Marke
 import { INTERNAL_EVENT_TYPES, stripSecret } from '@muse/shared';
 import type { KeyframeFile } from './LogWriter';
 import { isRunMeta } from './repair';
+import { readJsonStable } from './atomicWrite';
 
 /**
  * 観戦者・HTTP 向けのイベント: 進行中は secret を伏せる。
@@ -152,17 +153,18 @@ export class RunStore {
 
   /** meta.json（読めない・形が違うものは null。起動時の復旧が作り直す） */
   meta(runId: string): RunMetaFile | null {
-    try {
-      const m: unknown = JSON.parse(readFileSync(join(this.dir(runId), 'meta.json'), 'utf8'));
-      return isRunMeta(m) ? m : null;
-    } catch { return null; }
+    const r = this.metaState(runId);
+    return 'value' in r ? r.value : null;
+  }
+
+  /** meta.json の状態（§36.1 の 2: 無い・一時的に読めない・壊れている・読めた、を分ける。BOM は外す） */
+  metaState(runId: string): ReturnType<typeof readJsonStable<RunMetaFile>> {
+    return readJsonStable<RunMetaFile>(join(this.dir(runId), 'meta.json'), isRunMeta);
   }
 
   summary(runId: string): RunSummary | null {
-    try {
-      const s = JSON.parse(readFileSync(join(this.dir(runId), 'summary.json'), 'utf8')) as RunSummary | null;
-      return s && typeof s === 'object' && Array.isArray(s.players) ? s : null;
-    } catch { return null; }
+    const r = readJsonStable<RunSummary>(join(this.dir(runId), 'summary.json'), (v) => !!v && typeof v === 'object' && Array.isArray((v as RunSummary).players));
+    return 'value' in r ? r.value : null;
   }
 
   mtime(runId: string): number {

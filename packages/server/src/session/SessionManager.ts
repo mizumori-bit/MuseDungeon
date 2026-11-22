@@ -1,5 +1,5 @@
 // 複数ランの管理。参加時にプレイヤートークンを発行し、再接続・再開はトークンで行う。
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import type { Content } from '@muse/content';
 import { buildCatalog } from '@muse/content';
@@ -12,6 +12,7 @@ import { actionError } from '@muse/shared';
 import type { ServerConfig } from '../config';
 import { RunStore } from '../log/RunStore';
 import { readTokensStrict, repairMeta, repairSummary } from '../log/repair';
+import { acquireLock, releaseLock, retryPendingWrites, RUNS_LOCK, scrubPaths, sweepTmpFiles } from '../log/atomicWrite';
 import type { MetaRepair } from '../log/repair';
 import { SessionPlayerPort } from './PlayerPort';
 import type { PlayerPort } from './PlayerPort';
@@ -85,9 +86,20 @@ export class SessionManager {
     for (const f of this.profiles.store.brokenFiles()) log(`プロフィールのファイル ${f} が読めない（読まずに残す。上書きしない。そのプロフィールのトークンは使えない）`);
     for (const b of this.seasons.brokenSeasons()) log(`シーズン ${b.id} の記録が読めない（${b.files.join('・')}）。このシーズンは読まず、書き戻さない。シーズンのランは復旧に失敗したランとして出す`);
     if (!dir || !existsSync(dir)) return;
+    // 残っている一時のファイルを掃除する（SEASON.md §36.1 の 6。書いたプロセスがもう居ないものだけ: 運用の道具が書いている最中のものは消さない）
+    const swept = sweepTmpFiles([dir, this.config.profilesDir, this.config.seasonsDir]);
+    if (swept) log(`残っていた一時のファイル ${swept} 個を消した`);
     for (const runId of this.store!.listRunDirs()) {
       const runDir0 = join(dir, runId);
-      let meta = this.store!.meta(runId);
+      const ms = this.store!.metaState(runId);
+      // 一時的に読めない（ほかのプログラムが開いている）: 作り直さずに、復旧に失敗したランとして出す（次の起動で直る。§36.1 の 2）
+      if ('unreadable' in ms) {
+        const reason = `meta.json を一時的に読めない（${ms.unreadable}。ほかのプログラムが開いている）。作り直さずに残した。次の起動で直る`;
+        log(`failed to recover ${runId}: ${reason}`);
+        this.markFailed(runId, reason, undefined);
+        continue;
+      }
+      let meta = 'value' in ms ? ms.value : null;
       // meta.json が読めない・形が違う・消えた（SEASON.md §33.1 の 2）: ほかの記録から作り直す。作り直せなければ、復旧に失敗したランとして出す
       if (!meta) {
         let r: MetaRepair;
@@ -112,7 +124,8 @@ export class SessionManager {
         const have = 'tokens' in tk ? new Set(Object.values(tk.tokens)) : new Set<string>();
         if ('error' in tk || !meta.players.some((p) => have.has(p.id))) {
           const reason = 'error' in tk && tk.error === 'broken' ? 'tokens.json が読めない（再開用のトークンは、ほかの記録から作り直せない）'
-            : 'error' in tk ? 'tokens.json が無い（再開用のトークンは、ほかの記録から作り直せない）' : 'tokens.json に、このランの参加者のトークンが無い';
+            : 'error' in tk && tk.error === 'unreadable' ? 'tokens.json を一時的に読めない（ほかのプログラムが開いている）。次の起動で直る'
+              : 'error' in tk ? 'tokens.json が無い（再開用のトークンは、ほかの記録から作り直せない）' : 'tokens.json に、このランの参加者のトークンが無い';
           log(`failed to recover ${runId}: ${reason}`);
           this.markFailed(runId, reason, meta.season);
           continue;
@@ -129,8 +142,18 @@ export class SessionManager {
       }
       try {
         const r = RunSession.recover(this.deps, runId);
-        this.sessions.set(runId, r.session);
         log(r.message);
+        // 管理ファイルを World と比べて、違えば書き直す（§36.1 の 3: 書けなかった古い meta.json が、終わったランを進行中として残していた）
+        const fixed = r.session.reconcileFiles();
+        if (fixed.length) log(`  ${runId}: ${fixed.join('・')} を World に合わせて書き直した`);
+        // 終わっていたラン（meta.json だけが進行中のまま残っていた）: 動いているランにしない（記録の一覧から、終わったランとして出る）
+        if (r.session.world.status === 'ended') {
+          if (r.session.world.meta.season) this.seasons.onRecovered(r.session);
+          r.session.close();
+          log(`  ${runId} は終わっていた（進行中として読み込まない）`);
+          continue;
+        }
+        this.sessions.set(runId, r.session);
         // シーズン（S1a §10.1 の 4）: キャンプにいるかランが終わっていれば、火を載せて支援を数え直す（落ちる前に保存できなかった分）
         if (r.session.world.meta.season) this.seasons.onRecovered(r.session);
         // 古い版で始まったラン（V4-0b §1.2。World は変えない。記録だけ）: 分かっている不整合（遠征の開始時の検査で直るもの）
@@ -140,12 +163,37 @@ export class SessionManager {
           log(`  古い版で始まったラン ${runId}（engine ${created}。今は ${ENGINE_VERSION}）${gaps.length ? `: ${gaps.join(' / ')}` : '。分かっている不整合は無い'}`);
         }
       } catch (e) {
-        const reason = String((e as Error).message ?? e).split('\n')[0].slice(0, 200);
+        // 理由の文に、絶対のパス（利用者の名前を含む）を出さない（§36.1 の 6。記録の置き場所からの相対にする）
+        const reason = scrubPaths(String((e as Error).message ?? e).split('\n')[0], dir).slice(0, 200);
         log(`failed to recover ${runId}: ${reason}`);
         this.markFailed(runId, reason, meta.season);
       }
     }
   }
+
+  /**
+   * 同じ記録の置き場所で、サーバーを 2 つ動かさない（§36.1 の 6）: 置き場所に印（`.server.lock`。プロセスの番号と起動の時刻）を置く。
+   * 生きている別のサーバーの印があれば、理由の文を返す（呼ぶ側が止まる）。古い印（プロセスがもう居ない・機械の起動より前）は掃除する。
+   * 運用の道具（season など）は印を取らない（サーバーが動いていても使える）
+   */
+  acquireRunsLock(log: (msg: string) => void = () => undefined): string | null {
+    const dir = this.config.runsDir;
+    if (!dir) return null;
+    mkdirSync(dir, { recursive: true });
+    const r = acquireLock(join(dir, RUNS_LOCK));
+    if ('busy' in r) return `この記録の置き場所（${dir}）は、ほかのサーバー（プロセス ${r.busy.pid}、${new Date(r.busy.startedAt).toISOString()} に起動）が使っている。同じ置き場所で 2 つ動かすと、記録を壊しうるので止まる。そのサーバーを止めるか、別の置き場所（MUSE_RUNS_DIR）で起動する。そのサーバーがもう居ないのに止まるなら、${join(dir, RUNS_LOCK)} を消す`;
+    if (r.stale) log(`古いサーバーの印（プロセス ${r.stale.pid}）を掃除した`);
+    this.lockPath = join(dir, RUNS_LOCK);
+    return null;
+  }
+
+  /** 印を外す（自分のものだけ） */
+  releaseRunsLock(): void {
+    if (this.lockPath) releaseLock(this.lockPath);
+    this.lockPath = null;
+  }
+
+  private lockPath: string | null = null;
 
   /** 復旧に失敗したランを覚える（一覧と再開のエラーに出す。V4-1m §37.1）。読めるトークンがあれば、そのトークンでの再開にも */
   private markFailed(runId: string, reason: string, season: string | undefined): void {
@@ -404,6 +452,8 @@ export class SessionManager {
 
   closeAll(): void {
     for (const s of this.sessions.values()) s.close();
+    // 書けなかった管理ファイルを、もう一度書く（§36.1 の 3・5）
+    retryPendingWrites();
     this.seasons.flush();
     if (this.seasonTimer) { clearInterval(this.seasonTimer); this.seasonTimer = null; }
   }

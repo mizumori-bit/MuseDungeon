@@ -7,7 +7,7 @@ import { ENGINE_VERSION } from '@muse/engine';
 import type { Catalog, GameEvent, RunMetaFile, RunSummary, World } from '@muse/shared';
 import { applyEvent, emptyWorld } from '@muse/shared';
 import { summaryMarkdown } from '../session/summary';
-import { writeFileAtomic } from './atomicWrite';
+import { readJsonStable, writeFileAtomic } from './atomicWrite';
 import type { KeyframeFile } from './LogWriter';
 import { readJsonl } from './RunStore';
 
@@ -49,18 +49,13 @@ export function isKeyframe(x: unknown): x is KeyframeFile {
   return typeof k.seq === 'number' && typeof k.cseq === 'number' && !!k.world && typeof k.world === 'object' && !!k.world.meta && !!k.world.players;
 }
 
-/** 壊れたファイルの名前を替えて残す（`<名前>.broken`。もうあれば `.broken.2`・`.broken.3`…）。替えた後の名前 */
-export function moveAside(path: string): string | null {
+/** 壊れたファイルの名前を替えて残す（`<名前>.broken`。もうあれば `.broken.2`・`.broken.3`…。suffix で別の印）。替えた後の名前 */
+export function moveAside(path: string, suffix = 'broken'): string | null {
   if (!existsSync(path)) return null;
-  let to = `${path}.broken`;
-  for (let n = 2; existsSync(to); n++) to = `${path}.broken.${n}`;
+  let to = `${path}.${suffix}`;
+  for (let n = 2; existsSync(to); n++) to = `${path}.${suffix}.${n}`;
   renameSync(path, to);
   return to;
-}
-
-function tryJson(path: string): { ok: true; value: unknown } | { ok: false; missing: boolean } {
-  if (!existsSync(path)) return { ok: false, missing: true };
-  try { return { ok: true, value: JSON.parse(readFileSync(path, 'utf8')) }; } catch { return { ok: false, missing: false }; }
 }
 
 /** 出来事を World に畳む（seq が今の World より後のものだけ。同じ seq が 2 度あれば、先のもの） */
@@ -72,31 +67,85 @@ function foldOnto(w: World, events: readonly GameEvent[], upTo = Infinity): Worl
   return w;
 }
 
+type CmdLite = { cseq: number; resultSeq?: [number, number] | null };
+
 /**
- * いちばん新しい、読めるキーフレーム（壊れたものは名前を替えて残す）。無ければ null。
- * moved: 名前を替えた壊れたキーフレーム
+ * 記録の範囲（SEASON.md §36.1 の 1）: covered は命令の記録が覆っている最後の出来事の番号（ランを作ったときの出来事は命令が無いので、
+ * 最初の命令の結果より前の出来事も覆っているものと数える）。lastEventSeq は出来事の記録の最後、lastCseq は命令の記録の最後
  */
-export function latestKeyframe(dir: string, opts: { moveBroken: boolean }): { kf: KeyframeFile | null; moved: string[] } {
+export function logBounds(events: readonly GameEvent[], commands: readonly CmdLite[]): { events: readonly GameEvent[]; covered: number; lastEventSeq: number; lastCseq: number } {
+  const lastEventSeq = events.length ? events[events.length - 1].seq : 0;
+  let cmdEnd = 0;
+  let firstResult = Infinity;
+  for (const c of commands) if (c.resultSeq) { cmdEnd = Math.max(cmdEnd, c.resultSeq[1]); firstResult = Math.min(firstResult, c.resultSeq[0]); }
+  const creationEnd = firstResult === Infinity ? lastEventSeq : firstResult - 1;
+  return { events, covered: Math.max(cmdEnd, creationEnd), lastEventSeq, lastCseq: commands.length ? commands[commands.length - 1].cseq : 0 };
+}
+
+/**
+ * 出来事の記録から、番号が seq より後ろの出来事を切る（命令の記録が覆っていない出来事。§35.7 の 2）。切った分は `<名前>.uncommitted` に足して残す。
+ * 切った件数（無ければ 0）。出来事は番号の順に追記されているので、最初に seq を越えた行から後ろを切る
+ */
+export function cutEventsAfter(path: string, seq: number): number {
+  if (!existsSync(path)) return 0;
+  const buf = readFileSync(path);
+  let off = 0;
+  let cutAt = -1;
+  let n = 0;
+  while (off < buf.length) {
+    const nl = buf.indexOf(0x0a, off);
+    const end = nl < 0 ? buf.length : nl + 1;
+    const line = buf.subarray(off, end).toString('utf8').replace(/^\0+/, '').trim();
+    if (line) {
+      let sq: number | undefined;
+      try { sq = (JSON.parse(line) as { seq?: number }).seq; } catch { /* 読めない行は飛ばす（readJsonl と同じ） */ }
+      if (sq !== undefined && sq > seq) { if (cutAt < 0) cutAt = off; n++; }
+    }
+    off = end;
+  }
+  if (cutAt < 0) return 0;
+  appendFileSync(`${path}.uncommitted`, buf.subarray(cutAt));
+  truncateSync(path, cutAt);
+  return n;
+}
+
+/**
+ * いちばん新しい、読めるキーフレーム。無ければ null。壊れたものは名前を替えて残す（moved）。
+ * maxSeq・maxCseq: 記録の最後（§36.1 の 1）。キーフレームの出来事の番号か命令の番号がそれより先なら、使わずに名前を替えて残す（ahead。`.ahead`）。
+ * ほかのプログラムが開いていて一時的に読めないものは、名前を替えずに 1 つ前を使う
+ */
+export function latestKeyframe(dir: string, opts: { moveBroken: boolean; maxSeq?: number; maxCseq?: number }): { kf: KeyframeFile | null; moved: string[]; ahead: string[] } {
   const kfDir = join(dir, 'keyframes');
   const seqs = existsSync(kfDir) ? readdirSync(kfDir).filter((f) => /^\d+\.json$/.test(f)).map((f) => parseInt(f, 10)).sort((a, b) => b - a) : [];
   const moved: string[] = [];
+  const ahead: string[] = [];
   for (const seq of seqs) {
     const p = join(kfDir, `${seq}.json`);
-    const r = tryJson(p);
-    if (r.ok && isKeyframe(r.value) && r.value.seq === seq) return { kf: r.value, moved };
-    if (opts.moveBroken) { const to = moveAside(p); if (to) moved.push(to); }
+    if (opts.maxSeq !== undefined && seq > opts.maxSeq) {
+      if (opts.moveBroken) { const to = moveAside(p, 'ahead'); if (to) ahead.push(to); }
+      continue;
+    }
+    const r = readJsonStable<KeyframeFile>(p, (v) => isKeyframe(v) && v.seq === seq);
+    if ('value' in r) {
+      if (opts.maxCseq !== undefined && r.value.cseq > opts.maxCseq) {
+        if (opts.moveBroken) { const to = moveAside(p, 'ahead'); if (to) ahead.push(to); }
+        continue;
+      }
+      return { kf: r.value, moved, ahead };
+    }
+    if ('broken' in r && opts.moveBroken) { const to = moveAside(p); if (to) moved.push(to); }
   }
-  return { kf: null, moved };
+  return { kf: null, moved, ahead };
 }
 
 /**
  * 出来事の記録だけから、キーフレームの代わりを作る（読めるキーフレームが 1 つも無いとき）。
- * 命令の記録が覆っている最後の出来事まで畳み、cseq はその最後の命令（それより後の命令は無いので、再実行はしない）
+ * 命令の記録が覆っている最後の出来事（upTo）まで畳み、cseq はその最後の命令（それより後の命令は無いので、再実行はしない）
  */
-export function keyframeFromEvents(events: readonly GameEvent[], commands: readonly { cseq: number; resultSeq?: [number, number] | null }[]): KeyframeFile | null {
+export function keyframeFromEvents(events: readonly GameEvent[], commands: readonly CmdLite[], upTo = logBounds(events, commands).covered): KeyframeFile | null {
   if (!events.length || events[0].type !== 'run_started') return null;
   const last = commands.length ? commands[commands.length - 1] : null;
-  const w = foldOnto(emptyWorld(), events);
+  const w = foldOnto(emptyWorld(), events, upTo);
   return { seq: w.seq, cseq: last?.cseq ?? 0, world: w };
 }
 
@@ -116,14 +165,16 @@ export function repairMeta(dir: string, runId: string): MetaRepair {
   let world: World;
   let from: 'keyframe' | 'events' = 'keyframe';
   try {
-    const { kf } = latestKeyframe(dir, { moveBroken: false });
-    if (kf) world = foldOnto(kf.world, events);
-    else { from = 'events'; world = foldOnto(emptyWorld(), events); }
+    // 記録が覆っている範囲だけ（§36.1 の 1: 記録より先に進んだキーフレームと、命令の記録が覆っていない出来事は使わない）
+    const b = logBounds(events, readJsonl<CmdLite>(join(dir, 'commands.jsonl')));
+    const { kf } = latestKeyframe(dir, { moveBroken: false, maxSeq: Math.min(b.lastEventSeq, b.covered), maxCseq: b.lastCseq });
+    if (kf) world = foldOnto(kf.world, events, b.covered);
+    else { from = 'events'; world = foldOnto(emptyWorld(), events, b.covered); }
   } catch (e) {
     return why(`出来事を畳めない（${String((e as Error).message ?? e).split('\n')[0].slice(0, 120)}）`);
   }
   if (!world.meta?.runId) return why('記録から World を作れない');
-  const ended = [...events].reverse().find((e) => e.type === 'run_ended');
+  const ended = [...events].reverse().find((e) => e.type === 'run_ended' && e.seq <= world.seq);
   const meta = metaFromWorld(world, runId, first.wall, ended?.wall);
   const moved = moveAside(join(dir, 'meta.json'));
   writeFileAtomic(join(dir, 'meta.json'), JSON.stringify(meta, null, 2));
@@ -136,9 +187,9 @@ export function repairMeta(dir: string, runId: string): MetaRepair {
  */
 export function repairSummary(dir: string, catalog: Catalog): { rebuilt: boolean; moved: string | null } | null {
   const p = join(dir, 'summary.json');
-  const r = tryJson(p);
-  if (r.ok && r.value && typeof r.value === 'object' && Array.isArray((r.value as RunSummary).players)) return null;
-  if (!r.ok && r.missing) return null;
+  const r = readJsonStable<RunSummary>(p, (v) => !!v && typeof v === 'object' && Array.isArray((v as RunSummary).players));
+  // 壊れているときだけ作り直す（無い・一時的に読めないときは触らない。§36.1 の 2）
+  if (!('broken' in r)) return null;
   const events = readJsonl<GameEvent>(join(dir, 'events.jsonl'));
   let at = -1;
   for (let i = events.length - 1; i >= 0; i--) { const t = events[i].type; if (t === 'run_ended' || t === 'expedition_ended') { at = i; break; } }
@@ -152,12 +203,10 @@ export function repairSummary(dir: string, catalog: Catalog): { rebuilt: boolean
 }
 
 /** tokens.json を読む（再開用のトークン。ほかの記録から作り直せない）。無い・読めない・形が違う、を分ける */
-export function readTokensStrict(dir: string): { tokens: Record<string, string> } | { error: 'missing' | 'broken' } {
-  const r = tryJson(join(dir, 'tokens.json'));
-  if (!r.ok) return { error: r.missing ? 'missing' : 'broken' };
-  const v = r.value;
-  if (!v || typeof v !== 'object' || Array.isArray(v) || Object.values(v).some((x) => typeof x !== 'string')) return { error: 'broken' };
-  return { tokens: v as Record<string, string> };
+export function readTokensStrict(dir: string): { tokens: Record<string, string> } | { error: 'missing' | 'broken' | 'unreadable' } {
+  const r = readJsonStable<Record<string, string>>(join(dir, 'tokens.json'), (v) => !!v && typeof v === 'object' && !Array.isArray(v) && Object.values(v as object).every((x) => typeof x === 'string'));
+  if ('value' in r) return { tokens: r.value };
+  return { error: 'missing' in r ? 'missing' : 'unreadable' in r ? 'unreadable' : 'broken' };
 }
 
 /**
