@@ -1732,3 +1732,12 @@ engine と出来事の形は変えていない（`engineVersion` 0.38.0・`event
 - **印**: 古い印は名前を替えて移し、移したものが読んだ印と同じときだけ、新しい印を作る（`acquireLock`）。
 - **ポート**: `main.ts` は、印を取る前・復旧の前に、待ち受けるホストとポートが空いているかを確かめ（`portInUse`）、空いていなければ何も書かずに止まる。
 - `replay:verify` は、サーバーと同じ `readJsonl` で読む（読めない行を飛ばす）。
+
+### 42.10 S3h: 命令の記録が覆う出来事・境目（SEASON.md §41.10。PROTOCOL.md §5 の「S3h で変えた項目」）
+
+`engineVersion` 0.45.1・`eventVersion` 32 のまま（サーバー・運用の道具・巻き戻しの画面だけ）。
+
+- **覆う出来事**: `repair.ts` の `logBounds` が `covers(seq)` を返す（命令の結果の区間の和＋ランを作ったときの区間。区間はつないで二分探索）。`RunSession.recover`・`repairMeta`・`repairSummary`・`replay:verify` は、区間の外の出来事を読まない。読み方だけで、ファイルは変えない。
+- **境目**: 食い違ったランは、続けて最初に書く前に、必ず `seq_resume` を確定する（送り先は `max(記録の番号の次, World の番号 + 1)`）。直後のキーフレームが境目のキーフレーム。次の起動はそこから再生するので一致し、一致の側の直しが働く。断られる命令が最初の書き込みでも同じ（その 1 回で、次の起動から一致の側へ移る）。再生で終わったランには残さない。
+- **境目から畳む**: `RunSession.foldBase(upTo)`（`upTo` 以下の最後の境目のキーフレームの World と番号。無ければ空の World）を、`SpectatorPort.snapshot`（遅らせた観戦）と `foldHistory` が使う。人間の巻き戻しの画面は、流している途中で `seq_resumed` に着いたら、境目のキーフレームへ飛ぶ（`seek`）。`replay:verify` は、最後の境目のキーフレームから後だけを照らす。
+- 前の版（engine 0.45.0 以前）は `seq_resume`・`seq_resumed` を知らないので、境目を残したランをその版で起動しない。

@@ -71,12 +71,14 @@ function lastCommandReplayed(rd: string) {
 }
 
 describe('S3f §40.2 の 1: the replay running past the records is a mismatch', () => {
-  it('when the current engine emits one more event for the last command than the log has, recovery says mismatch and changes nothing', async () => {
+  it('when the current engine emits one more event for the last command than the log has, recovery says mismatch and changes nothing (a commandless event at that number is not cut)', async () => {
     const dir = tmp();
     const run = await waitedRun(dir, 's3f-past', 6);
     const { cp, cmds, at, a, b, ep } = lastCommandReplayed(run.rd);
-    // 前の版の engine が、最後の命令について 1 つ少なく出していた形（今の engine は 1 つ多く出す）
-    writeLines(ep, lines(ep).filter((e) => e.seq !== b));
+    // 前の版の engine が、最後の命令について 1 つ少なく出していた形（今の engine は 1 つ多く出す）。
+    // その番号には、命令の記録が覆っていない出来事が 1 つある（記録の #b とライブの #b は別物。S3h §41.10 の軽 3: 直しが無いと、一致と見て切っていた）
+    const lastEv = lines(ep).at(-1)! as unknown as Record<string, unknown>;
+    writeLines(ep, [...lines(ep).filter((e) => e.seq !== b), { type: 'noise', pos: { x: 0, y: 0 }, loudness: 0, source: null, seenBy: [], floor: lastEv.floor, ft: lastEv.ft, seq: b, cause: null, wall: lastEv.wall }]);
     cmds[at].resultSeq = [a, b - 1];
     writeLines(cp, cmds);
     const before = snap(dir);
@@ -86,18 +88,23 @@ describe('S3f §40.2 の 1: the replay running past the records is a mismatch', 
       expect(rec).toContain('with mismatch');
       expect(rec).toContain('再生が記録より先まで進んだ');
       expect(r.logs.some((l) => l.includes('再生が記録と食い違ったので'))).toBe(true);
-      // 再生は記録より先にいるので、番号を送らなくても重ならない
       expect(r.m.get(run.runId)!.world.seq).toBe(b);
-      expect(r.m.get(run.runId)!.seqResumePending()).toBeNull();
+      // 続けるときは、ライブの World の番号の次に境目を残す（S3h §41.10 の中 2）
+      expect(r.m.get(run.runId)!.seqResumePending()).toBe(b + 1);
       r.m.closeAll();
       same(before, snap(dir));
     }
-    // 続けても、番号は重ならない
+    // 続けても、番号は重ならない（ライブの World にだけある #b とも）
     const r = restart(dir);
     await act(r.m.portForToken(run.token)!, { type: 'wait' });
     r.m.closeAll();
     expect(strictlyIncreasing(ep)).toBe(true);
-    expect(lines(ep).some((e) => e.type === 'seq_resumed')).toBe(false);
+    expect(lines(ep).filter((e) => e.type === 'seq_resumed').map((e) => e.seq)).toEqual([b + 1]);
+    // 次の起動は、境目から再生するので一致し、記録の #b（命令の無い出来事）は確定の扱いにならない
+    const r2 = restart(dir);
+    expect(r2.logs.find((l) => l.startsWith(`recovered ${run.runId}`))).toContain('hash ok');
+    expect(r2.m.get(run.runId)!.history.some((e) => e.seq === b)).toBe(false);
+    r2.m.closeAll();
   });
 });
 
@@ -117,6 +124,7 @@ describe('S3f §40.2 の 2: continuing a run whose replay did not match', () => 
     const rec = r1.logs.find((l) => l.startsWith(`recovered ${run.runId}`))!;
     expect(rec).toContain('with mismatch');
     expect(rec).toContain('届かなかった');
+    expect(rec).toContain(`seq_resume #${b + 2}`);
     expect(rec).toContain(`${b + 2} から振る`);
     const s1 = r1.m.get(run.runId)!;
     expect(s1.world.seq).toBe(b);
@@ -192,10 +200,15 @@ describe('S3f §40.2 の 2: continuing a run whose replay did not match', () => 
     expect(r2.logs.find((l) => l.startsWith(`recovered ${run.runId}`))).toContain('with mismatch');
     const s2 = r2.m.get(run.runId)!;
     expect(s2.world.seq).toBe(seqAfter);
-    expect(s2.seqResumePending()).toBeNull();
+    // まだ食い違うので、続けるなら、もう 1 つ境目を残す（S3h §41.10 の中 2）
+    expect(s2.seqResumePending()).toBe(seqAfter + 1);
     await act(r2.m.portForToken(run.token)!, { type: 'wait' });
     r2.m.closeAll();
     expect(strictlyIncreasing(ep)).toBe(true);
+    expect(lines(ep).filter((e) => e.type === 'seq_resumed').map((e) => e.seq)).toEqual([next, seqAfter + 1]);
+    const r3 = restart(dir);
+    expect(r3.logs.find((l) => l.startsWith(`recovered ${run.runId}`))).toContain('hash ok');
+    r3.m.closeAll();
   });
 });
 

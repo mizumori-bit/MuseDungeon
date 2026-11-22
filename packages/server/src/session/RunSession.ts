@@ -133,6 +133,9 @@ export class RunSession {
    * システムの命令 seq_resume として確定する（resumeSeqIfNeeded）。null なら送らない
    */
   private pendingSeqResume: number | null = null;
+  /** 食い違いの後の続きの境目（seq_resumed の番号。S3h §41.10 の中 2）。履歴を空の World から畳む所は、境目のキーフレームから後を畳む */
+  private readonly boundarySeqs: number[] = [];
+  private boundaryCache: { seq: number; world: World } | null = null;
 
   private constructor(readonly deps: SessionDeps, runId: string, world: World, createdAt: number) {
     this.runId = runId;
@@ -168,10 +171,13 @@ export class RunSession {
     const notes: string[] = [];
     const commands = readJsonl<CommandRecord>(join(dir, 'commands.jsonl'));
     const allEvents = readJsonl<GameEvent>(join(dir, 'events.jsonl'));
-    // 記録の範囲（§36.1 の 1）。命令の記録が覆っていない出来事（出来事を追記した後、命令を書く前に落ちた）は、照合にも履歴にも入れない
+    // 記録の範囲（§36.1 の 1）。命令の記録が覆っていない出来事（出来事を追記した後、命令を書く前に落ちた）は、照合にも履歴にも入れない。
+    // 覆うかどうかは、命令の結果の区間の和で見る（S3h §41.10 の中 1: 最後の番号だけで見ると、続けた後に、途中に残った命令の無い出来事が混ざる）。
+    // 読み方だけで、記録のファイルには何も書かない
     const bounds = logBounds(allEvents, commands);
     const orphans = allEvents.filter((e) => e.seq > bounds.covered).length;
-    const kept = orphans ? allEvents.filter((e) => e.seq <= bounds.covered) : allEvents;
+    const kept = allEvents.filter((e) => bounds.covers(e.seq));
+    const inner = allEvents.length - kept.length - orphans;
     const lastKept = kept.length ? kept[kept.length - 1].seq : 0;
     // いちばん新しい、読めて、記録が覆っているキーフレーム（出来事の番号・命令の番号が、どちらも記録の最後以下）。範囲の中で最新のものが
     // 一時的に読めなければ、古いものへ下がらずに失敗する（§38.2 の 2: 長い再実行になり、版をまたいだランでは食い違いに入る）
@@ -225,19 +231,26 @@ export class RunSession {
       if (aside.moved.length) notes.push(`読めないキーフレーム ${aside.moved.length} 個の名前を替えた（${aside.moved.map((p) => basename(p)).join(', ')}）`);
       if (aside.ahead.length) notes.push(`記録より先に進んだキーフレーム ${aside.ahead.length} 個の名前を替えた（${aside.ahead.map((p) => basename(p)).join(', ')}）`);
       if (!found.kf) notes.push('読めるキーフレームが無いので、出来事の記録だけから作った');
+      // 途中に残った命令の無い出来事（S3h §41.10 の中 1）: 読まずに、記録のファイルには残す
+      if (inner) notes.push(`命令の記録が覆っていない途中の出来事 ${inner} 件は、読まずに残した`);
       // 出来事の記録から作ったとき・キーフレームを避けたときは、キーフレームを書き直す（次に起動し直したときに使う）
       if (!found.kf || aside.moved.length || aside.ahead.length) s.writeKeyframe();
     } else {
-      if (orphans || found.skipped) notes.push(`食い違ったので、記録のファイルは直していない（${[orphans ? `命令の記録が覆っていない出来事 ${orphans} 件` : '', found.skipped ? `使えないキーフレーム ${found.skipped} 個` : ''].filter(Boolean).join('・')}は、そのまま）`);
+      if (orphans || inner || found.skipped) notes.push(`食い違ったので、記録のファイルは直していない（${[orphans || inner ? `命令の記録が覆っていない出来事 ${orphans + inner} 件` : '', found.skipped ? `使えないキーフレーム ${found.skipped} 個` : ''].filter(Boolean).join('・')}は、そのまま）`);
       if (replayEnd > bounds.covered) notes.push(`再生が記録より先まで進んだ（再生の終わり ${replayEnd}、命令の記録の覆う最後 ${bounds.covered}）`);
       else if (replayEnd < bounds.covered) notes.push(`再生が記録の覆う番号まで届かなかった（再生の終わり ${replayEnd}、命令の記録の覆う最後 ${bounds.covered}）`);
-      // 続きの出来事の番号を、記録の中のどの番号とも重ねない（SEASON.md §40.2 の 2）。送るのは、続けて最初に記録へ書くとき（読むだけなら何も書かない。§38.1）
-      const next = resumeSeqTarget(dir, allEvents, bounds.covered);
-      if (next > s.world.seq + 1) {
+      // 続けるときは、最初に記録へ書く前に、必ず境目（seq_resume）を残す（S3h §41.10 の中 2）。番号は、記録の中のどの番号とも、
+      // ライブの World の番号とも重ねない（SEASON.md §40.2 の 2）。読むだけなら何も書かない（§38.1）。再生で終わったランには書かない
+      const next = Math.max(resumeSeqTarget(dir, allEvents, bounds.covered), s.world.seq + 1);
+      if (s.world.status !== 'ended') {
         s.pendingSeqResume = next;
-        notes.push(`続けると、出来事の番号を ${s.world.seq + 1} からでなく ${next} から振る（記録の番号と重ならないように。最初に記録へ書くときに seq_resume として残す）`);
+        notes.push(next > s.world.seq + 1
+          ? `続けると、境目（seq_resume #${next}）を残し、出来事の番号を ${s.world.seq + 1} からでなく ${next} から振る（記録の番号と重ならないように）`
+          : `続けると、境目（seq_resume #${next}）を残してから続ける`);
       }
     }
+    // 食い違いの後の続きの境目（S3h §41.10 の中 2）: 遅らせた観戦は、境目のキーフレームから後を畳む
+    for (const e of s.history) if (e.type === 'seq_resumed') s.boundarySeqs.push(e.seq);
     const message = verified ? `recovered ${runId} (${replayed.length} events re-executed, hash ok)` : `recovered ${runId} with mismatch (logged ${logged.length}, replayed ${replayed.length})`;
     return { session: s, verified, message: notes.length ? `${message}。${notes.join('。')}` : message };
   }
@@ -304,12 +317,38 @@ export class RunSession {
     if (!r.events.length) return;
     this.cseq = cseq;
     this.commit({ cseq, player: null, command: cmd, source: 'system', wall }, r.events);
+    // 境目のキーフレーム（次の起動は、ここから再生するので一致する。遅らせた観戦と巻き戻しも、ここから畳む）
     if (this.lastKeyframeSeq !== this.world.seq) this.writeKeyframe();
+    this.boundarySeqs.push(r.events[r.events.length - 1].seq);
   }
 
   /** 続けて最初に記録へ書くときに、出来事の番号を送るか（その送り先。テストと記録の確かめ用） */
   seqResumePending(): number | null {
     return this.pendingSeqResume;
+  }
+
+  /** 食い違いの後の続きの境目（seq_resumed の番号。古い順） */
+  boundaries(): readonly number[] {
+    return this.boundarySeqs;
+  }
+
+  /**
+   * 履歴を upTo まで畳むときの出発点（S3h §41.10 の中 2）: upTo 以下の最後の境目のキーフレームが読めれば、その World（写し）と番号。
+   * 無ければ空の World と 0（境目より前は、今までどおり最初から畳む）
+   */
+  foldBase(upTo: number): { world: World; from: number } {
+    for (let i = this.boundarySeqs.length - 1; i >= 0; i--) {
+      const b = this.boundarySeqs[i];
+      if (b > upTo) continue;
+      if (this.boundaryCache?.seq !== b) {
+        if (!this.log) break;
+        const r = readJsonStable<{ seq: number; world: World }>(join(this.log.dir, 'keyframes', `${b}.json`), (v) => !!v && typeof v === 'object' && (v as { seq?: number }).seq === b && !!(v as { world?: unknown }).world);
+        if (!('value' in r)) continue;
+        this.boundaryCache = { seq: b, world: r.value.world };
+      }
+      return { world: structuredClone(this.boundaryCache!.world), from: b };
+    }
+    return { world: emptyWorld(), from: 0 };
   }
 
   private writeKeyframe(): void {
@@ -833,8 +872,9 @@ export class RunSession {
 
   /** 観戦用の World 畳み込み検証（テスト用） */
   foldHistory(): World {
-    const w = emptyWorld();
-    for (const ev of this.history) applyEvent(w, ev);
+    // 食い違いの後の続き（S3h §41.10 の中 2）: 境目があれば、境目のキーフレームから後を畳む
+    const { world: w, from } = this.foldBase(this.world.seq);
+    for (const ev of this.history) if (ev.seq > from) applyEvent(w, ev);
     return w;
   }
 

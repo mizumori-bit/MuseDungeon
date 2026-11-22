@@ -71,15 +71,37 @@ type CmdLite = { cseq: number; resultSeq?: [number, number] | null };
 
 /**
  * 記録の範囲（SEASON.md §36.1 の 1）: covered は命令の記録が覆っている最後の出来事の番号（ランを作ったときの出来事は命令が無いので、
- * 最初の命令の結果より前の出来事も覆っているものと数える）。lastEventSeq は出来事の記録の最後、lastCseq は命令の記録の最後
+ * 最初の命令の結果より前の出来事も覆っているものと数える）。lastEventSeq は出来事の記録の最後、lastCseq は命令の記録の最後。
+ * covers（S3h。§41.10 の中 1）: その番号の出来事を、命令の記録が覆っているか。覆う範囲は、命令の結果の区間（resultSeq）の和と、ランを作ったときの区間。
+ * 最大の番号だけで見ると、食い違ったランを続けて covered が先へ伸びたとき、それより前に残っていた命令の無い出来事が範囲の内側に入っていた
  */
-export function logBounds(events: readonly GameEvent[], commands: readonly CmdLite[]): { events: readonly GameEvent[]; covered: number; lastEventSeq: number; lastCseq: number } {
+export function logBounds(events: readonly GameEvent[], commands: readonly CmdLite[]): { events: readonly GameEvent[]; covered: number; lastEventSeq: number; lastCseq: number; covers: (seq: number) => boolean } {
   const lastEventSeq = events.length ? events[events.length - 1].seq : 0;
   let cmdEnd = 0;
   let firstResult = Infinity;
-  for (const c of commands) if (c.resultSeq) { cmdEnd = Math.max(cmdEnd, c.resultSeq[1]); firstResult = Math.min(firstResult, c.resultSeq[0]); }
+  const iv: [number, number][] = [];
+  for (const c of commands) if (c.resultSeq) { cmdEnd = Math.max(cmdEnd, c.resultSeq[1]); firstResult = Math.min(firstResult, c.resultSeq[0]); iv.push([c.resultSeq[0], c.resultSeq[1]]); }
   const creationEnd = firstResult === Infinity ? lastEventSeq : firstResult - 1;
-  return { events, covered: Math.max(cmdEnd, creationEnd), lastEventSeq, lastCseq: commands.length ? commands[commands.length - 1].cseq : 0 };
+  iv.push([-Infinity, creationEnd]);
+  // 区間を並べて、重なる・隣り合うものをつなぐ
+  iv.sort((a, b) => a[0] - b[0]);
+  const merged: [number, number][] = [];
+  for (const [a, b] of iv) {
+    const last = merged[merged.length - 1];
+    if (last && a <= last[1] + 1) last[1] = Math.max(last[1], b);
+    else merged.push([a, b]);
+  }
+  const covers = (seq: number): boolean => {
+    let lo = 0, hi = merged.length - 1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (seq < merged[mid][0]) hi = mid - 1;
+      else if (seq > merged[mid][1]) lo = mid + 1;
+      else return true;
+    }
+    return false;
+  };
+  return { events, covered: Math.max(cmdEnd, creationEnd), lastEventSeq, lastCseq: commands.length ? commands[commands.length - 1].cseq : 0, covers };
 }
 
 /**
@@ -177,17 +199,20 @@ export type MetaRepair = { meta: RunMetaFile; from: 'keyframe' | 'events'; moved
  * 書く前に、壊れた元を meta.json.broken に残す
  */
 export function repairMeta(dir: string, runId: string): MetaRepair {
-  const events = readJsonl<GameEvent>(join(dir, 'events.jsonl'));
-  const first = events[0];
+  const raw = readJsonl<GameEvent>(join(dir, 'events.jsonl'));
+  const first = raw[0];
   const season = first?.type === 'run_started' ? first.meta.season?.id : undefined;
   const why = (s: string): MetaRepair => ({ error: `meta.json が読めず、作り直せない: ${s}`, ...(season ? { season } : {}) });
   if (!first || first.type !== 'run_started') return why('出来事の記録（events.jsonl）が無いか、run_started で始まっていない');
   let world: World;
   let from: 'keyframe' | 'events' = 'keyframe';
+  // 命令の記録が覆っている出来事だけ（S3h §41.10 の中 1。途中に残った命令の無い出来事も読まない）
+  const b = logBounds(raw, readJsonl<CmdLite>(join(dir, 'commands.jsonl')));
+  const events = raw.filter((e) => b.covers(e.seq));
   try {
     // 記録が覆っている範囲だけ（§36.1 の 1: 記録より先に進んだキーフレームと、命令の記録が覆っていない出来事は使わない）
-    const b = logBounds(events, readJsonl<CmdLite>(join(dir, 'commands.jsonl')));
-    const { kf } = latestKeyframe(dir, { moveBroken: false, maxSeq: Math.min(b.lastEventSeq, b.covered), maxCseq: b.lastCseq });
+    const lastKept = events.length ? events[events.length - 1].seq : 0;
+    const { kf } = latestKeyframe(dir, { moveBroken: false, maxSeq: Math.min(lastKept, b.covered), maxCseq: b.lastCseq });
     if (kf) world = foldOnto(kf.world, events, b.covered);
     else { from = 'events'; world = foldOnto(emptyWorld(), events, b.covered); }
   } catch (e) {
@@ -210,7 +235,10 @@ export function repairSummary(dir: string, catalog: Catalog): { rebuilt: boolean
   const r = readJsonStable<RunSummary>(p, (v) => !!v && typeof v === 'object' && Array.isArray((v as RunSummary).players));
   // 壊れているときだけ作り直す（無い・一時的に読めないときは触らない。§36.1 の 2）
   if (!('broken' in r)) return null;
-  const events = readJsonl<GameEvent>(join(dir, 'events.jsonl'));
+  // 命令の記録が覆っている出来事だけ（S3h §41.10 の中 1）
+  const raw = readJsonl<GameEvent>(join(dir, 'events.jsonl'));
+  const b = logBounds(raw, readJsonl<CmdLite>(join(dir, 'commands.jsonl')));
+  const events = raw.filter((e) => b.covers(e.seq));
   let at = -1;
   for (let i = events.length - 1; i >= 0; i--) { const t = events[i].type; if (t === 'run_ended' || t === 'expedition_ended') { at = i; break; } }
   const moved = moveAside(p);

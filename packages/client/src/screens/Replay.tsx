@@ -77,6 +77,8 @@ export function Replay({ runId }: { runId: string }) {
   const bubblesRef = useRef<Bubble[]>([]);
   const indexRef = useRef<RunIndex | null>(null);
   const seekToken = useRef(0);
+  /** 食い違いの後の続きの境目（seq_resumed）で、境目のキーフレームへ飛んでいる最中（S3h。その間は進めない） */
+  const boundarySeek = useRef<number | null>(null);
   const stateRef = useRef({ mode, follow, speed, realtime, playing });
   catalogRef.current = catalog;
   stateRef.current = { mode, follow, speed, realtime, playing };
@@ -146,6 +148,7 @@ export function Replay({ runId }: { runId: string }) {
       }
     } else w = emptyWorld();
     if (token !== seekToken.current) return;
+    boundarySeek.current = null;
     const evs = eventsRef.current;
     let i = upperBound(evs, from);
     while (i < evs.length && evs[i].seq <= target) {
@@ -164,12 +167,19 @@ export function Replay({ runId }: { runId: string }) {
   const advance = (byTurn: boolean, n = 1): GameEvent[] => {
     const w = worldRef.current;
     const evs = eventsRef.current;
-    if (!w) return [];
+    if (!w || boundarySeek.current !== null) return [];
     const applied: GameEvent[] = [];
     let count = 0;
     while (posRef.current < evs.length) {
       const ev = evs[posRef.current++];
       if (ev.seq <= w.seq) continue;
+      // 食い違いの後の続きの境目（S3h。SEASON.md §41.10 の中 2）: 境目より前は前の版の出来事なので、境目のキーフレームから畳み直す
+      if (ev.type === 'seq_resumed' && (indexRef.current?.keyframes ?? []).includes(ev.seq)) {
+        posRef.current--;
+        boundarySeek.current = ev.seq;
+        void seek(ev.seq);
+        break;
+      }
       try { applyEvent(w, ev); } catch (e) { setError(`#${ev.seq}: ${(e as Error).message}`); break; }
       applied.push(ev);
       if (!byTurn && ++count >= n) break;

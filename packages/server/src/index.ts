@@ -9,6 +9,7 @@ export { intentStopText, SessionPlayerPort, towardNote } from './session/PlayerP
 export type { PlayerPort, ActionPayload } from './session/PlayerPort';
 export { SpectatorPort } from './session/SpectatorPort';
 export { readJsonl, RunStore, spectatorEvent } from './log/RunStore';
+export { logBounds } from './log/repair';
 export { acquireLock, atomicWriteHooks, dropPendingWrites, pendingWrites, portInUse, RUNS_LOCK, scrubPaths, writeFileAtomic, writeFileAtomicLogged } from './log/atomicWrite';
 export { createMcpServer } from './mcp/server';
 export { rulesText } from './mcp/rules';

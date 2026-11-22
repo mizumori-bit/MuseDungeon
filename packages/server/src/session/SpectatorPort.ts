@@ -1,7 +1,7 @@
 // SpectatorPort: 観戦者向け。スナップショット（secret の seed/rng 除去）＋イベント購読。書き込み不可。
 // spectatorPolicy: omniscient = 全情報 / follow_only = 特定プレイヤーの PlayerView のみ / delayed = 一定 seq 遅らせた俯瞰
 import type { AgentActivity, GameEvent, PlayerId, PlayerView, SpectatorPolicy, World } from '@muse/shared';
-import { applyEvent, emptyWorld, projectPlayerView, stripSecret } from '@muse/shared';
+import { applyEvent, projectPlayerView, stripSecret } from '@muse/shared';
 import { spectatorEvent } from '../log/RunStore';
 import type { RunSession } from './RunSession';
 
@@ -35,8 +35,10 @@ export class SpectatorPort {
   snapshot(): { seq: number; world: World } {
     const upTo = this.visibleUpTo();
     if (upTo === this.session.world.seq) return { seq: upTo, world: stripSecret(this.session.world) };
-    const w = emptyWorld();
+    // 食い違いの後の続き（S3h。SEASON.md §41.10 の中 2）: 境目より後は、境目のキーフレームから畳む（境目より前の出来事は前の版のもの）
+    const { world: w, from } = this.session.foldBase(upTo);
     for (const ev of this.session.history) {
+      if (ev.seq <= from) continue;
       if (ev.seq > upTo) break;
       applyEvent(w, ev);
     }
