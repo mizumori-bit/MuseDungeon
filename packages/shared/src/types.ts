@@ -634,8 +634,8 @@ export type SeasonSlayFacts = Omit<SeasonSlay, 'by' | 'mine' | 'first' | 'least'
 
 /**
  * 予備動作（構え）への対し方（S5。SEASON.md §47.4 の 1）。kind: 予備動作の種類（Intent の kind: winding_up 突進・swinging 大振り・summoning 手下を呼ぶ・enraging 怒り）。
- * n: 構えた回数・seen: そのうち、構えの後の自分の手番の初めに相手が見えていた回数・
- * missed: 外させた（大きな一撃が空を切り、相手が動けなくなった）・hit: 受けた（大きな一撃が自分に届いた）。missed・hit は突進と大振りだけ（ほかは 0）
+ * n・seen: 構えの後の自分の手番の初めに相手が見えていた構えの回数（突進・大振りは自分に向けた構えだけ。S5c で n も seen と同じ数にした）・
+ * missed: 外させた（大きな一撃が空を切り、相手が動けなくなった）・hit: 受けた（大きな一撃が自分に当たった）。missed・hit は突進と大振りだけ（ほかは 0）
  */
 export interface SlayTell { kind: Intent['kind']; n: number; seen: number; missed: number; hit: number }
 

@@ -10,7 +10,7 @@ import type {
 } from '@muse/shared';
 import {
   actionError, applyEvent, buildExpeditionReport, canonicalHash, guardianDisplayName, compareReports, emptyWorld, filterEventsForPlayer, FREE_COMMANDS, MACRO_COMMANDS,
-  macroNext, macroStart, macroStopError, narrate, projectPlayerView, publicStairsAt, riskText, fightRiskStop, fightThreats, threatEstimate, seasonReportable, seasonReportableSpots, selfTurnMarks, t,
+  macroNext, macroProbe, macroStart, macroStopError, narrate, projectPlayerView, publicStairsAt, riskText, fightRiskStop, fightThreats, threatEstimate, seasonReportable, seasonReportableSpots, selfTurnMarks, t,
 } from '@muse/shared';
 import type { SeasonHooks } from '../season/SeasonService';
 import type { ServerConfig } from '../config';
@@ -886,8 +886,8 @@ export class RunSession {
     }
     // 1 歩も進めないと分かるなら、手番を使わずに理由付きで拒否する（V3-2R §14.2）
     {
-      const probe = macroStart(startView, cmd, this.deps.catalog);
-      const d0 = macroNext(probe, startView, this.deps.catalog, []);
+      // valid_actions の行を出すかと同じ判定（S5c: macroProbe）
+      const { state: probe, decision: d0 } = macroProbe(startView, cmd, this.deps.catalog);
       if ('stop' in d0) {
         const err = macroStopError(startView.locale, d0.stop, cmd, d0.dir, d0.blockedBy, d0.traps, d0.explored, d0.obstacle);
         // fight の被弾の前の断り（S1c §14.4 の 1）: 見込みと最悪の 2 つの数・いまの HP・実際に使った hp_floor

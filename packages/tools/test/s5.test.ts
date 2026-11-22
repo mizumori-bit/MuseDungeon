@@ -1,13 +1,15 @@
 // S5（SEASON.md §47.4・§47.5）のテスト: 討伐の記録の予備動作と動けなかった手番・退いた後のキャンプの並べ・古い形の記録・文の直し
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { buildCatalog, loadContent } from '@muse/content';
 import { ENGINE_VERSION } from '@muse/engine';
-import { loadConfig, SessionManager } from '@muse/server';
+import { createApp, loadConfig, SessionManager } from '@muse/server';
 import type { PlayerPort } from '@muse/server';
-import { applyEvent, buildObservation, emptyWorld, formatObservationText, SeasonSlaySchema, SeasonSyncSchema, slayObs } from '@muse/shared';
+import { applyEvent, buildObservation, emptyWorld, formatObservationText, macroProbe, projectPlayerView, SeasonSlaySchema, SeasonSyncSchema, slayObs } from '@muse/shared';
+import { arena } from './v33duel';
 import type { Command, Entity, GameEvent, SeasonSlay, World } from '@muse/shared';
 import { buildAttempts, buildSlays, incapStatuses } from '../../server/src/season/slays';
 import { rulesText } from '../../server/src/mcp/rules';
@@ -18,8 +20,8 @@ const incap = incapStatuses(content);
 const agent = { kind: 'agent' as const, label: 'test' };
 const SID = 's5t';
 
-function manager(runsDir: string | null = null): SessionManager {
-  return new SessionManager(content, loadConfig(runsDir ? { runsDir, waitOthersMs: 100 } : { runsDir: null, profilesDir: null, seasonsDir: null, waitOthersMs: 100 }));
+function manager(runsDir: string | null = null, extra: { keyframeEvery?: number } = {}): SessionManager {
+  return new SessionManager(content, loadConfig(runsDir ? { runsDir, waitOthersMs: 100, ...extra } : { runsDir: null, profilesDir: null, seasonsDir: null, waitOthersMs: 100 }));
 }
 function openSeason(m: SessionManager): void {
   m.seasons.store.open({ id: SID, name: 'S5試し', seed: 's4-season-1', engineVersion: ENGINE_VERSION, contentVersion: content.version, budget: 6000, endsAt: Date.now() + 86_400_000, openedAt: Date.now() });
@@ -41,12 +43,19 @@ const act = (r: { port: PlayerPort }, cmd: Command) => r.port.act(cmd, { source:
 const meOf = (w: World, pid: string) => w.entities[w.players[pid].entityId];
 const floorOf = (r: Run) => meOf(r.session.world, r.playerId).pos!.floor;
 
-/** テストの書き換え。履歴にも足す（畳んだ World が今の World と合うように。記録のファイルには書かない） */
+/**
+ * テストの書き換え。履歴にも足す（畳んだ World が今の World と合うように。記録のファイルには書かない）。
+ * recordEdits が false なら履歴に足さない（起動し直すテスト: 履歴と記録のファイルを同じにする）
+ */
+let recordEdits = true;
 function rec(r: Run, p: { put?: Entity[]; del?: string[] }): void {
+  recEv(r, { type: 'thought', player: r.session.world.playerOrder[0], text: '', floor: null, ...p });
+}
+function recEv(r: Run, p: Record<string, unknown>): void {
   const w = r.session.world;
-  const ev = { type: 'thought', player: w.playerOrder[0], text: '', seq: w.seq + 1, cause: null, floor: null, ft: 0, wall: 0, seenBy: [], ...p } as unknown as GameEvent;
+  const ev = { seq: w.seq + 1, cause: null, ft: 0, wall: 0, seenBy: [], ...p } as unknown as GameEvent;
   applyEvent(w, ev);
-  r.session.history.push(ev);
+  if (recordEdits) r.session.history.push(ev);
 }
 function edit(r: Run, id: string, fn: (e: Entity) => void): void { const e = structuredClone(r.session.world.entities[id]); fn(e); rec(r, { put: [e] }); }
 function clearMonsters(r: Run, keepWarden = false): void {
@@ -86,7 +95,7 @@ const CARD: [string, number, number, string, number, number][] = [['e', 1, 0, 's
  * 突進を 1 回外させて、外させた手番に 1 回殴る。大守護者を突き進む者にして、自分の後ろが壁のマス P に置き、大守護者を P から 3 マス先に置く。
  * 構えを見たら横へ 1 歩外れる（突進は P で壁に止まり、隣で朦朧になる）
  */
-async function chargeMiss(r: Run, wid: string): Promise<void> {
+async function chargeMiss(r: Run, wid: string, opts: { grass?: boolean } = {}): Promise<void> {
   const w = r.session.world;
   const key = floorOf(r);
   const f = w.floors[key];
@@ -119,6 +128,13 @@ async function chargeMiss(r: Run, wid: string): Promise<void> {
     delete e.actor!.ai.intent;
     delete e.actor!.dormant;
   });
+  // grass: 大守護者のマスを背の高い草にする（構えが、こちらから見えない。草は中の者を隠し、隣でなければ見えない）
+  if (opts.grass) {
+    const g = tt.indexOf('core:tall_grass');
+    expect(g).toBeGreaterThanOrEqual(0);
+    expect(w.meta.concealTerrain ?? []).toContain(g);
+    recEv(r, { type: 'tile_changed', floor: key, x: p.x + dx * 3, y: p.y + dy * 3, terrain: g, reason: 'other', by: null });
+  }
   // 構えるまで待つ（追跡中で直線の 3 マス先）
   for (let i = 0; i < 3 && !w.entities[wid].actor!.ai!.intent; i++) expect((await act(r, { type: 'wait' })).ok).toBe(true);
   expect(w.entities[wid].actor!.ai!.intent?.kind).toBe('winding_up');
@@ -322,6 +338,30 @@ describe('S5 §47.4 の 2: after coming back from a warden without slaying it, c
     expect(offer.slays![0].text).toBe(x.records[0].text);
     expect(offer.text).toMatch(new RegExp(` / 先に倒した者（倒した記録 1 件）: Aya（Lv\\d+・戦士・小剣）。与えた被害 \\d+・受けた被害 \\d+・突進の構えを 1 回見て 1 回外させた・\\d+ 手番目に倒した。／あなたの前の挑戦（遠征 ${cmp.no}）: 与えた被害 \\d+・受けた被害 \\d+・突進の構えを 1 回見て 1 回外させた。詳しくは記録庫$`));
     expect(offer.text).not.toContain('使った品');
+    // 2 人の列（最初の 1 人・いちばん少ない被害の 1 人）。S5 より前の記録の列は「記録に無い」
+    const ws = b.session.wardenAttempts(b.playerId, cmp.no);
+    const v2 = structuredClone(b.port.view());
+    const aya = v2.season!.slays![0];
+    const { tells: _t, openings: _o, ...oldShape } = aya;
+    v2.season!.slays = [{ ...aya, least: undefined, of: 2 }, { ...oldShape, by: 'Zed', first: undefined, least: true, of: 2, taken: 0 }];
+    const l2 = buildObservation(v2, catalog, { detail: 'brief', map: false, campCompare: { no: cmp.no, lines: [], wardens: ws } }).camp!.compare!.wardens![0].lines;
+    expect(l2[1]).toMatch(/^ {2}（項目: あなた Lv\d+・戦士・小剣 ／ Aya（先に倒した） Lv\d+・戦士・小剣 ／ Zed（いちばん少ない被害） Lv\d+・戦士・小剣）$/);
+    expect(l2.find((l) => l.startsWith('  突進の構えを外させた: '))).toBe('  突進の構えを外させた: 1 回（見た 1・受けた 0） ／ 1 回（見た 1・受けた 0） ／ 記録に無い');
+    expect(l2.find((l) => l.startsWith('  それ以外の手番: '))).toMatch(/ ／ 記録に無い$/);
+    // 英語: 表・候補・知らせ（単数・複数、読める形）
+    const ve = structuredClone(b.port.view());
+    ve.locale = 'en';
+    ve.camp!.offers = [{ ...ve.camp!.offers[0], objective: { type: 'slay_warden', targetDepth: 5 } }];
+    ve.milestonesCleared = [];
+    const oe = buildObservation(ve, catalog, { detail: 'full', map: false, campCompare: { no: cmp.no, lines: [], wardens: ws }, wardenPrev: { 5: prev }, slayNews: ve.season!.slays });
+    const le = oe.camp!.compare!.wardens![0].lines;
+    expect(le[0]).toMatch(/^Your attempt on the warden ".+" \(depth 5; expedition \d+, came back without slaying it\), beside the kill record:$/);
+    expect(le.find((l) => l.includes('made to miss'))).toBe('  charge wind-ups made to miss: 1 (saw 1, 0 hit you) / 1 (saw 1, 0 hit you)');
+    expect(le.find((l) => l.startsWith('  turns it could not act after a missed wind-up: '))).toMatch(/: 1 turn: dealt \d+ \(landed in 1\), took 0 \/ 1 turn: dealt \d+ \(landed in 1\), took 0$/);
+    expect(le.join('\n')).not.toMatch(/\b1 turns\b|wind-ups miss/);
+    expect(oe.camp!.offers[0].text).toMatch(new RegExp(`your last attempt \\(expedition ${cmp.no}\\): dealt \\d+, took \\d+, charge wind-ups: saw 1, 1 missed\\. Details in the archive$`));
+    expect(oe.camp!.offers[0].text).toContain('charge wind-ups: saw 1, 1 missed');
+    expect(oe.season!.slay_news![0].text).toMatch(/^New warden kill record: Aya \(Lv\d+ .+, .+\) slew ".+" on depth 5 \(dealt \d+, took \d+, charge wind-ups: 1 missed\)$/);
     // 記録が無くても、自分の前の挑戦は出す
     const vn = structuredClone(vb);
     vn.season!.slays = [];
@@ -366,33 +406,55 @@ describe('S5 §47.4 の 2: after coming back from a warden without slaying it, c
     m.closeAll();
   }, 120_000);
 
-  it('after a restart the last attempt on the warden is rebuilt from the run records (nothing is written)', async () => {
+  it('after a restart (recovered with a matching replay) the last attempt on the warden is rebuilt from the run records to the same facts; nothing is written; the attempt reaches neither the season files nor HTTP', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'muse-s5b-'));
+    // 書き換えを履歴に足さない（履歴と記録のファイルを同じにする）。キーフレームを命令ごとに書く（書き換えの後のキーフレームから再生するので、一致して復旧する）
+    recordEdits = false;
     try {
-      const m = manager(dir);
+      const m = manager(dir, { keyframeEvery: 1 });
       openSeason(m);
       const c = await seasonRun(m, 'Cid');
       const wid = await toWarden(c);
       await chargeMiss(c, wid);
       await lifelineHome(c);
       const before = c.session.lastWardenAttempt(c.playerId, 5)!;
-      expect(before.facts.tells![0]).toMatchObject({ kind: 'winding_up', missed: 1 });
+      expect(before).toBeTruthy();
+      expect(before.facts.dealt.melee.n).toBeGreaterThan(0);
       m.closeAll();
       const files = () => ['commands.jsonl', 'events.jsonl'].map((f) => readFileSync(join(dir, c.session.runId, f), 'utf8').length);
       const f0 = files();
-      const m2 = manager(dir);
-      m2.recoverAll();
+      const m2 = manager(dir, { keyframeEvery: 1 });
+      const log: string[] = [];
+      m2.recoverAll((s) => log.push(s));
+      // 再生が記録と一致して復旧した
+      expect(log.some((l) => l.includes(`recovered ${c.session.runId}`) && l.includes('hash ok'))).toBe(true);
+      expect(log.some((l) => l.includes('食い違'))).toBe(false);
       const s2 = m2.get(c.session.runId)!;
-      expect(s2).toBeTruthy();
       const after = s2.lastWardenAttempt(c.playerId, 5)!;
-      expect(after.no).toBe(before.no);
-      expect(after.facts.tells![0]).toMatchObject({ kind: 'winding_up', missed: 1 });
-      expect(after.facts.dealt).toEqual(before.facts.dealt);
+      expect(after).toEqual(before);
       // 観測を作っても、記録には書かない
       m2.portForToken(c.token)!.observe();
       expect(files()).toEqual(f0);
+      // 挑戦の数は、シーズンのファイルにも HTTP にも出ない（記録が無いので、項目の名前も出ない）
+      const sdir = join(dir, 'seasons', SID);
+      for (const f of readdirSync(sdir)) {
+        const s = readFileSync(join(sdir, f), 'utf8');
+        for (const k of ['"tells"', '"openings"', '"attempt"']) expect(s.includes(k), `${f} ${k}`).toBe(false);
+      }
+      const app = createApp(m2, m2.config);
+      await new Promise<void>((res) => app.server.listen(0, '127.0.0.1', () => res()));
+      try {
+        const base = `http://127.0.0.1:${(app.server.address() as AddressInfo).port}`;
+        for (const path of [`/api/seasons/${SID}`, `/api/runs/${c.session.runId}`]) {
+          const body = await (await fetch(`${base}${path}`)).text();
+          for (const k of ['"tells"', '"openings"', 'wardenAttempt']) expect(body.includes(k), `${path} ${k}`).toBe(false);
+        }
+      } finally {
+        await app.close();
+      }
       m2.closeAll();
     } finally {
+      recordEdits = true;
       rmSync(dir, { recursive: true, force: true });
     }
   }, 120_000);
@@ -438,6 +500,120 @@ describe('S5 §47.4 の 2: after coming back from a warden without slaying it, c
       rmSync(dir, { recursive: true, force: true });
     }
   }, 120_000);
+});
+
+describe('S5c (SEASON.md §48.11): only your own fight, only what you saw', () => {
+  const F = 'main:5';
+  const mk = () => {
+    let seq = 0;
+    const ev = (type: string, floor: string | null, p: Record<string, unknown>) => ({ type, seq: ++seq, cause: seq, floor, ft: 0, wall: 0, seenBy: [], ...p } as unknown as GameEvent);
+    const ai = (state: string, intent?: Record<string, unknown>) => ({ archetype: 'melee_chaser', state, targetPos: null, lostTurns: 0, params: {}, ...(intent ? { intent } : {}) });
+    const turn = (n: number) => [ev('turn_began', F, { actor: 'e_me0001', time: n }), ev('actor_scheduled', F, { id: 'e_me0001', nextActAt: n + 100, turns: n })];
+    const head = (meFloor = F) => [
+      ev('player_joined', null, { player: { id: 'p1' }, entity: { id: 'e_me0001', pos: { floor: 'main:1', x: 1, y: 1 } } }),
+      ev('expedition_started', null, { expedition: { no: 1 } }),
+      ev('entity_changed_floor', meFloor, { id: 'e_me0001', to: { floor: meFloor, x: 1, y: 1 } }),
+      ev('entity_spawned', F, { entity: { id: 'e_ward01', kind: 'core:orc_brute', pos: { floor: F, x: 4, y: 1 }, guardian: { name: { ja: '試し', en: 'Trial' }, types: ['core:charger'], warden: true }, actor: { ai: ai('hunting') }, statuses: [] } }),
+    ];
+    const tail = () => [ev('player_state', null, { player: 'p1', state: 'at_camp' }), ev('expedition_ended', null, { no: 1 })];
+    return { ev, ai, turn, head, tail };
+  };
+  const live = {
+    players: { p1: { entityId: 'e_me0001', classId: 'core:warrior', knowledge: { identified: [] } } },
+    entities: { e_me0001: { id: 'e_me0001', level: { level: 3, xp: 0 } } },
+    secret: { appearances: {} },
+  } as unknown as World;
+  const none = { world: emptyWorld(), from: Number.MAX_SAFE_INTEGER };
+
+  it('co-op: a charge aimed at an ally and the ally dodging it are not yours; with no blows of your own there is no attempt; blows on another floor do not count', () => {
+    const { ev, ai, turn, head, tail } = mk();
+    const toAlly = [
+      ev('ai_state_changed', F, { id: 'e_ward01', ai: ai('hunting', { kind: 'winding_up', dir: 'w', hold: { id: 'e_pal0001', turns: 0 } }) }),
+      ...turn(1),
+      ev('ai_state_changed', F, { id: 'e_ward01', ai: ai('hunting') }),
+      ev('status_applied', F, { target: 'e_ward01', status: { id: 'core:stun', turnsLeft: 1, power: 0 }, statusesAfter: [{ id: 'core:stun', turnsLeft: 1, power: 0 }] }),
+      ev('actor_scheduled', F, { id: 'e_ward01', nextActAt: 200, turns: 2 }),
+      // 仲間が殴る（自分は殴らない）
+      ev('attack', F, { attacker: 'e_pal0001', target: 'e_ward01', hit: true, crit: false }),
+      ev('damaged', F, { target: 'e_ward01', via: 'melee', source: 'e_pal0001', amount: 5, dealt: 5 }),
+      ...turn(2),
+    ];
+    expect(buildAttempts([...head(), ...toAlly, ...tail()], none, 'p1', live, 1, incap)).toEqual([]);
+    // 自分も 1 回殴った: 挑戦になるが、仲間に向いた構えと仲間の外れは入らない
+    const mine = [...head(), ...toAlly, ev('turn_began', F, { actor: 'e_me0001', time: 3 }),
+      ev('attack', F, { attacker: 'e_me0001', target: 'e_ward01', hit: true, crit: false }), ev('damaged', F, { target: 'e_ward01', via: 'melee', source: 'e_me0001', amount: 4, dealt: 4 }),
+      ev('actor_scheduled', F, { id: 'e_me0001', nextActAt: 400, turns: 3 }), ...tail()].map((e, i) => ({ ...e, seq: i + 1 }) as GameEvent);
+    const [a] = buildAttempts(mine, none, 'p1', live, 1, incap);
+    expect(a.tells).toEqual([]);
+    expect(a.attempt).toBe(1);
+    expect(a.dealt.melee).toEqual({ total: 4, n: 1 });
+    // 別の階にいる間に仲間が戦った遠征は、挑戦にならない
+    const away = [...head('main:4'), ev('attack', F, { attacker: 'e_pal0001', target: 'e_ward01', hit: true, crit: false }), ev('damaged', F, { target: 'e_ward01', via: 'melee', source: 'e_pal0001', amount: 5, dealt: 5 }), ...tail()];
+    expect(buildAttempts(away, none, 'p1', live, 1, incap)).toEqual([]);
+  });
+
+  it('a heavy swing aimed at you that misses its blow is not "took"; one that lands is; a rage sign (no target) counts once seen', () => {
+    const { ev, ai, turn, head, tail } = mk();
+    const swing = (hit: boolean) => [
+      ev('ai_state_changed', F, { id: 'e_ward01', ai: ai('hunting', { kind: 'swinging', pos: { x: 1, y: 1 }, hold: { id: 'e_me0001', turns: 0 } }) }),
+      ...turn(1),
+      ev('ai_state_changed', F, { id: 'e_ward01', ai: ai('hunting') }),
+      ev('attack', F, { attacker: 'e_ward01', target: 'e_me0001', hit, crit: false }),
+      ...(hit ? [ev('damaged', F, { target: 'e_me0001', via: 'melee', source: 'e_ward01', amount: 9, dealt: 9 })] : []),
+      ev('actor_scheduled', F, { id: 'e_ward01', nextActAt: 200, turns: 2 }),
+    ];
+    const h = [...head(), ...swing(false), ...swing(true),
+      ev('ai_state_changed', F, { id: 'e_ward01', ai: ai('hunting', { kind: 'enraging' }) }), ...turn(3),
+      ev('ai_state_changed', F, { id: 'e_ward01', ai: ai('hunting') }), ...tail()].map((e, i) => ({ ...e, seq: i + 1 }) as GameEvent);
+    const [a] = buildAttempts(h, none, 'p1', live, 1, incap);
+    expect(a.tells).toEqual([{ kind: 'swinging', n: 2, seen: 2, missed: 0, hit: 1 }, { kind: 'enraging', n: 1, seen: 1, missed: 0, hit: 0 }]);
+    const text = slayObs('ja', catalog, { ...a, by: 'X', of: 1 }).text;
+    expect(text).toContain('大振りの構えを 2 回見て、0 回外させ、1 回受けた・怒りの予兆を 1 回見た');
+    expect(slayObs('en', catalog, { ...a, by: 'X', of: 1 }).text).toContain('heavy-swing wind-ups: saw 2, 0 missed, 1 hit you; rage signs: saw 1');
+  });
+
+  it('a wind-up you could not see (the warden in tall grass) is not counted, nor its miss; the text never says how many you did not see', async () => {
+    const m = manager();
+    const r = await plainRun(m, 'Eve');
+    const wid = await toWarden(r);
+    await chargeMiss(r, wid, { grass: true });
+    await lifelineHome(r);
+    const [a] = r.session.wardenAttempts(r.playerId, r.port.observe().observation.camp!.compare!.no);
+    expect(a.tells).toEqual([]);
+    expect(a.openings!.missed.turns).toBe(0);
+    // 外れた後の朦朧は見えている（草の外。隣）: 殴った手番は「眠りなど」の動けない手番
+    expect(a.openings!.other.turns).toBe(1);
+    const lines = r.port.observe().observation.camp!.compare!.wardens![0].lines.join('\n');
+    expect(lines).not.toMatch(/構えた|見えていた|突進の構え/);
+    m.closeAll();
+  }, 120_000);
+
+  it('valid_actions offers explore toward:draft / toward:sense only when the command would not refuse at the first step (the same macroProbe)', async () => {
+    // 壁に囲まれた部屋で、東の端の 1 マスだけが開いていて、その先がまだ見ていない（境界は東にだけある）
+    const a = await arena('s5c-toward', { map: ['P.....'], guardian: { kind: 'core:goblin', hp: 50, dmg: '1d1', types: [], state: 'asleep' } });
+    a.inject({ del: [a.gId] });
+    const f = a.world.floors[a.key];
+    const fl = a.world.meta.terrainTable.indexOf('core:floor');
+    const i = a.oy * f.width + a.ox + a.W;
+    f.terrain[i] = fl;
+    a.world.players[a.pid].knowledge.floors[a.key].seen[i] = fl;
+    const seen = { draft: new Set<boolean>(), sense: new Set<boolean>() };
+    for (const dir of ['n', 'ne', 'e', 'se', 's', 'sw', 'w', 'nw'] as const) {
+      for (const toward of ['draft', 'sense'] as const) {
+        const v = projectPlayerView(a.world, a.pid);
+        if (toward === 'draft') v.floorHint = { ...(v.floorHint ?? {}), draft: dir } as typeof v.floorHint;
+        else v.sense = { what: 'guardian', dir } as typeof v.sense;
+        const shown = buildObservation(v, catalog, { detail: 'brief', map: false }).valid_actions.some((l) => l.startsWith(`explore toward:${toward} `));
+        const refused = 'stop' in macroProbe(v, { type: 'explore', toward }, catalog).decision;
+        expect(shown, `${toward} ${dir}`).toBe(!refused);
+        seen[toward].add(shown);
+      }
+    }
+    // 出る方角も、出ない方角もある（その方角に行ける未探索の境界が無い方角では、前は出ていて断られた）
+    expect([...seen.draft].sort()).toEqual([false, true]);
+    expect([...seen.sense].sort()).toEqual([false, true]);
+    a.manager.closeAll();
+  }, 60_000);
 });
 
 describe('S5 §47.5: rule texts', () => {

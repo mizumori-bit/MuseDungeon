@@ -4,7 +4,7 @@ import type { Catalog, CatalogEquipStats } from './catalog';
 import { abilityStatus, accBonuses, curseUnknown, isCursedItem, perkChoice, shortId, weaponReach } from './build';
 import { armorWithStatuses, boonHookSum, haulTotal, isMilestoneOf, nameOf, nextCampOf, nextOverreach, offerGap, offerWardenExtra, overreachPoints, payoutOf, regenInterval, regenStep, restCapHp, stairsSealed } from './catalog';
 import { floorTraitsText, guardianDisplayName, multText, objectiveText, offerText, partsText, progressText, resultText } from './expedition';
-import { COLLECT_WITHIN, collectTargets, isStationary, pickableItems, sameOrWorseEquip, worseEquip } from './macro';
+import { COLLECT_WITHIN, collectTargets, isStationary, macroProbe, pickableItems, sameOrWorseEquip, worseEquip } from './macro';
 import { attacksPerTurn, avgHitsOf, chaseAttacks, fightThreats, memoryOf, monsterSpeedOf, selfSpeed, threatEstimate } from './danger';
 import type { PerceivedEvent } from './filter';
 import { lastWithoutXp } from './filter';
@@ -934,17 +934,20 @@ function tellName(L: Locale, kind: string): string {
 }
 
 /** 予備動作への対し方の文（S5）。記録に項目が無ければ空 */
+/** 予備動作の名前の複数形（英語の見出し用。S5c） */
+function tellPlural(L: Locale, kind: string): string {
+  return L === 'en' ? `${tellName(L, kind)}s` : tellName(L, kind);
+}
+const isStrike = (kind: string) => kind === 'winding_up' || kind === 'swinging';
+
+/** 予備動作への対し方の文（S5・S5c）: 見えていた構え（seen）だけで書く（見えていなかった構えのことは言わない）。記録に項目が無ければ空 */
 function tellsText(L: Locale, tells: SeasonSlayFacts['tells']): string {
   if (!tells) return '';
-  if (!tells.length) return t(L, '予備動作の構え 0 回', 'no wind-ups');
-  return tells.map((x) => {
-    const name = tellName(L, x.kind);
-    const strike = x.kind === 'winding_up' || x.kind === 'swinging';
-    const res = strike ? t(L, `${x.missed} 回外させ、${x.hit} 回受けた`, `made ${x.missed} miss, took ${x.hit}`) : '';
-    if (x.seen === x.n) return strike ? t(L, `${name}を ${x.n} 回見て、${res}`, `saw ${x.n} ${name}${x.n === 1 ? '' : 's'}, ${res}`) : t(L, `${name}を ${x.n} 回見た`, `saw ${x.n} ${name}${x.n === 1 ? '' : 's'}`);
-    const seen = t(L, `${name} ${x.n} 回（見えていたのは ${x.seen} 回）`, `${x.n} ${name}${x.n === 1 ? '' : 's'} (${x.seen} seen)`);
-    return strike ? t(L, `${seen}: ${res}`, `${seen}: ${res}`) : seen;
-  }).join(t(L, '・', ', '));
+  const xs = tells.filter((x) => x.seen > 0);
+  if (!xs.length) return t(L, '予備動作の構え 0 回', 'no wind-ups');
+  return xs.map((x) => isStrike(x.kind)
+    ? t(L, `${tellName(L, x.kind)}を ${x.seen} 回見て、${x.missed} 回外させ、${x.hit} 回受けた`, `${tellPlural(L, x.kind)}: saw ${x.seen}, ${x.missed} missed, ${x.hit} hit you`)
+    : t(L, `${tellName(L, x.kind)}を ${x.seen} 回見た`, `${tellPlural(L, x.kind)}: saw ${x.seen}`)).join(t(L, '・', '; '));
 }
 
 /**
@@ -964,13 +967,9 @@ function openingsText(L: Locale, op: ObsSlay['openings']): string {
 
 /** 予備動作の短い文（S5a。候補に出す）: 「突進の構えを 11 回見て 11 回外させた」。構えが無い・項目が無ければ空 */
 function tellsShortText(L: Locale, tells: readonly { kind: string; n: number; seen: number; missed: number }[] | undefined): string {
-  return (tells ?? []).filter((x) => x.n > 0).map((x) => {
-    const name = tellName(L, x.kind);
-    const strike = x.kind === 'winding_up' || x.kind === 'swinging';
-    const saw = x.seen === x.n ? t(L, `${name}を ${x.n} 回見`, `saw ${x.n} ${name}${x.n === 1 ? '' : 's'}`) : t(L, `${name} ${x.n} 回（見えていたのは ${x.seen} 回）`, `${x.n} ${name}${x.n === 1 ? '' : 's'} (${x.seen} seen)`);
-    if (!strike || !x.missed) return x.seen === x.n ? t(L, `${saw}た`, saw) : saw;
-    return x.seen === x.n ? t(L, `${saw}て ${x.missed} 回外させた`, `${saw}, made ${x.missed} miss`) : t(L, `${saw}、${x.missed} 回外させた`, `${saw}, made ${x.missed} miss`);
-  }).join(t(L, '・', ', '));
+  return (tells ?? []).filter((x) => x.seen > 0).map((x) => (isStrike(x.kind) && x.missed
+    ? t(L, `${tellName(L, x.kind)}を ${x.seen} 回見て ${x.missed} 回外させた`, `${tellPlural(L, x.kind)}: saw ${x.seen}, ${x.missed} missed`)
+    : t(L, `${tellName(L, x.kind)}を ${x.seen} 回見た`, `${tellPlural(L, x.kind)}: saw ${x.seen}`))).join(t(L, '・', '; '));
 }
 
 /**
@@ -1080,8 +1079,8 @@ export function slayNewsItem(L: Locale, catalog: Catalog, s: SeasonSlay): { dept
   const r = slayObs(L, catalog, s);
   const warden = guardianDisplayName(L, { name: s.warden });
   const total = s.dealt.melee.total + s.dealt.thrown.total + s.dealt.poison.total + s.dealt.feature.total;
-  const tells = (s.tells ?? []).filter((x) => (x.kind === 'winding_up' || x.kind === 'swinging') && x.missed > 0)
-    .map((x) => t(L, `${tellName(L, x.kind)}を ${x.missed} 回外させた`, `made ${x.missed} ${tellName(L, x.kind)}${x.missed === 1 ? '' : 's'} miss`));
+  const tells = (s.tells ?? []).filter((x) => isStrike(x.kind) && x.missed > 0)
+    .map((x) => t(L, `${tellName(L, x.kind)}を ${x.missed} 回外させた`, `${tellPlural(L, x.kind)}: ${x.missed} missed`));
   const who = `${s.by}${s.mine ? t(L, '（あなた）', ' (you)') : ''}`;
   const text = t(L,
     `新しい討伐の記録: 地下${s.depth}階の大守護者「${warden}」を、${who}（Lv${s.level}・${r.class}${r.weapon ? `・${r.weapon.name}` : ''}）が倒した（与えた被害 ${total}・受けた被害 ${s.taken}${tells.map((x) => `・${x}`).join('')}）`,
@@ -1105,13 +1104,12 @@ export function wardenOfferText(L: Locale, recs: readonly ObsSlay[], prev?: { no
     const s = prev.facts;
     const total = s.dealt.melee.total + s.dealt.thrown.total + s.dealt.poison.total + s.dealt.feature.total;
     const kinds: string[] = [];
-    for (const x of [...recs.flatMap((r) => r.tells ?? []), ...(s.tells ?? [])]) if (x.n > 0 && !kinds.includes(x.kind)) kinds.push(x.kind);
+    for (const x of [...recs.flatMap((r) => r.tells ?? []), ...(s.tells ?? [])]) if (x.seen > 0 && !kinds.includes(x.kind)) kinds.push(x.kind);
     const tells = s.tells ? kinds.map((kind) => {
       const x = s.tells!.find((y) => y.kind === kind) ?? { seen: 0, missed: 0 };
-      const name = tellName(L, kind);
-      return kind === 'winding_up' || kind === 'swinging'
-        ? t(L, `${name}を ${x.seen} 回見て ${x.missed} 回外させた`, `saw ${x.seen} ${name}${x.seen === 1 ? '' : 's'}, made ${x.missed} miss`)
-        : t(L, `${name}を ${x.seen} 回見た`, `saw ${x.seen} ${name}${x.seen === 1 ? '' : 's'}`);
+      return isStrike(kind)
+        ? t(L, `${tellName(L, kind)}を ${x.seen} 回見て ${x.missed} 回外させた`, `${tellPlural(L, kind)}: saw ${x.seen}, ${x.missed} missed`)
+        : t(L, `${tellName(L, kind)}を ${x.seen} 回見た`, `${tellPlural(L, kind)}: saw ${x.seen}`);
     }) : [];
     parts.push(t(L, `あなたの前の挑戦（遠征 ${prev.no}）: 与えた被害 ${total}・受けた被害 ${s.taken}${tells.map((x) => `・${x}`).join('')}`,
       `your last attempt (expedition ${prev.no}): dealt ${total}, took ${s.taken}${tells.map((x) => `, ${x}`).join('')}`));
@@ -1171,17 +1169,17 @@ function compareTable(L: Locale, catalog: Catalog, view: PlayerView, no: number,
   // 予備動作（種類ごと。構えた列が 1 つでもある種類）。その下に、その予備動作を出す型の説明（知っている型だけ）
   const known = knownWardenTypes(view, mine.depth);
   const kinds: string[] = [];
-  for (const c of cols) for (const x of c.s.tells ?? []) if (x.n > 0 && !kinds.includes(x.kind)) kinds.push(x.kind);
+  // 見えていた構えだけ（S5c）
+  for (const c of cols) for (const x of c.s.tells ?? []) if (x.seen > 0 && !kinds.includes(x.kind)) kinds.push(x.kind);
   for (const kind of kinds) {
     const name = tellName(L, kind);
-    const strike = kind === 'winding_up' || kind === 'swinging';
-    const shown = row(strike ? t(L, `${name}を外させた`, `${name}s made to miss`) : t(L, `${name}を見た`, `${name}s seen`), (s) => {
+    const strike = isStrike(kind);
+    const shown = row(strike ? t(L, `${name}を外させた`, `${tellPlural(L, kind)} made to miss`) : t(L, `${name}を見た`, `${tellPlural(L, kind)} seen`), (s) => {
       if (!s.tells) return none();
       const x = s.tells.find((y) => y.kind === kind) ?? { kind, n: 0, seen: 0, missed: 0, hit: 0 };
-      const made = x.seen === x.n ? '' : t(L, `構えた ${x.n}・`, `${x.n} wound up, `);
       return strike
-        ? { text: t(L, `${x.missed} 回（${made}見た ${x.seen}・受けた ${x.hit}）`, `${x.missed} (${made}${x.seen} seen, ${x.hit} hit you)`), zero: x.n === 0 }
-        : { text: t(L, `${x.seen} 回${made ? `（構えた ${x.n}）` : ''}`, `${x.seen}${made ? ` (${x.n} wound up)` : ''}`), zero: x.n === 0 };
+        ? { text: t(L, `${x.missed} 回（見た ${x.seen}・受けた ${x.hit}）`, `${x.missed} (saw ${x.seen}, ${x.hit} hit you)`), zero: x.seen === 0 }
+        : { text: t(L, `${x.seen} 回`, `${x.seen}`), zero: x.seen === 0 };
     });
     if (!shown) continue;
     for (const id of known) {
@@ -1193,7 +1191,7 @@ function compareTable(L: Locale, catalog: Catalog, view: PlayerView, no: number,
   const opening = (pick: 'missed' | 'other') => (s: SeasonSlayFacts): Cell => {
     if (!s.openings) return none();
     const o = s.openings[pick];
-    return { text: t(L, `${o.turns} 手番${o.turns ? `で 与えた ${o.dealt}${o.hitTurns ? `（当てた ${o.hitTurns}）` : ''}・受けた ${o.taken}` : ''}`, `${o.turns} turns${o.turns ? `: dealt ${o.dealt}${o.hitTurns ? ` (landed in ${o.hitTurns})` : ''}, took ${o.taken}` : ''}`), zero: o.turns === 0 };
+    return { text: t(L, `${o.turns} 手番${o.turns ? `で 与えた ${o.dealt}${o.hitTurns ? `（当てた ${o.hitTurns}）` : ''}・受けた ${o.taken}` : ''}`, `${o.turns} turn${o.turns === 1 ? '' : 's'}${o.turns ? `: dealt ${o.dealt}${o.hitTurns ? ` (landed in ${o.hitTurns})` : ''}, took ${o.taken}` : ''}`), zero: o.turns === 0 };
   };
   const totalOf = (s: SeasonSlayFacts) => s.dealt.melee.total + s.dealt.thrown.total + s.dealt.poison.total + s.dealt.feature.total;
   const a = row(t(L, '外させた後の動けない手番', 'turns it could not act after a missed wind-up'), opening('missed'));
@@ -2494,10 +2492,13 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
   if (!adjAwake.length) {
     if (x.frontiers > 0 || x.pickables > 0) out.push(x.pickables > 0 ? `explore (${t(L, `拾えるアイテム ${x.pickables} 個も拾う`, `also picks up ${x.pickables} items`)})` : 'explore');
     else out.push(`explore (${t(L, '不可: 探索済み・拾う物なし', 'unavailable: explored, nothing to pick up')})`);
+    // 方角を優先する探索は、命令が最初の一歩で断らないときだけ出す（S5c: 断る判定と同じ macroProbe。前は「境界がある」だけを見ていて、
+    // その方角に行ける境界が無いと toward_exhausted で断られた）
+    const towardOk = (toward: 'draft' | 'sense') => !('stop' in macroProbe(view, { type: 'explore', toward }, catalog).decision);
     // 下への風の方角の未探索を優先する（V3-2R3 §20.5）
-    if (x.frontiers > 0 && x.draft) out.push(`explore toward:draft (${t(L, `下への風の${DIR_JA[x.draft]}を優先`, `prefer the draft (${x.draft})`)})`);
+    if (x.frontiers > 0 && x.draft && towardOk('draft')) out.push(`explore toward:draft (${t(L, `下への風の${DIR_JA[x.draft]}を優先`, `prefer the draft (${x.draft})`)})`);
     // 遺物・守護者の気配の方角の未探索を優先する（V3-4b §28.7）
-    if (x.frontiers > 0 && view.sense) out.push(`explore toward:sense (${t(L, `${view.sense.what === 'relic' ? '遺物' : '守護者'}の気配の${DIR_JA[view.sense.dir]}を優先`, `prefer the ${view.sense.what} you sense (${view.sense.dir})`)})`);
+    if (x.frontiers > 0 && view.sense && towardOk('sense')) out.push(`explore toward:sense (${t(L, `${view.sense.what === 'relic' ? '遺物' : '守護者'}の気配の${DIR_JA[view.sense.dir]}を優先`, `prefer the ${view.sense.what} you sense (${view.sense.dir})`)})`);
   }
   // 既知の経路で届かない階段は「不可」と書く（V3-3 後の AI 評価: 出ていた travel_to が unreachable で断られた）
   const reachable = (type: 'down' | 'up') => x.known_stairs.some((s) => s.type === type && s.path_len !== null);

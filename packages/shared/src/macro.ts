@@ -758,6 +758,15 @@ function intentKeys(view: PlayerView): string[] {
 /** 足元の目的の品を拾ってから止まる、の対象にしない止まり方（V3-8a §56.1: HP・被弾の前の停止・予備動作と、もう動けないもの） */
 const NO_PICK_STOPS: ReadonlySet<MacroStop> = new Set<MacroStop>(['hp_floor', 'hp_risk', 'intent', 'run_ended', 'dead', 'left_board', 'time_up', 'not_your_turn', 'floor_changed', 'error']);
 
+/**
+ * マクロの最初の一歩の見込み（S5c）: RunSession が手番を使わずに断るか（最初の一歩で止まるか）の判定と、valid_actions がその行を出すかの判定は、
+ * これ 1 つ（「できること」に出ているのに断られる、を作らない。explore toward:draft・toward:sense）
+ */
+export function macroProbe(view: PlayerView, cmd: Command, catalog: Catalog): { state: MacroState; decision: MacroDecision } {
+  const state = macroStart(view, cmd, catalog);
+  return { state, decision: macroNext(state, view, catalog, []) };
+}
+
 export function macroNext(state: MacroState, view: PlayerView, catalog: Catalog, events: readonly ProjectedEvent[]): MacroDecision {
   // 拾う 1 手を挟んだ後は、そのときの理由で止まる
   if (state.pendingStop) { const s = state.pendingStop; delete state.pendingStop; return { stop: s }; }

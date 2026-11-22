@@ -52,9 +52,12 @@ interface WardenTrack {
   asleep: boolean;
   /** いま構えている予備動作（無ければ null） */
   intent: string | null;
-  /** その予備動作を数えた所（構えたとき、自分がその階の遠征にいた）と、もう見えていたか */
+  /**
+   * 数える所（構えたとき、自分がその階の遠征にいて、構えが自分に向いていた。S5c: 構えた相手 hold のある種類は、自分に向けたものだけ）。
+   * 数えるのは、構えの後の自分の手番の初めに見えていたときだけ（S5c）: そのとき tell に、数えた記録が入る
+   */
+  pendingAcc: Acc | null;
   tell: SlayTell | null;
-  seen: boolean;
   /** 構えを解いて、大きな一撃を出しているところ（同じ手番の中で外れか当たりが決まる） */
   resolving: SlayTell | null;
   /** いまの動けない状態は、予備動作を外させたもの */
@@ -107,7 +110,7 @@ class FightScan {
       const e = base.world.entities[id];
       this.tracks.set(id, {
         depth, statuses: new Set((e?.statuses ?? []).map((s) => s.id)), asleep: e?.actor?.ai?.state === 'asleep', intent: e?.actor?.ai?.intent?.kind ?? null,
-        tell: null, seen: false, resolving: null, missStun: false,
+        pendingAcc: null, tell: null, resolving: null, missStun: false,
       });
     }
   }
@@ -168,21 +171,15 @@ class FightScan {
     if (p.intent !== undefined) {
       const k = p.intent?.kind ?? null;
       if (k && k !== t.intent) {
-        // 新しく構えた: 自分がその階の遠征にいれば数える
+        // 新しく構えた: 自分がその階の遠征にいて、構えが自分に向いていれば（相手 hold のある種類。手下を呼ぶ・怒りは向きが無いので、そのまま）、
+        // 構えの後の自分の手番の初めに見えたときに数える（S5c）
         const acc = this.accHere(t.depth);
-        let rec: SlayTell | null = null;
-        if (acc) {
-          rec = acc.tells.get(k) ?? { kind: k as Intent['kind'], n: 0, seen: 0, missed: 0, hit: 0 };
-          rec.n++;
-          acc.tells.set(k, rec);
-          // 構えたら戦いが始まった（突進が空を切ると、攻撃の出来事は出ない。S5a）
-          this.engaged.add(wid);
-        }
-        t.intent = k; t.tell = rec; t.seen = false; t.resolving = null;
+        const forMe = !p.intent?.hold || p.intent.hold.id === this.meId;
+        t.intent = k; t.pendingAcc = acc && forMe ? acc : null; t.tell = null; t.resolving = null;
       } else if (!k && t.intent) {
-        // 構えを解いた: 突進・大振りなら、同じ手番の中で外れか当たりが決まる
+        // 構えを解いた: 数えた（見えていた）突進・大振りなら、同じ手番の中で外れか当たりが決まる
         t.resolving = STRIKES.has(t.intent) ? t.tell : null;
-        t.intent = null; t.tell = null; t.seen = false;
+        t.intent = null; t.pendingAcc = null; t.tell = null;
       }
     }
   }
@@ -244,18 +241,19 @@ class FightScan {
     // 大守護者の状態（予備動作の結果は、状態を書き換える前に見る）
     this.watchWardens(ev);
 
-    // 挑んだ回数（S4b §46.4 の 1）: 大守護者を的・攻撃者・被害の元とする出来事が 1 つでもあった遠征だけ（階に入っただけの遠征は数えない）
+    // 挑んだ回数（S4b §46.4 の 1）と挑戦の成立: **自分が**大守護者と攻撃・被害をやり取りした（自分が的・攻撃者・被害の元）遠征だけ。
+    // 自分がその大守護者の階にいたときだけ（S5c: 協力プレイで、仲間だけが戦った遠征・別の階で仲間が戦った遠征を数えない）。倒した遠征は数える
     if (this.curNo !== null) {
-      const ids = ev.type === 'attack' ? [ev.attacker, ev.target] : ev.type === 'damaged' ? [ev.target, ev.source] : ev.type === 'warden_slain' ? [ev.id] : [];
-      for (const id of ids) {
-        const d = id ? this.wardens.get(id) : undefined;
-        if (d === undefined) continue;
-        const s = this.attempts.get(d) ?? new Set<number>();
-        s.add(this.curNo);
-        this.attempts.set(d, s);
-        this.engaged.add(id!);
-        if (ev.type !== 'warden_slain' && this.floor === `main:${d}`) this.lastFight.set(id!, { no: this.curNo, snap: this.snap() });
+      const pair = ev.type === 'attack' ? [ev.attacker, ev.target] : ev.type === 'damaged' ? [ev.target, ev.source] : null;
+      const wid = pair && pair.includes(meId) ? pair.find((id): id is string => !!id && this.wardens.has(id)) : undefined;
+      const d = wid ? this.wardens.get(wid) : undefined;
+      const note = (dep: number) => { const s = this.attempts.get(dep) ?? new Set<number>(); s.add(this.curNo!); this.attempts.set(dep, s); };
+      if (wid && d !== undefined && this.floor === `main:${d}`) {
+        note(d);
+        this.engaged.add(wid);
+        this.lastFight.set(wid, { no: this.curNo, snap: this.snap() });
       }
+      if (ev.type === 'warden_slain' && this.wardens.has(ev.id)) note(this.wardens.get(ev.id)!);
     }
     const evDepth = depthOfKey(ev.floor);
     const acc = evDepth !== null && this.keys.has(ev.floor!) && this.floor === ev.floor ? this.accFor(evDepth) : null;
@@ -288,14 +286,22 @@ class FightScan {
         if (ev.target === meId) x.taken += amount;
       }
     }
-    // 自分の手番の初め: 見えている構えを「見た」に、相手が動けなければ、その手番を数え始める
+    // 自分の手番の初め: 自分に向いた構えが見えていれば数え（S5c: 見えていない構えは数えない。構えた回数 n と見た回数 seen は同じ）、
+    // 相手が動けなければ、その手番を数え始める
     if (ev.type === 'turn_began' && ev.actor === meId) {
       this.closeWins();
       for (const [wid, t] of this.tracks) {
         const a = this.accHere(t.depth);
         if (!a) continue;
         const visible = this.sees(wid);
-        if (t.intent && t.tell && !t.seen && visible) { t.tell.seen++; t.seen = true; }
+        if (t.intent && t.pendingAcc && !t.tell && visible) {
+          const rec = t.pendingAcc.tells.get(t.intent) ?? { kind: t.intent as Intent['kind'], n: 0, seen: 0, missed: 0, hit: 0 };
+          rec.n++; rec.seen++;
+          t.pendingAcc.tells.set(t.intent, rec);
+          t.tell = rec;
+          // 自分に向いた構えを見たら、戦いが始まった（突進が空を切ると、攻撃の出来事は出ない。S5a）
+          this.engaged.add(wid);
+        }
         const helpless = t.asleep || [...t.statuses].some((s) => this.incap.has(s));
         if (helpless && visible) {
           const o = t.missStun ? a.openings.missed : a.openings.other;
@@ -311,7 +317,8 @@ class FightScan {
     // 大きな一撃の結果（構えを解いた同じ手番の中）
     for (const [wid, t] of this.tracks) {
       if (!t.resolving) continue;
-      if (ev.type === 'attack' && ev.attacker === wid) { if (ev.target === this.meId) t.resolving.hit++; t.resolving = null; }
+      // 受けた: 当たったものだけ（S5c）
+      if (ev.type === 'attack' && ev.attacker === wid) { if (ev.target === this.meId && ev.hit) t.resolving.hit++; t.resolving = null; }
       else if (ev.type === 'status_applied' && ev.target === wid && this.incap.has(ev.status.id)) { t.resolving.missed++; t.resolving = null; t.missStun = true; }
       else if (ev.type === 'actor_scheduled' && ev.id === wid) t.resolving = null;
     }
