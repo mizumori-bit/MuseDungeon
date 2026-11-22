@@ -1,6 +1,12 @@
 // 公開カタログ: 各コンテンツ ID の分類・カテゴリ・表示名と、プレイヤーが知ってよい性質のみ。
 // 能力値・出現条件は含まない。content が生成し、client は /api/content/catalog で取得する。
-import type { HaulParts, Names } from './types';
+import type { HaulParts, Intent, Names } from './types';
+
+/**
+ * 守護者の型の振る舞い（データの handler）が出す予備動作（S5b。engine の guardianBehaviors の charger・summoner・enrager と同じ対応）。
+ * 公開カタログの guardianTypes[].intent はここから作る（コンテンツのデータは変えない: データに足すとコンテンツの版が変わる）
+ */
+export const GUARDIAN_HANDLER_INTENT: Readonly<Record<string, Intent['kind']>> = { charger: 'winding_up', summoner: 'summoning', enrager: 'enraging' };
 
 /**
  * 群れる種族（ai の pack）の呼び声の届く広さの既定（データの alertRadius が無いとき。チェビシェフ距離）。
@@ -130,8 +136,11 @@ export interface Catalog {
   /** reach: 近接の届く距離（長柄）、attackCost: 近接の手番コスト（速い） */
   weaponTraits: Record<string, { name: Names; desc: Names; reach?: number; attackCost?: number }>;
   /** 守護者の型（V3-3 §3.1）。name は称号 */
-  /** armor: 型の効果で上がる装甲（護られし者: 火が灯っている間。S3b §30.3 の 4。通る目安の 1 句） */
-  guardianTypes: Record<string, { name: Names; desc: Names; strongVs: 'melee' | 'thrown'; handler: string; armor?: number }>;
+  /**
+   * armor: 型の効果で上がる装甲（護られし者: 火が灯っている間。S3b §30.3 の 4。通る目安の 1 句）。
+   * intent: その型が出す予備動作（S5b。データの handler から GUARDIAN_HANDLER_INTENT で引く。討伐の記録の並べで、予備動作の行に型の説明を添える）
+   */
+  guardianTypes: Record<string, { name: Names; desc: Names; strongVs: 'melee' | 'thrown'; handler: string; armor?: number; intent?: Intent['kind'] }>;
   /** 守護者の弱点（V3-3 §3.1）。どの守護者が持つかは試すまで伏せる */
   guardianWeaknesses: Record<string, { name: Names; desc: Names; handler: string; short?: Names; /** 付けてよい装甲の目安の上限（V4-1l §34.2） */ maxArmor?: number }>;
   /** 加護（V3-3 §3.3） */

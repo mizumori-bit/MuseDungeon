@@ -267,32 +267,65 @@ describe('S5 §47.4 の 2: after coming back from a warden without slaying it, c
     expect(x.attempt.openings!.missed.turns).toBe(1);
     expect(x.attempt.openings!.missed.dealt).toBeGreaterThan(0);
     expect(x.records.map((r) => r.by)).toEqual(['Aya']);
-    expect(x.lines).toHaveLength(2);
-    expect(x.lines[0]).toMatch(/^大守護者「.+」（地下5階）への遠征 \d+ の挑戦（倒さずに帰った）: あなた（Lv\d+・戦士）: /);
-    expect(x.lines[0]).toContain('突進の構えを 1 回見て、1 回外させ、0 回受けた');
-    expect(x.lines[0]).toContain('このランの中で 1 回目の挑戦');
-    expect(x.lines[1]).toMatch(/^ {2}先に倒した者（倒した記録 1 件）: Aya（Lv\d+・戦士）: /);
-    expect(x.lines[1]).toContain('突進の構えを 1 回見て、1 回外させ、0 回受けた');
-    // 同じ項目の並び: 2 つの文の「与えた被害 → 受けた被害 → 予備動作 → 動けなかった手番」の順が同じ
-    const order = (s: string) => ['与えた被害', '受けた被害', '突進の構え', '予備動作を外させた後の 1 手番: 与えた被害', 'それ以外の手番'].map((k) => s.indexOf(k));
-    expect(order(x.lines[0]).every((v, i, xs) => v > 0 && (i === 0 || v > xs[i - 1]))).toBe(true);
-    expect(order(x.lines[1]).every((v, i, xs) => v > 0 && (i === 0 || v > xs[i - 1]))).toBe(true);
+    // S5b: 項目ごとに 1 行の表（左に自分・右に先に倒した者）
+    expect(x.lines[0]).toMatch(/^大守護者「.+」（地下5階）への挑戦（遠征 \d+・倒さずに帰った）を、先に倒した者の記録と並べる:$/);
+    expect(x.lines[1]).toMatch(/^ {2}（項目: あなた Lv\d+・戦士・小剣 ／ Aya Lv\d+・戦士・小剣）$/);
+    const at = (label: string) => x.lines.findIndex((l) => l.startsWith(`  ${label}: `));
+    expect(x.lines[at('突進の構えを外させた')]).toBe('  突進の構えを外させた: 1 回（見た 1・受けた 0） ／ 1 回（見た 1・受けた 0）');
+    // 予備動作の行のすぐ下に、その予備動作を出す型の説明（知っている型だけ。データの名前と説明）
+    const ch = catalog.guardianTypes['core:charger'];
+    expect(ch.intent).toBe('winding_up');
+    // このテストの大守護者の型は、生成のときのもの（突進を出す型ではない）なので、説明は出ない
+    expect(b.port.view().camp!.milestone!.types).not.toContain('core:charger');
+    expect(x.lines.some((l) => l.includes('型「'))).toBe(false);
+    // 突進を出す型を知っていれば（キャンプの節目の型）、行のすぐ下に、その型の名前と説明。知らなければ出さない
+    const withTypes = (types: string[]) => {
+      const v = structuredClone(b.port.view());
+      v.camp!.milestone = { ...v.camp!.milestone!, types };
+      for (const o of v.camp!.offers) delete o.warden;
+      return buildObservation(v, catalog, { detail: 'brief', map: false, campCompare: { no: cmp.no, lines: [], wardens: [b.session.wardenAttempts(b.playerId, cmp.no)[0]] } }).camp!.compare!.wardens![0].lines;
+    };
+    const lk = withTypes(['core:charger', 'core:warded']);
+    const ik = lk.findIndex((l) => l.startsWith('  突進の構えを外させた: '));
+    expect(lk[ik + 1]).toBe(`    型「${ch.name.ja}」: ${ch.desc.ja}`);
+    expect(lk.filter((l) => l.includes('型「'))).toHaveLength(1);
+    expect(withTypes([]).some((l) => l.includes('型「'))).toBe(false);
+    expect(x.lines[at('外させた後の動けない手番')]).toMatch(/^ {2}外させた後の動けない手番: 1 手番で 与えた \d+（当てた 1）・受けた 0 ／ 1 手番で 与えた \d+（当てた 1）・受けた 0$/);
+    // 並べる順（予備動作 → 動けない手番 → それ以外 → 与えた内訳 → 受けた → 手番）。両方とも 0・なしの行は無い
+    const rows = ['突進の構えを外させた', '外させた後の動けない手番', 'それ以外の手番', '与えた被害の内訳', '手番'].map(at);
+    expect(rows.every((v, i, xs) => v > 1 && (i === 0 || v > xs[i - 1]))).toBe(true);
+    expect(at('護りの火を消した')).toBe(-1);
+    expect(at('眠りなどの動けない手番')).toBe(-1);
+    expect(x.lines[at('手番')]).toMatch(/^ {2}手番: \d+ 手番目まで戦って帰った（このランで 1 回目の挑戦） ／ \d+ 手番目に倒した（倒したランで 1 回目の挑戦）$/);
+    expect(x.lines.join('\n')).not.toMatch(/べき|足りない/);
     const text = formatObservationText(ob, 'ja');
-    expect(text).toContain(x.lines[0]);
-    expect(text).toContain(x.lines[1]);
+    for (const l of x.lines) expect(text).toContain(l);
     // 同じ記録の全文は 1 回だけ（S5a）: 記録庫の側は 1 行
     const arch = ob.camp!.archive!.slays!.find((s) => s.depth === 5)!;
     expect(arch.text).toBe(`記録庫・討伐の記録 地下5階の大守護者「${x.warden}」: （上の挑戦の並べに出している）`);
     expect(arch.records.map((r) => r.by)).toEqual(['Aya']);
-    expect(text.split(x.records[0].text).length - 1).toBe(1);
-    // 大守護者の候補は短い形（候補を 1 つ大守護者を倒す遠征に書き換えて、観測を作り直す）。構造化した slays は全部
+    expect(text).not.toContain(x.records[0].text);
+    // 初めて受け取った討伐の記録の知らせ（S5b）: Ben は遠征を始めるときに Aya の記録を受け取り、キャンプで初めて見る
+    expect(ob.season!.slay_news!.map((n) => n.by)).toEqual(['Aya']);
+    expect(ob.season!.slay_news![0].text).toMatch(/^新しい討伐の記録: 地下5階の大守護者「.+」を、Aya（Lv\d+・戦士・小剣）が倒した（与えた被害 \d+・受けた被害 \d+・突進の構えを 1 回外させた）$/);
+    expect(text).toContain(ob.season!.slay_news![0].text);
+    // 倒した本人には、自分の記録の知らせは出ない
+    expect(a.port.observe().observation.season!.slay_news).toBeUndefined();
+    // 大守護者の候補は短い形（候補を 1 つ大守護者を倒す遠征に書き換えて、観測を作り直す）。構造化した slays は全部。
+    // S5b: そのランで退いた、いちばん新しい挑戦を同じ 3 項目で添える
+    const prev = b.session.lastWardenAttempt(b.playerId, 5)!;
+    expect(prev.no).toBe(cmp.no);
     const vb = structuredClone(b.port.view());
     vb.camp!.offers = [{ ...vb.camp!.offers[0], objective: { type: 'slay_warden', targetDepth: 5 } }];
     vb.milestonesCleared = [];
-    const offer = buildObservation(vb, catalog, { detail: 'full', map: false }).camp!.offers[0];
+    const offer = buildObservation(vb, catalog, { detail: 'full', map: false, wardenPrev: { 5: prev } }).camp!.offers[0];
     expect(offer.slays![0].text).toBe(x.records[0].text);
-    expect(offer.text).toMatch(/ \/ 先に倒した者（倒した記録 1 件）: Aya（Lv\d+・戦士・小剣）。与えた被害 \d+・受けた被害 \d+・突進の構えを 1 回見て 1 回外させた・\d+ 手番目に倒した。詳しくは記録庫$/);
+    expect(offer.text).toMatch(new RegExp(` / 先に倒した者（倒した記録 1 件）: Aya（Lv\\d+・戦士・小剣）。与えた被害 \\d+・受けた被害 \\d+・突進の構えを 1 回見て 1 回外させた・\\d+ 手番目に倒した。／あなたの前の挑戦（遠征 ${cmp.no}）: 与えた被害 \\d+・受けた被害 \\d+・突進の構えを 1 回見て 1 回外させた。詳しくは記録庫$`));
     expect(offer.text).not.toContain('使った品');
+    // 記録が無くても、自分の前の挑戦は出す
+    const vn = structuredClone(vb);
+    vn.season!.slays = [];
+    expect(buildObservation(vn, catalog, { detail: 'full', map: false, wardenPrev: { 5: prev } }).camp!.offers[0].text).toMatch(new RegExp(` / あなたの前の挑戦（遠征 ${cmp.no}）: 与えた被害 \\d+・受けた被害 \\d+・突進の構えを 1 回見て 1 回外させた$`));
     // 共有しない: シーズンの記録は Aya の 1 件だけ（Ben の挑戦は外へ出ない）
     expect(m.seasons.get(SID)!.slays.map((s) => s.name)).toEqual(['Aya']);
     // observe し直しても出る
@@ -305,8 +338,11 @@ describe('S5 §47.4 の 2: after coming back from a warden without slaying it, c
     expect(ob2.camp!.compare).toBeTruthy();
     expect(ob2.camp!.compare!.wardens).toBeUndefined();
     expect(formatObservationText(ob2, 'ja')).not.toContain('の挑戦（倒さずに帰った）');
-    // 並べが無ければ、記録庫は全文
+    // 並べが無ければ、記録庫は全文。知らせは 2 度出ない
     expect(ob2.camp!.archive!.slays![0].text).toContain(`: 先に倒した者（倒した記録 1 件）: ${x.records[0].text}`);
+    expect(ob2.season!.slay_news).toBeUndefined();
+    // 前の挑戦は、何回前の遠征でも（いちばん新しいもの）
+    expect(b.session.lastWardenAttempt(b.playerId, 5)?.no).toBe(cmp.no);
     m.closeAll();
   }, 120_000);
 
@@ -320,11 +356,45 @@ describe('S5 §47.4 の 2: after coming back from a warden without slaying it, c
       const x = r.port.observe().observation.camp!.compare!.wardens!;
       expect(x).toHaveLength(1);
       expect(x[0].records).toEqual([]);
-      expect(x[0].lines).toHaveLength(1);
-      expect(x[0].lines[0]).toContain('あなた（Lv');
+      // 自分の列だけ
+      expect(x[0].lines[0]).toMatch(/^大守護者「.+」（地下5階）への挑戦（遠征 \d+・倒さずに帰った）:$/);
+      expect(x[0].lines[1]).toMatch(/^ {2}（項目: あなた Lv\d+・戦士・小剣）$/);
+      expect(x[0].lines.some((l) => l.includes(' ／ '))).toBe(false);
+      expect(x[0].lines.some((l) => l.startsWith('  突進の構えを外させた: 1 回（見た 1・受けた 0）'))).toBe(true);
       expect(x[0].attempt.tells![0]).toMatchObject({ kind: 'winding_up', missed: 1 });
     }
     m.closeAll();
+  }, 120_000);
+
+  it('after a restart the last attempt on the warden is rebuilt from the run records (nothing is written)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'muse-s5b-'));
+    try {
+      const m = manager(dir);
+      openSeason(m);
+      const c = await seasonRun(m, 'Cid');
+      const wid = await toWarden(c);
+      await chargeMiss(c, wid);
+      await lifelineHome(c);
+      const before = c.session.lastWardenAttempt(c.playerId, 5)!;
+      expect(before.facts.tells![0]).toMatchObject({ kind: 'winding_up', missed: 1 });
+      m.closeAll();
+      const files = () => ['commands.jsonl', 'events.jsonl'].map((f) => readFileSync(join(dir, c.session.runId, f), 'utf8').length);
+      const f0 = files();
+      const m2 = manager(dir);
+      m2.recoverAll();
+      const s2 = m2.get(c.session.runId)!;
+      expect(s2).toBeTruthy();
+      const after = s2.lastWardenAttempt(c.playerId, 5)!;
+      expect(after.no).toBe(before.no);
+      expect(after.facts.tells![0]).toMatchObject({ kind: 'winding_up', missed: 1 });
+      expect(after.facts.dealt).toEqual(before.facts.dealt);
+      // 観測を作っても、記録には書かない
+      m2.portForToken(c.token)!.observe();
+      expect(files()).toEqual(f0);
+      m2.closeAll();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   }, 120_000);
 
   it('a restart writes nothing (S5a: no intake at start-up); a participant at camp keeps the previous records until the next intake (starting an expedition)', async () => {

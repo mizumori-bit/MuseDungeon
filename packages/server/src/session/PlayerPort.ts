@@ -296,7 +296,7 @@ export class SessionPlayerPort implements PlayerPort {
   observe(opts: { detail?: 'brief' | 'full'; map?: boolean; consume?: boolean } = {}): { observation: Observation; text: string } {
     const view = this.view();
     const recent = opts.consume ? this.session.consumeFor(this.playerId) : this.pending();
-    const observation = buildObservation(view, this.catalog, { detail: opts.detail ?? 'brief', map: opts.map ?? true, recent: lastWithoutXp(recent, 10), campCompare: this.campCompare(view), offerNotes: this.offerNotes(view), records: this.campRecords(view) });
+    const observation = buildObservation(view, this.catalog, { detail: opts.detail ?? 'brief', map: opts.map ?? true, recent: lastWithoutXp(recent, 10), campCompare: this.campCompare(view), ...this.campSlayExtras(view), offerNotes: this.offerNotes(view), records: this.campRecords(view) });
     return { observation, text: formatObservationText(observation, view.locale) };
   }
 
@@ -345,6 +345,23 @@ export class SessionPlayerPort implements PlayerPort {
     // 倒さずに帰った節目の大守護者への挑戦（S5 §47.4 の 2）: 直前の遠征の振り返りの中に、その遠征の後のキャンプでだけ（次の遠征が終われば、その遠征の振り返りになる）
     const wardens = this.session.wardenAttempts(this.playerId, r.no);
     return { no: r.no, lines: compareLines(view.locale, r), ...(r.compare ? { compare: r.compare } : {}), ...(wardens.length ? { wardens } : {}) };
+  }
+
+  /**
+   * キャンプの観測に添える（S5b）: 大守護者の候補ごとの、そのランでその大守護者に挑んで退いたいちばん新しい挑戦と、
+   * 前のキャンプの後に初めて受け取った討伐の記録。どちらもランの記録から作る（書かない。外に出さない）
+   */
+  private campSlayExtras(view: PlayerView): Pick<ObservationOptions, 'wardenPrev' | 'slayNews'> {
+    if (view.status !== 'at_camp' || !view.camp) return {};
+    const prev: NonNullable<ObservationOptions['wardenPrev']> = {};
+    for (const o of view.camp.offers) {
+      const d = o.objective.targetDepth;
+      if (o.objective.type !== 'slay_warden' || d === null || (view.milestonesCleared ?? []).includes(d) || prev[d]) continue;
+      const a = this.session.lastWardenAttempt(this.playerId, d);
+      if (a) prev[d] = a;
+    }
+    const news = this.session.slayNews(this.playerId);
+    return { ...(Object.keys(prev).length ? { wardenPrev: prev } : {}), ...(news.length ? { slayNews: news } : {}) };
   }
 
   /** expedition ツールに足す行: 進行中なら途中経過（戦闘と進み）、キャンプなら直前の遠征のレポート（V3-6 §6.1・§6.2） */
@@ -401,7 +418,7 @@ export class SessionPlayerPort implements PlayerPort {
     const versionNote = view.status === 'at_camp' && !prev?.versionNoted && !!created && compareVersions(created, ENGINE_VERSION) < 0
       ? t(L, `このランは古い版で始まった（engine ${created}）。階の一部が姿を変えることがある`, `This run began on an older version (engine ${created}). Some floors may change shape`) : undefined;
     const shots = unseenShots(p.recent, view.self.id);
-    const observation = buildObservation(view, this.catalog, { detail: p.detail ?? 'brief', map: true, recent: lastWithoutXp(p.recent, 10), lifelineShort, boonsShort, campCompare: this.campCompare(view), offerNotes: this.offerNotes(view), records: this.campRecords(view), ...(versionNote ? { versionNote } : {}), ...(shots.length ? { unseenShots: shots } : {}) });
+    const observation = buildObservation(view, this.catalog, { detail: p.detail ?? 'brief', map: true, recent: lastWithoutXp(p.recent, 10), lifelineShort, boonsShort, campCompare: this.campCompare(view), ...this.campSlayExtras(view), offerNotes: this.offerNotes(view), records: this.campRecords(view), ...(versionNote ? { versionNote } : {}), ...(shots.length ? { unseenShots: shots } : {}) });
     const state = turnStateOf(view, p.expeditionEndedNow ?? false).state;
     const cur = turnSnapshot(view, observation, state);
     const longLife = observation.valid_actions.some((a) => a.includes('次の遠征はこの遠征を始めた階段から') || a.includes('the next expedition starts from where this one began'));

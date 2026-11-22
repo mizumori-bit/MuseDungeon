@@ -1,6 +1,6 @@
 // 公開カタログの生成。能力値・出現条件は含めない（プレイヤーが知り得る性質と表示名だけ）。
 import type { Catalog, CatalogEquipStats, CatalogItem, Names } from '@muse/shared';
-import { HP_BANDS, PACK_ALERT_RADIUS } from '@muse/shared';
+import { GUARDIAN_HANDLER_INTENT, HP_BANDS, PACK_ALERT_RADIUS } from '@muse/shared';
 import type { Content } from './content';
 import type { ItemDef } from './schema';
 
@@ -130,7 +130,11 @@ export function buildCatalog(c: Content): Catalog {
       // 最大 HP の割合の回復（V4-1c §16.2）
       ...(ab.handler === 'heal_pct' && typeof (ab.params as { pct?: unknown } | undefined)?.pct === 'number' ? { heal: { pct: (ab.params as { pct: number }).pct } } : {}),
     }])),
-    guardianTypes: Object.fromEntries(c.lists.guardianTypes.map((g) => [g.id, { name: g.name, desc: g.desc, strongVs: g.strongVs, handler: g.handler, ...(g.handler === 'warded' && typeof g.params?.armor === 'number' ? { armor: g.params.armor } : {}) }])),
+    guardianTypes: Object.fromEntries(c.lists.guardianTypes.map((g) => [g.id, {
+      name: g.name, desc: g.desc, strongVs: g.strongVs, handler: g.handler, ...(g.handler === 'warded' && typeof g.params?.armor === 'number' ? { armor: g.params.armor } : {}),
+      // 型が出す予備動作（S5b。handler から）
+      ...(GUARDIAN_HANDLER_INTENT[g.handler] ? { intent: GUARDIAN_HANDLER_INTENT[g.handler] } : {}),
+    }])),
     guardianWeaknesses: Object.fromEntries(c.lists.guardianWeaknesses.map((w) => [w.id, { name: w.name, desc: w.desc, handler: w.handler, ...(w.short ? { short: w.short } : {}), ...(w.maxArmor !== undefined ? { maxArmor: w.maxArmor } : {}) }])),
     boons: Object.fromEntries(c.lists.boons.map((b) => [b.id, { name: b.name, desc: b.desc, hooks: b.hooks.map((h) => ({ ...h })) }])),
     lore: { frame: c.lists.lore.filter((l) => l.kind === 'frame').map((l) => ({ ...l.text })) },

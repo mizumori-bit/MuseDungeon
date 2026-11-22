@@ -403,6 +403,8 @@ export interface ObsSeason {
   deposits_text?: string;
   /** キャンプ（S3）: 前の取り込みから、ほかの参加者が取った自分の品 */
   supply_news?: { depth: number; place: SupplyPlace; name: string; taker: string; text: string }[];
+  /** キャンプ（S5b）: 前のキャンプの後に初めて受け取った討伐の記録（そのキャンプの間だけ。次の遠征の後には出ない） */
+  slay_news?: { depth: number; by: string; text: string }[];
   /** 予算の 1 行 */
   text: string;
 }
@@ -422,6 +424,12 @@ export interface ObservationOptions {
    * （S5 §47.4 の 2。サーバーがそのランの出来事の記録から、討伐の記録と同じ作り方で作る。共有しない）
    */
   campCompare?: { no: number; lines: string[]; compare?: ReportCompare; wardens?: SeasonSlayFacts[] };
+  /**
+   * キャンプ: 大守護者の候補に添える、そのランでその大守護者に挑んで退いた、いちばん新しい挑戦（S5b。深さごと。サーバーがそのランの記録から作る。共有しない）
+   */
+  wardenPrev?: Record<number, { no: number; facts: SeasonSlayFacts }>;
+  /** キャンプ: 前のキャンプの後に初めて受け取った討伐の記録（S5b。サーバーがそのランの取り込みの記録から決める。1 つのキャンプの間だけ） */
+  slayNews?: SeasonSlay[];
   /** キャンプ: 候補に添える注記（候補の番号 → 文。再挑戦の前回の戦い。V3-3c §44.1） */
   offerNotes?: Record<number, string>;
   /** キャンプ: プロフィールの記録の 1 行と、直前の遠征で取った実績（V3-7 §7.2・§7.4） */
@@ -1067,10 +1075,49 @@ export function slayShortText(L: Locale, r: ObsSlay): string {
     `${who} (Lv${r.level} ${r.class}${r.weapon ? `, ${r.weapon.name}` : ''}): dealt ${total}, took ${r.taken}${tells ? `, ${tells}` : ''}, slain ${r.turns} turns in`);
 }
 
-/** 大守護者の候補に出す短い文（S5a）: 「先に倒した者（倒した記録 2 件）: …／いちばん少ない被害で倒した者: …。詳しくは記録庫」。全文は記録庫（camp.archive.slays）と offers[].slays */
+/** 初めて受け取った討伐の記録の知らせ（S5b）: 「新しい討伐の記録: 地下5階の大守護者「キモルカ」を、アカネ（Lv6・戦士・鋭い小剣）が倒した（与えた被害 90・受けた被害 61・突進の構えを 11 回外させた）」 */
+export function slayNewsItem(L: Locale, catalog: Catalog, s: SeasonSlay): { depth: number; by: string; text: string } {
+  const r = slayObs(L, catalog, s);
+  const warden = guardianDisplayName(L, { name: s.warden });
+  const total = s.dealt.melee.total + s.dealt.thrown.total + s.dealt.poison.total + s.dealt.feature.total;
+  const tells = (s.tells ?? []).filter((x) => (x.kind === 'winding_up' || x.kind === 'swinging') && x.missed > 0)
+    .map((x) => t(L, `${tellName(L, x.kind)}を ${x.missed} 回外させた`, `made ${x.missed} ${tellName(L, x.kind)}${x.missed === 1 ? '' : 's'} miss`));
+  const who = `${s.by}${s.mine ? t(L, '（あなた）', ' (you)') : ''}`;
+  const text = t(L,
+    `新しい討伐の記録: 地下${s.depth}階の大守護者「${warden}」を、${who}（Lv${s.level}・${r.class}${r.weapon ? `・${r.weapon.name}` : ''}）が倒した（与えた被害 ${total}・受けた被害 ${s.taken}${tells.map((x) => `・${x}`).join('')}）`,
+    `New warden kill record: ${who} (Lv${s.level} ${r.class}${r.weapon ? `, ${r.weapon.name}` : ''}) slew "${warden}" on depth ${s.depth} (dealt ${total}, took ${s.taken}${tells.map((x) => `, ${x}`).join('')})`);
+  return { depth: s.depth, by: s.by, text };
+}
+
+/** 大守護者の候補に出す短い文（S5a）:「先に倒した者（倒した記録 2 件）: …／いちばん少ない被害で倒した者: …。詳しくは記録庫」。全文は記録庫（camp.archive.slays）と offers[].slays */
 export function slayShortGroupText(L: Locale, recs: readonly ObsSlay[]): string {
-  if (!recs.length) return '';
-  return `${recs.map((r) => `${slayLabel(L, r)}: ${slayShortText(L, r)}`).join(t(L, '／', ' / '))}${t(L, '。詳しくは記録庫', '. Details in the archive')}`;
+  return wardenOfferText(L, recs);
+}
+
+/**
+ * 大守護者の候補の文（S5a・S5b）: 先に倒した者の短い形と、そのランでその大守護者に挑んで退いた、いちばん新しい挑戦（prev。同じ 3 項目:
+ * 与えた被害・受けた被害・予備動作。予備動作は、記録と自分のどちらかに構えのあった種類を、0 でも出す）。どちらも無ければ空
+ */
+export function wardenOfferText(L: Locale, recs: readonly ObsSlay[], prev?: { no: number; facts: SeasonSlayFacts }): string {
+  const parts: string[] = [];
+  if (recs.length) parts.push(recs.map((r) => `${slayLabel(L, r)}: ${slayShortText(L, r)}`).join(t(L, '／', ' / ')));
+  if (prev) {
+    const s = prev.facts;
+    const total = s.dealt.melee.total + s.dealt.thrown.total + s.dealt.poison.total + s.dealt.feature.total;
+    const kinds: string[] = [];
+    for (const x of [...recs.flatMap((r) => r.tells ?? []), ...(s.tells ?? [])]) if (x.n > 0 && !kinds.includes(x.kind)) kinds.push(x.kind);
+    const tells = s.tells ? kinds.map((kind) => {
+      const x = s.tells!.find((y) => y.kind === kind) ?? { seen: 0, missed: 0 };
+      const name = tellName(L, kind);
+      return kind === 'winding_up' || kind === 'swinging'
+        ? t(L, `${name}を ${x.seen} 回見て ${x.missed} 回外させた`, `saw ${x.seen} ${name}${x.seen === 1 ? '' : 's'}, made ${x.missed} miss`)
+        : t(L, `${name}を ${x.seen} 回見た`, `saw ${x.seen} ${name}${x.seen === 1 ? '' : 's'}`);
+    }) : [];
+    parts.push(t(L, `あなたの前の挑戦（遠征 ${prev.no}）: 与えた被害 ${total}・受けた被害 ${s.taken}${tells.map((x) => `・${x}`).join('')}`,
+      `your last attempt (expedition ${prev.no}): dealt ${total}, took ${s.taken}${tells.map((x) => `, ${x}`).join('')}`));
+  }
+  if (!parts.length) return '';
+  return `${parts.join(t(L, '。／', '. / '))}${recs.length ? t(L, '。詳しくは記録庫', '. Details in the archive') : ''}`;
 }
 
 /**
@@ -1080,10 +1127,114 @@ export function wardenAttemptCompare(L: Locale, catalog: Catalog, view: PlayerVi
   const warden = guardianDisplayName(L, { name: s.warden });
   const attempt = slayAttemptObs(L, catalog, s);
   const records = view.season ? slaysAt(L, catalog, view, s.depth) : [];
-  const head = t(L, `大守護者「${warden}」（地下${s.depth}階）への遠征 ${no} の挑戦（倒さずに帰った）`, `Your attempt on the warden "${warden}" (depth ${s.depth}) in expedition ${no} (came back without slaying it)`);
-  // 記録が無い（だれも倒していない・シーズンでないラン）ときは、自分の挑戦の行だけ
-  const lines = [`${head}: ${attempt.text}`, ...records.map((r) => `  ${slayLabel(L, r)}: ${r.text}`)];
-  return { depth: s.depth, warden, attempt, records, lines };
+  const raw = view.season ? (view.season.slays ?? []).filter((x) => x.depth === s.depth).sort((a, b) => Number(!!b.first) - Number(!!a.first)) : [];
+  return { depth: s.depth, warden, attempt, records, lines: compareTable(L, catalog, view, no, warden, s, raw) };
+}
+
+/** 節目の大守護者の型のうち、そのプレイヤーが知っているもの（キャンプの次の節目・大守護者の候補に出ている型。公開の情報。S5b） */
+function knownWardenTypes(view: PlayerView, depth: number): string[] {
+  const out = new Set<string>();
+  if (view.camp?.milestone?.depth === depth) for (const id of view.camp.milestone.types) out.add(id);
+  for (const o of view.camp?.offers ?? []) if (o.warden?.depth === depth) for (const id of o.warden.types) out.add(id);
+  return [...out];
+}
+
+/**
+ * 退いた後のキャンプの並べの表（S5b）: 項目ごとに 1 行、左に自分・右に先に倒した者（2 人なら「／」で 2 人）。
+ * 予備動作の行のすぐ下に、その予備動作を出す型の説明（知っている型だけ）。全部の列が 0・なしの行は省く。評価・助言の文は付けない
+ */
+function compareTable(L: Locale, catalog: Catalog, view: PlayerView, no: number, warden: string, mine: SeasonSlayFacts, recs: readonly SeasonSlay[]): string[] {
+  const sep = t(L, ' ／ ', ' / ');
+  const cols: { s: SeasonSlayFacts; rec: boolean }[] = [{ s: mine, rec: false }, ...recs.map((s) => ({ s, rec: true }))];
+  type Cell = { text: string; zero: boolean };
+  const none = (): Cell => ({ text: t(L, '記録に無い', 'not recorded'), zero: true });
+  const out: string[] = [];
+  const row = (label: string, f: (s: SeasonSlayFacts, rec: boolean) => Cell): boolean => {
+    const cells = cols.map((c) => f(c.s, c.rec));
+    if (cells.every((c) => c.zero)) return false;
+    out.push(`  ${label}: ${cells.map((c) => c.text).join(sep)}`);
+    return true;
+  };
+  // 見出し: 列の名前（レベル・職業・武器）
+  const weaponOf = (s: SeasonSlayFacts) => (s.weapon ? itemDisplayName(catalog, L, s.weapon.kind, null, s.weapon.affixes) : s.hidden ? t(L, '武器は未鑑定で載っていない', 'weapon unidentified') : t(L, '素手', 'bare hands'));
+  const clsOf = (s: SeasonSlayFacts) => nameOf(catalog.classes[s.classId]?.name, L, shortId(s.classId));
+  const who = (c: { s: SeasonSlayFacts; rec: boolean }) => {
+    const r = c.s as SeasonSlay;
+    const role = recs.length > 1 && c.rec ? (r.first ? t(L, '（先に倒した）', ' (first)') : t(L, '（いちばん少ない被害）', ' (least damage)')) : '';
+    const name = c.rec ? `${r.by}${r.mine ? t(L, '（あなた）', ' (you)') : ''}${role}` : t(L, 'あなた', 'you');
+    return t(L, `${name} Lv${c.s.level}・${clsOf(c.s)}・${weaponOf(c.s)}`, `${name} Lv${c.s.level} ${clsOf(c.s)}, ${weaponOf(c.s)}`);
+  };
+  out.push(recs.length
+    ? t(L, `大守護者「${warden}」（地下${mine.depth}階）への挑戦（遠征 ${no}・倒さずに帰った）を、先に倒した者の記録と並べる:`, `Your attempt on the warden "${warden}" (depth ${mine.depth}; expedition ${no}, came back without slaying it), beside the kill record${recs.length > 1 ? 's' : ''}:`)
+    : t(L, `大守護者「${warden}」（地下${mine.depth}階）への挑戦（遠征 ${no}・倒さずに帰った）:`, `Your attempt on the warden "${warden}" (depth ${mine.depth}; expedition ${no}, came back without slaying it):`));
+  out.push(t(L, `  （項目: ${cols.map(who).join(sep)}）`, `  (columns: ${cols.map(who).join(sep)})`));
+  // 予備動作（種類ごと。構えた列が 1 つでもある種類）。その下に、その予備動作を出す型の説明（知っている型だけ）
+  const known = knownWardenTypes(view, mine.depth);
+  const kinds: string[] = [];
+  for (const c of cols) for (const x of c.s.tells ?? []) if (x.n > 0 && !kinds.includes(x.kind)) kinds.push(x.kind);
+  for (const kind of kinds) {
+    const name = tellName(L, kind);
+    const strike = kind === 'winding_up' || kind === 'swinging';
+    const shown = row(strike ? t(L, `${name}を外させた`, `${name}s made to miss`) : t(L, `${name}を見た`, `${name}s seen`), (s) => {
+      if (!s.tells) return none();
+      const x = s.tells.find((y) => y.kind === kind) ?? { kind, n: 0, seen: 0, missed: 0, hit: 0 };
+      const made = x.seen === x.n ? '' : t(L, `構えた ${x.n}・`, `${x.n} wound up, `);
+      return strike
+        ? { text: t(L, `${x.missed} 回（${made}見た ${x.seen}・受けた ${x.hit}）`, `${x.missed} (${made}${x.seen} seen, ${x.hit} hit you)`), zero: x.n === 0 }
+        : { text: t(L, `${x.seen} 回${made ? `（構えた ${x.n}）` : ''}`, `${x.seen}${made ? ` (${x.n} wound up)` : ''}`), zero: x.n === 0 };
+    });
+    if (!shown) continue;
+    for (const id of known) {
+      const g = catalog.guardianTypes[id];
+      if (g?.intent === kind) out.push(t(L, `    型「${nameOf(g.name, L, id)}」: ${nameOf(g.desc, L, '')}`, `    type ${nameOf(g.name, L, id)}: ${nameOf(g.desc, L, '')}`));
+    }
+  }
+  // 動けなかった手番（外させた後・眠りなど）と、それ以外の手番
+  const opening = (pick: 'missed' | 'other') => (s: SeasonSlayFacts): Cell => {
+    if (!s.openings) return none();
+    const o = s.openings[pick];
+    return { text: t(L, `${o.turns} 手番${o.turns ? `で 与えた ${o.dealt}${o.hitTurns ? `（当てた ${o.hitTurns}）` : ''}・受けた ${o.taken}` : ''}`, `${o.turns} turns${o.turns ? `: dealt ${o.dealt}${o.hitTurns ? ` (landed in ${o.hitTurns})` : ''}, took ${o.taken}` : ''}`), zero: o.turns === 0 };
+  };
+  const totalOf = (s: SeasonSlayFacts) => s.dealt.melee.total + s.dealt.thrown.total + s.dealt.poison.total + s.dealt.feature.total;
+  const a = row(t(L, '外させた後の動けない手番', 'turns it could not act after a missed wind-up'), opening('missed'));
+  const b = row(t(L, '眠りなどの動けない手番', 'turns it could not act otherwise (asleep etc.)'), opening('other'));
+  if (a || b) {
+    row(t(L, 'それ以外の手番', 'other turns'), (s) => {
+      if (!s.openings) return none();
+      const d = Math.max(0, totalOf(s) - s.openings.missed.dealt - s.openings.other.dealt);
+      const k = Math.max(0, s.taken - s.openings.missed.taken - s.openings.other.taken);
+      return { text: t(L, `与えた ${d}・受けた ${k}`, `dealt ${d}, took ${k}`), zero: d === 0 && k === 0 };
+    });
+  }
+  // 与えた被害の内訳・受けた被害・仕掛け・品・能動技・手番
+  row(t(L, '与えた被害の内訳', 'damage dealt'), (s) => {
+    const d = s.dealt;
+    const parts = [
+      d.melee.n ? t(L, `近接 ${d.melee.total}（${d.melee.n} 回）`, `melee ${d.melee.total} (${d.melee.n})`) : '',
+      d.thrown.n ? t(L, `投擲 ${d.thrown.total}（${d.thrown.n} 回）`, `thrown ${d.thrown.total} (${d.thrown.n})`) : '',
+      d.poison.n ? t(L, `毒 ${d.poison.total}`, `poison ${d.poison.total}`) : '',
+      d.feature.n ? t(L, `地物 ${d.feature.total}（${d.feature.n} 回）`, `features ${d.feature.total} (${d.feature.n})`) : '',
+      d.crits ? t(L, `近接の会心 ${d.crits}`, `${d.crits} melee crits`) : '',
+    ].filter(Boolean);
+    return { text: parts.join(t(L, '・', ', ')) || t(L, 'なし', 'none'), zero: !parts.length };
+  });
+  row(t(L, '受けた被害', 'damage taken'), (s) => ({ text: `${s.taken}${s.lowestPct !== undefined ? t(L, `（HP の底 ${s.lowestPct}%）`, ` (lowest HP ${s.lowestPct}%)`) : ''}`, zero: s.taken === 0 }));
+  row(t(L, '護りの火を消した', 'ward fires put out'), (s) => ({ text: `${s.wardFires}`, zero: s.wardFires === 0 }));
+  const itemList = (xs: readonly { kind: string; n: number }[]) => xs.map((x) => `${nameOf(catalog.items[x.kind]?.name, L, shortId(x.kind))} ${x.n}`);
+  row(t(L, '使った品・投げた品', 'items used and thrown'), (s) => {
+    const xs = [...itemList(s.used), ...itemList(s.thrown)];
+    return { text: xs.join(t(L, '・', ', ')) || t(L, 'なし', 'none'), zero: !xs.length };
+  });
+  row(t(L, '能動技', 'abilities'), (s) => {
+    const xs = s.abilities.map((x) => `${nameOf(catalog.abilities[x.id]?.name, L, shortId(x.id))} ${x.n}`);
+    return { text: xs.join(t(L, '・', ', ')) || t(L, 'なし', 'none'), zero: !xs.length };
+  });
+  row(t(L, '手番', 'turns'), (s, rec) => ({
+    text: rec ? t(L, `${s.turns} 手番目に倒した（倒したランで ${s.attempt} 回目の挑戦）`, `slain ${s.turns} turns in (attempt ${s.attempt} in that run)`)
+      : t(L, `${s.turns} 手番目まで戦って帰った（このランで ${s.attempt} 回目の挑戦）`, `fought until turn ${s.turns}, then came back (attempt ${s.attempt} in this run)`),
+    zero: false,
+  }));
+  return out;
 }
 
 /** 討伐の記録（S4）: その深さの記録（PlayerView の season.slays から。最初の 1 件が先） */
@@ -1941,7 +2092,13 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
           + (o.guardian?.armor !== undefined ? ` / ${gearVsArmorText(L, catalog, view, o.guardian.armor, offerGuardianHp(view, o), o.guardian.types ?? [])}` : '')
           // 討伐の記録（S4 §35.5）: まだ倒していない大守護者を倒す候補に、先に倒した参加者の戦いの事実。
           // 文は短い形（S5a: 全文は記録庫に。同じ記録の全文を 1 つの観測に 3 回出さない）。offers[].slays は全部持つ
-          + (offerSlays(o).length ? ` / ${slayShortGroupText(L, offerSlays(o))}` : ''),
+          + ((): string => {
+            // S5b: そのランで、その大守護者に挑んで退いたことがあれば、いちばん新しい挑戦を同じ 3 項目で（記録が無くても）
+            const dep = o.objective.targetDepth;
+            const prev = o.objective.type === 'slay_warden' && dep !== null && !(view.milestonesCleared ?? []).includes(dep) ? opts.wardenPrev?.[dep] : undefined;
+            const s = wardenOfferText(L, offerSlays(o), prev);
+            return s ? ` / ${s}` : '';
+          })(),
         ...(offerSlays(o).length ? { slays: offerSlays(o) } : {}),
         ...(o.bounty ? { bounty: { kind: o.bounty.kind, name: nameOf(o.bounty.name, L, ''), hp: o.bounty.hp, ...(o.bounty.hpRange ? { hp_range: { ...o.bounty.hpRange } } : {}), max_hit: o.bounty.maxHit } } : {}),
         ...(o.vault ? { vault: true } : {}), ...(o.scar ? { scar: o.scar } : {}),
@@ -2106,6 +2263,8 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
     }
     // 補給の置き場（S3 §25.2）
     if (catalog.rules.seasonSupply) Object.assign(season, supplyObs(view, catalog));
+    // 前のキャンプの後に初めて受け取った討伐の記録（S5b。キャンプだけ。サーバーが取り込みの記録から決める）
+    if (view.status === 'at_camp' && opts.slayNews?.length) season.slay_news = opts.slayNews.map((s) => slayNewsItem(L, catalog, s));
     obs.season = season;
   }
   if (opts.detail === 'full') obs.self.inventory = invItems;
@@ -2502,6 +2661,8 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
       // 補給の置き場（S3 §25.2）: 自分の預けた品と、取られた知らせ
       if (obs.season.deposits_text) lines.push(obs.season.deposits_text);
       for (const n of obs.season.supply_news ?? []) lines.push(n.text);
+      // 初めて受け取った討伐の記録（S5b）
+      for (const n of obs.season.slay_news ?? []) lines.push(n.text);
       if (obs.season.stairs) lines.push(t(L, `まだ報告していない階段 ${obs.season.stairs.unreported}（うち、まだだれも公開していないもの ${obs.season.stairs.unpublished}）${obs.season.stairs.unreported ? '。report_stairs で報告できる' : ''}`, `Unreported stairs ${obs.season.stairs.unreported} (not yet published by anyone: ${obs.season.stairs.unpublished})${obs.season.stairs.unreported ? '. Report them with report_stairs' : ''}`));
       // 特別な場所（S1c §14.5）: 見つけたものがあるときだけ
       if (obs.season.spots?.unreported) lines.push(t(L, `まだ報告していない特別な場所（祭壇・賭けの祭壇・碑文） ${obs.season.spots.unreported}（うち、まだだれも公開していないもの ${obs.season.spots.unpublished}）。report_stairs で一緒に報告できる`, `Unreported special places (altars, altars of chance, inscriptions) ${obs.season.spots.unreported} (not yet published by anyone: ${obs.season.spots.unpublished}). report_stairs reports them too`));

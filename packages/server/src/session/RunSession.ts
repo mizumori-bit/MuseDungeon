@@ -6,7 +6,7 @@ import type { Content } from '@muse/content';
 import { createRun, isPlayersTurn, joinPlayer, resumeSeq, seasonSync, step } from '@muse/engine';
 import type {
   ActionError, AgentActivity, Command, CommandRecord, CommandSource, Dir, Expedition, ExpeditionReport, GameEvent, JoinCommand, LegacyMonster, MacroStop, ProjectedEvent,
-  PerceivedEvent, PlayerId, PlayerView, Pos, ReportCall, RunMetaFile, RunSummary, SeasonSlayFacts, SeasonSyncCommand, SeqResumeCommand, TurnSnapshot, World,
+  PerceivedEvent, PlayerId, PlayerView, Pos, ReportCall, RunMetaFile, RunSummary, SeasonSlay, SeasonSlayFacts, SeasonSyncCommand, SeqResumeCommand, TurnSnapshot, World,
 } from '@muse/shared';
 import {
   actionError, applyEvent, buildExpeditionReport, canonicalHash, guardianDisplayName, compareReports, emptyWorld, filterEventsForPlayer, FREE_COMMANDS, MACRO_COMMANDS,
@@ -125,6 +125,9 @@ export class RunSession {
   private readonly reports = new Map<string, ExpeditionReport>();
   /** 倒さずに帰った大守護者への挑戦（S5。プレイヤーと遠征ごと） */
   private readonly attempts = new Map<string, SeasonSlayFacts[]>();
+  /** いちばん新しい挑戦（S5b。プレイヤー・深さ・最後に終わった遠征ごと）と、前のキャンプまでに見えていた討伐の記録（S5b。プレイヤーと遠征ごと） */
+  private readonly lastAttempt = new Map<string, { no: number; facts: SeasonSlayFacts } | null>();
+  private readonly slaySeen = new Map<string, Set<string>>();
   /** 参加コマンドのプロフィールの ID と継承した知識（V3-7。参加コマンドから。復元時も作り直す） */
   private readonly joinInfo = new Map<PlayerId, { profile?: string; legacy?: LegacyMonster[] }>();
   private readonly log: LogWriter | null;
@@ -416,7 +419,7 @@ export class RunSession {
    * 倒さずに帰った節目の大守護者への自分の挑戦（S5。SEASON.md §47.4 の 2）: 終わった遠征 no で戦った（攻撃・被害の出来事があった）のに、
    * 倒れなかった大守護者ごとの、討伐の記録と同じ作り方の事実。このランの出来事の記録から作って覚えておく（共有しない。キャンプの観測にだけ出す）
    */
-  wardenAttempts(pid: PlayerId, no: number): SeasonSlayFacts[] {
+  wardenAttempts(pid: PlayerId, no: number, wardenIds?: ReadonlySet<string>): SeasonSlayFacts[] {
     const key = `${pid}|${no}`;
     const hit = this.attempts.get(key);
     if (hit) return hit;
@@ -424,7 +427,7 @@ export class RunSession {
     if (!x || x.endSeq === null) return [];
     const end = this.indexOfSeq(x.endSeq + 1);
     // 大守護者と攻撃・被害の出来事があった遠征だけ畳む（ほとんどの遠征は、ここで済む）
-    const wardens = new Set(this.wardenIds());
+    const wardens = wardenIds ?? new Set(this.wardenIds());
     const isW = (id: string | null | undefined) => !!id && wardens.has(id);
     const fought = this.history.slice(this.indexOfSeq(x.startSeq), end)
       .some((e) => (e.type === 'attack' && (isW(e.attacker) || isW(e.target))) || (e.type === 'damaged' && (isW(e.target) || isW(e.source))));
@@ -438,6 +441,54 @@ export class RunSession {
     }
     this.attempts.set(key, out);
     return out;
+  }
+
+  /**
+   * そのランで、その深さの節目の大守護者に挑んで退いた、いちばん新しい挑戦（S5b。大守護者の候補に添える）: 終わった遠征を新しい順に見て、
+   * `wardenAttempts` に、その深さの挑戦があった最初の遠征。ランの記録（履歴）から作り、何も書かない（起動し直しても同じに作り直せる）
+   */
+  lastWardenAttempt(pid: PlayerId, depth: number): { no: number; facts: SeasonSlayFacts } | null {
+    const xs = (this.world.expeditions ?? []).filter((x) => x.participants.includes(pid) && x.endSeq !== null);
+    const key = `${pid}|${depth}|${xs[xs.length - 1]?.no ?? 0}`;
+    const hit = this.lastAttempt.get(key);
+    if (hit !== undefined) return hit;
+    let out: { no: number; facts: SeasonSlayFacts } | null = null;
+    const wardens = new Set(this.wardenIds());
+    for (let i = xs.length - 1; i >= 0 && !out; i--) {
+      const f = this.wardenAttempts(pid, xs[i].no, wardens).find((a) => a.depth === depth);
+      if (f) out = { no: xs[i].no, facts: f };
+    }
+    this.lastAttempt.set(key, out);
+    return out;
+  }
+
+  /**
+   * 前のキャンプの後に初めて受け取った討伐の記録（S5b。キャンプの知らせ）: 今の World の `season.slays` のうち、いちばん新しい遠征を始めたときの
+   * 取り込みより前の取り込み（前のキャンプまでに見えていたもの）に無かった記録（深さと名前で見る。自分の記録は除く）。
+   * キャンプにいて、遠征を 1 つ以上終えているときだけ。ランの記録（取り込みの出来事）から作り、何も書かない
+   */
+  slayNews(pid: PlayerId): SeasonSlay[] {
+    const pr = this.world.players[pid];
+    const cur = (this.world.season?.slays ?? []).filter((s) => !s.mine);
+    if (!pr || pr.state !== 'at_camp' || !cur.length) return [];
+    const xs = (this.world.expeditions ?? []).filter((x) => x.participants.includes(pid) && x.endSeq !== null);
+    const x = xs[xs.length - 1];
+    if (!x) return [];
+    const key = `${pid}|${x.no}`;
+    let seen = this.slaySeen.get(key);
+    if (!seen) {
+      // その遠征を始めたときの取り込み（遠征を始める直前の、いちばん新しい取り込み）
+      const i0 = this.indexOfSeq(x.startSeq);
+      let start = -1;
+      for (let i = i0 - 1; i >= 0; i--) { const e = this.history[i]; if (e.type === 'season_synced' && e.player === pid) { start = i; break; } }
+      seen = new Set<string>();
+      for (let i = 0; i < start; i++) {
+        const e = this.history[i];
+        if (e.type === 'season_synced' && e.player === pid) for (const s of e.seasonAfter.slays ?? []) seen.add(`${s.depth}|${s.by}`);
+      }
+      this.slaySeen.set(key, seen);
+    }
+    return cur.filter((s) => !seen!.has(`${s.depth}|${s.by}`));
   }
 
   /** そのプレイヤーの終わった遠征のレポート（古い順） */
