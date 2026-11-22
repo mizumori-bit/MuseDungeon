@@ -10,3 +10,6 @@ token.txt
 bot-test-pilot/
 # 試運転の記録とトークン（SEASON.md §6.4・§7。npm run call の既定の置き場所 trial-runs/tokens も。コミットしない）
 trial-runs/
+
+# 配下のエージェントの作業コピー
+.claude/worktrees/
