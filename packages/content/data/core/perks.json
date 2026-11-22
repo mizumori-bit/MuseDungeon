@@ -21,7 +21,7 @@
     "desc": { "ja": "HP が最大の 25% 以下のとき、近接の威力 +2", "en": "Melee might +2 while HP is at or below 25% of max" },
     "hooks": [{ "hook": "last_stand", "belowPct": 25, "might": 2 }] },
   { "id": "core:perk_heavy_blow", "name": { "ja": "重い一撃", "en": "Heavy blow" }, "lineage": "warrior_front", "maxRanks": 3,
-    "desc": { "ja": "近接の会心のダメージ +2（ランクごとに）", "en": "Melee critical hits deal +2 damage (per rank)" },
+    "desc": { "ja": "近接の会心のダメージ +2（ランクごとに）。会心のダメージだけが増える（ふつうの当たりの威力は変わらない。敵の型の「重い一撃」とは別のもの）", "en": "Melee critical hits deal +2 damage (per rank). Only critical hits get stronger (normal hits are unchanged; unrelated to the enemy type \"heavy blow\")" },
     "hooks": [{ "hook": "melee_crit_dmg", "dmg": 2 }] },
 
   { "id": "core:perk_second_wind", "name": { "ja": "立て直し", "en": "Second wind" }, "lineage": "warrior_tough",

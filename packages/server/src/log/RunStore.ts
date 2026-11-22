@@ -178,12 +178,14 @@ export class RunStore {
   }
 
   /** 記録（ラン終了時、または遠征の終了ごとの途中経過）。達成した遠征の数を主な並び順にする */
-  leaderboard(): LeaderboardEntry[] {
+  leaderboard(hideSeason: (seasonId: string) => boolean = () => false): LeaderboardEntry[] {
     const out: LeaderboardEntry[] = [];
     for (const id of this.listRunIds()) {
       const s = this.summary(id);
       if (!s) continue;
       const meta = this.meta(id);
+      // 開催中のシーズンのランは載せない（S3a §27.9 の 3: 確定するまで、名前とシーズンのランであることだけ）
+      if (meta?.season && hideSeason(meta.season)) continue;
       const endedAt = meta?.endedAt ?? this.mtime(id);
       const ongoing = meta?.status === 'active';
       for (const p of s.players) {

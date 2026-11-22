@@ -9,8 +9,13 @@ import { loadContent } from '@muse/content';
 import { ENGINE_VERSION, generateFloor } from '@muse/engine';
 import { createApp, loadConfig, SessionManager } from '@muse/server';
 import type { App, PlayerPort } from '@muse/server';
-import { applyEvent, formatObservationText } from '@muse/shared';
-import type { Command, Entity, GameEvent, Pos, ServerMsg, World } from '@muse/shared';
+import { applyEvent, filterEventsForPlayer, formatObservationText } from '@muse/shared';
+import { createMcpServer } from '@muse/server';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import type { IncomingMessage } from 'node:http';
+import { isLocalRequest } from '../../server/src/http/local';
+import type { Command, Entity, Expedition, GameEvent, Pos, ServerMsg, World } from '@muse/shared';
 import { playWithPort } from '../src/bot';
 import { verifyRunDir } from '../src/replay';
 
@@ -512,5 +517,195 @@ describe('S3 §25.2: supply caches', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+// ---- S3a（§27.9・§27.6） ----
+
+describe('S3a §27.9: leaks', () => {
+  it('the player\'s events do not carry the after values (no free identification), and a viewer who has not identified a kind gets the name without the look', async () => {
+    const m = manager();
+    openSeason(m);
+    const a = await seasonRun(m, 'Aya');
+    const c = await seasonRun(m, 'Cid');
+    await startAndClear(a);
+    const wa = a.session.world;
+    const down = wa.floors[floorOf(a)].stairs.down[0];
+    await placeAt(a, down);
+    // 未鑑定の巻物を 2 つ重ねて持ち、1 つ預ける: プレイヤーに渡る出来事に、本当の種類が出ない
+    const sc = give(a, 'core:scroll_teleport', 2);
+    expect(wa.players[a.playerId].knowledge.identified).not.toContain('core:scroll_teleport');
+    expect((await act(a, { type: 'deposit_supply', slot: sc })).ok).toBe(true);
+    expect((await act(a, { type: 'take_supply', id: 'l1' })).ok).toBe(true);
+    const pe = filterEventsForPlayer(a.session.history, a.playerId, a.port.view());
+    const dep = pe.filter((e) => e.type === 'supply_deposited' || e.type === 'supply_taken');
+    expect(dep.length).toBe(2);
+    expect(JSON.stringify(pe)).not.toContain('scroll_teleport');
+    expect(JSON.stringify(a.port.perceivedSince(0))).not.toContain('scroll_teleport');
+    // 鑑定済みの巻物を預ける（A だけが知っている種類）
+    applyEvent(wa, { type: 'item_identified', player: a.playerId, kind: 'core:scroll_mapping', appearanceId: wa.secret.appearances['core:scroll_mapping'], seq: wa.seq + 1, cause: null, floor: null, ft: 0, wall: 0, seenBy: [a.playerId] } as unknown as GameEvent);
+    const mp = give(a, 'core:scroll_mapping');
+    expect((await act(a, { type: 'deposit_supply', slot: mp })).ok).toBe(true);
+    await lifelineHome(a);
+    // C は未鑑定: 名前は渡るが、外見は渡らない（外見と種類の対応が分かるのは、取ったとき）
+    await startAndClear(c);
+    await placeAt(c, down);
+    const wc = c.session.world;
+    expect(wc.players[c.playerId].knowledge.identified).not.toContain('core:scroll_mapping');
+    const item = c.port.view().season!.cache!.find((x) => x.kind === 'core:scroll_mapping')!;
+    expect(item.appearanceId).toBeNull();
+    expect(JSON.stringify(c.port.view())).not.toContain(`"${wc.secret.appearances['core:scroll_mapping']}"`);
+    expect(obsOf(c).season!.supply!.items.find((x) => x.id === item.id)!.name).toContain('地図');
+    // 取ると知る（外見も）
+    expect((await act(c, { type: 'take_supply', id: item.id })).ok).toBe(true);
+    expect(wc.players[c.playerId].knowledge.identified).toContain('core:scroll_mapping');
+    m.closeAll();
+  });
+
+  it('refuses items with affixes, and takes outside an expedition', async () => {
+    const m = manager();
+    openSeason(m);
+    const a = await seasonRun(m, 'Aya');
+    await startAndClear(a);
+    const w = a.session.world;
+    await placeAt(a, w.floors[floorOf(a)].stairs.down[0]);
+    const sl = give(a, 'core:javelin', 2);
+    const id = meOf(w, a.playerId).inv!.items.find((x) => w.entities[x]?.item?.slot === sl)!;
+    const it = structuredClone(w.entities[id]);
+    it.item!.affixes = ['core:keen'];
+    inject(w, { put: [it] });
+    const r = await act(a, { type: 'deposit_supply', slot: sl });
+    expect(!r.ok && r.error.message).toContain('接辞や呪い');
+    m.closeAll();
+  });
+
+  it('a spectator never receives a player token from the AI activity log (all runs)', async () => {
+    const m = manager();
+    const [x, y] = InMemoryTransport.createLinkedPair();
+    const server = createMcpServer({ manager: m, boundToken: null, briefMap: true, clientLabel: 'test' });
+    await server.connect(x);
+    const client = new Client({ name: 's3a', version: '0' });
+    await client.connect(y);
+    const r = (await client.callTool({ name: 'new_run', arguments: { character_name: 'Tok', objective: 'auto' } })) as unknown as { structuredContent: { run_id: string; player_token: string; profile_token?: string } };
+    const { run_id, player_token, profile_token } = r.structuredContent;
+    expect(player_token.length).toBeGreaterThan(8);
+    const acts = m.get(run_id)!.agentActivity;
+    expect(acts.length).toBeGreaterThan(0);
+    for (const a of acts) {
+      expect(a.text).not.toContain(player_token);
+      if (profile_token) expect(a.text).not.toContain(profile_token);
+      expect(a.text).not.toMatch(/player_token\s*:/);
+      expect(JSON.stringify(a.args)).not.toContain(player_token);
+    }
+    // 俯瞰の観戦（つないだときに直近の記録を受ける）にも出ない
+    const { app, port } = await listen(m);
+    try {
+      const sp = await spectate(port, { runId: run_id, mode: 'director' }, {}, 6);
+      expect(sp.msgs.some((x2) => x2.t === 'agent')).toBe(true);
+      expect(JSON.stringify(sp.msgs)).not.toContain(player_token);
+    } finally {
+      await app.close();
+      await client.close();
+    }
+  });
+
+  it('a run of an unfinalized season shows only its name and that it is a season run, through the run list, the leaderboard and meta; all of it once final', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'muse-s3a-'));
+    try {
+      const m = manager(dir);
+      openSeason(m);
+      const a = await seasonRun(m, 'Aya');
+      await startAndClear(a);
+      await lifelineHome(a);
+      await act(a, { type: 'retire' });
+      const runId = a.session.runId;
+      const { app, port } = await listen(m);
+      const base = `http://127.0.0.1:${port}`;
+      try {
+        const runs = async () => ((await (await fetch(`${base}/api/runs`)).json()) as { runs: { runId: string; summary?: unknown; expeditions?: unknown; seq: number; players: { hidden?: boolean; depth: number | null }[] }[] }).runs.find((x) => x.runId === runId)!;
+        const r0 = await runs();
+        expect(r0.summary).toBeUndefined();
+        expect(r0.expeditions).toBeUndefined();
+        expect(r0.seq).toBe(0);
+        expect(r0.players[0].hidden).toBe(true);
+        const lb = (await (await fetch(`${base}/api/leaderboard`)).json()) as { entries: { runId: string }[] };
+        expect(lb.entries.some((x) => x.runId === runId)).toBe(false);
+        const meta = (await (await fetch(`${base}/api/runs/${runId}/meta`)).json()) as { lastSeq?: number; endedAt?: number; season?: string };
+        expect(meta.season).toBe(SID);
+        expect(meta.lastSeq).toBeUndefined();
+        expect(meta.endedAt).toBeUndefined();
+        // 確定した後は、今までどおり
+        m.seasons.finalize(m.seasons.get(SID)!, 'operator');
+        const r1 = await runs();
+        expect(r1.summary).toBeTruthy();
+        expect(r1.players[0].hidden).toBeUndefined();
+        const lb1 = (await (await fetch(`${base}/api/leaderboard`)).json()) as { entries: { runId: string }[] };
+        expect(lb1.entries.some((x) => x.runId === runId)).toBe(true);
+        const meta1 = (await (await fetch(`${base}/api/runs/${runId}/meta`)).json()) as { lastSeq?: number };
+        expect(meta1.lastSeq).toBeGreaterThan(0);
+      } finally {
+        await app.close();
+      }
+      m.closeAll();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('the same machine: a loopback peer with forwarded addresses all on this machine (the dev proxy) is local; any other address is not', () => {
+    const req = (remote: string, headers: Record<string, string> = {}) => ({ socket: { remoteAddress: remote }, headers } as unknown as IncomingMessage);
+    expect(isLocalRequest(req('127.0.0.1'))).toBe(true);
+    expect(isLocalRequest(req('::1'))).toBe(true);
+    expect(isLocalRequest(req('127.0.0.1', { 'x-forwarded-for': '127.0.0.1' }))).toBe(true);
+    expect(isLocalRequest(req('::ffff:127.0.0.1', { 'x-forwarded-for': '::1' }))).toBe(true);
+    expect(isLocalRequest(req('127.0.0.1', { 'x-forwarded-for': '127.0.0.1, 203.0.113.9' }))).toBe(false);
+    expect(isLocalRequest(req('127.0.0.1', { 'x-forwarded-for': '192.168.1.20' }))).toBe(false);
+    expect(isLocalRequest(req('127.0.0.1', { forwarded: 'for=203.0.113.9' }))).toBe(false);
+    expect(isLocalRequest(req('127.0.0.1', { forwarded: 'for="[::1]:5173"' }))).toBe(true);
+    expect(isLocalRequest(req('127.0.0.1', { forwarded: 'proto=http' }))).toBe(false);
+    // 外から直に来た者が見出しを偽っても、外
+    expect(isLocalRequest(req('203.0.113.9', { 'x-forwarded-for': '127.0.0.1' }))).toBe(false);
+    expect(isLocalRequest(req('192.168.1.20'))).toBe(false);
+  });
+});
+
+describe('S3a §27.6: texts', () => {
+  it('the warden offer shows its armor and the per-hit estimate with your gear; the relic offer warns that picking it up wakes the floor; the heavy blow perk says only crits grow', async () => {
+    const { previewOffers } = await import('@muse/engine');
+    const m = manager();
+    const r = await m.createRun({ name: 'W', controller: agent, seed: 's3a-warden' });
+    if ('error' in r) throw new Error(r.error.message);
+    const w = r.session.world;
+    // 地下 4 階の遠征を達成して帰った形（標準の枠に、節目に挑む候補が出る）
+    const pid = r.playerId;
+    w.expeditions = [{ no: 1, objective: { type: 'slay_guardian', targetDepth: 4 }, points: 0, relicGuarded: false, status: 'ended', startSeq: 1, endSeq: 2, endReason: 'completed', participants: [pid], start: {}, targets: { guardian: null, relic: null }, progress: { reached: true, guardianSlain: true, relicHeldBy: null }, extracted: [{ player: pid, completed: true }], result: null } as unknown as Expedition];
+    let found = false;
+    for (let no = 2; no < 12 && !found; no++) {
+      const offers = previewOffers(w, content, no);
+      const wo = offers.find((o) => o.objective.type === 'slay_warden');
+      if (!wo) continue;
+      found = true;
+      expect(wo.guardian?.armor).toBeGreaterThanOrEqual(0);
+      const camp = structuredClone(w.camp!);
+      camp.offers = offers;
+      applyEvent(w, { type: 'expedition_offered', camp, seq: w.seq + 1, cause: null, floor: null, ft: 0, wall: 0, seenBy: 'all' } as unknown as GameEvent);
+      const text = formatObservationText(r.port.observe().observation, 'ja');
+      expect(text).toMatch(/大守護者「[^」]+」[\s\S]*装甲はおよそ \d+[\s\S]*いまの持ち物で 1 回に通る目安/);
+    }
+    expect(found).toBe(true);
+    const { offerText } = await import('@muse/shared');
+    const relic = offerText('ja', { index: 1, objective: { type: 'retrieve_relic', targetDepth: 3 }, points: 100, relicGuarded: false, slot: 'ambitious', traits: [], multiplierPct: 100 } as never);
+    expect(relic).toContain('遺物を拾うと、その階の敵が目を覚まして集まり');
+    expect(content.perks['core:perk_heavy_blow'].desc.ja).toContain('会心のダメージだけが増える');
+    m.closeAll();
+  });
+
+  it('explore toward on a fully explored floor still stops, and says the floor is explored and to travel_to a coordinate', async () => {
+    const { macroStopError } = await import('@muse/shared');
+    const e = macroStopError('ja', 'toward_exhausted', { type: 'explore', toward: 'sense' }, undefined, undefined, undefined, true);
+    expect(e.message).toContain('この階は探索し終えている');
+    expect(e.hint).toContain('travel_to で座標を指して');
+    const e2 = macroStopError('ja', 'toward_exhausted', { type: 'explore', toward: 'sense' });
+    expect(e2.message).not.toContain('探索し終えている');
   });
 });

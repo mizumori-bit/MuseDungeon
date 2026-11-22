@@ -53,6 +53,15 @@ function itemName(ctx: NarrateCtx, ev: Record<string, unknown>): string {
 
 const DIR_FROM_JA: Record<string, string> = { n: '北', ne: '北東', e: '東', se: '南東', s: '南', sw: '南西', w: '西', nw: '北西' };
 
+/** 相手の方角と距離（「北東に 5」。自分の位置から） */
+function relWhere(from: Pos, to: Pos, ja: boolean): string {
+  const dx = to.x - from.x, dy = to.y - from.y;
+  const ns = dy < 0 ? (ja ? '北' : 'N') : dy > 0 ? (ja ? '南' : 'S') : '';
+  const ew = dx > 0 ? (ja ? '東' : 'E') : dx < 0 ? (ja ? '西' : 'W') : '';
+  const d = Math.max(Math.abs(dx), Math.abs(dy));
+  return ja ? `${ns}${ew || ''}に ${d}` : `${ns}${ew} ${d}`;
+}
+
 /** 置き場の場所（「地下4階の下り階段 (12,7)」） */
 function supplyWhere(ctx: NarrateCtx, ev: Record<string, unknown>): string {
   const ja = ctx.locale !== 'en';
@@ -495,8 +504,12 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
     case 'fire_return': {
       if (ev.phase === 'start') return ja ? `${ev.by} の野営の火で帰り支度を始めた（${ev.turns} 手番。この手番を含む。その間に追ってくる敵が見えたら取りやめになる）。` : `You start packing up at ${ev.by}'s campfire (${ev.turns} turns including this one; it is called off if a hunting enemy comes into view).`;
       if (ev.phase === 'done') return ja ? `${ev.by} の野営の火から${ev.completed ? '帰還した（遠征達成）' : '撤退した'}。次の遠征は、この火のそばから始まる。` : `You ${ev.completed ? 'return home (expedition complete)' : 'withdraw'} from ${ev.by}'s campfire. The next expedition starts beside this fire.`;
-      const why = ev.reason === 'hostile' ? (ja ? '追ってくる敵が見えた' : 'a hunting enemy came into view')
-        : ev.reason === 'damaged' ? (ja ? '被害を受けた' : 'you took damage')
+      // 何で取りやめになったか（S3a §27.6 の 4）: 見えた敵の名前・ID・方角と距離、受けた被害とその相手
+      const foe = ev.foe as { id: string; kind: string; pos: Pos } | undefined;
+      const foeText = foe ? (ja ? `: ${kindName(ctx.catalog, L, foe.kind)} ${foe.id}${ctx.selfPos ? `（${relWhere(ctx.selfPos, foe.pos, true)}）` : ''}` : `: ${kindName(ctx.catalog, L, foe.kind)} ${foe.id}${ctx.selfPos ? ` (${relWhere(ctx.selfPos, foe.pos, false)})` : ''}`) : '';
+      const src = typeof ev.sourceKind === 'string' ? kindName(ctx.catalog, L, ev.sourceKind) : null;
+      const why = ev.reason === 'hostile' ? (ja ? `追ってくる敵が見えた${foeText}` : `a hunting enemy came into view${foeText}`)
+        : ev.reason === 'damaged' ? (ja ? `被害を受けた${ev.dealt ? `: ${ev.dealt}` : ''}${src ? `（${src}から）` : ''}` : `you took damage${ev.dealt ? `: ${ev.dealt}` : ''}${src ? ` (from ${src})` : ''}`)
         : ev.reason === 'moved' ? (ja ? '火のそばから離された' : 'you were moved away from the fire')
           : (ja ? '目的が未達成になった（撤退するなら extract confirm: true）' : 'the objective is no longer complete (to withdraw, extract confirm: true)');
       return ja ? `帰り支度を取りやめた（${why}）。過ごした手番は戻らない。帰るなら、もう一度 extract（最初から）。` : `Packing up is called off (${why}). The turns spent are gone; extract again to start over.`;

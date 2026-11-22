@@ -95,7 +95,8 @@ export function createApp(manager: SessionManager, config: ServerConfig): App {
     }
     if (p === '/api/config') return json(res, 200, { spectatorPolicy: config.spectatorPolicy });
     if (p === '/api/content/catalog') return json(res, 200, manager.catalog);
-    if (p === '/api/leaderboard') return json(res, 200, { entries: store?.leaderboard() ?? [] });
+    // 開催中のシーズンのランは載せない（S3a §27.9 の 3）
+    if (p === '/api/leaderboard') return json(res, 200, { entries: store?.leaderboard((sid) => manager.seasonHidden(sid)) ?? [] });
     // シーズン（S0。PROTOCOL §9.8）: 一覧と順位の表（公開された階段の位置は出さない）
     if (p === '/api/seasons' && m === 'GET') return json(res, 200, { seasons: manager.seasons.list() });
     {
@@ -150,7 +151,15 @@ export function createApp(manager: SessionManager, config: ServerConfig): App {
       }
       const live = manager.get(runId);
       if (!live && !store?.exists(runId)) return fail(res, 404, actionError('no_session', `unknown run ${runId}`, ''));
-      if (sub === '/meta') return json(res, 200, live ? live.meta() : store!.meta(runId));
+      if (sub === '/meta') {
+        const meta = live ? live.meta() : store!.meta(runId);
+        // 開催中のシーズンのラン（S3a §27.9 の 3）: 進み具合（lastSeq・終わった時刻・参加の seq）を出さない
+        if (meta?.season && manager.seasonHidden(meta.season)) {
+          const { lastSeq: _l, endedAt: _e, seed: _s, ...rest } = meta;
+          return json(res, 200, { ...rest, players: rest.players.map((x) => ({ ...x, joinedSeq: 0 })) });
+        }
+        return json(res, 200, meta);
+      }
       { const blocked = spectatorBlocked(runId, req); if (blocked) return fail(res, 403, blocked); }
       if (sub === '/events') {
         const src = liveEvents(runId)!;

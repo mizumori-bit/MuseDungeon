@@ -285,7 +285,7 @@ export function applyDamage(ctx: Ctx, target: Entity, amount: number, source: En
     });
   }
   // 野営の火の帰り支度の間に被害を受けた（S1d §17.3）: 取りやめ（その手番から動ける）
-  if (t.player && dealt > 0) fireReturnHurt(ctx, ctx.world.entities[t.id] ?? t);
+  if (t.player && dealt > 0) fireReturnHurt(ctx, ctx.world.entities[t.id] ?? t, dealt, source);
   if (standing && stand) {
     const body = structuredClone(ctx.world.entities[t.id]);
     body.boonUsed = { ...(body.boonUsed ?? {}), [stand.boon]: xNo };

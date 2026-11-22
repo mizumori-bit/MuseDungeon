@@ -102,9 +102,9 @@ export function createMcpServer(ctx: McpContext): McpServer {
     return errOut(f ?? actionError('no_session', 'このMCP接続にはプレイヤーが束縛されていない / no player bound to this connection', 'new_run で始めるか、resume_run(player_token) で再開する / call new_run or resume_run'));
   };
 
-  const record = (port: PlayerPort, tool: string, args: Record<string, unknown>, text: string) => {
+  const record = (port: PlayerPort, tool: string, args: Record<string, unknown>, text: string, secrets: readonly (string | undefined)[] = []) => {
     const { player_token: _t, profile_token: _p, ...safe } = args;
-    manager.recordActivity(port.runId, { playerId: port.playerId, seq: port.view().seq, tool, args: safe, text, wall: Date.now() });
+    manager.recordActivity(port.runId, { playerId: port.playerId, seq: port.view().seq, tool, args: safe, text: withoutTokens(text, [_t, _p, ...secrets]), wall: Date.now() });
   };
 
   const act = async (tool: string, args: Record<string, unknown>, cmd: Command) => {
@@ -190,7 +190,8 @@ export function createMcpServer(ctx: McpContext): McpServer {
       : profile ? `profile_id: ${profile.id}\n` : '';
     const head = `run_id: ${runId}\nplayer_token: ${token}\n(このトークンで resume_run できる / keep this token to resume)\n${prof}\n`;
     const text = head + (briefing.length ? briefing.join('\n') + '\n\n' : '') + o.text;
-    record(port, tool, args, text);
+    // 観戦の「AI の呼び出しの記録」には、トークンを入れない（S3a §27.9 の 4。俯瞰の観戦は、つないだときに直近の記録を受ける）
+    record(port, tool, args, text, [token, profile?.token]);
     return out(text, { run_id: runId, player_token: token, player_id: port.playerId, ...(profile ? { profile_id: profile.id, ...(profile.token ? { profile_token: profile.token } : {}) } : {}), briefing, observation: o.observation, turn: o.turn });
   };
 
@@ -620,4 +621,14 @@ function interceptArgs(server: McpServer, onBad: (tool: string, args: Record<str
     }
     return orig(req, extra);
   });
+}
+
+/**
+ * 観戦に流す文からトークンを除く（S3a §27.9 の 4）: player_token・profile_token の行を落とし、渡されたトークンの値が残っていれば伏せる。
+ * 応答そのもの（呼んだ AI に返す文）は変えない
+ */
+export function withoutTokens(text: string, secrets: readonly unknown[] = []): string {
+  let out = text.split('\n').filter((l) => !/^\s*(player_token|profile_token)\s*:/.test(l)).join('\n');
+  for (const s of secrets) if (typeof s === 'string' && s.length >= 8) out = out.split(s).join('••••');
+  return out;
 }

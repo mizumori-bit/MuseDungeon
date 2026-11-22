@@ -350,7 +350,8 @@ export function makeOffers(ctx: Ctx, no: number): ExpeditionOffer[] {
       offer.warden = structuredClone(ms);
       const pv = wardenPreview(ctx, target);
       // 体力の幅（式の下限と上限。V3-3c §44.2）。大守護者は遅くならない
-      offer.guardian = { rank: 3, traits: pv ? guardianTraits(ctx, pv.kind, pv.affixes, ctx.content.balance.guardian.warden.minSpeed, true) : [], name: { ...ms.name }, ...(ms.title ? { title: { ...ms.title } } : {}), types: [...ms.types], hpRange: wardenHpRange(ctx.content, target) };
+      // 装甲の目安（S3a §27.6 の 1: 守護者の候補と同じ形。通る目安は観測が持ち物から添える。体力と弱点は、今までどおり記録庫から）
+      offer.guardian = { rank: 3, traits: pv ? guardianTraits(ctx, pv.kind, pv.affixes, ctx.content.balance.guardian.warden.minSpeed, true) : [], name: { ...ms.name }, ...(ms.title ? { title: { ...ms.title } } : {}), types: [...ms.types], hpRange: wardenHpRange(ctx.content, target), ...(pv ? { armor: pv.armor } : {}) };
       // 傷跡（V3-8 §53.3）: 前の挑戦で与えたダメージの 4 分の 1
       const live = Object.values(ctx.world.entities).find((e) => e.guardian?.warden && e.pos?.floor === `main:${target}` && (e.stats?.hp ?? 0) > 0);
       const sc = live ? projectedScar(live) : 0;
@@ -718,16 +719,21 @@ export function noteRooms(ctx: Ctx): void {
  * forRest: 休憩の判定では、動かない敵は隣接していなければ数えない（V3-2R §14.2）
  */
 export function huntingInView(ctx: Ctx, pr: PlayerRecord, forRest = false): boolean {
+  return !!huntingFoeInView(ctx, pr, forRest);
+}
+
+/** 見えている追ってくる敵（最初の 1 体。huntingInView と同じ判定。S3a §27.6 の 4: 帰り支度の取りやめの文に名前と方角を出す） */
+export function huntingFoeInView(ctx: Ctx, pr: PlayerRecord, forRest = false): Entity | null {
   const me = ctx.world.entities[pr.entityId];
-  if (!me?.pos) return false;
+  if (!me?.pos) return null;
   const key = me.pos.floor;
   for (const e of ctx.entitiesOn(key)) {
     if (!e.actor || e.player || !e.pos || (e.stats?.hp ?? 0) <= 0) continue;
     if (!ctx.seesActor(pr.id, e)) continue;
     if (forRest && ctx.content.monsters[e.kind]?.tags.includes('stationary') && cheb(e.pos, me.pos) > 1) continue;
-    if (isPursuing(e)) return true;
+    if (isPursuing(e)) return e;
   }
-  return false;
+  return null;
 }
 
 /** その場で extract したら「達成」になるか */

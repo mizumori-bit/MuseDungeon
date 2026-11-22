@@ -23,7 +23,7 @@ export function conditionText(L: Locale, o: Objective): string {
   switch (o.type) {
     case 'reach_depth': return t(L, `地下${o.targetDepth}階の下り階段に着く（着いただけでは達成しない）→ いずれかの階段の上で extract`, `Stand on the down stairs of depth ${o.targetDepth} (arriving is not enough) → extract while standing on any stairs`);
     case 'slay_guardian': return t(L, '守護者を倒す → いずれかの階段の上で extract', 'Slay the guardian → extract while standing on any stairs');
-    case 'retrieve_relic': return t(L, '遺物を拾う → 持ったままいずれかの階段の上で extract', 'Pick up the relic → extract on any stairs while carrying it');
+    case 'retrieve_relic': return t(L, '遺物を拾う → 持ったままいずれかの階段の上で extract。拾うと、その階の眠っている・気づいていない敵が目を覚まして遺物の場所へ向かい、その遠征の間は徘徊も増える（帰り道に備えてから拾う）', 'Pick up the relic → extract on any stairs while carrying it. Picking it up wakes every sleeping or unaware monster on the floor and sends them toward it, and wanderers come more often for the rest of the expedition (prepare the way back before you take it)');
     case 'slay_warden': return t(L, '大守護者を倒す → いずれかの階段の上で extract（広間の下り階段でも、前室の上り階段でもよい）', 'Slay the warden → extract while standing on any stairs (the hall\'s stairs down or the antechamber\'s stairs up)');
     case 'slay_bounty': return t(L, '名前付きの強敵（賞金首）を倒す → いずれかの階段の上で extract（賞金は別に入る）', 'Slay the named elite (the bounty) → extract while standing on any stairs (its bounty is paid separately)');
     case 'open_vault': return t(L, '宝物庫の鍵を手に入れ（鍵を持つ敵を倒すか、床で拾う）、鍵のかかった格子扉を隣で interact して開ける → いずれかの階段の上で extract（中身は別に入る）', 'Get the vault key (slay its carrier or pick it up), interact with the locked grate next to it → extract while standing on any stairs (the loot inside counts separately)');
@@ -239,7 +239,9 @@ export function offerText(L: Locale, o: ExpeditionOffer, ctx?: { rules: Pick<Cat
   const sc = o.scar ? t(L, ` / 傷跡で体力 −${o.scar}`, ` / scars: −${o.scar} HP`) : '';
   // 目的の階と通り道の階のうち、作られていて性質のある階（V4-0e §8.1）
   const ft = offerFloorTraitsText(L, ctx?.rules, o);
-  const gf = (ft ? ` / ${ft}` : '') + wd + rep + rc + sc + bt + vt + (o.guardian ? ` / ${guardianForecastText(L, o.guardian)}` : '') + (o.relic ? ` / ${relicText(L, o.relic)}` : '')
+  // 遺物（S3a §27.6 の 2）: 拾うと階じゅうの敵が起きることを、選ぶ前に
+  const rw = o.objective.type === 'retrieve_relic' ? t(L, ' / 遺物を拾うと、その階の敵が目を覚まして集まり、徘徊も増える', ' / picking up the relic wakes the floor and draws more wanderers') : '';
+  const gf = (ft ? ` / ${ft}` : '') + wd + rep + rc + sc + bt + vt + (o.guardian ? ` / ${guardianForecastText(L, o.guardian)}` : '') + (o.relic ? ` / ${relicText(L, o.relic)}` : '') + rw
     + (o.passesWarden ? t(L, ` / 途中の地下${o.passesWarden.depth}階で大守護者「${guardianDisplayName(L, o.passesWarden)}」を倒す必要がある（倒すまで下り階段が封じられている）`, ` / you must slay the warden "${guardianDisplayName(L, o.passesWarden)}" on depth ${o.passesWarden.depth} on the way (its stairs down are sealed until then)`) : '');
   return t(L, `${head} — 基礎 +${o.points} / 倍率 ${multText(mult)}${traits ? `（${traits}）` : ''}${danger}${gf}`,
     `${head} — base +${o.points} / multiplier ${multText(mult)}${traits ? ` (${traits})` : ''}${danger}${gf}`);

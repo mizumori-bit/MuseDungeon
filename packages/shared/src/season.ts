@@ -200,7 +200,7 @@ export interface SupplyTakenView { id: string; depth: number; x: number; y: numb
  * PlayerView の補給の置き場（S3 §25.2）。cache: 見る者が場所を知っている置き場の中身（その階のそのマスの地形を知っている（見た・地図に載った）か、火を覚えている。
  * 下り階段をまだ知らない階の置き場は、場所が分かってしまうので出さず、hidden に深さごとの数だけ）。種類は鑑定の決まりで伏せる
  */
-export function projectSupplies(world: World, pid: PlayerId): { cache: SupplyView[]; hidden: { depth: number; count: number }[]; taken: (SupplyView & { no: number })[]; mine: SupplyView[]; news: SupplyTakenView[] } {
+export function projectSupplies(world: World, pid: PlayerId): { cache: SupplyView[]; hidden: { depth: number; count: number; place: SupplyPlace }[]; taken: (SupplyView & { no: number })[]; mine: SupplyView[]; news: SupplyTakenView[] } {
   const s = world.season;
   const pr = world.players[pid];
   const empty = { cache: [], hidden: [], taken: [], mine: [], news: [] };
@@ -209,7 +209,9 @@ export function projectSupplies(world: World, pid: PlayerId): { cache: SupplyVie
   const mask = (kind: string, identified: boolean): { kind: string | null; appearanceId: string | null } => {
     const app = world.secret.appearances[kind];
     if (app === undefined) return { kind, appearanceId: null };
-    return identified || known.has(kind) ? { kind, appearanceId: app } : { kind: null, appearanceId: app };
+    if (known.has(kind)) return { kind, appearanceId: app };
+    // 預けた者が鑑定済みでも、見る者が未鑑定なら、外見は渡さない（名前だけ。外見と種類の対応が分かるのは、取ったとき。S3a §27.9 の 2）
+    return identified ? { kind, appearanceId: null } : { kind: null, appearanceId: app };
   };
   const view = (c: CacheItem): SupplyView => ({ id: c.id, depth: c.depth, x: c.x, y: c.y, place: c.place, ...mask(c.kind, c.identified), by: c.by, mine: c.mine, local: c.local });
   const knows = (c: { depth: number; x: number; y: number }) => {
@@ -222,12 +224,20 @@ export function projectSupplies(world: World, pid: PlayerId): { cache: SupplyVie
   };
   const all = cacheItems(s);
   const cache = all.filter(knows).map(view);
-  const hiddenBy = new Map<number, number>();
-  for (const c of all) if (!knows(c) && world.floors[floorKey('main', c.depth)]) hiddenBy.set(c.depth, (hiddenBy.get(c.depth) ?? 0) + 1);
+  // 場所を知らない置き場（作ってある階だけ）: 深さと置き場の種類ごとの数（S3a §27.9 の 5: 覚えていない火を「下り階段」と書かない）
+  const hiddenBy = new Map<string, { depth: number; count: number; place: SupplyPlace }>();
+  for (const c of all) {
+    if (knows(c) || !world.floors[floorKey('main', c.depth)]) continue;
+    const k = `${c.depth}|${c.place}`;
+    const h = hiddenBy.get(k) ?? { depth: c.depth, count: 0, place: c.place };
+    h.count++;
+    hiddenBy.set(k, h);
+  }
   const taken = (s.taken ?? []).map((x) => ({ ...view({ ...x, mine: false, local: x.id.startsWith('l') }), no: x.no }));
-  const mine = all.filter((c) => c.mine).map(view);
+  // 自分の預けた品の一覧は、このランで知っている場所だけ（S3a §27.9 の 5）
+  const mine = all.filter((c) => c.mine && knows(c)).map(view);
   const news = (s.supplyNews ?? []).map((x: SeasonSupplyTaken) => ({ id: x.id, depth: x.depth, x: x.x, y: x.y, place: x.place, ...mask(x.kind, x.identified), taker: x.taker }));
-  return { cache, hidden: [...hiddenBy.entries()].sort((a, b) => a[0] - b[0]).map(([depth, count]) => ({ depth, count })), taken, mine, news };
+  return { cache, hidden: [...hiddenBy.values()].sort((a, b) => a.depth - b.depth || a.place.localeCompare(b.place)), taken, mine, news };
 }
 
 /** 置き場の名前（「上り階段」「下り階段」「野営の火」） */

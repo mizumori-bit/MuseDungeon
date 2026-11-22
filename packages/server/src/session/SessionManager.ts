@@ -241,12 +241,10 @@ export class SessionManager {
         };
       });
       const alive = players.filter((p) => p.state === 'alive' || p.state === 'at_camp').length;
-      // 進行中のシーズンのラン（S2a §20.10 の 2）: 名前と、シーズンのランであることだけ（今いる階・レベル・状態・遠征・進み具合を出さない。外との出入りはキャンプでだけ）
-      if (w.meta.season && w.status === 'active') {
-        out.push({
-          runId: s.runId, status: w.status, mode: w.meta.mode, season: w.meta.season.id, createdAt: s.createdAt, updatedAt: s.createdAt, seq: 0, live: true, joinable: false,
-          players: players.map((p) => ({ id: p.id, name: p.name, classId: p.classId, controller: p.controller, state: 'alive', depth: null, level: 0, hidden: true })),
-        });
+      // 開催中のシーズンのラン（S2a §20.10 の 2・S3a §27.9 の 3。終わったランも、確定するまで）: 名前と、シーズンのランであることだけ
+      // （今いる階・レベル・状態・遠征・進み具合・要約を出さない。外との出入りはキャンプでだけ）
+      if (w.meta.season && this.seasonHidden(w.meta.season.id)) {
+        out.push(hiddenListing(s.runId, w.status, w.meta.mode, w.meta.season.id, s.createdAt, true, players));
         continue;
       }
       out.push({
@@ -260,6 +258,10 @@ export class SessionManager {
         if (seen.has(id)) continue;
         const meta = this.store.meta(id);
         if (!meta) continue;
+        if (meta.season && this.seasonHidden(meta.season)) {
+          out.push(hiddenListing(id, meta.status, meta.mode, meta.season, meta.createdAt, false, meta.players.map((p) => ({ id: p.id, name: p.name, classId: p.classId, controller: p.controller })), this.failed.get(id)));
+          continue;
+        }
         const summary = this.store.summary(id) ?? undefined;
         out.push({
           // シーズンのラン（S3: ロビーが、確定する前のシーズンのランの巻き戻しを出し分ける）
@@ -276,6 +278,14 @@ export class SessionManager {
       }
     }
     return out.sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
+  /**
+   * 開催中のシーズンのランか（S3a §27.9 の 3）: 結果が確定するまで、どの口（ランの一覧・リーダーボード・meta）からも、
+   * 名前とシーズンのランであることだけを出す（§20.10 の 2 と同じ考え）
+   */
+  seasonHidden(seasonId: string | undefined | null): boolean {
+    return !!seasonId && !this.seasonFinal(seasonId);
   }
 
   /** シーズンの結果が確定しているか（S3 §25.1: 確定した後は、だれでも観戦・巻き戻しできる） */
@@ -325,6 +335,16 @@ export class SessionManager {
     this.seasons.flush();
     if (this.seasonTimer) { clearInterval(this.seasonTimer); this.seasonTimer = null; }
   }
+}
+
+/** 開催中のシーズンのランの一覧の行（S2a・S3a）: 名前・職業・操作の種類と、シーズンのランであることだけ（state・depth・level は意味を持たない） */
+function hiddenListing(runId: string, status: RunListing['status'], mode: RunListing['mode'], season: string, createdAt: number, live: boolean,
+  players: { id: PlayerId; name: string; classId: string; controller: Controller }[], failed?: { reason: string; at: number }): RunListing {
+  return {
+    runId, status, mode, season, createdAt, updatedAt: createdAt, seq: 0, live, joinable: false,
+    players: players.map((p) => ({ id: p.id, name: p.name, classId: p.classId, controller: p.controller, state: 'alive', depth: null, level: 0, hidden: true })),
+    ...(failed ? { recoveryFailed: { ...failed } } : {}),
+  };
 }
 
 /** new_run の objective → 最初の遠征の候補番号（auto = 1 番目、endless は目的なし） */

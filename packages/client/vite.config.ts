@@ -8,9 +8,10 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': 'http://127.0.0.1:7777',
-      '/mcp': 'http://127.0.0.1:7777',
-      '/ws': { target: 'ws://127.0.0.1:7777', ws: true },
+      // xfwd: 接続元を X-Forwarded-For で伝える（S3a §27.9 の 5。サーバーは、それで「同じ機械からの接続」かを見分ける）
+      '/api': { target: 'http://127.0.0.1:7777', xfwd: true },
+      '/mcp': { target: 'http://127.0.0.1:7777', xfwd: true },
+      '/ws': { target: 'ws://127.0.0.1:7777', ws: true, xfwd: true },
     },
   },
 });

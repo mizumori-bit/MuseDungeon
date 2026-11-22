@@ -129,6 +129,13 @@ export function filterEventsForPlayer(events: readonly GameEvent[], playerId: Pl
       case 'max_hp_changed':
         if (ev.target !== selfId) continue;
         break;
+      // 補給の置き場（S3a §27.9 の 1）: after 値には本当の種類が入る（未鑑定の品の正体が漏れる）。プレイヤーには渡さない（置き場の中身は PlayerView の season が伏せて渡す）
+      case 'supply_deposited':
+        delete pe.depositedAfter;
+        break;
+      case 'supply_taken':
+        delete pe.takenAfter;
+        break;
       case 'player_joined':
         pe.player = { id: ev.player.id, name: ev.player.name, classId: ev.player.classId, controller: ev.player.controller };
         delete pe.entity;

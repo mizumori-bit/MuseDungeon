@@ -8,6 +8,7 @@ import type { Dir } from './types';
 import { cheb, compassDir } from './util';
 import { projectSupplies, seasonBudgetLeft, seasonStairsCounts } from './season';
 import type { SupplyTakenView, SupplyView } from './season';
+import type { SupplyPlace } from './types';
 
 const clone = <T>(x: T): T => structuredClone(x);
 
@@ -97,6 +98,8 @@ export interface RememberedView {
   /** 自分が投げた物 */
   mine?: boolean;
   value?: number;
+  /** 品の接辞（S3a §27.6 の 6: 見えたときに分かる不変の性質。見えている品と同じ。「補強された革鎧」が覚えている地図で「革鎧」と出た） */
+  affixes?: string[];
   /** 棲み処の地物の持ち主の守護者（V3-3c §44.6） */
   lair?: { name: Names; title?: Names };
   /** この遠征の目的の遺物（V4-1a §12.2） */
@@ -245,7 +248,7 @@ export interface PlayerView {
      * supplyTaken: このランで取った品（no は遠征）、myDeposits: 自分の預けた品で、まだだれも取っていないもの、cacheNews: 前の取り込みから、ほかの者が取った自分の品。
      * 種類は、預けた者か見る者が鑑定済みのときだけ（ほかは外見だけ）
      */
-    cache?: SupplyView[]; cacheHidden?: { depth: number; count: number }[]; supplyTaken?: (SupplyView & { no: number })[]; myDeposits?: SupplyView[]; cacheNews?: SupplyTakenView[];
+    cache?: SupplyView[]; cacheHidden?: { depth: number; count: number; place: SupplyPlace }[]; supplyTaken?: (SupplyView & { no: number })[]; myDeposits?: SupplyView[]; cacheNews?: SupplyTakenView[];
   };
 }
 
@@ -493,6 +496,7 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
     if (objectiveIds.has(r.id)) rv.objective = true;
     if (r.cat === 'item' && we?.item?.thrownBy === playerId && !we.item.heldBy) rv.mine = true;
     if (r.cat === 'item' && we?.item?.value !== undefined) rv.value = we.item.value;
+    if (r.cat === 'item' && rv.kind && we?.item?.affixes.length) rv.affixes = [...we.item.affixes];
     const lg = we?.lairOf ? world.entities[we.lairOf]?.guardian : undefined;
     if (lg) rv.lair = { name: { ...lg.name }, ...(lg.title ? { title: { ...lg.title } } : {}) };
     if (we?.campfire) rv.campfire = { by: we.campfire.by };

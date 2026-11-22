@@ -50,6 +50,10 @@ export function depositCheck(ctx: Ctx, e: Entity, pr: PlayerRecord, slot: string
   if (!def || def.bound || !SUPPLY_CATEGORIES.includes(def.category)) {
     return { error: actionError('cannot_use', t(L, '預けられるのは、消耗品（薬・巻物・投げる武器）だけ。装備・遺物・宝・鍵・帰還の綱は預けられない。', 'Only consumables (potions, scrolls, throwing weapons) can be deposited; not gear, relics, treasure, keys or the lifeline.'), t(L, '薬・巻物・投げる武器のスロットを選ぶ。', 'Pick a potion, scroll or throwing weapon.')) };
   }
+  // 接辞・呪いの付いた品は預けない（S3a §27.9 の 5: 預けて取り返すと呪いが消える道をふさぐ。今の消耗品には付かない）
+  if ((it.item?.affixes ?? []).length || (it.item?.hidden ?? []).length) {
+    return { error: actionError('cannot_use', t(L, '接辞や呪いの付いた品は、預けられない。', 'Items with affixes or curses cannot be deposited.'), t(L, 'ほかの品を選ぶ。', 'Pick another item.')) };
+  }
   const cap = ctx.content.balance.season.supplyCap;
   const n = cacheAt(s, at.depth, at.x, at.y).length;
   if (n >= cap) return { error: actionError('cannot_use', t(L, `この置き場（${supplyPlaceName(L, at.place)}）は、もういっぱい（${n}/${cap}）。`, `This cache (${supplyPlaceName(L, at.place)}) is full (${n}/${cap}).`), t(L, 'ほかの置き場に預ける。', 'Deposit at another cache.')) };
@@ -87,7 +91,9 @@ export function takeCheck(ctx: Ctx, e: Entity, pr: PlayerRecord, id: string | un
   if (!at) return { error: notPlace(L) };
   const no = currentExpedition(ctx.world)?.no ?? null;
   const per = ctx.content.balance.season.supplyTakesPerExpedition;
-  if (no !== null && supplyTakenThis(s, no) && (s.taken ?? []).filter((x) => x.no === no).length >= per) {
+  // 遠征の外では取れない（上限を見られない所は、断る側に倒す。S3a §27.9 の 5）
+  if (no === null) return { error: actionError('cannot_use', t(L, '遠征の外では、置き場から取れない。', 'You cannot take from a cache outside an expedition.'), '') };
+  if (supplyTakenThis(s, no) && (s.taken ?? []).filter((x) => x.no === no).length >= per) {
     return { error: actionError('cannot_use', t(L, `この遠征では、もう置き場から ${per} つ取った（1 回の遠征で、どの置き場からも合わせて ${per} つまで）。`, `You have already taken ${per} item(s) from caches this expedition (${per} per expedition, from any cache).`), t(L, '次の遠征で。預けるのはできる。', 'Next expedition. You can still deposit.')) };
   }
   const items = cacheAt(s, at.depth, at.x, at.y);

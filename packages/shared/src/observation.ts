@@ -1003,12 +1003,18 @@ function supplyObs(view: PlayerView, catalog: Catalog): Partial<ObsSeason> {
   const byCell = new Map<string, SupplyView[]>();
   for (const c of cache) { const k = `${c.x},${c.y}`; byCell.set(k, [...(byCell.get(k) ?? []), c]); }
   const caches = [...byCell.values()].map((list) => ({ place: list[0].place, at: [list[0].x, list[0].y] as [number, number], items: list.map((c) => ({ id: c.id, name: supplyName(catalog, L, c), by: c.by })) }));
-  const hidden = (s.cacheHidden ?? []).find((h) => h.depth === f.depth)?.count ?? 0;
+  const hiddenList = (s.cacheHidden ?? []).filter((h) => h.depth === f.depth);
+  const hidden = hiddenList.reduce((a, h) => a + h.count, 0);
   if (caches.length || hidden) {
     out.caches = caches;
     if (hidden) out.caches_hidden = hidden;
     const parts = caches.map((c) => t(L, `${supplyPlaceName(L, c.place)} (${c.at[0]},${c.at[1]}): ${c.items.map((x) => `${x.name}（${x.by}）`).join('・')}`, `${supplyPlaceName(L, c.place)} (${c.at[0]},${c.at[1]}): ${c.items.map((x) => `${x.name} (${x.by})`).join(', ')}`));
-    if (hidden) parts.push(t(L, `まだ見ていない下り階段の置き場にも ${hidden} つ（階段を見つけると分かる）`, `${hidden} more at the stairs down you have not seen (find them to learn more)`));
+    // 場所を知らない置き場（S3a §27.9 の 5: 置き場の種類ごと。覚えていない火を「下り階段」と書かない）
+    for (const h of hiddenList) {
+      parts.push(h.place === 'stairs_down'
+        ? t(L, `まだ見ていない下り階段の置き場にも ${h.count} つ（階段を見つけると分かる）`, `${h.count} more at the stairs down you have not seen (find them to learn more)`)
+        : t(L, `まだ場所を知らない${supplyPlaceName(L, h.place)}の置き場にも ${h.count} つ`, `${h.count} more at a ${supplyPlaceName(L, h.place)} whose place you do not know yet`));
+    }
     out.caches_text = t(L, `補給の置き場（この階）: ${parts.join('／')}`, `Supply caches on this floor: ${parts.join(' / ')}`);
   }
   const at = supplyPlaceInView(view, catalog);
@@ -1259,7 +1265,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
   for (const r of view.memory.remembered) {
     if (visibleIds.has(r.id)) continue;
     if (r.cat === 'item') {
-      const it: ObsItem = { id: r.id, name: itemDisplayName(catalog, L, r.kind, r.appearanceId), pos: r.pos, ...rel(r.pos), qty: r.qty, remembered: true };
+      const it: ObsItem = { id: r.id, name: itemDisplayName(catalog, L, r.kind, r.appearanceId, r.affixes ?? []), pos: r.pos, ...rel(r.pos), qty: r.qty, remembered: true };
       if (r.role) it.role = r.role;
       if (r.objective) it.objective = true;
       if (r.mine) it.mine = true;
@@ -1652,7 +1658,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
           return left > 0 ? t(L, ` / 納めると、記録庫が地下${msd}階の番人の記憶を 1 つ返す（残り ${left}）`, ` / delivering it makes the archive recall one memory of the depth-${msd} keeper (${left} left)`) : '';
         })() + (o.bounty ? ` / ${gearVsArmorText(L, catalog, view, o.bounty.armor, Math.max(1, o.bounty.hp - (o.scar ?? 0)))}` : '')
           // 守護者の候補（格 1〜3。再挑戦を含む）にも通る目安（V3-8a §56.1。大守護者は記録庫の記憶の装甲で出す）
-          + (o.guardian?.armor !== undefined && o.objective.type !== 'slay_warden' ? ` / ${gearVsArmorText(L, catalog, view, o.guardian.armor, o.guardian.hp !== undefined ? Math.max(1, o.guardian.hp - (o.scar ?? 0)) : undefined)}` : ''),
+          + (o.guardian?.armor !== undefined ? ` / ${gearVsArmorText(L, catalog, view, o.guardian.armor, o.guardian.hp !== undefined ? Math.max(1, o.guardian.hp - (o.scar ?? 0)) : undefined)}` : ''),
         ...(o.bounty ? { bounty: { kind: o.bounty.kind, name: nameOf(o.bounty.name, L, ''), hp: o.bounty.hp, ...(o.bounty.hpRange ? { hp_range: { ...o.bounty.hpRange } } : {}), max_hit: o.bounty.maxHit } } : {}),
         ...(o.vault ? { vault: true } : {}), ...(o.scar ? { scar: o.scar } : {}),
         ...(o.slot ? { slot: o.slot } : {}), ...(o.traits?.length ? { traits: [...o.traits] } : {}),
@@ -2036,7 +2042,8 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
     const comer = x.huntingReach.filter((m) => m.dist > 1 && !m.traits.includes('stationary') && !m.traits.includes('ranged'))[0];
     if (comer) out.push(`fight ${comer.id}${abArg} (${t(L, `${comer.name} を迎え撃つ: 隣に来るまで待つ・${stopText}`, `meet ${comer.name}: waits until it is adjacent, ${stopText}`)}${abNote})`);
     const shooter = x.huntingReach.filter((m) => m.dist > 1 && m.traits.includes('ranged'))[0];
-    if (shooter) out.push(`travel_to ${shooter.id} (${t(L, `${shooter.name}: 近づく（寄られると下がり、下がる間は撃たない）／視線を切る`, `${shooter.name}: close in (it backs off when approached and does not shoot while backing off) / break line of sight`)})`);
+    // 寄られると下がるのは、すぐ近く（数マス以内）に寄られたときだけ。それより遠い間と、下がれないときは撃ってくる（S3a §27.6 の 5。ai の ranged_kiter）
+    if (shooter) out.push(`travel_to ${shooter.id} (${t(L, `${shooter.name}: 近づく（すぐ近くまで寄られると下がり、下がる間は撃たない。それより遠い間と、下がれないときは撃ってくる）／視線を切る`, `${shooter.name}: close in (it backs off once you are right next to it and does not shoot while backing off; it shoots while you are farther away or when it cannot back off) / break line of sight`)})`);
   }
   if (!adjAwake.length) {
     if (x.frontiers > 0 || x.pickables > 0) out.push(x.pickables > 0 ? `explore (${t(L, `拾えるアイテム ${x.pickables} 個も拾う`, `also picks up ${x.pickables} items`)})` : 'explore');
@@ -2302,7 +2309,8 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
       // 眠っている敵と 8 マスより遠い敵は、名前・位置・脅威・体力の目安だけ（命中と通りの記録・射線は省く。V3-4b §28.8）
       const brief = m.awareness === 'asleep' || m.dist > 8;
       const outOf = m.shots.filter((x) => x.state === 'out_of_range').map((x) => x.slot);
-      const shot = brief ? '' : m.shot === 'blocked' ? t(L, '  射線:通らない', ' shot:blocked') : outOf.length && outOf.length === m.shots.length ? t(L, '  射程外', ' out of range') : outOf.length ? t(L, `  射程外:${outOf.join(',')}`, ` out of range:${outOf.join(',')}`) : '';
+      // あなたの投擲の射線と射程（S3a §27.6 の 5: 「射程外」を相手の射程と読まれた。相手の射撃は、相手の射程で届く）
+      const shot = brief ? '' : m.shot === 'blocked' ? t(L, '  あなたの投擲の射線:通らない', ' your throw: line blocked') : outOf.length && outOf.length === m.shots.length ? t(L, '  あなたの投擲の射程外', ' out of your throwing range') : outOf.length ? t(L, `  あなたの投擲の射程外:${outOf.join(',')}`, ` out of your throwing range:${outOf.join(',')}`) : '';
       const threat = m.threat === null ? (m.first_seen ? t(L, '不明（初見）', 'unknown (first sighting)') : t(L, '不明（被弾の記録なし）', 'unknown (never hit by it)')) : String(m.threat);
       const perTurn = m.worst_turn !== null && m.worst_turn !== m.worst_hit ? t(L, `（1 手に最悪 ${m.worst_turn}）`, ` (worst ${m.worst_turn}/turn)`) : '';
       const worst = m.worst_hit !== null ? t(L, `  最大の一撃:${m.worst_hit}${perTurn}`, ` worst_hit:${m.worst_hit}${perTurn}`) : '';

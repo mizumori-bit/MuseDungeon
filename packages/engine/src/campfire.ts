@@ -5,7 +5,7 @@ import type { ActionError, Entity, Expedition, FloorKey, PlayerRecord } from '@m
 import { actionError, cheb, currentExpedition, isMilestoneOf, restCapHp, seasonBudgetLeft, t } from '@muse/shared';
 import { heal } from './combat';
 import type { Ctx } from './ctx';
-import { doExtract, huntingInView, wouldComplete } from './expedition';
+import { doExtract, huntingFoeInView, huntingInView, wouldComplete } from './expedition';
 import { makeFeature } from './spawn';
 import { addStatus, removeStatus } from './statuses';
 import { milestoneRule } from './warden';
@@ -65,19 +65,24 @@ function finishFireReturn(ctx: Ctx, e: Entity, pr: PlayerRecord, fire: Entity, x
 }
 
 /** 帰り支度の間に被害を受けた（S1d §17.3。見えない相手に撃たれた場合も・毒も）: 取りやめ。combat の applyDamage が呼ぶ */
-export function fireReturnHurt(ctx: Ctx, e: Entity): void {
+export function fireReturnHurt(ctx: Ctx, e: Entity, dealt = 0, source: Entity | null = null): void {
   const cur = ctx.world.entities[e.id];
   const pr = cur?.player ? ctx.world.players[cur.player] : undefined;
   if (!cur?.pos || !pr || !(cur.statuses ?? []).some((s) => s.id === FIRE_RETURN)) return;
-  cancelFireReturn(ctx, cur, pr, 'damaged', campfireNear(ctx, cur));
+  // 被害と、その相手の種族（見えている相手だけ。見えない相手・毒なら null。S3a §27.6 の 4）
+  const sourceKind = source && source.id !== cur.id && source.pos && ctx.seesActor(pr.id, source) ? source.kind : null;
+  cancelFireReturn(ctx, cur, pr, 'damaged', campfireNear(ctx, cur), { dealt, sourceKind });
 }
 
-function cancelFireReturn(ctx: Ctx, e: Entity, pr: PlayerRecord, reason: 'hostile' | 'moved' | 'not_complete' | 'damaged', fire: Entity | undefined): void {
+function cancelFireReturn(ctx: Ctx, e: Entity, pr: PlayerRecord, reason: 'hostile' | 'moved' | 'not_complete' | 'damaged', fire: Entity | undefined, extra: { foe?: Entity | null; dealt?: number; sourceKind?: string | null } = {}): void {
   removeStatus(ctx, e, FIRE_RETURN);
   const f = e.pos ? ctx.world.floors[e.pos.floor] : undefined;
   ctx.emit({
     type: 'fire_return', player: pr.id, phase: 'cancel', reason,
-    depth: f?.depth ?? 0, x: fire?.pos?.x ?? -1, y: fire?.pos?.y ?? -1, by: fire?.campfire?.by ?? '', seenBy: [pr.id], floor: e.pos?.floor ?? null,
+    depth: f?.depth ?? 0, x: fire?.pos?.x ?? -1, y: fire?.pos?.y ?? -1, by: fire?.campfire?.by ?? '',
+    ...(extra.foe?.pos ? { foe: { id: extra.foe.id, kind: extra.foe.kind, pos: { x: extra.foe.pos.x, y: extra.foe.pos.y } } } : {}),
+    ...(reason === 'damaged' ? { dealt: extra.dealt ?? 0, sourceKind: extra.sourceKind ?? null } : {}),
+    seenBy: [pr.id], floor: e.pos?.floor ?? null,
   });
 }
 
@@ -92,7 +97,8 @@ export function fireReturnTick(ctx: Ctx, e0: Entity): void {
   if (!pr || !e.pos || !(e.statuses ?? []).some((s) => s.id === FIRE_RETURN)) return;
   const fire = campfireNear(ctx, e);
   if (!fire) { cancelFireReturn(ctx, e, pr, 'moved', undefined); return; }
-  if (huntingInView(ctx, pr, true)) cancelFireReturn(ctx, e, pr, 'hostile', fire);
+  const foe = huntingFoeInView(ctx, pr, true);
+  if (foe) cancelFireReturn(ctx, e, pr, 'hostile', fire, { foe });
 }
 
 /** 帰り支度が切れた: 帰る。目的を達成していないのに confirm が無かった（始めたときは達成していた）なら、帰らずに取りやめ */

@@ -222,7 +222,8 @@ describe('S1c §14.3 の 1・2: returning home from a campfire', () => {
     expect(cancel?.type === 'fire_return' && cancel.phase).toBe('cancel');
     // 速い敵は見えたその手番に殴ることがあるので、被害での取りやめ（S1d §17.3）にもなりうる
     expect(['hostile', 'damaged']).toContain(cancel?.type === 'fire_return' && cancel.reason);
-    expect(a.port.formatActionText(r)).toMatch(/帰り支度を取りやめた（(追ってくる敵が見えた|被害を受けた)）/);
+    // 何で取りやめになったか（S3a §27.6 の 4）: 見えた敵の名前・ID・方角と距離、または受けた被害
+    expect(a.port.formatActionText(r)).toMatch(/帰り支度を取りやめた（(追ってくる敵が見えた: .+ e_[0-9a-z]{6}（[北南東西]+に \d+）|被害を受けた: \d+.*)）/);
     expect(meOf(w, a.playerId).statuses!.some((s) => s.id === 'core:fire_return')).toBe(false);
     // 階段の上なら、追われていてもすぐ帰れる（今までどおり）
     const down = w.floors[k1].stairs.down[0];
@@ -636,7 +637,9 @@ describe('S1d §17.3〜§17.5: returning from a fire', () => {
     const cancel = a.session.history.filter((e) => e.type === 'fire_return').at(-1);
     expect(cancel?.type === 'fire_return' && cancel.phase).toBe('cancel');
     expect(cancel?.type === 'fire_return' && cancel.reason).toBe('damaged');
-    expect(a.port.formatActionText(r)).toContain('帰り支度を取りやめた（被害を受けた）');
+    // 被害の数（S3a §27.6 の 4。毒は相手が分からないので、相手の名前は付かない）
+    expect(a.port.formatActionText(r)).toMatch(/帰り支度を取りやめた（被害を受けた: \d+）/);
+    expect(cancel?.type === 'fire_return' && cancel.dealt).toBeGreaterThan(0);
     m.closeAll();
   });
 

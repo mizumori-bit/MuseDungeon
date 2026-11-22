@@ -657,7 +657,8 @@ function resolveTravelGoal(view: PlayerView, catalog: Catalog, target: TravelTar
 /** dir: trap_ahead のとき、罠のマスの方角（踏むなら move { dir }） */
 /** blockedBy: じゃまをしている見えている敵（hostile_adjacent・blocked。V4-1a §12.3。拒否のエラーの details.blocked_by と hint の名前） */
 /** traps: trap_ahead のとき、道の上の発見済みの罠（近い順。V4-1d §18.1。拒否のエラーの details.blocked_by_traps と hint の名前・位置） */
-export type MacroDecision = { command: Command } | { stop: MacroStop; dir?: Dir; blockedBy?: { id: string; name: string }[]; traps?: MacroTrap[] };
+/** explored（S3a §27.6 の 7）: toward_exhausted で、その階に行ける未探索の境界がもう 1 つも無い（探索し終えている） */
+export type MacroDecision = { command: Command } | { stop: MacroStop; dir?: Dir; blockedBy?: { id: string; name: string }[]; traps?: MacroTrap[]; explored?: boolean };
 /** 道をふさいでいる発見済みの罠（V4-1d §18.1） */
 export interface MacroTrap { id: string; kind: string; name: string; pos: Pos }
 
@@ -1193,7 +1194,7 @@ function macroStep(state: MacroState, view: PlayerView, catalog: Catalog, events
       const along = fr.filter(inDraft);
       if (along.length) fr = along;
       // その方角に行ける境界が無い: 止まる（S1c §14.6 の 2。方角を渡すのはその方角へ行きたいから。逃げる flee は今までどおり、ほかの方角の境界へ）
-      else if (mode !== 'flee') return { stop: 'toward_exhausted' };
+      else if (mode !== 'flee') return { stop: 'toward_exhausted', ...(allFrontiers.length ? {} : { explored: true }) };
       else state.towardNoAlong = (state.towardNoAlong ?? 0) + 1;
     }
     const itemCells = state.pickup && !draft ? pickableItems(view, catalog, state.skipItems, state.pickUseful !== false).map((x) => x.cell) : [];
@@ -1310,8 +1311,13 @@ function macroStep(state: MacroState, view: PlayerView, catalog: Catalog, events
  * 1 歩も進めないと分かったマクロの拒否（手番を使わない。V3-2R §14.2「0 歩で終わる呼び出しを作らない」）。
  * 最初の判断が停止なら、その理由をゲームのエラー形式で返す。
  */
-export function macroStopError(L: Locale, stop: MacroStop, cmd: Command, dir?: Dir, blockedBy?: readonly { id: string; name: string }[], traps?: readonly MacroTrap[]): ActionError {
+export function macroStopError(L: Locale, stop: MacroStop, cmd: Command, dir?: Dir, blockedBy?: readonly { id: string; name: string }[], traps?: readonly MacroTrap[], explored?: boolean): ActionError {
   const e = macroStopErrorBase(L, stop, cmd, dir);
+  // 探索し終えた階で toward を渡した（S3a §27.6 の 7）: 止まるのは今のまま。気配の方角へは座標を指して向かう
+  if (stop === 'toward_exhausted' && explored) {
+    e.message += t(L, ' この階は探索し終えている。', ' This floor has been fully explored.');
+    e.hint = t(L, '気配の方角へは、travel_to で座標を指して向かう（self.sense の方角の、覚えている地図のマス）。', 'Head toward the sense with travel_to and a coordinate (a remembered cell in the self.sense direction).');
+  }
   // 道をふさいでいる発見済みの罠（V4-1d §18.1）: details.blocked_by_traps と hint の名前・位置
   if (traps?.length && stop === 'trap_ahead') {
     const first = traps[0];
