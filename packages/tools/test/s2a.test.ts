@@ -158,7 +158,8 @@ describe('S2a §20.10 の 3・5: the lethal refusal text, and pilot uses the mac
     } as unknown as Entity);
     a.inject({ put: [mon('e_s2al01', 1, 1), mon('e_s2al02', 3, 1)] });
     await a.r.port.act({ type: 'wait' }, { source: 'bot' });
-    a.world.players[a.pid].knowledge.monsterMemory['core:goblin'] = { kind: 'core:goblin', encounters: 2, kills: 0, maxDamageToYou: 10, maxPlainToYou: 6, maxDamageByYou: 0, abilities: [], hitsOnYou: [5, 10], dmgOnYou: [20, 5, 10] };
+    // S7（SEASON.md §52.3 の 5）: 攻撃された回数が 5 回より少ない記録（今までどおりの数え方: いちばん重い 1 体は会心でない最大、残りは平均）
+    a.world.players[a.pid].knowledge.monsterMemory['core:goblin'] = { kind: 'core:goblin', encounters: 2, kills: 0, maxDamageToYou: 10, maxPlainToYou: 6, maxDamageByYou: 0, abilities: [], hitsOnYou: [2, 4], dmgOnYou: [8, 2, 4] };
     const setHp = (hp: number) => { const me = structuredClone(a.world.entities[a.meId]); me.stats!.hp = hp; a.inject({ put: [me] }); };
     const obsOf = () => buildObservation(projectPlayerView(a.world, a.pid), catalog, { detail: 'brief', map: false });
     // 観測の fight_risk は、マクロと同じ threatEstimate

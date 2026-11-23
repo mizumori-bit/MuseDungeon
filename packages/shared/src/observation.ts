@@ -7,7 +7,7 @@ import { floorTraitsText, guardianDisplayName, multText, objectiveText, offerTex
 import { COLLECT_WITHIN, collectTargets, isStationary, macroProbe, macroStopError, pickableItems, sameOrWorseEquip, worseEquip } from './macro';
 import type { MacroStop } from './macro';
 import type { Command } from './commands';
-import { attacksPerTurn, avgHitsOf, chaseAttacks, fightThreats, memoryOf, monsterSpeedOf, selfSpeed, threatEstimate } from './danger';
+import { attacksPerTurn, avgHitsOf, chaseAttacks, fightThreats, lineBlockedShooter, memoryOf, monsterSpeedOf, recordedHitsOf, selfSpeed, threatEstimate } from './danger';
 import type { PerceivedEvent } from './filter';
 import { lastWithoutXp } from './filter';
 import type { ReportCompare } from './expeditionStats';
@@ -904,7 +904,7 @@ export interface ChaseEstimate {
   /** 記録のある敵だけの最悪の被害（記録の無い敵がいても下限として使える） */
   recordedWorst: number;
   worst: number;
-  /** 被害の見込み（S1c §14.4 の 1。いちばん重い 1 体は最大の一撃、残りは平均の被害。平均の記録が無ければ最大） */
+  /** 被害の見込み（S1c §14.4 の 1・S7: fight の見込みと同じ数え方。記録の足りる種族はその記録の平均、ほかはいちばん重い 1 体は会心でない最大の一撃・残りは平均。射線の切れている射手は入れない） */
   expected: number;
   /** 自分の歩く速さより速い近接の敵の数 */
   catchers: number;
@@ -914,7 +914,7 @@ export interface ChaseEstimate {
 /** 階段まで steps 歩く間の最悪の被害（V3-4b §28.5）: 敵ごとに「歩く間の攻撃回数 × 受けた最大の一撃」の合計 */
 export function chaseEstimate(view: PlayerView, catalog: Catalog, hunters: readonly ObsMonster[], steps: number): ChaseEstimate {
   let worst = 0, catchers = 0, shooters = 0;
-  const per: { w: number; p: number; a: number }[] = [];
+  const per: { w: number; p: number; a: number; r: number | null; blocked: boolean }[] = [];
   for (const m of hunters) {
     const e = view.entities.find((x) => x.id === m.id);
     if (!e) continue;
@@ -929,12 +929,15 @@ export function chaseEstimate(view: PlayerView, catalog: Catalog, hunters: reado
       // 会心でない最大（S6 §49.6 の 10。fight の見込みと同じ: S1d §17.2）
       const p = hits * (mem.maxPlainToYou && mem.maxPlainToYou > 0 ? mem.maxPlainToYou : mem.maxDamageToYou);
       worst += w;
-      per.push({ w, p, a: Math.min(p, avgHitsOf(view, e, hits) ?? p) });
+      // 記録の足りる種族は、その記録の平均（会心の分も入る。ふつうの最大では切らない: 真ん中の数なので）
+      per.push({ w, p, a: Math.min(p, avgHitsOf(view, e, hits) ?? p), r: recordedHitsOf(view, catalog, e, hits), blocked: lineBlockedShooter(catalog, e, view.self.pos) });
     }
   }
-  // 見込み（S1c §14.4 の 1・S6: fight の見込みと同じ）: いちばん重い 1 体は会心でない最大の一撃、残りは平均の被害。最悪は全員が最大の一撃（会心を含む）
-  per.sort((a, b) => b.p - a.p);
-  const expected = per.length ? per[0].p + per.slice(1).reduce((s, x) => s + x.a, 0) : 0;
+  // 見込み（S1c §14.4 の 1・S6・S7: fight の見込みと同じ数え方）: 記録の足りる種族はその記録の平均。ほかは、いちばん重い 1 体は会心でない最大の一撃、
+  // 残りは平均の被害。射線の切れている射手は見込みに入れない（いまの射線。歩く間に通ることはある）。最悪は全員が最大の一撃（会心を含む）で、変えていない
+  const counted = per.filter((x) => !x.blocked);
+  const rest = counted.filter((x) => x.r === null).sort((a, b) => b.p - a.p);
+  const expected = counted.filter((x) => x.r !== null).reduce((s, x) => s + x.r!, 0) + (rest.length ? rest[0].p + rest.slice(1).reduce((s, x) => s + x.a, 0) : 0);
   return { recordedWorst: worst, worst, expected, catchers, shooters };
 }
 

@@ -1793,3 +1793,4 @@ engine と出来事の形は変えていない（`engineVersion` 0.38.0・`event
 - **観戦の直前の命令**: 画面だけ（`AiPanel`）。引数のトークンは、サーバーの `record`（MCP の活動の記録を作る所）と画面の両方で `stripTokenArgs` に通す。
 - **呼び出しの時間**: `createMcpServer` が `tools/call` の処理を包んで測る（`timeCalls`。引数の断り・SDK の検査・ハンドラを含む）。控えは `SessionManager.calls`（`CallLog`。メモリだけ）。
 - **explore toward の幅**: `towardWidths`（その方角と両隣 → 横 → 後ろ）。macroNext の explore で、行ける境界（`route` で道があり、罠を通らない）のある最初の幅を選ぶ。「できること」の行と断りは、前と同じく `macroProbe`（= macroNext）で決まる。
+- **見込みの数え方**（別のコミット）: `threatEstimate`（shared の danger.ts）1 つを直した（`recordedHitsOf`・`lineBlockedShooter`）。マクロの fight・観測の `fight_risk`・pilot・知らせ・断りの文が、同じ関数を使う。逃げの見込み（`chaseEstimate`）も同じ数え方。最悪は変えていない（死にうるの判定は §16 のまま）。
