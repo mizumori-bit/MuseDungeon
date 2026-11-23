@@ -216,8 +216,12 @@ export interface MacroState {
    */
   towardWidth?: number;
   goalWidth?: number;
-  /** explore toward（S7b）: 入ったマスの回数（空回りの見張り。同じマスに 3 回目に入る形になったら止まる）と、最後に数えたマス */
+  /**
+   * explore toward（S7b・S7c）: 入ったマスの回数（空回りの見張り。幅を広げた後に、同じマスに 3 回目に入る形になったら止まる）と、最後に数えたマス。
+   * visitKnown: そのマスに最後に入ったときの、知っているマスの数（その後に新しいマスを見ていれば、回数を数え直す: 行き止まりを見て戻るのは往復ではない）
+   */
   visits?: Record<number, number>;
+  visitKnown?: Record<number, number>;
   visitLast?: number;
   /** 同じマスに 3 回目に入るところで止まった（S7b。結果の文に出す） */
   revisit?: Pos;
@@ -1305,11 +1309,16 @@ function macroStep(state: MacroState, view: PlayerView, catalog: Catalog, events
     if (found) return { stop: 'sense_found' };
   }
   if (kind === 'explore') {
-    // 入ったマスを数える（S7b。explore toward の空回りの見張り。同じマスで何度呼ばれても 1 回）
+    // 入ったマスを数える（S7b。explore toward の空回りの見張り。同じマスで何度呼ばれても 1 回）。
+    // S7c: 前にそのマスに入った後に、新しいマスを見ていれば、数え直す（分かれ道を通って行き止まりを見て戻るのは、往復ではない）
+    const knownNow = state.toward ? view.memory.terrain.reduce((n, c) => n + (c ? 1 : 0), 0) : 0;
     if (state.toward && state.visitLast !== here) {
       const v = state.visits ?? {};
-      v[here] = (v[here] ?? 0) + 1;
+      const k = state.visitKnown ?? {};
+      v[here] = k[here] !== undefined && knownNow > k[here] ? 1 : (v[here] ?? 0) + 1;
+      k[here] = knownNow;
       state.visits = v;
+      state.visitKnown = k;
       state.visitLast = here;
     }
     // 行き先: 未見の区画との境界（＋拾うなら拾えるアイテム）
@@ -1401,10 +1410,12 @@ function macroStep(state: MacroState, view: PlayerView, catalog: Catalog, events
       const w0 = state.towardWiden;
       state.towardWiden = { level: Math.max(w0?.level ?? 1, state.towardWidth ?? 1) as 1 | 2, steps: (w0?.steps ?? 0) + 1, from: w0 ? w0.from : { x: pos.x, y: pos.y } };
     }
-    // 空回りの見張り（S7b）: explore toward で、同じマスに 3 回目に入る形になったら止まる（往復 A-B-A-B の見張りは、端から端への行き来を捕まえない）
-    if (state.toward && path && path.length) {
+    // 空回りの見張り（S7b・S7c）: explore toward で、方角の幅を広げた後に、同じマスに 3 回目に入る形になったら止まる（往復 A-B-A-B の見張りは、
+    // 端から端への行き来を捕まえない）。幅を広げていない間は S7 の前と同じ進み方。そのマスに前に入った後に新しいマスを見ていれば、数え直す
+    if (state.toward && (state.towardWidth ?? 0) > 0 && path && path.length) {
       const next = path[0].y * grid.width + path[0].x;
-      if ((state.visits?.[next] ?? 0) >= 2) { state.revisit = { x: path[0].x, y: path[0].y }; return noProgress(state, 6); }
+      const seenSince = state.visitKnown?.[next] !== undefined && knownNow > state.visitKnown[next];
+      if ((state.visits?.[next] ?? 0) >= 2 && !seenSince) { state.revisit = { x: path[0].x, y: path[0].y }; return noProgress(state, 6); }
     }
     if (path === null || path.length === 0) {
       const loose = findPath(grid, pos, targets.filter((i) => i !== here), 'none');

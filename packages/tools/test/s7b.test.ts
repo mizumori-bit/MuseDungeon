@@ -97,6 +97,41 @@ describe('S7b §53.10 の 1: a widened explore toward does not sweep the same co
     expect(st.revisit).toEqual({ x: nx, y: v.self.pos!.y });
     a.manager.closeAll();
   });
+
+  it('S7c: a plain explore toward (not widened) passes a fork for the third time without stopping; after widening, new cells seen since the last pass reset the count', async () => {
+    const { a } = await windCorridor('s7c-fork', { vertical: false, len: 30, at: 15, split: 0 });
+    const cell = (v: PlayerView, d: string) => v.self.pos!.y * v.floor!.width + v.self.pos!.x + (d.includes('e') ? 1 : d.includes('w') ? -1 : 0);
+    // 風は東: 東の境界が、方角と両隣の幅に入る（広げない）
+    const v = projectPlayerView(a.world, a.pid);
+    v.floorHint = { floor: v.floor!.key, draft: 'e', explored: 1 };
+    const st = macroStart(v, { type: 'explore', toward: 'draft' }, catalog);
+    const first = macroNext(st, v, catalog, []);
+    expect('command' in first).toBe(true);
+    expect(st.towardWidth ?? 0).toBe(0);
+    const d = 'command' in first && first.command.type === 'move' ? first.command.dir : 'e';
+    // 次に入るマス（分かれ道）に、もう 2 回入った: 幅を広げていないので、止まらずに進む（S7 の前と同じ進み方）
+    st.visits = { ...(st.visits ?? {}), [cell(v, d)]: 2 };
+    st.visitLast = v.self.pos!.y * v.floor!.width + v.self.pos!.x;
+    const again = macroNext(st, v, catalog, []);
+    expect('command' in again).toBe(true);
+    expect(st.revisit).toBeUndefined();
+    // 幅を広げた後（風は北）でも、そのマスに前に入った後に新しいマスを見ていれば、数え直す（行き止まりを見て戻るのは往復ではない）
+    const v2 = projectPlayerView(a.world, a.pid);
+    v2.floorHint = { floor: v2.floor!.key, draft: 'n', explored: 1 };
+    const st2 = macroStart(v2, { type: 'explore', toward: 'draft' }, catalog);
+    const f2 = macroNext(st2, v2, catalog, []);
+    expect(st2.towardWidth).toBe(1);
+    const d2 = 'command' in f2 && f2.command.type === 'move' ? f2.command.dir : 'e';
+    const known = v2.memory.terrain.reduce((n, c) => n + (c ? 1 : 0), 0);
+    st2.visits = { ...(st2.visits ?? {}), [cell(v2, d2)]: 2 };
+    st2.visitKnown = { ...(st2.visitKnown ?? {}), [cell(v2, d2)]: known - 5 };
+    st2.visitLast = v2.self.pos!.y * v2.floor!.width + v2.self.pos!.x;
+    expect('command' in macroNext(st2, v2, catalog, [])).toBe(true);
+    // 新しいマスを見ていなければ、止まる（S7b の往復の見張り）
+    st2.visitKnown = { ...st2.visitKnown, [cell(v2, d2)]: known };
+    expect(macroNext(st2, v2, catalog, [])).toEqual({ stop: 'no_progress' });
+    a.manager.closeAll();
+  });
 });
 
 describe('S7b §53.10 の 2・3: the checkpoint is not shown again after a restart, nor on a peek', () => {
