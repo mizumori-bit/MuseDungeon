@@ -4,7 +4,7 @@ import type {
   ActionError, Catalog, Command, Dir, ExpeditionReport, GameEvent, Locale, ObsSlay, Observation, ObservationOptions, PerceivedEvent, PlayerId, PlayerView, Pos, RunSummary, TurnBlock, TurnReason,
 } from '@muse/shared';
 import {
-  actionError, briefingLines, briefingShort, buildObservation, buildTurnBlock, campLines, changesLine, compareLines, describeInventory, describeTarget, diffChanges, progressLines, reportLines,
+  actionError, briefingLines, briefingShort, buildObservation, checkpointChangeText, withdrawText, buildTurnBlock, campLines, changesLine, compareLines, describeInventory, describeTarget, diffChanges, progressLines, reportLines,
   cheb, compassDir, dirLabel, formatObservationText, guardianDisplayName, kindName, lastWithoutXp, MACRO_COMPLETED_STOPS, mapTextLines, memoryCombatText, memoryKey, mineCount, nameOf, nearDirs, pickableItems, progressText, renderAsciiMap, resultText, t,
   turnLine, turnSnapshot, turnStateOf, fightThreats, fleeRiskText, riskText, threatEstimate, DIR_VEC, collectTargets, collectWhatOf, itemDisplayName, slayGroupText, slaysAt,
 } from '@muse/shared';
@@ -97,6 +97,21 @@ export interface PlayerPort {
 }
 
 /**
+ * 装備を替えたときの能力の変わった所（S7）: 能力の行と同じ項目（命中・ダメージ・回避・装甲）の「前 → 後」。変わっていなければ空
+ */
+export function statChangeText(L: Locale, a: Observation['self'], b: Observation['self']): string {
+  const sg = (n: number) => (n >= 0 ? `+${n}` : `${n}`);
+  const parts = [
+    a.attack.acc !== b.attack.acc ? t(L, `命中${sg(a.attack.acc)} → ${sg(b.attack.acc)}`, `acc ${sg(a.attack.acc)} -> ${sg(b.attack.acc)}`) : '',
+    a.attack.dmg !== b.attack.dmg ? t(L, `ダメージ${a.attack.dmg} → ${b.attack.dmg}`, `dmg ${a.attack.dmg} -> ${b.attack.dmg}`) : '',
+    a.defense.eva !== b.defense.eva ? t(L, `回避${a.defense.eva} → ${b.defense.eva}`, `eva ${a.defense.eva} -> ${b.defense.eva}`) : '',
+    a.defense.armor !== b.defense.armor ? t(L, `装甲${a.defense.armor} → ${b.defense.armor}`, `armor ${a.defense.armor} -> ${b.defense.armor}`) : '',
+    a.speed !== b.speed ? t(L, `速さ${a.speed} → ${b.speed}`, `speed ${a.speed} -> ${b.speed}`) : '',
+  ].filter(Boolean);
+  return parts.length ? t(L, `能力の変わった所: ${parts.join('・')}。`, `Stats changed: ${parts.join(', ')}.`) : '';
+}
+
+/**
  * explore toward の結果の文に添える、方角と違う向きに歩いた理由（S1b §12.4 の 4）。
  * 方角に行ける未探索の境界が無かった手・方角の境界が遠回りで近い境界を先に見た回数・始めた所から見て方角と違う向きに進んだ（道が回り込んでいる）
  */
@@ -104,6 +119,15 @@ export function towardNote(L: Locale, tw: NonNullable<MacroReport['toward']>, en
   if (!tw.dir) return '';
   const what = tw.kind === 'draft' ? t(L, '下への風', 'the draft') : t(L, '気配', 'the sense');
   const dir = dirLabel(L, tw.dir);
+  // 方角の幅を広げた（S7 §52.3 の 4・S7b）: 実際にしたこと（広げた所から、どちらへ何マス、何手）
+  if (tw.widen) {
+    const how = tw.widen.level === 1 ? t(L, '横', 'the sides') : t(L, '後ろ', 'behind');
+    const d = end ? cheb(tw.widen.from, end) : 0;
+    const nd = end && d > 0 ? compassDir(tw.widen.from, end) : null;
+    const moved = nd ? t(L, `広げた所から${dirLabel(L, nd)}へ ${d} マス進んだ`, `ended ${d} cells ${nd} of where it widened`) : t(L, '広げた所の近くに戻った', 'ended back near where it widened');
+    return t(L, `${what}の方角（${dir}）とその両隣に、行ける未探索の境界が無かったので、方角の幅を${how}まで広げて ${tw.widen.steps} 手歩き、${moved}。`,
+      `There was no reachable unexplored edge toward ${what} (${tw.dir}) or either side of it, so it widened to ${how} and walked ${tw.widen.steps} step${tw.widen.steps > 1 ? 's' : ''}; it ${moved}.`);
+  }
   if (tw.noAlong) return t(L, `${what}の方角（${dir}）に、行ける未探索の境界が無い手が ${tw.noAlong} 手あった（その間は、ほかの方角の近い境界を探した）。`, `For ${tw.noAlong} step${tw.noAlong > 1 ? 's' : ''} there was no reachable unexplored edge toward ${what} (${tw.dir}); meanwhile it searched the nearest edges in other directions.`);
   if (tw.detour) return t(L, `${what}の方角（${dir}）の境界は遠回りなので、近くの境界を先に見た（${tw.detour} 回）。`, `The edges toward ${what} (${tw.dir}) were a long way round, so it looked at nearer ones first (${tw.detour} time${tw.detour > 1 ? 's' : ''}).`);
   const moved = end && cheb(tw.start, end) >= 2 ? compassDir(tw.start, end) : null;
@@ -235,7 +259,7 @@ const STOP_TEXT: Record<string, [string, string]> = {
   error: ['行動できなかった', 'an action failed'],
   attacked: ['攻撃を受けた', 'you were attacked'],
   collected: ['回収し終えた', 'nothing left to collect'],
-  toward_exhausted: ['その方角（下への風・気配）に行ける未探索の境界が無くなった（ほかの方角を探すなら toward を付けない explore）', 'no reachable unexplored edge left toward the hint (to search other directions, explore without toward)'],
+  toward_exhausted: ['その方角（下への風・気配）から両隣・横・後ろまで幅を広げても、行ける未探索の境界が無くなった（残りは敵にふさがれた道か、罠を通る道の先）', 'no reachable unexplored edge left toward the hint, even widening to the sides and behind (the rest are behind enemies or traps)'],
 };
 
 const LONG_REASONS: ReadonlySet<TurnReason> = new Set<TurnReason>(['run_started', 'resumed', 'expedition_started']);
@@ -454,6 +478,10 @@ export class SessionPlayerPort implements PlayerPort {
       // 文になった出来事と、知覚した他の者の移動（見えなくなった敵の最後に見た位置。V4-0c §4.2）
       const events = prev ? [...this.session.messages(this.playerId).filter((m) => m.seq > prev.seq), ...this.session.movesSince(this.playerId, prev.seq)].sort((a, b) => a.seq - b.seq) : [];
       changes = diffChanges(prev, cur, view, observation, events, this.catalog);
+      // 遠征の途中の区切り（S7 §52.2 の 2・S7a・S7b）: 上限の外に 1 回だけ。どの手番か・出したかは記録から決まる。
+      // 判定するのは、基準を進める応答だけ（観戦の先読み peek では呼ばない）。応答を作る時点で敵が見えていれば（協力プレイで仲間の番を待つ間など）出さない
+      // （控えは応答のたびに作っておく: 初めて要るときに、長い記録を畳まなくて済むように）
+      if (p.changes === true && view.status !== 'at_camp' && this.session.checkpointDue(this.playerId, prev?.seq ?? null) && !view.entities.some((e) => e.cat === 'monster')) changes = [...changes, { code: 'checkpoint', text: checkpointChangeText(L) }];
       if (p.changes === true) this.session.setTurnSnapshot(this.playerId, cur);
     }
     const turn = buildTurnBlock(view, { reason, interruptedBy: p.interruptedBy, changes, expeditionEndedNow: p.expeditionEndedNow });
@@ -525,7 +553,18 @@ export class SessionPlayerPort implements PlayerPort {
       // その方角に行ける境界が無いと断った explore toward の行は、同じ応答の「できること」に出さない（S2a §20.6 の 2。観測は境界の数だけで出すので、方角の境界までは見ない）
       const toward = cmd.type === 'explore' && cmd.toward && (r.error.details as { stop?: string } | undefined)?.stop === 'toward_exhausted' ? `explore toward:${cmd.toward}` : null;
       const valid = toward ? res.observation.valid_actions.filter((l) => !l.startsWith(toward)) : res.observation.valid_actions;
-      const payload: ActionFailure = { ok: false, error: r.error, valid_actions: valid, turn: res.turn };
+      // 撤退の確かめ（S7）: engine の文は「撤退（報酬なし）」だが、撤退でも戦利品の一部は確定する。事実の文に差し替える（code と hint はそのまま）
+      let error = r.error;
+      if (cmd.type === 'extract' && error.code === 'confirm_required') {
+        const L0 = view.locale;
+        const endless = view.expedition?.objective.type === 'endless';
+        const ifNow = res.observation.expedition?.haul?.if_extract_now;
+        const what = withdrawText(L0, this.catalog.rules.haul.withdrawPct, endless, ifNow);
+        error = { ...error, message: endless
+          ? t(L0, `目的なしの遠征なので、extract は撤退になる（${what}）。`, `This expedition has no objective, so extracting is a withdrawal (${what}).`)
+          : t(L0, `目的は未達成。今 extract すると撤退になる（${what}）。`, `The objective is not complete; extracting now is a withdrawal (${what}).`) };
+      }
+      const payload: ActionFailure = { ok: false, error, valid_actions: valid, turn: res.turn };
       return payload;
     }
     const perceived = this.session.consumeFor(this.playerId);
@@ -535,7 +574,13 @@ export class SessionPlayerPort implements PlayerPort {
     let rest: RestReport | undefined;
     let collected: { picked: number; remaining: number } | undefined;
     if (r.steps !== undefined) {
-      const stop = r.interruptedBy ? STOP_TEXT[r.interruptedBy] : undefined;
+      // 停止の理由（S7b: explore toward の空回りは「同じ 2 マスを往復」ではない。探索し終えた toward_exhausted は、括弧の理由を付けない）
+      const stop0 = r.interruptedBy ? STOP_TEXT[r.interruptedBy] : undefined;
+      const stop: [string, string] | undefined = r.interruptedBy === 'no_progress' && r.macro?.revisit
+        ? ['同じ道を行き来して進めない（同じマスに 3 回目に入るところ）', 'going back and forth on the same way (about to enter the same cell a third time)']
+        : r.interruptedBy === 'toward_exhausted' && view.self.pos && buildObservation(view, this.catalog, { detail: 'brief', map: false }).navigation.frontiers.length === 0
+          ? ['この階は探索し終えた（行ける未探索の境界が 1 つも無い）', 'this floor is fully explored (no reachable unexplored edge left)']
+          : stop0;
       // 見えない相手に撃たれて止まった: 停止の理由に方角を書く（V4-0c §4.3。休憩もほかのマクロも）
       const unseen = r.interruptedBy ? unseenShots(mine, view.self.id) : [];
       const unseenText = unseen.length
@@ -565,6 +610,8 @@ export class SessionPlayerPort implements PlayerPort {
           outcome += ' ' + t(L, `動かない ${who} の隣を通らない道を選んだ（隣を通る近道より ${m.detour.extra} 歩長い）。`, `Took a way that avoids passing next to the stationary ${who} (${m.detour.extra} steps longer than the shortcut past it).`);
         }
         // 往復で止まった: 近道をふさいで道を変えさせた動く敵を名指す（S3c §33.3 の 2。マクロは、道が入れ替わる往復を直さない）
+        // 同じマスに 3 回目に入るところで止まった（S7b。explore toward の空回りの見張り）: 事実どおりに
+        if (m?.revisit && r.interruptedBy === 'no_progress') outcome += ' ' + t(L, `同じ道を行き来していたので、(${m.revisit.x},${m.revisit.y}) に 3 回目に入るところで止めた（toward の方角の境界へ、この道では近づけない。toward を付けない explore か、travel_to で場所を指す）。`, `It was going back and forth on the same way, so it stopped before entering (${m.revisit.x},${m.revisit.y}) a third time (this way does not get closer to the edges toward the hint; explore without toward, or travel_to a place).`);
         if (m?.routeFoes?.length && r.interruptedBy === 'no_progress') {
           const who = m.routeFoes.map((x) => `${x.name} ${x.id}`).join(t(L, '・', ', '));
           outcome += ' ' + t(L, `道を変えさせた相手: ${who}（動いて近道をふさいだり空けたりするので、通る道が入れ替わった。相手を片付けるか、動きを待つか、別の行き先へ）。`, `What kept changing the route: ${who} (it moved on and off the short way, so the route kept switching; deal with it, wait for it to move, or pick another destination).`);
@@ -684,6 +731,11 @@ export class SessionPlayerPort implements PlayerPort {
           const slotNote = off.slotName === 'accessory' ? t(L, '（装飾品の枠は 1 つ: 指輪と護符は同時に付けられない）', ' (one accessory slot: a ring and an amulet cannot be worn together)') : '';
           outcome = t(L, `外れた品: ${name}${slotNote}。`, `Came off: ${name}${slotNote}.`) + ' ' + outcome;
         }
+      }
+      // 装備を替えた（S7: 指輪の命中 −2 が文に出なかった）: 能力の行の命中・ダメージ・回避・装甲のうち、変わった所を「前 → 後」で
+      if (cmd.type === 'equip' || cmd.type === 'unequip') {
+        const note = statChangeText(L, buildObservation(before, this.catalog, { detail: 'brief', map: false }).self, buildObservation(view, this.catalog, { detail: 'brief', map: false }).self);
+        if (note) outcome += ' ' + note;
       }
       // 地形が分かる品（残り頁・地図の巻物）を使った（S6 §49.6 の 9: 「使った」としか出なかった）: 分かったことを 1 文
       if (cmd.type === 'use') {

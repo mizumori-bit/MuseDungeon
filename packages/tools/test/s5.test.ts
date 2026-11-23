@@ -804,9 +804,10 @@ describe('S5c (SEASON.md §48.11): only your own fight, only what you saw', () =
         seen[toward].add(shown);
       }
     }
-    // 出る方角も、出ない方角もある（その方角に行ける未探索の境界が無い方角では、前は出ていて断られた）
-    expect([...seen.draft].sort()).toEqual([false, true]);
-    expect([...seen.sense].sort()).toEqual([false, true]);
+    // S7（SEASON.md §52.3 の 4）: その方角に境界が無ければ幅を広げる（両隣 → 横 → 後ろ）ので、行ける境界が 1 つでもあれば、どの方角でも出る（断られない）。
+    // 全部の境界が尽きたときに出ないこと（断りと同じ）は s7.test.ts
+    expect([...seen.draft]).toEqual([true]);
+    expect([...seen.sense]).toEqual([true]);
     a.manager.closeAll();
   }, 60_000);
 });

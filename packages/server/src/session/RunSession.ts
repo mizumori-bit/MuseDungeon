@@ -7,9 +7,11 @@ import { createRun, isPlayersTurn, joinPlayer, resumeSeq, seasonSync, step } fro
 import type {
   ActionError, AgentActivity, Command, CommandRecord, CommandSource, Dir, Expedition, ExpeditionReport, GameEvent, JoinCommand, LegacyMonster, MacroStop, ProjectedEvent,
   PerceivedEvent, PlayerId, PlayerView, Pos, ReportCall, RunMetaFile, RunSummary, SeasonSlay, SeasonSlayFacts, SeasonSyncCommand, SeqResumeCommand, TurnSnapshot, World,
+  CheckpointLedger,
 } from '@muse/shared';
 import {
   actionError, applyEvent, buildExpeditionReport, canonicalHash, guardianDisplayName, compareReports, emptyWorld, filterEventsForPlayer, FREE_COMMANDS, MACRO_COMMANDS,
+  CHECKPOINT_EVERY, checkpointCamp, checkpointStep, monsterInView,
   fleeOptionsText, fleeRiskText, macroNext, macroProbe, macroStart, macroStopError, narrate, projectPlayerView, publicStairsAt, riskText, fightRiskStop, fightThreats, threatEstimate, seasonReportable, seasonReportableSpots, selfTurnMarks, t,
 } from '@muse/shared';
 import type { SeasonHooks } from '../season/SeasonService';
@@ -70,7 +72,10 @@ export interface MacroReport {
   /** fight: 標的を最後に見た場所（V4-0c §4.2） */
   targetSeenAt?: Pos;
   /** explore toward: 始めた所と方角・方角に行ける境界が無かった手・遠回りで近い境界を先にした回数（S1b §12.4 の 4。結果の文で理由を言う） */
-  toward?: { kind: 'draft' | 'sense'; dir: Dir | null; start: Pos; noAlong: number; detour: number };
+  /** widen: その方角（と両隣）に行ける境界が無いので、幅を広げた（S7 §52.3 の 4。level 1 = 横・2 = 後ろ、steps: 広げた手、dir: 向かった境界の方角） */
+  toward?: { kind: 'draft' | 'sense'; dir: Dir | null; start: Pos; noAlong: number; detour: number; widen?: { level: 1 | 2; steps: number; from: Pos } };
+  /** explore toward が、同じマスに 3 回目に入るところで止まった（S7b。そのマス） */
+  revisit?: Pos;
   /** fight: 投げる物が尽きたが、隣に追ってくる敵がいるので床の投げ物を拾いに行かなかった（S1b §12.4 の 5） */
   retrieveHeld?: boolean;
   /** fight・steady・flee: 実際に使った hp_floor（渡した値か既定。S1c §14.4 の 1: 文と食い違わないように） */
@@ -144,6 +149,11 @@ export class RunSession {
   private boundaryCache: { seq: number; world: World } | null = null;
   /** 読めなかった境目のキーフレーム（知らせるのは 1 回だけ） */
   private readonly foldWarned = new Set<number>();
+  /**
+   * 遠征の途中の区切り（S7。SEASON.md §52.2 の 2）の控え（プレイヤーごと）。ランの記録（履歴）を畳んで作り、記録には何も書かない。
+   * 初めて要るときに畳み（起動し直した後も同じに作り直せる）、その後は確定のたびに今の World で進める
+   */
+  private readonly checkpoints = new Map<PlayerId, CheckpointLedger>();
 
   private constructor(readonly deps: SessionDeps, runId: string, world: World, createdAt: number) {
     this.runId = runId;
@@ -381,6 +391,7 @@ export class RunSession {
     this.log?.appendEvents(events);
     this.log?.appendCommand({ ...rec, resultSeq });
     appendAll(this.history, events);
+    this.stepCheckpoints(events);
     this.updatedAt = rec.wall;
     for (const pid of this.world.playerOrder) this.appendMessages(pid, events);
     const floorChange = events.some((e) => e.type === 'entity_changed_floor' || e.type === 'player_joined'
@@ -965,11 +976,12 @@ export class RunSession {
       hpGained: end.self.stats.hp - state.startHp,
       ...(state.slowChasers?.length ? { slowChasers: state.slowChasers.length } : {}),
       ...(state.targetSeenAt ? { targetSeenAt: { ...state.targetSeenAt } } : {}),
-      ...(cmd.type === 'explore' && cmd.toward && startView.self.pos ? { toward: { kind: cmd.toward, dir: state.towardDir ?? null, start: { ...startView.self.pos }, noAlong: state.towardNoAlong ?? 0, detour: state.towardDetour ?? 0 } } : {}),
+      ...(cmd.type === 'explore' && cmd.toward && startView.self.pos ? { toward: { kind: cmd.toward, dir: state.towardDir ?? null, start: { ...startView.self.pos }, noAlong: state.towardNoAlong ?? 0, detour: state.towardDetour ?? 0, ...(state.towardWiden ? { widen: { ...state.towardWiden } } : {}) } } : {}),
       ...(state.retrieveHeld ? { retrieveHeld: true } : {}),
       hpFloor: state.hpFloor,
       ...(state.detour ? { detour: structuredClone(state.detour) } : {}),
       ...(stop === 'no_progress' && state.noProgressBy?.length ? { routeFoes: structuredClone(state.noProgressBy) } : {}),
+      ...(stop === 'no_progress' && state.revisit ? { revisit: { ...state.revisit } } : {}),
     };
     return { ok: true, events: all, startSeq, steps: state.steps, interruptedBy: stop, macro };
   }
@@ -1002,6 +1014,122 @@ export class RunSession {
   private turnKey(pid: PlayerId): string {
     const e = this.world.entities[this.world.players[pid].entityId];
     return `${e.pos?.floor}|${e.actor?.nextActAt}|${e.actor?.turns}`;
+  }
+
+  /**
+   * 遠征の途中の区切り（S7 §52.2 の 2）: 確定した出来事で、控えのあるプレイヤーの控えを進める。自分の手番の初め（turn_began）ごとに、
+   * その手番の数と、敵が見えていないか（monsterInView。今の World: 手番の初めの後に、同じ階の出来事は続かない）。キャンプに着いたら、そこまでを出したことにする
+   */
+  private stepCheckpoints(events: readonly GameEvent[]): void {
+    if (!this.checkpoints.size) return;
+    for (const ev of events) {
+      if (ev.type === 'turn_began') {
+        for (const [pid, l] of this.checkpoints) {
+          const rec = this.world.players[pid];
+          if (rec?.entityId !== ev.actor) continue;
+          checkpointStep(l, this.world.entities[ev.actor]?.actor?.turns ?? 0, !monsterInView(this.world, pid), ev.seq, CHECKPOINT_EVERY);
+        }
+      } else if (ev.type === 'player_state' && ev.state === 'at_camp') {
+        const l = this.checkpoints.get(ev.player);
+        const rec = this.world.players[ev.player];
+        if (l && rec) checkpointCamp(l, this.world.entities[rec.entityId]?.actor?.turns ?? 0);
+      }
+    }
+  }
+
+  /**
+   * 遠征の途中の区切りの控え（S7 §52.2 の 2）。無ければ、ランの記録を畳んで作る: 今の 100 手番の区切りが始まる前の手番から
+   * （その前の区切りの手番は、今の区切りを決めない）。畳む元は、その手番より前の、境目をまたがないキーフレーム（無ければ境目か空の World）
+   */
+  private checkpointLedger(pid: PlayerId): CheckpointLedger {
+    const have = this.checkpoints.get(pid);
+    if (have) return have;
+    let l: CheckpointLedger;
+    try {
+      l = this.foldCheckpoints(pid, false);
+    } catch (err) {
+      // 畳めない記録（記録の外から World を書き換えたテストの場面など）: 区切りの控えは空から始める（区切りは表示だけ。ゲームは止めない）
+      console.error(`[checkpoint] ${this.runId} の区切りの控えを、記録から作れなかった（空から始める）: ${String((err as Error)?.message ?? err).split(/\r?\n/)[0]}`);
+      l = { lastCalm: -1, due: [] };
+    }
+    this.checkpoints.set(pid, l);
+    return l;
+  }
+
+  /** 区切りの控えを、ランの記録を畳んで作る（full: ランの初めから。テスト・確かめ用。ふつうは今の 100 手番の区切りが始まる前から） */
+  private foldCheckpoints(pid: PlayerId, full: boolean): CheckpointLedger {
+    const l: CheckpointLedger = { lastCalm: -1, due: [] };
+    const rec = this.world.players[pid];
+    const eid = rec?.entityId;
+    const now = eid ? this.world.entities[eid]?.actor?.turns ?? 0 : 0;
+    if (rec && eid && (full || now >= CHECKPOINT_EVERY)) {
+      // S7a: 1 つ前の 100 手番の区切りから畳む（その区切りの手番が、まだ出ていない（応答の終わりで敵が見えていた）ことがある）
+      const block = Math.max(0, Math.trunc(now / CHECKPOINT_EVERY) * CHECKPOINT_EVERY - CHECKPOINT_EVERY);
+      // 手番の数が block に届く前の、最後の自分の手番の数の知らせ（無ければ、ランの初めから）
+      let startSeq = 0;
+      for (let i = this.history.length - 1; i >= 0 && !full && block > 0; i--) {
+        const e = this.history[i];
+        if (e.type === 'actor_scheduled' && e.id === eid && e.turns < block) { startSeq = e.seq; break; }
+      }
+      let base = this.foldBase(startSeq);
+      if (this.log && startSeq > 0) {
+        try {
+          const k = latestKeyframe(this.log.dir, { moveBroken: false, maxSeq: startSeq });
+          if (k.kf && k.kf.seq >= base.from) base = { world: k.kf.world, from: k.kf.seq };
+        } catch { /* 読めなければ、境目か空の World から畳む */ }
+      }
+      let w = base.world;
+      const later = this.boundarySeqs.filter((b) => b > base.from).sort((a, b) => a - b);
+      for (let i = this.indexOfSeq(base.from + 1); i < this.history.length; i++) {
+        const ev = this.history[i];
+        // 境目（食い違いの後の続き）をまたぐときは、境目のキーフレームから続ける（foldBase と同じ考え方）
+        while (later.length && ev.seq > later[0]) { const fb = this.foldBase(later[0]); if (fb.from === later[0]) w = fb.world; later.shift(); }
+        applyEvent(w, ev);
+        if (ev.type === 'turn_began' && ev.actor === eid) checkpointStep(l, w.entities[eid]?.actor?.turns ?? 0, !monsterInView(w, pid), ev.seq, CHECKPOINT_EVERY);
+        else if (ev.type === 'player_state' && ev.player === pid && ev.state === 'at_camp') checkpointCamp(l, w.entities[eid]?.actor?.turns ?? 0);
+      }
+      // 途中から畳んだときは、畳み始めの前を知らないので、1 つ前の区切りより前の手番の区切りは数えない（これからの応答に効くのは、いちばん新しい区切りだけ）
+      if (!full) l.due = l.due.filter((d) => d.turn >= block);
+    }
+    return l;
+  }
+
+  /**
+   * 区切りを出すか（S7 §52.2 の 2・S7a §53.9 の 4）: いちばん新しい区切りの手番の後で、まだ出していなくて、いまの自分の手番に敵が見えていないとき。
+   * 「出した」は記録から分かる: 区切りの手番から、いまの手番の前までに、敵の見えていない「応答の終わり」の手番（その後の自分の呼び出しが
+   * マクロの続きの一歩でない手番）があったか、キャンプに着いたか。マクロの途中の手番が区切りで、止まった所で敵が見えていれば、出さずに次へ回す。
+   * since（前の応答の seq）が、いまの手番の初めより後なら、同じ手番の 2 回目の応答なので出さない
+   */
+  checkpointDue(pid: PlayerId, since: number | null): boolean {
+    const rec = this.world.players[pid];
+    if (!rec || rec.state !== 'alive') return false;
+    const l = this.checkpointLedger(pid);
+    const last = l.due[l.due.length - 1];
+    if (!last || l.camped || l.shown || !l.calm?.length) return false;
+    let cur = -1;
+    for (let i = this.history.length - 1; i >= 0 && cur < 0; i--) {
+      const e = this.history[i];
+      if (e.type === 'turn_began' && e.actor === rec.entityId) cur = e.seq;
+    }
+    if (cur < last.seq || (since !== null && since >= cur)) return false;
+    // いまの手番に敵が見えていない
+    if (!l.calm.includes(cur)) return false;
+    const calls = this.calls.get(pid) ?? [];
+    // 前の応答の控えが無い（起動し直した直後など。S7b）: いまの手番を作った呼び出しが記録にあれば、いまの手番の応答はもう返している
+    // （敵が見えていない応答の終わりなので、そこで出した）。出したことにする
+    if (since === null && calls.some((c) => c.seq <= cur)) { l.shown = true; return false; }
+    // 区切りの手番から、いまの手番の前までに、敵の見えていない応答の終わりがあれば、もう出した
+    for (const tseq of l.calm) {
+      if (tseq >= cur) break;
+      const next = calls.find((c) => c.seq > tseq);
+      if (!next || next.kind !== 'macro_step') { l.shown = true; return false; }
+    }
+    return true;
+  }
+
+  /** 区切りの手番（テスト・確かめ用。控えが無ければ畳んで作る。fold: 控えを使わずに、ランの初めから畳み直した答え） */
+  checkpointTurns(pid: PlayerId, fold = false): { seq: number; turn: number }[] {
+    return (fold ? this.foldCheckpoints(pid, true) : this.checkpointLedger(pid)).due.map((d) => ({ ...d }));
   }
 
   /** 観戦用の World 畳み込み検証（テスト用） */

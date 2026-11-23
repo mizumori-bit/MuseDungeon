@@ -197,6 +197,8 @@ button.exit { border-color: #2e8a4e; background: #1f4a30; }
 .campbox h2 { margin: 0 0 6px; }
 .campbox h3 { font-size: 13px; margin: 10px 0 2px; }
 .campbox .result { color: #ffe08a; }
+.notes ul { margin: 2px 0 6px; padding-left: 18px; font-size: 13px; }
+.notes li small { color: var(--muted, #999); margin-right: 4px; }
 .aiwait { position: absolute; left: 8px; top: 8px; background: rgba(40,24,60,0.92); border: 1px solid #8e6cc8; border-radius: 6px; padding: 3px 10px; font-size: 13px; }
 .pstate.at_camp { color: #a8d8a0; }
 .inv em.relic { color: #ffd54f; }

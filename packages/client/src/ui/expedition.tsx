@@ -5,7 +5,7 @@ import type {
   RestEstimate, World,
 } from '@muse/shared';
 import {
-  bountyForecastText, briefingLines, buildObservation, campDepthOf, gearVsArmorText, offerGuardianHp, currentExpedition, dirLabel, endReasonText, guardianForecastText, haulTotal, latestExpedition, multText, nameOf,
+  bountyForecastText, briefingLines, buildObservation, campDepthOf, CHECKPOINT_NOTES, gearVsArmorText, offerGuardianHp, currentExpedition, dirLabel, endReasonText, guardianForecastText, haulTotal, latestExpedition, multText, nameOf,
   nextCampOf, nextOverreach, objectiveText, offerFloorTraitsText, offerGap, offerText, offerWardenExtra, overreachPoints, partsText, progressText, recordsCampLine, resultText, slaysAt, slayGroupText, slayShortGroupText, slotName,
 } from '@muse/shared';
 import { api } from '../api';
@@ -468,6 +468,21 @@ function CampRecords({ nextNo }: { nextNo: number }) {
   return <p class="muted records-line">{line} <a href="#/">{tr('（ロビーで全文）', '(full text in the lobby)')}</a></p>;
 }
 
+/**
+ * 今あるメモ（S7。SEASON.md §52.2 の 4）: キャンプで、自分用メモを新しい順に読むだけで出す（AI のキャンプの観測と同じ 8 件まで）。
+ * 観戦（追従）でも、持ち主と同じ機械からの観戦（開催中のシーズンの決まりのまま）で、相手のメモが読める
+ */
+export function NotesBlock({ notes, who }: { notes: readonly string[]; who?: string }) {
+  if (!notes.length) return null;
+  const shown = notes.map((text, index) => ({ index, text })).reverse().slice(0, CHECKPOINT_NOTES);
+  return (
+    <div class="notes">
+      <h3>{who ? tr(`${who} のメモ（新しい順）`, `${who}'s notes (newest first)`) : tr('あなたのメモ（新しい順）', 'Your notes (newest first)')}{notes.length > shown.length ? tr(`・全 ${notes.length} 件のうち ${shown.length} 件`, ` — ${shown.length} of ${notes.length}`) : ''}</h3>
+      <ul>{shown.map((n) => <li key={n.index}><small>{n.index}</small> {n.text}</li>)}</ul>
+    </div>
+  );
+}
+
 /** キャンプ（遠征と遠征の間）。成績・前の遠征の払い戻し・候補を出し、次の遠征を選ぶか、ここで終える */
 export function CampPanel({ view, catalog, onStart, onRetire, season, canReport, onReport }: {
   view: PlayerView; catalog?: Catalog | null; onStart: (offer: number | 'endless') => void; onRetire: () => void;
@@ -499,6 +514,7 @@ export function CampPanel({ view, catalog, onStart, onRetire, season, canReport,
             `You are off the board (time does not pass). HP ${view.self.stats.hp}/${view.self.stats.maxHp}, Lv${view.self.level}. Deepest: ${view.deepestDepth}. You may stop here.`)}
       </p>
       {camp && <CampRecords nextNo={camp.nextNo} />}
+      <NotesBlock notes={view.notes} />
       {season && <SeasonCampPanel season={season} canReport={!!canReport} onReport={() => onReport?.()} />}
       {/* 討伐の記録（S4 §35.5）: キャンプの記録庫の行（節目ごと。AI のキャンプの観測と同じ文） */}
       {catalog && (view.season?.slays ?? []).length > 0 && (

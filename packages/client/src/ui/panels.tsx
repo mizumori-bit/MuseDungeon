@@ -2,7 +2,7 @@
 import type { AgentActivity, Alert, Catalog, CommandRecord, ObsMonster, Observation, PlayerView, RunSummary, World } from '@muse/shared';
 import {
   abilityStatus, accBonuses, curseUnknown, dealtText, dirLabel, endReasonText, floorTraitsText, hitsText, hpEstimateText, hpState, isCursedItem, itemDisplayName, itemStats, itemStatsText, kindName, nameOf,
-  objectiveText, sameOrWorseEquip, shortId, xpForLevel,
+  commandBrief, INFO_TOOLS, objectiveText, sameOrWorseEquip, shortId, stripTokenArgs, xpForLevel,
 } from '@muse/shared';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { PLAYER_COLORS } from '../render/scene';
@@ -307,7 +307,8 @@ export function MonstersPanel({ monsters, hp, onFight, throwSlotFor, reach, onRe
       <h3>{tr('見えている敵', 'Enemies in view')} <small>{monsters.length}</small></h3>
       <ul>
         {monsters.map((m) => {
-          const aw = AWARE_LABEL[m.awareness];
+          // 動かない敵が気づいているときは「気づいている（動かない）」（S7 §52.3 の 6）
+          const aw: [string, string] | undefined = m.awareness === 'hunting' && m.traits.includes('stationary') ? ['気づいている（動かない）', 'aware (stationary)'] : AWARE_LABEL[m.awareness];
           const hs = HP_LABEL[m.hp_state];
           const wt = reachesYou(m) ? m.worst_turn : null;
           const lethal = wt !== null && wt >= hp;
@@ -463,6 +464,9 @@ export function AiPanel({ thoughts, activities, commands, observationText }: {
   thoughts: ThoughtLine[]; activities?: AgentActivity[]; commands?: CommandRecord[]; observationText: string | null;
 }) {
   const [tab, setTab] = useState<'thought' | 'calls' | 'obs'>('thought');
+  // 思考が無いとき（S7。SEASON.md §52.1 の 1: thought を付けない AI もいる）: 同じ欄に、直前の命令（ツールの名前と要る引数。thought・トークンは出さない）
+  const lastCmd = [...(activities ?? [])].reverse().find((a) => !INFO_TOOLS.has(a.tool));
+  const showCmd = !!lastCmd && !(typeof lastCmd.args?.thought === 'string' && lastCmd.args.thought);
   return (
     <section class="panel ai">
       <h3>
@@ -475,7 +479,8 @@ export function AiPanel({ thoughts, activities, commands, observationText }: {
       </h3>
       {tab === 'thought' && (
         <div class="lines">
-          {thoughts.length === 0 && <div class="muted">{tr('まだ thought はありません', 'No thoughts yet')}</div>}
+          {showCmd && lastCmd && <div class="line command"><small>{tr('思考なし・直前の命令', 'No thought; last command')} #{lastCmd.seq}</small><br /><code>{commandBrief(lastCmd)}</code></div>}
+          {thoughts.length === 0 && !showCmd && <div class="muted">{tr('まだ thought はありません', 'No thoughts yet')}</div>}
           {thoughts.slice(-30).reverse().map((t) => <div key={t.seq} class="line thought"><b>{t.name}</b> <small>#{t.seq}</small><br />{t.text}</div>)}
         </div>
       )}
@@ -483,7 +488,7 @@ export function AiPanel({ thoughts, activities, commands, observationText }: {
         <div class="lines">
           {activities && activities.slice(-20).reverse().map((a, i) => (
             <details key={`${a.seq}-${i}`} class="call">
-              <summary><code>{a.tool}</code> {JSON.stringify(a.args)} <small>#{a.seq}</small></summary>
+              <summary><code>{a.tool}</code> {JSON.stringify(stripTokenArgs(a.args))} <small>#{a.seq}</small></summary>
               <pre>{a.text}</pre>
             </details>
           ))}

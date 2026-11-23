@@ -71,6 +71,7 @@ turn: {
 - `objective_complete` は、`slay_guardian` と `retrieve_relic` では「坑が騒がしくなった（この遠征の間、徘徊の湧き間隔が半分）」を添える。遺物を手にした `objective_progress` は「この階の眠っていた敵が目を覚ました」を添える。
 - V3-2R2: 守護者が倒れたら `guardian_slain`（「★ 守護者が倒れた」。優先順の先頭で、テキストではほかの変化と別の行にして先に出す）。
 - V3-2R: 踏破（目標より深い階の下り階段に立った）は `objective_progress`（「地下4階を踏破した」）。今帰った場合の次の候補の下限が変わると `next_camp`（優先順は `objective_progress` の次）。`hostile_gone` は最後に見た位置と、視界の外へ出た一歩の向きを添える（「見えなくなった敵: ゴブリン（最後に見た位置 (5,6)・北東へ）」。向きは知覚した移動から。行き先は出さない）。
+- S7（SEASON.md §52.2 の 2）: 遠征の途中の区切り `checkpoint`（「区切り（100 手番）。今の観測が正本。これより前の経過は、要らない」）。自分の手番の数が 100 の倍数に届いた後の、敵（モンスター）が 1 体も見えていない最初の自分の手番に 1 回だけ（敵が見えている間は出さず、見えなくなった最初の手番に回す。キャンプに着いたら、そこまでの分は出したことにする）。前の応答の後に始まった自分の手番に区切りの手番があれば、その応答に 1 回（上限の 8 件の外。マクロの途中の手番が区切りなら、止まった所で敵が見えていることはある）。どの手番かはランの記録（engine の `turn_began` の手番の数と、その時の視界）だけから決まり、サーバーは控えを覚えているだけ（起動し直したら記録を畳んで作り直す。応答の控えの無い最初の応答では、いまの手番が区切りかだけを見る）。すべてのプレイヤーに同じ文。
 - 末尾の ▶ 行は既定で短縮形（`set_options status_line: short`）。新しいラン・再開・遠征の開始と、`state` が変わった応答では長い形になる。
 
 ---
@@ -117,7 +118,7 @@ turn: {
 | `inventory` | – | 所持品と装備の詳細 |
 | `recall` | `kind_name` | そのモンスター種について自キャラが学んだこと（遭遇数、撃破数、観測した最大ダメージ、見た能力、倒した個体の体力の範囲 `hpSeen`、見た射撃の最長距離） |
 | `get_messages` | `since_seq?`, `limit?` | 自分が知覚したイベントの文章ログ |
-| `notes` | `add?: string`, `remove?: number` | 自分用メモの読み書き（長時間プレイでの文脈喪失対策。ゲームに影響しない） |
+| `notes` | `add?: string`, `remove?: number` | 自分用メモの読み書き（長時間プレイでの文脈喪失対策。ゲームに影響しない）。S7: 項目つきで書ける（add の先頭に覚え書きの定型の項目の名前）。キャンプの観測に新しい順に 8 件まで（`checkpoint.notes`）、`resume_run` に全部。キャンプの `valid_actions` に `notes { add: "次のねらい: …" }（…）` の行 |
 | `set_options` | `map?: 'auto'|'always'|'never'`, `inventory?: 'on_change'|'always'`, `status_line?: 'short'|'long'` | 応答テキストの出し方（v3）。既定は `auto`（階が変わった・新しいセルを知った・敵の出入りがあった応答だけ地図を付け、それ以外は「地図: 変化なし」）・`on_change`（所持品の行は変わったときだけ）・`short`。ゲームと `structuredContent` には影響しない |
 
 ### 2.3 行動（手番を消費する）
@@ -283,6 +284,7 @@ Observation {
   }
   camp?: { next_no, offers: { index, type, target_depth, points, text, guardian?: { rank: 1|2|3, traits: ('fast'|'slow'|'ranged'|'large'|'armored')[] },   // 守護者の見込み（種族名は出さない。V3-2R3）
            slot?, traits?, multiplier_pct, recommended_level: number | null, level_gap: number | null, trait_danger: number }[] }   // キャンプ（遠征と遠征の間）のみ
+  checkpoint?: { text, template: string[], notes: { index, text }[], notes_total }   // S7: キャンプにいるときだけ。区切りの 1 段・覚え書きの定型（項目の名前だけ）・今あるメモ（新しい順に 8 件まで）
   recent_events: string[]              // 前回の行動結果以降に知覚した出来事の文章（最大 10）
   map?: { origin:{x,y}, rows: string[], legend: Record<string,string> }  // 自分中心の局所 ASCII（既定 21×15。フロア外は出さない）
   valid_actions: string[]              // 例 "move e (attack ゴブリン)", "use_item a (回復の薬)", "use_stairs"、"use_ability bash target:e_xxxxxx (強打: …)"
@@ -457,6 +459,17 @@ S5 で変えた項目（試運転 t6 を受けて。SEASON.md §47.4・§47.5・
 
 - **討伐の記録**（§9.13 の S5）: `SeasonSlay.tells`・`openings`（任意。古い記録は無い項目を出さない）。観測の `ObsSlay.tells`・`openings`。
 - **退いた後のキャンプの並べ**（すべてのラン。§9.13 の S5）: `camp.compare.wardens`。
+- **S7**（SEASON.md §52・§53。`engineVersion` 0.47.0・`eventVersion` 35・コンテンツの版 `cff6932f0071` のまま。engine・コンテンツ・出来事と命令の形は変えていない。サーバー・shared の観測とマクロ・client だけ）:
+  - **S7b**（SEASON.md §53.10。検査の指摘）: `explore toward` は、方角を呼び出しの初めの方角に固定し、1 回の呼び出しの中では広げた幅を狭め直さない（行き先を追い続ける判定と、近くの境界を続けて追う判定は、その行き先を選んだときの幅）。同じマスに 3 回目に入る形になったら `no_progress` で止まる（結果の文「同じ道を行き来していたので、(x,y) に 3 回目に入るところで止めた…」）。幅を広げた結果の文は、実際にしたこと（「方角の幅を横まで広げて N 手歩き、広げた所から東へ M マス進んだ」）。探索し終えた階の `toward_exhausted` の断りと止まった文は、括弧の理由を付けない（「この階は探索し終えている」）。区切りは、前の応答の控えが無い応答（起動し直した直後）では、いまの手番を作った呼び出しが記録にあれば出さない。基準を進めない応答（`changes: 'peek'`）では判定しない。応答を作る時点で敵が見えていれば出さない。「ふつう」は見込みを超えない（`min`）。品の行に「（あなたが置いた）」（`ObsItem.dropped`。自分の置いた品だけ）。呼び出しの控えのツール名は `/^[a-z_]{1,40}$/` に合わなければ `?`。
+  - **区切りの出る応答**（S7a §53.9 の 4）: 区切りの手番がマクロの途中で、マクロが止まった時点で敵が見えていれば、その応答には出さず、敵が見えていない応答の終わり（その後の自分の呼び出しがマクロの続きの一歩でない手番）の最初に出す。出したかどうかは、ランの記録（自分の手番の初めの視界と、呼び出しの記録のマクロの親子）から決まる。同じ手番の 2 回目の応答（observe など）には出さない。
+  - **区切り**（すべてのラン。§52.2）: キャンプの観測に `checkpoint`（決まった 1 段・覚え書きの定型・今あるメモを新しい順に 8 件まで）。テキストは観測の終わり（「できること」の後）に「あなたのメモ…」「区切り: ここは遠征の区切り。…」「覚え書きの定型（項目の名前だけ…）: …」「書き方: notes { add: "次のねらい: …" }…」。「この表示が正本」と言うので、キャンプのテキストにも能力の行と所持品の行を出す（迷宮の観測と同じ形）。キャンプの `valid_actions` に `notes { add: "次のねらい: …" }（…）` の行。遠征の途中は changes の `checkpoint`（§1.2）。
+  - **観戦の活動の記録**（§7）: `AgentActivity.args` は、名前に token を含む引数をどの深さでも落とし、トークンの値を含む文字列は伏せる（`stripTokenArgs`。サーバーが記録を作るときと、画面が出すときの両方）。画面の「思考」の欄は、照会でない直前の呼び出しに thought が無ければ「思考なし・直前の命令」（`commandBrief`: ツールの名前と引数。thought・トークン・`expect_seq`・表示の引数は出さない）。
+  - **呼び出しの時間の控え**（§8）: MCP の `tools/call` ごとに、受け取った時刻・ツール・ラン・サーバーの側でかかった時間をメモリに直近 200 件。10 秒より長いものと例外で終わったものをサーバーのログに 1 行（`[mcp] 長い呼び出し: <tool> run=<run> <秒> 秒（受け取り <時刻>）`。引数・トークン・考えは出さない）。`GET /api/ops/calls?limit=`（同じ機械からだけ。外からは 403）。
+  - **explore の toward の幅**（§52.3 の 4）: その方角と両隣に行ける境界（敵にふさがれず罠を通らない道のある境界）が無ければ、横（±90°）→ 後ろと幅を広げる（`towardWidths`）。広げた手は結果の文に「気配の方角（北）とその両隣に、行ける未探索の境界が無いので、東の境界へ回った（方角の幅を横まで広げた手 N）」。どの幅にも無ければ今までどおり `toward_exhausted`（文は「両隣・横・後ろまで幅を広げても、行ける未探索の境界が無い…」）。「できること」の行と断りは同じ `macroProbe`。
+  - **表示と文**: 動かない敵が気づいている（awareness は `hunting` のまま）ときの状態の表示は「気づいている（動かない）」（`awarenessText`。観測・look・人間の画面）。`interact <dir>（扉を閉める）` は、扉の上に者か品（見えている・覚えている）があれば出さない（engine が断る）。撤退の確かめ（`confirm_required`）の文と `extract confirm:true` の行は、撤退で確定するもの（目的の点を除く戦利品の 50%・今なら +N。目的なしの遠征は「いつもこの扱い」）を言う（engine の文は差し替える。code と hint は同じ）。ブリーフィングの撤退の行も同じ。装備・外すの結果に「能力の変わった所: 命中+5 → +3・…」（能力の行の項目: 命中・ダメージ・回避・装甲・速さ）。
+  - **自分で置いた品**: `EntityView.dropped`・`RememberedView.dropped`（自分が床に置いた品。World の `item.droppedBy`）。移動マクロの拾い（`explore` の pickup・`collect what:items`）は、これを拾い直さない（`pickup { item }` は今までどおり拾える）。`navigation.collectable` は、発見済みの罠を通る道の先の品を数えない（collect が罠の手前で止まる）。
+  - **被害の 3 つの数**（すべてのラン。§52.3 の 5。S7a §53.9 で改めた）: 見込み（`threatEstimate` の `expected`・`chaseEstimate` の `expected`）と最悪（`worst`）は S1d のまま（fight の hp_floor の判定・死にうるかの判定・`self.fight_risk`・「できること」は、前と同じ数）。表示だけの「ふつう」（`usualEstimate`・`chaseEstimate` の `usual`）: その種族に攻撃された回数が `rules.estimateMinSamples`（5）以上なら、その記録の平均（受けた被害の合計 ÷ 攻撃された回数）× 行動の回数。足りない種族は見込みと同じ数え方。射線の切れている射手は入れない。見込みと違うときだけ、文に「ふつうは M」を添える（`riskText` の括弧の中「HP 35・hp_floor 25・ふつうは 4」、`incoming` の「（全員が最大の一撃・ふつうは M）」、階段の行の「被害の見込み 34・最悪 77（ふつうは 6）」）。構造化した項目: `incoming` の `data.usual_sum`・`escape` の `data.usual_if_chased`。`self.fight_risk` には入れない（pilot の判定に使わない）。
+  - **規則の文**（日本語と英語）: シードはシーズンごと・碑文の手がかりの順・記録庫（物語の文と欠片）・鑑定の手段のまとめ・帰還の綱は遠征の開始時に持っていなければ 1 本・撤退でも戦利品の一部は確定する・区切り・explore toward の幅。
 - **S6a**（検査の指摘の直し。SEASON.md §50.4。`engineVersion` 0.47.0・`eventVersion` 35 のまま）: 討伐の記録と挑戦の `wardenStart` から始めの体力（`hp`）を外した（倒していない相手の体力になる）。出すのは傷跡だけ。灯っていた護りの火（`firesLit`）は、その遠征で自分が見た火だけ（見ていなければ無い）。消した数（`wardFires`）も見えていた火だけ。文は「護りの火: 戦い始めに 1 つ灯っていた・この挑戦で 1 つ消した」。逃げる移動は、`travel_to` の行き先に着いた手番なら `arrived`。止まった・断った文の取れる手に、階段の上なら `use_stairs`・`extract`。階段の行は steady が断られたら flee の形、両方断られるときだけ「不可」と move・綱。身かわしの行に「罠を踏めばそこで止まる」。
 - **S6b**（SEASON.md §50.5。版は同じ）: `PlayerView.season.slays` は、取り込んだ記録を決まった形（`SeasonSlaySchema`）に通したもの（形に無い項目を落とし、形に合わない記録は渡さない。World の中身は変えない）。逃げる移動の取れる手の「ここで帰る（extract）」は、目的が未達なら「目的は未達: confirm: true で撤退」を添える。
 - **S6 の 2 つ目**（そのほか。SEASON.md §49.6・§50.2。`engineVersion` 0.47.0・`eventVersion` 35 のまま。弱点の説明の文を直したので**コンテンツの版が変わる**（`cff6932f0071`。前は `70a906e92c28`）: その前の版で開いたシーズン（t7 など）では、この版で新しいランを始められない）。すべてのラン:
@@ -1082,7 +1095,7 @@ S3f の `seq_resume { next }`（`player: null`）も同じ: 起動時の再生�
 { t: 'events', events: Event[] }                               // spectator: 逐次
 { t: 'error', error: ActionError }
 { t: 'result', id, data }
-{ t: 'agent', activity: { playerId, seq, tool, args, text, wall } }   // 観戦: MCP ツール呼び出しと AI が受け取った観測テキスト
+{ t: 'agent', activity: { playerId, seq, tool, args, text, wall } }   // 観戦: MCP ツール呼び出しと AI が受け取った観測テキスト（args・text にトークンは入らない。S7: 名前に token を含む引数はどの深さでも落とす）
 { t: 'macro', playerId, kind, state: 'running'|'stopped', steps, reason? }
 { t: 'ended', summary }
 ```
@@ -1116,6 +1129,7 @@ S3f の `seq_resume { next }`（`player: null`）も同じ: 起動時の再生�
 | `POST /api/runs` / `POST /api/runs/:id/join` | ランを開始・参加（`{ name, classId?, seed?, mode?, locale?, objective?, controller?, season?, profileToken? }`。`season` は S0 §9.1 → `{ runId, playerId, token }`。`controller` を省くと `{ kind: 'unknown' }`。V4-1g。ブラウザの画面は `human` を送る。参加はキャンプから始まる）。開始時は最初の遠征まで始める |
 | `GET /api/runs/:id/commands` | commands.jsonl（AI パネルのツール呼び出し・thought 表示用） |
 | `GET /api/runs/:id/summary` | 終了時サマリー |
+| `GET /api/ops/calls?limit=` | S7（SEASON.md §52.1 の 2）。運用の口（サーバーと同じ機械からだけ。外からは 403）: 直近の MCP の呼び出し（新しい順に最大 200 件）`{ long_ms, calls: { at, tool, run, ms, error? }[] }`（受け取った時刻・ツール・ラン・サーバーの側でかかった時間。メモリだけで、ファイルには書かない。引数・トークン・考えは持たない） |
 | `GET /api/seasons` / `GET /api/seasons/:id` | S0（§9.8）。シーズンの一覧 / 1 つのシーズンの順位の表・確定した結果・坑の断面（S2 §9.11。公開された階段の位置は出さない） |
 | `GET /api/seasons/:id/watch` | S3（§9.7）。いま観戦できる、そのシーズンの進行中のラン `{ local, final, runs: { runId, name }[] }`。`Authorization: Bearer <profile_token>`（任意。招かれたプロフィールのもの） |
 

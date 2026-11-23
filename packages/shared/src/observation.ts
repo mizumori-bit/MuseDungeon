@@ -7,7 +7,7 @@ import { floorTraitsText, guardianDisplayName, multText, objectiveText, offerTex
 import { COLLECT_WITHIN, collectTargets, isStationary, macroProbe, macroStopError, pickableItems, sameOrWorseEquip, worseEquip } from './macro';
 import type { MacroStop } from './macro';
 import type { Command } from './commands';
-import { attacksPerTurn, avgHitsOf, chaseAttacks, fightThreats, memoryOf, monsterSpeedOf, selfSpeed, threatEstimate } from './danger';
+import { attacksPerTurn, avgHitsOf, chaseAttacks, fightThreats, lineBlockedShooter, memoryOf, monsterSpeedOf, recordedHitsOf, selfSpeed, threatEstimate, usualEstimate } from './danger';
 import type { PerceivedEvent } from './filter';
 import { lastWithoutXp } from './filter';
 import type { ReportCompare } from './expeditionStats';
@@ -112,7 +112,7 @@ export interface ObsMonster {
   intent?: { code: 'winding_up' | 'summoning' | 'enraging' | 'swinging'; dir?: Dir; pos?: Pos; on_line?: boolean; text: string };
 }
 /** 同じセルの同種の物は 1 行にまとめる（ids に全て。id は先頭） */
-export interface ObsItem { id: string; ids?: string[]; name: string; pos: Pos; dir: Dir | null; dist: number; qty: number; remembered?: boolean; role?: EntityRole; /** この遠征の目的の遺物（V4-1a §12.2） */ objective?: true; mine?: boolean; value?: number; /** まとめた「自分が投げた物」の、最寄りのマスの本数 */ near_qty?: number }
+export interface ObsItem { id: string; ids?: string[]; name: string; pos: Pos; dir: Dir | null; dist: number; qty: number; remembered?: boolean; role?: EntityRole; /** この遠征の目的の遺物（V4-1a §12.2） */ objective?: true; mine?: boolean; /** 自分が床に置いた品（S7b。移動マクロは拾い直さない） */ dropped?: true; value?: number; /** まとめた「自分が投げた物」の、最寄りのマスの本数 */ near_qty?: number }
 
 export interface RestEstimate {
   /** 休憩で戻る HP（上限 cap_hp まで。V3-4b §28.3） */
@@ -376,6 +376,61 @@ export interface Observation {
   camp?: ObsCamp;
   /** シーズン（S0。PROTOCOL §9.6。シーズンのランだけ）。賞と報告していない階段はキャンプでだけ */
   season?: ObsSeason;
+  /** 区切り（S7。SEASON.md §52.2 の 1。キャンプにいるときだけ）: 決まった 1 段・覚え書きの定型（項目の名前だけ）・今あるメモ */
+  checkpoint?: ObsCheckpoint;
+}
+
+/**
+ * 区切り（S7 §52.2 の 1）。すべてのプレイヤーに同じ文。text: 決まった 1 段。template: 覚え書きの定型の項目の名前（中身は書かない）。
+ * notes: 今あるメモを新しい順に CHECKPOINT_NOTES 件まで（index は notes ツールの番号。remove に使える）。notes_total: メモの全部の数
+ */
+export interface ObsCheckpoint { text: string; template: string[]; notes: { index: number; text: string }[]; notes_total: number }
+
+/** キャンプの観測に出すメモの数（新しい順。S7 §52.2 の 1） */
+export const CHECKPOINT_NOTES = 8;
+
+/** 覚え書きの定型の項目の名前（S7 §52.2 の 1。notes の add の文の先頭に付けて書ける） */
+export function checkpointTemplate(L: Locale): string[] {
+  return L === 'en'
+    ? ['next aim', 'learned (foes, items, terrain)', 'still unknown', 'what you gave up on before, and why (does it still hold?)']
+    : ['次のねらい', '分かったこと（相手・品・地形）', 'まだ分からないこと', '前にやめたことと、その根拠（今も成り立つか）'];
+}
+
+/** 区切り（S7 §52.2 の 1）: キャンプの観測の終わりの 1 段と、覚え書きの定型と、今あるメモ（新しい順に 8 件まで） */
+export function checkpointObs(L: Locale, notes: readonly string[]): ObsCheckpoint {
+  const shown = notes.map((text, index) => ({ index, text })).reverse().slice(0, CHECKPOINT_NOTES);
+  return {
+    text: t(L,
+      'ここは遠征の区切り。今の状態は、この表示が正本（持ち物・装備・能力・順位・次の候補）。これより前の経過は、次の判断に要らない。次の遠征に持ち越したいことは、notes に書けば、キャンプと resume_run で返す',
+      'This is a break between expeditions. This display is the source of truth for where you stand now (inventory, equipment, stats, standings, next offers). What happened before is not needed for your next decision. Anything you want to carry into the next expedition, write with notes: camp and resume_run give it back'),
+    template: checkpointTemplate(L),
+    notes: shown,
+    notes_total: notes.length,
+  };
+}
+
+/**
+ * 撤退で確定するもの（S7: 「撤退（報酬なし）」と読めたが、撤退でも戦利品の一部は確定する）。目的なしの遠征は、extract がいつも撤退の扱い。
+ * ifNow: 今 extract した場合の確定点（分かれば）
+ */
+export function withdrawText(L: Locale, pct: number, endless: boolean, ifNow?: number): string {
+  const now = ifNow !== undefined ? t(L, `。今なら +${ifNow}`, `; +${ifNow} now`) : '';
+  return endless
+    ? t(L, `撤退: 目的なしの遠征は、いつもこの扱い。戦利品の ${pct}% が確定する${now}`, `withdraw: always so on an expedition with no objective; ${pct}% of the haul is banked${now}`)
+    : t(L, `撤退: 目的は未達のまま終える。戦利品の ${pct}%（目的の点を除く）が確定する${now}`, `withdraw: end without the objective; ${pct}% of the haul (without the objective points) is banked${now}`);
+}
+
+/** キャンプの「できること」の notes の行（S7 §52.2 の 1。そのまま呼べる形） */
+export function notesActionLine(L: Locale): string {
+  return t(L,
+    'notes { add: "次のねらい: …" }（自分用メモを書く。手番を使わない。先頭に覚え書きの定型の項目の名前。キャンプと resume_run で返る。消すのは notes { remove: 番号 }）',
+    'notes { add: "next aim: ..." } (write a note for yourself; free; start it with a template item name; camp and resume_run give it back; delete with notes { remove: number })');
+}
+
+/** 遠征の途中の区切り（S7 §52.2 の 2）: 自分の手番で 100 手番ごとに、敵が見えていないときに 1 回だけ、観測の「変化」の行に出す文 */
+export const CHECKPOINT_EVERY = 100;
+export function checkpointChangeText(L: Locale): string {
+  return t(L, `区切り（${CHECKPOINT_EVERY} 手番）。今の観測が正本。これより前の経過は、要らない`, `Checkpoint (${CHECKPOINT_EVERY} turns). This observation is the source of truth; what came before is not needed`);
 }
 
 export interface ObsSeason {
@@ -557,6 +612,13 @@ export function partyText(L: Locale, party: readonly ObsPartyMember[]): string {
   return t(L, `仲間: ${party.map(one).join('、')}`, `Party: ${party.map(one).join(', ')}`);
 }
 const AW_JA: Record<string, string> = { asleep: '睡眠中', unaware: '未察知', hunting: '追跡中' };
+
+/** 状態の表示（S7 §52.3 の 6）: 動かない敵（毒カビなど）が気づいているときは「追跡中」でなく「気づいている（動かない）」。表示だけ（awareness の値は hunting のまま） */
+export function awarenessText(L: Locale, awareness: string | undefined, stationary: boolean): string {
+  const a = awareness ?? 'unaware';
+  if (a === 'hunting' && stationary) return t(L, '気づいている（動かない）', 'aware (stationary)');
+  return L === 'en' ? a : AW_JA[a] ?? a;
+}
 
 export function itemDisplayName(catalog: Catalog, locale: Locale, kind: string | null, appearanceId: string | null, affixes: readonly string[] = []): string {
   const base = kindName(catalog, locale, kind, appearanceId);
@@ -842,8 +904,10 @@ export interface ChaseEstimate {
   /** 記録のある敵だけの最悪の被害（記録の無い敵がいても下限として使える） */
   recordedWorst: number;
   worst: number;
-  /** 被害の見込み（S1c §14.4 の 1。いちばん重い 1 体は最大の一撃、残りは平均の被害。平均の記録が無ければ最大） */
+  /** 被害の見込み（S1c §14.4 の 1。いちばん重い 1 体は会心でない最大の一撃、残りは平均の被害。平均の記録が無ければ最大） */
   expected: number;
+  /** ふつうの被害（S7a §53.9 の 2。表示だけ）: 記録の足りる種族はその記録の平均、ほかは見込みと同じ数え方。射線の切れている射手は入れない */
+  usual: number;
   /** 自分の歩く速さより速い近接の敵の数 */
   catchers: number;
   shooters: number;
@@ -852,7 +916,7 @@ export interface ChaseEstimate {
 /** 階段まで steps 歩く間の最悪の被害（V3-4b §28.5）: 敵ごとに「歩く間の攻撃回数 × 受けた最大の一撃」の合計 */
 export function chaseEstimate(view: PlayerView, catalog: Catalog, hunters: readonly ObsMonster[], steps: number): ChaseEstimate {
   let worst = 0, catchers = 0, shooters = 0;
-  const per: { w: number; p: number; a: number }[] = [];
+  const per: { w: number; p: number; a: number; r: number | null; blocked: boolean }[] = [];
   for (const m of hunters) {
     const e = view.entities.find((x) => x.id === m.id);
     if (!e) continue;
@@ -867,13 +931,21 @@ export function chaseEstimate(view: PlayerView, catalog: Catalog, hunters: reado
       // 会心でない最大（S6 §49.6 の 10。fight の見込みと同じ: S1d §17.2）
       const p = hits * (mem.maxPlainToYou && mem.maxPlainToYou > 0 ? mem.maxPlainToYou : mem.maxDamageToYou);
       worst += w;
-      per.push({ w, p, a: Math.min(p, avgHitsOf(view, e, hits) ?? p) });
+      // 記録の足りる種族は、その記録の平均（会心の分も入る。ふつうの最大では切らない: 真ん中の数なので）
+      per.push({ w, p, a: Math.min(p, avgHitsOf(view, e, hits) ?? p), r: recordedHitsOf(view, catalog, e, hits), blocked: lineBlockedShooter(catalog, e, view.self.pos) });
     }
   }
   // 見込み（S1c §14.4 の 1・S6: fight の見込みと同じ）: いちばん重い 1 体は会心でない最大の一撃、残りは平均の被害。最悪は全員が最大の一撃（会心を含む）
-  per.sort((a, b) => b.p - a.p);
-  const expected = per.length ? per[0].p + per.slice(1).reduce((s, x) => s + x.a, 0) : 0;
-  return { recordedWorst: worst, worst, expected, catchers, shooters };
+  const sorted = [...per].sort((a, b) => b.p - a.p);
+  const expected = sorted.length ? sorted[0].p + sorted.slice(1).reduce((s, x) => s + x.a, 0) : 0;
+  // ふつう（S7a §53.9 の 2。表示だけ。fight の usualEstimate と同じ数え方）: 記録の足りる種族はその記録の平均。ほかは見込みと同じ数え方。
+  // 射線の切れている射手は入れない（いまの射線。歩く間に通ることはある）
+  const counted = per.filter((x) => !x.blocked);
+  const rest = counted.filter((x) => x.r === null).sort((a, b) => b.p - a.p);
+  const usual0 = counted.filter((x) => x.r !== null).reduce((s, x) => s + x.r!, 0) + (rest.length ? rest[0].p + rest.slice(1).reduce((s, x) => s + x.a, 0) : 0);
+  // 見込みより大きくは出さない（S7b: t7 の c1483 で、見込み 56・ふつう 57 と出た）
+  const usual = Math.min(usual0, expected);
+  return { recordedWorst: worst, worst, expected, usual, catchers, shooters };
 }
 
 /**
@@ -1711,7 +1783,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
     } else if (e.cat === 'item') {
       const name = itemDisplayName(catalog, L, e.kind, e.appearanceId, e.affixes);
       // 同じセルの同種の物は 1 行にまとめる
-      const same = items.find((x) => !x.remembered && x.pos.x === e.pos.x && x.pos.y === e.pos.y && x.name === name && x.role === e.role && !!x.mine === !!e.mine);
+      const same = items.find((x) => !x.remembered && x.pos.x === e.pos.x && x.pos.y === e.pos.y && x.name === name && x.role === e.role && !!x.mine === !!e.mine && !!x.dropped === !!e.dropped);
       if (same) {
         same.qty += e.qty ?? 1;
         same.ids = [...(same.ids ?? [same.id]), e.id];
@@ -1721,6 +1793,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       if (e.role) it.role = e.role;
       if (e.objective) it.objective = true;
       if (e.mine) it.mine = true;
+      if (e.dropped) it.dropped = true;
       if (e.value !== undefined) it.value = e.value;
       items.push(it);
     } else if (e.cat === 'player') {
@@ -1741,6 +1814,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       if (r.role) it.role = r.role;
       if (r.objective) it.objective = true;
       if (r.mine) it.mine = true;
+      if (r.dropped) it.dropped = true;
       if (r.value !== undefined) it.value = r.value;
       rememberedItems.push(it);
     }
@@ -1867,13 +1941,16 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
     // 群れ全体の被害見込み（思い出の記録だけから。V3-2R2 §18.2）。fight の見込み（S1c §14.4 の 1: いちばん重い 1 体は最大の一撃、残りは平均）も並べる
     const ents = huntingReach.map((m) => view.entities.find((e) => e.id === m.id)).filter((e): e is EntityView => !!e);
     const est = threatEstimate(view, catalog, ents);
-    const both = est.expected < worstSum ? t(L, `1 手の被害の見込み ${est.expected}・最悪 ${worstSum}（全員が最大の一撃）`, `expected damage per turn ${est.expected}, worst ${worstSum} (everyone at their worst)`)
-      : t(L, `1 手の最悪の被害の合計 ${worstSum}`, `worst damage per turn sums to ${worstSum}`);
+    // ふつう（S7a §53.9 の 2）: あなたの記録からの平均。見込みと同じなら添えない（表示だけ）
+    const usual = usualEstimate(view, catalog, ents);
+    const uj = usual !== est.expected ? `・ふつうは ${usual}` : '', ue = usual !== est.expected ? `, usually ${usual}` : '';
+    const both = est.expected < worstSum ? t(L, `1 手の被害の見込み ${est.expected}・最悪 ${worstSum}（全員が最大の一撃${uj}）`, `expected damage per turn ${est.expected}, worst ${worstSum} (everyone at their worst${ue})`)
+      : t(L, `1 手の最悪の被害の合計 ${worstSum}${uj ? `（ふつうは ${usual}）` : ''}`, `worst damage per turn sums to ${worstSum}${ue ? ` (usually ${usual})` : ''}`);
     alerts.push({
       code: 'incoming',
       text: t(L, `追跡中 ${huntingReach.length} 体。${both}${unrecorded ? `、ほかに記録のない ${unrecorded} 体` : ''}。あなたの HP ${me.stats.hp}`,
         `${huntingReach.length} hunting you. ${both[0].toUpperCase()}${both.slice(1)}${unrecorded ? `, plus ${unrecorded} with no record` : ''}. Your HP ${me.stats.hp}`),
-      data: { hunting: huntingReach.length, worst_sum: worstSum, expected_sum: est.expected, unrecorded, hp: me.stats.hp },
+      data: { hunting: huntingReach.length, worst_sum: worstSum, expected_sum: est.expected, usual_sum: usual, unrecorded, hp: me.stats.hp },
     });
   } else if (hostiles.length && !adjacent.length) alerts.push({ code: 'enemy_in_view', text: t(L, `敵が視界内: ${hostiles[0].name}`, `Enemy in view: ${hostiles[0].name}`), entity: hostiles[0].id });
   // 1 手で倒されうる: 1 体の worst_turn、または合計が今の HP 以上。2 手で倒されうる: 合計の 2 倍が HP 以上
@@ -1911,7 +1988,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
           `${st.path_len} steps to the stairs ${st.type}. ${faster ? `${faster} of your pursuers are faster than you` : 'none of your pursuers is faster than you'} (on stairs you can extract; enemies do not follow you between floors)${st.occupied_by ? `. But ${(hostiles.find((m) => m.id === st.occupied_by)?.name ?? st.occupied_by)} stands on the stairs and blocks them` : ''}`),
         // worst_if_chased: 追われたままなら最悪の被害（敵ごとに歩く間の攻撃回数 × 受けた最大の一撃。記録の無い敵がいれば null。V3-4b §28.5）
         // expected_if_chased: 被害の見込み（S1c §14.4 の 1）
-        data: { stairs: st.type, path_len: st.path_len, faster, worst_if_chased: unrecorded ? null : chaseOf(st.path_len!).worst, expected_if_chased: unrecorded ? null : chaseOf(st.path_len!).expected, hp: me.stats.hp },
+        data: { stairs: st.type, path_len: st.path_len, faster, worst_if_chased: unrecorded ? null : chaseOf(st.path_len!).worst, expected_if_chased: unrecorded ? null : chaseOf(st.path_len!).expected, usual_if_chased: unrecorded ? null : chaseOf(st.path_len!).usual, hp: me.stats.hp },
       });
     }
   }
@@ -2258,6 +2335,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
     attackers, mineCount, pickables, collectable: collectIds.length, huntingReach, worstSum, unrecorded, chaseOf, lifelineShort: !!opts.lifelineShort,
     draft: view.floorHint?.draft ?? null,
     ifLifeline: expedition?.haul?.if_lifeline_now, lifelineObjective: expedition?.haul?.parts.objective ?? 0,
+    ifExtract: expedition?.haul?.if_extract_now, endless: view.expedition?.objective.type === 'endless',
     perkChoice: perkChoiceObs, boonChoice: boonChoiceObs, abilities: abilitiesList, bonuses,
   });
 
@@ -2329,6 +2407,8 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
   }
   if (expedition) obs.expedition = expedition;
   if (camp) obs.camp = camp;
+  // 区切り（S7 §52.2 の 1）: キャンプにいるときだけ。協力プレイで仲間を待っている（候補がまだ無い）キャンプも
+  if (view.status === 'at_camp') obs.checkpoint = checkpointObs(L, view.notes);
   const season = seasonObs(view, catalog.rules.seasonFire?.perSeason);
   if (season) {
     // 迷宮で、いま火を置けるマスにいる: 支援賞の行（キャンプで取り込んだもの）と自分の火の数（S1c §14.4 の 7）
@@ -2378,6 +2458,8 @@ interface VAInput {
   chaseOf: (steps: number) => ChaseEstimate;
   /** 帰還の綱を今使った場合の確定点 */
   ifLifeline?: number;
+  /** 今 extract した場合の確定点（S7: 撤退でも入る）・目的なしの遠征か */
+  ifExtract?: number; endless?: boolean;
   /** 戦利品のうち目的の分（綱では入らない。S3b §30.4 の 2） */
   lifelineObjective?: number;
   /** 下への風（今いる階の下り階段が未発見のとき） */
@@ -2410,12 +2492,14 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
     const reportWhat = ss ? [ss.unreported > 0 ? t(L, `報告していない階段 ${ss.unreported}`, `${ss.unreported} unreported stairs`) : '', (ss.spotsUnreported ?? 0) > 0 ? t(L, `報告していない特別な場所 ${ss.spotsUnreported}`, `${ss.spotsUnreported} unreported special places`) : ''].filter(Boolean) : [];
     const report = reportWhat.length ? [`report_stairs (${reportWhat.join(t(L, '・', ', '))})`] : [];
     const closed = !!view.season && (view.season.budgetLeft <= 0 || view.season.ended);
-    if (!view.camp || closed) return [...perkLines, ...report, ...(view.camp ? ['retire'] : ['wait_for_turn'])];
+    // 覚え書き（S7 §52.2 の 1）: キャンプの区切りで書けるように、呼べる形で 1 行（プレイする AI に届くのは応答の文だけのことがある。§53）
+    const note = notesActionLine(L);
+    if (!view.camp || closed) return [...perkLines, ...report, note, ...(view.camp ? ['retire'] : ['wait_for_turn'])];
     return [
       ...perkLines,
       ...report,
       ...view.camp.offers.map((o) => `start_expedition ${o.index} (${objectiveText(L, o.objective)})`),
-      'start_expedition endless', 'retire',
+      'start_expedition endless', note, 'retire',
     ];
   }
   if (view.status !== 'your_turn' || !view.self.pos || !view.floor) return view.status === 'dead' || view.status === 'ended' ? [] : [...perkLines, 'wait_for_turn'];
@@ -2471,7 +2555,7 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
   // 野営の火から（S1c §14.3 の 1）: 帰り支度の手番・取りやめ・次の遠征はこの火のそばから
   const viaFire = x.extractVia;
   const fromFire = viaFire ? t(L, `・${viaFire.by} の野営の火から。帰り支度 ${viaFire.turns} 手番（この手番を含む。その間に追ってくる敵が見えたら取りやめ）・次の遠征はこのマスから始まる`, `; from ${viaFire.by}'s campfire: ${viaFire.turns} turns packing up (including this one; called off if a hunting enemy comes into view); the next expedition starts from this cell`) : '';
-  if (x.canExtract) out.push(x.objectiveComplete ? `extract (${t(L, '帰還: 遠征達成', 'complete the expedition')}${viaFire ? fromFire : fromHere}${leftBehind})` : `extract confirm:true (${t(L, '撤退: 未達成のまま終える', 'withdraw without the reward')}${viaFire ? fromFire : fromHere}${leftBehind})`);
+  if (x.canExtract) out.push(x.objectiveComplete ? `extract (${t(L, '帰還: 遠征達成', 'complete the expedition')}${viaFire ? fromFire : fromHere}${leftBehind})` : `extract confirm:true (${withdrawText(L, catalog.rules.haul.withdrawPct, !!x.endless, x.ifExtract)}${viaFire ? fromFire : fromHere}${leftBehind})`);
   // 移動マクロはその場で進める mode だけを出す（V3-2R §14.2）。隣に起きている敵がいれば careful では動かないので flee を出す
   const adjAwake = x.hostiles.filter((m) => m.dist <= 1 && m.awareness !== 'asleep' && !m.fleeing);
   // 既定の hp_floor の実数（steady・fight は最大 HP の 50%。V3-2R2 §18.5）
@@ -2494,7 +2578,9 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
         // いま隣にいる近接の敵は、離れる前に相手の手番が来れば 1 回殴りうる（最悪の被害に入れてある。engine に離れぎわの攻撃の規則は無い: S6 §49.6 の 3。「追いつけるのは 0 体」を安全と読まれた。S1b §12.4 の 8）
         const adj = x.huntingReach.filter((m) => m.dist <= 1 && !m.traits.includes('ranged')).length;
         // 見込みと最悪を並べる（S1c §14.4 の 1。見込みは、いちばん重い 1 体を最大の一撃、残りを平均の被害で数える）
-        const both = c.expected < c.worst ? t(L, `被害の見込み ${c.expected}・最悪 ${c.worst}`, `expected ${c.expected}, worst ${c.worst} damage`) : t(L, `最悪 ${c.worst} の被害`, `worst ${c.worst} damage`);
+        // ふつう（S7a §53.9 の 2。表示だけ）: 「見込み 31・最悪 155（ふつうは 6）」。見込みと同じなら添えない
+        const us = c.usual !== c.expected ? t(L, `（ふつうは ${c.usual}）`, ` (usually ${c.usual})`) : '';
+        const both = c.expected < c.worst ? t(L, `被害の見込み ${c.expected}・最悪 ${c.worst}${us}`, `expected ${c.expected}, worst ${c.worst} damage${us}`) : t(L, `最悪 ${c.worst} の被害${us}`, `worst ${c.worst} damage${us}`);
         return t(L, `階段まで ${n} 歩。追われたままなら${both}（追いつけるのは ${c.catchers} 体・射撃 ${c.shooters} 体${adj ? `・いま隣の ${adj} 体は、離れる前に相手の手番が来れば殴られる（最悪の見込みに 1 回ずつ入れてある）` : ''}。HP ${hpNow}）`,
           `${n} steps to the stairs. If they keep chasing you, ${both} (${c.catchers} can catch you, ${c.shooters} shooting${adj ? `; the worst case includes one hit each from the ${adj} adjacent, if they act before you get away` : ''}; HP ${hpNow})`);
       })();
@@ -2696,7 +2782,9 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
     if (nx < 0 || ny < 0 || nx >= f.width || ny >= f.height) continue;
     const i = ny * f.width + nx;
     const tr = catalog.terrain[view.terrainTable[view.memory.terrain[i]]];
-    if (d && tr?.door === 'open' && !byPos.has(i)) out.push(`interact ${d} (${t(L, '扉を閉める', 'close door')})`);
+    // 扉の上に者か品があると、engine は閉めずに断る（S7: 「できること」と断りをそろえる。品は見えている物と覚えている物）
+    const doorItem = view.entities.some((e) => e.cat === 'item' && e.pos.x === nx && e.pos.y === ny) || view.memory.remembered.some((r) => r.cat === 'item' && r.pos.x === nx && r.pos.y === ny);
+    if (d && tr?.door === 'open' && !byPos.has(i) && !doorItem) out.push(`interact ${d} (${t(L, '扉を閉める', 'close door')})`);
     // 鍵のかかった格子扉（V3-5 §5.1）
     if (d && tr?.tags.includes('locked')) {
       const hasKey = view.inventory.some((it) => it.kind && catalog.items[it.kind]?.category === 'key');
@@ -2746,6 +2834,45 @@ export interface TextFormat {
   map?: 'show' | 'unchanged';
 }
 
+/** 能力の行（迷宮の観測と、区切りのあるキャンプの観測で同じ。S7） */
+function statsLine(obs: Observation, L: Locale): string {
+  const s = obs.self;
+  const st = s.statuses.length ? s.statuses.map((x) => `${x.name}(${x.turns_left})`).join(' ') : t(L, 'なし', 'none');
+  return t(L,
+    `能力: 命中+${s.attack.acc} ダメージ${s.attack.dmg} 回避${s.defense.eva} 装甲${s.defense.armor} 速さ${s.speed} XP ${s.xp}/${s.xp_next} 状態:${st}`,
+    `Stats: acc+${s.attack.acc} dmg ${s.attack.dmg} eva ${s.defense.eva} armor ${s.defense.armor} speed ${s.speed} XP ${s.xp}/${s.xp_next} status:${st}`);
+}
+
+/** 所持品の行（装備は * に一本化。迷宮の観測と、区切りのあるキャンプの観測で同じ。S7） */
+function inventoryLines(obs: Observation, L: Locale): string[] {
+  const s = obs.self;
+  if (!s.inventory) return [t(L, `所持品 (${s.inventory_count}/${s.inventory_capacity}、* は装備中): `, `Inventory (${s.inventory_count}/${s.inventory_capacity}, * = equipped): `) + (s.inventory_brief || '-')];
+  return [
+    t(L, `所持品 (${s.inventory_count}/${s.inventory_capacity}、* は装備中):`, `Inventory (${s.inventory_count}/${s.inventory_capacity}, * = equipped):`),
+    ...s.inventory.map((it) => `  ${it.slot}) ${it.name}${it.qty > 1 ? ` x${it.qty}` : ''}${it.equipped ? '*' : ''}${it.identified ? '' : t(L, ' (未鑑定)', ' (unidentified)')}${it.curse === 'cursed' ? t(L, ' {呪い:外せない}', ' {cursed}') : it.curse === 'unknown' ? t(L, ' {呪い?}', ' {curse?}') : ''}`),
+  ];
+}
+
+/** キャンプの区切りの観測の能力と所持品（S7 §52.2 の 1: 「この表示が正本（持ち物・装備・能力…）」と言うので、キャンプにも出す） */
+function statsAndInventoryLines(obs: Observation, L: Locale): string[] {
+  return [statsLine(obs, L), ...inventoryLines(obs, L)];
+}
+
+/** 区切りの段（S7 §52.2 の 1）: 今あるメモ（新しい順に 8 件まで）・決まった 1 段・覚え書きの定型 */
+export function checkpointLines(L: Locale, c: ObsCheckpoint): string[] {
+  const out: string[] = [];
+  if (c.notes.length) {
+    out.push(c.notes_total > c.notes.length
+      ? t(L, `あなたのメモ（新しい順に ${c.notes.length} 件。全部で ${c.notes_total} 件は notes で）:`, `Your notes (newest ${c.notes.length} of ${c.notes_total}; all with notes):`)
+      : t(L, 'あなたのメモ（新しい順）:', 'Your notes (newest first):'));
+    for (const n of c.notes) out.push(`- ${n.index}: ${n.text}`);
+  }
+  out.push(t(L, `区切り: ${c.text}`, `Break: ${c.text}`));
+  out.push(t(L, `覚え書きの定型（項目の名前だけ。中身はあなたが書く）: ${c.template.join('／')}`, `Note template (item names only; you write the content): ${c.template.join(' / ')}`));
+  out.push(t(L, `書き方: notes { add: "${c.template[0]}: …" }（1 件 280 字まで。項目ごとに 1 件ずつ。手番を使わない）`, `How: notes { add: "${c.template[0]}: ..." } (up to 280 characters each; one note per item; free)`));
+  return out;
+}
+
 export function formatObservationText(obs: Observation, locale: Locale, fmt: TextFormat = {}): string {
   const L = locale;
   const lines: string[] = [];
@@ -2783,6 +2910,8 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
     for (const x of obs.camp?.compare?.wardens ?? []) lines.push(...x.lines);
     lines.push(t(L, `確定済み ${s.score.banked} 点・達成した遠征 ${s.score.expeditions_completed}`, `Banked ${s.score.banked}, expeditions completed ${s.score.expeditions_completed}`));
     lines.push(boonsText(L, s.boons ?? []));
+    // 区切り（S7 §52.2 の 1）: 「この表示が正本（持ち物・装備・能力…）」と言うので、能力と所持品もキャンプの表示に出す
+    if (obs.checkpoint) lines.push(...statsAndInventoryLines(obs, L));
     if (obs.camp?.milestone) lines.push(obs.camp.milestone.text);
     if (obs.camp?.archive) lines.push(t(L, `記録庫: 欠片 ${obs.camp.archive.delivered}/${obs.camp.archive.total}`, `Archive: shards ${obs.camp.archive.delivered}/${obs.camp.archive.total}`));
     // 討伐の記録（S4 §35.5）: 節目ごとに 1 行
@@ -2807,6 +2936,7 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
       for (const e of collapseRepeats(obs.recent_events)) lines.push(`- ${e}`);
     }
     lines.push(t(L, 'できること: ', 'Actions: ') + obs.valid_actions.join(' / '));
+    if (obs.checkpoint) lines.push(...checkpointLines(L, obs.checkpoint));
     return lines.join('\n');
   }
   // 通常の階でなければ階の種類も（聖域・大守護者の間など。V3-3 後の AI 評価: 敵のいない階が聖域と分からなかった）
@@ -2835,10 +2965,7 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
     lines.push([head, x.haul?.text, x.sense?.text, ...(x.ward_fires ?? []).map((w) => w.text)].filter(Boolean).join(' | '));
   }
   if (obs.alerts.length) lines.push('!! ' + obs.alerts.map((a) => a.text).join(' / '));
-  const st = s.statuses.length ? s.statuses.map((x) => `${x.name}(${x.turns_left})`).join(' ') : t(L, 'なし', 'none');
-  lines.push(t(L,
-    `能力: 命中+${s.attack.acc} ダメージ${s.attack.dmg} 回避${s.defense.eva} 装甲${s.defense.armor} 速さ${s.speed} XP ${s.xp}/${s.xp_next} 状態:${st}`,
-    `Stats: acc+${s.attack.acc} dmg ${s.attack.dmg} eva ${s.defense.eva} armor ${s.defense.armor} speed ${s.speed} XP ${s.xp}/${s.xp_next} status:${st}`));
+  lines.push(statsLine(obs, L));
   if (s.abilities.length || s.perks.length) {
     const ab = s.abilities.map((a) => `${a.name}(${a.id}${a.uses_left === 0 ? t(L, '・使い切った', ', used up') : a.cooldown_left ? t(L, `・あと${a.cooldown_left}`, `, ${a.cooldown_left} left`) : t(L, '・使える', ', ready')})`).join(' ');
     const pk = s.perks.map((x) => `${x.name}${x.ranks > 1 ? `×${x.ranks}` : ''}`).join(t(L, '・', ', '));
@@ -2890,12 +3017,12 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
       // 持っている品（宝物庫の鍵。V3-5 §5.1）
       const carry = m.carries ? t(L, ` [${m.carries_name ?? m.carries}を持っている]`, ` [carries the ${m.carries_name ?? m.carries}]`) : '';
       lines.push(L === 'en'
-        ? `- ${m.name}${m.objective ? ' [objective]' : ''}${role}${carry}${gtext} ${m.id} (${m.pos.x},${m.pos.y}) ${relLabel(L, from, m.pos)} hp:${m.hp_state} ${m.awareness}${m.fleeing ? '(fleeing)' : ''}${looksText} threat:${threat}${worst}${hits}${dmg}${est}${shot}${m.statuses.length ? ' ' + m.statuses.join(',') : ''}${itext}`
-        : `- ${m.name}${m.objective ? '［目的］' : ''}${role}${carry}${gtext} ${m.id} (${m.pos.x},${m.pos.y}) ${relLabel(L, from, m.pos)}  負傷:${HP_JA[m.hp_state]}  状態:${AW_JA[m.awareness] ?? m.awareness}${m.fleeing ? '(逃走中)' : ''}${looksText}  脅威:${threat}${worst}${hits}${dmg}${est}${shot}${m.statuses.length ? '  ' + m.statuses.join(',') : ''}${itext}`);
+        ? `- ${m.name}${m.objective ? ' [objective]' : ''}${role}${carry}${gtext} ${m.id} (${m.pos.x},${m.pos.y}) ${relLabel(L, from, m.pos)} hp:${m.hp_state} ${awarenessText(L, m.awareness, m.traits.includes('stationary'))}${m.fleeing ? '(fleeing)' : ''}${looksText} threat:${threat}${worst}${hits}${dmg}${est}${shot}${m.statuses.length ? ' ' + m.statuses.join(',') : ''}${itext}`
+        : `- ${m.name}${m.objective ? '［目的］' : ''}${role}${carry}${gtext} ${m.id} (${m.pos.x},${m.pos.y}) ${relLabel(L, from, m.pos)}  負傷:${HP_JA[m.hp_state]}  状態:${awarenessText(L, m.awareness, m.traits.includes('stationary'))}${m.fleeing ? '(逃走中)' : ''}${looksText}  脅威:${threat}${worst}${hits}${dmg}${est}${shot}${m.statuses.length ? '  ' + m.statuses.join(',') : ''}${itext}`);
     }
     for (const p of vis.players) lines.push(`- ${t(L, '味方', 'ally')} ${p.name} (${p.pos.x},${p.pos.y}) ${relLabel(L, from, p.pos)} ${L === 'en' ? p.hp_state : HP_JA[p.hp_state]}`);
     for (const it of vis.items) {
-      const tags = `${it.role === 'relic' ? t(L, ' [遺物]', ' [relic]') : ''}${it.mine ? t(L, ' [自分が投げた]', ' [yours]') : ''}${it.value !== undefined ? t(L, ` [宝・価値 ${it.value}]`, ` [treasure ${it.value}]`) : ''}`;
+      const tags = `${it.role === 'relic' ? t(L, ' [遺物]', ' [relic]') : ''}${it.mine ? t(L, ' [自分が投げた]', ' [yours]') : ''}${it.dropped ? t(L, '（あなたが置いた）', ' (you dropped it)') : ''}${it.value !== undefined ? t(L, ` [宝・価値 ${it.value}]`, ` [treasure ${it.value}]`) : ''}`;
       // まとめた「自分が投げた物」は合計の本数と、最寄りのマスの本数
       const qtyText = it.near_qty !== undefined ? t(L, ` 合計${it.qty}（最寄りのマスに${it.near_qty}）`, ` ${it.qty} in all (${it.near_qty} at the nearest)`) : it.qty > 1 ? ` x${it.qty}` : '';
       lines.push(`- ${it.name}${it.objective ? t(L, '［目的］', ' [objective]') : ''}${qtyText}${tags} ${it.id} (${it.pos.x},${it.pos.y}) ${relLabel(L, from, it.pos)}${it.remembered ? t(L, ' (記憶)', ' (remembered)') : ''}`);
@@ -2926,14 +3053,7 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
     for (const e of collapseRepeats(obs.recent_events)) lines.push(`- ${e}`);
   }
   // 装備は所持品の * に一本化
-  if (fmt.inventory !== false) {
-    if (s.inventory) {
-      lines.push(t(L, `所持品 (${s.inventory_count}/${s.inventory_capacity}、* は装備中):`, `Inventory (${s.inventory_count}/${s.inventory_capacity}, * = equipped):`));
-      for (const it of s.inventory) lines.push(`  ${it.slot}) ${it.name}${it.qty > 1 ? ` x${it.qty}` : ''}${it.equipped ? '*' : ''}${it.identified ? '' : t(L, ' (未鑑定)', ' (unidentified)')}${it.curse === 'cursed' ? t(L, ' {呪い:外せない}', ' {cursed}') : it.curse === 'unknown' ? t(L, ' {呪い?}', ' {curse?}') : ''}`);
-    } else {
-      lines.push(t(L, `所持品 (${s.inventory_count}/${s.inventory_capacity}、* は装備中): `, `Inventory (${s.inventory_count}/${s.inventory_capacity}, * = equipped): `) + (s.inventory_brief || '-'));
-    }
-  }
+  if (fmt.inventory !== false) lines.push(...inventoryLines(obs, L));
   if (obs.map) {
     lines.push(t(L, `地図（上の 2 行が x 座標の 10 の位と 1 の位、左が y 座標）:`, `Map (top rows: x tens/ones, left: y):`));
     for (const r of mapTextLines(obs.map)) lines.push(r);
@@ -3023,7 +3143,7 @@ export function describeTarget(view: PlayerView, catalog: Catalog, target: Pos |
       // 大守護者: 記録庫の記憶（体力と最大の一撃の目安。V3-3a §35.7）
       const wi = g?.warden && view.floor ? view.wardenIntel?.[String(view.floor.depth)] : undefined;
       const wiText = wi?.hp !== undefined ? t(L, `・記録庫の記憶: 体力およそ ${wi.hp}・一撃 ${wi.maxHit} まで`, `, the archive remembers: about ${wi.hp} HP, hits up to ${wi.maxHit}`) : '';
-      parts.push(`${name} [${L === 'en' ? e.hp : HP_JA[e.hp ?? 'healthy']}, ${L === 'en' ? e.awareness : AW_JA[e.awareness ?? 'unaware']}] ${memText}${hpText}${traitText}${affText}${ds}${estText}${shotText}${sturdy}${gText}${wiText}`);
+      parts.push(`${name} [${L === 'en' ? e.hp : HP_JA[e.hp ?? 'healthy']}, ${awarenessText(L, e.awareness, !!e.kind && !!catalog.monsters[e.kind]?.tags.includes('stationary'))}] ${memText}${hpText}${traitText}${affText}${ds}${estText}${shotText}${sturdy}${gText}${wiText}`);
       list.push({ id: e.id, name, hp_state: e.hp, awareness: e.awareness, memory: mem ?? null, threat: threatOf(view, e), role: e.role, damage_seen: e.damageSeen ?? 0, hp_left_est: est ?? null });
     } else if (e.cat === 'item') {
       const name = itemDisplayName(catalog, L, e.kind, e.appearanceId, e.affixes);

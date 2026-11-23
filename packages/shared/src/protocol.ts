@@ -17,6 +17,42 @@ export type ClientMsg =
   | { t: 'command'; command: Command; expectSeq?: number; thought?: string }
   | { t: 'query'; id: string; kind: 'look' | 'recall' | 'map' | 'inventory' | 'messages' | 'observation'; args?: Record<string, unknown> };
 
+/**
+ * 観戦に送る活動の記録の引数から、トークンを除く（S7。SEASON.md §52.1 の 1。§27・§28 の漏れをくり返さない）: 名前に token を含む引数は、
+ * どの深さでも落とし、知っているトークンの値（8 字以上）を含む文字列は伏せる。サーバーが記録を作るときと、画面が出すときの両方で通す
+ */
+export function stripTokenArgs(v: unknown, secrets: readonly unknown[] = []): unknown {
+  const sec = secrets.filter((x): x is string => typeof x === 'string' && x.length >= 8);
+  const walk = (x: unknown, depth: number): unknown => {
+    if (typeof x === 'string') return sec.some((t) => x.includes(t)) ? '••••' : x;
+    if (depth > 6 || x === null || typeof x !== 'object') return x;
+    if (Array.isArray(x)) return x.map((y) => walk(y, depth + 1));
+    const out: Record<string, unknown> = {};
+    for (const [k, y] of Object.entries(x as Record<string, unknown>)) if (!/token/i.test(k)) out[k] = walk(y, depth + 1);
+    return out;
+  };
+  return walk(v, 0);
+}
+
+/** 観戦の「直前の命令」に出さない引数（S7）: 考え・トークン・表示の引数・前提の seq・断った呼び出しの知らない名前 */
+const BRIEF_SKIP: ReadonlySet<string> = new Set(['thought', 'player_token', 'profile_token', 'expect_seq', 'map', 'inventory', 'status_line', 'unknown_args']);
+
+/** 照会・設定のツール（手番を使わず、盤面を動かさない）。観戦の「直前の命令」は、これ以外の呼び出し（S7） */
+export const INFO_TOOLS: ReadonlySet<string> = new Set([
+  'get_rules', 'list_runs', 'new_run', 'join_run', 'resume_run', 'records', 'profile', 'expedition', 'review', 'observe', 'wait_for_turn', 'set_options',
+  'look', 'get_map', 'inventory', 'recall', 'get_messages', 'notes', 'say',
+]);
+
+/**
+ * 観戦の「思考」の欄に、思考の代わりに出す直前の命令の文（S7。SEASON.md §52.1 の 1）: ツールの名前と、要る引数（thought・トークン・表示の引数は出さない）。
+ * 例: explore { toward: "sense" }
+ */
+export function commandBrief(a: Pick<AgentActivity, 'tool' | 'args'>): string {
+  const args = stripTokenArgs(a.args ?? {}) as Record<string, unknown>;
+  const parts = Object.entries(args).filter(([k, v]) => !BRIEF_SKIP.has(k) && v !== undefined).map(([k, v]) => `${k}: ${JSON.stringify(v)}`);
+  return parts.length ? `${a.tool} { ${parts.join(', ')} }` : a.tool;
+}
+
 /** AI パネル用: MCP ツール呼び出しの記録（観戦にのみ流す。ゲームに影響しない） */
 export interface AgentActivity {
   playerId: PlayerId;
