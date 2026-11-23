@@ -30,10 +30,9 @@ describe('S1c §14.4 の 1: the fight estimate (the heaviest at its worst hit, t
     const a = await arena('s1c-risk', { map: ['.....', '..P..', '.....'], guardian: { kind: 'core:goblin', hp: 30, dmg: '1d1', types: [], state: 'asleep' }, player: { hp: 40 } });
     a.inject({ del: [a.gId] });
     a.inject({ put: [monAt(a, 'e_s1cr01', 'core:goblin', 1, 1, 'hunting'), monAt(a, 'e_s1cr02', 'core:goblin', 3, 1, 'hunting')] });
-    // 種族の記録: 最大の一撃 10、攻撃された 4 回のうち 2 回当たって合計 8（平均 2。外れは 0）。
-    // S7（SEASON.md §52.3 の 5）: 攻撃された回数が 5 回以上なら記録の平均で数えるので、ここは 4 回（S1c・S1d の数え方を確かめる）
+    // 種族の記録: 最大の一撃 10、攻撃された 10 回のうち 5 回当たって合計 20（平均 2。外れは 0）
     await a.r.port.act({ type: 'wait' }, { source: 'bot' });
-    a.world.players[a.pid].knowledge.monsterMemory['core:goblin'] = { kind: 'core:goblin', encounters: 2, kills: 0, maxDamageToYou: 10, maxDamageByYou: 0, abilities: [], hitsOnYou: [2, 4], dmgOnYou: [8, 2, 4] };
+    a.world.players[a.pid].knowledge.monsterMemory['core:goblin'] = { kind: 'core:goblin', encounters: 2, kills: 0, maxDamageToYou: 10, maxDamageByYou: 0, abilities: [], hitsOnYou: [5, 10], dmgOnYou: [20, 5, 10] };
     setMe(a, (e) => { e.stats!.hp = 40; });
     const v = view(a);
     const threats = v.entities.filter((e) => e.cat === 'monster');
@@ -61,12 +60,8 @@ describe('S1c §14.4 の 1: the fight estimate (the heaviest at its worst hit, t
     a.world.players[a.pid].knowledge.monsterMemory['core:goblin'] = { kind: 'core:goblin', encounters: 2, kills: 0, maxDamageToYou: 10, maxDamageByYou: 0, abilities: [], hitsOnYou: [5, 100], dmgOnYou: [20, 5] };
     expect(threatEstimate(view(a), catalog, view(a).entities.filter((e) => e.cat === 'monster'))).toEqual({ expected: 20, worst: 20, unrecorded: 0 });
     // S1d §17.2: いちばん重い 1 体は会心でない最大の一撃（6）。最悪は会心を含む最大（10）のまま
-    a.world.players[a.pid].knowledge.monsterMemory['core:goblin'] = { kind: 'core:goblin', encounters: 2, kills: 0, maxDamageToYou: 10, maxPlainToYou: 6, maxDamageByYou: 0, abilities: [], hitsOnYou: [2, 4], dmgOnYou: [8, 2, 4] };
-    expect(threatEstimate(view(a), catalog, view(a).entities.filter((e) => e.cat === 'monster'))).toEqual({ expected: 8, worst: 20, unrecorded: 0 });
-    // S7: 攻撃された回数が 5 回以上なら、2 体とも記録の平均（1 回あたり 2）で数える。最悪は変わらない
     a.world.players[a.pid].knowledge.monsterMemory['core:goblin'] = { kind: 'core:goblin', encounters: 2, kills: 0, maxDamageToYou: 10, maxPlainToYou: 6, maxDamageByYou: 0, abilities: [], hitsOnYou: [5, 10], dmgOnYou: [20, 5, 10] };
-    expect(threatEstimate(view(a), catalog, view(a).entities.filter((e) => e.cat === 'monster'))).toEqual({ expected: 4, worst: 20, unrecorded: 0 });
-    a.world.players[a.pid].knowledge.monsterMemory['core:goblin'] = { kind: 'core:goblin', encounters: 2, kills: 0, maxDamageToYou: 10, maxPlainToYou: 6, maxDamageByYou: 0, abilities: [], hitsOnYou: [2, 4], dmgOnYou: [8, 2, 4] };
+    expect(threatEstimate(view(a), catalog, view(a).entities.filter((e) => e.cat === 'monster'))).toEqual({ expected: 8, worst: 20, unrecorded: 0 });
     // 死にうるなら止まる: HP が最悪（20）以下なら、hp_floor が 0 でも止まる・始めない。文に「死にうるので止まった」
     setMe(a, (e) => { e.stats!.hp = 20; });
     const v3 = view(a);

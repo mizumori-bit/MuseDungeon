@@ -1053,10 +1053,11 @@ export class RunSession {
     const eid = rec?.entityId;
     const now = eid ? this.world.entities[eid]?.actor?.turns ?? 0 : 0;
     if (rec && eid && (full || now >= CHECKPOINT_EVERY)) {
-      const block = Math.trunc(now / CHECKPOINT_EVERY) * CHECKPOINT_EVERY;
+      // S7a: 1 つ前の 100 手番の区切りから畳む（その区切りの手番が、まだ出ていない（応答の終わりで敵が見えていた）ことがある）
+      const block = Math.max(0, Math.trunc(now / CHECKPOINT_EVERY) * CHECKPOINT_EVERY - CHECKPOINT_EVERY);
       // 手番の数が block に届く前の、最後の自分の手番の数の知らせ（無ければ、ランの初めから）
       let startSeq = 0;
-      for (let i = this.history.length - 1; i >= 0 && !full; i--) {
+      for (let i = this.history.length - 1; i >= 0 && !full && block > 0; i--) {
         const e = this.history[i];
         if (e.type === 'actor_scheduled' && e.id === eid && e.turns < block) { startSeq = e.seq; break; }
       }
@@ -1077,27 +1078,40 @@ export class RunSession {
         if (ev.type === 'turn_began' && ev.actor === eid) checkpointStep(l, w.entities[eid]?.actor?.turns ?? 0, !monsterInView(w, pid), ev.seq, CHECKPOINT_EVERY);
         else if (ev.type === 'player_state' && ev.player === pid && ev.state === 'at_camp') checkpointCamp(l, w.entities[eid]?.actor?.turns ?? 0);
       }
-      // 途中から畳んだときは、畳み始めの前を知らないので、今の区切りより前の手番の区切りは数えない（今の区切りだけが、これからの応答に効く）
+      // 途中から畳んだときは、畳み始めの前を知らないので、1 つ前の区切りより前の手番の区切りは数えない（これからの応答に効くのは、いちばん新しい区切りだけ）
       if (!full) l.due = l.due.filter((d) => d.turn >= block);
     }
     return l;
   }
 
   /**
-   * 区切りを出すか（S7 §52.2 の 2）: seq since より後に始まった自分の手番に、区切りの手番があるか。since が null（前の応答の控えが無い:
-   * 起動し直した直後・最初の応答）なら、いまの自分の手番が区切りか。迷宮にいるときだけ
+   * 区切りを出すか（S7 §52.2 の 2・S7a §53.9 の 4）: いちばん新しい区切りの手番の後で、まだ出していなくて、いまの自分の手番に敵が見えていないとき。
+   * 「出した」は記録から分かる: 区切りの手番から、いまの手番の前までに、敵の見えていない「応答の終わり」の手番（その後の自分の呼び出しが
+   * マクロの続きの一歩でない手番）があったか、キャンプに着いたか。マクロの途中の手番が区切りで、止まった所で敵が見えていれば、出さずに次へ回す。
+   * since（前の応答の seq）が、いまの手番の初めより後なら、同じ手番の 2 回目の応答なので出さない
    */
   checkpointDue(pid: PlayerId, since: number | null): boolean {
     const rec = this.world.players[pid];
     if (!rec || rec.state !== 'alive') return false;
     const l = this.checkpointLedger(pid);
-    if (!l.due.length) return false;
-    if (since !== null) return l.due.some((d) => d.seq > since);
-    for (let i = this.history.length - 1; i >= 0; i--) {
+    const last = l.due[l.due.length - 1];
+    if (!last || l.camped || l.shown || !l.calm?.length) return false;
+    let cur = -1;
+    for (let i = this.history.length - 1; i >= 0 && cur < 0; i--) {
       const e = this.history[i];
-      if (e.type === 'turn_began' && e.actor === rec.entityId) return l.due.some((d) => d.seq === e.seq);
+      if (e.type === 'turn_began' && e.actor === rec.entityId) cur = e.seq;
     }
-    return false;
+    if (cur < last.seq || (since !== null && since >= cur)) return false;
+    // いまの手番に敵が見えていない
+    if (!l.calm.includes(cur)) return false;
+    // 区切りの手番から、いまの手番の前までに、敵の見えていない応答の終わりがあれば、もう出した
+    const calls = this.calls.get(pid) ?? [];
+    for (const tseq of l.calm) {
+      if (tseq >= cur) break;
+      const next = calls.find((c) => c.seq > tseq);
+      if (!next || next.kind !== 'macro_step') { l.shown = true; return false; }
+    }
+    return true;
   }
 
   /** 区切りの手番（テスト・確かめ用。控えが無ければ畳んで作る。fold: 控えを使わずに、ランの初めから畳み直した答え） */

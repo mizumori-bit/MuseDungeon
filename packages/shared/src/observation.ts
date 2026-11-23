@@ -7,7 +7,7 @@ import { floorTraitsText, guardianDisplayName, multText, objectiveText, offerTex
 import { COLLECT_WITHIN, collectTargets, isStationary, macroProbe, macroStopError, pickableItems, sameOrWorseEquip, worseEquip } from './macro';
 import type { MacroStop } from './macro';
 import type { Command } from './commands';
-import { attacksPerTurn, avgHitsOf, chaseAttacks, fightThreats, lineBlockedShooter, memoryOf, monsterSpeedOf, recordedHitsOf, selfSpeed, threatEstimate } from './danger';
+import { attacksPerTurn, avgHitsOf, chaseAttacks, fightThreats, lineBlockedShooter, memoryOf, monsterSpeedOf, recordedHitsOf, selfSpeed, threatEstimate, usualEstimate } from './danger';
 import type { PerceivedEvent } from './filter';
 import { lastWithoutXp } from './filter';
 import type { ReportCompare } from './expeditionStats';
@@ -904,8 +904,10 @@ export interface ChaseEstimate {
   /** 記録のある敵だけの最悪の被害（記録の無い敵がいても下限として使える） */
   recordedWorst: number;
   worst: number;
-  /** 被害の見込み（S1c §14.4 の 1・S7: fight の見込みと同じ数え方。記録の足りる種族はその記録の平均、ほかはいちばん重い 1 体は会心でない最大の一撃・残りは平均。射線の切れている射手は入れない） */
+  /** 被害の見込み（S1c §14.4 の 1。いちばん重い 1 体は会心でない最大の一撃、残りは平均の被害。平均の記録が無ければ最大） */
   expected: number;
+  /** ふつうの被害（S7a §53.9 の 2。表示だけ）: 記録の足りる種族はその記録の平均、ほかは見込みと同じ数え方。射線の切れている射手は入れない */
+  usual: number;
   /** 自分の歩く速さより速い近接の敵の数 */
   catchers: number;
   shooters: number;
@@ -933,12 +935,15 @@ export function chaseEstimate(view: PlayerView, catalog: Catalog, hunters: reado
       per.push({ w, p, a: Math.min(p, avgHitsOf(view, e, hits) ?? p), r: recordedHitsOf(view, catalog, e, hits), blocked: lineBlockedShooter(catalog, e, view.self.pos) });
     }
   }
-  // 見込み（S1c §14.4 の 1・S6・S7: fight の見込みと同じ数え方）: 記録の足りる種族はその記録の平均。ほかは、いちばん重い 1 体は会心でない最大の一撃、
-  // 残りは平均の被害。射線の切れている射手は見込みに入れない（いまの射線。歩く間に通ることはある）。最悪は全員が最大の一撃（会心を含む）で、変えていない
+  // 見込み（S1c §14.4 の 1・S6: fight の見込みと同じ）: いちばん重い 1 体は会心でない最大の一撃、残りは平均の被害。最悪は全員が最大の一撃（会心を含む）
+  const sorted = [...per].sort((a, b) => b.p - a.p);
+  const expected = sorted.length ? sorted[0].p + sorted.slice(1).reduce((s, x) => s + x.a, 0) : 0;
+  // ふつう（S7a §53.9 の 2。表示だけ。fight の usualEstimate と同じ数え方）: 記録の足りる種族はその記録の平均。ほかは見込みと同じ数え方。
+  // 射線の切れている射手は入れない（いまの射線。歩く間に通ることはある）
   const counted = per.filter((x) => !x.blocked);
   const rest = counted.filter((x) => x.r === null).sort((a, b) => b.p - a.p);
-  const expected = counted.filter((x) => x.r !== null).reduce((s, x) => s + x.r!, 0) + (rest.length ? rest[0].p + rest.slice(1).reduce((s, x) => s + x.a, 0) : 0);
-  return { recordedWorst: worst, worst, expected, catchers, shooters };
+  const usual = counted.filter((x) => x.r !== null).reduce((s, x) => s + x.r!, 0) + (rest.length ? rest[0].p + rest.slice(1).reduce((s, x) => s + x.a, 0) : 0);
+  return { recordedWorst: worst, worst, expected, usual, catchers, shooters };
 }
 
 /**
@@ -1932,13 +1937,16 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
     // 群れ全体の被害見込み（思い出の記録だけから。V3-2R2 §18.2）。fight の見込み（S1c §14.4 の 1: いちばん重い 1 体は最大の一撃、残りは平均）も並べる
     const ents = huntingReach.map((m) => view.entities.find((e) => e.id === m.id)).filter((e): e is EntityView => !!e);
     const est = threatEstimate(view, catalog, ents);
-    const both = est.expected < worstSum ? t(L, `1 手の被害の見込み ${est.expected}・最悪 ${worstSum}（全員が最大の一撃）`, `expected damage per turn ${est.expected}, worst ${worstSum} (everyone at their worst)`)
-      : t(L, `1 手の最悪の被害の合計 ${worstSum}`, `worst damage per turn sums to ${worstSum}`);
+    // ふつう（S7a §53.9 の 2）: あなたの記録からの平均。見込みと同じなら添えない（表示だけ）
+    const usual = usualEstimate(view, catalog, ents);
+    const uj = usual !== est.expected ? `・ふつうは ${usual}` : '', ue = usual !== est.expected ? `, usually ${usual}` : '';
+    const both = est.expected < worstSum ? t(L, `1 手の被害の見込み ${est.expected}・最悪 ${worstSum}（全員が最大の一撃${uj}）`, `expected damage per turn ${est.expected}, worst ${worstSum} (everyone at their worst${ue})`)
+      : t(L, `1 手の最悪の被害の合計 ${worstSum}${uj ? `（ふつうは ${usual}）` : ''}`, `worst damage per turn sums to ${worstSum}${ue ? ` (usually ${usual})` : ''}`);
     alerts.push({
       code: 'incoming',
       text: t(L, `追跡中 ${huntingReach.length} 体。${both}${unrecorded ? `、ほかに記録のない ${unrecorded} 体` : ''}。あなたの HP ${me.stats.hp}`,
         `${huntingReach.length} hunting you. ${both[0].toUpperCase()}${both.slice(1)}${unrecorded ? `, plus ${unrecorded} with no record` : ''}. Your HP ${me.stats.hp}`),
-      data: { hunting: huntingReach.length, worst_sum: worstSum, expected_sum: est.expected, unrecorded, hp: me.stats.hp },
+      data: { hunting: huntingReach.length, worst_sum: worstSum, expected_sum: est.expected, usual_sum: usual, unrecorded, hp: me.stats.hp },
     });
   } else if (hostiles.length && !adjacent.length) alerts.push({ code: 'enemy_in_view', text: t(L, `敵が視界内: ${hostiles[0].name}`, `Enemy in view: ${hostiles[0].name}`), entity: hostiles[0].id });
   // 1 手で倒されうる: 1 体の worst_turn、または合計が今の HP 以上。2 手で倒されうる: 合計の 2 倍が HP 以上
@@ -1976,7 +1984,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
           `${st.path_len} steps to the stairs ${st.type}. ${faster ? `${faster} of your pursuers are faster than you` : 'none of your pursuers is faster than you'} (on stairs you can extract; enemies do not follow you between floors)${st.occupied_by ? `. But ${(hostiles.find((m) => m.id === st.occupied_by)?.name ?? st.occupied_by)} stands on the stairs and blocks them` : ''}`),
         // worst_if_chased: 追われたままなら最悪の被害（敵ごとに歩く間の攻撃回数 × 受けた最大の一撃。記録の無い敵がいれば null。V3-4b §28.5）
         // expected_if_chased: 被害の見込み（S1c §14.4 の 1）
-        data: { stairs: st.type, path_len: st.path_len, faster, worst_if_chased: unrecorded ? null : chaseOf(st.path_len!).worst, expected_if_chased: unrecorded ? null : chaseOf(st.path_len!).expected, hp: me.stats.hp },
+        data: { stairs: st.type, path_len: st.path_len, faster, worst_if_chased: unrecorded ? null : chaseOf(st.path_len!).worst, expected_if_chased: unrecorded ? null : chaseOf(st.path_len!).expected, usual_if_chased: unrecorded ? null : chaseOf(st.path_len!).usual, hp: me.stats.hp },
       });
     }
   }
@@ -2566,7 +2574,9 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
         // いま隣にいる近接の敵は、離れる前に相手の手番が来れば 1 回殴りうる（最悪の被害に入れてある。engine に離れぎわの攻撃の規則は無い: S6 §49.6 の 3。「追いつけるのは 0 体」を安全と読まれた。S1b §12.4 の 8）
         const adj = x.huntingReach.filter((m) => m.dist <= 1 && !m.traits.includes('ranged')).length;
         // 見込みと最悪を並べる（S1c §14.4 の 1。見込みは、いちばん重い 1 体を最大の一撃、残りを平均の被害で数える）
-        const both = c.expected < c.worst ? t(L, `被害の見込み ${c.expected}・最悪 ${c.worst}`, `expected ${c.expected}, worst ${c.worst} damage`) : t(L, `最悪 ${c.worst} の被害`, `worst ${c.worst} damage`);
+        // ふつう（S7a §53.9 の 2。表示だけ）: 「見込み 31・最悪 155（ふつうは 6）」。見込みと同じなら添えない
+        const us = c.usual !== c.expected ? t(L, `（ふつうは ${c.usual}）`, ` (usually ${c.usual})`) : '';
+        const both = c.expected < c.worst ? t(L, `被害の見込み ${c.expected}・最悪 ${c.worst}${us}`, `expected ${c.expected}, worst ${c.worst} damage${us}`) : t(L, `最悪 ${c.worst} の被害${us}`, `worst ${c.worst} damage${us}`);
         return t(L, `階段まで ${n} 歩。追われたままなら${both}（追いつけるのは ${c.catchers} 体・射撃 ${c.shooters} 体${adj ? `・いま隣の ${adj} 体は、離れる前に相手の手番が来れば殴られる（最悪の見込みに 1 回ずつ入れてある）` : ''}。HP ${hpNow}）`,
           `${n} steps to the stairs. If they keep chasing you, ${both} (${c.catchers} can catch you, ${c.shooters} shooting${adj ? `; the worst case includes one hit each from the ${adj} adjacent, if they act before you get away` : ''}; HP ${hpNow})`);
       })();

@@ -329,8 +329,17 @@ export function diffChanges(prev: TurnSnapshot | null, cur: TurnSnapshot, view: 
 export interface CheckpointLedger {
   /** 敵が見えていなかった、最後の自分の手番の数（まだ無ければ -1） */
   lastCalm: number;
-  /** 区切りを出す手番（その手番の初めの seq と、手番の数）。新しいものだけ残す */
+  /** 区切りの手番（その手番の初めの seq と、手番の数）。新しいものだけ残す */
   due: { seq: number; turn: number }[];
+  /**
+   * S7a（SEASON.md §53.9 の 4）: いちばん新しい区切りの手番から後の、敵の見えていない自分の手番の初めの seq（区切りの手番を含む）。
+   * 区切りを出すのは、この中の、応答の終わり（マクロの途中でない手番）の最初。出した・キャンプに着いた後は、もう足さない
+   */
+  calm?: number[];
+  /** いちばん新しい区切りの手番の後に、キャンプに着いた（キャンプの区切りの段で、出したことにする） */
+  camped?: boolean;
+  /** 出したと分かった（応答の終わりの、敵の見えていない手番があった。記録から分かることを覚えておくだけ） */
+  shown?: boolean;
 }
 
 export function checkpointStep(l: CheckpointLedger, turn: number, calm: boolean, seq: number, every = 100): void {
@@ -339,6 +348,12 @@ export function checkpointStep(l: CheckpointLedger, turn: number, calm: boolean,
   if (turn >= every && l.lastCalm < block) {
     l.due.push({ seq, turn });
     if (l.due.length > 16) l.due.splice(0, l.due.length - 16);
+    l.calm = [seq];
+    l.camped = false;
+    l.shown = false;
+  } else if (l.due.length && !l.camped && !l.shown && l.calm) {
+    l.calm.push(seq);
+    if (l.calm.length > 4000) l.calm.splice(1, l.calm.length - 4000);
   }
   l.lastCalm = turn;
 }
@@ -346,6 +361,7 @@ export function checkpointStep(l: CheckpointLedger, turn: number, calm: boolean,
 /** キャンプに着いた（S7）: キャンプそのものが区切り（キャンプの観測に区切りの段が出る）なので、その手番までの 100 手番の分は出したことにする */
 export function checkpointCamp(l: CheckpointLedger, turn: number): void {
   l.lastCalm = Math.max(l.lastCalm, turn);
+  if (l.due.length) l.camped = true;
 }
 
 function statusName(obs: Observation, id: string): string {

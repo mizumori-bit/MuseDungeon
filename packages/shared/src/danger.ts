@@ -123,26 +123,35 @@ export function lineBlockedShooter(catalog: Catalog, e: Partial<Pick<EntityView,
 }
 
 /**
- * fight の止まり方の見積もり（S1c §14.4 の 1・S1d §17.2・S7 §52.3 の 5）: 次の手番の被害の見込み expected と、最悪 worst（全員が記録の最大の一撃。会心を含む）。
- * expected（S7）: 記録の足りる種族は、その種族の記録の平均（相手の命中の割合と受けた被害の平均: recordedHitsOf）× 行動の回数。
- * 記録の足りない種族は今までどおり: その中でいちばん重い 1 体（1 手の「ふつうの」最大が最大の者）は会心でない最大の一撃、残りは 1 手の平均
- * （平均の記録が無ければ、ふつうの最大。重い側）。射線の切れている射手は、見込みに入れない（最悪には入れる）。
- * fight は、HP が worst 以下なら止まり（死にうる。worst は S7 で変えていない）、HP − expected が hp_floor を下回れば止まる。
- * 被弾の記録の無い敵は、どちらにも数えない（今までどおり。fight は記録の無い種族で別に止まる）。unrecorded はその数
+ * fight の止まり方の見積もり（S1c §14.4 の 1・S1d §17.2）: 次の手番の被害の見込み expected と、最悪 worst（全員が記録の最大の一撃。会心を含む）。
+ * expected = いちばん重い 1 体（1 手の「ふつうの」最大が最大の者）は会心でない最大の一撃、残りは 1 手の平均（平均の記録が無ければ、ふつうの最大。重い側）の合計。
+ * fight は、HP が worst 以下なら止まり（死にうる）、HP − expected が hp_floor を下回れば止まる。
+ * 被弾の記録の無い敵は、どちらにも数えない（今までどおり。fight は記録の無い種族で別に止まる）。unrecorded はその数。
+ * S7a（SEASON.md §53.9 の 1）: 止まる判定に使うこの数は、S1d のまま。記録の平均で数えた「ふつう」は usualEstimate（表示だけ）
  */
-export function threatEstimate(view: PlayerView, catalog: Catalog, threats: readonly (Pick<EntityView, 'kind' | 'role' | 'speed' | 'statuses' | 'paceAgo'> & Partial<Pick<EntityView, 'shot' | 'pos'>>)[]): { expected: number; worst: number; unrecorded: number } {
+export function threatEstimate(view: PlayerView, catalog: Catalog, threats: readonly Pick<EntityView, 'kind' | 'role' | 'speed' | 'statuses' | 'paceAgo'>[]): { expected: number; worst: number; unrecorded: number } {
+  const per = threats.map((h) => ({ w: worstTurnOf(view, catalog, h), p: plainTurnOf(view, catalog, h), a: avgTurnOf(view, catalog, h) }));
+  const known = per.filter((x): x is { w: number; p: number; a: number | null } => x.w !== null && x.p !== null).sort((a, b) => b.p - a.p);
+  const worst = known.reduce((s, x) => s + x.w, 0);
+  const expected = known.length ? known[0].p + known.slice(1).reduce((s, x) => s + Math.min(x.p, x.a ?? x.p), 0) : 0;
+  return { expected, worst, unrecorded: per.length - known.length };
+}
+
+/**
+ * 「ふつう」の被害（S7 §52.3 の 5・S7a §53.9 の 2。表示だけ: マクロの止まり方・「できること」・pilot の判定には使わない）:
+ * 記録の足りる種族（recordedHitsOf）は、その記録の平均（命中の割合 × 受けた被害の平均）× 行動の回数。記録の足りない種族は、
+ * 今までの数え方（その中でいちばん重い 1 体は会心でない最大の一撃、残りは 1 手の平均）。射線の切れている射手は入れない。被弾の記録の無い敵は入れない
+ */
+export function usualEstimate(view: PlayerView, catalog: Catalog, threats: readonly (Pick<EntityView, 'kind' | 'role' | 'speed' | 'statuses' | 'paceAgo'> & Partial<Pick<EntityView, 'shot' | 'pos'>>)[]): number {
   const me = view.self.pos;
   const per = threats.map((h) => ({
     w: worstTurnOf(view, catalog, h), p: plainTurnOf(view, catalog, h), a: avgTurnOf(view, catalog, h),
     r: recordedHitsOf(view, catalog, h, attacksPerTurn(view, catalog, h)), blocked: lineBlockedShooter(catalog, h, me),
   }));
-  const known = per.filter((x): x is typeof x & { w: number; p: number } => x.w !== null && x.p !== null);
-  const worst = known.reduce((s, x) => s + x.w, 0);
-  const counted = known.filter((x) => !x.blocked);
+  const counted = per.filter((x): x is typeof x & { w: number; p: number } => x.w !== null && x.p !== null && !x.blocked);
   const byRecord = counted.filter((x) => x.r !== null).reduce((s, x) => s + x.r!, 0);
   const rest = counted.filter((x) => x.r === null).sort((a, b) => b.p - a.p);
-  const expected = byRecord + (rest.length ? rest[0].p + rest.slice(1).reduce((s, x) => s + Math.min(x.p, x.a ?? x.p), 0) : 0);
-  return { expected, worst, unrecorded: per.length - known.length };
+  return byRecord + (rest.length ? rest[0].p + rest.slice(1).reduce((s, x) => s + Math.min(x.p, x.a ?? x.p), 0) : 0);
 }
 
 /** fight が止まる理由（S1d §17.2）: lethal＝今の HP が最悪以下（死にうる。hp_floor によらない）、floor＝HP − 見込みが hp_floor を下回る。止まらなければ null */
@@ -177,8 +186,12 @@ export function riskText(view: PlayerView, catalog: Catalog, hpFloor: number): s
   const why = by === 'lethal'
     ? (ja ? `死にうるので止まった: HP ${hp} が最悪 ${est.worst} 以下（hp_floor によらない）。` : `Stopped because one turn could kill you: HP ${hp} is at or below the worst ${est.worst} (whatever hp_floor is). `)
     : by === 'floor' ? (ja ? `hp_floor で止まった: HP ${hp} − 見込み ${est.expected} が hp_floor ${hpFloor} を下回る。` : `Stopped at hp_floor: HP ${hp} minus expected ${est.expected} falls below hp_floor ${hpFloor}. `) : '';
-  return ja ? `${why}${head}（HP ${hp}・hp_floor ${hpFloor}。見込みは、攻撃された回数が ${catalog.rules?.estimateMinSamples ?? 5} 回以上の種族をその記録の平均（命中の割合と受けた被害の平均）で、ほかはいちばん重い 1 体を記録の会心でない最大の一撃、残りを記録の平均の被害で数え、射線の切れている射手は入れない。最悪は全員が最大の一撃・会心を含む）`
-    : `${why}${head} (HP ${hp}, hp_floor ${hpFloor}; expected counts species that have attacked you ${catalog.rules?.estimateMinSamples ?? 5}+ times at their recorded average (hit rate times average damage), and among the rest the heaviest enemy at its recorded worst non-critical hit and the others at their recorded average, leaving out shooters whose line to you is blocked; worst has everyone at their worst hit, criticals included)`;
+  // ふつう（S7a §53.9 の 2）: あなたの記録からの平均。見込みと同じなら添えない。止まる判定には使わない
+  const usual = pos ? usualEstimate(view, catalog, fightThreats(catalog, view.entities.filter((e) => e.cat === 'monster'), pos)) : est.expected;
+  const uj = usual !== est.expected ? `・ふつうは ${usual}` : '';
+  const ue = usual !== est.expected ? `, usually ${usual}` : '';
+  return ja ? `${why}${head}（HP ${hp}・hp_floor ${hpFloor}${uj}。見込みは、いちばん重い 1 体を記録の会心でない最大の一撃、残りを記録の平均の被害で数える${uj ? '（止まる判定に使う数）。ふつうは、あなたの記録からの平均（表示だけ）' : ''}。最悪は全員が最大の一撃・会心を含む）`
+    : `${why}${head} (HP ${hp}, hp_floor ${hpFloor}${ue}; expected counts the heaviest enemy at its recorded worst non-critical hit and the rest at their recorded average${ue ? ' (the number the stop uses); usually is the average from your own record (display only)' : ''}; worst has everyone at their worst hit, criticals included)`;
 }
 
 /**

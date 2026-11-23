@@ -119,23 +119,27 @@ describe('S7 §52.2 の 2: the checkpoint turn (every 100 own turns, on the firs
       expect(new Set(live.map((d) => Math.trunc(d.turn / 100))).size).toBe(live.length);
       // 記録を初めから畳んだ答えと同じ
       expect(r.session.checkpointTurns(pid, true)).toEqual(live);
-      // 応答に出たのは、区切りの手番（敵が見えていなかった手番）を含む応答だけ。同じ区切りを 2 回出さない
-      // （マクロの途中の手番が区切りなら、止まった所で敵が見えていることはある: 出す手番は記録から決まり、応答の切れ目にはよらない）
+      // 応答に出たのは、応答の終わりで敵が見えていないときだけ（S7a: マクロの途中の手番が区切りで、止まった所で敵が見えていれば、次へ回す）。
+      // 同じ区切りを 2 回出さない（キャンプに着けば、出したことにする）
       expect(seen.length).toBeGreaterThan(0);
       expect(seen.length).toBeLessThanOrEqual(live.length);
-      for (const s of seen) expect(live.some((d) => d.turn <= s.turn && Math.trunc(d.turn / 100) === Math.trunc(s.turn / 100) || (d.turn <= s.turn && s.turn - d.turn < 100))).toBe(true);
+      for (const s of seen) expect(s.monsters).toBe(0);
+      for (const s of seen) expect(live.some((d) => d.turn <= s.turn)).toBe(true);
       expect(new Set(seen.map((s) => live.filter((d) => d.turn <= s.turn).length)).size).toBe(seen.length);
+      // 起動し直す前の、いまの応答で出すかの答え（起動し直した後と比べる）
+      const dueNow = r.session.checkpointDue(pid, null);
       const runId = r.session.runId;
       m.closeAll();
       // 起動し直した後（記録だけから作り直す）も、今の区切りの手番は同じ
       const m2 = manager(dir);
       const rec = RunSession.recover(m2.deps, runId);
       expect(rec.verified).toBe(true);
-      const block = Math.trunc(turns / 100);
+      const block = Math.trunc(turns / 100) - 1;
       const after = rec.session.checkpointTurns(pid);
-      // 起動し直した後は、今の 100 手番の区切りが始まる前から畳む: その区切りの分は必ず同じで、ほかに出すものは、もとの控えにあるものだけ
+      // 起動し直した後は、1 つ前の 100 手番の区切りが始まる前から畳む（S7a: その区切りが、まだ出ていないことがある）: その分は必ず同じ
       expect(after).toEqual(live.filter((x) => Math.trunc(x.turn / 100) >= block));
       expect(rec.session.checkpointTurns(pid, true)).toEqual(live);
+      expect(rec.session.checkpointDue(pid, null)).toBe(dueNow);
       m2.closeAll();
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -201,6 +205,32 @@ describe('S7 §52.3 の 4: explore toward widens the direction (sides, then behi
     a.world.players[a.pid].knowledge.sense = { what: 'guardian', dir: 'n', range: 'far' };
     const no = await act(a.r.port, { type: 'explore', toward: 'sense' });
     expect(!no.ok && no.error.message).toContain('気配の方角から、両隣・横・後ろまで幅を広げても、行ける未探索の境界が無い');
+    a.manager.closeAll();
+  });
+});
+
+describe('S7a §53.9 の 4: a checkpoint turn in the middle of a macro waits while the macro ends with an enemy in view', () => {
+  it('not shown when the travel ends next to a visible enemy; shown on the first response that ends with none in view; not again', async () => {
+    const a = await arena('s7a-defer', { map: ['P.........................G'], guardian: { kind: 'core:spore_mold', hp: 10, dmg: '1d1', types: [], state: 'asleep', archetype: 'stationary' } });
+    // 手番の数を 99 にする（テストの書き換え。控えは今の World から進むので、書き換えの後に作る）
+    const me = structuredClone(a.world.entities[a.meId]); me.actor!.turns = 99; a.inject({ put: [me] });
+    expect(a.r.session.checkpointTurns(a.pid)).toEqual([]);
+    const cp = (res: Awaited<ReturnType<typeof act>>) => res.turn.changes.some((c) => c.code === 'checkpoint');
+    // 東へ: 1 歩目の後の手番（100）は敵が見えない（区切りの手番）。止まった所では、毒カビが見えている
+    const r1 = await act(a.r.port, { type: 'travel', to: { x: a.ox + 21, y: a.oy } });
+    expect(r1.ok).toBe(true);
+    expect(a.r.session.checkpointTurns(a.pid).map((d) => d.turn)).toEqual([100]);
+    expect(a.r.port.view().entities.some((e) => e.cat === 'monster')).toBe(true);
+    expect(cp(r1)).toBe(false);
+    // 西へ戻る: 止まった所で敵が見えていない。ここで出す
+    const r2 = await act(a.r.port, { type: 'travel', to: { x: a.ox + 1, y: a.oy } });
+    expect(r2.ok).toBe(true);
+    expect(a.r.port.view().entities.some((e) => e.cat === 'monster')).toBe(false);
+    expect(cp(r2)).toBe(true);
+    expect(r2.turn.changes.find((c) => c.code === 'checkpoint')?.text).toBe('区切り（100 手番）。今の観測が正本。これより前の経過は、要らない');
+    // もう出さない（同じ手番の observe でも、次の手番でも）
+    expect(a.r.port.observeWithTurn('observed').turn.changes.some((c) => c.code === 'checkpoint')).toBe(false);
+    expect(cp(await act(a.r.port, { type: 'wait' }))).toBe(false);
     a.manager.closeAll();
   });
 });
