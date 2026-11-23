@@ -791,6 +791,19 @@ export function macroNext(state: MacroState, view: PlayerView, catalog: Catalog,
   return { command: { type: 'pickup', item: pick } };
 }
 
+/** travel_to の行き先に、いま着いているか（下の travel の arrived と同じ判定。S6a: 逃げる移動の「死にうる」より先に見る） */
+function travelArrived(state: MacroState, view: PlayerView, catalog: Catalog, events: readonly ProjectedEvent[]): boolean {
+  const pos = view.self.pos;
+  if (!pos || !view.floor || state.target === undefined) return false;
+  if (typeof state.target === 'string' && view.inventory.some((i) => i.id === state.target)) return true;
+  if (typeof state.target === 'string' && events.some((e) => e.type === 'item_picked_up' && (e as unknown as { item?: string; actor?: string }).item === state.target && (e as unknown as { actor?: string }).actor === view.self.id)) return true;
+  const goal = resolveTravelGoal(view, catalog, state.target);
+  if (!goal) return false;
+  const w = view.floor.width;
+  if (goal.goals.includes(pos.y * w + pos.x)) return true;
+  return goal.adjacentOk && goal.goals.some((g) => cheb({ x: g % w, y: Math.trunc(g / w) }, pos) <= 1);
+}
+
 function macroStep(state: MacroState, view: PlayerView, catalog: Catalog, events: readonly ProjectedEvent[]): MacroDecision {
   if (view.runStatus === 'ended') return { stop: 'run_ended' };
   if (view.status === 'dead') return { stop: 'dead' };
@@ -910,7 +923,8 @@ function macroStep(state: MacroState, view: PlayerView, catalog: Catalog, events
   const hostiles = view.entities.filter((e) => e.cat === 'monster');
   // 逃げる移動（mode: flee）: 次の 1 歩の間に、届く追跡中の敵（隣・射撃）の最悪の 1 手で倒れうるなら、hp_floor に関係なく止まる（S6 §49.6 の 1）。
   // 判定は fight の「死にうる」と同じ（threatEstimate・fightThreats・fightRiskStop の lethal。S1d §17.2）。綱・薬・向きを変えるかは、プレイヤーが決める
-  if (mode === 'flee' && (kind === 'travel' || kind === 'explore' || kind === 'collect')
+  // S6a §50.4 の 2: travel_to で行き先に着いていれば、先に着いたことにする（下の arrived。着いた手番に flee_lethal で止まっていた）
+  if (mode === 'flee' && (kind === 'travel' || kind === 'explore' || kind === 'collect') && !(kind === 'travel' && travelArrived(state, view, catalog, events))
     && fightRiskStop(hp, 0, threatEstimate(view, catalog, fightThreats(catalog, hostiles, pos))) === 'lethal') return { stop: 'flee_lethal' };
   // じゃまをしている敵（V4-1a §12.3）: 見えている敵だけ（view.entities は視界の判定を通った者だけ）
   const blockersOf = (hs: readonly EntityView[]) => hs.map((h) => ({ id: h.id, name: kindName(catalog, view.locale, h.kind) }));

@@ -70,6 +70,36 @@ describe('V4-1a collectable items (§12.1)', () => {
     a.manager.closeAll();
   });
 
+  it('S6a §50.4 の 4: a straight corridor, nothing in the way: an item 16 steps away only gives no collect line (and collect refuses); one 15 steps away gives the line, and collect picks it up', async () => {
+    const a = await arena('v41a-corr', { map: ['P................', '#################', '...............G.'], guardian: { kind: 'core:goblin', hp: 50, dmg: '1d1', types: [], state: 'asleep' } });
+    a.inject({ del: [a.gId] });
+    const fk = a.world.players[a.pid].knowledge.floors[a.key];
+    fk.remembered = [];
+    // 品は覚えている（遠くて見えなくても、collect の的になる）
+    const place = (id: string, x: number) => {
+      const it = potion(a, id, x, 0);
+      a.inject({ put: [it] });
+      fk.remembered = [...fk.remembered.filter((r) => r.id !== id), { id, kind: it.kind, cat: 'item', pos: { x: it.pos!.x, y: it.pos!.y }, qty: 1, ft: 0 }];
+    };
+    place('e_cor016', 16);
+    await act(a, { type: 'wait' });
+    let o = obsOf(a).observation;
+    expect(pickableItems(projectPlayerView(a.world, a.pid), catalog).map((x) => x.id)).toEqual(['e_cor016']);
+    expect(o.navigation.collectable).toEqual({ count: 0, ids: [] });
+    expect(o.valid_actions.some((v) => v.startsWith('collect what:items'))).toBe(false);
+    expect((await act(a, { type: 'collect', what: 'items' })).ok).toBe(false);
+    // 15 歩の品: 行が出て、引数なしの collect で拾う（16 歩の品は、拾った後も範囲の外）
+    place('e_cor015', 15);
+    o = obsOf(a).observation;
+    expect(o.navigation.collectable).toEqual({ count: 1, ids: ['e_cor015'] });
+    expect(o.valid_actions.find((v) => v.startsWith('collect what:items'))).toContain('1 個');
+    const ok = await act(a, { type: 'collect', what: 'items' });
+    expect(ok.ok ? '' : JSON.stringify(ok.error)).toBe('');
+    const picked = a.world.entities['e_cor015'];
+    expect(!picked || picked.item?.heldBy === a.meId).toBe(true);
+    a.manager.closeAll();
+  });
+
   it('over bot runs: whenever no awake enemy is adjacent, valid_actions shows collect exactly when collectable.count > 0, and then the first step of a bare collect is not a stop', async () => {
     let shown = 0, farOnly = 0, checked = 0, farMismatch = 0;
     for (let i = 0; i < 3; i++) {

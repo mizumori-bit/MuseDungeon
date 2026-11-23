@@ -1050,7 +1050,7 @@ export function slaysBrief(recs: readonly SeasonSlayRec[], deeds: readonly Seaso
 
 /**
  * 討伐の記録の見せる分（S4 §35.5）: 節目ごとに、最初に載った 1 件と、受けた被害がいちばん少ない 1 件（同じなら 1 件）。深さの順。
- * 取り込みの決まった形（SeasonSlaySchema）に合わないものは渡さない。viewer: 見る者のプロフィールの ID（自分の記録に mine）
+ * 取り込みの決まった形（SeasonSlaySchema）に合わないものは渡さない（形にない項目は落とす）。viewer: 見る者のプロフィールの ID（自分の記録に mine）
  */
 export function slaysView(recs: readonly SeasonSlayRec[], viewer: string | null): SeasonSlay[] {
   const out: SeasonSlay[] = [];
@@ -1065,7 +1065,9 @@ export function slaysView(recs: readonly SeasonSlayRec[], viewer: string | null)
         ...structuredClone(facts), by: name, of: list.length,
         ...(r === first ? { first: true } : {}), ...(r === least ? { least: true } : {}), ...(viewer && profileId === viewer ? { mine: true } : {}),
       };
-      if (SeasonSlaySchema.safeParse(v).success) out.push(v);
+      // 決まった形にない項目は渡さない（S6a: 形から外した項目が、置き場所のファイルに残っていても出さない。zod は知らない項目を落とす）
+      const ok = SeasonSlaySchema.safeParse(v);
+      if (ok.success) out.push(ok.data as SeasonSlay);
     }
   }
   return out;

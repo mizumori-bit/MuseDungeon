@@ -245,8 +245,11 @@ export interface ObsSlay {
    * rest: それ以外の手番（相手が動けた手番）に与えた被害（毒の目盛りを含む）・受けた被害（記録の合計から 2 つを引いた残り）
    */
   openings?: { missed: ObsOpening; other: ObsOpening; rest: { dealt: number; taken: number } };
-  /** 戦いが始まったときの相手（S6）: 傷跡・始めの体力・灯っていた護りの火（棲み処に火のある相手だけ）。S6 より前の記録には無い */
-  warden_start?: { scar: number; hp: number; fires_lit?: number };
+  /**
+   * 戦いが始まったときの相手（S6）: 傷跡・灯っていた護りの火（その遠征で見た火だけ。見ていなければ無い）。S6 より前の記録には無い。
+   * 始めの体力は出さない（S6a §50.4: 倒していない相手の体力になる）
+   */
+  warden_start?: { scar: number; fires_lit?: number };
   text: string;
 }
 /** 相手が動けなかった手番の数（S5）: turns・その手番の自分の行動で与えた被害・被害を与えた手番の数・その手番に受けた被害 */
@@ -1019,7 +1022,7 @@ function fightCore(L: Locale, catalog: Catalog, s: SeasonSlayFacts): { obs: ObsS
   const abilities = s.abilities.map((x) => ({ id: x.id, name: nameOf(catalog.abilities[x.id]?.name, L, shortId(x.id)), n: x.n }));
   const list = (xs: { name: string; n: number }[]) => xs.map((x) => `${x.name} ${x.n}`).join(t(L, '・', ', '));
   const extra = [
-    s.wardFires ? t(L, `護りの火を ${s.wardFires} つ消した`, `put out ${s.wardFires} ward fire${s.wardFires > 1 ? 's' : ''}`) : '',
+    wardFireText(L, s.wardenStart?.firesLit, s.wardFires),
     used.length ? t(L, `使った品: ${list(used)}`, `used: ${list(used)}`) : t(L, '使った品なし', 'no items used'),
     thrown.length ? t(L, `投げた品: ${list(thrown)}`, `thrown: ${list(thrown)}`) : '',
     abilities.length ? t(L, `能動技: ${list(abilities)}`, `abilities: ${list(abilities)}`) : '',
@@ -1032,7 +1035,7 @@ function fightCore(L: Locale, catalog: Catalog, s: SeasonSlayFacts): { obs: ObsS
     missed: ob(op.missed), other: ob(op.other),
     rest: { dealt: Math.max(0, total - op.missed.dealt - op.other.dealt), taken: Math.max(0, s.taken - op.missed.taken - op.other.taken) },
   } : undefined;
-  const fight = [wardenStartText(L, s.wardenStart), tellsText(L, s.tells), openingsText(L, openings)].filter(Boolean);
+  const fight = [scarText(L, s.wardenStart), tellsText(L, s.tells), openingsText(L, openings)].filter(Boolean);
   const body = t(L,
     `${wText}・${aText}${hiddenText}。与えた被害 ${total}（${dealtParts.join('、') || 'なし'}）。受けた被害 ${s.taken}${s.lowestPct !== undefined ? `（HP がいちばん減って ${s.lowestPct}%）` : ''}。${fight.map((x) => `${x}。`).join('')}${extra.join('。')}`,
     `${wText}, ${aText}${hiddenText}. Dealt ${total} (${dealtParts.join(', ') || 'none'}). Took ${s.taken}${s.lowestPct !== undefined ? ` (lowest HP ${s.lowestPct}%)` : ''}. ${fight.map((x) => `${x}. `).join('')}${extra.join('. ')}`);
@@ -1044,17 +1047,32 @@ function fightCore(L: Locale, catalog: Catalog, s: SeasonSlayFacts): { obs: ObsS
       dealt: { melee: { ...d.melee }, thrown: { ...d.thrown }, poison: { ...d.poison }, feature: { ...d.feature }, crits: d.crits },
       taken: s.taken, ...(s.lowestPct !== undefined ? { lowest_pct: s.lowestPct } : {}), used, thrown, abilities, ward_fires: s.wardFires, attempt: s.attempt, turns: s.turns,
       ...(tells ? { tells } : {}), ...(openings ? { openings } : {}),
-      ...(ws ? { warden_start: { scar: ws.scar, hp: ws.hp, ...(ws.firesLit !== undefined ? { fires_lit: ws.firesLit } : {}) } } : {}), text: '',
+      ...(ws ? { warden_start: { scar: ws.scar, ...(ws.firesLit !== undefined ? { fires_lit: ws.firesLit } : {}) } } : {}), text: '',
     },
   };
 }
 
-/** 戦いが始まったときの相手の文（S6）: 「戦い始めの相手: 傷跡で体力 −39（始めの体力 51）・灯っていた護りの火 0」。記録に項目が無ければ空 */
-function wardenStartText(L: Locale, ws: SeasonSlayFacts['wardenStart']): string {
-  if (!ws) return '';
-  const hp = ws.scar > 0 ? t(L, `傷跡で体力 −${ws.scar}（始めの体力 ${ws.hp}）`, `scarred −${ws.scar} HP (started at ${ws.hp})`) : t(L, `体力 ${ws.hp}（傷跡なし）`, `${ws.hp} HP (no scar)`);
-  const fires = ws.firesLit !== undefined ? t(L, `・灯っていた護りの火 ${ws.firesLit}`, `, ward fires lit ${ws.firesLit}`) : '';
-  return t(L, `戦い始めの相手: ${hp}${fires}`, `At the start of the fight it had ${hp}${fires}`);
+/**
+ * 戦いが始まったときの相手の傷跡の句（S6・S6a）: 「相手は、傷跡で体力 −39 から」。傷跡が無い・記録に項目が無ければ空。
+ * 始めの体力は出さない（S6a §50.4: 倒していない相手の体力になる）
+ */
+function scarText(L: Locale, ws: SeasonSlayFacts['wardenStart']): string {
+  return ws && ws.scar > 0 ? t(L, `相手は、傷跡で体力 −${ws.scar} から`, `it started scarred −${ws.scar} HP`) : '';
+}
+
+/**
+ * 護りの火の句（S6a §50.4）: 「戦い始めに 1 つ灯っていた・この挑戦で 1 つ消した」（前の挑戦で消えたままなら「戦い始めに灯っていた火 0」）。
+ * 戦い始めの数は、その遠征で自分が見た火だけ（見ていなければ省く）。どちらも無ければ空。評価の言葉（「消してから」など）は付けない
+ */
+function wardFireParts(L: Locale, lit: number | undefined, out: number): string {
+  return [
+    lit === undefined ? '' : lit === 0 ? t(L, '戦い始めに灯っていた火 0', 'none lit when the fight began') : t(L, `戦い始めに ${lit} つ灯っていた`, `${lit} lit when the fight began`),
+    out ? t(L, `この挑戦で ${out} つ消した`, `${out} put out in this attempt`) : '',
+  ].filter(Boolean).join(t(L, '・', ', '));
+}
+function wardFireText(L: Locale, lit: number | undefined, out: number): string {
+  const p = wardFireParts(L, lit, out);
+  return p ? t(L, `護りの火: ${p}`, `ward fires: ${p}`) : '';
 }
 
 /** 討伐の記録の 1 件の観測（S4。SEASON.md §35.5）。文は「Aya（Lv6・戦士）: 鎚矛（地下3階で拾った）・革鎧（最初から持っていた）。与えた被害 92（近接 11 回・1 回あたり 8.2…）…」 */
@@ -1092,8 +1110,8 @@ export function slayGroupText(L: Locale, recs: readonly ObsSlay[]): string {
 }
 
 /**
- * 討伐の記録 1 件の短い文（S5a・S6。大守護者の候補に出す）。2 つの事実（何で倒したか・護りの火を先に消したか）から始める:
- * 「アオイ（Lv7・戦士）。小剣の近接だけ・品なし・護りの火は消してから。突進の構えを 5 回外させた。与 51・受 51（相手は傷跡で体力 −39 から。始めの体力 51）。5 回目の挑戦」
+ * 討伐の記録 1 件の短い文（S5a・S6・S6a。大守護者の候補に出す）。何で倒したか・護りの火から始める:
+ * 「アオイ（Lv7・戦士）。小剣の近接だけ・品なし。護りの火: 戦い始めに灯っていた火 0。突進の構えを 5 回外させた。与 51・受 51（相手は、傷跡で体力 −39 から）。5 回目の挑戦」
  */
 export function slayShortText(L: Locale, r: ObsSlay): string {
   const d = r.dealt;
@@ -1110,18 +1128,16 @@ export function slayShortText(L: Locale, r: ObsSlay): string {
   const how = srcs.length === 1 ? srcs[0].only : srcs.map((x) => x.part).join(t(L, '・', ', '));
   const items = [...r.used, ...r.thrown];
   const itemText = items.length ? t(L, `品: ${items.map((x) => `${x.name} ${x.n}`).join('・')}`, `items: ${items.map((x) => `${x.name} ${x.n}`).join(', ')}`) : t(L, '品なし', 'no items');
-  // 護りの火を先に消したか（戦い始めに灯っていた火の数。S6 より前の記録は、消した数）
+  // 護りの火（S6a: 戦い始めに灯っていた数・この挑戦で消した数。評価の言葉は付けない）
   const ws = r.warden_start;
-  const fires = ws?.fires_lit !== undefined
-    ? (ws.fires_lit === 0 ? t(L, '護りの火は消してから', 'ward fires out first') : t(L, `護りの火が ${ws.fires_lit} つ灯ったまま`, `${ws.fires_lit} ward fire${ws.fires_lit > 1 ? 's' : ''} still lit`))
-    : r.ward_fires ? t(L, `護りの火を ${r.ward_fires} つ消した`, `put out ${r.ward_fires} ward fire${r.ward_fires > 1 ? 's' : ''}`) : '';
+  const fires = wardFireText(L, ws?.fires_lit, r.ward_fires);
   const tells = (r.tells ?? []).filter((x) => x.seen > 0).map((x) => (isStrike(x.kind) && x.missed
     ? t(L, `${x.name}を ${x.missed} 回外させた`, `${tellPlural(L, x.kind)}: ${x.missed} missed`)
     : t(L, `${x.name}を ${x.seen} 回見た`, `${tellPlural(L, x.kind)}: saw ${x.seen}`))).join(t(L, '・', '; '));
-  const scar = ws && ws.scar > 0 ? t(L, `（相手は傷跡で体力 −${ws.scar} から。始めの体力 ${ws.hp}）`, ` (it started scarred −${ws.scar}, at ${ws.hp} HP)`) : '';
+  const scar = ws && ws.scar > 0 ? t(L, `（${scarText(L, ws)}）`, ` (${scarText(L, ws)})`) : '';
   return t(L,
-    `${who}（Lv${r.level}・${r.class}）。${[how, itemText, fires].filter(Boolean).join('・')}。${tells ? `${tells}。` : ''}与 ${total}・受 ${r.taken}${scar}。${r.attempt} 回目の挑戦`,
-    `${who} (Lv${r.level} ${r.class}): ${[how, itemText, fires].filter(Boolean).join(', ')}. ${tells ? `${tells}. ` : ''}Dealt ${total}, took ${r.taken}${scar}. Attempt ${r.attempt}`);
+    `${who}（Lv${r.level}・${r.class}）。${how}・${itemText}。${fires ? `${fires}。` : ''}${tells ? `${tells}。` : ''}与 ${total}・受 ${r.taken}${scar}。${r.attempt} 回目の挑戦`,
+    `${who} (Lv${r.level} ${r.class}): ${how}, ${itemText}. ${fires ? `${fires[0].toUpperCase()}${fires.slice(1)}. ` : ''}${tells ? `${tells}. ` : ''}Dealt ${total}, took ${r.taken}${scar}. Attempt ${r.attempt}`);
 }
 
 /** 初めて受け取った討伐の記録の知らせ（S5b）: 「新しい討伐の記録: 地下5階の大守護者「キモルカ」を、アカネ（Lv6・戦士・鋭い小剣）が倒した（与えた被害 90・受けた被害 61・突進の構えを 11 回外させた）」 */
@@ -1267,14 +1283,17 @@ function compareTable(L: Locale, catalog: Catalog, view: PlayerView, no: number,
     return { text: parts.join(t(L, '・', ', ')) || t(L, 'なし', 'none'), zero: !parts.length };
   });
   row(t(L, '受けた被害', 'damage taken'), (s) => ({ text: `${s.taken}${s.lowestPct !== undefined ? t(L, `（HP の底 ${s.lowestPct}%）`, ` (lowest HP ${s.lowestPct}%)`) : ''}`, zero: s.taken === 0 }));
-  // 戦い始めの相手（S6）: 傷跡と始めの体力・灯っていた護りの火
+  // 戦い始めの相手（S6・S6a）: 傷跡だけ（始めの体力は出さない）。どの列も傷跡が無ければ、行ごと省く
   row(t(L, '戦い始めの相手', 'the warden when the fight began'), (s) => {
     const ws = s.wardenStart;
     if (!ws) return none();
-    const fires = ws.firesLit !== undefined ? t(L, `・灯っていた護りの火 ${ws.firesLit}`, `, ward fires lit ${ws.firesLit}`) : '';
-    return { text: t(L, `体力 ${ws.hp}${ws.scar ? `（傷跡 −${ws.scar}）` : ''}${fires}`, `${ws.hp} HP${ws.scar ? ` (scar −${ws.scar})` : ''}${fires}`), zero: false };
+    return ws.scar > 0 ? { text: t(L, `傷跡で体力 −${ws.scar}`, `scarred −${ws.scar} HP`), zero: false } : { text: t(L, '傷跡なし', 'no scar'), zero: true };
   });
-  row(t(L, '護りの火を消した', 'ward fires put out'), (s) => ({ text: `${s.wardFires}`, zero: s.wardFires === 0 }));
+  // 護りの火（S6a）: 戦い始めに灯っていた数（その遠征で見た火だけ）・その挑戦で消した数
+  row(t(L, '護りの火', 'ward fires'), (s) => {
+    const p = wardFireParts(L, s.wardenStart?.firesLit, s.wardFires);
+    return p ? { text: p, zero: false } : { text: t(L, 'なし', 'none'), zero: true };
+  });
   const itemList = (xs: readonly { kind: string; n: number }[]) => xs.map((x) => `${nameOf(catalog.items[x.kind]?.name, L, shortId(x.kind))} ${x.n}`);
   row(t(L, '使った品・投げた品', 'items used and thrown'), (s) => {
     const xs = [...itemList(s.used), ...itemList(s.thrown)];
@@ -2494,7 +2513,17 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
     const mode = adjAwake.length ? 'flee' : x.huntingReach.length ? 'steady' : undefined;
     // 断られる形なら、断りの理由を「不可」として出す（S6 §49.6 の 2。逃げる移動が死にうる: flee_lethal など）
     const stop = refused({ type: 'travel', to: `stairs_${type}`, ...(mode ? { mode } : {}) });
-    if (stop) return `travel_to stairs_${type}${mode ? ` mode:${mode}` : ''} (${t(L, '不可: ', 'unavailable: ')}${macroStopError(L, stop, { type: 'travel', to: `stairs_${type}` }).message}${risk ? sep + risk : ''})`;
+    // steady が断られても（HP がすでに hp_floor 以下など）、flee が通るなら flee の行を出す（S6a §50.4 の 3。前の形）
+    const fleeStop = stop && mode === 'steady' ? refused({ type: 'travel', to: `stairs_${type}`, mode: 'flee' }) : stop;
+    if (stop && !fleeStop) return `travel_to stairs_${type} mode:flee${risk ? ` (${risk})` : ''}`;
+    if (fleeStop) {
+      // 両方断られる: 理由（flee まで試したなら flee の理由）と、まだ取れる手（move で 1 歩ずつ・帰還の綱）
+      const shown = mode === 'steady' ? 'flee' : mode;
+      const life = view.inventory.find((i) => !!i.kind && !!catalog.items[i.kind]?.bound);
+      const still = mode ? t(L, `。move で 1 歩ずつは動ける${life ? `・帰還の綱（use_item { slot: '${life.slot}' }）` : ''}`, `; you can still step with move${life ? ` or use the lifeline (use_item { slot: '${life.slot}' })` : ''}`) : '';
+      const why = macroStopError(L, fleeStop, { type: 'travel', to: `stairs_${type}` }).message.replace(/[。.]$/, '');
+      return `travel_to stairs_${type}${shown ? ` mode:${shown}` : ''} (${t(L, '不可: ', 'unavailable: ')}${why}${risk ? sep + risk : ''}${still})`;
+    }
     if (adjAwake.length) return `travel_to stairs_${type} mode:flee${risk ? ` (${risk})` : ''}`;
     if (x.huntingReach.length) return `travel_to stairs_${type} mode:steady (${stopText}${risk ? sep + risk : ''})`;
     return `travel_to stairs_${type}`;
@@ -2543,7 +2572,8 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
         const away = x.passable_dirs.filter((d) => { const v = DIR_VEC[d]; return cheb({ x: pos.x + v[0], y: pos.y + v[1] }, near.pos) > 1; });
         // 動くマスの数を先に（S6 §49.6 の 4: 1 歩のつもりで、階段を通り越した。1 マス先が階段でも止まらない）
         const steps = def?.steps;
-        const stepNote = steps && steps > 1 ? t(L, `${steps} マス動く（壁・閉じた扉・ほかの者の手前まで。1 マス先が階段でも止まらない）。`, `moves ${steps} cells (up to a wall, closed door or someone in the way; it does not stop on stairs one cell away). `) : '';
+        // 罠を踏めばそこで止まる（S6a §50.4 の 5）
+        const stepNote = steps && steps > 1 ? t(L, `${steps} マス動く（壁・閉じた扉・ほかの者の手前まで。罠を踏めばそこで止まる。1 マス先が階段でも止まらない）。`, `moves ${steps} cells (up to a wall, closed door or someone in the way; stepping on a trap stops it there; it does not stop on stairs one cell away). `) : '';
         if (away.length) out.push(`use_ability ${a.id} target:${away.length > 1 ? `<${away.join('|')}>` : away[0]} (${a.name}: ${stepNote}${desc})`);
       }
     } else if (def && a.target === 'none') {

@@ -20,8 +20,8 @@ interface Acc {
   /** 予備動作（種類ごと。最初に構えた順） */
   tells: Map<string, SlayTell>;
   openings: SlayOpenings;
-  /** 戦いが始まったときの相手（S6） */
-  start?: { scar: number; hp: number; firesLit?: number };
+  /** 戦いが始まったときの相手（S6）。S6a: 始めの体力は持たない（倒していない相手の体力を漏らさない） */
+  start?: { scar: number; firesLit?: number };
 }
 
 const newAcc = (): Acc => ({
@@ -46,6 +46,7 @@ const pctOf = (e: Entity | undefined): number | null => {
 };
 /** 突進・大振り: 外れると動けなくなり、当たれば相手に届く予備動作 */
 const STRIKES: ReadonlySet<string> = new Set<Intent['kind']>(['winding_up', 'swinging']);
+const WARD_FIRE = 'core:ward_fire';
 
 /** 大守護者 1 体の、出来事から追う状態（状態異常・眠り・予備動作） */
 interface WardenTrack {
@@ -100,6 +101,12 @@ class FightScan {
   private readonly engaged = new Set<string>();
   /** その遠征で、その大守護者と最後に戦った時点の装備など（倒さずに帰った挑戦に使う） */
   readonly lastFight = new Map<string, { no: number; snap: Snap }>();
+  /**
+   * この遠征で自分が見た護りの火（ID → 最後に見た状態。S6a: 戦い始めに灯っていた数は、見た火だけから作る。見ていない火・見ていない間に
+   * 変わった状態は使わない）。floorFires: いまいる大守護者の階の護りの火の ID（階が変わったら作り直す）
+   */
+  private readonly seenFires = new Map<string, string>();
+  private floorFires: string[] | null = null;
 
   constructor(private readonly base: { world: World; from: number }, private readonly pid: PlayerId, private readonly live: World,
     private readonly wardens: ReadonlyMap<string, number>, private readonly incap: ReadonlySet<string>) {
@@ -132,8 +139,10 @@ class FightScan {
   private accHere(depth: number): Acc | null { return this.floor === `main:${depth}` && this.curNo !== null ? this.accFor(depth) : null; }
 
   /**
-   * 戦いが始まった（S5a。自分が当事者の攻撃・被害か、自分に向いた構えを見た）。その遠征で初めてなら、そのときの相手の傷跡・始めの体力・
-   * 灯っていた護りの火を控える（S6 §49.5 の 2。畳んだ World から。畳めない区間では控えない）
+   * 戦いが始まった（S5a。自分が当事者の攻撃・被害か、自分に向いた構えを見た）。その遠征で初めてなら、そのときの相手の傷跡と、
+   * 灯っていた護りの火を控える（S6 §49.5 の 2。畳んだ World から。畳めない区間では控えない）。
+   * S6a: 始めの体力は控えない（倒していない相手の体力になる）。火は、この遠征で自分が見た、その相手の棲み処の火だけ（最後に見た状態で数える。
+   * 1 つも見ていなければ項目を省く）
    */
   private engage(wid: string): void {
     if (this.engaged.has(wid)) return;
@@ -142,10 +151,38 @@ class FightScan {
     const acc = t ? this.accHere(t.depth) : null;
     if (!acc || acc.start || !this.me()) return;
     const e = this.w.entities[wid];
-    if (!e?.stats || !e.pos) return;
-    const scar = Math.max(0, e.scar ?? 0);
-    const fires = Object.values(this.w.entities).filter((x) => x.kind === 'core:ward_fire' && x.pos?.floor === e.pos!.floor && (!x.lairOf || x.lairOf === wid));
-    acc.start = { scar, hp: Math.max(0, e.stats.maxHp - scar), ...(fires.length ? { firesLit: fires.filter((x) => x.feature?.state === 'lit').length } : {}) };
+    if (!e?.pos) return;
+    this.noteFires();
+    const seen = (this.floorFires ?? []).filter((id) => {
+      const x = this.w.entities[id];
+      return this.seenFires.has(id) && x?.pos?.floor === e.pos!.floor && (!x.lairOf || x.lairOf === wid);
+    });
+    acc.start = { scar: Math.max(0, e.scar ?? 0), ...(seen.length ? { firesLit: seen.filter((id) => this.seenFires.get(id) === 'lit').length } : {}) };
+  }
+
+  /** いまいる大守護者の階で、自分から見えている護りの火の状態を控える（畳んだ World の視界から。畳めない区間では控えない） */
+  private noteFires(): void {
+    const meE = this.me();
+    if (!meE?.pos || !this.floor || !this.keys.has(this.floor) || meE.pos.floor !== this.floor) return;
+    const f = this.w.floors[this.floor];
+    const vis = this.w.players[this.pid]?.knowledge?.visible;
+    if (!f || !vis) return;
+    const key = this.floor;
+    this.floorFires ??= Object.values(this.w.entities).filter((x) => x.kind === WARD_FIRE && x.pos?.floor === key).map((x) => x.id);
+    for (const id of this.floorFires) {
+      const x = this.w.entities[id];
+      if (x?.pos && vis.includes(x.pos.y * f.width + x.pos.x)) this.seenFires.set(id, x.feature?.state ?? 'lit');
+    }
+  }
+
+  /** その護りの火が自分から見えているか（消えた火を「消した数」に数えるか。畳めない区間では見えていたことにする） */
+  private fireVisible(id: string): boolean {
+    if (!this.me()) return true;
+    const x = this.w.entities[id];
+    const f = x?.pos ? this.w.floors[x.pos.floor] : undefined;
+    const vis = this.w.players[this.pid]?.knowledge?.visible;
+    if (!x?.pos || !f || !vis) return true;
+    return x.pos.floor === this.floor && vis.includes(x.pos.y * f.width + x.pos.x);
   }
 
   /** 大守護者が自分から見えるか（畳んだ World の視界と、草の中か。畳めないときは見えていたことにする） */
@@ -240,7 +277,9 @@ class FightScan {
       if (ev.state === 'at_camp' || ev.state === 'dead' || ev.state === 'left') this.floor = null;
       else if (body?.pos) this.floor = body.pos.floor;
     }
-    if (this.floor !== was) this.closeWins();
+    if (this.floor !== was) { this.closeWins(); this.floorFires = null; }
+    // 護りの火が置かれた（階を作ったときより後に置かれた火も、次に見るときに入れる）
+    if (this.floorFires && ((ev.type === 'entity_spawned' && ev.entity.kind === WARD_FIRE) || ev.put?.some((e) => e.kind === WARD_FIRE))) this.floorFires = null;
     if (ev.type === 'actor_scheduled' && ev.id === meId) {
       this.myTurns = ev.turns; this.inMyTurn = false;
       for (const x of this.wins) x.action = false;
@@ -250,6 +289,8 @@ class FightScan {
       this.curNo = ev.expedition.no;
       this.startTurns.set(this.curNo, this.myTurns);
       this.engaged.clear();
+      this.seenFires.clear();
+      this.floorFires = null;
     } else if (ev.type === 'expedition_ended') { this.closeWins(); this.curNo = null; }
     // 品を手に入れた（拾った・置き場から取った）
     if (ev.type === 'item_picked_up' && ev.actor === meId) this.got.set(ev.item, { got: 'picked', depth: depthOfKey(ev.floor) });
@@ -272,7 +313,8 @@ class FightScan {
         this.engage(wid);
         this.lastFight.set(wid, { no: this.curNo, snap: this.snap() });
       }
-      if (ev.type === 'warden_slain' && this.wardens.has(ev.id)) note(this.wardens.get(ev.id)!);
+      // 倒れた遠征: 自分がその階にいたときだけ（S6a: 協力プレイで、別の階で仲間が倒した遠征を数えない）
+      if (ev.type === 'warden_slain' && this.wardens.has(ev.id) && this.floor === `main:${this.wardens.get(ev.id)}`) note(this.wardens.get(ev.id)!);
     }
     const evDepth = depthOfKey(ev.floor);
     const acc = evDepth !== null && this.keys.has(ev.floor!) && this.floor === ev.floor ? this.accFor(evDepth) : null;
@@ -290,7 +332,8 @@ class FightScan {
       else if (ev.type === 'item_used' && ev.actor === meId && ev.kind && ev.category !== 'lifeline' && ev.category !== 'key' && this.identified(ev.kind)) add(acc.used, ev.kind);
       else if (ev.type === 'item_thrown' && ev.actor === meId && ev.kind && this.identified(ev.kind)) add(acc.thrownItems, ev.kind);
       else if (ev.type === 'ability_used' && ev.actor === meId) add(acc.abilities, ev.ability);
-      else if (ev.type === 'feature_state' && ev.kind === 'core:ward_fire' && ev.state === 'out') acc.wardFires++;
+      // 消した護りの火: 自分から見えていた火だけ（S6a。見えていない所で消えた火は数えない）
+      else if (ev.type === 'feature_state' && ev.kind === WARD_FIRE && ev.state === 'out' && this.fireVisible(ev.id)) acc.wardFires++;
       // いちばん低かった HP の割合（自分の HP が動いた出来事の後の World で）
       if ((ev.type === 'damaged' || ev.type === 'healed' || ev.type === 'max_hp_changed' || ev.type === 'level_up') && ev.target === meId) {
         const p = pctOf(this.me());
@@ -309,6 +352,7 @@ class FightScan {
     // 相手が動けなければ、その手番を数え始める
     if (ev.type === 'turn_began' && ev.actor === meId) {
       this.closeWins();
+      this.noteFires();
       for (const [wid, t] of this.tracks) {
         const a = this.accHere(t.depth);
         if (!a) continue;

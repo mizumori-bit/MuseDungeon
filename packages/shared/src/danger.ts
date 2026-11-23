@@ -1,7 +1,7 @@
 // 危険の見積もり（V3-2R3 §20.4）: 速さの比と思い出の記録から、1 手番あたりの最悪の被害を出す。観測とマクロで共用。
 // 入力は PlayerView と公開カタログだけ（伏せた能力値は使わない）。
 import type { Catalog } from './catalog';
-import { memoryKey } from './catalog';
+import { memoryKey, stairsSealed } from './catalog';
 import type { MonsterMemory } from './types';
 import { ceilDiv, floorDiv } from './util';
 import type { EntityView, PlayerView } from './view';
@@ -165,12 +165,29 @@ export function fleeRiskText(view: PlayerView, catalog: Catalog, withOptions = t
   const hp = view.self.stats.hp;
   const head = ja ? `次の 1 歩の間の最悪の見込み ${est.worst}（届く追跡中の敵の、記録の最大の一撃。会心を含む）・いまの HP ${hp}。` : `Worst case during the next step ${est.worst} (the recorded biggest hit of each hunter in reach, crits included); HP now ${hp}.`;
   if (!withOptions) return head;
+  return `${head}${ja ? '' : ' '}${fleeOptionsText(view, catalog)}`;
+}
+
+/**
+ * 逃げる移動が死にうるときの、取れる手（S6・S6a）: 階段の上なら階段と extract（S6a §50.4 の 2）・帰還の綱・回復の薬・向きを変える。
+ * 「取れる手: …。」の 1 文（持っている品はスロット付き）
+ */
+export function fleeOptionsText(view: PlayerView, catalog: Catalog): string {
+  const ja = view.locale !== 'en';
+  const pos = view.self.pos;
   const lifeline = view.inventory.find((i) => !!i.kind && !!catalog.items[i.kind]?.bound);
   const potion = view.inventory.find((i) => i.kind === 'core:potion_healing');
+  // 階段の上（着いた手番に止まった）: 階を移る・帰る。封じられた下り階段は使えない
+  const f = view.floor;
+  const stairs = f && pos ? catalog.terrain[view.terrainTable[view.memory.terrain[pos.y * f.width + pos.x]]]?.stairs ?? null : null;
+  const sealed = stairs === 'down' && stairsSealed(catalog.rules?.milestone, f?.depth ?? 0, view.milestonesCleared ?? []);
+  const canExtract = !!stairs && !!view.expedition && view.expedition.status !== 'ended';
   const opts = [
+    stairs && !sealed ? (ja ? `階段を使う（use_stairs で${stairs === 'down' ? '降りる' : '上る'}。階を移れば敵は追ってこない）` : `the stairs (use_stairs to go ${stairs}; enemies do not follow you between floors)`) : '',
+    canExtract ? (ja ? 'ここで帰る（extract）' : 'go home from here (extract)') : '',
     lifeline ? (ja ? `帰還の綱（use_item { slot: '${lifeline.slot}' }）` : `the lifeline (use_item { slot: '${lifeline.slot}' })`) : '',
     potion ? (ja ? `回復の薬（use_item { slot: '${potion.slot}' }）` : `a healing potion (use_item { slot: '${potion.slot}' })`) : '',
     ja ? '向きを変える（move で 1 歩ずつ。別の道・視線を切る）' : 'another direction (step with move: another way, or break line of sight)',
   ].filter(Boolean);
-  return ja ? `${head}取れる手: ${opts.join('・')}。` : `${head} Options: ${opts.join(', ')}.`;
+  return ja ? `取れる手: ${opts.join('・')}。` : `Options: ${opts.join(', ')}.`;
 }

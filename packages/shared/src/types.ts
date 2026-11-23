@@ -628,10 +628,11 @@ export interface SeasonSlay {
   /** 相手が動けなかった手番と、その手番に与えた・受けた被害（S5。S5 より前の記録には無い） */
   openings?: SlayOpenings;
   /**
-   * 戦いが始まったときの相手（S6。SEASON.md §49.5 の 2。S6 より前の記録には無い）: scar 傷跡（前の挑戦で残った体力の減り）・hp 始めの体力（最大体力 − 傷跡）・
-   * firesLit 棲み処の護りの火のうち灯っていた数（棲み処に火のある相手だけ）
+   * 戦いが始まったときの相手（S6。SEASON.md §49.5 の 2。S6 より前の記録には無い）: scar 傷跡（前の挑戦で残った体力の減り）・
+   * firesLit 棲み処の護りの火のうち灯っていた数（その遠征で自分が見た火だけ。1 つも見ていなければ無い）。
+   * 始めの体力は持たない（S6a §50.4: 倒していない相手の体力を漏らさない）
    */
-  wardenStart?: { scar: number; hp: number; firesLit?: number };
+  wardenStart?: { scar: number; firesLit?: number };
 }
 
 /** 討伐の記録の事実（だれのものか・選ばれ方を除いた中身）。倒さずに帰った自分の挑戦（S5 §47.4 の 2）も同じ形 */
