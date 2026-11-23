@@ -182,9 +182,13 @@ export function fleeOptionsText(view: PlayerView, catalog: Catalog): string {
   const stairs = f && pos ? catalog.terrain[view.terrainTable[view.memory.terrain[pos.y * f.width + pos.x]]]?.stairs ?? null : null;
   const sealed = stairs === 'down' && stairsSealed(catalog.rules?.milestone, f?.depth ?? 0, view.milestonesCleared ?? []);
   const canExtract = !!stairs && !!view.expedition && view.expedition.status !== 'ended';
+  // 観測の extract_outcome と同じ（遺物の目的は、自分が持っているときだけ達成）
+  const xv = view.expedition;
+  const done = xv?.status === 'objective_complete' && (xv.objective.type !== 'retrieve_relic' || xv.progress.relicHeldByYou);
   const opts = [
     stairs && !sealed ? (ja ? `階段を使う（use_stairs で${stairs === 'down' ? '降りる' : '上る'}。階を移れば敵は追ってこない）` : `the stairs (use_stairs to go ${stairs}; enemies do not follow you between floors)`) : '',
-    canExtract ? (ja ? 'ここで帰る（extract）' : 'go home from here (extract)') : '',
+    // 目的が未達なら、extract は confirm: true が無いと 1 回断られる（S6b。valid_actions の撤退の行と同じ）
+    canExtract ? (done ? (ja ? 'ここで帰る（extract）' : 'go home from here (extract)') : (ja ? 'ここで帰る（extract。目的は未達: confirm: true で撤退）' : 'go home from here (extract; objective not met: withdraw with confirm: true)')) : '',
     lifeline ? (ja ? `帰還の綱（use_item { slot: '${lifeline.slot}' }）` : `the lifeline (use_item { slot: '${lifeline.slot}' })`) : '',
     potion ? (ja ? `回復の薬（use_item { slot: '${potion.slot}' }）` : `a healing potion (use_item { slot: '${potion.slot}' })`) : '',
     ja ? '向きを変える（move で 1 歩ずつ。別の道・視線を切る）' : 'another direction (step with move: another way, or break line of sight)',

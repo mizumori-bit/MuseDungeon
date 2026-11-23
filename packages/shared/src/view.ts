@@ -8,7 +8,8 @@ import type { Dir } from './types';
 import { cheb, compassDir } from './util';
 import { projectSupplies, seasonBudgetLeft, seasonStairsCounts } from './season';
 import type { SupplyTakenView, SupplyView } from './season';
-import type { SupplyPlace } from './types';
+import type { SeasonSlay, SupplyPlace } from './types';
+import { SeasonSlaySchema } from './commands';
 
 const clone = <T>(x: T): T => structuredClone(x);
 
@@ -626,13 +627,18 @@ export function xpForLevel(level: number): number {
   return 15 * level * level;
 }
 
-/** PlayerView のシーズン（S0）。補給の置き場の品（S3）は、鑑定の決まりで種類を伏せ、場所を知っている置き場だけにする（projectSupplies） */
+/**
+ * PlayerView のシーズン（S0）。補給の置き場の品（S3）は、鑑定の決まりで種類を伏せ、場所を知っている置き場だけにする（projectSupplies）。
+ * 討伐の記録（S6b）は、取り込みの決まった形（SeasonSlaySchema。サーバーの見せる分 slaysView と同じ）に通して、形に無い項目を落とす
+ * （古い形の記録の始めの体力 wardenStart.hp などを渡さない）。形に合わない記録は渡さない。World の中身は変えない（射影の側だけ）
+ */
 function seasonView(world: World, playerId: PlayerId): NonNullable<PlayerView['season']> {
-  const { supplies: _s, deposited: _d, taken: _t, mineTaken: _m, supplyNews: _n, depositsPublished: _p, ...rest } = world.season!;
+  const { supplies: _s, deposited: _d, taken: _t, mineTaken: _m, supplyNews: _n, depositsPublished: _p, slays, ...rest } = world.season!;
   const sup = projectSupplies(world, playerId);
   const has = !!(_s?.length || _d?.length || _t?.length || _n?.length);
+  const shownSlays = slays?.flatMap((x): SeasonSlay[] => { const r = SeasonSlaySchema.safeParse(x); return r.success ? [r.data as SeasonSlay] : []; });
   return {
-    ...clone(rest), budgetLeft: seasonBudgetLeft(world, playerId) ?? 0, ...seasonStairsCounts(world, playerId),
+    ...clone(rest), ...(shownSlays ? { slays: shownSlays } : {}), budgetLeft: seasonBudgetLeft(world, playerId) ?? 0, ...seasonStairsCounts(world, playerId),
     ...(has ? { cache: sup.cache, cacheHidden: sup.hidden, supplyTaken: sup.taken, myDeposits: sup.mine, cacheNews: sup.news } : {}),
   };
 }

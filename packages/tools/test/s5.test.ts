@@ -568,9 +568,29 @@ describe('S6a (SEASON.md §50.4): an unslain warden\'s HP shows nowhere; ward fi
     const recs = m.seasons.get(SID)!.slays;
     expect(recs.map((x) => x.name)).toEqual(['Ben']);
     expect(recs[0].wardenStart).toEqual({ scar: 39 });
-    // Aya: 傷跡 −39 の相手に、棲み処の護りの火 2 つ（1 つは近くで見える・1 つは遠くで見えない）。突進を外させて殴り、倒さずに帰る
+    // Aya: 傷跡 −39 の相手に、棲み処の護りの火 3 つ（1 つは近くで見える・1 つは遠くで見えない・1 つは見た後に、見えない所で消える）。
+    // 突進を外させて殴り、倒さずに帰る
     const wa = await toWarden(a);
     const w = a.session.world;
+    // 見た後に、見えない所で消える火（S6b）: 遠い隅で見てから離れ、見えない間に消える。最後に見た「灯っている」で数え、消した数には入れない
+    const key5 = floorOf(a);
+    const f5 = w.floors[key5];
+    const tt5 = w.meta.terrainTable;
+    const free = (x: number, y: number) => {
+      const tr = content.terrain[content.terrainIndex[tt5[f5.terrain[y * f5.width + x]]]];
+      return tr.passable && !tr.opaque && !tr.stairs && !tr.door && !Object.values(w.entities).some((e) => e.pos?.floor === key5 && e.pos.x === x && e.pos.y === y);
+    };
+    let corner = { x: 0, y: 0 };
+    let cfire = { x: 0, y: 0 };
+    for (let y = 1; y < f5.height - 1; y++) for (let x = 1; x < f5.width - 1; x++) {
+      if (x + y <= corner.x + corner.y || !free(x, y)) continue;
+      const n = [[1, 0], [-1, 0], [0, 1], [0, -1]].map(([dx, dy]) => ({ x: x + dx, y: y + dy })).find((c) => free(c.x, c.y));
+      if (n) { corner = { x, y }; cfire = n; }
+    }
+    edit(a, meOf(w, a.playerId).id, (e) => { e.pos = { floor: key5, ...corner }; });
+    rec(a, { put: [{ id: 'e_s6afir3', kind: 'core:ward_fire', sid: Math.max(...Object.values(w.entities).map((e) => e.sid ?? 0)) + 1, pos: { floor: key5, ...cfire }, feature: { state: 'lit' }, lairOf: wa } as Entity] });
+    expect((await act(a, { type: 'wait' })).ok).toBe(true);
+    expect(w.players[a.playerId].knowledge.visible.includes(cfire.y * f5.width + cfire.x)).toBe(true);
     let near = { x: 0, y: 0 };
     let far = { x: 0, y: 0 };
     await chargeMiss(a, wa, {
@@ -585,12 +605,17 @@ describe('S6a (SEASON.md §50.4): an unslain warden\'s HP shows nowhere; ward fi
         let sid = Math.max(...Object.values(w.entities).map((e) => e.sid ?? 0));
         const fire = (id: string, c: { x: number; y: number }) => ({ id, kind: 'core:ward_fire', sid: ++sid, pos: { floor: key, x: c.x, y: c.y }, feature: { state: 'lit' }, lairOf: wa } as Entity);
         rec(a, { put: [fire('e_s6afir1', near), fire('e_s6afir2', far)] });
+        // 隅から離れた（視界を空にする。次の手番に、P からの視界で数え直す）。見えない間に、隅の火が消える
+        recEv(a, { type: 'knowledge_updated', player: a.playerId, floorKey: key, visible: [], newlySeen: [], rememberedSet: [], rememberedDel: [], metAdd: [], floor: key });
+        recEv(a, { type: 'feature_state', floor: key, id: 'e_s6afir3', kind: 'core:ward_fire', state: 'out' });
       },
     });
     const f = w.floors[floorOf(a)];
     const vis = w.players[a.playerId].knowledge.visible;
     expect(vis.includes(near.y * f.width + near.x)).toBe(true);
     expect(vis.includes(far.y * f.width + far.x)).toBe(false);
+    expect(vis.includes(cfire.y * f.width + cfire.x)).toBe(false);
+    expect(w.entities['e_s6afir3'].feature!.state).toBe('out');
     // 見えている火が消えた（数える）・見えていない火が消えた（数えない）
     recEv(a, { type: 'feature_state', floor: floorOf(a), id: 'e_s6afir1', kind: 'core:ward_fire', state: 'out' });
     recEv(a, { type: 'feature_state', floor: floorOf(a), id: 'e_s6afir2', kind: 'core:ward_fire', state: 'out' });
@@ -600,13 +625,14 @@ describe('S6a (SEASON.md §50.4): an unslain warden\'s HP shows nowhere; ward fi
     await lifelineHome(a);
     const ob = a.port.observe().observation;
     const x = ob.camp!.compare!.wardens![0];
-    expect(x.attempt.warden_start).toEqual({ scar: 39, fires_lit: 1 });
+    // 灯っていた火: 近くの火と、最後に見たときに灯っていた隅の火（見ていない遠くの火は入らない）。消した火: 見えていた近くの火だけ
+    expect(x.attempt.warden_start).toEqual({ scar: 39, fires_lit: 2 });
     expect(x.attempt.ward_fires).toBe(1);
     expect(x.attempt.text).toContain('。相手は、傷跡で体力 −39 から。');
-    expect(x.attempt.text).toContain('護りの火: 戦い始めに 1 つ灯っていた・この挑戦で 1 つ消した');
+    expect(x.attempt.text).toContain('護りの火: 戦い始めに 2 つ灯っていた・この挑戦で 1 つ消した');
     const at = (label: string) => x.lines.find((l) => l.startsWith(`  ${label}: `));
     expect(at('戦い始めの相手')).toBe('  戦い始めの相手: 傷跡で体力 −39 ／ 傷跡で体力 −39');
-    expect(at('護りの火')).toBe('  護りの火: 戦い始めに 1 つ灯っていた・この挑戦で 1 つ消した ／ なし');
+    expect(at('護りの火')).toBe('  護りの火: 戦い始めに 2 つ灯っていた・この挑戦で 1 つ消した ／ なし');
     // 候補（大守護者を倒す遠征）の記録の短い形と、前の挑戦
     const prev = a.session.lastWardenAttempt(a.playerId, 5)!;
     const v = structuredClone(a.port.view());
@@ -616,7 +642,12 @@ describe('S6a (SEASON.md §50.4): an unslain warden\'s HP shows nowhere; ward fi
     expect(offer.text).toContain('（相手は、傷跡で体力 −39 から）');
     // 文: 始めの体力も、残りの体力も無い
     const recText = offer.text.slice(offer.text.indexOf('先に倒した者'));
-    const texts = [x.attempt.text, ...x.lines, ...x.records.map((r) => r.text), recText, ...offer.slays!.map((r) => r.text), ...a.port.slayArchive().lines];
+    // 構造化した知らせ・記録庫（S6b）
+    expect(ob.season!.slay_news!.map((n) => n.by)).toEqual(['Ben']);
+    const archive = ob.camp!.archive!.slays!;
+    expect(archive.length).toBeGreaterThan(0);
+    const texts = [x.attempt.text, ...x.lines, ...x.records.map((r) => r.text), recText, ...offer.slays!.map((r) => r.text), ...a.port.slayArchive().lines,
+      ...ob.season!.slay_news!.map((n) => n.text), ...archive.flatMap((s) => [s.text, ...s.records.map((r) => r.text)])];
     for (const t of texts) {
       expect(t).not.toMatch(/始めの体力|started at/);
       expect(t).not.toContain(String(startHp));
@@ -624,8 +655,33 @@ describe('S6a (SEASON.md §50.4): an unslain warden\'s HP shows nowhere; ward fi
     }
     expect(formatObservationText(ob, 'ja')).not.toMatch(/始めの体力/);
     // 項目: 体力の項目は無い（挑戦・並べの記録・候補の記録・見える討伐の記録・シーズンの置き場所）
-    const fields = [x.attempt, ...x.records, ...offer.slays!, a.port.view().season!.slays, prev.facts, m.seasons.get(SID)!.slays];
+    const fields = [x.attempt, ...x.records, ...offer.slays!, a.port.view().season!.slays, prev.facts, m.seasons.get(SID)!.slays, ob.season!.slay_news, archive];
     for (const o of fields) expect(JSON.stringify(o)).not.toMatch(/"(hp|max_?hp|maxHp)"\s*:/);
+    // HTTP の順位の表（同じ機械からなので、開催中でも記録の中身まで出る）
+    const app = createApp(m, m.config);
+    await new Promise<void>((res) => app.server.listen(0, '127.0.0.1', () => res()));
+    try {
+      const body = await (await fetch(`http://127.0.0.1:${(app.server.address() as AddressInfo).port}/api/seasons/${SID}`)).text();
+      expect(body).toContain('"wardenStart":{"scar":39}');
+      expect(body).not.toMatch(/"(hp|max_?hp|maxHp)"\s*:|始めの体力/);
+    } finally {
+      await app.close();
+    }
+    // S6b: 古い形の記録（始めの体力 wardenStart.hp・形に無い項目）が World にあっても、PlayerView には出ない（射影の側で落とす。World は変えない）。
+    // 形に合わない記録は渡さない
+    const w2 = structuredClone(a.session.world);
+    const base = w2.season!.slays![0];
+    w2.season!.slays = [
+      { ...structuredClone(base), wardenStart: { scar: 39, hp: 461, firesLit: 1 }, secretHp: 461 } as unknown as SeasonSlay,
+      { ...structuredClone(base), depth: -1 },
+    ];
+    const pv = projectPlayerView(w2, a.playerId);
+    expect(pv.season!.slays).toHaveLength(1);
+    expect(pv.season!.slays![0].wardenStart).toEqual({ scar: 39, firesLit: 1 });
+    expect(JSON.stringify(pv.season)).not.toMatch(/"hp"\s*:|secretHp/);
+    expect((w2.season!.slays![0].wardenStart as { hp?: number }).hp).toBe(461);
+    const ob2 = buildObservation(pv, catalog, { detail: 'full', map: false });
+    expect(JSON.stringify(ob2)).not.toMatch(/secretHp|始めの体力/);
     m.closeAll();
   }, 120_000);
 });

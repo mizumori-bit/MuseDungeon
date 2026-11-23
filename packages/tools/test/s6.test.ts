@@ -103,8 +103,19 @@ describe('S6a §50.4 の 2・4・7: a flight stops on the way once one worst tur
     // 階段の上で、ほかの行き先への逃げは断る（死にうる）。取れる手に、階段と extract
     const no = await act(a, { type: 'travel', to: { x: a.ox, y: a.oy }, mode: 'flee' });
     expect(!no.ok && no.error.code).toBe('flee_lethal');
-    if (!no.ok) expect(no.error.hint).toMatch(/^取れる手: 階段を使う（use_stairs で降りる。階を移れば敵は追ってこない）・ここで帰る（extract）・帰還の綱（use_item \{ slot: '.' \}）・.*向きを変える/);
+    if (!no.ok) expect(no.error.hint).toMatch(/^取れる手: 階段を使う（use_stairs で降りる。階を移れば敵は追ってこない）・ここで帰る（extract。目的は未達: confirm: true で撤退）・帰還の綱（use_item \{ slot: '.' \}）・.*向きを変える/);
     expect(fleeOptionsText(v, catalog)).toContain('use_stairs');
+    // 目的が未達なので、extract は confirm: true が無いと断られる（S6b: 取れる手にそう添える）
+    expect(v.expedition!.status).not.toBe('objective_complete');
+    const ex = await act(a, { type: 'extract' });
+    expect(!ex.ok && ex.error.code).toBe('confirm_required');
+    // 達成していれば、添えない
+    const done = structuredClone(v);
+    done.expedition!.status = 'objective_complete';
+    if (done.expedition!.objective.type === 'retrieve_relic') done.expedition!.progress.relicHeldByYou = true;
+    expect(fleeOptionsText(done, catalog)).toContain('・ここで帰る（extract）・');
+    expect(fleeOptionsText({ ...done, locale: 'en' }, catalog)).toContain('go home from here (extract), ');
+    expect(fleeOptionsText({ ...v, locale: 'en' }, catalog)).toContain('go home from here (extract; objective not met: withdraw with confirm: true), ');
     a.manager.closeAll();
   });
 
