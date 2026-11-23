@@ -307,7 +307,8 @@ export function MonstersPanel({ monsters, hp, onFight, throwSlotFor, reach, onRe
       <h3>{tr('見えている敵', 'Enemies in view')} <small>{monsters.length}</small></h3>
       <ul>
         {monsters.map((m) => {
-          const aw = AWARE_LABEL[m.awareness];
+          // 動かない敵が気づいているときは「気づいている（動かない）」（S7 §52.3 の 6）
+          const aw: [string, string] | undefined = m.awareness === 'hunting' && m.traits.includes('stationary') ? ['気づいている（動かない）', 'aware (stationary)'] : AWARE_LABEL[m.awareness];
           const hs = HP_LABEL[m.hp_state];
           const wt = reachesYou(m) ? m.worst_turn : null;
           const lethal = wt !== null && wt >= hp;

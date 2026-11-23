@@ -409,6 +409,17 @@ export function checkpointObs(L: Locale, notes: readonly string[]): ObsCheckpoin
   };
 }
 
+/**
+ * 撤退で確定するもの（S7: 「撤退（報酬なし）」と読めたが、撤退でも戦利品の一部は確定する）。目的なしの遠征は、extract がいつも撤退の扱い。
+ * ifNow: 今 extract した場合の確定点（分かれば）
+ */
+export function withdrawText(L: Locale, pct: number, endless: boolean, ifNow?: number): string {
+  const now = ifNow !== undefined ? t(L, `。今なら +${ifNow}`, `; +${ifNow} now`) : '';
+  return endless
+    ? t(L, `撤退: 目的なしの遠征は、いつもこの扱い。戦利品の ${pct}% が確定する${now}`, `withdraw: always so on an expedition with no objective; ${pct}% of the haul is banked${now}`)
+    : t(L, `撤退: 目的は未達のまま終える。戦利品の ${pct}%（目的の点を除く）が確定する${now}`, `withdraw: end without the objective; ${pct}% of the haul (without the objective points) is banked${now}`);
+}
+
 /** キャンプの「できること」の notes の行（S7 §52.2 の 1。そのまま呼べる形） */
 export function notesActionLine(L: Locale): string {
   return t(L,
@@ -601,6 +612,13 @@ export function partyText(L: Locale, party: readonly ObsPartyMember[]): string {
   return t(L, `仲間: ${party.map(one).join('、')}`, `Party: ${party.map(one).join(', ')}`);
 }
 const AW_JA: Record<string, string> = { asleep: '睡眠中', unaware: '未察知', hunting: '追跡中' };
+
+/** 状態の表示（S7 §52.3 の 6）: 動かない敵（毒カビなど）が気づいているときは「追跡中」でなく「気づいている（動かない）」。表示だけ（awareness の値は hunting のまま） */
+export function awarenessText(L: Locale, awareness: string | undefined, stationary: boolean): string {
+  const a = awareness ?? 'unaware';
+  if (a === 'hunting' && stationary) return t(L, '気づいている（動かない）', 'aware (stationary)');
+  return L === 'en' ? a : AW_JA[a] ?? a;
+}
 
 export function itemDisplayName(catalog: Catalog, locale: Locale, kind: string | null, appearanceId: string | null, affixes: readonly string[] = []): string {
   const base = kindName(catalog, locale, kind, appearanceId);
@@ -2302,6 +2320,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
     attackers, mineCount, pickables, collectable: collectIds.length, huntingReach, worstSum, unrecorded, chaseOf, lifelineShort: !!opts.lifelineShort,
     draft: view.floorHint?.draft ?? null,
     ifLifeline: expedition?.haul?.if_lifeline_now, lifelineObjective: expedition?.haul?.parts.objective ?? 0,
+    ifExtract: expedition?.haul?.if_extract_now, endless: view.expedition?.objective.type === 'endless',
     perkChoice: perkChoiceObs, boonChoice: boonChoiceObs, abilities: abilitiesList, bonuses,
   });
 
@@ -2424,6 +2443,8 @@ interface VAInput {
   chaseOf: (steps: number) => ChaseEstimate;
   /** 帰還の綱を今使った場合の確定点 */
   ifLifeline?: number;
+  /** 今 extract した場合の確定点（S7: 撤退でも入る）・目的なしの遠征か */
+  ifExtract?: number; endless?: boolean;
   /** 戦利品のうち目的の分（綱では入らない。S3b §30.4 の 2） */
   lifelineObjective?: number;
   /** 下への風（今いる階の下り階段が未発見のとき） */
@@ -2519,7 +2540,7 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
   // 野営の火から（S1c §14.3 の 1）: 帰り支度の手番・取りやめ・次の遠征はこの火のそばから
   const viaFire = x.extractVia;
   const fromFire = viaFire ? t(L, `・${viaFire.by} の野営の火から。帰り支度 ${viaFire.turns} 手番（この手番を含む。その間に追ってくる敵が見えたら取りやめ）・次の遠征はこのマスから始まる`, `; from ${viaFire.by}'s campfire: ${viaFire.turns} turns packing up (including this one; called off if a hunting enemy comes into view); the next expedition starts from this cell`) : '';
-  if (x.canExtract) out.push(x.objectiveComplete ? `extract (${t(L, '帰還: 遠征達成', 'complete the expedition')}${viaFire ? fromFire : fromHere}${leftBehind})` : `extract confirm:true (${t(L, '撤退: 未達成のまま終える', 'withdraw without the reward')}${viaFire ? fromFire : fromHere}${leftBehind})`);
+  if (x.canExtract) out.push(x.objectiveComplete ? `extract (${t(L, '帰還: 遠征達成', 'complete the expedition')}${viaFire ? fromFire : fromHere}${leftBehind})` : `extract confirm:true (${withdrawText(L, catalog.rules.haul.withdrawPct, !!x.endless, x.ifExtract)}${viaFire ? fromFire : fromHere}${leftBehind})`);
   // 移動マクロはその場で進める mode だけを出す（V3-2R §14.2）。隣に起きている敵がいれば careful では動かないので flee を出す
   const adjAwake = x.hostiles.filter((m) => m.dist <= 1 && m.awareness !== 'asleep' && !m.fleeing);
   // 既定の hp_floor の実数（steady・fight は最大 HP の 50%。V3-2R2 §18.5）
@@ -2744,7 +2765,9 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
     if (nx < 0 || ny < 0 || nx >= f.width || ny >= f.height) continue;
     const i = ny * f.width + nx;
     const tr = catalog.terrain[view.terrainTable[view.memory.terrain[i]]];
-    if (d && tr?.door === 'open' && !byPos.has(i)) out.push(`interact ${d} (${t(L, '扉を閉める', 'close door')})`);
+    // 扉の上に者か品があると、engine は閉めずに断る（S7: 「できること」と断りをそろえる。品は見えている物と覚えている物）
+    const doorItem = view.entities.some((e) => e.cat === 'item' && e.pos.x === nx && e.pos.y === ny) || view.memory.remembered.some((r) => r.cat === 'item' && r.pos.x === nx && r.pos.y === ny);
+    if (d && tr?.door === 'open' && !byPos.has(i) && !doorItem) out.push(`interact ${d} (${t(L, '扉を閉める', 'close door')})`);
     // 鍵のかかった格子扉（V3-5 §5.1）
     if (d && tr?.tags.includes('locked')) {
       const hasKey = view.inventory.some((it) => it.kind && catalog.items[it.kind]?.category === 'key');
@@ -2977,8 +3000,8 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
       // 持っている品（宝物庫の鍵。V3-5 §5.1）
       const carry = m.carries ? t(L, ` [${m.carries_name ?? m.carries}を持っている]`, ` [carries the ${m.carries_name ?? m.carries}]`) : '';
       lines.push(L === 'en'
-        ? `- ${m.name}${m.objective ? ' [objective]' : ''}${role}${carry}${gtext} ${m.id} (${m.pos.x},${m.pos.y}) ${relLabel(L, from, m.pos)} hp:${m.hp_state} ${m.awareness}${m.fleeing ? '(fleeing)' : ''}${looksText} threat:${threat}${worst}${hits}${dmg}${est}${shot}${m.statuses.length ? ' ' + m.statuses.join(',') : ''}${itext}`
-        : `- ${m.name}${m.objective ? '［目的］' : ''}${role}${carry}${gtext} ${m.id} (${m.pos.x},${m.pos.y}) ${relLabel(L, from, m.pos)}  負傷:${HP_JA[m.hp_state]}  状態:${AW_JA[m.awareness] ?? m.awareness}${m.fleeing ? '(逃走中)' : ''}${looksText}  脅威:${threat}${worst}${hits}${dmg}${est}${shot}${m.statuses.length ? '  ' + m.statuses.join(',') : ''}${itext}`);
+        ? `- ${m.name}${m.objective ? ' [objective]' : ''}${role}${carry}${gtext} ${m.id} (${m.pos.x},${m.pos.y}) ${relLabel(L, from, m.pos)} hp:${m.hp_state} ${awarenessText(L, m.awareness, m.traits.includes('stationary'))}${m.fleeing ? '(fleeing)' : ''}${looksText} threat:${threat}${worst}${hits}${dmg}${est}${shot}${m.statuses.length ? ' ' + m.statuses.join(',') : ''}${itext}`
+        : `- ${m.name}${m.objective ? '［目的］' : ''}${role}${carry}${gtext} ${m.id} (${m.pos.x},${m.pos.y}) ${relLabel(L, from, m.pos)}  負傷:${HP_JA[m.hp_state]}  状態:${awarenessText(L, m.awareness, m.traits.includes('stationary'))}${m.fleeing ? '(逃走中)' : ''}${looksText}  脅威:${threat}${worst}${hits}${dmg}${est}${shot}${m.statuses.length ? '  ' + m.statuses.join(',') : ''}${itext}`);
     }
     for (const p of vis.players) lines.push(`- ${t(L, '味方', 'ally')} ${p.name} (${p.pos.x},${p.pos.y}) ${relLabel(L, from, p.pos)} ${L === 'en' ? p.hp_state : HP_JA[p.hp_state]}`);
     for (const it of vis.items) {
@@ -3103,7 +3126,7 @@ export function describeTarget(view: PlayerView, catalog: Catalog, target: Pos |
       // 大守護者: 記録庫の記憶（体力と最大の一撃の目安。V3-3a §35.7）
       const wi = g?.warden && view.floor ? view.wardenIntel?.[String(view.floor.depth)] : undefined;
       const wiText = wi?.hp !== undefined ? t(L, `・記録庫の記憶: 体力およそ ${wi.hp}・一撃 ${wi.maxHit} まで`, `, the archive remembers: about ${wi.hp} HP, hits up to ${wi.maxHit}`) : '';
-      parts.push(`${name} [${L === 'en' ? e.hp : HP_JA[e.hp ?? 'healthy']}, ${L === 'en' ? e.awareness : AW_JA[e.awareness ?? 'unaware']}] ${memText}${hpText}${traitText}${affText}${ds}${estText}${shotText}${sturdy}${gText}${wiText}`);
+      parts.push(`${name} [${L === 'en' ? e.hp : HP_JA[e.hp ?? 'healthy']}, ${awarenessText(L, e.awareness, !!e.kind && !!catalog.monsters[e.kind]?.tags.includes('stationary'))}] ${memText}${hpText}${traitText}${affText}${ds}${estText}${shotText}${sturdy}${gText}${wiText}`);
       list.push({ id: e.id, name, hp_state: e.hp, awareness: e.awareness, memory: mem ?? null, threat: threatOf(view, e), role: e.role, damage_seen: e.damageSeen ?? 0, hp_left_est: est ?? null });
     } else if (e.cat === 'item') {
       const name = itemDisplayName(catalog, L, e.kind, e.appearanceId, e.affixes);

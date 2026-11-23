@@ -72,7 +72,8 @@ export interface MacroReport {
   /** fight: 標的を最後に見た場所（V4-0c §4.2） */
   targetSeenAt?: Pos;
   /** explore toward: 始めた所と方角・方角に行ける境界が無かった手・遠回りで近い境界を先にした回数（S1b §12.4 の 4。結果の文で理由を言う） */
-  toward?: { kind: 'draft' | 'sense'; dir: Dir | null; start: Pos; noAlong: number; detour: number };
+  /** widen: その方角（と両隣）に行ける境界が無いので、幅を広げた（S7 §52.3 の 4。level 1 = 横・2 = 後ろ、steps: 広げた手、dir: 向かった境界の方角） */
+  toward?: { kind: 'draft' | 'sense'; dir: Dir | null; start: Pos; noAlong: number; detour: number; widen?: { level: 1 | 2; steps: number; dir: Dir | null } };
   /** fight: 投げる物が尽きたが、隣に追ってくる敵がいるので床の投げ物を拾いに行かなかった（S1b §12.4 の 5） */
   retrieveHeld?: boolean;
   /** fight・steady・flee: 実際に使った hp_floor（渡した値か既定。S1c §14.4 の 1: 文と食い違わないように） */
@@ -973,7 +974,7 @@ export class RunSession {
       hpGained: end.self.stats.hp - state.startHp,
       ...(state.slowChasers?.length ? { slowChasers: state.slowChasers.length } : {}),
       ...(state.targetSeenAt ? { targetSeenAt: { ...state.targetSeenAt } } : {}),
-      ...(cmd.type === 'explore' && cmd.toward && startView.self.pos ? { toward: { kind: cmd.toward, dir: state.towardDir ?? null, start: { ...startView.self.pos }, noAlong: state.towardNoAlong ?? 0, detour: state.towardDetour ?? 0 } } : {}),
+      ...(cmd.type === 'explore' && cmd.toward && startView.self.pos ? { toward: { kind: cmd.toward, dir: state.towardDir ?? null, start: { ...startView.self.pos }, noAlong: state.towardNoAlong ?? 0, detour: state.towardDetour ?? 0, ...(state.towardWiden ? { widen: { ...state.towardWiden } } : {}) } } : {}),
       ...(state.retrieveHeld ? { retrieveHeld: true } : {}),
       hpFloor: state.hpFloor,
       ...(state.detour ? { detour: structuredClone(state.detour) } : {}),

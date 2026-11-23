@@ -44,14 +44,18 @@ export function endReasonText(L: Locale, r: ExpeditionEndReason | null): string 
 }
 
 /** 開始時・再開時のブリーフィング（§2.6） */
-export function briefingLines(L: Locale, x: ExpeditionView, rules?: Pick<CatalogRules, 'traits'> & Partial<Pick<CatalogRules, 'lifeline'>>): string[] {
+export function briefingLines(L: Locale, x: ExpeditionView, rules?: Pick<CatalogRules, 'traits'> & Partial<Pick<CatalogRules, 'lifeline' | 'haul'>>): string[] {
   const lt = rules?.lifeline?.turns ?? 0;
+  const wp = rules?.haul?.withdrawPct ?? 50;
   const lines = [
     t(L, `【遠征 ${x.no}】目的: ${objectiveText(L, x.objective)}`, `[Expedition ${x.no}] Objective: ${objectiveText(L, x.objective)}`),
     // 物語の 1 文（V3-3 §3.4）
     ...(x.story ? [nameOf(x.story, L, '')] : []),
     t(L, `達成条件: ${conditionText(L, x.objective)}`, `Completion: ${conditionText(L, x.objective)}`),
-    t(L, '撤退: 階段の上で extract(confirm) すると、未達成のまま生還して遠征を終えられる（追跡中の敵が見えていてもよい）', 'Withdraw: extract(confirm) on stairs ends the expedition alive, without the reward (even with hunters in view)'),
+    // 撤退でも戦利品の一部は確定する（S7: 「報酬なし」と読めた）。目的なしの遠征は、extract がいつも撤退の扱い
+    x.objective.type === 'endless'
+      ? t(L, `帰る: 目的なしの遠征なので、階段の上で extract(confirm) すると撤退の扱いで生還し、戦利品の ${wp}% が確定する（追跡中の敵が見えていてもよい）`, `Going home: with no objective, extract(confirm) on stairs is a withdrawal; you come back alive and ${wp}% of the haul is banked (even with hunters in view)`)
+      : t(L, `撤退: 階段の上で extract(confirm) すると、未達成のまま生還して遠征を終えられる（目的の点は入らず、ほかの戦利品の ${wp}% が確定する。追跡中の敵が見えていてもよい）`, `Withdraw: extract(confirm) on stairs ends the expedition alive without the objective (${wp}% of the rest of the haul is banked; even with hunters in view)`),
     t(L, `帰還の綱: 階段から遠くても use_item で使えば${lt > 0 ? ` ${lt} 手番後に` : 'その場で'}キャンプへ戻る（命と、目的を除く戦利品の半分を持ち帰る。遺物は運べない。達成した遠征には数えない）`,
       `Lifeline: use_item it anywhere to return to camp${lt > 0 ? ` after ${lt} turns` : ' at once'} (you keep your life and half the haul without the objective; a relic cannot come along; not a completed expedition)`),
     t(L, '終了理由: 達成して帰還 / 帰還の綱で帰還 / 撤退 / 死亡 / 引退(retire)', 'It ends by: completion + extract / lifeline / withdrawal / death / retire'),

@@ -378,12 +378,17 @@ describe('S1b §12.4 の 4: explore toward', () => {
   it('counts the steps with no reachable edge toward the hint, and the result says why it walked another way', async () => {
     const a = await room('s1b-toward', true);
     const v = withDraft(projectPlayerView(a.world, a.pid), 'e');
-    // S1c §14.6 の 2: 方角に行ける境界が無ければ止まる（flee は今までどおり、ほかの方角の境界へ）
-    expect(macroNext(macroStart(v, { type: 'explore', toward: 'draft' }, catalog), v, catalog, [])).toEqual({ stop: 'toward_exhausted' });
+    // S1c §14.6 の 2 は止まっていた。S7（SEASON.md §52.3 の 4）: 方角の幅を広げて（両隣 → 横 → 後ろ）、西の境界へ回る
+    const wide = macroStart(v, { type: 'explore', toward: 'draft' }, catalog);
+    const wd = macroNext(wide, v, catalog, []);
+    expect('command' in wd && wd.command.type === 'move' && ['w', 'nw', 'sw'].includes(wd.command.dir)).toBe(true);
+    expect(wide.towardWiden?.level).toBe(2);
     const st = macroStart(v, { type: 'explore', toward: 'draft', mode: 'flee' }, catalog);
     const d = macroNext(st, v, catalog, []);
     expect('command' in d && d.command.type === 'move' && ['w', 'nw', 'sw'].includes(d.command.dir)).toBe(true);
-    expect(st.towardNoAlong).toBe(1);
+    // flee も幅を広げる（どの幅にも無いときだけ、今までどおり towardNoAlong）
+    expect(st.towardNoAlong).toBeUndefined();
+    expect(st.towardWiden?.level).toBe(2);
     expect(st.towardDir).toBe('e');
     const start = { x: 15, y: 3 };
     expect(towardNote('ja', { kind: 'draft', dir: 'e', start, noAlong: 4, detour: 0 }, { x: 10, y: 3 })).toBe('下への風の方角（東）に、行ける未探索の境界が無い手が 4 手あった（その間は、ほかの方角の近い境界を探した）。');
@@ -395,17 +400,14 @@ describe('S1b §12.4 の 4: explore toward', () => {
     const f = a2.world.floors[a2.key];
     a2.world.players[a2.pid].knowledge.floorHint = { floor: a2.key, draft: 'e', explored: 1 };
     void f;
-    // flee でなければ、手番を使わずに理由を言って断る（S1c §14.6 の 2）
-    const no = await a2.r.port.act({ type: 'explore', toward: 'draft' }, { source: 'bot' });
-    expect(!no.ok && no.error.code).toBe('nothing_to_do');
-    expect(!no.ok && no.error.message).toContain('下への風の方角に、行ける未探索の境界が無い');
-    expect(!no.ok && no.error.details?.stop).toBe('toward_exhausted');
-    // 断った応答の「できること」に、同じ行を出さない（S2a §20.6 の 2）。S5c: 観測の行も出さない（断る判定と同じ macroProbe で決める）
-    expect(a2.r.port.observe().observation.valid_actions.some((l) => l.startsWith('explore toward:draft'))).toBe(false);
-    expect(!no.ok && no.valid_actions.some((l) => l.startsWith('explore toward:draft'))).toBe(false);
-    expect(!no.ok && no.valid_actions.some((l) => l === 'explore' || l.startsWith('explore ('))).toBe(true);
+    // S7（SEASON.md §52.3 の 4）: 断らずに、幅を広げて回る。結果の文に、広げたことと向かった方角（S1c §14.6 の 2 の断りは、全部の境界が尽きたときだけ: s7.test.ts）
+    expect(a2.r.port.observe().observation.valid_actions.some((l) => l.startsWith('explore toward:draft'))).toBe(true);
+    const go = await a2.r.port.act({ type: 'explore', toward: 'draft', maxSteps: 3 }, { source: 'bot' });
+    expect(go.ok && go.outcome).toContain('下への風の方角（東）とその両隣に、行ける未探索の境界が無いので、');
+    expect(go.ok && go.outcome).toMatch(/(西|北西|南西)の境界へ回った（方角の幅を後ろまで広げた手 \d+）/);
+    a2.world.players[a2.pid].knowledge.floorHint = { floor: a2.key, draft: 'e', explored: 1 };
     const res = await a2.r.port.act({ type: 'explore', toward: 'draft', mode: 'flee', maxSteps: 3 }, { source: 'bot' });
-    expect(res.ok && res.outcome).toContain('行ける未探索の境界が無い手が');
+    expect(res.ok).toBe(true);
     a.manager.closeAll();
     a2.manager.closeAll();
   });

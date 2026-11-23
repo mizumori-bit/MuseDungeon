@@ -62,6 +62,8 @@ export interface EntityView {
   firstSeenSeq?: number;
   /** 自分が投げた物（アイテム） */
   mine?: boolean;
+  /** 自分が床に置いた物（アイテム。拾えば消える。S7: 移動マクロの拾いは、自分で置いた品を拾い直さない） */
+  dropped?: boolean;
   /** 宝の価値（アイテム） */
   value?: number;
   /** 倒すと戦利品に入る賞金（守護者・名前付きの強敵） */
@@ -98,6 +100,8 @@ export interface RememberedView {
   role?: EntityRole;
   /** 自分が投げた物 */
   mine?: boolean;
+  /** 自分が床に置いた物（S7） */
+  dropped?: boolean;
   value?: number;
   /** 品の接辞（S3a §27.6 の 6: 見えたときに分かる不変の性質。見えている品と同じ。「補強された革鎧」が覚えている地図で「革鎧」と出た） */
   affixes?: string[];
@@ -449,6 +453,7 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
         if (e.role) iv.role = e.role;
         if (objectiveIds.has(e.id)) iv.objective = true;
         if (e.item!.thrownBy === playerId) iv.mine = true;
+        if (e.item!.droppedBy === playerId) iv.dropped = true;
         if (e.item!.value !== undefined) iv.value = e.item!.value;
         entities.push(iv);
       } else if (cat === 'monster' || cat === 'player') {
@@ -515,6 +520,7 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
     if (we?.role) rv.role = we.role;
     if (objectiveIds.has(r.id)) rv.objective = true;
     if (r.cat === 'item' && we?.item?.thrownBy === playerId && !we.item.heldBy) rv.mine = true;
+    if (r.cat === 'item' && we?.item?.droppedBy === playerId && !we.item.heldBy) rv.dropped = true;
     if (r.cat === 'item' && we?.item?.value !== undefined) rv.value = we.item.value;
     // 接辞は、見たときに覚えたもの（S3c §33.3 の 1。覚えている地図は見たときのまま。今の World からは取らない: 協力プレイで、仲間が拾った・呪いが見つかったことが、
     // 名前の変わり方から分かっていた）。種類が伏せられている品は、今までどおり出さない。接辞の無い古い記録は、名前だけ

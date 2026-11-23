@@ -262,8 +262,8 @@ describe('S1c §14.4 の 6: collect and pickup', () => {
   });
 });
 
-describe('S1c §14.6 の 2: explore toward stops when no reachable edge lies that way', () => {
-  it('refuses (no turn) with the reason when the hinted direction has no edge; flee goes on as before', async () => {
+describe('S1c §14.6 の 2 (widened in S7): explore toward goes round when no reachable edge lies that way', () => {
+  it('widens to the sides and behind when the hinted direction has no edge; flee goes on as before', async () => {
     const a = await arena('s1c-toward', { map: Array.from({ length: 7 }, () => '.'.repeat(30)), guardian: { kind: 'core:goblin', hp: 10, dmg: '1d1', types: [], state: 'asleep' }, player: { hp: 100 } });
     a.inject({ del: [a.gId] });
     const me = structuredClone(a.world.entities[a.meId]); me.pos = { ...me.pos!, x: a.ox + 15, y: a.oy + 3 }; a.inject({ put: [me] });
@@ -275,7 +275,12 @@ describe('S1c §14.6 の 2: explore toward stops when no reachable edge lies tha
     const v = view(a);
     const hinted = structuredClone(v);
     hinted.floorHint = { ...(hinted.floorHint ?? { floor: v.floor!.key, explored: 2 }), floor: v.floor!.key, draft: 'e' } as never;
-    expect(macroNext(macroStart(hinted, { type: 'explore', toward: 'draft' }, catalog), hinted, catalog, [])).toEqual({ stop: 'toward_exhausted' });
+    // S7（SEASON.md §52.3 の 4）: その方角（と両隣）に行ける境界が無ければ、幅を広げる（横 → 後ろ）。ここでは西（後ろ）の境界へ回る
+    const st = macroStart(hinted, { type: 'explore', toward: 'draft' }, catalog);
+    const d = macroNext(st, hinted, catalog, []);
+    expect('command' in d && d.command.type === 'move' && ['w', 'nw', 'sw'].includes(d.command.dir)).toBe(true);
+    expect(st.towardWiden?.level).toBe(2);
+    expect(['w', 'nw', 'sw']).toContain(st.towardWiden?.dir);
     expect('command' in macroNext(macroStart(hinted, { type: 'explore', toward: 'draft', mode: 'flee' }, catalog), hinted, catalog, [])).toBe(true);
     expect('command' in macroNext(macroStart(hinted, { type: 'explore' }, catalog), hinted, catalog, [])).toBe(true);
     a.manager.closeAll();

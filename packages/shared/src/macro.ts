@@ -205,6 +205,11 @@ export interface MacroState {
   towardDir?: Dir | null;
   towardNoAlong?: number;
   towardDetour?: number;
+  /**
+   * explore toward: その方角（と両隣）に行ける境界が無いので、方角の幅を広げた（S7。SEASON.md §52.3 の 4）。level: いちばん広げた幅（1 = 横、2 = 後ろ）、
+   * steps: 広げた手、dir: 初めて広げたときに向かった境界の方角（始めた所から）
+   */
+  towardWiden?: { level: 1 | 2; steps: number; dir: Dir | null };
   /** explore toward: draft で、直前の手に下への風が出ていた（風が消えた＝下り階段を自分の目で見たら止まる。S1b §12.4 の 4） */
   hadDraft?: boolean;
   /** fight: 投げる物が尽きたが、隣に追ってくる敵がいるので拾いに行かなかった（S1b §12.4 の 5） */
@@ -335,8 +340,10 @@ export function worseEquip(view: PlayerView, catalog: Catalog, it: { kind: strin
 
 /** マクロが拾ってよいアイテムか（遺物・鑑定済みの有害品・同じか劣る装備は拾わない。useful なら種類の違う劣る装備も）。
  *  有害品でも、投げて使える品（毒薬など）は拾う（V3-5a 後の AI 評価: 毒に弱い守護者を倒す鍵の毒薬を collect が拾わなかった） */
-function pickable(view: PlayerView, catalog: Catalog, it: { kind: string | null; role?: string; affixes?: readonly string[] }, knownAffixes: boolean, useful: boolean): boolean {
+function pickable(view: PlayerView, catalog: Catalog, it: { kind: string | null; role?: string; affixes?: readonly string[]; dropped?: boolean }, knownAffixes: boolean, useful: boolean): boolean {
   if (it.role === 'relic') return false;
+  // 自分で床に置いた品は、移動マクロ（explore の拾い・collect what:items）で拾い直さない（S7。拾い直すなら pickup { item }）
+  if (it.dropped) return false;
   if (it.kind && catalog.items[it.kind]?.harmful && catalog.items[it.kind]?.throwRange == null) return false;
   if (knownAffixes && sameOrWorseEquip(view, catalog, it)) return false;
   if (useful && knownAffixes && worseEquip(view, catalog, it)) return false;
@@ -443,12 +450,14 @@ export function collectTargets(view: PlayerView, catalog: Catalog): string[] {
   if (!list.length) return [];
   const { grid, route } = macroRouting(view, catalog, 'collect', 'careful', undefined);
   const here = view.self.pos.y * grid.width + view.self.pos.x;
+  // 発見済みの罠を通る道の先の品は、collect が罠の手前で止まるので数えない（S7: 数えた品があるのに行が出ない・断られる、を無くす）
+  const traps = new Set([...view.entities.filter((e) => e.cat === 'trap').map((e) => e.pos), ...view.memory.remembered.filter((r) => r.cat === 'trap').map((r) => r.pos)].map((p) => p.y * grid.width + p.x));
   const out: string[] = [];
   for (const x of list) {
     if (x.cell === here) { if (view.entities.some((e) => e.id === x.id)) out.push(x.id); continue; }
     if (grid.occupied[x.cell]) continue;
     const path = route([x.cell]);
-    if (path && path.length <= COLLECT_WITHIN) out.push(x.id);
+    if (path && path.length <= COLLECT_WITHIN && !path.some((c) => traps.has(c.y * grid.width + c.x))) out.push(x.id);
   }
   return out;
 }
@@ -524,6 +533,18 @@ const DRAFT_DETOUR = 12;
 export function nearDirs(d: Dir): Dir[] {
   const i = DIRS.indexOf(d);
   return [d, DIRS[(i + 1) % DIRS.length], DIRS[(i + DIRS.length - 1) % DIRS.length]];
+}
+
+/**
+ * explore toward の方角の幅（S7。SEASON.md §52.3 の 4）: その方角と両隣 → 横（±90°）も → 後ろ（残りの 3 つ）も。
+ * その幅に行ける境界が無ければ、次の幅で探す。使うのは、プレイヤーの知っている方角（下への風・気配）だけ
+ */
+export function towardWidths(d: Dir): Dir[][] {
+  const i = DIRS.indexOf(d);
+  const at = (k: number) => DIRS[(i + k + DIRS.length * 2) % DIRS.length];
+  const near = [d, at(1), at(-1)];
+  const side = [...near, at(2), at(-2)];
+  return [near, side, [...side, at(3), at(-3), at(4)]];
 }
 
 /** その種族（守護者は別）から被弾した記録がある（fight は記録の無い種族の出現でだけ止まる。V3-4b §28.4） */
@@ -1279,14 +1300,28 @@ function macroStep(state: MacroState, view: PlayerView, catalog: Catalog, events
     // 下への風の方角（と隣り合う方角）の未探索を優先する（V3-2R3 §20.5）
     // toward: draft は下への風、sense は遺物・守護者の気配の方角（V3-4b §28.7。同じ仕組み）
     const draft = state.toward === 'draft' ? view.floorHint?.draft ?? null : state.toward === 'sense' ? view.sense?.dir ?? null : null;
-    const nearSet = draft ? new Set<Dir>(nearDirs(draft)) : null;
-    const inDraft = (i: number) => { const d = compassDir(pos, { x: i % grid.width, y: Math.trunc(i / grid.width) }); return d !== null && !!nearSet?.has(d); };
+    const dirOfCell = (i: number) => compassDir(pos, { x: i % grid.width, y: Math.trunc(i / grid.width) });
+    // 方角の幅（S7 §52.3 の 4）: その方角（と両隣）に行ける境界（敵にふさがれず、罠を通らない道のある境界）が無ければ、横 → 後ろと広げる。
+    // 気配は直線の方角で、道は回り込むので、その方角に未探索の境界が無いことがある。広げても無ければ（全部の境界が尽きた）、今までどおり止まる
+    let width = 0;
+    let nearSet: Set<Dir> | null = draft ? new Set<Dir>(nearDirs(draft)) : null;
+    if (draft) {
+      const widths = towardWidths(draft);
+      width = -1;
+      for (let k = 0; k < widths.length && width < 0; k++) {
+        const set = new Set<Dir>(widths[k]);
+        const along = allFrontiers.filter((i) => i !== here && set.has(dirOfCell(i) as Dir));
+        const p = along.length ? route(along) : null;
+        if (p && !crossesTrap(p)) { width = k; nearSet = set; }
+      }
+    }
+    const inDraft = (i: number) => { const d = dirOfCell(i); return d !== null && !!nearSet?.has(d); };
     // 結果の文で、方角と違う向きに歩いた理由を言うために数える（S1b §12.4 の 4）
     if (state.toward && state.towardDir === undefined) state.towardDir = draft;
     if (draft) {
       const along = fr.filter(inDraft);
-      if (along.length) fr = along;
-      // その方角に行ける境界が無い: 止まる（S1c §14.6 の 2。方角を渡すのはその方角へ行きたいから。逃げる flee は今までどおり、ほかの方角の境界へ）
+      if (width >= 0 && along.length) fr = along;
+      // どの幅にも行ける境界が無い: 止まる（S1c §14.6 の 2。逃げる flee は今までどおり、ほかの境界へ）
       else if (mode !== 'flee') return { stop: 'toward_exhausted', ...(allFrontiers.length ? {} : { explored: true }) };
       else state.towardNoAlong = (state.towardNoAlong ?? 0) + 1;
     }
@@ -1333,6 +1368,12 @@ function macroStep(state: MacroState, view: PlayerView, catalog: Catalog, events
       }
       const last = path && path.length ? path[path.length - 1] : null;
       state.goal = last ? last.y * grid.width + last.x : undefined;
+    }
+    // 幅を広げて向かった手（S7 §52.3 の 4）: 結果の文で、広げたことと、向かった境界の方角を言う
+    if (draft && width > 0 && path && path.length) {
+      const end = path[path.length - 1];
+      const w0 = state.towardWiden;
+      state.towardWiden = { level: Math.max(w0?.level ?? 1, width) as 1 | 2, steps: (w0?.steps ?? 0) + 1, dir: w0 ? w0.dir : compassDir(pos, end) };
     }
     if (path === null || path.length === 0) {
       const loose = findPath(grid, pos, targets.filter((i) => i !== here), 'none');
@@ -1507,8 +1548,8 @@ function macroStopErrorBase(L: Locale, stop: MacroStop, cmd: Command, dir?: Dir)
       return actionError('nothing_to_do', t(L, 'この階で辿り着ける未見の区画も、拾うアイテムも無い。', 'Nothing reachable left to explore or pick up on this floor.'), t(L, 'travel_to stairs_down か extract。', 'travel_to stairs_down, or extract.'));
     case 'toward_exhausted': {
       const what = cmd.type === 'explore' && cmd.toward === 'sense' ? t(L, '気配', 'the sense') : t(L, '下への風', 'the draft');
-      return { ...actionError('nothing_to_do', t(L, `${what}の方角に、行ける未探索の境界が無い（ほかの方角は探さずに止まった）。`, `No reachable unexplored edge lies toward ${what} (stopped instead of searching other directions).`),
-        t(L, 'ほかの方角も探すなら toward を付けない explore。分かっている場所へは travel_to。', 'To search other directions, explore without toward; to go somewhere known, travel_to.')), details: { stop: 'toward_exhausted' } };
+      return { ...actionError('nothing_to_do', t(L, `${what}の方角から、両隣・横・後ろまで幅を広げても、行ける未探索の境界が無い（残りの境界へは、敵にふさがれた道か、罠を通る道しか無い）。`, `No reachable unexplored edge lies toward ${what}, even widening to the sides and behind (the only ways to the edges left are blocked by enemies or cross traps).`),
+        t(L, '道をふさぐ敵を片付けるか、罠を越えるなら toward を付けない explore（罠の手前で止まる）。分かっている場所へは travel_to。', 'Clear the enemy in the way, or explore without toward (it stops before the trap); to go somewhere known, travel_to.')), details: { stop: 'toward_exhausted' } };
     }
     case 'collected':
       return actionError('nothing_to_do', t(L, '回収する物が無い。', 'Nothing to collect.'), cmd.type === 'collect' && cmd.kinds?.length ? t(L, 'kinds の種類の品が見えていない・記憶に無い（kinds を外すと他の品も拾う。未鑑定の品は区分 potion・scroll・amulet・ring で指す）。', 'No item of those kinds is visible or remembered (drop kinds to pick up other items; name unidentified items by category: potion, scroll, amulet, ring).')

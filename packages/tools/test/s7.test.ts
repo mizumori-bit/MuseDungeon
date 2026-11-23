@@ -7,9 +7,10 @@ import { describe, expect, it } from 'vitest';
 import { buildCatalog, loadContent } from '@muse/content';
 import { loadConfig, RunSession, SessionManager } from '@muse/server';
 import type { PlayerPort } from '@muse/server';
-import { buildObservation, checkpointStep, CHECKPOINT_NOTES, formatObservationText, projectPlayerView } from '@muse/shared';
-import type { CheckpointLedger, Command } from '@muse/shared';
+import { buildObservation, checkpointStep, CHECKPOINT_NOTES, DIRS, formatObservationText, macroNext, macroProbe, macroStart, projectPlayerView, towardWidths } from '@muse/shared';
+import type { CheckpointLedger, Command, Dir, Entity } from '@muse/shared';
 import { playWithPort } from '../src/bot';
+import { arena } from './v33duel';
 
 const content = loadContent();
 const catalog = buildCatalog(content);
@@ -139,5 +140,67 @@ describe('S7 §52.2 の 2: the checkpoint turn (every 100 own turns, on the firs
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+// ---------------- D: explore toward の方角の幅（§52.3 の 4） ----------------
+
+describe('S7 §52.3 の 4: explore toward widens the direction (sides, then behind) when no reachable edge lies that way', () => {
+  /** 壁に囲まれた 1 列の部屋で、東の端の先だけが未見（境界は東にだけある）。trap: 東の端の手前に、見つけた罠 */
+  async function corridor(seed: string, trap = false) {
+    const a = await arena(seed, { map: ['P.....'], guardian: { kind: 'core:goblin', hp: 50, dmg: '1d1', types: [], state: 'asleep' } });
+    a.inject({ del: [a.gId] });
+    const f = a.world.floors[a.key];
+    const fl = a.world.meta.terrainTable.indexOf('core:floor');
+    const i = a.oy * f.width + a.ox + a.W;
+    f.terrain[i] = fl;
+    a.world.players[a.pid].knowledge.floors[a.key].seen[i] = fl;
+    if (trap) a.inject({ put: [{ id: 'e_s7trp1', kind: 'core:trap_dart', sid: 997701, pos: { floor: a.key, x: a.ox + a.W - 1, y: a.oy }, trap: { revealedTo: [a.pid] } } as unknown as Entity] });
+    // 1 手待って、視界と覚えている地図を今の部屋にする（罠が見える）
+    if (trap) await act(a.r.port, { type: 'wait' });
+    return a;
+  }
+  const sensed = (a: Awaited<ReturnType<typeof corridor>>, dir: Dir) => { const v = projectPlayerView(a.world, a.pid); v.sense = { what: 'guardian', dir, range: 'far' }; return v; };
+
+  it('the widths: the direction and both neighbours, then the sides, then behind', () => {
+    expect(towardWidths('n')).toEqual([['n', 'ne', 'nw'], ['n', 'ne', 'nw', 'e', 'w'], ['n', 'ne', 'nw', 'e', 'w', 'se', 'sw', 's']]);
+  });
+
+  it('goes to the side edge (north sense, east edge), or behind (west sense), and says so; the action line and the refusal stay the same function', async () => {
+    const a = await corridor('s7-wide-1');
+    const st = macroStart(sensed(a, 'n'), { type: 'explore', toward: 'sense' }, catalog);
+    const d = macroNext(st, sensed(a, 'n'), catalog, []);
+    expect('command' in d && d.command.type === 'move' && d.command.dir).toBe('e');
+    expect(st.towardWiden).toEqual({ level: 1, steps: 1, dir: 'e' });
+    const st2 = macroStart(sensed(a, 'w'), { type: 'explore', toward: 'sense' }, catalog);
+    macroNext(st2, sensed(a, 'w'), catalog, []);
+    expect(st2.towardWiden?.level).toBe(2);
+    // 「できること」の行と、断る判定（macroProbe）は同じ: どの方角でも出て、断られない
+    for (const dir of DIRS) {
+      const v = sensed(a, dir);
+      const shown = buildObservation(v, catalog, { detail: 'brief', map: false }).valid_actions.some((l) => l.startsWith('explore toward:sense '));
+      expect(shown, dir).toBe(!('stop' in macroProbe(v, { type: 'explore', toward: 'sense' }, catalog).decision));
+      expect(shown, dir).toBe(true);
+    }
+    // 結果の文（実際の呼び出し）
+    a.world.players[a.pid].knowledge.sense = { what: 'guardian', dir: 'w', range: 'far' };
+    const r = await act(a.r.port, { type: 'explore', toward: 'sense', maxSteps: 2 });
+    expect(r.ok && r.outcome).toContain('気配の方角（西）とその両隣に、行ける未探索の境界が無いので、東の境界へ回った（方角の幅を後ろまで広げた手');
+    a.manager.closeAll();
+  });
+
+  it('when every edge is gone (the only way crosses a known trap), it still stops; the action line is not offered, matching the refusal', async () => {
+    const a = await corridor('s7-wide-2', true);
+    for (const dir of DIRS) {
+      const v = sensed(a, dir);
+      expect(macroNext(macroStart(v, { type: 'explore', toward: 'sense' }, catalog), v, catalog, [])).toEqual({ stop: 'toward_exhausted' });
+      const shown = buildObservation(v, catalog, { detail: 'brief', map: false }).valid_actions.some((l) => l.startsWith('explore toward:sense '));
+      expect(shown, dir).toBe(!('stop' in macroProbe(v, { type: 'explore', toward: 'sense' }, catalog).decision));
+      expect(shown, dir).toBe(false);
+    }
+    a.world.players[a.pid].knowledge.sense = { what: 'guardian', dir: 'n', range: 'far' };
+    const no = await act(a.r.port, { type: 'explore', toward: 'sense' });
+    expect(!no.ok && no.error.message).toContain('気配の方角から、両隣・横・後ろまで幅を広げても、行ける未探索の境界が無い');
+    a.manager.closeAll();
   });
 });
