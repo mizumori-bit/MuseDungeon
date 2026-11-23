@@ -112,7 +112,7 @@ export interface ObsMonster {
   intent?: { code: 'winding_up' | 'summoning' | 'enraging' | 'swinging'; dir?: Dir; pos?: Pos; on_line?: boolean; text: string };
 }
 /** 同じセルの同種の物は 1 行にまとめる（ids に全て。id は先頭） */
-export interface ObsItem { id: string; ids?: string[]; name: string; pos: Pos; dir: Dir | null; dist: number; qty: number; remembered?: boolean; role?: EntityRole; /** この遠征の目的の遺物（V4-1a §12.2） */ objective?: true; mine?: boolean; value?: number; /** まとめた「自分が投げた物」の、最寄りのマスの本数 */ near_qty?: number }
+export interface ObsItem { id: string; ids?: string[]; name: string; pos: Pos; dir: Dir | null; dist: number; qty: number; remembered?: boolean; role?: EntityRole; /** この遠征の目的の遺物（V4-1a §12.2） */ objective?: true; mine?: boolean; /** 自分が床に置いた品（S7b。移動マクロは拾い直さない） */ dropped?: true; value?: number; /** まとめた「自分が投げた物」の、最寄りのマスの本数 */ near_qty?: number }
 
 export interface RestEstimate {
   /** 休憩で戻る HP（上限 cap_hp まで。V3-4b §28.3） */
@@ -942,7 +942,9 @@ export function chaseEstimate(view: PlayerView, catalog: Catalog, hunters: reado
   // 射線の切れている射手は入れない（いまの射線。歩く間に通ることはある）
   const counted = per.filter((x) => !x.blocked);
   const rest = counted.filter((x) => x.r === null).sort((a, b) => b.p - a.p);
-  const usual = counted.filter((x) => x.r !== null).reduce((s, x) => s + x.r!, 0) + (rest.length ? rest[0].p + rest.slice(1).reduce((s, x) => s + x.a, 0) : 0);
+  const usual0 = counted.filter((x) => x.r !== null).reduce((s, x) => s + x.r!, 0) + (rest.length ? rest[0].p + rest.slice(1).reduce((s, x) => s + x.a, 0) : 0);
+  // 見込みより大きくは出さない（S7b: t7 の c1483 で、見込み 56・ふつう 57 と出た）
+  const usual = Math.min(usual0, expected);
   return { recordedWorst: worst, worst, expected, usual, catchers, shooters };
 }
 
@@ -1781,7 +1783,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
     } else if (e.cat === 'item') {
       const name = itemDisplayName(catalog, L, e.kind, e.appearanceId, e.affixes);
       // 同じセルの同種の物は 1 行にまとめる
-      const same = items.find((x) => !x.remembered && x.pos.x === e.pos.x && x.pos.y === e.pos.y && x.name === name && x.role === e.role && !!x.mine === !!e.mine);
+      const same = items.find((x) => !x.remembered && x.pos.x === e.pos.x && x.pos.y === e.pos.y && x.name === name && x.role === e.role && !!x.mine === !!e.mine && !!x.dropped === !!e.dropped);
       if (same) {
         same.qty += e.qty ?? 1;
         same.ids = [...(same.ids ?? [same.id]), e.id];
@@ -1791,6 +1793,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       if (e.role) it.role = e.role;
       if (e.objective) it.objective = true;
       if (e.mine) it.mine = true;
+      if (e.dropped) it.dropped = true;
       if (e.value !== undefined) it.value = e.value;
       items.push(it);
     } else if (e.cat === 'player') {
@@ -1811,6 +1814,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       if (r.role) it.role = r.role;
       if (r.objective) it.objective = true;
       if (r.mine) it.mine = true;
+      if (r.dropped) it.dropped = true;
       if (r.value !== undefined) it.value = r.value;
       rememberedItems.push(it);
     }
@@ -3018,7 +3022,7 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
     }
     for (const p of vis.players) lines.push(`- ${t(L, '味方', 'ally')} ${p.name} (${p.pos.x},${p.pos.y}) ${relLabel(L, from, p.pos)} ${L === 'en' ? p.hp_state : HP_JA[p.hp_state]}`);
     for (const it of vis.items) {
-      const tags = `${it.role === 'relic' ? t(L, ' [遺物]', ' [relic]') : ''}${it.mine ? t(L, ' [自分が投げた]', ' [yours]') : ''}${it.value !== undefined ? t(L, ` [宝・価値 ${it.value}]`, ` [treasure ${it.value}]`) : ''}`;
+      const tags = `${it.role === 'relic' ? t(L, ' [遺物]', ' [relic]') : ''}${it.mine ? t(L, ' [自分が投げた]', ' [yours]') : ''}${it.dropped ? t(L, '（あなたが置いた）', ' (you dropped it)') : ''}${it.value !== undefined ? t(L, ` [宝・価値 ${it.value}]`, ` [treasure ${it.value}]`) : ''}`;
       // まとめた「自分が投げた物」は合計の本数と、最寄りのマスの本数
       const qtyText = it.near_qty !== undefined ? t(L, ` 合計${it.qty}（最寄りのマスに${it.near_qty}）`, ` ${it.qty} in all (${it.near_qty} at the nearest)`) : it.qty > 1 ? ` x${it.qty}` : '';
       lines.push(`- ${it.name}${it.objective ? t(L, '［目的］', ' [objective]') : ''}${qtyText}${tags} ${it.id} (${it.pos.x},${it.pos.y}) ${relLabel(L, from, it.pos)}${it.remembered ? t(L, ' (記憶)', ' (remembered)') : ''}`);

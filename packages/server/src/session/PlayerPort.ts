@@ -119,12 +119,14 @@ export function towardNote(L: Locale, tw: NonNullable<MacroReport['toward']>, en
   if (!tw.dir) return '';
   const what = tw.kind === 'draft' ? t(L, '下への風', 'the draft') : t(L, '気配', 'the sense');
   const dir = dirLabel(L, tw.dir);
-  // 方角の幅を広げた（S7 §52.3 の 4）: 「気配の方角に境界が無いので、東の境界へ回る」
+  // 方角の幅を広げた（S7 §52.3 の 4・S7b）: 実際にしたこと（広げた所から、どちらへ何マス、何手）
   if (tw.widen) {
     const how = tw.widen.level === 1 ? t(L, '横', 'the sides') : t(L, '後ろ', 'behind');
-    const to = tw.widen.dir ? t(L, `${dirLabel(L, tw.widen.dir)}の境界へ回った`, `went round to an edge to the ${tw.widen.dir}`) : t(L, 'ほかの方角の境界へ回った', 'went round to an edge in another direction');
-    return t(L, `${what}の方角（${dir}）とその両隣に、行ける未探索の境界が無いので、${to}（方角の幅を${how}まで広げた手 ${tw.widen.steps}）。`,
-      `There was no reachable unexplored edge toward ${what} (${tw.dir}) or either side of it, so it ${to} (widened to ${how} for ${tw.widen.steps} step${tw.widen.steps > 1 ? 's' : ''}).`);
+    const d = end ? cheb(tw.widen.from, end) : 0;
+    const nd = end && d > 0 ? compassDir(tw.widen.from, end) : null;
+    const moved = nd ? t(L, `広げた所から${dirLabel(L, nd)}へ ${d} マス進んだ`, `ended ${d} cells ${nd} of where it widened`) : t(L, '広げた所の近くに戻った', 'ended back near where it widened');
+    return t(L, `${what}の方角（${dir}）とその両隣に、行ける未探索の境界が無かったので、方角の幅を${how}まで広げて ${tw.widen.steps} 手歩き、${moved}。`,
+      `There was no reachable unexplored edge toward ${what} (${tw.dir}) or either side of it, so it widened to ${how} and walked ${tw.widen.steps} step${tw.widen.steps > 1 ? 's' : ''}; it ${moved}.`);
   }
   if (tw.noAlong) return t(L, `${what}の方角（${dir}）に、行ける未探索の境界が無い手が ${tw.noAlong} 手あった（その間は、ほかの方角の近い境界を探した）。`, `For ${tw.noAlong} step${tw.noAlong > 1 ? 's' : ''} there was no reachable unexplored edge toward ${what} (${tw.dir}); meanwhile it searched the nearest edges in other directions.`);
   if (tw.detour) return t(L, `${what}の方角（${dir}）の境界は遠回りなので、近くの境界を先に見た（${tw.detour} 回）。`, `The edges toward ${what} (${tw.dir}) were a long way round, so it looked at nearer ones first (${tw.detour} time${tw.detour > 1 ? 's' : ''}).`);
@@ -476,8 +478,10 @@ export class SessionPlayerPort implements PlayerPort {
       // 文になった出来事と、知覚した他の者の移動（見えなくなった敵の最後に見た位置。V4-0c §4.2）
       const events = prev ? [...this.session.messages(this.playerId).filter((m) => m.seq > prev.seq), ...this.session.movesSince(this.playerId, prev.seq)].sort((a, b) => a.seq - b.seq) : [];
       changes = diffChanges(prev, cur, view, observation, events, this.catalog);
-      // 遠征の途中の区切り（S7 §52.2 の 2）: 前の応答の後に始まった自分の手番に、区切りの手番があれば 1 回だけ（上限の外。どの手番かは記録から決まる）
-      if (view.status !== 'at_camp' && this.session.checkpointDue(this.playerId, prev?.seq ?? null)) changes = [...changes, { code: 'checkpoint', text: checkpointChangeText(L) }];
+      // 遠征の途中の区切り（S7 §52.2 の 2・S7a・S7b）: 上限の外に 1 回だけ。どの手番か・出したかは記録から決まる。
+      // 判定するのは、基準を進める応答だけ（観戦の先読み peek では呼ばない）。応答を作る時点で敵が見えていれば（協力プレイで仲間の番を待つ間など）出さない
+      // （控えは応答のたびに作っておく: 初めて要るときに、長い記録を畳まなくて済むように）
+      if (p.changes === true && view.status !== 'at_camp' && this.session.checkpointDue(this.playerId, prev?.seq ?? null) && !view.entities.some((e) => e.cat === 'monster')) changes = [...changes, { code: 'checkpoint', text: checkpointChangeText(L) }];
       if (p.changes === true) this.session.setTurnSnapshot(this.playerId, cur);
     }
     const turn = buildTurnBlock(view, { reason, interruptedBy: p.interruptedBy, changes, expeditionEndedNow: p.expeditionEndedNow });
@@ -570,7 +574,13 @@ export class SessionPlayerPort implements PlayerPort {
     let rest: RestReport | undefined;
     let collected: { picked: number; remaining: number } | undefined;
     if (r.steps !== undefined) {
-      const stop = r.interruptedBy ? STOP_TEXT[r.interruptedBy] : undefined;
+      // 停止の理由（S7b: explore toward の空回りは「同じ 2 マスを往復」ではない。探索し終えた toward_exhausted は、括弧の理由を付けない）
+      const stop0 = r.interruptedBy ? STOP_TEXT[r.interruptedBy] : undefined;
+      const stop: [string, string] | undefined = r.interruptedBy === 'no_progress' && r.macro?.revisit
+        ? ['同じ道を行き来して進めない（同じマスに 3 回目に入るところ）', 'going back and forth on the same way (about to enter the same cell a third time)']
+        : r.interruptedBy === 'toward_exhausted' && view.self.pos && buildObservation(view, this.catalog, { detail: 'brief', map: false }).navigation.frontiers.length === 0
+          ? ['この階は探索し終えた（行ける未探索の境界が 1 つも無い）', 'this floor is fully explored (no reachable unexplored edge left)']
+          : stop0;
       // 見えない相手に撃たれて止まった: 停止の理由に方角を書く（V4-0c §4.3。休憩もほかのマクロも）
       const unseen = r.interruptedBy ? unseenShots(mine, view.self.id) : [];
       const unseenText = unseen.length
@@ -600,6 +610,8 @@ export class SessionPlayerPort implements PlayerPort {
           outcome += ' ' + t(L, `動かない ${who} の隣を通らない道を選んだ（隣を通る近道より ${m.detour.extra} 歩長い）。`, `Took a way that avoids passing next to the stationary ${who} (${m.detour.extra} steps longer than the shortcut past it).`);
         }
         // 往復で止まった: 近道をふさいで道を変えさせた動く敵を名指す（S3c §33.3 の 2。マクロは、道が入れ替わる往復を直さない）
+        // 同じマスに 3 回目に入るところで止まった（S7b。explore toward の空回りの見張り）: 事実どおりに
+        if (m?.revisit && r.interruptedBy === 'no_progress') outcome += ' ' + t(L, `同じ道を行き来していたので、(${m.revisit.x},${m.revisit.y}) に 3 回目に入るところで止めた（toward の方角の境界へ、この道では近づけない。toward を付けない explore か、travel_to で場所を指す）。`, `It was going back and forth on the same way, so it stopped before entering (${m.revisit.x},${m.revisit.y}) a third time (this way does not get closer to the edges toward the hint; explore without toward, or travel_to a place).`);
         if (m?.routeFoes?.length && r.interruptedBy === 'no_progress') {
           const who = m.routeFoes.map((x) => `${x.name} ${x.id}`).join(t(L, '・', ', '));
           outcome += ' ' + t(L, `道を変えさせた相手: ${who}（動いて近道をふさいだり空けたりするので、通る道が入れ替わった。相手を片付けるか、動きを待つか、別の行き先へ）。`, `What kept changing the route: ${who} (it moved on and off the short way, so the route kept switching; deal with it, wait for it to move, or pick another destination).`);

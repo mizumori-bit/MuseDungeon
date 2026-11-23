@@ -140,7 +140,8 @@ export function threatEstimate(view: PlayerView, catalog: Catalog, threats: read
 /**
  * 「ふつう」の被害（S7 §52.3 の 5・S7a §53.9 の 2。表示だけ: マクロの止まり方・「できること」・pilot の判定には使わない）:
  * 記録の足りる種族（recordedHitsOf）は、その記録の平均（命中の割合 × 受けた被害の平均）× 行動の回数。記録の足りない種族は、
- * 今までの数え方（その中でいちばん重い 1 体は会心でない最大の一撃、残りは 1 手の平均）。射線の切れている射手は入れない。被弾の記録の無い敵は入れない
+ * 今までの数え方（その中でいちばん重い 1 体は会心でない最大の一撃、残りは 1 手の平均）。射線の切れている射手は入れない。被弾の記録の無い敵は入れない。
+ * 見込み（threatEstimate の expected）より大きくは出さない（S7b）
  */
 export function usualEstimate(view: PlayerView, catalog: Catalog, threats: readonly (Pick<EntityView, 'kind' | 'role' | 'speed' | 'statuses' | 'paceAgo'> & Partial<Pick<EntityView, 'shot' | 'pos'>>)[]): number {
   const me = view.self.pos;
@@ -151,7 +152,9 @@ export function usualEstimate(view: PlayerView, catalog: Catalog, threats: reado
   const counted = per.filter((x): x is typeof x & { w: number; p: number } => x.w !== null && x.p !== null && !x.blocked);
   const byRecord = counted.filter((x) => x.r !== null).reduce((s, x) => s + x.r!, 0);
   const rest = counted.filter((x) => x.r === null).sort((a, b) => b.p - a.p);
-  return byRecord + (rest.length ? rest[0].p + rest.slice(1).reduce((s, x) => s + Math.min(x.p, x.a ?? x.p), 0) : 0);
+  const usual = byRecord + (rest.length ? rest[0].p + rest.slice(1).reduce((s, x) => s + Math.min(x.p, x.a ?? x.p), 0) : 0);
+  // 見込みより大きくは出さない（S7b: 記録の足りない種族が「いちばん重い 1 体」に回ると、見込みを 1 上回ることがあった）
+  return Math.min(usual, threatEstimate(view, catalog, threats).expected);
 }
 
 /** fight が止まる理由（S1d §17.2）: lethal＝今の HP が最悪以下（死にうる。hp_floor によらない）、floor＝HP − 見込みが hp_floor を下回る。止まらなければ null */

@@ -175,7 +175,8 @@ describe('S7 §52.3 の 4: explore toward widens the direction (sides, then behi
     const st = macroStart(sensed(a, 'n'), { type: 'explore', toward: 'sense' }, catalog);
     const d = macroNext(st, sensed(a, 'n'), catalog, []);
     expect('command' in d && d.command.type === 'move' && d.command.dir).toBe('e');
-    expect(st.towardWiden).toEqual({ level: 1, steps: 1, dir: 'e' });
+    expect(st.towardWiden).toEqual({ level: 1, steps: 1, from: { x: a.ox, y: a.oy } });
+    expect(st.towardWidth).toBe(1);
     const st2 = macroStart(sensed(a, 'w'), { type: 'explore', toward: 'sense' }, catalog);
     macroNext(st2, sensed(a, 'w'), catalog, []);
     expect(st2.towardWiden?.level).toBe(2);
@@ -189,7 +190,9 @@ describe('S7 §52.3 の 4: explore toward widens the direction (sides, then behi
     // 結果の文（実際の呼び出し）
     a.world.players[a.pid].knowledge.sense = { what: 'guardian', dir: 'w', range: 'far' };
     const r = await act(a.r.port, { type: 'explore', toward: 'sense', maxSteps: 2 });
-    expect(r.ok && r.outcome).toContain('気配の方角（西）とその両隣に、行ける未探索の境界が無いので、東の境界へ回った（方角の幅を後ろまで広げた手');
+    expect(r.ok && r.outcome).toContain('気配の方角（西）とその両隣に、行ける未探索の境界が無かったので、方角の幅を後ろまで広げて 1 手歩き、広げた所から東へ 1 マス進んだ。');
+    // 1 歩で東の端の先が見えて、行ける境界が 1 つも無くなった: 止まった理由は「探索し終えた」（括弧の理由は付けない。S7b）
+    expect(r.ok && r.outcome).toContain('停止: この階は探索し終えた（行ける未探索の境界が 1 つも無い）。');
     a.manager.closeAll();
   });
 
@@ -205,6 +208,10 @@ describe('S7 §52.3 の 4: explore toward widens the direction (sides, then behi
     a.world.players[a.pid].knowledge.sense = { what: 'guardian', dir: 'n', range: 'far' };
     const no = await act(a.r.port, { type: 'explore', toward: 'sense' });
     expect(!no.ok && no.error.message).toContain('気配の方角から、両隣・横・後ろまで幅を広げても、行ける未探索の境界が無い');
+    // 断った応答の「できること」に、同じ行を出さない（S2a §20.6 の 2。PlayerPort を通して確かめる）。次の観測にも出ない
+    expect(!no.ok && no.valid_actions.some((l) => l.startsWith('explore toward:sense'))).toBe(false);
+    expect(!no.ok && no.valid_actions.some((l) => l === 'explore' || l.startsWith('explore ('))).toBe(true);
+    expect(a.r.port.observe().observation.valid_actions.some((l) => l.startsWith('explore toward:sense'))).toBe(false);
     a.manager.closeAll();
   });
 });

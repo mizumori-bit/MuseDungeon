@@ -280,7 +280,7 @@ describe('S1c §14.6 の 2 (widened in S7): explore toward goes round when no re
     const d = macroNext(st, hinted, catalog, []);
     expect('command' in d && d.command.type === 'move' && ['w', 'nw', 'sw'].includes(d.command.dir)).toBe(true);
     expect(st.towardWiden?.level).toBe(2);
-    expect(['w', 'nw', 'sw']).toContain(st.towardWiden?.dir);
+    expect(st.towardWidth).toBe(2);
     expect('command' in macroNext(macroStart(hinted, { type: 'explore', toward: 'draft', mode: 'flee' }, catalog), hinted, catalog, [])).toBe(true);
     expect('command' in macroNext(macroStart(hinted, { type: 'explore' }, catalog), hinted, catalog, [])).toBe(true);
     a.manager.closeAll();

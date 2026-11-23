@@ -1795,3 +1795,4 @@ engine と出来事の形は変えていない（`engineVersion` 0.38.0・`event
 - **explore toward の幅**: `towardWidths`（その方角と両隣 → 横 → 後ろ）。macroNext の explore で、行ける境界（`route` で道があり、罠を通らない）のある最初の幅を選ぶ。「できること」の行と断りは、前と同じく `macroProbe`（= macroNext）で決まる。
 - **被害の 3 つの数**（S7a で改めた）: 止まる判定の `threatEstimate` は S1d のまま。記録の平均の「ふつう」は `usualEstimate`（表示だけ。`riskText`・`incoming`・階段の行。`chaseEstimate.usual`）。マクロ・「できること」・`self.fight_risk`（pilot）は使わない。
 - **区切りの出る応答**（S7a）: `RunSession.checkpointDue` は、控えの「区切りの手番の後の、敵の見えていない手番」の中に、応答の終わり（呼び出しの記録 `calls` で、次の自分の呼び出しがマクロの一歩でない）があれば、出したとみなす。控えは 1 つ前の 100 手番の区切りの手前から畳む（その区切りが、まだ出ていないことがある）。
+- **S7b**（検査の指摘）: `explore toward` の幅は、`MacroState.towardWidth`（いちばん広げた幅。狭め直さない）・`goalWidth`（行き先を選んだときの幅）・`towardDir`（呼び出しの初めの方角）で決める。空回りの見張りは `visits`（入ったマスの回数。explore toward だけ。同じマスに 3 回目に入る前に `no_progress`）。前は、幅と方角を毎手選び直していて、風の方角が e と se の間を行き来すると、通路の両端を交互に狙い直した。

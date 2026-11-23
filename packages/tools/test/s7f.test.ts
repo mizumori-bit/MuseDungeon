@@ -33,8 +33,9 @@ describe('S7 §52.3 の 7: rule texts (seed per season, inscription order, the a
   it('has each in Japanese and English', () => {
     const ja = rulesText('all', 'ja', catalog);
     const en = rulesText('all', 'en', catalog);
-    expect(ja).toContain('シードは、シーズンごとに違う（別のシーズンは別の迷宮。同じなのは、同じシーズンの参加者どうし）');
-    expect(en).toContain('Each season has its own seed');
+    expect(ja).toContain('シードは、シーズンごとに運用者が決める（ふつうは、シーズンごとに違う');
+    expect(en).toContain("The operator sets each season's seed (usually it differs per season");
+    expect(ja).toContain('自分で床に置いた品（観測の品の行に「（あなたが置いた）」');
     expect(ja).toContain('この階の守護者のまだ知らない弱点 → この階の鍵のかかった宝物庫の場所 → 未鑑定の品 1 種の正体（持っている物を先に）の順に、当てはまる最初のもの');
     expect(en).toContain('an unknown weakness of this floor\'s guardian, then where this floor\'s locked vault is, then what one unidentified item is');
     expect(ja).toContain('「記録庫の一頁が、ふたたび読めるようになった」は物語の文で、数は変わらない');

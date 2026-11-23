@@ -122,8 +122,8 @@ describe('S7 §52.1 の 2: the server notes each MCP call (time received, tool, 
     const log = new (m.calls.constructor as new (a: number, b: number, c: (l: string) => void) => typeof m.calls)(10_000, 3, (l) => out.push(l));
     log.record({ at: '2026-11-23T00:00:00.000Z', tool: 'fight', run: 'run_x', ms: 5, error: true }, new Error('boom abcdefghijklmnopqrstuvwxyz0123\nstack'));
     expect(out).toEqual(['[mcp] 例外で終わった呼び出し: fight run=run_x 5 ms（受け取り 2026-11-23T00:00:00.000Z）: boom ••••']);
-    for (let i = 0; i < 5; i++) log.record({ at: 'x', tool: `t${i}`, run: null, ms: 1 });
-    expect(log.list().map((c) => c.tool)).toEqual(['t4', 't3', 't2']);
+    for (const tool of ['move', 'wait', 'rest', 'explore', 'fight']) log.record({ at: 'x', tool, run: null, ms: 1 });
+    expect(log.list().map((c) => c.tool)).toEqual(['fight', 'explore', 'rest']);
     m.closeAll();
   });
 });

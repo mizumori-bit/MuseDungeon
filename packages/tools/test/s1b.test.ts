@@ -403,11 +403,12 @@ describe('S1b §12.4 の 4: explore toward', () => {
     // S7（SEASON.md §52.3 の 4）: 断らずに、幅を広げて回る。結果の文に、広げたことと向かった方角（S1c §14.6 の 2 の断りは、全部の境界が尽きたときだけ: s7.test.ts）
     expect(a2.r.port.observe().observation.valid_actions.some((l) => l.startsWith('explore toward:draft'))).toBe(true);
     const go = await a2.r.port.act({ type: 'explore', toward: 'draft', maxSteps: 3 }, { source: 'bot' });
-    expect(go.ok && go.outcome).toContain('下への風の方角（東）とその両隣に、行ける未探索の境界が無いので、');
-    expect(go.ok && go.outcome).toMatch(/(西|北西|南西)の境界へ回った（方角の幅を後ろまで広げた手 \d+）/);
+    // S7b: 実際にしたこと（広げた幅・歩いた手・広げた所からどちらへ何マス）
+    expect(go.ok && go.outcome).toMatch(/下への風の方角（東）とその両隣に、行ける未探索の境界が無かったので、方角の幅を後ろまで広げて \d+ 手歩き、広げた所から(西|北西|南西)へ \d+ マス進んだ。/);
     a2.world.players[a2.pid].knowledge.floorHint = { floor: a2.key, draft: 'e', explored: 1 };
     const res = await a2.r.port.act({ type: 'explore', toward: 'draft', mode: 'flee', maxSteps: 3 }, { source: 'bot' });
-    expect(res.ok).toBe(true);
+    // flee も同じに幅を広げる。結果の文も同じ形（S7b で、文の確かめを戻した）
+    expect(res.ok && res.outcome).toMatch(/下への風の方角（東）とその両隣に、行ける未探索の境界が無かったので、方角の幅を後ろまで広げて \d+ 手歩き/);
     a.manager.closeAll();
     a2.manager.closeAll();
   });

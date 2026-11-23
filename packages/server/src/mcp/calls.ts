@@ -30,7 +30,9 @@ export class CallLog {
   constructor(public longMs = LONG_CALL_MS, private readonly size = CALL_LOG_SIZE, private readonly log: (line: string) => void = (l) => console.error(l)) {}
 
   /** 控える。長いもの・例外で終わったものは 1 行ログに出す（引数・トークン・考えは出さない） */
-  record(r: CallRecord, err?: unknown): void {
+  record(r0: CallRecord, err?: unknown): void {
+    // ツールの名前は、クライアントが送ったまま。決まった形（英小文字と _）でなければ ? にする（S7b: ログに任意の文字を入れない）
+    const r = { ...r0, tool: /^[a-z_]{1,40}$/.test(r0.tool) ? r0.tool : '?' };
     this.items.push(r);
     if (this.items.length > this.size) this.items.splice(0, this.items.length - this.size);
     if (r.error) this.log(`[mcp] 例外で終わった呼び出し: ${r.tool} run=${r.run ?? '-'} ${r.ms} ms（受け取り ${r.at}）: ${errLine(err)}`);

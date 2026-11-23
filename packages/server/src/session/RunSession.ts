@@ -73,7 +73,9 @@ export interface MacroReport {
   targetSeenAt?: Pos;
   /** explore toward: 始めた所と方角・方角に行ける境界が無かった手・遠回りで近い境界を先にした回数（S1b §12.4 の 4。結果の文で理由を言う） */
   /** widen: その方角（と両隣）に行ける境界が無いので、幅を広げた（S7 §52.3 の 4。level 1 = 横・2 = 後ろ、steps: 広げた手、dir: 向かった境界の方角） */
-  toward?: { kind: 'draft' | 'sense'; dir: Dir | null; start: Pos; noAlong: number; detour: number; widen?: { level: 1 | 2; steps: number; dir: Dir | null } };
+  toward?: { kind: 'draft' | 'sense'; dir: Dir | null; start: Pos; noAlong: number; detour: number; widen?: { level: 1 | 2; steps: number; from: Pos } };
+  /** explore toward が、同じマスに 3 回目に入るところで止まった（S7b。そのマス） */
+  revisit?: Pos;
   /** fight: 投げる物が尽きたが、隣に追ってくる敵がいるので床の投げ物を拾いに行かなかった（S1b §12.4 の 5） */
   retrieveHeld?: boolean;
   /** fight・steady・flee: 実際に使った hp_floor（渡した値か既定。S1c §14.4 の 1: 文と食い違わないように） */
@@ -979,6 +981,7 @@ export class RunSession {
       hpFloor: state.hpFloor,
       ...(state.detour ? { detour: structuredClone(state.detour) } : {}),
       ...(stop === 'no_progress' && state.noProgressBy?.length ? { routeFoes: structuredClone(state.noProgressBy) } : {}),
+      ...(stop === 'no_progress' && state.revisit ? { revisit: { ...state.revisit } } : {}),
     };
     return { ok: true, events: all, startSeq, steps: state.steps, interruptedBy: stop, macro };
   }
@@ -1041,7 +1044,14 @@ export class RunSession {
   private checkpointLedger(pid: PlayerId): CheckpointLedger {
     const have = this.checkpoints.get(pid);
     if (have) return have;
-    const l = this.foldCheckpoints(pid, false);
+    let l: CheckpointLedger;
+    try {
+      l = this.foldCheckpoints(pid, false);
+    } catch (err) {
+      // 畳めない記録（記録の外から World を書き換えたテストの場面など）: 区切りの控えは空から始める（区切りは表示だけ。ゲームは止めない）
+      console.error(`[checkpoint] ${this.runId} の区切りの控えを、記録から作れなかった（空から始める）: ${String((err as Error)?.message ?? err).split(/\r?\n/)[0]}`);
+      l = { lastCalm: -1, due: [] };
+    }
     this.checkpoints.set(pid, l);
     return l;
   }
@@ -1104,8 +1114,11 @@ export class RunSession {
     if (cur < last.seq || (since !== null && since >= cur)) return false;
     // いまの手番に敵が見えていない
     if (!l.calm.includes(cur)) return false;
-    // 区切りの手番から、いまの手番の前までに、敵の見えていない応答の終わりがあれば、もう出した
     const calls = this.calls.get(pid) ?? [];
+    // 前の応答の控えが無い（起動し直した直後など。S7b）: いまの手番を作った呼び出しが記録にあれば、いまの手番の応答はもう返している
+    // （敵が見えていない応答の終わりなので、そこで出した）。出したことにする
+    if (since === null && calls.some((c) => c.seq <= cur)) { l.shown = true; return false; }
+    // 区切りの手番から、いまの手番の前までに、敵の見えていない応答の終わりがあれば、もう出した
     for (const tseq of l.calm) {
       if (tseq >= cur) break;
       const next = calls.find((c) => c.seq > tseq);
