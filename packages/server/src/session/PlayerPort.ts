@@ -4,7 +4,7 @@ import type {
   ActionError, Catalog, Command, Dir, ExpeditionReport, GameEvent, Locale, ObsSlay, Observation, ObservationOptions, PerceivedEvent, PlayerId, PlayerView, Pos, RunSummary, TurnBlock, TurnReason,
 } from '@muse/shared';
 import {
-  actionError, briefingLines, briefingShort, buildObservation, buildTurnBlock, campLines, changesLine, compareLines, describeInventory, describeTarget, diffChanges, progressLines, reportLines,
+  actionError, briefingLines, briefingShort, buildObservation, checkpointChangeText, buildTurnBlock, campLines, changesLine, compareLines, describeInventory, describeTarget, diffChanges, progressLines, reportLines,
   cheb, compassDir, dirLabel, formatObservationText, guardianDisplayName, kindName, lastWithoutXp, MACRO_COMPLETED_STOPS, mapTextLines, memoryCombatText, memoryKey, mineCount, nameOf, nearDirs, pickableItems, progressText, renderAsciiMap, resultText, t,
   turnLine, turnSnapshot, turnStateOf, fightThreats, fleeRiskText, riskText, threatEstimate, DIR_VEC, collectTargets, collectWhatOf, itemDisplayName, slayGroupText, slaysAt,
 } from '@muse/shared';
@@ -454,6 +454,8 @@ export class SessionPlayerPort implements PlayerPort {
       // 文になった出来事と、知覚した他の者の移動（見えなくなった敵の最後に見た位置。V4-0c §4.2）
       const events = prev ? [...this.session.messages(this.playerId).filter((m) => m.seq > prev.seq), ...this.session.movesSince(this.playerId, prev.seq)].sort((a, b) => a.seq - b.seq) : [];
       changes = diffChanges(prev, cur, view, observation, events, this.catalog);
+      // 遠征の途中の区切り（S7 §52.2 の 2）: 前の応答の後に始まった自分の手番に、区切りの手番があれば 1 回だけ（上限の外。どの手番かは記録から決まる）
+      if (view.status !== 'at_camp' && this.session.checkpointDue(this.playerId, prev?.seq ?? null)) changes = [...changes, { code: 'checkpoint', text: checkpointChangeText(L) }];
       if (p.changes === true) this.session.setTurnSnapshot(this.playerId, cur);
     }
     const turn = buildTurnBlock(view, { reason, interruptedBy: p.interruptedBy, changes, expeditionEndedNow: p.expeditionEndedNow });

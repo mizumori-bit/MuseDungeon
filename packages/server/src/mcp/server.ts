@@ -5,7 +5,7 @@ import { z } from 'zod';
 import type { ZodTypeAny } from 'zod';
 import { argListText, argProblems, argShape, exampleOf } from './args';
 import type { ActionError, Command, Controller, ObjectiveChoice, TurnBlock } from '@muse/shared';
-import { actionError, CommandSchema, t } from '@muse/shared';
+import { actionError, CommandSchema, stripTokenArgs, t } from '@muse/shared';
 import type { PlayerPort, ActionPayload } from '../session/PlayerPort';
 import type { SessionManager } from '../session/SessionManager';
 import { rulesText, RULE_TOPICS } from './rules';
@@ -103,8 +103,11 @@ export function createMcpServer(ctx: McpContext): McpServer {
   };
 
   const record = (port: PlayerPort, tool: string, args: Record<string, unknown>, text: string, secrets: readonly (string | undefined)[] = []) => {
-    const { player_token: _t, profile_token: _p, ...safe } = args;
-    manager.recordActivity(port.runId, { playerId: port.playerId, seq: port.view().seq, tool, args: safe, text: withoutTokens(text, [_t, _p, ...secrets]), wall: Date.now() });
+    const { player_token: _t, profile_token: _p, ...rest } = args;
+    // 引数のトークン（名前に token を含む引数・トークンの値）は、どの深さでも記録に残さない（S7 §52.1 の 1: 観戦の「直前の命令」に引数を出す）
+    const all = [_t, _p, ...secrets, ...(ctx.boundToken ? [ctx.boundToken] : [])];
+    const safe = stripTokenArgs(rest, all) as Record<string, unknown>;
+    manager.recordActivity(port.runId, { playerId: port.playerId, seq: port.view().seq, tool, args: safe, text: withoutTokens(text, all), wall: Date.now() });
   };
 
   const act = async (tool: string, args: Record<string, unknown>, cmd: Command) => {
@@ -434,7 +437,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
 
   server.registerTool('notes', {
     title: 'メモ',
-    description: '自分用メモの読み書き（長時間プレイでの文脈喪失対策。ゲームに影響しない）。',
+    description: '自分用メモの読み書き（長時間プレイでの文脈喪失対策。ゲームに影響しない。手番を使わない）。項目つきで書ける: add の文の先頭に覚え書きの定型の項目の名前（「次のねらい: …」「分かったこと: …」「まだ分からないこと: …」「前にやめたこと: …（根拠: そのときのレベル・武器・与えた被害と受けた被害）」）。キャンプの観測に新しい順に 8 件まで、resume_run に全部出る / Notes for yourself (no effect on the game; free). Start an add with a template item name ("next aim: ...", "learned: ...", "still unknown: ...", "gave up on: ... (why: level, weapon, damage dealt and taken)"). Camp shows the newest 8; resume_run shows all.',
     inputSchema: { ...common, add: z.string().min(1).max(280).optional(), remove: z.number().int().nonnegative().optional() },
   }, async (args) => {
     const port = portOf(args.player_token);
@@ -602,7 +605,32 @@ export function createMcpServer(ctx: McpContext): McpServer {
     record(port, tool, { ...known, ...(unknown.length ? { unknown_args: [...unknown] } : {}) }, `${err.code} ${err.message}`);
     return errOut(err, va, { block: tb, line: port.turnLine(tb) });
   });
+  // 呼び出しの時間の控え（S7 §52.1 の 2）: 受け取りから返すまで（引数の断りも、SDK の検査も、ハンドラも含む）。引数・トークン・考えは控えない
+  timeCalls(server, (tool, args, startedAt, ms, err) => {
+    const tok = (typeof args.player_token === 'string' ? args.player_token : undefined) ?? ctx.boundToken ?? undefined;
+    const run = tok ? manager.portForToken(tok)?.runId ?? null : null;
+    manager.calls.record({ at: new Date(startedAt).toISOString(), tool, run, ms, ...(err !== undefined ? { error: true as const } : {}) }, err);
+  });
   return server;
+}
+
+/** tools/call の処理の時間を測る（interceptArgs の後に包む: 引数の断りの分も入る）。SDK の内部の形が違えば何もしない */
+function timeCalls(server: McpServer, done: (tool: string, args: Record<string, unknown>, startedAt: number, ms: number, err?: unknown) => void): void {
+  const inner = server.server as unknown as { _requestHandlers?: Map<string, (req: unknown, extra: unknown) => Promise<unknown>> };
+  const orig = inner._requestHandlers?.get('tools/call');
+  if (!inner._requestHandlers || !orig) return;
+  inner._requestHandlers.set('tools/call', async (req, extra) => {
+    const p = (req as { params?: { name?: string; arguments?: Record<string, unknown> } }).params;
+    const t0 = Date.now();
+    try {
+      const r = await orig(req, extra);
+      done(p?.name ?? '?', p?.arguments ?? {}, t0, Date.now() - t0);
+      return r;
+    } catch (e) {
+      done(p?.name ?? '?', p?.arguments ?? {}, t0, Date.now() - t0, e ?? 'error');
+      throw e;
+    }
+  });
 }
 
 /**

@@ -33,7 +33,9 @@ export type ChangeCode =
   /** このランで初めて見た種族・地物・バイオームの描写（V3-5 §5.4） */
   | 'first_seen'
   /** 節目の階が作り直された（V4-0a §1.1。遠征の開始の応答） */
-  | 'floor_reset';
+  | 'floor_reset'
+  /** 遠征の途中の区切り（S7。SEASON.md §52.2 の 2）: 自分の手番で 100 手番ごとに、敵が見えていない手番に 1 回だけ */
+  | 'checkpoint';
 
 export interface Change { code: ChangeCode; text: string; entity?: string }
 
@@ -316,6 +318,34 @@ export function diffChanges(prev: TurnSnapshot | null, cur: TurnSnapshot, view: 
   // 初めて見たときの 1 行（最大 3 件）は、上限の外で必ず渡す（「見た」と記録した後に上限で切ると、二度と出なかった。V4-1g G6）
   out.sort((a, b) => PRIORITY.indexOf(a.code) - PRIORITY.indexOf(b.code));
   return [...out.slice(0, MAX_CHANGES), ...firsts];
+}
+
+/**
+ * 遠征の途中の区切り（S7。SEASON.md §52.2 の 2）の控え。自分の手番の初め（engine の turn_began）ごとに、その手番の数と、
+ * 敵が見えていないか（monsterInView）を渡して進める。区切りは、自分の手番の数が 100 の倍数を越えた後の、敵が見えていない最初の手番。
+ * 戦いの最中（敵が見えている手番）は出さず、見えなくなった最初の手番に回す。前の区切りの後に、もう敵の見えない手番があったら、その 100 手番の分は出した。
+ * World（手番の数）と視界だけから決まるので、ランの記録を畳めば同じに作り直せる（サーバーは覚えているだけ。起動し直したら畳み直す）
+ */
+export interface CheckpointLedger {
+  /** 敵が見えていなかった、最後の自分の手番の数（まだ無ければ -1） */
+  lastCalm: number;
+  /** 区切りを出す手番（その手番の初めの seq と、手番の数）。新しいものだけ残す */
+  due: { seq: number; turn: number }[];
+}
+
+export function checkpointStep(l: CheckpointLedger, turn: number, calm: boolean, seq: number, every = 100): void {
+  if (!calm) return;
+  const block = Math.trunc(turn / every) * every;
+  if (turn >= every && l.lastCalm < block) {
+    l.due.push({ seq, turn });
+    if (l.due.length > 16) l.due.splice(0, l.due.length - 16);
+  }
+  l.lastCalm = turn;
+}
+
+/** キャンプに着いた（S7）: キャンプそのものが区切り（キャンプの観測に区切りの段が出る）なので、その手番までの 100 手番の分は出したことにする */
+export function checkpointCamp(l: CheckpointLedger, turn: number): void {
+  l.lastCalm = Math.max(l.lastCalm, turn);
 }
 
 function statusName(obs: Observation, id: string): string {

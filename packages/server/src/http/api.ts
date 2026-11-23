@@ -95,6 +95,12 @@ export function createApp(manager: SessionManager, config: ServerConfig): App {
       return;
     }
     if (p === '/api/config') return json(res, 200, { spectatorPolicy: config.spectatorPolicy });
+    // 運用の口（S7 §52.1 の 2）: 直近の MCP の呼び出し（受け取った時刻・ツール・ラン・サーバーの側でかかった時間）。同じ機械からだけ（引数・トークン・考えは持っていない）
+    if (p === '/api/ops/calls' && m === 'GET') {
+      if (!isLocalRequest(req)) return fail(res, 403, actionError('bad_request', 'only from the same machine as the server', ''));
+      const limit = Math.max(1, Math.min(200, Number(url.searchParams.get('limit') ?? 200) || 200));
+      return json(res, 200, { long_ms: manager.calls.longMs, calls: manager.calls.list(limit) });
+    }
     if (p === '/api/content/catalog') return json(res, 200, manager.catalog);
     // 開催中のシーズンのランは載せない（S3a §27.9 の 3）
     if (p === '/api/leaderboard') return json(res, 200, { entries: store?.leaderboard((sid) => manager.seasonHidden(sid)) ?? [] });

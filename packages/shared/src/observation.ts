@@ -376,6 +376,50 @@ export interface Observation {
   camp?: ObsCamp;
   /** シーズン（S0。PROTOCOL §9.6。シーズンのランだけ）。賞と報告していない階段はキャンプでだけ */
   season?: ObsSeason;
+  /** 区切り（S7。SEASON.md §52.2 の 1。キャンプにいるときだけ）: 決まった 1 段・覚え書きの定型（項目の名前だけ）・今あるメモ */
+  checkpoint?: ObsCheckpoint;
+}
+
+/**
+ * 区切り（S7 §52.2 の 1）。すべてのプレイヤーに同じ文。text: 決まった 1 段。template: 覚え書きの定型の項目の名前（中身は書かない）。
+ * notes: 今あるメモを新しい順に CHECKPOINT_NOTES 件まで（index は notes ツールの番号。remove に使える）。notes_total: メモの全部の数
+ */
+export interface ObsCheckpoint { text: string; template: string[]; notes: { index: number; text: string }[]; notes_total: number }
+
+/** キャンプの観測に出すメモの数（新しい順。S7 §52.2 の 1） */
+export const CHECKPOINT_NOTES = 8;
+
+/** 覚え書きの定型の項目の名前（S7 §52.2 の 1。notes の add の文の先頭に付けて書ける） */
+export function checkpointTemplate(L: Locale): string[] {
+  return L === 'en'
+    ? ['next aim', 'learned (foes, items, terrain)', 'still unknown', 'what you gave up on before, and why (does it still hold?)']
+    : ['次のねらい', '分かったこと（相手・品・地形）', 'まだ分からないこと', '前にやめたことと、その根拠（今も成り立つか）'];
+}
+
+/** 区切り（S7 §52.2 の 1）: キャンプの観測の終わりの 1 段と、覚え書きの定型と、今あるメモ（新しい順に 8 件まで） */
+export function checkpointObs(L: Locale, notes: readonly string[]): ObsCheckpoint {
+  const shown = notes.map((text, index) => ({ index, text })).reverse().slice(0, CHECKPOINT_NOTES);
+  return {
+    text: t(L,
+      'ここは遠征の区切り。今の状態は、この表示が正本（持ち物・装備・能力・順位・次の候補）。これより前の経過は、次の判断に要らない。次の遠征に持ち越したいことは、notes に書けば、キャンプと resume_run で返す',
+      'This is a break between expeditions. This display is the source of truth for where you stand now (inventory, equipment, stats, standings, next offers). What happened before is not needed for your next decision. Anything you want to carry into the next expedition, write with notes: camp and resume_run give it back'),
+    template: checkpointTemplate(L),
+    notes: shown,
+    notes_total: notes.length,
+  };
+}
+
+/** キャンプの「できること」の notes の行（S7 §52.2 の 1。そのまま呼べる形） */
+export function notesActionLine(L: Locale): string {
+  return t(L,
+    'notes { add: "次のねらい: …" }（自分用メモを書く。手番を使わない。先頭に覚え書きの定型の項目の名前。キャンプと resume_run で返る。消すのは notes { remove: 番号 }）',
+    'notes { add: "next aim: ..." } (write a note for yourself; free; start it with a template item name; camp and resume_run give it back; delete with notes { remove: number })');
+}
+
+/** 遠征の途中の区切り（S7 §52.2 の 2）: 自分の手番で 100 手番ごとに、敵が見えていないときに 1 回だけ、観測の「変化」の行に出す文 */
+export const CHECKPOINT_EVERY = 100;
+export function checkpointChangeText(L: Locale): string {
+  return t(L, `区切り（${CHECKPOINT_EVERY} 手番）。今の観測が正本。これより前の経過は、要らない`, `Checkpoint (${CHECKPOINT_EVERY} turns). This observation is the source of truth; what came before is not needed`);
 }
 
 export interface ObsSeason {
@@ -2329,6 +2373,8 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
   }
   if (expedition) obs.expedition = expedition;
   if (camp) obs.camp = camp;
+  // 区切り（S7 §52.2 の 1）: キャンプにいるときだけ。協力プレイで仲間を待っている（候補がまだ無い）キャンプも
+  if (view.status === 'at_camp') obs.checkpoint = checkpointObs(L, view.notes);
   const season = seasonObs(view, catalog.rules.seasonFire?.perSeason);
   if (season) {
     // 迷宮で、いま火を置けるマスにいる: 支援賞の行（キャンプで取り込んだもの）と自分の火の数（S1c §14.4 の 7）
@@ -2410,12 +2456,14 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
     const reportWhat = ss ? [ss.unreported > 0 ? t(L, `報告していない階段 ${ss.unreported}`, `${ss.unreported} unreported stairs`) : '', (ss.spotsUnreported ?? 0) > 0 ? t(L, `報告していない特別な場所 ${ss.spotsUnreported}`, `${ss.spotsUnreported} unreported special places`) : ''].filter(Boolean) : [];
     const report = reportWhat.length ? [`report_stairs (${reportWhat.join(t(L, '・', ', '))})`] : [];
     const closed = !!view.season && (view.season.budgetLeft <= 0 || view.season.ended);
-    if (!view.camp || closed) return [...perkLines, ...report, ...(view.camp ? ['retire'] : ['wait_for_turn'])];
+    // 覚え書き（S7 §52.2 の 1）: キャンプの区切りで書けるように、呼べる形で 1 行（プレイする AI に届くのは応答の文だけのことがある。§53）
+    const note = notesActionLine(L);
+    if (!view.camp || closed) return [...perkLines, ...report, note, ...(view.camp ? ['retire'] : ['wait_for_turn'])];
     return [
       ...perkLines,
       ...report,
       ...view.camp.offers.map((o) => `start_expedition ${o.index} (${objectiveText(L, o.objective)})`),
-      'start_expedition endless', 'retire',
+      'start_expedition endless', note, 'retire',
     ];
   }
   if (view.status !== 'your_turn' || !view.self.pos || !view.floor) return view.status === 'dead' || view.status === 'ended' ? [] : [...perkLines, 'wait_for_turn'];
@@ -2746,6 +2794,45 @@ export interface TextFormat {
   map?: 'show' | 'unchanged';
 }
 
+/** 能力の行（迷宮の観測と、区切りのあるキャンプの観測で同じ。S7） */
+function statsLine(obs: Observation, L: Locale): string {
+  const s = obs.self;
+  const st = s.statuses.length ? s.statuses.map((x) => `${x.name}(${x.turns_left})`).join(' ') : t(L, 'なし', 'none');
+  return t(L,
+    `能力: 命中+${s.attack.acc} ダメージ${s.attack.dmg} 回避${s.defense.eva} 装甲${s.defense.armor} 速さ${s.speed} XP ${s.xp}/${s.xp_next} 状態:${st}`,
+    `Stats: acc+${s.attack.acc} dmg ${s.attack.dmg} eva ${s.defense.eva} armor ${s.defense.armor} speed ${s.speed} XP ${s.xp}/${s.xp_next} status:${st}`);
+}
+
+/** 所持品の行（装備は * に一本化。迷宮の観測と、区切りのあるキャンプの観測で同じ。S7） */
+function inventoryLines(obs: Observation, L: Locale): string[] {
+  const s = obs.self;
+  if (!s.inventory) return [t(L, `所持品 (${s.inventory_count}/${s.inventory_capacity}、* は装備中): `, `Inventory (${s.inventory_count}/${s.inventory_capacity}, * = equipped): `) + (s.inventory_brief || '-')];
+  return [
+    t(L, `所持品 (${s.inventory_count}/${s.inventory_capacity}、* は装備中):`, `Inventory (${s.inventory_count}/${s.inventory_capacity}, * = equipped):`),
+    ...s.inventory.map((it) => `  ${it.slot}) ${it.name}${it.qty > 1 ? ` x${it.qty}` : ''}${it.equipped ? '*' : ''}${it.identified ? '' : t(L, ' (未鑑定)', ' (unidentified)')}${it.curse === 'cursed' ? t(L, ' {呪い:外せない}', ' {cursed}') : it.curse === 'unknown' ? t(L, ' {呪い?}', ' {curse?}') : ''}`),
+  ];
+}
+
+/** キャンプの区切りの観測の能力と所持品（S7 §52.2 の 1: 「この表示が正本（持ち物・装備・能力…）」と言うので、キャンプにも出す） */
+function statsAndInventoryLines(obs: Observation, L: Locale): string[] {
+  return [statsLine(obs, L), ...inventoryLines(obs, L)];
+}
+
+/** 区切りの段（S7 §52.2 の 1）: 今あるメモ（新しい順に 8 件まで）・決まった 1 段・覚え書きの定型 */
+export function checkpointLines(L: Locale, c: ObsCheckpoint): string[] {
+  const out: string[] = [];
+  if (c.notes.length) {
+    out.push(c.notes_total > c.notes.length
+      ? t(L, `あなたのメモ（新しい順に ${c.notes.length} 件。全部で ${c.notes_total} 件は notes で）:`, `Your notes (newest ${c.notes.length} of ${c.notes_total}; all with notes):`)
+      : t(L, 'あなたのメモ（新しい順）:', 'Your notes (newest first):'));
+    for (const n of c.notes) out.push(`- ${n.index}: ${n.text}`);
+  }
+  out.push(t(L, `区切り: ${c.text}`, `Break: ${c.text}`));
+  out.push(t(L, `覚え書きの定型（項目の名前だけ。中身はあなたが書く）: ${c.template.join('／')}`, `Note template (item names only; you write the content): ${c.template.join(' / ')}`));
+  out.push(t(L, `書き方: notes { add: "${c.template[0]}: …" }（1 件 280 字まで。項目ごとに 1 件ずつ。手番を使わない）`, `How: notes { add: "${c.template[0]}: ..." } (up to 280 characters each; one note per item; free)`));
+  return out;
+}
+
 export function formatObservationText(obs: Observation, locale: Locale, fmt: TextFormat = {}): string {
   const L = locale;
   const lines: string[] = [];
@@ -2783,6 +2870,8 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
     for (const x of obs.camp?.compare?.wardens ?? []) lines.push(...x.lines);
     lines.push(t(L, `確定済み ${s.score.banked} 点・達成した遠征 ${s.score.expeditions_completed}`, `Banked ${s.score.banked}, expeditions completed ${s.score.expeditions_completed}`));
     lines.push(boonsText(L, s.boons ?? []));
+    // 区切り（S7 §52.2 の 1）: 「この表示が正本（持ち物・装備・能力…）」と言うので、能力と所持品もキャンプの表示に出す
+    if (obs.checkpoint) lines.push(...statsAndInventoryLines(obs, L));
     if (obs.camp?.milestone) lines.push(obs.camp.milestone.text);
     if (obs.camp?.archive) lines.push(t(L, `記録庫: 欠片 ${obs.camp.archive.delivered}/${obs.camp.archive.total}`, `Archive: shards ${obs.camp.archive.delivered}/${obs.camp.archive.total}`));
     // 討伐の記録（S4 §35.5）: 節目ごとに 1 行
@@ -2807,6 +2896,7 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
       for (const e of collapseRepeats(obs.recent_events)) lines.push(`- ${e}`);
     }
     lines.push(t(L, 'できること: ', 'Actions: ') + obs.valid_actions.join(' / '));
+    if (obs.checkpoint) lines.push(...checkpointLines(L, obs.checkpoint));
     return lines.join('\n');
   }
   // 通常の階でなければ階の種類も（聖域・大守護者の間など。V3-3 後の AI 評価: 敵のいない階が聖域と分からなかった）
@@ -2835,10 +2925,7 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
     lines.push([head, x.haul?.text, x.sense?.text, ...(x.ward_fires ?? []).map((w) => w.text)].filter(Boolean).join(' | '));
   }
   if (obs.alerts.length) lines.push('!! ' + obs.alerts.map((a) => a.text).join(' / '));
-  const st = s.statuses.length ? s.statuses.map((x) => `${x.name}(${x.turns_left})`).join(' ') : t(L, 'なし', 'none');
-  lines.push(t(L,
-    `能力: 命中+${s.attack.acc} ダメージ${s.attack.dmg} 回避${s.defense.eva} 装甲${s.defense.armor} 速さ${s.speed} XP ${s.xp}/${s.xp_next} 状態:${st}`,
-    `Stats: acc+${s.attack.acc} dmg ${s.attack.dmg} eva ${s.defense.eva} armor ${s.defense.armor} speed ${s.speed} XP ${s.xp}/${s.xp_next} status:${st}`));
+  lines.push(statsLine(obs, L));
   if (s.abilities.length || s.perks.length) {
     const ab = s.abilities.map((a) => `${a.name}(${a.id}${a.uses_left === 0 ? t(L, '・使い切った', ', used up') : a.cooldown_left ? t(L, `・あと${a.cooldown_left}`, `, ${a.cooldown_left} left`) : t(L, '・使える', ', ready')})`).join(' ');
     const pk = s.perks.map((x) => `${x.name}${x.ranks > 1 ? `×${x.ranks}` : ''}`).join(t(L, '・', ', '));
@@ -2926,14 +3013,7 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
     for (const e of collapseRepeats(obs.recent_events)) lines.push(`- ${e}`);
   }
   // 装備は所持品の * に一本化
-  if (fmt.inventory !== false) {
-    if (s.inventory) {
-      lines.push(t(L, `所持品 (${s.inventory_count}/${s.inventory_capacity}、* は装備中):`, `Inventory (${s.inventory_count}/${s.inventory_capacity}, * = equipped):`));
-      for (const it of s.inventory) lines.push(`  ${it.slot}) ${it.name}${it.qty > 1 ? ` x${it.qty}` : ''}${it.equipped ? '*' : ''}${it.identified ? '' : t(L, ' (未鑑定)', ' (unidentified)')}${it.curse === 'cursed' ? t(L, ' {呪い:外せない}', ' {cursed}') : it.curse === 'unknown' ? t(L, ' {呪い?}', ' {curse?}') : ''}`);
-    } else {
-      lines.push(t(L, `所持品 (${s.inventory_count}/${s.inventory_capacity}、* は装備中): `, `Inventory (${s.inventory_count}/${s.inventory_capacity}, * = equipped): `) + (s.inventory_brief || '-'));
-    }
-  }
+  if (fmt.inventory !== false) lines.push(...inventoryLines(obs, L));
   if (obs.map) {
     lines.push(t(L, `地図（上の 2 行が x 座標の 10 の位と 1 の位、左が y 座標）:`, `Map (top rows: x tens/ones, left: y):`));
     for (const r of mapTextLines(obs.map)) lines.push(r);

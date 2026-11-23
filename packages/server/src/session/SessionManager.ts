@@ -1,5 +1,6 @@
 // 複数ランの管理。参加時にプレイヤートークンを発行し、再接続・再開はトークンで行う。
 import { existsSync, mkdirSync } from 'node:fs';
+import { CallLog } from '../mcp/calls';
 import { basename, join } from 'node:path';
 import type { Content } from '@muse/content';
 import { buildCatalog } from '@muse/content';
@@ -52,6 +53,8 @@ export class SessionManager {
   readonly profiles: ProfileService;
   /** シーズン（S0。PROTOCOL §9） */
   readonly seasons: SeasonService;
+  /** MCP の呼び出しの時間の控え（S7 §52.1 の 2。メモリだけ） */
+  readonly calls = new CallLog();
   private seasonTimer: NodeJS.Timeout | null = null;
 
   constructor(content: Content, readonly config: ServerConfig) {

@@ -373,6 +373,25 @@ export function actorSeen(world: World, floor: FloorKey, at: Pos, viewer: Pos | 
   return cellInView && !inCover(world, floor, at, viewer);
 }
 
+/**
+ * そのプレイヤーに、いま敵（モンスター）が 1 体でも見えているか（S7。SEASON.md §52.2 の 2: 遠征の途中の区切りは、敵が見えていない手番に出す）。
+ * 見え方は projectPlayerView と同じ（今いる階で、視界のマスにいて、草の中なら隣だけ。判定は actorSeen 1 つ）
+ */
+export function monsterInView(world: World, playerId: PlayerId): boolean {
+  const rec = world.players[playerId];
+  const me = rec ? world.entities[rec.entityId] : undefined;
+  const fk = me?.pos?.floor;
+  const floor = fk ? world.floors[fk] : undefined;
+  if (!rec || !me?.pos || !fk || !floor) return false;
+  const visible = new Set(rec.knowledge.visible);
+  for (const e of Object.values(world.entities)) {
+    if (e.id === me.id || e.pos?.floor !== fk || entityCat(e) !== 'monster') continue;
+    if (!visible.has(e.pos.y * floor.width + e.pos.x)) continue;
+    if (actorSeen(world, fk, e.pos, me.pos, true)) return true;
+  }
+  return false;
+}
+
 export function entityCat(e: Entity): EntityView['cat'] | null {
   if (e.player) return 'player';
   if (e.actor) return 'monster';

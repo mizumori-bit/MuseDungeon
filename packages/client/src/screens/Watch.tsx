@@ -12,7 +12,7 @@ import { soundDirector } from '../sound/director';
 import { ErrorBanner, Header, MapView, ThemePicker, useCatalog, useLocaleRefresh, useTheme } from '../ui/common';
 import { SoundControls } from '../ui/sound';
 import { CampScene } from '../ui/camp';
-import { AgentWaitBadge, directorExpInfo, ExpeditionStatusPanel, followExpInfo, type ExpInfo } from '../ui/expedition';
+import { AgentWaitBadge, directorExpInfo, ExpeditionStatusPanel, followExpInfo, NotesBlock, type ExpInfo } from '../ui/expedition';
 import { narrateWorld, perceivedLines, thoughtsFrom } from '../ui/narration';
 import { AiPanel, MessageLog, PartyPanel, SummaryDialog, type LogLine, type ThoughtLine } from '../ui/panels';
 import { getLocale, getPref, setPref, tr } from '../util';
@@ -341,6 +341,8 @@ export function Watch({ runId }: { runId: string }) {
   // 遠征の目的と状態: 俯瞰は World の最新の遠征、追従は射影した PlayerView
   let expInfo: ExpInfo | null = null;
   let campNote: string | null = null;
+  // キャンプにいる相手のメモ（S7 §52.2 の 4。読むだけ）
+  let campNotes: { who: string; notes: string[] } | null = null;
   // 追従で見ている相手がキャンプにいれば、地図を隠してキャンプの絵（ASSET_SPEC §7.7）。俯瞰と終わったランは地図のまま
   const followCamp = followOnly
     ? viewRef.current?.status === 'at_camp'
@@ -350,12 +352,12 @@ export function Watch({ runId }: { runId: string }) {
       const v = viewRef.current;
       if (v) {
         expInfo = followExpInfo(v, catalog);
-        if (v.status === 'at_camp') campNote = tr(`${v.self.name} はキャンプにいる（盤面の外）`, `${v.self.name} is at camp (off the board)`);
+        if (v.status === 'at_camp') { campNote = tr(`${v.self.name} はキャンプにいる（盤面の外）`, `${v.self.name} is at camp (off the board)`); campNotes = { who: v.self.name, notes: v.notes }; }
       }
     } else if (w) {
       if (mode === 'follow' && follow && w.players[follow]) {
         expInfo = followExpInfo(projectPlayerView(w, follow), catalog);
-        if (w.players[follow].state === 'at_camp') campNote = tr(`${w.players[follow].name} はキャンプにいる（盤面の外）`, `${w.players[follow].name} is at camp (off the board)`);
+        if (w.players[follow].state === 'at_camp') { campNote = tr(`${w.players[follow].name} はキャンプにいる（盤面の外）`, `${w.players[follow].name} is at camp (off the board)`); campNotes = { who: w.players[follow].name, notes: w.players[follow].knowledge.notes }; }
       } else {
         const fk = featuredFloor(w);
         expInfo = directorExpInfo(w, fk ? w.floors[fk]?.depth ?? null : null, catalog);
@@ -415,6 +417,7 @@ export function Watch({ runId }: { runId: string }) {
         </div>
         <aside class="side">
           <ExpeditionStatusPanel info={expInfo} />
+          {campNotes && campNotes.notes.length > 0 && <section class="panel"><NotesBlock notes={campNotes.notes} who={campNotes.who} /></section>}
           {w && catalog && <PartyPanel world={w} catalog={catalog} follow={follow} onFollow={(pid) => setFollow(pid)} />}
           <AiPanel thoughts={thoughts} activities={activities} observationText={obsText} />
           <MessageLog lines={log} title={mode === 'follow' || followOnly ? tr('メッセージ（追従）', 'Messages (follow)') : tr('メッセージ（俯瞰）', 'Messages (director)')} />
