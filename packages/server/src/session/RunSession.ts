@@ -3,14 +3,14 @@
 import { randomBytes } from 'node:crypto';
 import type { Catalog } from '@muse/shared';
 import type { Content } from '@muse/content';
-import { createRun, directiveRefusal, heldItemOf, isPlayersTurn, joinPlayer, resumeSeq, seasonSync, step } from '@muse/engine';
+import { createRun, directiveRefusal, isPlayersTurn, joinPlayer, resumeSeq, seasonSync, step } from '@muse/engine';
 import type {
   ActionError, AgentActivity, Command, CommandRecord, CommandSource, Dir, Expedition, ExpeditionReport, GameEvent, JoinCommand, LegacyMonster, MacroStop, ProjectedEvent,
   PerceivedEvent, PlayerId, PlayerView, Pos, ReportCall, RunMetaFile, RunSummary, SeasonSlay, SeasonSlayFacts, SeasonSyncCommand, SeqResumeCommand, TurnSnapshot, World,
   CheckpointLedger, DirectiveItem,
 } from '@muse/shared';
 import {
-  DIRECTIVE_ITEMS, actionError, applyEvent, buildExpeditionReport, canonicalHash, guardianDisplayName, compareReports, emptyWorld, filterEventsForPlayer, FREE_COMMANDS, MACRO_COMMANDS,
+  DIRECTIVE_ITEMS, OWNER_COMMANDS, actionError, applyEvent, buildExpeditionReport, canonicalHash, guardianDisplayName, compareReports, emptyWorld, filterEventsForPlayer, FREE_COMMANDS, MACRO_COMMANDS, prepStateOf,
   CHECKPOINT_EVERY, checkpointCamp, checkpointStep, monsterInView,
   fleeOptionsText, fleeRiskText, macroNext, macroProbe, macroStart, macroStopError, narrate, projectPlayerView, publicStairsAt, riskText, fightRiskStop, fightThreats, threatEstimate, seasonReportable, seasonReportableSpots, seasonFinalText, selfTurnMarks, t,
 } from '@muse/shared';
@@ -121,6 +121,10 @@ export class RunSession {
   private readonly macroActive = new Set<PlayerId>();
   /** 最後に入力（コマンド投入）があった時刻 */
   private readonly lastInput = new Map<PlayerId, number>();
+  /** プレイヤー（AI）が最後に呼び出した時刻（S9 §58.1。命令と MCP の呼び出し。持ち主・サーバーの命令は数えない。メモリだけで、起動し直すと空） */
+  private readonly lastCall = new Map<PlayerId, number>();
+  /** 持ち主の支度を wait_for_turn で待っている呼び出しの数（S9 §58.1。メモリだけ） */
+  private readonly ownerWaiting = new Map<PlayerId, number>();
   /** 応答テキストの表示オプション（ゲームには影響しない。World の外） */
   private readonly options = new Map<PlayerId, PlayerOptions>();
   /** プレイヤーごとの、送ったコマンドの記録（遠征レポートの呼び出し数・マクロの割合。V3-6 §6） */
@@ -791,7 +795,13 @@ export class RunSession {
     return this.turnKey(pid);
   }
 
+  /** プレイヤーが最後に呼び出した時刻（S9 §58.1。このサーバーの起動の後に呼び出しが無ければ null） */
+  lastCallAt(pid: PlayerId): number | null {
+    return this.lastCall.get(pid) ?? null;
+  }
+
   recordAgentActivity(a: AgentActivity): void {
+    if (a.playerId) this.lastCall.set(a.playerId, Math.max(this.lastCall.get(a.playerId) ?? 0, a.wall));
     this.agentActivity.push(a);
     if (this.agentActivity.length > 50) this.agentActivity.shift();
     this.notify((l) => l.onAgent?.(a));
@@ -819,20 +829,37 @@ export class RunSession {
   }
 
   /**
-   * 持ち主の決定を待つ（S8。SEASON.md §54.4 の 5）: キャンプで目的を握られている間、持ち主が遠征を始める（キャンプを出る）か、目的を握るのをやめるか、
-   * timeoutMs が過ぎるまで。時間は World に入れない（待つだけで、何も記録しない）
+   * 持ち主の支度を待つ（S8 §54.4 の 5。S9 §58.1 で「キャンプで、札が『まだ』のとき、準備完了になるまで」に）: 準備完了になる（ready）か、
+   * 握るのをすべてやめる（released）か、キャンプを出る（started。S9 では持ち主は遠征を始めないので、記録の外から変わったときだけ）か、timeoutMs が過ぎるまで。
+   * 時間は World に入れない（待つだけで、何も記録しない）
    */
-  async waitForOwner(pid: PlayerId, timeoutMs: number): Promise<'started' | 'released' | 'timeout' | 'ended'> {
+  async waitForOwner(pid: PlayerId, timeoutMs: number): Promise<'ready' | 'started' | 'released' | 'timeout' | 'ended'> {
     const deadline = Date.now() + timeoutMs;
-    for (;;) {
-      const pr = this.world.players[pid];
-      if (this.world.status === 'ended' || !pr || pr.state === 'dead' || pr.state === 'left') return 'ended';
-      if (pr.state !== 'at_camp') return 'started';
-      if (!pr.directive?.hold.includes('objective')) return 'released';
-      const left = deadline - Date.now();
-      if (left <= 0) return 'timeout';
-      await this.waitChange(left);
+    // 持ち主の画面に「AI は、いま待っている」と出す（S9 §58.1。メモリだけ）
+    this.lastCall.set(pid, Date.now());
+    this.ownerWaiting.set(pid, (this.ownerWaiting.get(pid) ?? 0) + 1);
+    try {
+      for (;;) {
+        const pr = this.world.players[pid];
+        if (this.world.status === 'ended' || !pr || pr.state === 'dead' || pr.state === 'left' || this.closed) return 'ended';
+        if (pr.state !== 'at_camp') return 'started';
+        const st = prepStateOf(pr.directive);
+        if (st === null) return 'released';
+        if (st === 'ready') return 'ready';
+        const left = deadline - Date.now();
+        if (left <= 0) return 'timeout';
+        await this.waitChange(left);
+      }
+    } finally {
+      const n = (this.ownerWaiting.get(pid) ?? 1) - 1;
+      if (n > 0) this.ownerWaiting.set(pid, n); else this.ownerWaiting.delete(pid);
+      this.lastCall.set(pid, Date.now());
     }
+  }
+
+  /** プレイヤー（AI）が、いま持ち主の支度を wait_for_turn で待っているか（S9 §58.1。持ち主の画面に出す） */
+  waitingForOwner(pid: PlayerId): boolean {
+    return (this.ownerWaiting.get(pid) ?? 0) > 0;
   }
 
   /** コマンドを投入する。マクロはここで基本行動に展開する（AI も人間も同じ） */
@@ -844,8 +871,10 @@ export class RunSession {
     // 確定したシーズンのラン（S9a §57.3 の 4）: どの口からの命令も、手番を使わず、記録に何も残さずに断る（記録は見返せる）
     const closed = this.seasonFinalRefusal(pid);
     if (closed) return { ok: false, error: closed };
-    if (owner && cmd.type !== 'set_directive' && !heldItemOf(cmd)) return { ok: false, error: actionError('bad_request', t(pr.locale, '持ち主の口から出せるのは、set_directive と、握った項目の命令（start_expedition・equip・unequip・choose_perk・choose_boon）だけ。', 'From the owner you can send set_directive and the held items\' commands (start_expedition, equip, unequip, choose_perk, choose_boon) only.'), '') };
+    if (owner && !OWNER_COMMANDS.has(cmd.type)) return { ok: false, error: actionError('bad_request', t(pr.locale, '持ち主の口から出せるのは、set_directive・prepare と、握った項目の命令（equip・unequip・choose_perk・choose_boon）だけ。', 'From the owner you can send set_directive, prepare and the held items\' commands (equip, unequip, choose_perk, choose_boon) only.'), '') };
     if (!owner) this.lastInput.set(pid, Date.now());
+    // AI が最後に命令を出した時刻（S9 §58.1: 持ち主の画面に、いま AI がいるかを出す。World に入れない。サーバーが代わりに出した命令は数えない）
+    if (!owner && opts.source !== 'system' && opts.source !== 'timeout') this.lastCall.set(pid, Date.now());
     if (opts.expectSeq !== undefined && opts.expectSeq !== this.world.seq && !FREE_COMMANDS.has(cmd.type)) {
       return {
         ok: false,
@@ -858,9 +887,10 @@ export class RunSession {
     // シーズン（S0 §9.4）: 遠征を始めるときに取り込む（予算・終わりの時刻・公開された階段・順位）
     if (cmd.type === 'start_expedition' && this.world.meta.season && this.deps.season && pr.state === 'at_camp') {
       return this.enqueue(() => {
-        // 目的を握られた start_expedition（S8 §54.3）は、取り込みを記録する前に断る（断りは World を変えない）
-        const held = this.world.players[pid] ? directiveRefusal(this.world, this.world.players[pid], cmd, owner) : null;
-        if (held) return { ok: false as const, error: held };
+        // 断られる start_expedition（S8 §54.3・S9 §58.1: 目的を握られている・支度が「まだ」・持ち主の口）は、取り込みを記録する前に断る。
+        // 希望（S9 §58.2）を覚える断りは、engine が出来事を出すので、取り込みをせずに step へ渡す
+        const held = this.world.players[pid] ? directiveRefusal(this.world, this.deps.content, this.world.players[pid], cmd, owner) : null;
+        if (held) return this.stepNow(pid, cmd, opts.source, opts.thought);
         this.seasonSyncNow(pid, 'start');
         return this.stepNow(pid, cmd, opts.source, opts.thought);
       });

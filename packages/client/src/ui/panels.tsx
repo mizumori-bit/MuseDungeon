@@ -462,15 +462,18 @@ export function PartyPanel({ world, catalog, follow, onFollow }: { world: World;
 }
 
 /**
- * 思考の欄の 1 行。kind（S8。SEASON.md §54.6）: 無ければ AI の考え、owner は持ち主が決めたこと（owner_decided）、owner_msg は持ち主の指図と伝言（directive_set）。
- * sub: 添える 1 行（伝言の行の、握った項目など）
+ * 思考の欄の 1 行。kind（S8。SEASON.md §54.6）: 無ければ AI の考え、owner は持ち主が決めたこと（owner_decided・S9 の支度 directive_prep）、owner_msg は持ち主の指図と伝言（directive_set）、
+ * wish は AI の希望（S9 §58.2。directive_wish）。sub: 添える 1 行（伝言の行の、握った項目・希望の理由など）
  */
-export interface ThoughtLine { seq: number; player: string; name: string; text: string; kind?: 'owner' | 'owner_msg'; sub?: string }
+export interface ThoughtLine { seq: number; player: string; name: string; text: string; kind?: 'owner' | 'owner_msg' | 'wish'; sub?: string }
 
-/** 思考の欄の 1 行を描く（持ち主の行は見出しを替える） */
+/** 思考の欄の 1 行を描く（持ち主の行・希望の行は見出しを替える） */
 function ThoughtRow({ t }: { t: ThoughtLine }) {
   if (t.kind === 'owner') {
     return <div class="line owner"><b>{tr('持ち主が決めた', 'The owner decided')}</b> <small>{t.name} #{t.seq}</small><br />{t.text}</div>;
+  }
+  if (t.kind === 'wish') {
+    return <div class="line thought wish"><b>{t.name}</b> <small>#{t.seq}</small><br />{tr('希望: ', 'Wish: ')}{t.text}{t.sub ? <div class="muted small">{t.sub}</div> : null}</div>;
   }
   if (t.kind === 'owner_msg') {
     return <div class="line owner_msg"><b>{tr('持ち主から', 'From the owner')}</b> <small>{t.name} #{t.seq}</small><br />{t.text}{t.sub ? <div class="muted small">{t.sub}</div> : null}</div>;

@@ -12,7 +12,7 @@ import { buildCatalog, loadContent } from '@muse/content';
 import { ENGINE_VERSION } from '@muse/engine';
 import { createMcpServer, loadConfig, RunSession, SeasonService, SeasonStore, SessionManager } from '@muse/server';
 import type { PlayerPort } from '@muse/server';
-import { applyEvent, EVENT_VERSION, ownerUndecidedWaitOpen, ownerWaitOpen, projectPlayerView } from '@muse/shared';
+import { applyEvent, EVENT_VERSION, ownerWaitOpen, projectPlayerView } from '@muse/shared';
 import type { Command, Entity, GameEvent, World } from '@muse/shared';
 import { rulesText } from '../../server/src/mcp/rules';
 import { ownerView } from '../../server/src/session/OwnerPort';
@@ -63,40 +63,43 @@ function filesUnder(dir: string): string[] {
 const hashes = (dir: string) => Object.fromEntries(filesUnder(dir).filter((p) => !p.endsWith('.server.lock')).map((p) => [p, createHash('sha256').update(readFileSync(p)).digest('hex')]));
 
 describe('S9a §57.3 の 1: what the owner has not decided yet, by name', () => {
-  it('the camp line and self.directive.undecided; the start_expedition note on the first line only; the change after starting; the short line inside', async () => {
-    expect(ENGINE_VERSION).toBe('0.48.0');
-    expect(EVENT_VERSION).toBe(36);
+  // S9（SEASON.md §58.1）で改めた: 決めていないものは、支度の札の行に入る（指図の行の直後）。「まだ」の間は start_expedition の行を出さず、
+  // AI は準備完了まで待つ（「持ち主が特技を選ぶ前に始めると…」の注意は、もう出さない）。待ちは waitForOwner の 1 つ
+  it('the camp line and self.directive.undecided; no start lines while not ready; the change after starting with an unchosen perk; the short line inside', async () => {
+    expect(ENGINE_VERSION).toBe('0.49.0');
+    expect(EVENT_VERSION).toBe(37);
     const m = manager();
     const r = await campRun(m, 's9a-undecided-1');
     expect(errCode(await owner(r, { type: 'set_directive', hold: ['perks'] }))).toBe('ok');
-    // 候補が無ければ、行は出ない
+    // 候補が無ければ、決めていないものは無い（札は準備完了）
     let o = r.port.observeWithTurn('observed');
     expect(o.observation.self.directive?.undecided).toBeUndefined();
-    expect(o.text).not.toContain('持ち主が、まだ決めていないもの');
+    expect(o.text).not.toContain('決めていないもの');
     expect(o.observation.valid_actions.some((l) => l.includes('持ち主が特技を選ぶ前に始めると'))).toBe(false);
+    // 遠征の間に候補が出た（記録の外で足す）→ キャンプに着くと、札は「まだ」で、決めていないものが名前で出る
+    expect(errCode(await act(r.port, { type: 'start_expedition', offer: 1 }))).toBe('ok');
     const opts = offerPerks(r, 3);
+    await lifelineHome(r);
     o = r.port.observeWithTurn('observed');
     expect(o.observation.self.directive?.undecided).toEqual({ perk: { level: 2, options: opts.length, more: 0 }, text: `持ち主が、まだ決めていないもの: 特技（Lv2 の候補 ${opts.length} つ）` });
     const lines = o.text.split('\n');
     const iDir = lines.findIndex((l) => l.startsWith('指図: '));
-    expect(lines[iDir + 1]).toBe(`持ち主が、まだ決めていないもの: 特技（Lv2 の候補 ${opts.length} つ）`);
-    // 「できること」: 最初の start_expedition の行にだけ添える
-    const starts = o.observation.valid_actions.filter((l) => l.startsWith('start_expedition'));
-    expect(starts.length).toBeGreaterThan(1);
-    expect(starts[0].endsWith('（持ち主が特技を選ぶ前に始めると、選べるのは、次のキャンプになる。待つなら、observe か wait_for_turn）')).toBe(true);
-    expect(starts.slice(1).some((l) => l.includes('持ち主が特技を'))).toBe(false);
+    expect(lines[iDir + 1]).toBe(`持ち主の支度: まだ（決めていないもの: 特技（Lv2 の候補 ${opts.length} つ））。準備完了になるまで、start_expedition は断られる。待つなら wait_for_turn`);
+    // 「できること」: 「まだ」の間は start_expedition の行を出さない（待つ行）
+    expect(o.observation.valid_actions.some((l) => l.startsWith('start_expedition'))).toBe(false);
+    expect(o.observation.valid_actions.some((l) => l.startsWith('wait_for_turn（待つ: 持ち主の支度'))).toBe(true);
     expect(JSON.stringify(o.observation)).not.toContain('鑑定');
-    // 待つ: 持ち主が決めるか、時間が来るまで（手番は減らない）
+    // 待つ: 準備完了になるか、時間が来るまで（手番は減らない）
     const seq0 = r.session.world.seq;
-    expect(await r.port.waitForOwnerDecision(30)).toBe('timeout');
+    expect(await r.port.waitForOwner(30)).toBe('timeout');
     expect(r.session.world.seq).toBe(seq0);
-    const w = r.port.waitForOwnerDecision(5000);
+    const w = r.port.waitForOwner(5000);
     expect(errCode(await owner(r, { type: 'choose_perk', option: 1 }))).toBe('ok');
-    expect(await w).toBe('changed');
     o = r.port.observeWithTurn('observed');
     expect(o.observation.self.directive?.undecided).toBeUndefined();
-    expect(o.observation.valid_actions.some((l) => l.includes('持ち主が特技を'))).toBe(false);
-    // 決めていないものを残して、AI が自分で始める: 始めた直後の「変化」に 1 回
+    expect(errCode(await owner(r, { type: 'prepare', ready: true }))).toBe('ok');
+    expect(await w).toBe('ready');
+    // 決めていないものを残して準備完了（記録の外で候補を足す）→ AI が始める: 始めた直後の「変化」に 1 回
     offerPerks(r, 2);
     const s = await act(r.port, { type: 'start_expedition', offer: 1 });
     expect(s.ok).toBe(true);
@@ -114,31 +117,37 @@ describe('S9a §57.3 の 1: what the owner has not decided yet, by name', () => 
     m.closeAll();
   });
 
-  it('equipment held: the unworn equippable pieces are counted; the owner row carries the same; nothing held and objective only show nothing', async () => {
+  // S9（SEASON.md §58.1）で改めた: 装備は「前の準備完了の後に持ち物に入った品」だけを数える（札の seen）。目的を握っていれば「次の遠征の目的」も
+  it('equipment held: new equippable pieces are counted; the owner row carries the same; objective held shows the objective; nothing held shows nothing', async () => {
     const m = manager();
     const r = await campRun(m, 's9a-undecided-2');
     expect(errCode(await owner(r, { type: 'set_directive', hold: ['objective'] }))).toBe('ok');
-    expect(r.port.observeWithTurn('observed').observation.self.directive?.undecided).toBeUndefined();
+    expect(r.port.observeWithTurn('observed').observation.self.directive?.undecided).toEqual({ objective: true, text: '持ち主が、まだ決めていないもの: 次の遠征の目的' });
     expect(errCode(await owner(r, { type: 'set_directive', hold: ['objective', 'loadout'] }))).toBe('ok');
-    expect(r.port.observeWithTurn('observed').observation.self.directive?.undecided).toBeUndefined();
+    expect(r.port.observeWithTurn('observed').observation.self.directive?.undecided).toEqual({ objective: true, text: '持ち主が、まだ決めていないもの: 次の遠征の目的' });
+    // 持っていた品を外しても、新しく入った品ではないので数えない
     const armor = r.port.view().inventory.find((i) => i.equipped === 'armor')!;
     expect(errCode(await owner(r, { type: 'unequip', slot: armor.slot }))).toBe('ok');
+    expect(r.port.observeWithTurn('observed').observation.self.directive?.undecided?.gear).toBeUndefined();
+    // 新しく持ち物に入った品（記録の外で足す）は数える
+    const e = structuredClone(meOf(r.session.world, r.playerId));
+    const gid = 'e_s9agr1';
+    inject(r.session.world, { put: [{ id: gid, kind: 'core:dagger', sid: 9998, item: { qty: 1, affixes: [], heldBy: e.id, slot: 'q', inspected: true } } as Entity, { ...e, inv: { ...e.inv!, items: [...e.inv!.items, gid] } }] });
     const o = r.port.observeWithTurn('observed');
-    expect(o.observation.self.directive?.undecided).toEqual({ gear: 1, text: '持ち物に、身に着けていない装備 1 品（着けるかどうかは、持ち主が決める）' });
-    // 装備だけのときは「まだ決めていないもの」と言わない（S9b）
-    expect(o.text).not.toContain('まだ決めていないもの');
+    expect(o.observation.self.directive?.undecided).toEqual({ objective: true, gear: 1, text: '持ち主が、まだ決めていないもの: 次の遠征の目的・新しく持ち物に入った装備 1 品' });
     // 目的を握られているので、start_expedition の行は無い（注意も無い）
     expect(o.observation.valid_actions.some((l) => l.startsWith('start_expedition'))).toBe(false);
     const row = m.ownerRuns({ local: true }).runs.find((x) => x.runId === r.session.runId)!;
     expect(row.undecided).toEqual(o.observation.self.directive?.undecided);
     // 英語
     r.session.world.players[r.playerId].locale = 'en';
-    expect(r.port.observeWithTurn('observed').observation.self.directive?.undecided?.text).toBe('1 unworn piece of gear in your pack (whether to wear it is your owner\'s call)');
+    expect(r.port.observeWithTurn('observed').observation.self.directive?.undecided?.text).toBe('Not yet decided by your owner: the next expedition; 1 new piece of gear in your pack');
     r.session.world.players[r.playerId].locale = 'ja';
-    // 持ち主が出撃させる: 装備の分は、始めた直後の「変化」に出さない（S9b）
-    expect(errCode(await owner(r, { type: 'start_expedition', offer: 1 }))).toBe('ok');
-    const ch = r.port.observeWithTurn('turn_arrived').turn.changes.map((c) => c.text);
-    expect(ch.some((x) => x.includes('身に着けていない装備'))).toBe(false);
+    // 持ち主が準備完了を出し、AI が始める: 装備の分は、始めた直後の「変化」に出さない（S9b）
+    expect(errCode(await owner(r, { type: 'prepare', objective: 1, ready: true }))).toBe('ok');
+    const sx = await act(r.port, { type: 'start_expedition', offer: 1 });
+    const ch = sx.ok ? sx.turn.changes.map((c) => c.text) : [];
+    expect(ch.some((x) => x.includes('装備'))).toBe(false);
     expect(r.port.observeWithTurn('observed').observation.self.directive?.text).toBe('指図: 目的・装備は、持ち主（キャンプで）');
     // 何も握っていないランは、今までどおり
     const n = await campRun(m, 's9a-undecided-3');
@@ -148,7 +157,8 @@ describe('S9a §57.3 の 1: what the owner has not decided yet, by name', () => 
     m.closeAll();
   });
 
-  it('MCP wait_for_turn at camp waits for the owner to decide (objective not held), and returns at once when nothing is undecided', async () => {
+  // S9（SEASON.md §58.1）で改めた: 待つのは、札が「まだ」の間（準備完了になるまで）。決めるものが無ければ札は最初から準備完了で、すぐ返る
+  it('MCP wait_for_turn at camp waits while the preparations are not ready (objective not held), and returns at once when they are', async () => {
     const m = manager();
     const [x, y] = InMemoryTransport.createLinkedPair();
     const server = createMcpServer({ manager: m, boundToken: null, briefMap: true, clientLabel: 'test' });
@@ -164,16 +174,26 @@ describe('S9a §57.3 の 1: what the owner has not decided yet, by name', () => 
     await client.callTool({ name: 'wait_for_turn', arguments: { player_token, timeout_s: 5 } });
     expect(Date.now() - t00).toBeLessThan(2000);
     expect(errCode(await s.submit(player_id, { type: 'set_directive', hold: ['perks'] }, { source: 'owner' }))).toBe('ok');
+    // 決めるものが無い: 準備完了なので、すぐ返る
+    const t01 = Date.now();
+    await client.callTool({ name: 'wait_for_turn', arguments: { player_token, timeout_s: 5 } });
+    expect(Date.now() - t01).toBeLessThan(2000);
+    // 遠征の間に候補が出た（記録の外で足す）→ キャンプに着くと「まだ」
+    expect(errCode(await s.submit(player_id, { type: 'start_expedition', offer: 1 }, { source: 'mcp' }))).toBe('ok');
     const e = structuredClone(s.world.entities[s.world.players[player_id].entityId]);
     const opts = Object.entries(catalog.perks).filter(([, p]) => p.lineage === 'common' && !p.requires.length).slice(0, 2).map(([id]) => id);
     e.build = { ...e.build!, pending: [{ level: 2, options: opts }] };
     inject(s.world, { put: [e] });
+    const life = projectPlayerView(s.world, player_id).inventory.find((it) => it.kind === 'core:lifeline')!;
+    expect(errCode(await s.submit(player_id, { type: 'use', slot: life.slot }, { source: 'mcp' }))).toBe('ok');
+    for (let i = 0; i < 20 && s.world.players[player_id].state !== 'at_camp'; i++) await s.submit(player_id, { type: 'wait' }, { source: 'mcp' });
     const t0 = (await client.callTool({ name: 'wait_for_turn', arguments: { player_token, timeout_s: 1 } })) as unknown as T;
     expect(t0.structuredContent.turn.reason).toBe('wait_timeout');
     expect(t0.structuredContent.observation.self.directive?.undecided).toBeDefined();
     const pending = client.callTool({ name: 'wait_for_turn', arguments: { player_token, timeout_s: 20 } }) as unknown as Promise<T>;
     await new Promise((res) => setTimeout(res, 50));
     expect(errCode(await s.submit(player_id, { type: 'choose_perk', option: 2 }, { source: 'owner' }))).toBe('ok');
+    expect(errCode(await s.submit(player_id, { type: 'prepare', ready: true }, { source: 'owner' }))).toBe('ok');
     const t1 = await pending;
     expect(t1.structuredContent.turn.reason).toBe('observed');
     expect(t1.structuredContent.observation.self.directive?.undecided).toBeUndefined();
@@ -360,7 +380,6 @@ describe('S9b: a finalized season\'s run looks closed (its end time still ahead)
     expect(oa.observation.self.directive?.undecided).toBeUndefined();
     expect(oa.text).not.toContain('wait_for_turn（待つ');
     expect(ownerWaitOpen(a.port.view())).toBe(false);
-    expect(ownerUndecidedWaitOpen(a.port.view(), catalog)).toBe(false);
     // 持ち主の口の表示も同じ
     const ov = ownerView(a.session, a.playerId);
     expect(ov.waiting).toBe(false);
@@ -385,7 +404,8 @@ describe('S9b: a finalized season\'s run looks closed (its end time still ahead)
     m.closeAll();
   });
 
-  it('equipment only: wait_for_turn returns at once and nothing about gear appears in the changes after starting (S9b)', async () => {
+  // S9（SEASON.md §58.1）で改めた: 持ち主が付け替えたら札は「まだ」になり、準備完了まで待つ。持ち物の品は札が覚えているので、装備のことは知らせない
+  it('equipment only: after the owner re-gears, wait_for_turn waits until ready; nothing about gear appears in the changes after starting (S9b)', async () => {
     const m = manager();
     const [x, y] = InMemoryTransport.createLinkedPair();
     const server = createMcpServer({ manager: m, boundToken: null, briefMap: true, clientLabel: 'test' });
@@ -398,15 +418,19 @@ describe('S9b: a finalized season\'s run looks closed (its end time still ahead)
     expect(errCode(await s.submit(player_id, { type: 'set_directive', hold: ['loadout'] }, { source: 'owner' }))).toBe('ok');
     const armor = projectPlayerView(s.world, player_id).inventory.find((i) => i.equipped === 'armor')!;
     expect(errCode(await s.submit(player_id, { type: 'unequip', slot: armor.slot }, { source: 'owner' }))).toBe('ok');
-    type T = { structuredContent: { turn: { reason: string; changes: { text: string }[] }; observation: { valid_actions: string[]; self: { directive?: { undecided?: { gear?: number } } } } } };
+    type T = { structuredContent: { turn: { reason: string; changes: { text: string }[] }; observation: { valid_actions: string[]; self: { directive?: { undecided?: { gear?: number }; prep?: { state: string } } } } } };
+    const w = (await client.callTool({ name: 'wait_for_turn', arguments: { player_token, timeout_s: 1 } })) as unknown as T;
+    expect(w.structuredContent.turn.reason).toBe('wait_timeout');
+    expect(w.structuredContent.observation.self.directive?.prep?.state).toBe('pending');
+    // 持っていた品なので、決めていないものには数えない
+    expect(w.structuredContent.observation.self.directive?.undecided).toBeUndefined();
+    expect(errCode(await s.submit(player_id, { type: 'prepare', ready: true }, { source: 'owner' }))).toBe('ok');
     const t0 = Date.now();
-    const w = (await client.callTool({ name: 'wait_for_turn', arguments: { player_token, timeout_s: 10 } })) as unknown as T;
+    const w2 = (await client.callTool({ name: 'wait_for_turn', arguments: { player_token, timeout_s: 10 } })) as unknown as T;
     expect(Date.now() - t0).toBeLessThan(3000);
-    expect(w.structuredContent.observation.self.directive?.undecided?.gear).toBe(1);
-    // 注意は付かない（特技と加護だけ）
-    expect(w.structuredContent.observation.valid_actions.some((l) => l.includes('持ち主が'))).toBe(false);
+    expect(w2.structuredContent.observation.valid_actions.some((l) => l.includes('持ち主が特技'))).toBe(false);
     const st = (await client.callTool({ name: 'start_expedition', arguments: { player_token, offer: 1 } })) as unknown as T;
-    expect(st.structuredContent.turn.changes.some((c) => c.text.includes('身に着けていない装備'))).toBe(false);
+    expect(st.structuredContent.turn.changes.some((c) => c.text.includes('装備'))).toBe(false);
     await client.close();
     m.closeAll();
   });

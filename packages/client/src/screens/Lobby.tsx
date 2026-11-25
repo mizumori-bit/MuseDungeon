@@ -7,7 +7,7 @@
 import type { LeaderboardEntry, Locale, OwnerRunRow, ProfileRecords, RunListing, SeasonListing, SeasonStandingRow, SeasonStandingsResponse, SeasonWatchResponse } from '@muse/shared';
 import { endReasonText, kindName, nameOf, objectiveText } from '@muse/shared';
 import { useEffect, useState } from 'preact/hooks';
-import { api, errorText } from '../api';
+import { ApiError, api, errorText } from '../api';
 import { ErrorBanner, Header, useCatalog, useLocaleRefresh } from '../ui/common';
 import { normName, SeasonSharedFlow, sortStandings, STANDING_SORTS, standingSortName, StandingsTable, type StandingSort } from '../ui/home';
 import { FIRST_EXPEDITION_CHOICES, playerStateLabel, type FirstExpeditionChoice } from '../ui/labels';
@@ -143,7 +143,11 @@ export function Lobby({ tab = 'sortie' }: { tab?: HomeTab }) {
     return () => clearInterval(t);
   }, []);
 
-  const start = async () => {
+  // 冒険者 1 人に続きは 1 つ（S9。SEASON.md §58.3）: run_in_progress を受けたら、画面の中の確かめの窓を出し、同意で endPrevious を付けて出し直す
+  const [endPrev, setEndPrev] = useState<{ runId: string; retry: () => Promise<void> } | null>(null);
+  const inProgressOf = (e: unknown): string | null => (e instanceof ApiError && e.error?.code === 'run_in_progress' ? e.error.details?.in_progress?.run_id ?? '' : null);
+
+  const start = async (endPrevious = false) => {
     setBusy(true);
     try {
       setPref('name', name);
@@ -151,12 +155,14 @@ export function Lobby({ tab = 'sortie' }: { tab?: HomeTab }) {
       setPref('firstExpedition', objective);
       // camp: objective を省くとキャンプから始まる（候補 3 つから最初の遠征を選ぶ）
       setPref('legacy', legacy ? 'on' : 'off');
-      const r = await api.newRun({ name, classId, mode, seed: seed || undefined, locale, controller: { kind: 'human', label: 'browser' }, ...(objective === 'camp' ? {} : { objective }), ...(profileToken ? { profileToken } : {}), legacy });
+      const r = await api.newRun({ name, classId, mode, seed: seed || undefined, locale, controller: { kind: 'human', label: 'browser' }, ...(objective === 'camp' ? {} : { objective }), ...(profileToken ? { profileToken } : {}), legacy, ...(endPrevious ? { endPrevious: true } : {}) });
       keepProfile(r.profileToken);
       saveToken(r.runId, { token: r.token, playerId: r.playerId, name });
       navigate(`#/play/${r.runId}`);
     } catch (e) {
-      setError(errorText(e));
+      const prev = inProgressOf(e);
+      if (prev !== null && !endPrevious) setEndPrev({ runId: prev, retry: () => start(true) });
+      else setError(errorText(e));
     } finally {
       setBusy(false);
     }
@@ -179,18 +185,20 @@ export function Lobby({ tab = 'sortie' }: { tab?: HomeTab }) {
   /** シーズンのランを始める（AI の new_run { season, profile_token } と同じ POST /api/runs）。断られたらサーバーの理由をそのまま出す */
   /** そのシーズンで使うプロフィールのトークン（S8b: 前の版でシーズンごとに覚えたもの、無ければ「AI のランの持ち主になる」の欄で覚えたもの） */
   const seasonTokFor = (id: string): string => seasonTok[id] || profileToken;
-  const joinSeason = async (id: string) => {
+  const joinSeason = async (id: string, endPrevious = false) => {
     const tok = seasonTokFor(id);
     if (!tok) { setError(tr('招かれたプロフィールのトークン（運用者から受け取ったもの）を、「AI のランの持ち主になる」の欄に入れる', 'Put the profile token the operator gave you in the "Become the owner" box')); return; }
     setBusy(true);
     try {
       setPref('name', name);
       setPref('class', classId);
-      const r = await api.newRun({ name, classId, locale, controller: { kind: 'human', label: 'browser' }, season: id, profileToken: tok });
+      const r = await api.newRun({ name, classId, locale, controller: { kind: 'human', label: 'browser' }, season: id, profileToken: tok, ...(endPrevious ? { endPrevious: true } : {}) });
       saveToken(r.runId, { token: r.token, playerId: r.playerId, name });
       navigate(`#/play/${r.runId}`);
     } catch (e) {
-      setError(errorText(e));
+      const prev = inProgressOf(e);
+      if (prev !== null && !endPrevious) setEndPrev({ runId: prev, retry: () => joinSeason(id, true) });
+      else setError(errorText(e));
     } finally {
       setBusy(false);
     }
@@ -499,7 +507,7 @@ export function Lobby({ tab = 'sortie' }: { tab?: HomeTab }) {
                 </select>
               </label>
               <label class="check"><input type="checkbox" checked={legacy} onChange={(e) => setLegacy((e.target as HTMLInputElement).checked)} />{tr('図鑑の知識を引き継ぐ（継承）', 'Inherit codex knowledge (legacy)')}</label>
-              <button class="primary" disabled={busy || !name.trim()} onClick={start}>{tr('冒険を始める', 'Start')}</button>
+              <button class="primary" disabled={busy || !name.trim()} onClick={() => void start()}>{tr('冒険を始める', 'Start')}</button>
             </div>
           </section>
         </div>
@@ -719,6 +727,20 @@ export function Lobby({ tab = 'sortie' }: { tab?: HomeTab }) {
       </div>
       <ErrorBanner error={error ?? catErr} onClose={() => setError(null)} />
       {tab === 'records' ? recordsTab() : sortie()}
+      {endPrev && (
+        <div class="modal" onClick={() => setEndPrev(null)}>
+          <div class="dialog" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => { if (e.key === 'Escape') setEndPrev(null); }}>
+            <h3>{tr('続きのある冒険がある', 'There is an adventure to continue')}</h3>
+            <p>{tr('この冒険者には、続きを遊べるランがある（冒険者 1 人に、続きは 1 つ）。新しく始めると、前の冒険は、ここで終わる。記録は、残る。', 'This adventurer already has a run to continue (one adventurer, one run to continue). Starting anew ends the previous adventure here. Its records stay.')}</p>
+            {endPrev.runId && <p class="muted small"><code>{endPrev.runId}</code></p>}
+            <div class="row">
+              <button class="small primary" onClick={() => setEndPrev(null)}>{tr('やめる', 'Cancel')}</button>
+              <button class="small" disabled={busy} onClick={() => { const r = endPrev.retry; setEndPrev(null); void r(); }}>{tr('前の冒険を終えて、新しく始める', 'End it and start anew')}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

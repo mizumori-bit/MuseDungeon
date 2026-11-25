@@ -34,7 +34,8 @@ describe('V3-7 profiles (§7.1・§16.3)', () => {
     const a = await m.createRun({ name: 'A', seed: 'v37-p1', controller: agent });
     if ('error' in a) throw new Error(a.error.message);
     expect(a.profile.token).toBeTruthy();
-    const b = await m.createRun({ name: 'B', seed: 'v37-p2', controller: agent, profileToken: a.profile.token });
+    // S9（SEASON.md §58.3）: 1 つのプロフィールに続きのあるランは 1 つ。前のランを終えてから（end_previous）
+    const b = await m.createRun({ name: 'B', seed: 'v37-p2', controller: agent, profileToken: a.profile.token, endPrevious: true });
     if ('error' in b) throw new Error(b.error.message);
     expect(b.profile).toEqual({ id: a.profile.id });
     expect(m.profilePort(a.profile.id)!.records('ja')!.data.runs.total).toBe(2);
@@ -112,7 +113,7 @@ describe('V3-7 legacy (§7.3)', () => {
     // 文章では覚え書きとして区別する
     expect(memoryCombatText('ja', mem)).toContain('覚え書きより');
     // 同じプロフィールでも legacy: false なら無し
-    const off = await m.createRun({ name: 'Fresh', seed: 'v37-l2', controller: agent, profileToken: c.token, legacy: false });
+    const off = await m.createRun({ name: 'Fresh', seed: 'v37-l2', controller: agent, profileToken: c.token, legacy: false, endPrevious: true });
     if ('error' in off) throw new Error(off.error.message);
     expect(off.session.world.players[off.playerId].legacy).toBeUndefined();
     expect(off.session.world.players[off.playerId].knowledge.monsterMemory).toEqual({});
@@ -217,7 +218,8 @@ describe('V3-7 records, codex and feats (§7.2・§7.4)', () => {
       expect(pf.structuredContent.runs[0].resumable).toBe(true);
       expect(JSON.stringify(pf)).not.toContain(nr.structuredContent.player_token);
       // 2 本目のランをトークンで始めると、新しいトークンは返らない
-      const nr2 = (await client.callTool({ name: 'new_run', arguments: { character_name: 'M2', profile_token: tok } })) as unknown as { structuredContent: Record<string, unknown> };
+      // S9（SEASON.md §58.3）: 続きのあるランがあるので end_previous を付ける
+      const nr2 = (await client.callTool({ name: 'new_run', arguments: { character_name: 'M2', profile_token: tok, end_previous: true } })) as unknown as { structuredContent: Record<string, unknown> };
       expect(nr2.structuredContent.profile_id).toBe(nr.structuredContent.profile_id);
       expect(nr2.structuredContent.profile_token).toBeUndefined();
       // 観戦向けの AI の呼び出し記録にもトークンは出ない

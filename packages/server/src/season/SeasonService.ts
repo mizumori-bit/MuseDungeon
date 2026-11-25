@@ -500,7 +500,8 @@ export class SeasonService implements SeasonHooks {
   }
 
   /** 新しいランを始められるか（PROTOCOL §9.1）。理由の文を返す（日本語 / 英語）。招かれたプロフィールだけ（S0a §4.1） */
-  canStart(id: string, profileId: string | null): { def: SeasonDef; name: string } | { reason: string } {
+  /** inProgress: 進行中のシーズンのランがある（S9 §58.3: SessionManager が run_in_progress にする。end_previous で前のランを終えてから、もう一度見る） */
+  canStart(id: string, profileId: string | null): { def: SeasonDef; name: string } | { reason: string; inProgress?: string } {
     const d = this.store.get(id);
     if (!d && this.store.isBroken(id)) return { reason: `シーズン ${id} の記録が読めない。運用者に知らせる / the records of season ${id} are unreadable; tell the operator` };
     if (!d) return { reason: `そのシーズンは無い / no such season: ${id}` };
@@ -516,7 +517,7 @@ export class SeasonService implements SeasonHooks {
     if (p) {
       if (used(p) >= d.def.budget) return { reason: `このシーズンの行動予算（${d.def.budget} 手番）を使い切っている / budget used up` };
       const live = p.runs.find((r) => !r.ended && this.liveRun(r.runId) !== null && this.liveRun(r.runId) !== 'ended');
-      if (live) return { reason: `進行中のシーズンのラン ${live.runId} がある。resume_run で続けるか、retire で終えてから / a season run is in progress: ${live.runId}` };
+      if (live) return { reason: `進行中のシーズンのラン ${live.runId} がある。resume_run で続けるか、end_previous: true を付けて前のランを終えてから / a season run is in progress: ${live.runId}`, inProgress: live.runId };
     }
     return { def: d.def, name: inv.name };
   }

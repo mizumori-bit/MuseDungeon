@@ -195,9 +195,10 @@ describe('S0 §2.2: the budget', () => {
     for (let i = 0; i < 25; i++) await act(r1.port, { type: 'wait' });
     const used1 = r1.session.world.entities[r1.session.world.players[r1.playerId].entityId].actor!.turns;
     expect(used1).toBeGreaterThanOrEqual(25);
-    // 進行中のシーズンのランがある間は、新しいランを始められない
+    // 進行中のシーズンのランがある間は、新しいランを始められない（S9 §58.3: code は run_in_progress。end_previous で前のランを終えてから始められる）
     const busy = await m.createRun({ name: 'R2', controller: agent, season: SID, profileToken: r1.ptoken });
-    expect('error' in busy && busy.error.message).toContain('進行中');
+    expect('error' in busy && busy.error.code).toBe('run_in_progress');
+    expect('error' in busy && busy.error.message).toContain('続きを遊べるラン');
     expect((await r1.port.act({ type: 'retire' }, { source: 'bot' })).ok).toBe(true);
     const r2 = await seasonRun(m, 'R2', { profileToken: r1.ptoken });
     expect(r2.profile.id).toBe(r1.profile.id);
@@ -468,7 +469,8 @@ describe('S0a §4.1: only profiles the operator invited may start season runs', 
     const inv = m.seasons.invite(SID, 'Plainly', m.profiles.store, plain.profile.token);
     expect('error' in inv).toBe(false);
     expect('token' in inv && inv.token).toBeFalsy();
-    const ok = await m.createRun({ name: 'キャラ名', controller: agent, season: SID, profileToken: plain.profile.token });
+    // S9（§58.3）: そのプロフィールには、シーズンでない続きのラン（plain）があるので、end_previous で終えてから
+    const ok = await m.createRun({ name: 'キャラ名', controller: agent, season: SID, profileToken: plain.profile.token, endPrevious: true });
     if ('error' in ok) throw new Error(ok.error.message);
     expect(m.seasons.standings(SID)!.standings.map((x) => x.name)).toEqual(['Plainly']);
     m.closeAll();

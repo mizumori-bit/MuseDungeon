@@ -7,9 +7,9 @@ import { join } from 'node:path';
 import { readJsonStable, writeFileAtomicLogged } from '../log/atomicWrite';
 import type { Content } from '@muse/content';
 import type {
-  Catalog, CodexIndex, CodexRun, FeatContext, FeatDefLite, FeatRecord, GameEvent, LegacyMonster, Locale, PlayerId, ProfileData, ProfileRecords, ProfileRun, SeasonTitle,
+  Catalog, CodexIndex, CodexRun, DirectiveItem, FeatContext, FeatDefLite, FeatRecord, GameEvent, LegacyMonster, Locale, PlayerId, ProfileData, ProfileRecords, ProfileRun, SeasonTitle,
 } from '@muse/shared';
-import { abilityName, buildRecords, codexCount, emptyCodex, evalFeatCond, expeditionBest, floorsUnhurt, kindName, legacyFrom, mergeCodex, recordsCampLine, recordsLines, t } from '@muse/shared';
+import { DIRECTIVE_ITEMS, abilityName, buildRecords, codexCount, emptyCodex, evalFeatCond, expeditionBest, floorsUnhurt, kindName, legacyFrom, mergeCodex, recordsCampLine, recordsLines, t } from '@muse/shared';
 import type { RunSession } from './RunSession';
 
 interface ProfileFile extends ProfileData { version: 1; tokenHash: string }
@@ -186,6 +186,8 @@ export class ProfileService implements ProfileHooks {
       if (e.type === 'player_joined') joined.add(e.player.id);
       else if (e.type === 'expedition_ended') ended.push(e.no);
       else if (e.type === 'run_ended') runEnded = true;
+      // 握る項目をプロフィールに控える（S9。SEASON.md §58.3。持ち主の set_directive。伝言は控えない）。確定したときだけ（再生では呼ばれない）
+      else if (e.type === 'directive_set') this.noteHold(session.profileOf(e.player), e.directiveAfter.hold);
     }
     if (!joined.size && !ended.length && !runEnded) return;
     for (const pid of session.world.playerOrder) {
@@ -193,6 +195,16 @@ export class ProfileService implements ProfileHooks {
       if (!joined.has(pid) && !nos.length && !runEnded) continue;
       this.update(session, pid, nos);
     }
+  }
+
+  /** 握る項目を控える（S9 §58.3。新しいランは、作った直後に、これを持ち主の口の命令として入れる） */
+  noteHold(profileId: string | null, hold: readonly DirectiveItem[]): void {
+    const prof = profileId ? this.store.get(profileId) : null;
+    if (!prof) return;
+    const next = DIRECTIVE_ITEMS.filter((x) => hold.includes(x));
+    if ((prof.hold ?? []).join(',') === next.join(',')) return;
+    if (next.length) prof.hold = next; else delete prof.hold;
+    this.store.save(prof);
   }
 
   /** そのランの記録を作り直し、実績を判定して保存する。返り値: 新しく取った実績 */

@@ -175,7 +175,18 @@ export interface NewRunRequest {
   legacy?: boolean;
   /** シーズンの ID（S0。PROTOCOL §9.1）。シーズンのシードでソロ、Lv1 のキャンプから。seed・mode・objective・legacy は使わない */
   season?: string;
+  /**
+   * 冒険者 1 人に続きは 1 つ（S9。SEASON.md §58.3）: そのプロフィールに続きを遊べるランがあれば、new_run は run_in_progress で断られる。
+   * true なら、前のランを引退（retire と同じ）で終わらせてから、新しいランを始める（確定した点と記録は残る）
+   */
+  endPrevious?: boolean;
 }
+
+/**
+ * new_run で、プロフィールの握る項目を引き継いだ（S9 §58.3）。hold: 入れた握る項目（持ち主の口の set_directive として記録に残る）、
+ * objectiveIgnored: 最初の遠征の目的が渡されていたが、キャンプから始めた（持ち主の支度を待つ）
+ */
+export interface InheritedHold { hold: DirectiveItem[]; objectiveIgnored: boolean }
 
 /** シーズンの一覧の 1 行（S0。GET /api/seasons・list_runs の seasons） */
 /** participants: 1 回でもランを始めた参加者の数、invited: 招いた数（S0a） */
@@ -265,11 +276,19 @@ export interface OwnerRunRow {
   mine?: boolean;
   /** 持ち主が、まだ決めていないもの（S9a。SEASON.md §57.3 の 2。AI の観測の self.directive.undecided と同じ）。無ければ無い */
   undecided?: DirectiveUndecided;
+  /** 支度の札（S9。SEASON.md §58.1。握っている項目があるときだけ。objective: 持ち主が選んだ次の遠征） */
+  prep?: { state: 'pending' | 'ready'; objective?: number | 'endless' };
+  /** AI の希望の数（S9 §58.2。今も成り立つものだけ。中身は …/owner/view の view.directive.wishes） */
+  wishes?: number;
+  /** AI との行き来（S9 §58.1。サーバーの控え。World に入れない）。lastCallAgoS: AI が最後に呼び出してからの秒数（このサーバーの起動の後に無ければ null）。waitingNow: いま wait_for_turn で支度を待っている */
+  ai?: { lastCallAgoS: number | null; waitingNow: boolean };
 }
 export interface OwnerRunsResponse { local: boolean; runs: OwnerRunRow[] }
 /** GET /api/runs/:id/owner/view・POST …/owner/directive・…/owner/act の応答。result: POST の結果（断りなら error） */
 export interface OwnerViewResponse {
   runId: string; playerId: PlayerId; name: string; eligible: boolean; reason?: string; waiting: boolean;
+  /** AI との行き来（S9 §58.1。OwnerRunRow.ai と同じ） */
+  ai?: { lastCallAgoS: number | null; waitingNow: boolean };
   view: PlayerView; observation: Observation; text: string;
   result?: { ok: true } | { ok: false; error: ActionError };
 }

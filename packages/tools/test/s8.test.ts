@@ -57,8 +57,8 @@ function filesUnder(dir: string): string[] {
 
 describe('S8 §54.9: with nothing held, nothing changes (the default)', () => {
   it('no directive line, the offers and camp_choice stay, a camp equip is still at_camp, set_directive from the player is refused with no events', async () => {
-    expect(ENGINE_VERSION).toBe('0.48.0');
-    expect(EVENT_VERSION).toBe(36);
+    expect(ENGINE_VERSION).toBe('0.49.0');
+    expect(EVENT_VERSION).toBe(37);
     const m = manager();
     const r = await campRun(m, 's8-none-1');
     const v = r.port.view();
@@ -105,33 +105,35 @@ describe('S8 §54.3・§54.4: objective and equipment held by the owner (records
       const w = () => r.session.world;
       // 迷宮にいないと持ち主しか決められない: まず指図
       expect(errCode(await owner(r, { type: 'set_directive', hold: ['loadout', 'objective', 'objective'], message: '深追いはしない\n無理せず\u0007‮' }))).toBe('ok');
-      expect(w().players[pid].directive).toEqual({ hold: ['objective', 'loadout'], message: '深追いはしない 無理せず' });
+      expect(w().players[pid].directive).toMatchObject({ hold: ['objective', 'loadout'], message: '深追いはしない 無理せず', prep: { state: 'pending' } });
       expect(errCode(await owner(r, { type: 'set_directive', hold: ['objective', 'loadout'], message: '深追いはしない 無理せず' }))).toBe('nothing_to_do');
-      // プレイヤーの口: 握られた項目は断る（手番を使わない・World を変えない）
-      const seq0 = w().seq;
+      // プレイヤーの口: 握られた項目は断る（手番を使わない）。S9（SEASON.md §58.2）: 断ったうえで、希望として覚える（出来事は出る）
+      const turns0 = meOf(w(), pid).actor?.turns;
       const refused = await act(r.port, { type: 'start_expedition', offer: 1 });
       expect(errCode(refused)).toBe('held_by_owner');
       if (!refused.ok) {
-        expect(refused.error.message).toContain('持ち主がキャンプで決める');
+        expect(refused.error.message).toContain('あなたの希望（候補 1: ');
+        expect(refused.error.message).toContain('持ち主に伝えた');
         expect(refused.error.hint).toContain('wait_for_turn');
         expect(refused.valid_actions.some((l) => l.startsWith('start_expedition'))).toBe(false);
-        expect(refused.valid_actions.some((l) => l.startsWith('wait_for_turn（待つ: 持ち主が、次の遠征を決める'))).toBe(true);
+        expect(refused.valid_actions.some((l) => l.startsWith('wait_for_turn（待つ: 持ち主の支度が、準備完了になるまで待つ'))).toBe(true);
       }
       expect(errCode(await act(r.port, { type: 'start_expedition', offer: 'endless' }))).toBe('held_by_owner');
       const armor = r.port.view().inventory.find((i) => i.equipped === 'armor')!;
       expect(errCode(await act(r.port, { type: 'unequip', slot: armor.slot }))).toBe('held_by_owner');
-      expect(w().seq).toBe(seq0);
+      expect(meOf(w(), pid).actor?.turns).toBe(turns0);
+      expect(w().players[pid].directive?.wishes?.map((x) => x.item)).toEqual(['objective', 'loadout']);
       // 観測の行・「できること」・伝言（区切りの段の前）・待ち方
       const o = r.port.observeWithTurn('observed');
       expect(o.observation.self.directive?.text).toBe('指図: 目的と装備は、持ち主がキャンプで決める（迷宮で手に入れた装備は、キャンプで確かめるまで身に着けない。あなたの start_expedition・equip・unequip は断られる）。特技と加護は、あなたが決める');
       expect(o.observation.self.directive?.message).toBe('深追いはしない 無理せず');
-      expect(o.text).toContain('持ち主が、この中から決める（指図。あなたの start_expedition は断られる）');
+      expect(o.text).toContain('持ち主が、この中から選ぶ（指図。持ち主の支度が準備完了になったら、あなたの start_expedition で、持ち主が選んだ目的で始まる）');
       const iMsg = o.text.indexOf('持ち主から: 深追いはしない 無理せず');
       expect(iMsg).toBeGreaterThan(o.text.indexOf('できること: '));
       expect(iMsg).toBeLessThan(o.text.indexOf('区切り: '));
       expect(o.observation.valid_actions.some((l) => /^(start_expedition|equip|unequip)\b/.test(l))).toBe(false);
       expect(o.turn.awaiting).toBe('nothing');
-      expect(o.text).toContain('▶ キャンプにいます。持ち主が、次の遠征を決めるのを待つ。持ち主が始めたら、あなたが迷宮を進める（wait_for_turn で待てる。手番は減らない）。');
+      expect(o.text).toContain('▶ キャンプにいます。持ち主の支度を待つ。準備完了になったら、あなたが start_expedition で出発する（wait_for_turn で待てる。手番は減らない）。');
       expect(o.text).not.toContain('ここで終えてもかまいません');
       // 持ち主: キャンプで付け替える（盤面にいないので手番は無い）
       const seqA = w().seq;
@@ -142,20 +144,25 @@ describe('S8 §54.3・§54.4: objective and equipment held by the owner (records
       expect(evs.some((e) => e.type === 'actor_scheduled')).toBe(false);
       expect(w().players[pid].ownerDecided).toEqual(['loadout']);
       expect(errCode(await owner(r, { type: 'equip', slot: armor.slot }))).toBe('ok');
-      // 持ち主が遠征を始めるまで待つ（wait_for_turn の中身）。時間が来たら timeout
+      // 持ち主の支度が準備完了になるまで待つ（wait_for_turn の中身）。時間が来たら timeout。
+      // S9（SEASON.md §58.1）: 持ち主は遠征を始めない（bad_request）。目的を選んで準備完了を出し、プレイヤーが始める
       expect(await r.port.waitForOwner(30)).toBe('timeout');
       const waiting = r.port.waitForOwner(5000);
-      expect(errCode(await owner(r, { type: 'start_expedition', offer: 1 }))).toBe('ok');
-      expect(await waiting).toBe('started');
+      expect(errCode(await owner(r, { type: 'start_expedition', offer: 1 }))).toBe('bad_request');
+      expect(errCode(await owner(r, { type: 'prepare', objective: 1, ready: true }))).toBe('ok');
+      expect(await waiting).toBe('ready');
+      expect(w().players[pid].ownerDecided).toEqual(['loadout']);
+      const st = await act(r.port, { type: 'start_expedition', offer: 'endless' });
+      expect(errCode(st)).toBe('ok');
       expect(w().players[pid].ownerDecided).toEqual(['objective', 'loadout']);
-      // 持ち主が決めた後の最初の応答の「変化」: 付け替え・遠征の開始・伝言をもう 1 回
+      // 出発した応答の「変化」: 付け替え・持ち主が決めた目的で始めた（指した候補と違う）・伝言をもう 1 回
       const o2 = r.port.observeWithTurn('turn_arrived');
-      const own = o2.turn.changes.filter((c) => c.code === 'owner').map((c) => c.text);
+      const own = st.ok ? st.turn.changes.filter((c) => c.code === 'owner').map((c) => c.text) : [];
       expect(own.some((x) => x.startsWith('持ち主が、装備を変えた:') && x.endsWith('を外した'))).toBe(true);
       expect(own.some((x) => x.startsWith('持ち主が、装備を変えた:') && x.endsWith('を装備'))).toBe(true);
-      expect(own.some((x) => x.startsWith('持ち主が、遠征 1 を始めた: '))).toBe(true);
+      expect(own.some((x) => x.startsWith('持ち主が決めた目的で始めた: 遠征 1（') && x.endsWith('あなたが指した目的なし（endless）ではなく、持ち主の選んだ目的で始まった'))).toBe(true);
       expect(own).toContain('持ち主から: 深追いはしない 無理せず');
-      expect(o2.turn.changes[0].code).toBe('owner');
+      expect(st.ok && st.turn.changes[0].code).toBe('owner');
       // 迷宮の中: 指図の行（装備はだれも付け替えられない）。持ち主の口は not_at_camp、プレイヤーは held_by_owner（装備中の品を捨てるのも）
       // 迷宮の中の行は短い（S9a §57.3 の 1）。決まりの読み方は、キャンプの行と規則に
       expect(o2.observation.self.directive?.text).toBe('指図: 目的・装備は、持ち主（キャンプで）');
@@ -164,9 +171,16 @@ describe('S8 §54.3・§54.4: objective and equipment held by the owner (records
       const seqB = w().seq;
       expect(errCode(await owner(r, { type: 'set_directive', hold: [] }))).toBe('not_at_camp');
       expect(errCode(await owner(r, { type: 'unequip', slot: armor.slot }))).toBe('not_at_camp');
-      expect(errCode(await act(r.port, { type: 'unequip', slot: armor.slot }))).toBe('held_by_owner');
-      expect(errCode(await act(r.port, { type: 'drop', slot: armor.slot }))).toBe('held_by_owner');
       expect(w().seq).toBe(seqB);
+      // プレイヤーの付け替えは断る（手番を使わない）。S9（§58.2）: 外す命令は、希望として覚える（迷宮の中でも）。装備中の品を捨てるのは希望にならない
+      const turnsB = meOf(w(), pid).actor?.turns;
+      expect(errCode(await act(r.port, { type: 'unequip', slot: armor.slot }))).toBe('held_by_owner');
+      const seqC = w().seq;
+      expect(errCode(await act(r.port, { type: 'drop', slot: armor.slot }))).toBe('held_by_owner');
+      expect(w().seq).toBe(seqC);
+      expect(meOf(w(), pid).actor?.turns).toBe(turnsB);
+      // キャンプの希望は、持ち主が決めたので消えている（目的を選んだ・付け替えた）。残るのは、いま迷宮で出した希望だけ
+      expect(w().players[pid].directive?.wishes?.map((x) => x.item)).toEqual(['loadout']);
       // 帰る（迷宮の中はプレイヤーが決める）。振り返りに、持ち主が決めた項目の 1 行
       await lifelineHome(r);
       expect(r.port.review().text).toContain('指図: 目的と装備は、持ち主が決めた');
@@ -174,8 +188,10 @@ describe('S8 §54.3・§54.4: objective and equipment held by the owner (records
       // 記録: 持ち主の命令は source: owner。プレイヤーの呼び出しに数えない
       const recs = readFileSync(join(dir, r.session.runId, 'commands.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l) as CommandRecord);
       const ownRecs = recs.filter((x) => x.source === 'owner');
-      expect(ownRecs.map((x) => x.command.type)).toEqual(['set_directive', 'unequip', 'equip', 'start_expedition']);
-      expect(r.port.report(1)?.tempo.tool_calls).toBe(recs.filter((x) => x.source === 'bot' && x.player === pid && x.resultSeq).length);
+      expect(ownRecs.map((x) => x.command.type)).toEqual(['set_directive', 'unequip', 'equip', 'prepare']);
+      // 遠征レポートの呼び出しの数は、その遠征の間のプレイヤーの呼び出し（キャンプで希望を伝えた呼び出しは、遠征の前）
+      const xs1 = w().expeditions![0];
+      expect(r.port.report(1)?.tempo.tool_calls).toBe(recs.filter((x) => x.source === 'bot' && x.player === pid && x.resultSeq && x.resultSeq[0] >= xs1.startSeq && x.resultSeq[0] <= xs1.endSeq!).length);
       // 起動し直した前後で同じ観測（再生は記録だけで一致）
       const before = JSON.stringify(buildObservation(projectPlayerView(w(), pid), catalog, { detail: 'full', map: false }));
       const runId = r.session.runId;
@@ -185,10 +201,11 @@ describe('S8 §54.3・§54.4: objective and equipment held by the owner (records
       expect(rec.verified).toBe(true);
       expect(JSON.stringify(buildObservation(projectPlayerView(rec.session.world, pid), catalog, { detail: 'full', map: false }))).toBe(before);
       expect(rec.session.world.players[pid].directive?.hold).toEqual(['objective', 'loadout']);
-      // 起動し直した後も、握られた項目は断られる
-      const seqR = rec.session.world.seq;
+      // 起動し直した後も、握られた項目は断られる（手番は使わない）
+      const turnsR = meOf(rec.session.world, pid).actor?.turns;
       expect(errCode(await rec.session.submit(pid, { type: 'start_expedition', offer: 1 }, { source: 'mcp' }))).toBe('held_by_owner');
-      expect(rec.session.world.seq).toBe(seqR);
+      expect(meOf(rec.session.world, pid).actor?.turns).toBe(turnsR);
+      expect(rec.session.world.players[pid].state).toBe('at_camp');
       rec.session.close();
       m2.closeAll();
     } finally {
@@ -204,10 +221,12 @@ describe('S8 §54.3: perks and boons held — offers wait until the owner picks 
     expect(errCode(await owner(r, { type: 'set_directive', hold: ['perks'] }))).toBe('ok');
     expect(errCode(await act(r.port, { type: 'start_expedition', offer: 1 }))).toBe('ok');
     const opts = offerPerks(r);
-    const seq = r.session.world.seq;
+    const turns = meOf(r.session.world, r.playerId).actor?.turns;
     expect(errCode(await act(r.port, { type: 'choose_perk', option: 1 }))).toBe('held_by_owner');
     expect(errCode(await owner(r, { type: 'choose_perk', option: 1 }))).toBe('not_at_camp');
-    expect(r.session.world.seq).toBe(seq);
+    // 手番は使わない。S9（SEASON.md §58.2）: プレイヤーの choose_perk は、希望として覚える
+    expect(meOf(r.session.world, r.playerId).actor?.turns).toBe(turns);
+    expect(r.session.world.players[r.playerId].directive?.wishes).toEqual([{ item: 'perk', perk: opts[0], level: 2 }]);
     const o = r.port.observeWithTurn('observed').observation;
     expect(o.alerts.find((a) => a.code === 'perk_pending')?.text).toContain('覚えられる特技が増えた（Lv2）');
     expect(o.valid_actions.some((l) => l.startsWith('choose_perk'))).toBe(false);
@@ -223,6 +242,8 @@ describe('S8 §54.3: perks and boons held — offers wait until the owner picks 
     expect(errCode(await owner(r, { type: 'choose_perk', option: 2 }))).toBe('ok');
     expect(meOf(r.session.world, r.playerId).build?.perks.includes(opts[1])).toBe(true);
     expect(r.session.world.players[r.playerId].ownerDecided).toEqual(['perks']);
+    // 持ち主が決めたので、特技の希望は消える（S9 §58.2）
+    expect(r.session.world.players[r.playerId].directive?.wishes).toBeUndefined();
     const ch = r.port.observeWithTurn('observed').turn.changes.filter((c) => c.code === 'owner').map((c) => c.text);
     expect(ch.some((x) => x.startsWith('持ち主が、特技を選んだ: '))).toBe(true);
     m.closeAll();
@@ -240,8 +261,8 @@ describe('S8 §54.1: no directive for runs played by a human, or in co-op', () =
   });
 });
 
-describe('S8 §54.4 の 5: wait_for_turn at camp waits for the owner to start (MCP)', () => {
-  it('returns when the owner starts, with the changes; times out with the camp observation otherwise', async () => {
+describe('S8 §54.4 の 5: wait_for_turn at camp waits for the owner (MCP)', () => {
+  it('returns when the owner marks the preparations ready (S9), with the changes; times out with the camp observation otherwise', async () => {
     const m = manager();
     const [x, y] = InMemoryTransport.createLinkedPair();
     const server = createMcpServer({ manager: m, boundToken: null, briefMap: true, clientLabel: 'test' });
@@ -257,13 +278,17 @@ describe('S8 §54.4 の 5: wait_for_turn at camp waits for the owner to start (M
     expect(t0.structuredContent.turn.state).toBe('at_camp');
     // 伝言は new_run の応答の後に書いた: 最初の応答で「（新しい）」と「変化」（S8b）
     expect(t0.content[0].text).toContain('持ち主から（新しい）: 静かに');
-    const pending = client.callTool({ name: 'wait_for_turn', arguments: { player_token, timeout_s: 20 } }) as unknown as Promise<{ structuredContent: { turn: { reason: string; changes: { code: string; text: string }[] } } }>;
+    type W = { structuredContent: { turn: { reason: string; changes: { code: string; text: string }[] } } };
+    const pending = client.callTool({ name: 'wait_for_turn', arguments: { player_token, timeout_s: 20 } }) as unknown as Promise<W>;
     await new Promise((res) => setTimeout(res, 50));
-    expect(errCode(await s.submit(player_id, { type: 'start_expedition', offer: 1 }, { source: 'owner' }))).toBe('ok');
+    // S9（SEASON.md §58.1）: 持ち主は遠征を始めない。目的を選んで準備完了を出すと、待ちが返る。出発するのは AI
+    expect(errCode(await s.submit(player_id, { type: 'prepare', objective: 1, ready: true }, { source: 'owner' }))).toBe('ok');
     const t1 = await pending;
-    expect(t1.structuredContent.turn.reason).toBe('turn_arrived');
-    expect(t1.structuredContent.turn.changes.some((c) => c.code === 'owner' && c.text.startsWith('持ち主が、遠征 1 を始めた'))).toBe(true);
-    expect(t1.structuredContent.turn.changes.some((c) => c.text === '持ち主から: 静かに')).toBe(true);
+    expect(t1.structuredContent.turn.reason).toBe('observed');
+    expect(t1.structuredContent.turn.changes.some((c) => c.code === 'owner' && c.text.startsWith('持ち主の支度が、準備完了になった（目的: 候補 1: '))).toBe(true);
+    const t2 = (await client.callTool({ name: 'start_expedition', arguments: { player_token, offer: 1 } })) as unknown as W;
+    expect(t2.structuredContent.turn.changes.some((c) => c.code === 'owner' && c.text.startsWith('持ち主が決めた目的で始めた: 遠征 1（'))).toBe(true);
+    expect(t2.structuredContent.turn.changes.some((c) => c.text === '持ち主から: 静かに')).toBe(true);
     // 握られた start_expedition の MCP の断り
     await client.close();
     m.closeAll();
@@ -314,12 +339,18 @@ describe('S8 §54.1・§54.8: the owner endpoint (HTTP) — who may use it, and 
       const d = (await call(`${v}/directive`, { method: 'POST', headers: ext, body: { hold: ['objective'], message: 'まず地下2階', profileToken: ptok } })).json as unknown as OwnerViewResponse;
       expect(d.result).toEqual({ ok: true });
       expect(d.waiting).toBe(true);
-      expect(d.view.directive).toEqual({ hold: ['objective'], message: 'まず地下2階', decided: [] });
+      expect(d.view.directive).toEqual({ hold: ['objective'], message: 'まず地下2階', decided: [], prep: { state: 'pending', seen: expect.any(Array) } });
       const bad = (await call(`${v}/act`, { method: 'POST', headers: { ...ext, authorization: `Bearer ${ptok}` }, body: { command: { type: 'explore' } } })).json as unknown as OwnerViewResponse;
       expect(bad.result?.ok).toBe(false);
-      const start = (await call(`${v}/act`, { method: 'POST', headers: { ...ext, authorization: `Bearer ${ptok}` }, body: { command: { type: 'start_expedition', offer: 1 } } })).json as unknown as OwnerViewResponse;
-      expect(start.result).toEqual({ ok: true });
-      expect(start.view.status).toBe('your_turn');
+      // S9（SEASON.md §58.1）: 持ち主の口から遠征は始めない。目的を選んで準備完了（同じ口の prepare）。始めるのはプレイヤー
+      const direct = (await call(`${v}/act`, { method: 'POST', headers: { ...ext, authorization: `Bearer ${ptok}` }, body: { command: { type: 'start_expedition', offer: 1 } } })).json as unknown as OwnerViewResponse;
+      expect(direct.result?.ok === false && direct.result.error.code).toBe('bad_request');
+      const ready = (await call(`${v}/act`, { method: 'POST', headers: { ...ext, authorization: `Bearer ${ptok}` }, body: { command: { type: 'prepare', objective: 1, ready: true } } })).json as unknown as OwnerViewResponse;
+      expect(ready.result).toEqual({ ok: true });
+      expect(ready.waiting).toBe(false);
+      expect(ready.view.directive?.prep).toMatchObject({ state: 'ready', objective: 1 });
+      expect(errCode(await r.port.act({ type: 'start_expedition', offer: 1 }, { source: 'mcp' }))).toBe('ok');
+      expect(r.port.view().status).toBe('your_turn');
       const late = (await call(`${v}/directive`, { method: 'POST', headers: { authorization: `Bearer ${ptok}` }, body: { hold: [] } })).json as unknown as OwnerViewResponse;
       expect(late.result?.ok === false && late.result.error.code).toBe('not_at_camp');
       // 持ち主の口は MCP のツールに無い
@@ -368,11 +399,14 @@ describe('S8 §54.6・§54.8: other participants never get directives or message
     // キャンプで決めた: 印が付く（順位は分けない）
     expect(rowOf('アカネ').directed).toEqual(['loadout']);
     expect(rowOf('ボタン').directed).toBeUndefined();
-    // 目的を握られた参加者の start_expedition は、取り込みを記録する前に断る
-    const seqA = a.session.world.seq;
+    // 目的を握られた参加者の start_expedition は、取り込みを記録する前に断る（S9: 希望は覚えるが、取り込みは記録しない）
+    const syncs = () => a.session.history.filter((e) => e.type === 'season_synced').length;
+    const s0 = syncs();
     expect(errCode(await act(a.port, { type: 'start_expedition', offer: 1 }))).toBe('held_by_owner');
-    expect(a.session.world.seq).toBe(seqA);
-    expect(errCode(await a.session.submit(a.playerId, { type: 'start_expedition', offer: 1 }, { source: 'owner' }))).toBe('ok');
+    expect(syncs()).toBe(s0);
+    // S9（SEASON.md §58.1）: 持ち主は目的を選んで準備完了。始めるのはプレイヤー
+    expect(errCode(await a.session.submit(a.playerId, { type: 'prepare', objective: 1, ready: true }, { source: 'owner' }))).toBe('ok');
+    expect(errCode(await act(a.port, { type: 'start_expedition', offer: 1 }))).toBe('ok');
     expect(rowOf('アカネ').directed).toEqual(['loadout']);
     // B は遠征を始め、帰って取り込む
     expect(errCode(await act(b.port, { type: 'start_expedition', offer: 1 }))).toBe('ok');

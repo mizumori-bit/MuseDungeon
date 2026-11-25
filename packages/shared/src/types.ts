@@ -339,8 +339,8 @@ export interface PlayerRecord {
    */
   lastAct?: number;
   /**
-   * 指図（S8。SEASON.md §54.2）: 持ち主が握った項目と、持ち主から自分の AI への伝言。持ち主の口からの set_directive（出来事 directive_set）でだけ変わる。
-   * 指図の無いランには無い
+   * 指図（S8。SEASON.md §54.2）: 持ち主が握った項目と、持ち主から自分の AI への伝言。持ち主の口からの set_directive（出来事 directive_set）で変わる。
+   * 支度の札（S9 §58.1。出来事 directive_prep）と希望（S9 §58.2。出来事 directive_wish）も、ここに持つ。指図の無いランには無い
    */
   directive?: Directive;
   /** このランで、持ち主の口から決めた項目（S8 §54.6。出来事 owner_decided の after 値。順位の印の元。握っただけでは入らない） */
@@ -350,8 +350,36 @@ export interface PlayerRecord {
 /** 指図で握れる項目（S8 §54.2）: 遠征の目的・装備・特技と加護 */
 export type DirectiveItem = 'objective' | 'loadout' | 'perks';
 export const DIRECTIVE_ITEMS: readonly DirectiveItem[] = ['objective', 'loadout', 'perks'];
-/** 指図（S8 §54.2）。hold: 握る項目（並びは DIRECTIVE_ITEMS の順）、message: 伝言（280 字まで。無ければ空） */
-export interface Directive { hold: DirectiveItem[]; message: string }
+/**
+ * 指図（S8 §54.2）。hold: 握る項目（並びは DIRECTIVE_ITEMS の順）、message: 伝言（280 字まで。無ければ空）。
+ * prep: 支度の札（S9 §58.1。握っている項目があるときだけ）。wishes: 希望（S9 §58.2。項目ごとに最新の 1 つ。特技と加護は別）。
+ * S8 の版の記録の after 値には prep・wishes が無い（握っていて札が無ければ「まだ」と読む: prepStateOf）
+ */
+export interface Directive { hold: DirectiveItem[]; message: string; prep?: DirectivePrep; wishes?: DirectiveWish[] }
+
+/**
+ * 支度の札（S9。SEASON.md §58.1）。state: pending（まだ）/ ready（準備完了）。キャンプに着くたびに engine が置き直す（決めるものが無ければ ready）。
+ * objective: 持ち主が選んだ次の遠征（目的を握っているとき。このキャンプの候補の番号か endless。キャンプに着くと消える）。
+ * seen: 前の準備完了（か札ができた）ときの持ち物の品の ID（ID の順）。装備を握っているとき、これに無い装備できる品が「新しく持ち物に入った品」
+ */
+export interface DirectivePrep { state: 'pending' | 'ready'; objective?: number | 'endless'; seen: string[] }
+
+/**
+ * 希望（S9。SEASON.md §58.2）: 握られた項目の命令を、プレイヤーの口から出したもの（断られたうえで、持ち主に届く）。reason: 命令に付いた thought（280 字まで）。
+ * objective: このキャンプの遠征の通番 no と候補（objective はその候補の目的）。loadout: 品の ID と、着けるか外すか。perk・boon: 候補の ID（Lv・節目の深さ）
+ */
+export type DirectiveWish =
+  | { item: 'objective'; no: number; offer: number | 'endless'; objective: Objective; reason?: string }
+  | { item: 'loadout'; act: 'equip' | 'unequip'; target: EntityId; reason?: string }
+  | { item: 'perk'; perk: string; level: number; reason?: string }
+  | { item: 'boon'; boon: string; depth: number; reason?: string };
+export type WishItem = DirectiveWish['item'];
+
+/** 支度の札の状態（S9 §58.1）: 握っている項目が無ければ null。握っていて札が無い（S8 の版の記録）なら pending */
+export function prepStateOf(d: { hold: readonly DirectiveItem[]; prep?: { state: 'pending' | 'ready' } } | undefined | null): 'pending' | 'ready' | null {
+  if (!d?.hold.length) return null;
+  return d.prep?.state ?? 'pending';
+}
 
 export type PlayerState = 'alive' | 'dead' | 'left' | 'at_camp';
 

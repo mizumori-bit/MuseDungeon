@@ -4,7 +4,7 @@ import type {
   CampState, Controller, Entity, EntityId, EntityRole, EquipSlot, Expedition, ExpeditionEndReason, ExpeditionResult, FloorKey,
   Locale, MonsterMemory, Objective, OfferSlot, PlayerBuild, PlayerId, PlayerState, Pos, RememberedEntity, SeasonState, Stats, StatusInst, World, Sense, FloorHint, Names, Intent, RelicInfo, MilestoneInfo,
 } from './types';
-import type { Dir, DirectiveItem } from './types';
+import type { Dir, DirectiveItem, DirectivePrep, DirectiveWish } from './types';
 import { cheb, compassDir } from './util';
 import { projectSupplies, seasonBudgetLeft, seasonStairsCounts } from './season';
 import type { SupplyTakenView, SupplyView } from './season';
@@ -264,7 +264,8 @@ export interface PlayerView {
    * 自分の指図（S8。SEASON.md §54.4）: 持ち主が握っている項目・持ち主からの伝言・このランで持ち主が決めた項目。指図の無いランには無い。
    * ほかの参加者の指図は入らない
    */
-  directive?: { hold: DirectiveItem[]; message: string; decided: DirectiveItem[] };
+  /** prep: 支度の札（S9 §58.1）・wishes: 自分の希望（S9 §58.2。本人と、その持ち主にだけ見える） */
+  directive?: { hold: DirectiveItem[]; message: string; decided: DirectiveItem[]; prep?: DirectivePrep; wishes?: DirectiveWish[] };
 }
 
 export function hpState(hp: number, maxHp: number): HpState {
@@ -648,8 +649,13 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
     record: { banked: rec.stats.banked ?? 0, lost: rec.stats.lost ?? 0, expeditions: rec.stats.expeditions ?? 0 },
     ...(world.season ? { season: seasonView(world, playerId) } : {}),
     // 指図（S8 §54.4）: 自分のものだけ。握っている・伝言がある・持ち主が決めたことがあるときだけ
+    // 支度の札・希望（S9 §58）: 自分のものだけ（ほかの参加者には渡らない）
     ...(rec.directive?.hold.length || rec.directive?.message || rec.ownerDecided?.length
-      ? { directive: { hold: [...(rec.directive?.hold ?? [])], message: rec.directive?.message ?? '', decided: [...(rec.ownerDecided ?? [])] } } : {}),
+      ? { directive: {
+        hold: [...(rec.directive?.hold ?? [])], message: rec.directive?.message ?? '', decided: [...(rec.ownerDecided ?? [])],
+        ...(rec.directive?.prep ? { prep: structuredClone(rec.directive.prep) } : {}),
+        ...(rec.directive?.wishes?.length ? { wishes: structuredClone(rec.directive.wishes) } : {}),
+      } } : {}),
   };
 }
 

@@ -321,8 +321,10 @@ export function applyEvent(world: World, ev: GameEvent): void {
     case 'notes_updated':
       world.players[ev.player].knowledge.notes = clone(ev.notesAfter);
       break;
-    // 指図（S8。SEASON.md §54.2・§54.6）: after 値の代入だけ
+    // 指図（S8。SEASON.md §54.2・§54.6）・支度の札と希望（S9 §58.1・§58.2）: after 値の代入だけ
     case 'directive_set':
+    case 'directive_prep':
+    case 'directive_wish':
       world.players[ev.player].directive = clone(ev.directiveAfter);
       break;
     case 'owner_decided':

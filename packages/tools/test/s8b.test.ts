@@ -43,9 +43,9 @@ async function mcp(m: SessionManager) {
 }
 
 describe('S8b の 1: the waiting response says what is going on', () => {
-  it('a timed-out wait_for_turn says the owner has not decided, how long it waited, that waiting again is fine and that stopping is fine; after stopping, the owner\'s start is picked up on the next call', async () => {
-    expect(ENGINE_VERSION).toBe('0.48.0');
-    expect(EVENT_VERSION).toBe(36);
+  it('a timed-out wait_for_turn says the preparations are not ready, how long it waited, that waiting again is fine and that stopping is fine; after stopping, the AI sets out itself once ready (S9)', async () => {
+    expect(ENGINE_VERSION).toBe('0.49.0');
+    expect(EVENT_VERSION).toBe(37);
     const m = manager();
     const { client, call } = await mcp(m);
     const nr = await call('new_run', { character_name: 'Mw' });
@@ -57,7 +57,8 @@ describe('S8b の 1: the waiting response says what is going on', () => {
     expect(t0.structuredContent.turn.reason).toBe('wait_timeout');
     expect(t0.structuredContent.turn.owner_wait).toEqual({ decided: false, waited_s: 1, may_wait_again: true, turns_spent: 0 });
     const line = t0.content[0].text.split('\n').at(-1)!;
-    expect(line).toBe('▶ キャンプにいます。持ち主は、まだ次の遠征を決めていない（この待ちで 1 秒待った）。決めたら、次の応答で、迷宮の中に変わる。もう一度 wait_for_turn で待てる（何回待ってもよい。手番は減らない）。待つのをやめてもよい（やめても、持ち主が始めれば遠征は始まり、次に呼んだときに続きから遊べる）。');
+    // S9（SEASON.md §58.1）: 持ち主の支度を待つ文。持ち主は遠征を始めないので、やめると、だれも出発しない
+    expect(line).toBe('▶ キャンプにいます。持ち主の支度は、まだ準備完了でない（この待ちで 1 秒待った）。準備完了になったら、次の応答で分かる（そのあと、あなたが start_expedition で出発する）。もう一度 wait_for_turn で待てる（何回待ってもよい。手番は減らない）。待つのをやめてもよい（やめると、準備完了になっても、だれも出発しない。次に呼んだときに、start_expedition で出発できる）。');
     // もう一度待っても、手番は減らない
     const t1 = await call('wait_for_turn', { player_token, timeout_s: 1 });
     expect(t1.structuredContent.turn.reason).toBe('wait_timeout');
@@ -66,13 +67,17 @@ describe('S8b の 1: the waiting response says what is going on', () => {
     // observe（待たない）: 待ち方の行。待った秒数は無い
     const ob = await call('observe', { player_token });
     expect(ob.structuredContent.turn.owner_wait).toEqual({ decided: false, may_wait_again: true, turns_spent: 0 });
-    expect(ob.content[0].text).toContain('▶ キャンプにいます。持ち主が、次の遠征を決めるのを待つ。');
-    // 待つのをやめた（呼ばない）間に、持ち主が始める → 次に呼んだとき、迷宮の中から続けて遊べる
-    expect(errCode(await s.submit(player_id, { type: 'start_expedition', offer: 1 }, { source: 'owner' }))).toBe('ok');
+    expect(ob.content[0].text).toContain('▶ キャンプにいます。持ち主の支度を待つ。');
+    // 待つのをやめた（呼ばない）間に、持ち主が準備完了を出す → 次に呼んだとき、そう分かる。出発するのは AI（S9 §58.1）
+    expect(errCode(await s.submit(player_id, { type: 'prepare', objective: 1, ready: true }, { source: 'owner' }))).toBe('ok');
     const o2 = await call('observe', { player_token });
-    expect(o2.structuredContent.turn.state).toBe('your_turn');
+    expect(o2.structuredContent.turn.state).toBe('at_camp');
     expect(o2.structuredContent.turn.owner_wait).toBeUndefined();
-    expect(ownerLines(o2.structuredContent.turn).some((x) => x.startsWith('持ち主が、遠征 1 を始めた'))).toBe(true);
+    expect(o2.structuredContent.turn.awaiting).toBe('camp_choice');
+    expect(ownerLines(o2.structuredContent.turn).some((x) => x.startsWith('持ち主の支度が、準備完了になった'))).toBe(true);
+    const st = await call('start_expedition', { player_token, offer: 1 });
+    expect(st.structuredContent.turn.state).toBe('your_turn');
+    expect(ownerLines(st.structuredContent.turn).some((x) => x.startsWith('持ち主が決めた目的で始めた: 遠征 1'))).toBe(true);
     const turns0 = s.view(player_id).self.turns;
     await call('wait', { player_token });
     expect(s.view(player_id).self.turns).toBe(turns0 + 1);
@@ -120,15 +125,17 @@ describe('S8b の 2: a new message stands out', () => {
       const ownerText = (s: string) => s.split('\n').filter((l) => l.includes('持ち主') && !l.startsWith('- '));
       expect(ownerText(after.text)).toEqual(ownerText(peek.text));
       expect(ownerText(after.text)).toContain('持ち主から（新しい）: 地下3階で帰る');
-      // 持ち主が遠征を始めた直後の、最初の迷宮の中の応答に、伝言がもう 1 回（前の応答で読んだ伝言は「持ち主から」）
-      expect(errCode(await rec.session.submit(pid, { type: 'start_expedition', offer: 1 }, { source: 'owner' }))).toBe('ok');
-      const d = port2.observeWithTurn('turn_arrived');
-      expect(d.turn.state).toBe('your_turn');
-      const own = ownerLines(d.turn);
-      expect(own[0]).toMatch(/^持ち主が、遠征 1 を始めた: /);
+      // 持ち主の選んだ目的で遠征を始めた応答に、伝言がもう 1 回（前の応答で読んだ伝言は「持ち主から」）。S9（§58.1）: 持ち主は準備完了を出し、始めるのは AI
+      expect(errCode(await rec.session.submit(pid, { type: 'prepare', objective: 1, ready: true }, { source: 'owner' }))).toBe('ok');
+      const dr = await port2.act({ type: 'start_expedition', offer: 1 }, { source: 'bot' });
+      expect(dr.ok).toBe(true);
+      if (!dr.ok) throw new Error('start refused');
+      expect(dr.turn.state).toBe('your_turn');
+      const own = ownerLines(dr.turn);
+      expect(own[0]).toMatch(/^持ち主が決めた目的で始めた: 遠征 1（/);
       expect(own).toContain('持ち主から: 地下3階で帰る');
       expect(own.some((x) => x.startsWith('持ち主が、伝言を書いた'))).toBe(false);
-      expect(d.text).toContain('持ち主から: 地下3階で帰る');
+      expect(port2.formatActionText(dr)).toContain('持ち主から: 地下3階で帰る');
       // 次の応答には出ない
       expect(ownerLines(port2.observeWithTurn('observed').turn)).toEqual([]);
       rec.session.close();
@@ -145,11 +152,13 @@ describe('S8b の 2: a new message stands out', () => {
     r.port.observeWithTurn('observed');
     const long = '深追いはしない。HP が半分を切ったら帰る。'.repeat(5);
     expect(errCode(await owner(r, { type: 'set_directive', hold: ['objective'], message: long }))).toBe('ok');
-    expect(errCode(await owner(r, { type: 'start_expedition', offer: 1 }))).toBe('ok');
-    const d = r.port.observeWithTurn('turn_arrived');
+    // S9（§58.1）: 持ち主は準備完了を出し、始めるのは AI
+    expect(errCode(await owner(r, { type: 'prepare', objective: 1, ready: true }))).toBe('ok');
+    const d = await act(r.port, { type: 'start_expedition', offer: 1 });
+    if (!d.ok) throw new Error('start refused');
     const own = ownerLines(d.turn);
     expect(own.filter((x) => x.includes(long))).toEqual([`持ち主が、伝言を書いた: ${long}`]);
-    expect(own.indexOf(`持ち主が、伝言を書いた: ${long}`)).toBeGreaterThan(own.findIndex((x) => x.startsWith('持ち主が、遠征 1 を始めた')));
+    expect(own.indexOf(`持ち主が、伝言を書いた: ${long}`)).toBeGreaterThan(own.findIndex((x) => x.startsWith('持ち主が決めた目的で始めた: 遠征 1')));
     m.closeAll();
   });
 });
@@ -208,6 +217,9 @@ describe('S8b の 4: a camp whose season budget is used up (or past its end) doe
     expect(o.text).not.toContain('持ち主が始めたら');
     expect(o.observation.valid_actions.some((l) => l.startsWith('wait_for_turn'))).toBe(false);
     expect(o.turn.owner_wait).toBeUndefined();
+    // S9（§58.1）: 予算を使い切ったキャンプでは、支度を待たない（断りは今までの budget_exhausted。支度の札の断りにしない）
+    expect(r.session.world.players[r.playerId].directive?.prep?.state).toBe('pending');
+    expect(errCode(await act(r.port, { type: 'start_expedition', offer: 1 }))).toBe('budget_exhausted');
     // 時間切れのシーズンも同じ（終わりの時刻を過ぎた）
     const v = projectPlayerView(w, r.playerId);
     const ended = { ...v, season: { ...v.season!, budgetLeft: 10, ended: true } };

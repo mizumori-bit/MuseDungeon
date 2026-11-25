@@ -481,5 +481,11 @@ ul.ocost { margin: 0; padding-left: 18px; }
 .ooffers li { align-items: flex-start; }
 .ooffers .otext { white-space: pre-wrap; font-size: 12.5px; }
 .ooffers .oslay { margin-top: 2px; }
+/* 支度の札（S9。SEASON.md §58.1）: 準備完了は落ち着いた色・選んだ目的の候補に印 */
+.waitmark.ready { background: #24452a; color: #a8e6b0; }
+.ooffers li.chosen { outline: 1px solid #3f6a3a; border-radius: 6px; }
+.owish ul { margin: 0; padding-left: 18px; font-size: 12.5px; }
+.owish li button { margin-left: 8px; }
 .line.owner { color: #ffe08a; }
 .line.owner_msg { color: #b4d8ff; }
+.line.wish { color: #d7c4ff; }

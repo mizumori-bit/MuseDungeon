@@ -4,7 +4,7 @@
 import type { LegacyMonster } from './commands';
 import type { ExpeditionReport } from './expeditionStats';
 import type { ProjectedEvent } from './filter';
-import type { Locale, Names } from './types';
+import type { DirectiveItem, Locale, Names } from './types';
 import { t } from './util';
 
 // ---------------- 図鑑 ----------------
@@ -149,6 +149,11 @@ export interface ProfileData {
   updatedAt: number;
   runs: ProfileRun[];
   feats: FeatRecord[];
+  /**
+   * 持ち主が握る項目（S9。SEASON.md §58.3）: 持ち主が set_directive で握る項目を変えるたびに、サーバーが控える（伝言は控えない）。
+   * このプロフィールの新しいランは、作った直後に、これを持ち主の口の命令として入れる。握っていなければ無い
+   */
+  hold?: DirectiveItem[];
 }
 
 // ---------------- 継承（§7.3） ----------------

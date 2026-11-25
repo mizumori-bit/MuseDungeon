@@ -223,7 +223,10 @@ describe('S8a §55.6 の 12・13: the remaining cases', () => {
       expect(errCode(await owner(r, { type: 'set_directive', hold: ['objective', 'loadout'], message: '記録から' }))).toBe('ok');
       expect(errCode(await owner(r, { type: 'unequip', slot: armor.slot }))).toBe('ok');
       expect(errCode(await r.port.act({ type: 'start_expedition', offer: 1 }, { source: 'bot' }))).toBe('held_by_owner');
-      expect(errCode(await owner(r, { type: 'start_expedition', offer: 1 }))).toBe('ok');
+      // S9（SEASON.md §58.1）: 持ち主は遠征を始めない。目的を選んで準備完了を出し、プレイヤーが始める
+      expect(errCode(await owner(r, { type: 'start_expedition', offer: 1 }))).toBe('bad_request');
+      expect(errCode(await owner(r, { type: 'prepare', objective: 1, ready: true }))).toBe('ok');
+      expect(errCode(await r.port.act({ type: 'start_expedition', offer: 2 }, { source: 'bot' }))).toBe('ok');
       expect(errCode(await r.port.act({ type: 'wait' }, { source: 'bot' }))).toBe('ok');
       const runId = r.session.runId;
       m.closeAll();

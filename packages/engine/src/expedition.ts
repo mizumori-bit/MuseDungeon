@@ -19,6 +19,7 @@ import { isMilestoneDepth } from './gen/generate';
 import { spawnFromSpec, sumAffixMods } from './spawn';
 import { recomputeStats } from './stats';
 import { campfireNear, fireReturnCheck } from './campfire';
+import { settleCampPrep } from './directive';
 
 const OFFER_TYPES: ObjectiveType[] = ['reach_depth', 'slay_guardian', 'retrieve_relic'];
 /** 帰還の綱（V3-2R2 §18.1） */
@@ -438,6 +439,8 @@ export function offerExpeditions(ctx: Ctx): void {
   const no = (ctx.world.expeditions?.length ?? 0) + 1;
   const ms = nextMilestone(ctx);
   ctx.emit({ type: 'expedition_offered', camp: { nextNo: no, offers: makeOffers(ctx, no), ...(ms ? { milestone: ms } : {}) }, seenBy: 'all', floor: null });
+  // 支度の札（S9 §58.1）: キャンプに着いた者の札を置き直す（握っていないランには、何も出ない）
+  settleCampPrep(ctx);
 }
 
 /** 目標階の生成で置くもの（目標階でなければ null） */

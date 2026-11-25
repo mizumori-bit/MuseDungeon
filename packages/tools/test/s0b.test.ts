@@ -329,8 +329,11 @@ describe('S0b §6.2-6: the call tool', () => {
       expect(bad1.text).toContain("例: travel_to { to: 'stairs_down' }");
       const bad2 = await call('choose_perk', 'choice=1');
       expect(bad2.text).toContain('choose_perk には option が要る（渡されていない）。choose_perk に choice という名前の引数は無い。このツールの引数: 要る: option');
-      // 2 つ目のラン: 上書きする前のトークンは *.old.txt に残る
-      expect((await call('new_run', 'character_name=Aki2')).code).toBe(0);
+      // 2 つ目のラン: 上書きする前のトークンは *.old.txt に残る。S9（SEASON.md §58.3）: 保存したプロフィールのトークンが付くので、
+      // 続きのあるランがあると run_in_progress で断られる。end_previous=true で前のランを終えてから
+      const busy = await call('new_run', 'character_name=Aki2');
+      expect(busy.text).toContain('run_in_progress');
+      expect((await call('new_run', 'character_name=Aki2', 'end_previous=true')).code).toBe(0);
       expect(readFileSync(files.player.replace(/\.txt$/, '.old.txt'), 'utf8')).toContain(ptok);
       // シーズン: 運用者から受け取ったプロフィールのトークンを profile-token.txt に置くと、new_run に付く
       m.seasons.store.open({ id: 's0c', name: 'S0c', seed: 's0c-season', engineVersion: ENGINE_VERSION, contentVersion: content.version, budget: 300, endsAt: Date.now() + 86_400_000, openedAt: Date.now() });

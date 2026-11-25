@@ -1,6 +1,6 @@
 // 観戦・リプレイ用の文章化。追従視点ではプレイヤー向けフィルタを通してから narrate する。
-import type { Catalog, GameEvent, Locale, PerceivedEvent, PlayerView, ProjectedEvent, World } from '@muse/shared';
-import { directiveItemsText, filterEventsForPlayer, narrate, projectPlayerView } from '@muse/shared';
+import type { Catalog, DirectiveWish, GameEvent, Locale, PerceivedEvent, PlayerView, ProjectedEvent, World } from '@muse/shared';
+import { directiveItemsText, filterEventsForPlayer, narrate, projectPlayerView, wishLabel } from '@muse/shared';
 import { getLocale, tr } from '../util';
 import type { LogLine, ThoughtLine } from './panels';
 
@@ -52,6 +52,9 @@ export function perceivedLines(events: readonly PerceivedEvent[]): LogLine[] {
   return events.filter((e) => e.text).map((e) => ({ seq: e.seq, text: e.text, kind: e.type === 'chat' ? 'chat' as const : undefined }));
 }
 
+/** 思考の欄に並べる持ち主と希望の出来事（S8 §54.6・S9 §58.2） */
+const OWNER_TYPES: ReadonlySet<string> = new Set(['owner_decided', 'directive_set', 'directive_prep', 'directive_wish']);
+
 /** 指図の握った項目の 1 行（伝言の行に添える） */
 function holdSub(hold: readonly string[]): string {
   const held = directiveItemsText(getLocale(), hold);
@@ -66,6 +69,18 @@ function ownerLine(ev: { seq: number; type: string } & Record<string, unknown>, 
   if (ev.type === 'owner_decided') {
     const text = ctx ? narrate(ev as unknown as ProjectedEvent, ctx) : null;
     return text ? { seq: ev.seq, player, name, text, kind: 'owner' } : null;
+  }
+  // 支度（S9 §58.1）: 持ち主の prepare だけ（narrate が文にするもの）
+  if (ev.type === 'directive_prep') {
+    const text = ctx ? narrate(ev as unknown as ProjectedEvent, ctx) : null;
+    return text ? { seq: ev.seq, player, name, text, kind: 'owner' } : null;
+  }
+  // 希望（S9 §58.2）: 「希望: 鎧さばき」と理由。カタログが無ければ（読む前）出さない
+  if (ev.type === 'directive_wish') {
+    const w = ev.wish as DirectiveWish | undefined;
+    if (!w || !ctx) return null;
+    const label = wishLabel(getLocale(), ctx.catalog, w, w.item === 'loadout' ? { kind: (ev.kind as string | null) ?? null, appearanceId: (ev.appearanceId as string | null) ?? null } : null);
+    return { seq: ev.seq, player, name, text: label, kind: 'wish', ...(w.reason ? { sub: w.reason } : {}) };
   }
   if (ev.type === 'directive_set') {
     const d = ev.directiveAfter as { hold?: string[]; message?: string } | undefined;
@@ -89,7 +104,7 @@ export function thoughtsFrom(events: readonly GameEvent[], world: World, catalog
       out.push({ seq: ev.seq, player: ev.player, name: world.players[ev.player]?.name ?? ev.player, text: ev.text });
       continue;
     }
-    if (ev.type !== 'owner_decided' && ev.type !== 'directive_set') continue;
+    if (ev.type !== 'owner_decided' && ev.type !== 'directive_set' && ev.type !== 'directive_prep' && ev.type !== 'directive_wish') continue;
     if (ctx === undefined) ctx = catalog ? { locale: getLocale(), catalog, selfId: null, playerNames: namesFromWorld(world) } : null;
     const line = ownerLine(ev as unknown as { seq: number; type: string } & Record<string, unknown>, ev.player, world.players[ev.player]?.name ?? ev.player, ctx);
     if (line) out.push(line);
@@ -105,7 +120,7 @@ export function ownerLinesFromPerceived(events: readonly PerceivedEvent[], view:
   const out: ThoughtLine[] = [];
   const ctx = catalog ? { locale: getLocale(), catalog, selfId: view.self.id, selfPlayerId: view.playerId, playerNames: namesFromView(view), selfPos: view.self.pos } : null;
   for (const pe of events) {
-    if (pe.type !== 'owner_decided' && pe.type !== 'directive_set') continue;
+    if (!OWNER_TYPES.has(pe.type)) continue;
     const ev = pe.event as unknown as { seq: number; type: string; player?: string } & Record<string, unknown>;
     const player = typeof ev.player === 'string' ? ev.player : view.playerId;
     const name = view.party.find((p) => p.playerId === player)?.name ?? view.self.name;

@@ -28,6 +28,8 @@ const PLAYER_VISIBLE: ReadonlySet<EventType> = new Set<EventType>([
   'supply_deposited', 'supply_taken',
   // 指図（S8。SEASON.md §54。本人だけ）: 持ち主の決定と伝言（ほかの参加者には渡らない）
   'directive_set', 'owner_decided',
+  // 支度の札と希望（S9。SEASON.md §58。本人だけ）
+  'directive_prep', 'directive_wish',
 ]);
 
 /** 自分に関するときだけ渡す種別 */
@@ -61,6 +63,8 @@ const SELF_ONLY: Partial<Record<EventType, (ev: any, playerId: PlayerId, selfId:
   supply_taken: (ev, p) => ev.player === p,
   directive_set: (ev, p) => ev.player === p,
   owner_decided: (ev, p) => ev.player === p,
+  directive_prep: (ev, p) => ev.player === p,
+  directive_wish: (ev, p) => ev.player === p,
 };
 
 /** プレイヤー向けに縮約したイベント（seenBy/masks/put/del を除去済み） */
