@@ -5,7 +5,7 @@ import { z } from 'zod';
 import type { ZodTypeAny } from 'zod';
 import { argListText, argProblems, argShape, exampleOf } from './args';
 import type { ActionError, Command, Controller, ObjectiveChoice, TurnBlock } from '@muse/shared';
-import { actionError, CommandSchema, ownerUndecidedWaitOpen, ownerWaitOpen, stripTokenArgs, t } from '@muse/shared';
+import { actionError, CommandSchema, ownerUndecidedWaitOpen, ownerWaitOpen, seasonFinalView, stripTokenArgs, t } from '@muse/shared';
 import type { PlayerPort, ActionPayload } from '../session/PlayerPort';
 import type { SessionManager } from '../session/SessionManager';
 import { rulesText, RULE_TOPICS } from './rules';
@@ -380,6 +380,12 @@ export function createMcpServer(ctx: McpContext): McpServer {
       return out(o.text, { observation: o.observation, turn: o.turn });
     }
     const before = v0.status;
+    // 確定したシーズンのラン（S9b）: 何も来ないので、待たずに返す
+    if (seasonFinalView(v0)) {
+      const o = port.observeWithTurn('observed', { detail: 'brief' });
+      record(port, 'wait_for_turn', args, o.text);
+      return out(o.text, { observation: o.observation, turn: o.turn });
+    }
     const got = before === 'your_turn' ? true : before === 'waiting_others' ? await port.waitForTurn((args.timeout_s ?? 20) * 1000) : false;
     const now = port.view().status;
     const reason = got ? 'turn_arrived' : now === 'waiting_others' ? 'wait_timeout' : 'observed';

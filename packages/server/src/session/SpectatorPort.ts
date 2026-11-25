@@ -1,7 +1,7 @@
 // SpectatorPort: 観戦者向け。スナップショット（secret の seed/rng 除去）＋イベント購読。書き込み不可。
 // spectatorPolicy: omniscient = 全情報 / follow_only = 特定プレイヤーの PlayerView のみ / delayed = 一定 seq 遅らせた俯瞰
 import type { AgentActivity, GameEvent, PerceivedEvent, PlayerId, PlayerView, SpectatorPolicy, World } from '@muse/shared';
-import { applyEvent, filterEventsForPlayer, projectPlayerView, stripSecret } from '@muse/shared';
+import { applyEvent, filterEventsForPlayer, stripSecret } from '@muse/shared';
 import { spectatorEvent } from '../log/RunStore';
 import type { RunSession } from './RunSession';
 
@@ -73,7 +73,8 @@ export class SpectatorPort {
 
   followView(pid: PlayerId): PlayerView | null {
     if (!this.hasPlayer(pid)) return null;
-    return projectPlayerView(this.session.world, pid);
+    // 確定したシーズンのランは「閉じた」見え方（S9b。RunSession.view と同じ）
+    return this.session.view(pid);
   }
 
   /**

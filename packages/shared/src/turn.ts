@@ -7,7 +7,7 @@ import type { Dir, Locale, Names } from './types';
 import type { Catalog } from './catalog';
 import { nameOf, nextOverreach, overreachStepPoints } from './catalog';
 import { t } from './util';
-import { dirLabel, ownerWaitOpen, seasonClosedView, undecidedStartedTexts } from './observation';
+import { dirLabel, ownerWaitOpen, seasonClosedView, seasonFinalText, seasonFinalView, undecidedStartedTexts } from './observation';
 import type { PlayerView } from './view';
 
 export type TurnState = 'your_turn' | 'waiting_others' | 'at_camp' | 'expedition_ended' | 'run_ended';
@@ -418,6 +418,10 @@ function statusName(obs: Observation, id: string): string {
 /** 状態と、ゲームがあなたに何を待っているか */
 export function turnStateOf(view: PlayerView, expeditionEndedNow: boolean): { state: TurnState; awaiting: Awaiting } {
   if (view.status === 'ended' || view.status === 'dead') return { state: 'run_ended', awaiting: 'nothing' };
+  // 確定したシーズンのラン（S9b）: もう何も待たない（状態の名前は今のまま）
+  if (seasonFinalView(view)) {
+    return { state: view.status === 'at_camp' ? (expeditionEndedNow ? 'expedition_ended' : 'at_camp') : view.status === 'your_turn' ? 'your_turn' : 'waiting_others', awaiting: 'nothing' };
+  }
   if (view.status === 'at_camp') {
     if (expeditionEndedNow) return { state: 'expedition_ended', awaiting: 'nothing' };
     // 目的を持ち主が握っている（S8 §54.4）: 次の遠征はあなたの選ぶことではない
@@ -443,6 +447,8 @@ export function turnLine(view: PlayerView, b: TurnBlock, short = false): string 
   const L: Locale = view.locale;
   const x = view.expedition;
   const inExp = x && x.status !== 'ended';
+  // 確定したシーズンのラン（S9b）: 観測の頭の 1 行と同じ
+  if (seasonFinalView(view) && view.status !== 'dead' && view.status !== 'ended') return `▶ ${seasonFinalText(L, view.season!.name)}`;
   if (short && b.state === 'your_turn') return t(L, `▶ あなたの番（手番 ${b.turn_no}）`, `▶ Your turn (turn ${b.turn_no})`);
   if (short && b.state === 'waiting_others') return t(L, '▶ 他のプレイヤーの手番（wait_for_turn で待てる）', '▶ Another player is acting (wait_for_turn)');
   switch (b.state) {

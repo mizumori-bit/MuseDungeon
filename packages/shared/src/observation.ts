@@ -458,6 +458,9 @@ export interface ObsSeason {
   budget: { left: number; limit: number };
   /** 終わりの時刻を過ぎた（新しい遠征は始められない） */
   ended: boolean;
+  /** 結果が確定した（S9b）: このランは、もう命令を受けない。final_text は観測の頭の 1 行 */
+  final?: true;
+  final_text?: string;
   awards?: (SeasonAward & { text: string })[];
   /** まだ報告していない階段と、そのうちまだだれも公開していないもの */
   stairs?: { unreported: number; unpublished: number };
@@ -589,6 +592,16 @@ function fireCountText(L: Locale, n: number, limit: number): string {
 }
 
 /** シーズン（S0。PROTOCOL §9.6）: 予算はいつも、賞と報告していない階段はキャンプでだけ。fireLimit: シーズンで置ける火の数（catalog の rules.seasonFire） */
+/** 確定したシーズンのランの 1 行（S9b。観測の頭・▶ 行・断りの文とそろえる） */
+export function seasonFinalText(L: Locale, name: string): string {
+  return t(L, `このシーズン（${name}）は終わった。このランは、もう命令を受けない。記録は、見返せる。`, `This season (${name}) is over; this run takes no more commands. Its records can be looked back on.`);
+}
+
+/** 結果が確定したシーズンのラン（S9b。サーバーが投影の後に付けた印） */
+export function seasonFinalView(view: PlayerView): boolean {
+  return !!view.season?.final;
+}
+
 export function seasonObs(view: PlayerView, fireLimit?: number): ObsSeason | null {
   const s = view.season;
   if (!s) return null;
@@ -609,6 +622,7 @@ export function seasonObs(view: PlayerView, fireLimit?: number): ObsSeason | nul
   const news = camp ? (s.fireNews ?? []).map((n) => ({ ...n, names: [...n.names], text: t(L, `知らせ: あなたの野営の火（地下${n.depth}階 (${n.x},${n.y})）を ${n.names.join('・')} が使った（支援賞 +${n.names.length}）`, `News: ${n.names.join(', ')} used your campfire (depth ${n.depth} (${n.x},${n.y})) (support +${n.names.length})`) })) : [];
   return {
     id: s.id, name: s.name, budget: { left: Math.max(0, s.budgetLeft), limit: s.budget.limit }, ended: s.ended,
+    ...(s.final ? { final: true as const, final_text: seasonFinalText(L, s.name) } : {}),
     ...(camp ? { awards: s.awards.map((a) => ({ ...a, leader: a.leader ? { ...a.leader } : null, text: supportText(a) })), stairs: { unreported: s.unreported, unpublished: s.unpublished }, spots: { unreported: s.spotsUnreported ?? 0, unpublished: s.spotsUnpublished ?? 0 } } : {}),
     ...(news.length ? { fire_news: news } : {}),
     ...(fires.length ? { fires, fires_text: t(L, `あなたの野営の火: ${fires.map(fireText).join('／')}`, `Your campfires: ${fires.map(fireText).join(' / ')}`) } : {}),
@@ -2522,6 +2536,8 @@ function abilityHandlerOf(catalog: Catalog, id: string): string | undefined {
  * 「できること」（S8 §54.4 の 2: 握られた項目の行は出さない。断られる行を出さない: §48.11・§49.6）。キャンプで目的を握られているときは、待つ行を 1 つ
  */
 function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): string[] {
+  // 確定したシーズンのラン（S9b）: どの命令も断られるので、行を出さない
+  if (seasonFinalView(view)) return [];
   const lines = buildValidActionsRaw(view, catalog, x);
   const hold = view.directive?.hold ?? [];
   if (!hold.length) return lines;
@@ -2533,7 +2549,7 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
   if (hold.includes('perks')) out = out.filter(drop(/^(choose_perk|choose_boon)\b/));
   // 決めていないものが残っている（S9a §57.3 の 1）: 目的を握られていなければ、最初の start_expedition の行に注意を添える（行ごとに繰り返さない）
   const und = directiveUndecided(view, catalog);
-  if (und && !hold.includes('objective')) {
+  if (und && choicePending(und) && !hold.includes('objective')) {
     const i = out.findIndex((l) => /^start_expedition\b/.test(l));
     if (i >= 0) out = [...out.slice(0, i), out[i] + undecidedStartNote(L, und), ...out.slice(i + 1)];
   }
@@ -2548,7 +2564,7 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
 
 /** シーズンの予算を使い切ったか、終わりの時刻を過ぎた（新しい遠征は始められない） */
 export function seasonClosedView(view: PlayerView): boolean {
-  return !!view.season && (view.season.budgetLeft <= 0 || view.season.ended);
+  return !!view.season && (view.season.budgetLeft <= 0 || view.season.ended || !!view.season.final);
 }
 
 /**
@@ -2625,14 +2641,20 @@ export function undecidedItems(view: PlayerView, catalog: Catalog | undefined): 
   return out.perk || out.boon || out.gear ? out : null;
 }
 
-/** 決めていないものの名前（「特技・加護・装備」。始める前の注意と、始めた後の「変化」） */
-function undecidedNames(L: Locale, u: Omit<DirectiveUndecided, 'text'>): string[] {
-  return [u.perk ? t(L, '特技', 'a perk') : '', u.boon ? t(L, '加護', 'a boon') : '', u.gear ? t(L, '装備', 'gear') : ''].filter(Boolean);
+/** 特技・加護の保留があるか（S9b: AI を待たせる・知らせるのは、これだけ。装備の分は待たせない・くり返し知らせない） */
+function choicePending(u: Omit<DirectiveUndecided, 'text'> | null): boolean {
+  return !!u && (!!u.perk || !!u.boon);
+}
+
+/** 特技・加護の名前（「特技・加護」。始める前の注意と、始めた後の「変化」） */
+function choiceNames(L: Locale, u: Omit<DirectiveUndecided, 'text'>): string[] {
+  return [u.perk ? t(L, '特技', 'a perk') : '', u.boon ? t(L, '加護', 'a boon') : ''].filter(Boolean);
 }
 
 /**
- * キャンプの観測の、指図の行の後の 1 行（S9a §57.3 の 1）: 「持ち主が、まだ決めていないもの: 特技（Lv2 の候補 3 つ）」。
- * キャンプで、次の遠征を始められるときだけ（予算切れ・時間切れ・仲間を待つキャンプでは出さない）。無ければ null
+ * キャンプの観測の、指図の行の後の 1 行（S9a §57.3 の 1・S9b）: 特技と加護は「持ち主が、まだ決めていないもの: 特技（Lv2 の候補 3 つ）」。
+ * 装備は、別の言い方で続ける（「持ち物に、身に着けていない装備 N 品（着けるかどうかは、持ち主が決める）」。装備だけのときは「まだ決めていないもの」と言わない）。
+ * キャンプで、次の遠征を始められるときだけ（予算切れ・時間切れ・確定したシーズン・仲間を待つキャンプでは出さない）。無ければ null
  */
 export function directiveUndecided(view: PlayerView, catalog: Catalog | undefined): DirectiveUndecided | null {
   if (view.status !== 'at_camp' || !view.camp || seasonClosedView(view)) return null;
@@ -2642,40 +2664,39 @@ export function directiveUndecided(view: PlayerView, catalog: Catalog | undefine
   const parts = [
     u.perk ? t(L, `特技（Lv${u.perk.level} の候補 ${u.perk.options} つ${u.perk.more ? `。ほかに ${u.perk.more} 回分` : ''}）`, `a perk (Lv${u.perk.level}, ${u.perk.options} options${u.perk.more ? `; ${u.perk.more} more after it` : ''})`) : '',
     u.boon ? t(L, `加護（地下${u.boon.depth}階の大守護者。候補 ${u.boon.options} つ）`, `a boon (warden of depth ${u.boon.depth}; ${u.boon.options} options)`) : '',
-    u.gear ? t(L, `持ち物に、身に着けていない装備 ${u.gear} 品（着けるかどうかは、持ち主が決める）`, `${u.gear} unworn piece${u.gear > 1 ? 's' : ''} of gear in your pack (whether to wear ${u.gear > 1 ? 'them' : 'it'} is your owner's call)`) : '',
   ].filter(Boolean);
-  return { ...u, text: t(L, `持ち主が、まだ決めていないもの: ${parts.join('・')}`, `Not yet decided by your owner: ${parts.join('; ')}`) };
+  const gear = u.gear
+    ? t(L, `持ち物に、身に着けていない装備 ${u.gear} 品（着けるかどうかは、持ち主が決める）`, `${u.gear} unworn piece${u.gear > 1 ? 's' : ''} of gear in your pack (whether to wear ${u.gear > 1 ? 'them' : 'it'} is your owner's call)`)
+    : '';
+  const head = parts.length ? t(L, `持ち主が、まだ決めていないもの: ${parts.join('・')}`, `Not yet decided by your owner: ${parts.join('; ')}`) : '';
+  return { ...u, text: [head, gear].filter(Boolean).join(t(L, '。', '. ')) };
 }
 
-/** 「できること」の start_expedition の行に添える注意（S9a §57.3 の 1。目的を握られていないとき） */
+/** 「できること」の start_expedition の行に添える注意（S9a §57.3 の 1。目的を握られていないとき。S9b: 特技と加護の保留があるときだけ） */
 function undecidedStartNote(L: Locale, u: Omit<DirectiveUndecided, 'text'>): string {
-  const names = undecidedNames(L, u);
-  const choose = !u.gear;
-  return t(L, `（持ち主が${names.join('・')}を${choose ? '選ぶ' : '決める'}前に始めると、${choose ? '選べる' : '決められる'}のは、次のキャンプになる。待つなら、observe か wait_for_turn）`,
-    ` (if you start before your owner decides ${names.join(', ')}, it waits until the next camp; to wait, use observe or wait_for_turn)`);
+  const names = choiceNames(L, u);
+  return t(L, `（持ち主が${names.join('・')}を選ぶ前に始めると、選べるのは、次のキャンプになる。待つなら、observe か wait_for_turn）`,
+    ` (if you start before your owner chooses ${names.join(' or ')}, the choice waits until the next camp; to wait, use observe or wait_for_turn)`);
 }
 
 /**
- * 決めていないものを残して遠征を始めた直後の「変化」（S9a §57.3 の 1）: 「特技を選ばないまま、遠征を始めた（持ち主が選べるのは、次のキャンプ）」。
+ * 特技・加護を選ばないまま遠征を始めた直後の「変化」（S9a §57.3 の 1。S9b: 装備の分は出さない）: 「特技を選ばないまま、遠征を始めた（持ち主が選べるのは、次のキャンプ）」。
  * 始めた後の今の状態から作る（握った特技と加護は、遠征の間はだれも選べないので、始めたときのまま残っている）
  */
 export function undecidedStartedTexts(view: PlayerView, catalog: Catalog | undefined): string[] {
   const u = undecidedItems(view, catalog);
-  if (!u) return [];
+  if (!u || !choicePending(u)) return [];
   const L = view.locale;
-  const out: string[] = [];
-  const pb = undecidedNames(L, { ...(u.perk ? { perk: u.perk } : {}), ...(u.boon ? { boon: u.boon } : {}) });
-  if (pb.length) out.push(t(L, `${pb.join('・')}を選ばないまま、遠征を始めた（持ち主が選べるのは、次のキャンプ）`, `Started the expedition without ${pb.join(' or ')} chosen (your owner can choose only at the next camp)`));
-  if (u.gear) out.push(t(L, `身に着けていない装備 ${u.gear} 品を持ったまま、遠征を始めた（着けるかどうかを持ち主が決められるのは、次のキャンプ）`, `Started the expedition carrying ${u.gear} unworn piece${u.gear > 1 ? 's' : ''} of gear (your owner can decide on ${u.gear > 1 ? 'them' : 'it'} only at the next camp)`));
-  return out;
+  const pb = choiceNames(L, u);
+  return [t(L, `${pb.join('・')}を選ばないまま、遠征を始めた（持ち主が選べるのは、次のキャンプ）`, `Started the expedition without ${pb.join(' or ')} chosen (your owner can choose only at the next camp)`)];
 }
 
 /**
- * 持ち主が、決めていないものを決めるのを待てる（S9a: wait_for_turn）。キャンプで、目的は握られていない（握られていれば ownerWaitOpen の待ち方）が、
- * 握られた項目に決めていないものが残っている
+ * 持ち主が、特技・加護を選ぶのを待てる（S9a: wait_for_turn。S9b: 装備の分では待たせない）。キャンプで、目的は握られていない
+ * （握られていれば ownerWaitOpen の待ち方）が、握られた特技・加護の保留が残っている
  */
 export function ownerUndecidedWaitOpen(view: PlayerView, catalog: Catalog | undefined): boolean {
-  return !ownerWaitOpen(view) && !view.directive?.hold.includes('objective') && !!directiveUndecided(view, catalog);
+  return !ownerWaitOpen(view) && !view.directive?.hold.includes('objective') && choicePending(directiveUndecided(view, catalog));
 }
 
 function buildValidActionsRaw(view: PlayerView, catalog: Catalog, x: VAInput): string[] {
@@ -3085,6 +3106,8 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
   if (obs.status === 'at_camp') {
     // キャンプ専用の形: 成績と候補だけ
     lines.push(`[seq ${obs.seq} | ${t(L, 'キャンプ', 'Camp')} | HP ${s.hp}/${s.max_hp} | Lv${s.level} | ${statusText.at_camp[L === 'en' ? 1 : 0]}]`);
+    // 確定したシーズンのラン（S9b）: 頭に 1 行
+    if (obs.season?.final_text) lines.push(obs.season.final_text);
     // 指図（S8 §54.4 の 1）と、持ち主がまだ決めていないもの（S9a §57.3 の 1）
     if (s.directive) lines.push(s.directive.text);
     if (s.directive?.undecided) lines.push(s.directive.undecided.text);
@@ -3126,7 +3149,9 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
     if (obs.camp?.version_note) lines.push(obs.camp.version_note);
     if (obs.alerts.length) lines.push('!! ' + obs.alerts.map((a) => a.text).join(' / '));
     const seasonClosed = obs.season && (obs.season.budget.left <= 0 || obs.season.ended);
-    if (obs.camp && seasonClosed) {
+    if (obs.camp && obs.season?.final) {
+      // 確定したシーズン（S9b）: 頭の 1 行のとおり。報告・引退もできないので、終わりの文は出さない
+    } else if (obs.camp && seasonClosed) {
       lines.push(obs.season!.budget.left <= 0
         ? t(L, 'このシーズンの行動予算を使い切った。新しい遠征は始められない（報告と引退はできる。ここで終えてよい）', 'You have used up this season\'s budget. No more expeditions (you can still report and retire; it is fine to stop here)')
         : t(L, 'シーズンは終わりの時刻を過ぎた。新しい遠征は始められない（報告と引退はできる。ここで終えてよい）', 'The season has passed its end time. No more expeditions (you can still report and retire; it is fine to stop here)'));
@@ -3155,6 +3180,8 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
   const floorText = s.floor ? t(L, `地下${s.floor.depth}階 ${s.floor.biome_name}${ftText}`, `Depth ${s.floor.depth} ${s.floor.biome_name}${ftText}`) : '-';
   const posText = s.pos ? t(L, `位置(${s.pos.x},${s.pos.y})`, `pos(${s.pos.x},${s.pos.y})`) : '';
   lines.push(`[seq ${obs.seq} | ${floorText} | HP ${s.hp}/${s.max_hp} | Lv${s.level} | ${posText ? posText + ' | ' : ''}${statusText[obs.status][L === 'en' ? 1 : 0]}]`);
+  // 確定したシーズンのラン（S9b）: 頭に 1 行
+  if (obs.season?.final_text) lines.push(obs.season.final_text);
   // 指図（S8 §54.4 の 1）: 迷宮の中でも 1 行
   if (s.directive) lines.push(s.directive.text);
   // シーズン（S0 §9.6）: 迷宮の中は予算の残りだけ（順位は出さない）

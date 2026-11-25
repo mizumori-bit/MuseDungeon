@@ -2,7 +2,7 @@
 // 始めた直後の「変化」・迷宮の中の短い指図の行・wait_for_turn の待ち）・持ち主の一覧の行・確定したシーズンのランは命令を受けない・
 // 新しいシーズンを開くと前のシーズンが確定する・地図を書き足す品のときだけの文
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -12,9 +12,10 @@ import { buildCatalog, loadContent } from '@muse/content';
 import { ENGINE_VERSION } from '@muse/engine';
 import { createMcpServer, loadConfig, RunSession, SeasonService, SeasonStore, SessionManager } from '@muse/server';
 import type { PlayerPort } from '@muse/server';
-import { applyEvent, EVENT_VERSION } from '@muse/shared';
+import { applyEvent, EVENT_VERSION, ownerUndecidedWaitOpen, ownerWaitOpen, projectPlayerView } from '@muse/shared';
 import type { Command, Entity, GameEvent, World } from '@muse/shared';
 import { rulesText } from '../../server/src/mcp/rules';
+import { ownerView } from '../../server/src/session/OwnerPort';
 import { seasonCli } from '../src/season';
 import { arena } from './v33duel';
 
@@ -123,19 +124,21 @@ describe('S9a §57.3 の 1: what the owner has not decided yet, by name', () => 
     const armor = r.port.view().inventory.find((i) => i.equipped === 'armor')!;
     expect(errCode(await owner(r, { type: 'unequip', slot: armor.slot }))).toBe('ok');
     const o = r.port.observeWithTurn('observed');
-    expect(o.observation.self.directive?.undecided).toEqual({ gear: 1, text: '持ち主が、まだ決めていないもの: 持ち物に、身に着けていない装備 1 品（着けるかどうかは、持ち主が決める）' });
+    expect(o.observation.self.directive?.undecided).toEqual({ gear: 1, text: '持ち物に、身に着けていない装備 1 品（着けるかどうかは、持ち主が決める）' });
+    // 装備だけのときは「まだ決めていないもの」と言わない（S9b）
+    expect(o.text).not.toContain('まだ決めていないもの');
     // 目的を握られているので、start_expedition の行は無い（注意も無い）
     expect(o.observation.valid_actions.some((l) => l.startsWith('start_expedition'))).toBe(false);
     const row = m.ownerRuns({ local: true }).runs.find((x) => x.runId === r.session.runId)!;
     expect(row.undecided).toEqual(o.observation.self.directive?.undecided);
     // 英語
     r.session.world.players[r.playerId].locale = 'en';
-    expect(r.port.observeWithTurn('observed').observation.self.directive?.undecided?.text).toBe('Not yet decided by your owner: 1 unworn piece of gear in your pack (whether to wear it is your owner\'s call)');
+    expect(r.port.observeWithTurn('observed').observation.self.directive?.undecided?.text).toBe('1 unworn piece of gear in your pack (whether to wear it is your owner\'s call)');
     r.session.world.players[r.playerId].locale = 'ja';
-    // 持ち主が出撃させる: 装備を握っていれば、始めた直後に 1 回
+    // 持ち主が出撃させる: 装備の分は、始めた直後の「変化」に出さない（S9b）
     expect(errCode(await owner(r, { type: 'start_expedition', offer: 1 }))).toBe('ok');
     const ch = r.port.observeWithTurn('turn_arrived').turn.changes.map((c) => c.text);
-    expect(ch).toContain('身に着けていない装備 1 品を持ったまま、遠征を始めた（着けるかどうかを持ち主が決められるのは、次のキャンプ）');
+    expect(ch.some((x) => x.includes('身に着けていない装備'))).toBe(false);
     expect(r.port.observeWithTurn('observed').observation.self.directive?.text).toBe('指図: 目的・装備は、持ち主（キャンプで）');
     // 何も握っていないランは、今までどおり
     const n = await campRun(m, 's9a-undecided-3');
@@ -263,29 +266,40 @@ describe('S9a §57.3 の 4: a finalized season\'s runs take no commands', () => 
     }
   });
 
-  it('opening a new season with the tool finalizes the others first and says so; a duplicate id closes nothing', () => {
+  it('opening a new season: without --close-previous nothing happens; with it the others are finalized first and named; a duplicate id closes nothing (S9b)', () => {
     const dir = mkdtempSync(join(tmpdir(), 'muse-s9a-open-'));
     try {
       const sdir = join(dir, 'seasons');
       const ends = new Date(Date.now() + 86_400_000).toISOString();
       const out: string[] = [];
       const log = (s: string) => out.push(s);
-      expect(seasonCli(content, { sub: 'open', dir: sdir, id: 's_old', seed: 'a', ends }, log)).toBe(0);
-      expect(seasonCli(content, { sub: 'open', dir: sdir, id: 's_done', seed: 'b', ends }, log)).toBe(0);
-      // s_old は確定していない・s_done は確定していた（s_done を開いたときに s_old は確定する）
-      expect(out.some((l) => l.startsWith('前のシーズン s_old「s_old」を確定した'))).toBe(true);
-      expect(existsSync(join(sdir, 's_old', 'result.json'))).toBe(true);
       const svc = () => new SeasonService(new SeasonStore(sdir), { engineVersion: ENGINE_VERSION, contentVersion: content.version }, () => null, Date.now, 10, content.lists.seasonTitles);
+      expect(seasonCli(content, { sub: 'open', dir: sdir, id: 's_old', seed: 'a', ends, name: '古い' }, log)).toBe(0);
+      // --close-previous が無い: 何もせずに 1 で終える（名前と ID を並べる）
+      out.length = 0;
+      expect(seasonCli(content, { sub: 'open', dir: sdir, id: 's_done', seed: 'b', ends }, log)).toBe(1);
+      expect(out).toContain('開催中のシーズン s_old「古い」がある。新しいシーズンを開くと、それを確定する（元に戻せない）。よければ --close-previous を付ける');
+      expect(svc().isFinal('s_old')).toBe(false);
+      expect(existsSync(join(sdir, 's_done'))).toBe(false);
+      // 付ける: 確定してから開く
+      out.length = 0;
+      expect(seasonCli(content, { sub: 'open', dir: sdir, id: 's_done', seed: 'b', ends, closePrevious: true }, log)).toBe(0);
+      expect(out.some((l) => l.startsWith('前のシーズン s_old「古い」を確定した'))).toBe(true);
+      expect(existsSync(join(sdir, 's_old', 'result.json'))).toBe(true);
       expect(svc().isFinal('s_old')).toBe(true);
       expect(svc().isFinal('s_done')).toBe(false);
       out.length = 0;
       // 同じ ID: 何も確定しない
-      expect(seasonCli(content, { sub: 'open', dir: sdir, id: 's_done', seed: 'c', ends }, log)).toBe(1);
+      expect(seasonCli(content, { sub: 'open', dir: sdir, id: 's_done', seed: 'c', ends, closePrevious: true }, log)).toBe(1);
       expect(svc().isFinal('s_done')).toBe(false);
       expect(out.some((l) => l.includes('確定した'))).toBe(false);
-      // 3 つ目: s_done だけを確定する（s_old は確定し直さない）
+      // 3 つ目: s_done だけを確定する（s_old は確定し直さない）。サーバーの印に生きたプロセス（このテストのプロセス）があれば注意を 1 行
+      const runsDir = join(dir, 'runs');
+      mkdirSync(runsDir, { recursive: true });
+      writeFileSync(join(runsDir, '.server.lock'), JSON.stringify({ pid: process.pid, startedAt: Date.now(), port: 7999 }));
       const oldResult = readFileSync(join(sdir, 's_old', 'result.json'), 'utf8');
-      expect(seasonCli(content, { sub: 'open', dir: sdir, id: 's_new', seed: 'd', ends }, log)).toBe(0);
+      expect(seasonCli(content, { sub: 'open', dir: sdir, id: 's_new', seed: 'd', ends, closePrevious: true, runsDir }, log)).toBe(0);
+      expect(out.some((l) => l.startsWith('注意: 記録の置き場所の印（.server.lock）に、生きているプロセス（pid '))).toBe(true);
       expect(out.filter((l) => l.startsWith('前のシーズン')).map((l) => l.split('「')[0])).toEqual(['前のシーズン s_done']);
       expect(readFileSync(join(sdir, 's_old', 'result.json'), 'utf8')).toBe(oldResult);
       expect(svc().isFinal('s_done')).toBe(true);
@@ -294,7 +308,111 @@ describe('S9a §57.3 の 4: a finalized season\'s runs take no commands', () => 
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('a season with unreadable records stops open: nothing is finalized or opened (S9b)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'muse-s9a-broken-'));
+    try {
+      const sdir = join(dir, 'seasons');
+      const ends = new Date(Date.now() + 86_400_000).toISOString();
+      const out: string[] = [];
+      const log = (s: string) => out.push(s);
+      expect(seasonCli(content, { sub: 'open', dir: sdir, id: 's_ok', seed: 'a', ends }, log)).toBe(0);
+      expect(seasonCli(content, { sub: 'open', dir: sdir, id: 's_bad', seed: 'b', ends, closePrevious: true }, log)).toBe(0);
+      writeFileSync(join(sdir, 's_bad', 'result.json'), '{ broken');
+      out.length = 0;
+      expect(seasonCli(content, { sub: 'open', dir: sdir, id: 's_next', seed: 'c', ends, closePrevious: true }, log)).toBe(1);
+      expect(out.some((l) => l.startsWith('シーズン s_bad の記録が読めない: ') && l.includes('result.json'))).toBe(true);
+      expect(out.some((l) => l.includes('を確定した'))).toBe(false);
+      expect(existsSync(join(sdir, 's_next'))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
+
+describe('S9b: a finalized season\'s run looks closed (its end time still ahead)', () => {
+  it('the head line, no actions, season.ended true, no waits; wait_for_turn returns at once; the owner view says the same', async () => {
+    const m = manager();
+    openSeason(m, 's9bf');
+    const a = await seasonRun(m, 'Fa', 's9bf');
+    const b = await seasonRun(m, 'Fb', 's9bf');
+    expect(errCode(await a.session.submit(a.playerId, { type: 'set_directive', hold: ['objective', 'perks'] }, { source: 'owner' }))).toBe('ok');
+    offerPerks(a, 2);
+    expect(errCode(await act(b.port, { type: 'start_expedition', offer: 1 }))).toBe('ok');
+    expect(m.seasons.get('s9bf')!.def.endsAt).toBeGreaterThan(Date.now());
+    // 確定する前: 待つ・決めていないもの・「できること」がある
+    expect(r0(a).observation.self.directive?.undecided).toBeDefined();
+    expect(r0(a).turn.owner_wait).toBeDefined();
+    m.seasons.finalize(m.seasons.get('s9bf')!, 'operator');
+    const head = 'このシーズン（試しs9bf）は終わった。このランは、もう命令を受けない。記録は、見返せる。';
+    for (const r of [a, b]) {
+      const o = r.port.observeWithTurn('observed');
+      expect(o.observation.season?.ended).toBe(true);
+      expect(o.observation.season?.final).toBe(true);
+      expect(o.observation.valid_actions).toEqual([]);
+      expect(o.text.split('\n')[1]).toBe(head);
+      expect(o.text).toContain(`▶ ${head}`);
+      expect(o.turn.awaiting).toBe('nothing');
+      expect(o.turn.owner_wait).toBeUndefined();
+      expect(o.text).not.toContain('報告と引退はできる');
+    }
+    const oa = r0(a);
+    expect(oa.observation.self.directive?.undecided).toBeUndefined();
+    expect(oa.text).not.toContain('wait_for_turn（待つ');
+    expect(ownerWaitOpen(a.port.view())).toBe(false);
+    expect(ownerUndecidedWaitOpen(a.port.view(), catalog)).toBe(false);
+    // 持ち主の口の表示も同じ
+    const ov = ownerView(a.session, a.playerId);
+    expect(ov.waiting).toBe(false);
+    expect(ov.observation.season?.final).toBe(true);
+    expect(ov.observation.valid_actions).toEqual([]);
+    expect(ov.text).toContain(head);
+    // 英語
+    a.session.world.players[a.playerId].locale = 'en';
+    expect(r0(a).observation.season?.final_text).toBe('This season (試しs9bf) is over; this run takes no more commands. Its records can be looked back on.');
+    a.session.world.players[a.playerId].locale = 'ja';
+    // MCP の wait_for_turn: すぐ返る
+    const [x, y] = InMemoryTransport.createLinkedPair();
+    const server = createMcpServer({ manager: m, boundToken: null, briefMap: true, clientLabel: 'test' });
+    await server.connect(x);
+    const client = new Client({ name: 's9b', version: '0' });
+    await client.connect(y);
+    const t0 = Date.now();
+    const w = (await client.callTool({ name: 'wait_for_turn', arguments: { player_token: a.token, timeout_s: 10 } })) as unknown as { structuredContent: { turn: { reason: string } } };
+    expect(Date.now() - t0).toBeLessThan(3000);
+    expect(w.structuredContent.turn.reason).toBe('observed');
+    await client.close();
+    m.closeAll();
+  });
+
+  it('equipment only: wait_for_turn returns at once and nothing about gear appears in the changes after starting (S9b)', async () => {
+    const m = manager();
+    const [x, y] = InMemoryTransport.createLinkedPair();
+    const server = createMcpServer({ manager: m, boundToken: null, briefMap: true, clientLabel: 'test' });
+    await server.connect(x);
+    const client = new Client({ name: 's9b-g', version: '0' });
+    await client.connect(y);
+    const nr = (await client.callTool({ name: 'new_run', arguments: { character_name: 'Ug' } })) as unknown as { structuredContent: { run_id: string; player_token: string; player_id: string } };
+    const { run_id, player_token, player_id } = nr.structuredContent;
+    const s = m.get(run_id)!;
+    expect(errCode(await s.submit(player_id, { type: 'set_directive', hold: ['loadout'] }, { source: 'owner' }))).toBe('ok');
+    const armor = projectPlayerView(s.world, player_id).inventory.find((i) => i.equipped === 'armor')!;
+    expect(errCode(await s.submit(player_id, { type: 'unequip', slot: armor.slot }, { source: 'owner' }))).toBe('ok');
+    type T = { structuredContent: { turn: { reason: string; changes: { text: string }[] }; observation: { valid_actions: string[]; self: { directive?: { undecided?: { gear?: number } } } } } };
+    const t0 = Date.now();
+    const w = (await client.callTool({ name: 'wait_for_turn', arguments: { player_token, timeout_s: 10 } })) as unknown as T;
+    expect(Date.now() - t0).toBeLessThan(3000);
+    expect(w.structuredContent.observation.self.directive?.undecided?.gear).toBe(1);
+    // 注意は付かない（特技と加護だけ）
+    expect(w.structuredContent.observation.valid_actions.some((l) => l.includes('持ち主が'))).toBe(false);
+    const st = (await client.callTool({ name: 'start_expedition', arguments: { player_token, offer: 1 } })) as unknown as T;
+    expect(st.structuredContent.turn.changes.some((c) => c.text.includes('身に着けていない装備'))).toBe(false);
+    await client.close();
+    m.closeAll();
+  });
+});
+
+const r0 = (r: Run) => r.port.observeWithTurn('observed');
 
 describe('S9a §57.3 の 5: the map sentence only for items that write the map', () => {
   it('a healing potion says nothing about the map; a loose page and an unidentified mapping scroll do', async () => {

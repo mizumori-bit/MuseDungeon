@@ -12,7 +12,7 @@ import type {
 import {
   DIRECTIVE_ITEMS, actionError, applyEvent, buildExpeditionReport, canonicalHash, guardianDisplayName, compareReports, emptyWorld, filterEventsForPlayer, FREE_COMMANDS, MACRO_COMMANDS,
   CHECKPOINT_EVERY, checkpointCamp, checkpointStep, monsterInView,
-  fleeOptionsText, fleeRiskText, macroNext, macroProbe, macroStart, macroStopError, narrate, projectPlayerView, publicStairsAt, riskText, fightRiskStop, fightThreats, threatEstimate, seasonReportable, seasonReportableSpots, selfTurnMarks, t,
+  fleeOptionsText, fleeRiskText, macroNext, macroProbe, macroStart, macroStopError, narrate, projectPlayerView, publicStairsAt, riskText, fightRiskStop, fightThreats, threatEstimate, seasonReportable, seasonReportableSpots, seasonFinalText, selfTurnMarks, t,
 } from '@muse/shared';
 import type { SeasonHooks } from '../season/SeasonService';
 import type { ServerConfig } from '../config';
@@ -643,7 +643,10 @@ export class RunSession {
   }
 
   view(pid: PlayerId): PlayerView {
-    return projectPlayerView(this.world, pid);
+    const v = projectPlayerView(this.world, pid);
+    // 確定したシーズンのラン（S9b）: World の写しは確定の前のまま（取り込みも止めた）なので、見え方だけ「閉じた」にする（engine と World は変えない）
+    if (v.season && this.seasonFinal()) v.season = { ...v.season, ended: true, final: true };
+    return v;
   }
 
   isTurn(pid: PlayerId): boolean {
@@ -875,8 +878,7 @@ export class RunSession {
   private seasonFinalRefusal(pid: PlayerId): ActionError | null {
     if (!this.seasonFinal()) return null;
     const L = this.world.players[pid]?.locale ?? 'ja';
-    return actionError('season_ended',
-      t(L, `このシーズン（${this.world.meta.season!.name}）は終わった。このランは、もう命令を受けない。記録は、見返せる。`, `This season (${this.world.meta.season!.name}) is over; this run takes no more commands. Its records can be looked back on.`),
+    return actionError('season_ended', seasonFinalText(L, this.world.meta.season!.name),
       t(L, '巻き戻し・シーズンの結果で見返す。新しく遊ぶなら、開催中のシーズンか、シーズンでないランで。', 'Look back with the rewind or the season results. To play on, join a running season or start a run outside seasons.'));
   }
 

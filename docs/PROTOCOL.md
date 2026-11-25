@@ -1169,7 +1169,7 @@ S3f の `seq_resume { next }`（`player: null`）も同じ: 起動時の再生�
 
 ### 9.1 シーズンと参加
 
-- **開く**: 運用者が `npm.cmd run season -- open --id <id> --seed <seed> --ends "<ISO 8601 の時刻>" [--name <名前>] [--budget 3000]`（PowerShell では `npm` でなく `npm.cmd` と書き、カンマや `+` を含む値は引用符でくくる。`npm run` だと名前付きの引数が消える。道具は、使われなかった引数があればそう知らせる）。定義はサーバーの記録の置き場所の `seasons/<id>/season.json`（既定は `runs/seasons`。`MUSE_SEASONS_DIR` で変えられる）。動いているサーバーは、知らない ID を聞かれたときに読み直すので、起動し直さなくてよい。
+- **開く**: 運用者が `npm.cmd run season -- open --id <id> --seed <seed> --ends "<ISO 8601 の時刻>" [--name <名前>] [--budget 3000] [--close-previous]`（確定していないほかのシーズンがあれば、`--close-previous` が無いと何もせずに 1 で終える。付ければ先に確定してから開く。記録が読めないシーズンがあれば開かない。§9.14 の「S9b」。PowerShell では `npm` でなく `npm.cmd` と書き、カンマや `+` を含む値は引用符でくくる。`npm run` だと名前付きの引数が消える。道具は、使われなかった引数があればそう知らせる）。定義はサーバーの記録の置き場所の `seasons/<id>/season.json`（既定は `runs/seasons`。`MUSE_SEASONS_DIR` で変えられる）。動いているサーバーは、知らない ID を聞かれたときに読み直すので、起動し直さなくてよい。
   - `SeasonDef { id, name, seed, engineVersion, contentVersion, budget, endsAt, openedAt }`。`engineVersion`・`contentVersion` は開いたときの版。サーバーの版と違えば、そのシーズンのランは始められない（SEASON.md §2.1: 開いている間、版は変えない）。
   - ほかに `season -- list`・`season -- standings --id`・`season -- close --id`（すぐ確定する）・`season -- wardens --seeds "a,b,c"`（シードごとの地下 5 階の大守護者の種族と装甲の目安。§2.8 のシード選び）。
 - **招く**（S0a。SEASON.md §4.1）: 運用者が `npm.cmd run season -- invite --id <id> --name <表示名> [--profile-token <今あるトークン>]`。
@@ -1520,4 +1520,9 @@ SlayOpening { turns: number; dealt: number; hitTurns: number; taken: number }
   8. 運用の道具 `season -- open` は、確定していないシーズンがほかにあれば、**先に確定してから**開く（`close` と同じ処理。理由は `operator`。記録が読めないシーズンは確定しない）。何を確定したかを出力に出す。同じ ID のシーズンがあれば、何も確定せずに断る。サーバーを止めてから使う（`close` と同じ）。
   9. 地図を書き足す品（効果 `map` を持つ品。地図の巻物・残り頁。`CatalogItem.maps`）を使ったときだけ、結果の文に「地形が地図に載った（新しく N マス…）」か「新しく地図に載った地形は無かった」を添える。品は使う前の持ち物から引く（未鑑定で使ったなら、使って分かった種類から）。回復の薬など、ほかの品を使った手番に出た `knowledge_updated`（視界の変わらない知識の更新）では出さない。
   10. 規則: `directive` と `season` の話題に、それぞれ 1 項目（日本語と英語）。
+- **S9b（S9a の検査の指摘の直し。版は変えていない）**: 上の S9a の 1・2・3・5・7・8 を、次のとおりに改める。
+  1. **確定したシーズンのランの見え方**: World のシーズンの写しは確定の前のまま（取り込みも止めた）なので、サーバーが投影の後に `PlayerView.season.final: true`・`ended: true` を付ける（`RunSession.view`。観戦の追従・持ち主の口も同じ）。観測は、頭に 1 行「このシーズン（名前）は終わった。このランは、もう命令を受けない。記録は、見返せる。」（`season.final`・`season.final_text`。日英）・`valid_actions` は空・▶ 行も同じ文・`turn.awaiting` は `nothing`。決めていないもの・待つ行・`owner_wait` は出さない。`wait_for_turn` は、待たずにすぐ返す。キャンプの「新しい遠征は始められない（報告と引退はできる…）」の文は出さない（報告も引退もできないので）。
+  2. **装備の分は、AI を待たせない・くり返し知らせない**: `wait_for_turn` の新しい待ち（目的を握られていないキャンプ）は、特技と加護の保留があるときだけ（装備だけなら、今までどおりすぐ返る）。「できること」の `start_expedition` の注意も、特技と加護の保留があるときだけ（「持ち主が特技・加護を選ぶ前に始めると、選べるのは、次のキャンプになる…」）。始めた直後の「変化」も、特技と加護だけ（装備の行は出さない）。キャンプの 1 行は、特技・加護を「持ち主が、まだ決めていないもの: …」、装備は「持ち物に、身に着けていない装備 N 品（着けるかどうかは、持ち主が決める）」と続ける（装備だけのときは「まだ決めていないもの」と言わない）。`self.directive.undecided` の形は変えない（`gear` は別の項目）。持ち主の画面の 1 行と出撃の確かめの窓は、装備も出す。
+  3. **`season -- open`**: 確定していないほかのシーズンがあれば、その名前と ID を並べ（「開催中のシーズン s3「…」がある。新しいシーズンを開くと、それを確定する（元に戻せない）。よければ --close-previous を付ける」）、**`--close-previous` が付いていなければ、何もせずに 1 で終える**。付いていれば、確定してから開く。そのとき、ランの記録の置き場所の `.server.lock` に生きているプロセスがあれば、確定の前に注意を 1 行出す（止めはしない）。**記録が読めないシーズンがあれば、何も確定せず・開かずに 1 で終える**（どのシーズンの、どのファイルかを出す）。`--close-previous` は値を取らない引数（PowerShell では `npm.cmd run season -- open … --close-previous`。`npm run` が名前付きの引数を消すと、付いていない扱いになり、開かない）。
+  4. 人間の画面: シーズンの一覧を読み込むまでは、シーズンのランを「出撃」のランの一覧に出さない（確定したランが、読み込みの前の一瞬だけ出ていた）。
 - **pilot**: 持ち主が目的を握るランでは、pilot の `camp.auto_start` を `null` にする（pilot は `held_by_owner` を知らないので、出発を試みては断られ、数秒で自分を止める。pilot の README）。

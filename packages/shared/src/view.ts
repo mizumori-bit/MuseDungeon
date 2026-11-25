@@ -254,6 +254,11 @@ export interface PlayerView {
      * 種類は、預けた者か見る者が鑑定済みのときだけ（ほかは外見だけ）
      */
     cache?: SupplyView[]; cacheHidden?: { depth: number; count: number; place: SupplyPlace }[]; supplyTaken?: (SupplyView & { no: number })[]; myDeposits?: SupplyView[]; cacheNews?: SupplyTakenView[];
+    /**
+     * シーズンの結果が確定した（S9b）。World には無い: サーバーが投影の後に付ける（確定したシーズンのランは、命令を受けない。ended も真にする）。
+     * projectPlayerView だけでは付かない
+     */
+    final?: boolean;
   };
   /**
    * 自分の指図（S8。SEASON.md §54.4）: 持ち主が握っている項目・持ち主からの伝言・このランで持ち主が決めた項目。指図の無いランには無い。
