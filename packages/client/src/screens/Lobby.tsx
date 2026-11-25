@@ -1,38 +1,57 @@
-// ロビー: 進行中のラン（観戦・参加・再開）、終了したラン（リプレイ）、リーダーボード、新規ラン。
-import type { LeaderboardEntry, Locale, ProfileRecords, RunListing, SeasonStandingRow, SeasonStandingsResponse, SeasonWatchResponse } from '@muse/shared';
+// ホーム（S8 の H2。SEASON.md §54.7・HUMAN.md §5）: タブ 2 つ。見た目（色・絵・演出）は変えず、何をどこに出すかだけを並べ替えた。
+// 「出撃」（最初に開く。#/）: 今シーズンの自分のラン（持ち主の枠。無ければシーズンの参加）・今シーズンの順位・ほかのラン（畳む: 続きのある自分のラン・
+//   シーズンでないラン・観戦できるラン・新しいラン）。
+// 「記録」（#/records）: シーズンの一覧 → 順位 → 参加者ごとのリプレイ・結果の画面・共有層の出来事・称号・図鑑と実績・過去のラン・リーダーボード。
+// 持ち主のラン（GET /api/owner/runs）は、このブラウザに覚えてあるトークン（プロフィールと、シーズンの招き）ごとに呼んで、ランの ID でまとめる。
+// トークンは見出しでだけ渡し、画面・URL・console に出さない。
+import type { LeaderboardEntry, Locale, OwnerRunRow, ProfileRecords, RunListing, SeasonListing, SeasonStandingRow, SeasonStandingsResponse, SeasonWatchResponse } from '@muse/shared';
 import { endReasonText, kindName, nameOf, objectiveText } from '@muse/shared';
 import { useEffect, useState } from 'preact/hooks';
 import { api, errorText } from '../api';
 import { ErrorBanner, Header, useCatalog, useLocaleRefresh } from '../ui/common';
+import { normName, SeasonSharedFlow, sortStandings, STANDING_SORTS, standingSortName, StandingsTable, type StandingSort } from '../ui/home';
 import { FIRST_EXPEDITION_CHOICES, playerStateLabel, type FirstExpeditionChoice } from '../ui/labels';
-import { fmtTime, getLocale, getPref, getToken, navigate, saveToken, setPref, tr } from '../util';
+import { OwnerRunCard } from '../ui/owner';
+import { fmtTime, getLocale, getPref, getToken, inLocale, navigate, saveToken, setPref, tr } from '../util';
 
-/**
- * 復旧に失敗した理由の文（サーバーの文は「日本語 / English」の 2 つを並べたものがある。伏せた理由など）から、画面の言葉のほうだけ（S3c §33.3 の 3:
- * 日本語と英語が二重に出ていた）。並べていない文は、そのまま
- */
-function reasonIn(reason: string, L: Locale): string {
-  const i = reason.indexOf(' / ');
-  if (i < 0) return reason;
-  return L === 'ja' ? reason.slice(0, i) : reason.slice(i + 3);
-}
+export type HomeTab = 'sortie' | 'records';
 
 function firstChoice(v: string): FirstExpeditionChoice {
   return FIRST_EXPEDITION_CHOICES.find((o) => o.id === v)?.id ?? 'camp';
 }
 
-export function Lobby() {
+/** 持ち主のラン: rows（ランの ID でまとめた行）・token（そのランを返したトークン。無ければ同じ機械から）・mine（外からトークンで認められた = 自分のもの） */
+interface OwnerState { rows: OwnerRunRow[]; token: Record<string, string>; mine: Set<string>; local: boolean }
+
+/** このブラウザに覚えてあるトークン（プロフィールと、シーズンごとの招き）。重ならないように */
+function storedTokens(seasonIds: readonly string[]): string[] {
+  const toks = [getPref('profileToken', ''), ...seasonIds.map((id) => getPref(`seasonToken.${id}`, ''))].filter(Boolean);
+  return [...new Set(toks)];
+}
+
+/** シーズンの並び（開催中 → 確定待ち → 確定。その中は終わりの時刻の新しい順） */
+const SEASON_ORDER: Record<SeasonListing['status'], number> = { open: 0, ended: 1, final: 2 };
+const bySeason = (a: SeasonStandingsResponse, b: SeasonStandingsResponse) => SEASON_ORDER[a.season.status] - SEASON_ORDER[b.season.status] || b.season.endsAt - a.season.endsAt;
+
+export function Lobby({ tab = 'sortie' }: { tab?: HomeTab }) {
   useLocaleRefresh();
   const { catalog, error: catErr } = useCatalog();
   const [runs, setRuns] = useState<RunListing[] | null>(null);
   const [board, setBoard] = useState<LeaderboardEntry[]>([]);
   // シーズン（S0。PROTOCOL §9.8）: 開いている・終わったシーズンの順位の表
   const [seasons, setSeasons] = useState<SeasonStandingsResponse[]>([]);
+  // シーズンの一覧を一度でも読んだか（「ほかのラン」を既定で開くかを、読む前に決めない）
+  const [seasonsLoaded, setSeasonsLoaded] = useState(false);
   // シーズンの参加（S2 §18.1）: 招かれたプロフィールのトークンは、シーズンごとにこのブラウザに残す（画面には伏せて出す。URL・記録には出さない）
   const [seasonTok, setSeasonTok] = useState<Record<string, string>>({});
   const [tokDraft, setTokDraft] = useState<Record<string, string>>({});
-  // 観戦できるラン（S3 §25.1）: 開催中のシーズンのランは、このブラウザに覚えてあるトークンのランか、同じ機械から開いているときだけ
-  const [watch, setWatch] = useState<Record<string, SeasonWatchResponse>>({});
+  // 観戦できるラン（S3 §25.1）: 開催中のシーズンのランは、このブラウザに覚えてあるトークンのランか、同じ機械から開いているときだけ。
+  // withTok: トークンを付けて訊いた（外からなら、返ったランはそのトークンのもの）
+  const [watch, setWatch] = useState<Record<string, SeasonWatchResponse & { withTok: boolean }>>({});
+  // 持ち主のラン（S8 §54.5）
+  const [owner, setOwner] = useState<OwnerState>({ rows: [], token: {}, mine: new Set(), local: false });
+  // プロフィールの記録の直近のラン（自分のランを見分ける。トークンごと）
+  const [recentMine, setRecentMine] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [name, setName] = useState(getPref('name', 'Adventurer'));
   const [classId, setClassId] = useState(getPref('class', 'core:warrior'));
@@ -49,6 +68,11 @@ export function Lobby() {
   const [showRecords, setShowRecords] = useState(false);
   // 称号（S2 §18.2）: プロフィールの表示（/api/profile）から
   const [titles, setTitles] = useState<string[]>([]);
+  // 記録のタブ: 自分だけに絞る・並べ替え（このブラウザに覚える）
+  const [onlyMine, setOnlyMineState] = useState(getPref('records.onlyMine', 'off') === 'on');
+  const [sortBy, setSortByState] = useState<StandingSort>(STANDING_SORTS.find((k) => k === getPref('records.sort', 'adventure')) ?? 'adventure');
+  const setOnlyMine = (v: boolean) => { setPref('records.onlyMine', v ? 'on' : 'off'); setOnlyMineState(v); };
+  const setSortBy = (k: StandingSort) => { setPref('records.sort', k); setSortByState(k); };
   const L = getLocale();
   useEffect(() => {
     if (!profileToken) { setRecords(null); return; }
@@ -56,17 +80,59 @@ export function Lobby() {
     api.profile(profileToken, L).then((p) => setTitles((p.titles ?? []).map((x) => x.name))).catch(() => setTitles([]));
   }, [profileToken, L]);
   const keepProfile = (tok?: string) => { if (tok) { setPref('profileToken', tok); setProfileToken(tok); } };
+  // 自分のラン（記録のタブの「自分だけ」・順位の表の自分の行）: 覚えてあるトークンのプロフィールの直近のラン
+  const tokKey = [profileToken, ...Object.values(seasonTok)].join('\u0000');
+  useEffect(() => {
+    const toks = [...new Set([profileToken, ...Object.values(seasonTok)].filter(Boolean))];
+    if (!toks.length) { setRecentMine([]); return; }
+    Promise.all(toks.map((t) => api.records(t, L).then((r) => r.records.recent.map((x) => x.run_id)).catch(() => [] as string[])))
+      .then((xs) => setRecentMine([...new Set(xs.flat())]));
+  }, [tokKey]);
+
+  /** 持ち主のラン（S8）: トークンなしで 1 回（同じ機械なら全部返る）と、覚えてあるトークンごとに 1 回。ランの ID でまとめる */
+  const refreshOwner = async (seasonIds: readonly string[]) => {
+    const calls: (string | undefined)[] = [undefined, ...storedTokens(seasonIds)];
+    const res = await Promise.all(calls.map((t) => api.ownerRuns(t).then((r) => ({ t, r })).catch(() => null)));
+    const rows = new Map<string, OwnerRunRow>();
+    const token: Record<string, string> = {};
+    const mine = new Set<string>();
+    let local = false;
+    let any = false;
+    for (const x of res) {
+      if (!x) continue;
+      any = true;
+      local = local || x.r.local;
+      for (const row of x.r.runs) {
+        const prev = rows.get(row.runId);
+        if (!prev || row.updatedAt >= prev.updatedAt) rows.set(row.runId, row);
+        // 以後、そのランへの持ち主の呼び出しには、そのランを返したトークンを使う
+        if (x.t && !token[row.runId]) token[row.runId] = x.t;
+        if (x.t && !x.r.local) mine.add(row.runId);
+      }
+    }
+    if (!any) return;
+    const list = [...rows.values()].sort((a, b) => Number(b.waiting) - Number(a.waiting) || b.updatedAt - a.updatedAt);
+    setOwner({ rows: list, token, mine, local });
+  };
 
   const refresh = () => {
     api.runs().then((r) => { setRuns(r); setError(null); }).catch((e) => setError(errorText(e)));
     api.leaderboard().then(setBoard).catch(() => undefined);
-    api.seasons().then((list) => Promise.all(list.map((x) => api.season(x.id)))).then(async (list) => {
+    const seasonsP = api.seasons().then((list) => Promise.all(list.map((x) => api.season(x.id))));
+    seasonsP.then(async (list) => {
       setSeasons(list);
+      setSeasonsLoaded(true);
       const toks = Object.fromEntries(list.map((x) => [x.season.id, getPref(`seasonToken.${x.season.id}`, '')]).filter(([, v]) => v));
       setSeasonTok(toks);
-      const ws = await Promise.all(list.map((x) => api.seasonWatch(x.season.id, toks[x.season.id]).then((r) => [x.season.id, r] as const).catch(() => null)));
-      setWatch(Object.fromEntries(ws.filter((x): x is readonly [string, SeasonWatchResponse] => !!x)));
-    }).catch(() => undefined);
+      // 観戦の口は、シーズンの招きのトークン（無ければプロフィールのトークン）を見出しで
+      const prof = getPref('profileToken', '');
+      const ws = await Promise.all(list.map((x) => {
+        const t = toks[x.season.id] || prof || undefined;
+        return api.seasonWatch(x.season.id, t).then((r) => [x.season.id, { ...r, withTok: !!t }] as const).catch(() => null);
+      }));
+      setWatch(Object.fromEntries(ws.filter((x): x is readonly [string, SeasonWatchResponse & { withTok: boolean }] => !!x)));
+    }).catch(() => setSeasonsLoaded(true));
+    void seasonsP.catch(() => [] as SeasonStandingsResponse[]).then((list) => refreshOwner(list.map((x) => x.season.id)));
   };
   useEffect(() => {
     refresh();
@@ -137,8 +203,6 @@ export function Lobby() {
     delete next[id];
     setSeasonTok(next);
   };
-  /** 名前の横の称号（S2 §18.2。表示だけ） */
-  const titleBadges = (r: SeasonStandingRow) => (r.titles ?? []).map((x, i) => <span key={i} class="tag title" title={x.seasonName}>{L === 'en' ? x.name.en : x.name.ja}</span>);
 
   /** シーズンのラン（S3 §25.1）: 観戦できるか（確定する前は、覚えてあるトークンのランか、同じ機械からだけ）・巻き戻せるか（確定する前は、同じ機械から、ランが終わった後だけ） */
   const canWatch = (r: RunListing) => !r.season || !!watch[r.season]?.runs.some((x) => x.runId === r.runId);
@@ -150,6 +214,29 @@ export function Lobby() {
   const active = (runs ?? []).filter((r) => r.status === 'active');
   const ended = (runs ?? []).filter((r) => r.status === 'ended').sort((a, b) => b.updatedAt - a.updatedAt);
   const classes = catalog ? Object.entries(catalog.classes) : [];
+
+  // ---- 自分のラン・自分の名前（分かる範囲で） ----
+  // このブラウザで遊んでいるラン・外からトークンで認められた持ち主のラン・覚えてあるトークンのプロフィールの直近のラン
+  const myRunIds = new Set<string>([...(runs ?? []).filter((r) => getToken(r.runId)).map((r) => r.runId), ...owner.mine, ...recentMine]);
+  /** そのシーズンのランの参加者の名前（順位の表の名前。観戦の口が返した名前があればそれ、無ければランのプレイヤーの名前） */
+  const participantOf = (r: RunListing): string => (r.season ? watch[r.season]?.runs.find((x) => x.runId === r.runId)?.name : undefined) ?? r.players[0]?.name ?? '';
+  /**
+   * そのシーズンの、自分の行の名前（normName）。持ち主のランのシーズンでの表示名（season.participant）と、順位の表の行のランの ID（runIds）で結ぶ。
+   * どちらも無いときだけ、観戦の口の名前・ランの名前から推す
+   */
+  const myNames = (sid: string, rows: readonly SeasonStandingRow[]): Set<string> => {
+    const out = new Set<string>();
+    for (const row of owner.rows) {
+      if (row.season?.id === sid && row.season.participant && (!owner.local || myRunIds.has(row.runId))) out.add(normName(row.season.participant));
+    }
+    for (const r of rows) if (r.runIds?.some((id) => myRunIds.has(id))) out.add(normName(r.name));
+    if (out.size) return out;
+    const sw = watch[sid];
+    for (const x of sw?.runs ?? []) if ((sw!.withTok && !sw!.local) || myRunIds.has(x.runId)) out.add(normName(x.name));
+    for (const r of runs ?? []) if (r.season === sid && myRunIds.has(r.runId)) out.add(normName(participantOf(r)));
+    for (const row of owner.rows) if (row.season?.id === sid && myRunIds.has(row.runId)) out.add(normName(row.name));
+    return out;
+  };
 
   const playersText = (r: RunListing) => r.players.map((p) => {
     // 進行中のシーズンのラン（S2a）: サーバーが状態・階・レベルを伏せる。名前とシーズンのランであることだけ
@@ -169,7 +256,7 @@ export function Lobby() {
   const boardV1 = board.filter((b) => b.scoreVersion !== 2); // 旧表はサーバーの並び順のまま
 
   const boardRow = (b: LeaderboardEntry, i: number, v2: boolean) => (
-    <tr key={`${b.runId}-${b.playerId}`} class={b.ongoing ? 'ongoing' : ''}>
+    <tr key={`${b.runId}-${b.playerId}`} class={`${b.ongoing ? 'ongoing' : ''} ${myRunIds.has(b.runId) ? 'mine' : ''}`}>
       <td>{i + 1}</td>
       <td>
         {b.name} <span class={`tag ${b.controller.kind}`}>{b.controller.kind === 'agent' ? 'AI' : b.controller.kind === 'unknown' ? tr('不明', 'unknown') : tr('人間', 'human')}</span> <small>{catalog ? kindName(catalog, L, b.classId) : b.classId}</small>
@@ -197,45 +284,283 @@ export function Lobby() {
     return `${tr(`遠征達成 ${done}`, `${done} completed`)} / ${cur}`;
   };
 
-  return (
-    <div class="page">
-      <Header title={tr('ロビー', 'Lobby')} />
-      <ErrorBanner error={error ?? catErr} onClose={() => setError(null)} />
-      <div class="lobby">
-        <section class="panel">
-          <h3>{tr('新しいラン', 'New run')}</h3>
-          <div class="form">
-            <label>{tr('名前', 'Name')}<input value={name} maxLength={32} onInput={(e) => setName((e.target as HTMLInputElement).value)} /></label>
-            <label>{tr('クラス', 'Class')}
-              <select value={classId} onChange={(e) => setClassId((e.target as HTMLSelectElement).value)}>
-                {classes.map(([id, c]) => <option key={id} value={id}>{nameOf(c.name, L, id)}</option>)}
-                {!classes.length && <option value="core:warrior">core:warrior</option>}
-              </select>
-            </label>
-            {catalog?.classes[classId] && <p class="muted">{nameOf(catalog.classes[classId].desc, L, '')}</p>}
-            <label>{tr('モード', 'Mode')}
-              <select value={mode} onChange={(e) => setMode((e.target as HTMLSelectElement).value as 'solo' | 'coop')}>
-                <option value="solo">{tr('ソロ', 'Solo')}</option>
-                <option value="coop">COOP</option>
-              </select>
-            </label>
-            <label>{tr('最初の遠征', 'First expedition')}
-              <select value={objective} onChange={(e) => setObjective(firstChoice((e.target as HTMLSelectElement).value))}>
-                {FIRST_EXPEDITION_CHOICES.map((o) => <option key={o.id} value={o.id}>{L === 'en' ? o.en : o.ja}</option>)}
-              </select>
-            </label>
-            {objective === 'camp' && <p class="muted">{tr('キャンプから始まり、目標の深さ・推奨レベル・条件の違う 3 つの候補から最初の遠征を選ぶ。', 'You start at camp and choose the first expedition from 3 offers with different depths, recommended levels and traits.')}</p>}
-            <label>{tr('シード（任意）', 'Seed (optional)')}<input value={seed} onInput={(e) => setSeed((e.target as HTMLInputElement).value)} /></label>
-            <label>{tr('メッセージ言語', 'Message language')}
-              <select value={locale} onChange={(e) => setLoc((e.target as HTMLSelectElement).value as Locale)}>
-                <option value="ja">日本語</option><option value="en">English</option>
-              </select>
-            </label>
-            <label class="check"><input type="checkbox" checked={legacy} onChange={(e) => setLegacy((e.target as HTMLInputElement).checked)} />{tr('図鑑の知識を引き継ぐ（継承）', 'Inherit codex knowledge (legacy)')}</label>
-            <button class="primary" disabled={busy || !name.trim()} onClick={start}>{tr('冒険を始める', 'Start')}</button>
-          </div>
-        </section>
+  const seasonHead = (s: SeasonListing) => (
+    <>
+      {s.name}（{s.status === 'open' ? tr(`開催中・${fmtTime(s.endsAt)} まで`, `open until ${fmtTime(s.endsAt)}`) : s.status === 'ended' ? tr('終わりの時刻を過ぎた（確定待ち）', 'past its end (awaiting results)') : tr('確定', 'final')}・{tr(`予算 ${s.budget} 手番・参加 ${s.participants}（招いた ${s.invited}）`, `budget ${s.budget} turns, ${s.participants} of ${s.invited} invited playing`)}）
+    </>
+  );
 
+  /** 1 つの進行中のランの行（続きのある自分のラン・観戦できるラン） */
+  const activeItem = (r: RunListing) => {
+    const tok = getToken(r.runId);
+    return (
+      <li key={r.runId}>
+        <div><code>{r.runId}</code> <span class="tag">{r.mode}</span> <small>seq {r.seq}</small></div>
+        <div class="sub">{playersText(r)}</div>
+        {expeditionText(r) && <div class="sub exp">{expeditionText(r)}</div>}
+        {/* 起動時に復旧できなかったラン（V4-1m §37.1）: 理由を出し、観戦・再開は出さない（記録は残っているので巻き戻しは見られる） */}
+        {r.recoveryFailed && <div class="sub warn">{tr(`サーバーの起動時に復旧できなかった（理由: ${inLocale(r.recoveryFailed.reason, 'ja')}）。記録は残っている`, `Could not be recovered at server start (${inLocale(r.recoveryFailed.reason, 'en')}); its records are kept`)}</div>}
+        <div class="row">
+          {!r.recoveryFailed && canWatch(r) && <a class="button small" href={`#/watch/${r.runId}`}>{tr('観戦', 'Watch')}</a>}
+          {canRewind(r) && <a class="button small" href={`#/replay/${r.runId}`}>{tr('巻き戻し', 'Rewind')}</a>}
+          {tok && !r.recoveryFailed && <a class="button small primary" href={`#/play/${r.runId}`}>{tr('再開', 'Resume')}</a>}
+          {r.joinable && !tok && <button class="small" disabled={busy} onClick={() => join(r.runId)}>{tr('参加', 'Join')}</button>}
+        </div>
+      </li>
+    );
+  };
+
+  /** 名前とクラス（新しいラン・シーズンの参加で使う） */
+  const nameClassFields = () => (
+    <>
+      <label>{tr('名前', 'Name')}<input value={name} maxLength={32} onInput={(e) => setName((e.target as HTMLInputElement).value)} /></label>
+      <label>{tr('クラス', 'Class')}
+        <select value={classId} onChange={(e) => setClassId((e.target as HTMLSelectElement).value)}>
+          {classes.map(([id, c]) => <option key={id} value={id}>{nameOf(c.name, L, id)}</option>)}
+          {!classes.length && <option value="core:warrior">core:warrior</option>}
+        </select>
+      </label>
+    </>
+  );
+
+  // ---- 出撃 ----
+  const current = seasons.filter((x) => x.season.status !== 'final').sort(bySeason);
+  const currentIds = new Set(current.map((x) => x.season.id));
+  const isMineRow = (row: OwnerRunRow) => !owner.local || myRunIds.has(row.runId);
+  const seasonRows = owner.rows.filter((row) => row.season && currentIds.has(row.season.id))
+    .sort((a, b) => Number(b.waiting) - Number(a.waiting) || Number(isMineRow(b)) - Number(isMineRow(a)) || b.updatedAt - a.updatedAt);
+  const otherRows = owner.rows.filter((row) => !(row.season && currentIds.has(row.season.id)));
+  const cardIds = new Set(owner.rows.map((x) => x.runId));
+  const myActive = active.filter((r) => getToken(r.runId) && !cardIds.has(r.runId));
+  const otherActive = active.filter((r) => !getToken(r.runId));
+  const waitingCount = owner.rows.filter((x) => x.waiting).length;
+  const otherWaiting = otherRows.filter((x) => x.waiting).length;
+  const card = (row: OwnerRunRow) => <OwnerRunCard key={row.runId} row={row} token={owner.token[row.runId]} catalog={catalog} onChanged={() => void refreshOwner(seasons.map((x) => x.season.id))} />;
+
+  /** シーズンに参加する欄（今シーズンの自分のランが無いとき。今ある「このシーズンに参加」） */
+  const joinBox = (s: SeasonListing) => {
+    // このブラウザで始めた、このシーズンの進行中のラン（続ける）
+    const mine = active.find((r) => r.season === s.id && getToken(r.runId) && !r.recoveryFailed);
+    return (
+      <section key={`join-${s.id}`} class="panel seasonbox">
+        <h3>{tr(`シーズン「${s.name}」に参加する`, `Join the season "${s.name}"`)}</h3>
+        <div class="sjoin">
+          {mine ? (
+            <a class="button small primary" href={`#/play/${mine.runId}`}>{tr('進行中のシーズンのランを続ける', 'Resume your season run')}</a>
+          ) : (
+            <>
+              {seasonTok[s.id] ? (
+                <span class="muted">{tr('招かれたプロフィールのトークン: このブラウザに保存済み（••••）', 'Invited profile token: saved in this browser (••••)')} <button class="tiny" onClick={() => forgetSeasonTok(s.id)}>{tr('外す', 'Forget')}</button></span>
+              ) : (
+                <span class="row">
+                  <input type="password" autocomplete="off" placeholder={tr('招かれた profile_token', 'invited profile_token')} value={tokDraft[s.id] ?? ''}
+                    onInput={(e) => setTokDraft({ ...tokDraft, [s.id]: (e.target as HTMLInputElement).value })}
+                    onKeyDown={(e) => { if (e.key === 'Enter') keepSeasonTok(s.id); }} />
+                  <button class="small" onClick={() => keepSeasonTok(s.id)}>{tr('覚える', 'Keep')}</button>
+                </span>
+              )}
+            </>
+          )}
+        </div>
+        {!mine && (
+          <>
+            <p class="muted small">{tr('トークンを覚えさせると、そのプロフィールの AI のラン（MCP で始めたもの）も、ここに自分のランとして出る（指図を出せる）。自分で遊ぶなら、名前とクラスを決めて参加する。', 'Once the token is kept, your AI\'s run on that profile (started over MCP) shows up here as your run, and you can give it directives. To play yourself, pick a name and class and join.')}</p>
+            <div class="form inline-form">
+              {nameClassFields()}
+              <button class="small primary" disabled={busy || !name.trim() || !seasonTok[s.id]} onClick={() => joinSeason(s.id)}
+                title={tr('このシーズンのランを、自分で遊ぶ（人間のラン）。招かれたプロフィールだけが参加できる', 'Start a season run you play yourself (a human run). Only invited profiles can join')}>
+                {tr('このシーズンに参加（自分で遊ぶ）', 'Join this season (play yourself)')}
+              </button>
+            </div>
+          </>
+        )}
+      </section>
+    );
+  };
+
+  const sortie = () => (
+    <div class="home">
+      <section class="homesec">
+        <h2 class="hhead">{tr('今シーズンの自分のラン', 'Your run this season')}</h2>
+        {owner.local && seasonRows.length > 0 && <p class="muted small">{tr('サーバーと同じ機械から開いている: すべての進行中のソロのランの持ち主として出す。', 'Opened on the server machine: you are shown as the owner of every active solo run.')}</p>}
+        {seasonRows.map(card)}
+        {current.filter((x) => x.season.status === 'open' && !seasonRows.some((row) => row.season?.id === x.season.id && isMineRow(row))).map((x) => joinBox(x.season))}
+        {!current.length && <p class="muted">{tr('開催中のシーズンは無い。続きのあるラン・新しいランは、下の「ほかのラン」から。過去のシーズンは「記録」のタブ。', 'No season is running. Other runs and new runs are under "Other runs" below; past seasons are in the Records tab.')}</p>}
+      </section>
+
+      {current.map(({ season: s, standings }) => (
+        <section key={`st-${s.id}`} class="panel seasonbox">
+          <h3 title={tr('同着は、使った予算（手番）の少ないほうが上', 'Ties go to whoever used less budget (turns)')}>{tr('今シーズンの順位', 'Standings this season')}: {seasonHead(s)}</h3>
+          <div class="row">
+            <a class="button small" href={`#/season/${s.id}`}>{tr('順位と坑の断面', 'Standings and cross-section')}</a>
+          </div>
+          {standings.length === 0
+            ? <div class="muted">{tr('まだだれもランを始めていない（参加は運用者に招かれた者だけ）', 'Nobody has started yet (invited players only)')}</div>
+            : <StandingsTable rows={standings} mine={myNames(s.id, standings)} />}
+        </section>
+      ))}
+
+      <details class="panel others" open={seasonsLoaded && !current.length && !owner.rows.length}>
+        <summary>
+          {tr('ほかのラン', 'Other runs')}
+          <small>{tr(`（続きのある自分のラン ${myActive.length + otherRows.length}・進行中 ${otherActive.length}・新しいラン）`, ` (your runs ${myActive.length + otherRows.length}, active ${otherActive.length}, new run)`)}</small>
+          {otherWaiting > 0 && <span class="waitmark inline">{tr(`AI が、あなたの決定を待っている ${otherWaiting}`, `${otherWaiting} AI waiting for your decision`)}</span>}
+        </summary>
+        {otherRows.length > 0 && <div class="home inner">{otherRows.map(card)}</div>}
+        <div class="lobby">
+          <section class="panel">
+            <h3>{tr('続きのある自分のラン', 'Your runs to continue')} <button class="tiny" onClick={refresh}>↻</button></h3>
+            {runs === null && <div class="muted">{tr('読み込み中…', 'Loading…')}</div>}
+            {runs !== null && myActive.length === 0 && <div class="muted">{tr('なし（このブラウザで遊んでいるランは無い）', 'None (no run played from this browser)')}</div>}
+            <ul class="runs">{myActive.map(activeItem)}</ul>
+          </section>
+
+          <section class="panel">
+            <h3>{tr('進行中のラン（観戦・参加）', 'Active runs (watch or join)')}</h3>
+            {runs !== null && otherActive.length === 0 && <div class="muted">{tr('なし', 'None')}</div>}
+            <ul class="runs">{otherActive.map(activeItem)}</ul>
+            {current.some((x) => watch[x.season.id] && !watch[x.season.id].local) && (
+              <p class="muted small">{tr('開催中のシーズンのランを観戦できるのは、その参加者（招かれたプロフィールのトークンを覚えさせたブラウザ）と、サーバーと同じ機械からだけ。確定した後は、だれでも見返せる。', 'While the season is running, only its participant (a browser that keeps their invited profile token) and the server machine can watch a run. Once it is finalized, anyone can.')}</p>
+            )}
+          </section>
+
+          <section class="panel">
+            <h3>{tr('新しいラン（自分で遊ぶ）', 'New run (play yourself)')}</h3>
+            <div class="form">
+              {nameClassFields()}
+              {catalog?.classes[classId] && <p class="muted">{nameOf(catalog.classes[classId].desc, L, '')}</p>}
+              <label>{tr('モード', 'Mode')}
+                <select value={mode} onChange={(e) => setMode((e.target as HTMLSelectElement).value as 'solo' | 'coop')}>
+                  <option value="solo">{tr('ソロ', 'Solo')}</option>
+                  <option value="coop">COOP</option>
+                </select>
+              </label>
+              <label>{tr('最初の遠征', 'First expedition')}
+                <select value={objective} onChange={(e) => setObjective(firstChoice((e.target as HTMLSelectElement).value))}>
+                  {FIRST_EXPEDITION_CHOICES.map((o) => <option key={o.id} value={o.id}>{L === 'en' ? o.en : o.ja}</option>)}
+                </select>
+              </label>
+              {objective === 'camp' && <p class="muted">{tr('キャンプから始まり、目標の深さ・推奨レベル・条件の違う 3 つの候補から最初の遠征を選ぶ。', 'You start at camp and choose the first expedition from 3 offers with different depths, recommended levels and traits.')}</p>}
+              <label>{tr('シード（任意）', 'Seed (optional)')}<input value={seed} onInput={(e) => setSeed((e.target as HTMLInputElement).value)} /></label>
+              <label>{tr('メッセージ言語', 'Message language')}
+                <select value={locale} onChange={(e) => setLoc((e.target as HTMLSelectElement).value as Locale)}>
+                  <option value="ja">日本語</option><option value="en">English</option>
+                </select>
+              </label>
+              <label class="check"><input type="checkbox" checked={legacy} onChange={(e) => setLegacy((e.target as HTMLInputElement).checked)} />{tr('図鑑の知識を引き継ぐ（継承）', 'Inherit codex knowledge (legacy)')}</label>
+              <button class="primary" disabled={busy || !name.trim()} onClick={start}>{tr('冒険を始める', 'Start')}</button>
+            </div>
+          </section>
+        </div>
+      </details>
+    </div>
+  );
+
+  // ---- 記録 ----
+  const allSeasons = [...seasons].sort(bySeason);
+  /** その参加者の、そのシーズンのラン（古い順） */
+  const seasonRuns = (sid: string) => (runs ?? []).filter((r) => r.season === sid).sort((a, b) => a.createdAt - b.createdAt);
+  /**
+   * ランへの口: 巻き戻せればリプレイ、進行中で観戦できれば観戦。どちらでもなければ出さない（だれが見られるかは変えない: §25.1）。
+   * ID だけ（順位の表の runIds にあって一覧に無い）なら巻き戻しを開く（見られなければ、その画面にサーバーの断りの文が出る）
+   */
+  const runHref = (x: RunListing | string): string | null => {
+    if (typeof x === 'string') return `#/replay/${x}`;
+    if (canRewind(x)) return `#/replay/${x.runId}`;
+    if (x.status === 'active' && canWatch(x) && !x.recoveryFailed) return `#/watch/${x.runId}`;
+    return null;
+  };
+  /** 行のランの口（古い順に渡す）: いちばん新しいランを既定のボタンに。ほかのランはプルダウン（選ぶと開く） */
+  const runPicker = (xs: readonly (RunListing | string)[]) => {
+    const all = xs.map((x, i) => ({ id: typeof x === 'string' ? x : x.runId, n: i + 1, at: typeof x === 'string' ? null : x.createdAt, href: runHref(x) }))
+      .filter((x): x is { id: string; n: number; at: number | null; href: string } => !!x.href);
+    if (!all.length) return <span class="muted small">-</span>;
+    const newest = all[all.length - 1];
+    const older = all.slice(0, -1).reverse();
+    const label = (x: typeof newest) => `${tr(`ラン ${x.n}`, `run ${x.n}`)}${x.at ? `（${fmtTime(x.at)}）` : ''}${x.href.startsWith('#/watch') ? tr('・観戦', ', watch') : ''}`;
+    return (
+      <span class="row">
+        <a class="button tiny" href={newest.href} title={`${newest.id}${newest.at ? `・${fmtTime(newest.at)}` : ''}`}>
+          {newest.href.startsWith('#/watch') ? tr('観戦', 'Watch') : '▶'}{all.length > 1 ? tr(' 最新', ' latest') : ''}
+        </a>
+        {older.length > 0 && (
+          <select class="tiny" value="" title={tr('前のラン', 'Earlier runs')} onChange={(e) => { const v = (e.target as HTMLSelectElement).value; if (v) navigate(v); }}>
+            <option value="">{tr(`前のラン（${older.length}）`, `earlier (${older.length})`)}</option>
+            {older.map((x) => <option key={x.id} value={x.href}>{label(x)}</option>)}
+          </select>
+        )}
+      </span>
+    );
+  };
+
+  const seasonRecord = (data: SeasonStandingsResponse, i: number) => {
+    const s = data.season;
+    const rows0 = data.result?.standings ?? data.standings;
+    const mine = myNames(s.id, rows0);
+    const rows = sortStandings(onlyMine ? rows0.filter((r) => mine.has(normName(r.name))) : rows0, sortBy);
+    // 参加者（順位の表の名前）ごとの、そのシーズンのラン。行に runIds があればそれで結ぶ（確定したシーズンと、同じ機械から）。
+    // 無ければ GET /api/runs のシーズンと名前から（分かる範囲で）
+    const sr = seasonRuns(s.id);
+    const listing = new Map(sr.map((x) => [x.runId, x]));
+    const byIds = new Set(rows0.flatMap((r) => r.runIds ?? []));
+    const byName = new Map<string, RunListing[]>();
+    for (const x of sr) {
+      if (byIds.has(x.runId)) continue;
+      const k = normName(participantOf(x));
+      byName.set(k, [...(byName.get(k) ?? []), x]);
+    }
+    const rowNames = new Set(rows0.filter((r) => !r.runIds?.length).map((r) => normName(r.name)));
+    /** その行のラン（古い順）: runIds があればそれ（一覧に無いランは ID だけ） */
+    const runsOfRow = (r: SeasonStandingRow): (RunListing | string)[] => (r.runIds?.length ? r.runIds.map((id) => listing.get(id) ?? id) : byName.get(normName(r.name)) ?? []);
+    const replay = (r: SeasonStandingRow) => runPicker(runsOfRow(r));
+    const sw = watch[s.id];
+    const table = rows.length ? <StandingsTable rows={rows} mine={mine} replay={replay} /> : null;
+    // 順位の表の行と結べなかったラン（runIds が無く、ランのプレイヤーの名前が招いたときの表示名と違う）
+    const unmatched = sr.filter((x) => !byIds.has(x.runId) && !rowNames.has(normName(participantOf(x))) && !(onlyMine && !myRunIds.has(x.runId)));
+    return (
+      <details key={s.id} class="panel seasonbox recseason" open={i === 0}>
+        <summary><b>{seasonHead(s)}</b></summary>
+        <div class="row">
+          <a class="button small" href={`#/season/${s.id}`}>{s.status === 'final' ? tr('結果と坑の断面・討伐の記録', 'Results, cross-section and warden kills') : tr('順位と坑の断面', 'Standings and cross-section')}</a>
+        </div>
+        {s.status !== 'final' && !sw?.local && (
+          <p class="muted small">{tr('開催中のシーズンのランは、確定した後に、だれでも見返せる（それまでは、サーバーと同じ機械から、終わったランだけ。観戦は参加者と同じ機械から）。', 'Runs of a running season can be replayed by anyone once it is final (until then only finished runs, from the server machine; watching is for the participant and the server machine).')}</p>
+        )}
+        {rows0.length === 0 && <div class="muted">{tr('まだだれもランを始めていない', 'Nobody has started yet')}</div>}
+        {rows0.length > 0 && !rows.length && <div class="muted">{tr('このシーズンに、自分と分かる行は無い', 'No row of yours in this season')}</div>}
+        {table}
+        {unmatched.length > 0 && (
+          <div class="small">
+            <span class="muted">{tr('順位の表の名前と結べなかったラン（ランの名前が招いたときの表示名と違う）', 'Runs not matched to a standings row (the run name differs from the invited name)')}: </span>
+            {unmatched.map((x) => <span key={x.runId} class="unrun">{participantOf(x) || x.runId} {runPicker([x])}</span>)}
+          </div>
+        )}
+        {(data.result?.titles ?? []).length > 0 && (
+          <p class="titles">{tr('称号', 'Titles')}: {data.result!.titles!.map((x, j) => <span key={j}><b>{x.holder}</b> <span class="tag title">{L === 'en' ? x.name.en : x.name.ja}</span> </span>)}</p>
+        )}
+        <h4 title={tr('時刻の順の記録は、今の口には無い。階ごとに、公開されたもの・共有層に載った火・討伐を並べる', 'There is no timestamped feed yet; this lists, by floor, what was published, shared campfires and warden kills')}>{tr('共有層の出来事（階の順・時刻なし）', 'Shared layer (by floor, no times)')}</h4>
+        <SeasonSharedFlow data={data} catalog={catalog} />
+      </details>
+    );
+  };
+
+  const recordsTab = () => (
+    <div class="home">
+      <div class="row recbar">
+        <label class="check"><input type="checkbox" checked={onlyMine} onChange={(e) => setOnlyMine((e.target as HTMLInputElement).checked)} />{tr('自分だけ', 'Only mine')}</label>
+        <label class="inline">{tr('並べ替え', 'Sort')}
+          <select value={sortBy} onChange={(e) => setSortBy((e.target as HTMLSelectElement).value as StandingSort)}>
+            {STANDING_SORTS.map((k) => <option key={k} value={k}>{standingSortName(k)}</option>)}
+          </select>
+        </label>
+        <span class="muted small">{tr('自分の行は、このブラウザに覚えてあるトークンと、このブラウザで遊んだランから分かる範囲で。', 'Your rows are found from the tokens kept in this browser and the runs played here.')}</span>
+      </div>
+      <section class="homesec">
+        <h2 class="hhead">{tr('シーズン', 'Seasons')}</h2>
+        {allSeasons.length === 0 && <p class="muted">{tr('シーズンは、まだ無い', 'No seasons yet')}</p>}
+        {allSeasons.map(seasonRecord)}
+      </section>
+      <div class="lobby">
         <section class="panel">
           <h3>{tr('記録と図鑑', 'Records and codex')}</h3>
           {!profileToken && <p class="muted">{tr('最初のランを始めるとプロフィールが作られ、このブラウザに残る。次のランから記録・図鑑・実績が積まれる。', 'Your first run creates a profile kept in this browser; records, codex and feats stack from then on.')}</p>}
@@ -255,119 +580,29 @@ export function Lobby() {
         </section>
 
         <section class="panel">
-          <h3>{tr('進行中のラン', 'Active runs')} <button class="tiny" onClick={refresh}>↻</button></h3>
-          {runs === null && <div class="muted">{tr('読み込み中…', 'Loading…')}</div>}
-          {runs !== null && active.length === 0 && <div class="muted">{tr('なし', 'None')}</div>}
-          <ul class="runs">
-            {active.map((r) => {
-              const tok = getToken(r.runId);
-              return (
-                <li key={r.runId}>
-                  <div><code>{r.runId}</code> <span class="tag">{r.mode}</span> <small>seq {r.seq}</small></div>
-                  <div class="sub">{playersText(r)}</div>
-                  {expeditionText(r) && <div class="sub exp">{expeditionText(r)}</div>}
-                  {/* 起動時に復旧できなかったラン（V4-1m §37.1）: 理由を出し、観戦・再開は出さない（記録は残っているので巻き戻しは見られる） */}
-                  {r.recoveryFailed && <div class="sub warn">{tr(`サーバーの起動時に復旧できなかった（理由: ${reasonIn(r.recoveryFailed.reason, 'ja')}）。記録は残っている`, `Could not be recovered at server start (${reasonIn(r.recoveryFailed.reason, 'en')}); its records are kept`)}</div>}
-                  <div class="row">
-                    {!r.recoveryFailed && canWatch(r) && <a class="button small" href={`#/watch/${r.runId}`}>{tr('観戦', 'Watch')}</a>}
-                    {canRewind(r) && <a class="button small" href={`#/replay/${r.runId}`}>{tr('巻き戻し', 'Rewind')}</a>}
-                    {tok && !r.recoveryFailed && <a class="button small primary" href={`#/play/${r.runId}`}>{tr('再開', 'Resume')}</a>}
-                    {r.joinable && !tok && <button class="small" disabled={busy} onClick={() => join(r.runId)}>{tr('参加', 'Join')}</button>}
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        </section>
-
-        <section class="panel">
           <h3>{tr('終了したラン', 'Finished runs')}</h3>
-          {runs !== null && ended.length === 0 && <div class="muted">{tr('なし', 'None')}</div>}
-          <ul class="runs">
-            {ended.slice(0, 30).map((r) => (
-              <li key={r.runId}>
-                <div><code>{r.runId}</code> <small>{fmtTime(r.updatedAt)}</small></div>
-                <div class="sub">{playersText(r)}</div>
-                {expeditionText(r) && <div class="sub exp">{expeditionText(r)}</div>}
-                <div class="row">
-                  {canRewind(r) ? <a class="button small" href={`#/replay/${r.runId}`}>{tr('リプレイ', 'Replay')}</a>
-                    : <span class="muted small">{tr('シーズンの結果が確定した後に見返せる', 'Viewable once the season is finalized')}</span>}
-                </div>
-              </li>
-            ))}
-          </ul>
+          {(() => {
+            const list = (onlyMine ? ended.filter((r) => myRunIds.has(r.runId)) : ended).slice(0, 30);
+            return (
+              <>
+                {runs !== null && list.length === 0 && <div class="muted">{tr('なし', 'None')}</div>}
+                <ul class="runs">
+                  {list.map((r) => (
+                    <li key={r.runId} class={myRunIds.has(r.runId) ? 'mine' : ''}>
+                      <div><code>{r.runId}</code> <small>{fmtTime(r.updatedAt)}</small>{r.season && <span class="tag">{tr(`シーズン ${r.season}`, `season ${r.season}`)}</span>}</div>
+                      <div class="sub">{playersText(r)}</div>
+                      {expeditionText(r) && <div class="sub exp">{expeditionText(r)}</div>}
+                      <div class="row">
+                        {canRewind(r) ? <a class="button small" href={`#/replay/${r.runId}`}>{tr('リプレイ', 'Replay')}</a>
+                          : <span class="muted small">{tr('シーズンの結果が確定した後に見返せる', 'Viewable once the season is finalized')}</span>}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            );
+          })()}
         </section>
-
-        {seasons.length > 0 && (
-          <section class="panel">
-            <h3>{tr('シーズン', 'Seasons')}</h3>
-            {seasons.map(({ season: s, standings }) => {
-              // このブラウザで始めた、このシーズンの進行中のラン（続ける）
-              const mine = (runs ?? []).find((r) => r.status === 'active' && r.season === s.id && getToken(r.runId) && !r.recoveryFailed);
-              return (
-              <div key={s.id} class="seasonbox">
-                <h4 title={tr('同着は、使った予算（手番）の少ないほうが上', 'Ties go to whoever used less budget (turns)')}>
-                  {s.name}（{s.status === 'open' ? tr(`開催中・${fmtTime(s.endsAt)} まで`, `open until ${fmtTime(s.endsAt)}`) : s.status === 'ended' ? tr('終わりの時刻を過ぎた（確定待ち）', 'past its end (awaiting results)') : tr('確定', 'final')}・{tr(`予算 ${s.budget} 手番・参加 ${s.participants}（招いた ${s.invited}）`, `budget ${s.budget} turns, ${s.participants} of ${s.invited} invited playing`)}）
-                </h4>
-                <div class="row">
-                  <a class="button small" href={`#/season/${s.id}`}>{s.status === 'final' ? tr('結果と坑の断面', 'Results and cross-section') : tr('順位と坑の断面', 'Standings and cross-section')}</a>
-                  {/* 観戦（S3 §25.1）: 開催中は、このブラウザに覚えてあるトークンのランだけ（同じ機械から開いているときは、どのランも）。確定した後は、だれでも */}
-                  {(watch[s.id]?.runs ?? []).map((x) => <a key={x.runId} class="button small" href={`#/watch/${x.runId}`} title={x.runId}>{tr(`観戦: ${x.name}`, `Watch ${x.name}`)}</a>)}
-                </div>
-                {s.status !== 'final' && watch[s.id] && !watch[s.id].local && (
-                  <p class="muted small">{tr('開催中のシーズンのランを観戦できるのは、その参加者（招かれたプロフィールのトークンを覚えさせたブラウザ）と、サーバーと同じ機械からだけ。確定した後は、だれでも見返せる。', 'While the season is running, only its participant (a browser that keeps their invited profile token) and the server machine can watch a run. Once it is finalized, anyone can.')}</p>
-                )}
-                {s.status === 'open' && (
-                  <div class="sjoin">
-                    {mine ? (
-                      <a class="button small primary" href={`#/play/${mine.runId}`}>{tr('進行中のシーズンのランを続ける', 'Resume your season run')}</a>
-                    ) : (
-                      <>
-                        {seasonTok[s.id] ? (
-                          <span class="muted">{tr('招かれたプロフィールのトークン: このブラウザに保存済み（••••）', 'Invited profile token: saved in this browser (••••)')} <button class="tiny" onClick={() => forgetSeasonTok(s.id)}>{tr('外す', 'Forget')}</button></span>
-                        ) : (
-                          <span class="row">
-                            <input type="password" autocomplete="off" placeholder={tr('招かれた profile_token', 'invited profile_token')} value={tokDraft[s.id] ?? ''}
-                              onInput={(e) => setTokDraft({ ...tokDraft, [s.id]: (e.target as HTMLInputElement).value })}
-                              onKeyDown={(e) => { if (e.key === 'Enter') keepSeasonTok(s.id); }} />
-                            <button class="small" onClick={() => keepSeasonTok(s.id)}>{tr('覚える', 'Keep')}</button>
-                          </span>
-                        )}
-                        <button class="small primary" disabled={busy || !name.trim() || !seasonTok[s.id]} onClick={() => joinSeason(s.id)}
-                          title={tr('このシーズンのランを始める（名前・クラス・言語は「新しいラン」の欄のもの）。招かれたプロフィールだけが参加できる', 'Start a season run (name, class and language come from the New run form). Only invited profiles can join')}>
-                          {tr('このシーズンに参加', 'Join this season')}
-                        </button>
-                      </>
-                    )}
-                  </div>
-                )}
-                {standings.length === 0 && <div class="muted">{tr('まだだれもランを始めていない（参加は運用者に招かれた者だけ）', 'Nobody has started yet (invited players only)')}</div>}
-                {standings.length > 0 && (
-                  <table class="board">
-                    <thead><tr>
-                      <th>{tr('名前', 'Name')}</th><th title={tr('いちばん深い階', 'Deepest floor')}>{tr('冒険', 'Adventure')}</th>
-                      <th title={tr('最初に報告した階段の数', 'Stairs reported first')}>{tr('貢献', 'Contribution')}</th>
-                      <th title={tr('一度も倒れていない者の確定点', 'Banked points of those who never died')}>{tr('生還', 'Survival')}</th>
-                      <th title={tr('自分の野営の火が、ほかの参加者に使われた回数（S1）', 'Uses of your campfires by others (S1)')}>{tr('支援', 'Support')}</th>
-                      <th>{tr('使った予算', 'Budget used')}</th><th>{tr('ラン', 'Runs')}</th>
-                    </tr></thead>
-                    <tbody>{standings.map((r) => (
-                      <tr key={r.name}>
-                        <td>{r.name} {titleBadges(r)}</td>
-                        <td>{r.adventure.rank}. {tr(`地下${r.adventure.value}階`, `D${r.adventure.value}`)}</td>
-                        <td>{r.contribution.rank}. {r.contribution.value}</td>
-                        <td>{r.survival ? `${r.survival.rank}. ${r.survival.value}` : tr('対象外（倒れた）', 'out (fell)')}</td>
-                        <td>{r.support ? `${r.support.rank}. ${r.support.value}` : '-'}</td>
-                        <td>{r.used}</td><td>{r.runs}</td>
-                      </tr>
-                    ))}</tbody>
-                  </table>
-                )}
-              </div>
-              );
-            })}
-          </section>
-        )}
 
         <section class="panel">
           <h3>{tr('リーダーボード', 'Leaderboard')}</h3>
@@ -417,6 +652,22 @@ export function Lobby() {
           )}
         </section>
       </div>
+    </div>
+  );
+
+  return (
+    <div class="page">
+      <Header title={tr('ホーム', 'Home')} />
+      <div class="toolbar hometabs">
+        <span class="seg">
+          <button class={`small ${tab === 'sortie' ? 'on' : ''}`} onClick={() => navigate('#/')}>
+            {tr('出撃', 'Sortie')}{waitingCount > 0 && <span class="waitdot" title={tr('AI が、あなたの決定を待っている', 'An AI is waiting for your decision')}> ●{waitingCount}</span>}
+          </button>
+          <button class={`small ${tab === 'records' ? 'on' : ''}`} onClick={() => navigate('#/records')}>{tr('記録', 'Records')}</button>
+        </span>
+      </div>
+      <ErrorBanner error={error ?? catErr} onClose={() => setError(null)} />
+      {tab === 'records' ? recordsTab() : sortie()}
     </div>
   );
 }

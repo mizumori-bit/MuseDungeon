@@ -1,7 +1,8 @@
 // HTTP API（docs/PROTOCOL.md §8）。失敗は ApiError で投げ、画面側でバナー表示する。
 import type {
-  ActionError, Catalog, CommandRecord, GameEvent, JoinedResponse, JoinRunRequest, LeaderboardEntry,
-  NewRunRequest, ProfileRecords, RunIndex, RunListing, RunMetaFile, SeasonListing, SeasonStandingsResponse, SeasonWatchResponse, SpectatorPolicy, World,
+  ActionError, Catalog, Command, CommandRecord, DirectiveItem, GameEvent, JoinedResponse, JoinRunRequest, LeaderboardEntry,
+  NewRunRequest, OwnerRunsResponse, OwnerViewResponse, ProfileRecords, RunIndex, RunListing, RunMetaFile, SeasonListing, SeasonStandingsResponse, SeasonWatchResponse,
+  SpectatorPolicy, World,
 } from '@muse/shared';
 
 export class ApiError extends Error {
@@ -57,6 +58,18 @@ async function getJSONL<T>(path: string): Promise<T[]> {
 const enc = encodeURIComponent;
 const bearer = (token: string): RequestInit => ({ headers: { authorization: `Bearer ${token}` } });
 
+/**
+ * 持ち主の口（S8。SEASON.md §54.5）: プロフィールのトークンは Authorization の見出しでだけ渡す（URL・本文・画面・console に出さない）。
+ * トークンが無ければ見出しも付けない（同じ機械からの接続なら、それで通る）
+ */
+async function ownerGet<T>(path: string, token?: string): Promise<T> {
+  return (await (await request(path, token ? bearer(token) : undefined)).json()) as T;
+}
+async function ownerPost<T>(path: string, body: unknown, token?: string): Promise<T> {
+  const headers: Record<string, string> = { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) };
+  return (await (await request(path, { method: 'POST', headers, body: JSON.stringify(body) })).json()) as T;
+}
+
 export const api = {
   runs: () => getJSON<{ runs: RunListing[] }>('/api/runs').then((r) => r.runs ?? []),
   newRun: (req: NewRunRequest) => postJSON<JoinedResponse>('/api/runs', req),
@@ -79,6 +92,14 @@ export const api = {
   /** プロフィールの表示名・要約・称号（S2 §18.2。MCP の profile と同じ中身） */
   profile: async (profileToken: string, locale: string) => (await (await request(`/api/profile?locale=${enc(locale)}`, bearer(profileToken))).json()) as { name: string; summary: string; titles?: { name: string; season: string; season_name: string }[] },
   records: async (profileToken: string, locale: string) => (await (await request(`/api/profile/records?locale=${enc(locale)}`, bearer(profileToken))).json()) as { text: string; records: ProfileRecords },
+  /** 持ち主と認められた進行中のラン（S8 §54.7 の「出撃」）。token: プロフィールのトークン（無ければ見出しを付けない） */
+  ownerRuns: (token?: string) => ownerGet<OwnerRunsResponse>('/api/owner/runs', token),
+  /** 持ち主の見るもの（そのプレイヤーの PlayerView と、AI に届くのと同じ観測）。認められなければ 403 */
+  ownerView: (runId: string, token?: string) => ownerGet<OwnerViewResponse>(`/api/runs/${enc(runId)}/owner/view`, token),
+  /** 指図（握る項目と伝言）。キャンプでだけ通る。断りは result.error */
+  ownerDirective: (runId: string, d: { hold: DirectiveItem[]; message: string }, token?: string) => ownerPost<OwnerViewResponse>(`/api/runs/${enc(runId)}/owner/directive`, d, token),
+  /** 握った項目の命令（start_expedition・equip・unequip・choose_perk・choose_boon）。断りは result.error */
+  ownerAct: (runId: string, command: Command, token?: string) => ownerPost<OwnerViewResponse>(`/api/runs/${enc(runId)}/owner/act`, { command }, token),
 };
 
 let catalogPromise: Promise<Catalog> | null = null;

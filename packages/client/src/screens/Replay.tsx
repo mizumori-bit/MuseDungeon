@@ -188,6 +188,8 @@ export function Replay({ runId }: { runId: string }) {
     if (applied.length) {
       const now = performance.now();
       for (const t of thoughtsFrom(applied, w)) {
+        // 吹き出しは AI の考えだけ（持ち主の決定・伝言は思考の欄に出す。S8 §54.6）
+        if (t.kind) continue;
         const eid = w.players[t.player]?.entityId;
         if (eid) bubblesRef.current.push({ id: eid, text: t.text, until: now + Math.max(600, 3500 / stateRef.current.speed) });
       }
@@ -296,12 +298,13 @@ export function Replay({ runId }: { runId: string }) {
     return narrateWorld(evs.slice(start, posRef.current), w, catalog, L, mode === 'follow' ? follow : null);
   }, [seq, mode, follow, catalog, L]);
 
+  // AI の考えと、持ち主の決定・伝言（S8 §54.6。そのプレイヤーの出来事として World に載っている）を seq の順に
   const thoughts = useMemo(() => {
     if (!w) return [];
     const evs = eventsRef.current;
-    const out = thoughtsFrom(evs.slice(Math.max(0, posRef.current - 3000), posRef.current), w);
+    const out = thoughtsFrom(evs.slice(Math.max(0, posRef.current - 3000), posRef.current), w, catalog);
     return follow && mode === 'follow' ? out.filter((t) => t.player === follow) : out;
-  }, [seq, follow, mode]);
+  }, [seq, follow, mode, catalog, L]);
 
   const cmdView = useMemo(() => {
     const firstChild = new Map<number, number>();

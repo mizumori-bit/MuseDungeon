@@ -75,6 +75,16 @@ export function fmtTime(ms: number): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
+/**
+ * サーバーの文で「日本語 / English」の 2 つを並べたもの（伏せた理由・持ち主の口の断りなど）から、画面の言葉のほうだけ（S3c §33.3 の 3）。
+ * 並べていない文は、そのまま
+ */
+export function inLocale(text: string, L: Locale = uiLocale): string {
+  const i = text.indexOf(' / ');
+  if (i < 0) return text;
+  return L === 'ja' ? text.slice(0, i) : text.slice(i + 3);
+}
+
 export function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
 }

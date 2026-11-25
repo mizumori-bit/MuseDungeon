@@ -1,8 +1,22 @@
 // シーズン（S2。SEASON.md §18.1）の表示部品: 迷宮の中の予算・この階の公開と火・火の命令、キャンプの賞の表・報告・自分の火。
 // 文と数値は観測（buildObservation。projectPlayerView を通った PlayerView から作る）のものを並べるだけで、ゲームの判定はしない。
 // 命令は AI と同じもの（place_fire・interact・extract・report_stairs・deposit_supply・take_supply）を送る。
-import type { Command, Dir, ObsSeason, Observation, PlayerView } from '@muse/shared';
-import { tr } from '../util';
+import type { Command, Dir, DirectiveItem, ObsSeason, Observation, PlayerView } from '@muse/shared';
+import { directiveItemsText } from '@muse/shared';
+import { getLocale, tr } from '../util';
+
+/**
+ * 順位の表の名前の横の印（S8。SEASON.md §54.6）: そのシーズンで持ち主の口から決めた項目「指図（目的・装備）」。順位は分けない。決めていなければ出さない
+ */
+export function DirectedTag({ items }: { items?: readonly DirectiveItem[] }) {
+  if (!items?.length) return null;
+  const text = directiveItemsText(getLocale(), items);
+  return (
+    <span class="tag directed" title={tr('このシーズンで、持ち主（人間）がキャンプで決めた項目がある。順位は分けない', 'The owner (a human) decided these at camp this season. Ranks are not split')}>
+      {tr(`指図（${text}）`, `directed (${text})`)}
+    </span>
+  );
+}
 
 const DIRS: readonly [Dir, number, number][] = [['n', 0, -1], ['ne', 1, -1], ['e', 1, 0], ['se', 1, 1], ['s', 0, 1], ['sw', -1, 1], ['w', -1, 0], ['nw', -1, -1]];
 
