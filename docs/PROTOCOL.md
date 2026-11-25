@@ -25,6 +25,7 @@ ActionError {
       | 'recovery_failed'   // V4-1m: そのランはサーバーの起動時に復旧できなかった（message に理由。ランの記録は残っている）
       | 'confirm_required' | 'cannot_extract' | 'not_at_camp' | 'at_camp'     // 遠征（v2）
       | 'hostile_adjacent' | 'hostile_in_view' | 'hp_floor' | 'nothing_to_do'   // マクロが 1 歩も進めない（V3-2R。手番を使わない）
+      | 'held_by_owner'    // S8（§9.14）: その項目は持ち主が握っている。プレイヤーの口からは通らない（手番を使わない・何も変わらない）
   message: string      // 何が起きたか
   hint: string         // 次に何をすればよいか
   details?: {
@@ -72,6 +73,7 @@ turn: {
 - V3-2R2: 守護者が倒れたら `guardian_slain`（「★ 守護者が倒れた」。優先順の先頭で、テキストではほかの変化と別の行にして先に出す）。
 - V3-2R: 踏破（目標より深い階の下り階段に立った）は `objective_progress`（「地下4階を踏破した」）。今帰った場合の次の候補の下限が変わると `next_camp`（優先順は `objective_progress` の次）。`hostile_gone` は最後に見た位置と、視界の外へ出た一歩の向きを添える（「見えなくなった敵: ゴブリン（最後に見た位置 (5,6)・北東へ）」。向きは知覚した移動から。行き先は出さない）。
 - S7（SEASON.md §52.2 の 2）: 遠征の途中の区切り `checkpoint`（「区切り（100 手番）。今の観測が正本。これより前の経過は、要らない」）。自分の手番の数が 100 の倍数に届いた後の、敵（モンスター）が 1 体も見えていない最初の自分の手番に 1 回だけ（敵が見えている間は出さず、見えなくなった最初の手番に回す。キャンプに着いたら、そこまでの分は出したことにする）。前の応答の後に始まった自分の手番に区切りの手番があれば、その応答に 1 回（上限の 8 件の外。マクロの途中の手番が区切りなら、止まった所で敵が見えていることはある）。どの手番かはランの記録（engine の `turn_began` の手番の数と、その時の視界）だけから決まり、サーバーは控えを覚えているだけ（起動し直したら記録を畳んで作り直す。応答の控えの無い最初の応答では、いまの手番が区切りかだけを見る）。すべてのプレイヤーに同じ文。
+- S8（§9.14）: 持ち主が決めた `owner`（「持ち主が、遠征 5 を始めた: …」「持ち主が、装備を変えた: 鎚矛を装備」「持ち主が、特技を選んだ: 頑健」。持ち主が始めた遠征の後の最初の応答には、伝言も「持ち主から: …」でもう 1 回）。優先順の先頭。キャンプで目的を握られていると `awaiting` は `nothing`（▶ 行は「次の遠征は持ち主が決めます。wait_for_turn で…待てます」）。
 - 末尾の ▶ 行は既定で短縮形（`set_options status_line: short`）。新しいラン・再開・遠征の開始と、`state` が変わった応答では長い形になる。
 
 ---
@@ -112,7 +114,7 @@ turn: {
 | ツール | 引数 | 結果 |
 |---|---|---|
 | `observe` | `detail?: 'brief'|'full'` | Observation（§3）＋ `turn`。**待たずに返す**（v2） |
-| `wait_for_turn` | `timeout_s?`（既定 20、最大 60） | 自分の手番（または遠征・ランの終了）まで待って Observation ＋ `turn` を返す。既に自分の番なら即時。時間切れは `turn.reason = 'wait_timeout'` |
+| `wait_for_turn` | `timeout_s?`（既定 20、最大 60） | 自分の手番（または遠征・ランの終了）まで待って Observation ＋ `turn` を返す。既に自分の番なら即時。時間切れは `turn.reason = 'wait_timeout'`。S8（§9.14）: キャンプで目的を持ち主に握られているときは、持ち主が遠征を始める（`turn_arrived`）か、目的を握るのをやめるか、時間が来る（`wait_timeout`）まで待つ（手番は減らない。時間は World に入れない） |
 | `look` | `target: {x,y} | entity_id` | 対象の説明。モンスターなら「思い出」に基づく既知情報 |
 | `get_map` | `floor?`, `region?: {x,y,w,h}` | 記憶しているフロアの ASCII 地図（上 2 行が x の 10 の位・1 の位、行頭が y）と凡例、既知の注目点一覧（MVP は現在フロアのみ） |
 | `inventory` | – | 所持品と装備の詳細 |
@@ -454,6 +456,15 @@ V3-2R で足した項目（同じく後方互換。会心と経験値のルー�
 - `StatusInst.source`（状態異常を与えた者。毒で倒したときの撃破者になる）、`status_applied.targetAffixes`
 - `player_state.reason: 'joined'`（キャンプから始まる参加）。参加コマンドの `atCamp`
 - プレイヤー向けの射影で、見えていた個体が視界の外へ動いた `entity_moved` に `dirOut`（向きだけ。行き先は伏せたまま）
+
+S8 で変えた項目（指図。SEASON.md §54・§55、中身は §9.14。命令・出来事・観測が増え、engine の決まりが変わったので `engineVersion` 0.48.0・`eventVersion` 36。コンテンツの版は変わらない）。**指図の無いランは、何も変わらない**（命令・出来事・観測・候補のどれも。試運転 t7 の 3 本は、この版で記録の初めから再実行して、版の欄の違う `run_started` のほかは、すべての出来事が一致した）。0.47.0 で開いたシーズン s2 では、このサーバーで新しいランは始められない（続きのランは遊べる）:
+
+- 命令 `set_directive { hold: ('objective'|'loadout'|'perks')[], message?: string(≤280) }`（手番を使わない。持ち主の口からだけ。キャンプでだけ）。命令の記録の `source` に `owner`（持ち主の口から通った命令）。engine の `step` は、記録の `source` が `owner` かどうかを受け取る（`meta.owner`）
+- 出来事 `directive_set { player, directiveAfter: { hold, message } }`・`owner_decided { player, item, act, no?, kind?, appearanceId?, choice?, decidedAfter }`（どちらも本人だけ。プレイヤーの出来事にも渡す。`owner_decided` の `kind` は未鑑定なら伏せる）
+- `PlayerRecord.directive`・`PlayerRecord.ownerDecided`（after 値の代入）。`PlayerView.directive?: { hold, message, decided }`（自分のものだけ）。`Observation.self.directive?: { hold, message?, decided?, text }`
+- 断りの code `held_by_owner`（§1.1）。持ち主が装備を握っているとき、持ち主の口からのキャンプの `equip`・`unequip` は、盤面にいないまま通る（手番は無い。出来事は迷宮の中と同じで、`floor` は null）
+- 変化の code `owner`（§1.2）。`turn.awaiting` は、キャンプで目的を握られていると `nothing`
+- 遠征レポートの `owner?: DirectiveItem[]`（その遠征の前のキャンプとその遠征で、持ち主が決めた項目）
 
 S5 で変えた項目（試運転 t6 を受けて。SEASON.md §47.4・§47.5・§48。取り込みの命令と `SeasonState.slays` の中身に項目が増え、観測の形が変わったので `engineVersion` 0.47.0・`eventVersion` 34。ゲームの規則とコンテンツは変えていない（engine のコードも変えていないので、同じ記録の再生の結果は 0.46.0 と同じ）。0.46.0 で開いたシーズン t6 では、このサーバーで新しいランは始められない（進行中のランは続けられる）:
 
@@ -1063,7 +1074,7 @@ CommandRecord {
   cseq: number
   player: PlayerId
   command: Command              // move / wait / pickup / ... / explore / travel / rest / extract / start_expedition
-  source: 'mcp' | 'ws' | 'macro' | 'timeout' | 'bot' | 'system'   // system: new_run が最初の遠征を始める start_expedition
+  source: 'mcp' | 'ws' | 'macro' | 'timeout' | 'bot' | 'system' | 'owner'   // system: new_run が最初の遠征を始める start_expedition。owner（S8 §9.14）: 持ち主の口から通った命令。再実行は engine に owner を渡す
   parent?: number               // マクロ展開元の cseq
   thought?: string
   wall: number
@@ -1131,6 +1142,8 @@ S3f の `seq_resume { next }`（`player: null`）も同じ: 起動時の再生�
 | `GET /api/runs/:id/summary` | 終了時サマリー |
 | `GET /api/ops/calls?limit=` | S7（SEASON.md §52.1 の 2）。運用の口（サーバーと同じ機械からだけ。外からは 403）: 直近の MCP の呼び出し（新しい順に最大 200 件）`{ long_ms, calls: { at, tool, run, ms, error? }[] }`（受け取った時刻・ツール・ラン・サーバーの側でかかった時間。メモリだけで、ファイルには書かない。引数・トークン・考えは持たない） |
 | `GET /api/seasons` / `GET /api/seasons/:id` | S0（§9.8）。シーズンの一覧 / 1 つのシーズンの順位の表・確定した結果・坑の断面（S2 §9.11。公開された階段の位置は出さない） |
+| `GET /api/owner/runs` | S8（§9.14）。持ち主と認められた進行中のソロのラン `OwnerRunsResponse`。`Authorization: Bearer <profile_token>`（任意） |
+| `GET /api/runs/:id/owner/view`・`POST …/owner/directive`・`POST …/owner/act` | S8（§9.14）。持ち主の口: 見る・指図・握った項目の命令 |
 | `GET /api/seasons/:id/watch` | S3（§9.7）。いま観戦できる、そのシーズンの進行中のラン `{ local, final, runs: { runId, name }[] }`。`Authorization: Bearer <profile_token>`（任意。招かれたプロフィールのもの） |
 
 ### 8.1 ターンフィード（`GET /api/player/feed`）
@@ -1150,7 +1163,7 @@ S3f の `seq_resume { next }`（`player: null`）も同じ: 起動時の再生�
 
 ## 9. シーズン（S0。SEASON.md §2）
 
-シーズンのランだけの決まり。**シーズンでないランは何も変わらない**（SEASON.md §1.2 の 5。生成・候補・観測・出来事のどれも）。版は `engineVersion` 0.38.0・`eventVersion` 22（S1 で 0.39.0・23、S1a で 0.39.1・24、S1b で 0.40.0・25、S1c で 0.41.0・26（シーズン）と 0.42.0・27（すべてのラン）、S1d で 0.42.1・28、S2a で 0.42.2・28、S3 で 0.43.0・29、S3a で 0.43.1・30、S3b で 0.44.0・30、S3c で 0.45.0・31、S3f で 0.45.1・32、S4 で 0.46.0・33、S5 で 0.47.0・34。§5 のそれぞれの「変えた項目」）。
+シーズンのランだけの決まり。**シーズンでないランは何も変わらない**（SEASON.md §1.2 の 5。生成・候補・観測・出来事のどれも）。版は `engineVersion` 0.38.0・`eventVersion` 22（S1 で 0.39.0・23、S1a で 0.39.1・24、S1b で 0.40.0・25、S1c で 0.41.0・26（シーズン）と 0.42.0・27（すべてのラン）、S1d で 0.42.1・28、S2a で 0.42.2・28、S3 で 0.43.0・29、S3a で 0.43.1・30、S3b で 0.44.0・30、S3c で 0.45.0・31、S3f で 0.45.1・32、S4 で 0.46.0・33、S5 で 0.47.0・34、S8 で 0.48.0・36（指図。§9.14。シーズンでないランにも効く）。§5 のそれぞれの「変えた項目」）。
 
 ### 9.1 シーズンと参加
 
@@ -1458,3 +1471,33 @@ SlayOpening { turns: number; dealt: number; hitTurns: number; taken: number }
     - **記録庫をたたむ**: キャンプの記録庫の文（`camp.archive.slays[].text`）は、その節目の記録をそのキャンプで初めて見るとき（まだ倒していない節目で、新しい記録が届いた（`slayNews`）か、ランの最初のキャンプ）だけ全文。ほかは「記録庫・討伐の記録 地下5階の大守護者「キモルカ」: 倒した記録 3 件（最初: アオイ・いちばん少ない被害: ナズナ）。全文は records」の 1 行（もう倒した節目も 1 行。退いた後の並べが出ているキャンプは S5a のとおり「（上の挑戦の並べに出している）」）。決めるのはサーバー（そのランの取り込みの出来事から。`RunSession.slayNews(pid, { firstCamp: true })` → 観測の `slayFullDepths`）。engine の状態は足していない。構造化した `records` は、どのキャンプでも全部持つ。
     - **全文を読む道**: `records` ツール（手番を使わない）が、この接続のプレイヤーのシーズンのランなら、取り込んだ討伐の記録の全文を、文の後ろ（「記録庫・討伐の記録（全文。このシーズンで取り込んだもの）:」）と `slays: { depth, warden, records: ObsSlay[] }[]` に足す（`PlayerPort.slayArchive`）。
   - **起動し直したときの取り込みは無い**（S5a で外した。SEASON.md §48.9）: 起動時に記録のファイルへ書かない。記録を作り直しても、キャンプにいる参加者には、次の取り込み（キャンプに着く・遠征を始める・報告する）まで、前の記録が見える。
+
+### 9.14 指図と持ち主の口（S8。SEASON.md §54・§55）
+
+シーズンのランにも、シーズンでないランにも同じに働く。**対象は、ソロで、プレイヤーが人間でないラン**（`controller.kind` が `human` でない）。人間が自分で遊ぶランと協力プレイには出さない（`set_directive` を `bad_request` で断る）。
+
+- **役**: プレイヤー（迷宮の中で命令を出す）・**持ち主**（キャンプで、握った項目を決める）・観戦者。持ち主と認めるのは、そのプレイヤーのプロフィールのトークンを示した者と、サーバーと同じ機械からの接続（運用者）。判定は観戦と同じ関数（`SessionManager.ownerOf`。`seasonWatchAccess` もこれを使う）。**MCP のツールには、持ち主の口を出さない。**
+- **指図**（World の `PlayerRecord.directive`）: `hold`（握る項目の組。`objective` 目的・`loadout` 装備・`perks` 特技と加護。既定はどれも握らない）と `message`（伝言。280 字まで。制御文字と書式の文字（向きの指定など）を落とし、改行は空白に）。変えるのは命令 `set_directive`（出来事 `directive_set`）だけ。持ち主の口からだけ・キャンプにいるときだけ（迷宮では `not_at_camp`）。変わらなければ `nothing_to_do`。新しいランは、指図なしで始まる。
+- **握ったときの決まり**: 握った項目の命令は、持ち主の口からだけ通る。プレイヤーの口（MCP・人間の画面の WS・ボット）からは `held_by_owner`（手番を使わない・何も変わらない）。
+  | 握る項目 | 持ち主の口からだけ通る命令（キャンプで） | プレイヤーに残るもの |
+  |---|---|---|
+  | `objective` | `start_expedition`（候補の番号・`endless`） | 迷宮の中のすべて（帰還・撤退も） |
+  | `loadout` | `equip`・`unequip`（盤面にいないまま。手番は無い。呪いの決まりは今までどおり） | 拾う・捨てる・使う・投げる。**迷宮の中では、だれも付け替えない**（持ち主の口からも `not_at_camp`。装備中の品を `drop` するのも `held_by_owner`） |
+  | `perks` | `choose_perk`・`choose_boon` | なし。遠征の途中に出た候補は、キャンプで持ち主が選ぶまで残る（選ぶまで、進行は止まらない） |
+  - 持ち主の口から出せるのは、`set_directive` と、握った項目の命令だけ（ほかは `bad_request`。マクロ・報告・引退も）。
+  - 持ち主の口から通った命令は、命令の記録の `source: 'owner'`。engine の `step` には、記録の `source` から `owner` を渡す（再生は記録だけで同じ判定）。通ると、その命令の出来事の後に `owner_decided { player, item, act, … , decidedAfter }`（`PlayerRecord.ownerDecided`: このランで持ち主が決めた項目）。プレイヤーの呼び出しの数（遠征レポートの `tool_calls`）には数えない。
+  - シーズンのランで、目的を握られた `start_expedition` は、取り込み（`season_sync`）を記録する前に断る。
+- **プレイヤーへの見え方**（プレイする AI に届くのは、ツールの名前と応答の文だけ: SEASON.md §52.8）:
+  1. 観測の 1 行（キャンプでも迷宮でも）と `self.directive { hold, message?, decided?, text }`。文は、世界の中での読み方を添える（§55）: 「指図: 目的と装備は、持ち主がキャンプで決める（迷宮で手に入れた装備は、キャンプで確かめるまで身に着けない。あなたの start_expedition・equip・unequip は断られる）。特技と加護は、あなたが決める」。キャンプは、品の正体や呪いの有無を明かさない（鑑定の仕組みとは別）。
+  2. 「できること」: 握られた項目の行（`start_expedition`・`equip`・`unequip`・`choose_perk`・`choose_boon`）は出さない。キャンプで目的を握られているときは `wait_for_turn（待つ: 持ち主が、次の遠征を決める。observe で確かめてもよい。手番は減らない）`。候補の見出しは「持ち主が、この中から決める」。
+  3. 伝言: キャンプの観測の「できること」の後、区切りの段（§52.2）の前に「持ち主から: …」。持ち主が遠征を始めた後の最初の応答の「変化」にも、もう 1 回。
+  4. 「変化」の `owner`（§1.2）。特技と加護を握られているとき、`perk_pending`・`boon_pending` の知らせは「覚えられる特技が増えた（LvN）: … 身につけるのは、キャンプに戻ってから（持ち主が選ぶ…）」（`data.held_by_owner: true`）。
+  5. `wait_for_turn`（§2.2）。`turn.awaiting` は `nothing`。
+  6. 規則: `get_rules { topic: 'directive' }`（`all` にも入る。日本語と英語）。
+- **持ち主の口**（HTTP。トークンは `Authorization: Bearer <profile_token>` の見出しか、POST の本文の `profileToken` でだけ受ける。URL の `?token=` は受けない。応答・ログ・記録に出さない）:
+  - `GET /api/owner/runs` → `OwnerRunsResponse { local, runs: OwnerRunRow[] }`: 持ち主と認められた進行中のソロのラン（同じ機械からなら、すべて）。`OwnerRunRow { runId, playerId, name, classId, season?: { id, name, participant? }, status: 'at_camp'|'in_dungeon'|'ended', eligible, waiting, hold, message, level, hp, maxHp, depth, banked, budgetLeft?, budgetLimit?, updatedAt }`。`waiting`: キャンプで目的を握られていて、次の遠征を始められる（AI が持ち主の決定を待っている）。`participant`: そのシーズンでの自分の表示名。
+  - `GET /api/runs/:id/owner/view` → `OwnerViewResponse { runId, playerId, name, eligible, reason?, waiting, view: PlayerView, observation: Observation, text }`。見えるのはプレイヤーと同じもの（その PlayerView と、それから作る観測と文。何も消費せず、プレイヤーの応答の基準も動かさない）。認められなければ 403。
+  - `POST /api/runs/:id/owner/directive { hold, message?, profileToken? }`・`POST /api/runs/:id/owner/act { command, profileToken? }` → 同じ形に `result: { ok: true } | { ok: false, error }`。命令は `Command` のスキーマで検査し、プレイヤーと同じ道（`RunSession.submit` → engine の `step`）で流す。
+- **順位の印**: 参加者の公開の値（キャンプで更新: SEASON.md §20.10）に、そのシーズンで持ち主の口から決めた項目の和（`directed`）。`SeasonStandingRow.directed?`（HTTP の順位の表・確定した結果）。握っただけでは付かない。順位は分けない。`SeasonStandingRow.runIds?`（その参加者のシーズンのラン。確定したシーズンと、同じ機械からの接続だけ）。
+- **ほかの参加者には渡らない**: 指図と伝言はそのプレイヤーの World にだけあり、取り込み（`season_sync`）にも、ほかの参加者の観測にも入らない。出来事 `directive_set`・`owner_decided` は本人だけ（観戦・巻き戻しでは、そのプレイヤーの出来事として見える。だれが見られるかは今までどおり）。
+- **遠征レポート**: `owner?`（その遠征の前のキャンプとその遠征で、持ち主が決めた項目）と、文の「指図: 目的と装備は、持ち主が決めた」の 1 行。討伐の記録には載せない。
