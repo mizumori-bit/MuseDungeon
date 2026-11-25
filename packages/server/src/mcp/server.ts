@@ -5,7 +5,7 @@ import { z } from 'zod';
 import type { ZodTypeAny } from 'zod';
 import { argListText, argProblems, argShape, exampleOf } from './args';
 import type { ActionError, Command, Controller, ObjectiveChoice, TurnBlock } from '@muse/shared';
-import { actionError, CommandSchema, stripTokenArgs, t } from '@muse/shared';
+import { actionError, CommandSchema, ownerWaitOpen, stripTokenArgs, t } from '@muse/shared';
 import type { PlayerPort, ActionPayload } from '../session/PlayerPort';
 import type { SessionManager } from '../session/SessionManager';
 import { rulesText, RULE_TOPICS } from './rules';
@@ -355,17 +355,19 @@ export function createMcpServer(ctx: McpContext): McpServer {
 
   server.registerTool('wait_for_turn', {
     title: '手番を待つ',
-    description: '自分の手番（または遠征・ランの終了）まで待って観測を返す。既に自分の番なら即座に返る。キャンプで目的を持ち主に握られているとき（観測の「指図」の行）は、持ち主が遠征を始めるまで待つ（手番は減らない）。Wait until it is your turn (or, at camp with the objective held by your owner, until they start the expedition).',
+    description: '自分の手番（または遠征・ランの終了）まで待って観測を返す。既に自分の番なら即座に返る。キャンプで目的を持ち主に握られているとき（観測の「指図」の行）は、持ち主が遠征を始めるまで待つ（手番は減らない。時間切れなら今の状態を返す。何回呼んでもよい）。Wait until it is your turn (or, at camp with the objective held by your owner, until they start the expedition).',
     inputSchema: { ...common, timeout_s: z.number().int().min(1).max(60).optional().describe('最大待ち時間（秒、既定 20、最大 60）') },
   }, async (args) => {
     const port = portOf(args.player_token);
     if (!port) return noSession();
     const v0 = port.view();
-    // キャンプで目的を持ち主に握られている（S8。SEASON.md §54.4 の 5）: 持ち主が遠征を始めるまで待つ（最長は同じ。時間が来たら今の観測）
-    if (v0.status === 'at_camp' && v0.camp && v0.directive?.hold.includes('objective')) {
+    // キャンプで目的を持ち主に握られている（S8。SEASON.md §54.4 の 5）: 持ち主が遠征を始めるまで待つ（最長は同じ。時間が来たら今の観測）。
+    // 予算切れ・時間切れのキャンプは待たない（S8b。下の道で、すぐ返る）
+    if (ownerWaitOpen(v0)) {
+      const t0 = Date.now();
       const w = await port.waitForOwner((args.timeout_s ?? 20) * 1000);
       const reason = w === 'timeout' ? 'wait_timeout' : w === 'started' && port.view().status === 'your_turn' ? 'turn_arrived' : 'observed';
-      const o = port.observeWithTurn(reason, { detail: 'brief' });
+      const o = port.observeWithTurn(reason, { detail: 'brief', waitedMs: Date.now() - t0 });
       record(port, 'wait_for_turn', args, o.text);
       return out(o.text, { observation: o.observation, turn: o.turn });
     }

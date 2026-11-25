@@ -6,7 +6,7 @@ import type {
 import {
   actionError, briefingLines, briefingShort, buildObservation, checkpointChangeText, withdrawText, buildTurnBlock, campLines, changesLine, compareLines, describeInventory, describeTarget, diffChanges, progressLines, reportLines,
   cheb, compassDir, dirLabel, formatObservationText, guardianDisplayName, kindName, lastWithoutXp, MACRO_COMPLETED_STOPS, mapTextLines, memoryCombatText, memoryKey, mineCount, nameOf, nearDirs, pickableItems, progressText, renderAsciiMap, resultText, t,
-  turnLine, turnSnapshot, turnStateOf, fightThreats, fleeRiskText, riskText, threatEstimate, DIR_VEC, collectTargets, collectWhatOf, itemDisplayName, slayGroupText, slaysAt,
+  turnLine, turnSnapshot, turnStateOf, ownerMessageIsNew, fightThreats, fleeRiskText, riskText, threatEstimate, DIR_VEC, collectTargets, collectWhatOf, itemDisplayName, slayGroupText, slaysAt,
 } from '@muse/shared';
 import type { MacroReport } from './RunSession';
 import { compareVersions, ENGINE_VERSION } from '@muse/engine';
@@ -58,7 +58,7 @@ export interface PlayerPort {
    * 観測＋turn ブロック。text には変化の行と末尾の状態行が付く。
    * changes: true なら前回の応答からの変化を計算して基準を更新する（照会系は false）
    */
-  observeWithTurn(reason: TurnReason, opts?: { detail?: 'brief' | 'full'; map?: boolean; consume?: boolean; changes?: boolean | 'peek' }): ObserveResult;
+  observeWithTurn(reason: TurnReason, opts?: { detail?: 'brief' | 'full'; map?: boolean; consume?: boolean; changes?: boolean | 'peek'; waitedMs?: number }): ObserveResult;
   /** turn ブロックだけ（変化は計算しない） */
   turnBlock(reason: TurnReason): TurnBlock;
   /** 応答テキストの表示オプション（ゲームには影響しない） */
@@ -452,7 +452,7 @@ export class SessionPlayerPort implements PlayerPort {
    * changes: true なら前回の応答からの変化を計算して基準を更新、'peek' なら比べるだけ、false なら変化を出さない。
    */
   private render(view: PlayerView, reason: TurnReason, p: {
-    detail?: 'brief' | 'full'; recent: PerceivedEvent[]; changes: boolean | 'peek'; interruptedBy?: string; expeditionEndedNow?: boolean;
+    detail?: 'brief' | 'full'; recent: PerceivedEvent[]; changes: boolean | 'peek'; interruptedBy?: string; expeditionEndedNow?: boolean; waitedMs?: number;
   }): ObserveResult {
     const L = view.locale;
     const opts = this.options();
@@ -486,7 +486,9 @@ export class SessionPlayerPort implements PlayerPort {
       if (p.changes === true && view.status !== 'at_camp' && this.session.checkpointDue(this.playerId, prev?.seq ?? null) && !view.entities.some((e) => e.cat === 'monster')) changes = [...changes, { code: 'checkpoint', text: checkpointChangeText(L) }];
       if (p.changes === true) this.session.setTurnSnapshot(this.playerId, cur);
     }
-    const turn = buildTurnBlock(view, { reason, interruptedBy: p.interruptedBy, changes, expeditionEndedNow: p.expeditionEndedNow });
+    // 伝言が前の応答から変わった（S8b）: キャンプの「持ち主から」の行に「（新しい）」。変化を出す応答だけ（基準と比べる）
+    if (p.changes && observation.self.directive && ownerMessageIsNew(prev, view)) observation.self.directive.message_new = true;
+    const turn = buildTurnBlock(view, { reason, interruptedBy: p.interruptedBy, changes, expeditionEndedNow: p.expeditionEndedNow, waitedMs: p.waitedMs });
     // 地図: auto は、階が変わった・新しいセルを知った・敵の出入りがあった応答だけ
     let mapMode: 'show' | 'unchanged' | 'none' = 'show';
     if (opts.map === 'never') mapMode = 'none';
@@ -505,9 +507,9 @@ export class SessionPlayerPort implements PlayerPort {
     return { observation, text, turn };
   }
 
-  observeWithTurn(reason: TurnReason, opts: { detail?: 'brief' | 'full'; map?: boolean; consume?: boolean; changes?: boolean | 'peek' } = {}): ObserveResult {
+  observeWithTurn(reason: TurnReason, opts: { detail?: 'brief' | 'full'; map?: boolean; consume?: boolean; changes?: boolean | 'peek'; waitedMs?: number } = {}): ObserveResult {
     const recent = opts.consume ? this.session.consumeFor(this.playerId) : this.pending();
-    return this.render(this.view(), reason, { detail: opts.detail, recent, changes: opts.changes ?? true });
+    return this.render(this.view(), reason, { detail: opts.detail, recent, changes: opts.changes ?? true, waitedMs: opts.waitedMs });
   }
 
   turnBlock(reason: TurnReason): TurnBlock {

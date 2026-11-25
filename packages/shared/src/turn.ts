@@ -7,7 +7,7 @@ import type { Dir, Locale, Names } from './types';
 import type { Catalog } from './catalog';
 import { nameOf, nextOverreach, overreachStepPoints } from './catalog';
 import { t } from './util';
-import { dirLabel } from './observation';
+import { dirLabel, ownerWaitOpen, seasonClosedView } from './observation';
 import type { PlayerView } from './view';
 
 export type TurnState = 'your_turn' | 'waiting_others' | 'at_camp' | 'expedition_ended' | 'run_ended';
@@ -50,6 +50,11 @@ export interface TurnBlock {
   awaiting: Awaiting;
   /** 前回の応答以降の重要な変化（事実のみ。最大 MAX_CHANGES 件） */
   changes: Change[];
+  /**
+   * 持ち主の決定を待っている（S8b。キャンプで目的を握られていて、次の遠征を始められるときだけ）。decided は常に false（決めたら、次の応答で迷宮の中に変わる）。
+   * waited_s: この wait_for_turn で待った秒数（時間切れで返ったとき）。何回待ってもよく、手番は減らない
+   */
+  owner_wait?: { decided: false; waited_s?: number; may_wait_again: true; turns_spent: 0 };
 }
 
 export const MAX_CHANGES = 8;
@@ -103,6 +108,8 @@ export interface TurnSnapshot {
   nextCampMin?: number | null;
   /** 踏破した最も深い階 */
   crossed?: number;
+  /** 持ち主の伝言（S8b。前の応答から変わったかの判定。無ければ空） */
+  ownerMsg?: string;
 }
 
 export function turnSnapshot(view: PlayerView, obs: Observation, state: TurnState | null = null): TurnSnapshot {
@@ -135,7 +142,14 @@ export function turnSnapshot(view: PlayerView, obs: Observation, state: TurnStat
     canExtract: obs.expedition?.can_extract ?? false,
     nextCampMin: obs.expedition?.haul?.next_camp?.min_target_depth ?? null,
     crossed: x?.crossedDepth ?? 0,
+    ownerMsg: view.directive?.message ?? '',
   };
+}
+
+/** 伝言が、前の応答の後に書かれた・書き換えられた（S8b）。前の応答が無ければ（つないだ最初・起動し直した後）、新しいとは言わない */
+export function ownerMessageIsNew(prev: TurnSnapshot | null, view: PlayerView): boolean {
+  const m = view.directive?.message ?? '';
+  return !!prev && !!m && prev.ownerMsg !== undefined && prev.ownerMsg !== m;
 }
 
 const PRIORITY: ChangeCode[] = [
@@ -181,16 +195,33 @@ export function diffChanges(prev: TurnSnapshot | null, cur: TurnSnapshot, view: 
   if (!prev) return pub ? [{ code: 'floor_changed', text: pub }] : [];
   const firsts = catalog ? firstSeen(prev, cur, view, catalog) : [];
   const out: Change[] = [];
-  // 持ち主が決めた（S8 §54.4 の 4）: 遠征を始めた・装備を変えた・特技を選んだ。持ち主が始めた遠征には、伝言をもう 1 回（§54.4 の 3）
+  // 持ち主が決めた（S8 §54.4 の 4）: 遠征を始めた・装備を変えた・特技を選んだ。持ち主が始めた遠征には、伝言をもう 1 回（§54.4 の 3）。
+  // 伝言を書いた・書き換えた（S8b）: 前の応答の基準と比べる（World と基準だけで決まる）。全文を 1 回。遠征の開始の「持ち主から」と重ねない
+  const msgNew = ownerMessageIsNew(prev, view);
+  const msg = view.directive?.message ?? '';
+  // 並び: 特技と加護 → 装備の経過とまとめ → 遠征の開始 → 伝言（どれも code owner。ほかの変化より先）
+  const gear: Change[] = [];
+  const started: Change[] = [];
   for (const e of events) {
     if (e.seq <= prev.seq || e.type !== 'owner_decided' || !e.text) continue;
     const ev = e.event as { act?: string; no?: number };
     if (ev.act === 'start_expedition') {
       const xo = view.expedition && view.expedition.no === ev.no ? objectiveText(L, view.expedition.objective) : '';
-      out.push({ code: 'owner', text: t(L, `持ち主が、遠征 ${ev.no ?? '?'} を始めた${xo ? `: ${xo}` : ''}`, `Your owner started expedition ${ev.no ?? '?'}${xo ? `: ${xo}` : ''}`) });
-      if (view.directive?.message) out.push({ code: 'owner', text: t(L, `持ち主から: ${view.directive.message}`, `From your owner: ${view.directive.message}`) });
-    } else out.push({ code: 'owner', text: e.text.replace(/[。.]$/, '') });
+      started.push({ code: 'owner', text: t(L, `持ち主が、遠征 ${ev.no ?? '?'} を始めた${xo ? `: ${xo}` : ''}`, `Your owner started expedition ${ev.no ?? '?'}${xo ? `: ${xo}` : ''}`) });
+    } else if (ev.act === 'equip' || ev.act === 'unequip') gear.push({ code: 'owner', text: e.text.replace(/[。.]$/, '') });
+    else out.push({ code: 'owner', text: e.text.replace(/[。.]$/, '') });
   }
+  // 装備のまとめ（S8b）: 途中の経過（3 行まで。多ければまとめだけ）の後に、今の装備を 1 行
+  if (gear.length) {
+    if (gear.length <= 3) out.push(...gear);
+    const eq = obs.self.equipment;
+    const none = t(L, 'なし', 'none');
+    out.push({ code: 'owner', text: t(L, `持ち主が、装備を決めた。今の装備: 武器 ${eq.weapon ?? none}・防具 ${eq.armor ?? none}・装飾 ${eq.accessory ?? none}`,
+      `Your owner settled your gear. Now wearing: weapon ${eq.weapon ?? none}, armor ${eq.armor ?? none}, accessory ${eq.accessory ?? none}`) });
+  }
+  out.push(...started);
+  if (msgNew) out.push({ code: 'owner', text: t(L, `持ち主が、伝言を書いた: ${msg}`, `Your owner wrote a message: ${msg}`) });
+  else if (started.length && msg) out.push({ code: 'owner', text: t(L, `持ち主から: ${msg}`, `From your owner: ${msg}`) });
   const sameFloor = prev.floorKey === cur.floorKey;
   if (!sameFloor && cur.depth !== null) {
     // この階を作ったときに効いた条件（V4-0e §8.1）: 着いたときに 1 回
@@ -392,10 +423,14 @@ export function turnStateOf(view: PlayerView, expeditionEndedNow: boolean): { st
   return { state: 'waiting_others', awaiting: 'nothing' };
 }
 
-export function buildTurnBlock(view: PlayerView, p: { reason: TurnReason; interruptedBy?: string; changes: Change[]; expeditionEndedNow?: boolean }): TurnBlock {
+/** waitedMs: 持ち主を待った wait_for_turn が時間切れで返ったときの、待った時間（S8b） */
+export function buildTurnBlock(view: PlayerView, p: { reason: TurnReason; interruptedBy?: string; changes: Change[]; expeditionEndedNow?: boolean; waitedMs?: number }): TurnBlock {
   const s = turnStateOf(view, p.expeditionEndedNow ?? false);
   const b: TurnBlock = { state: s.state, turn_no: view.self.turns, reason: p.reason, awaiting: s.awaiting, changes: p.changes };
   if (p.interruptedBy) b.interrupted_by = p.interruptedBy;
+  if (s.state === 'at_camp' && ownerWaitOpen(view)) {
+    b.owner_wait = { decided: false, ...(p.reason === 'wait_timeout' && p.waitedMs !== undefined ? { waited_s: Math.round(p.waitedMs / 1000) } : {}), may_wait_again: true, turns_spent: 0 };
+  }
   return b;
 }
 
@@ -417,6 +452,12 @@ export function turnLine(view: PlayerView, b: TurnBlock, short = false): string 
     case 'waiting_others':
       return t(L, '▶ 他のプレイヤーの手番です。遠征は進行中です。wait_for_turn で自分の番を待てます。', '▶ Another player is acting. The expedition continues; wait_for_turn waits for your turn.');
     case 'expedition_ended':
+      // シーズンの予算を使い切った・終わりの時刻を過ぎた（S8b: 持ち主を待つ文を出さない）
+      if (seasonClosedView(view)) {
+        return t(L,
+          `▶ 遠征は終了しました（${endReasonText(L, x?.endReason ?? null)}）。これ以上の行動は不要です。${seasonClosedText(view)}`,
+          `▶ The expedition has ended (${endReasonText(L, x?.endReason ?? null)}). No further action is required. ${seasonClosedText(view)}`);
+      }
       // 目的を持ち主が握っている（S8a §55.6 の 8: ここでやめると、持ち主が始めた遠征を、だれも遊ばない）
       if (view.directive?.hold.includes('objective')) {
         return t(L,
@@ -427,8 +468,13 @@ export function turnLine(view: PlayerView, b: TurnBlock, short = false): string 
         `▶ 遠征は終了しました（${endReasonText(L, x?.endReason ?? null)}）。これ以上の行動は不要です。次の遠征は start_expedition で選べます。`,
         `▶ The expedition has ended (${endReasonText(L, x?.endReason ?? null)}). No further action is required. You can choose the next one with start_expedition.`);
     case 'at_camp':
-      // 目的を持ち主が握っている（S8 §54.4 の 5）: 待ち方
-      if (view.camp && view.directive?.hold.includes('objective')) {
+      // シーズンの予算を使い切った・終わりの時刻を過ぎた（S8b: 目的を握られていても、待つ文を出さない。本文の終わりの文とそろえる）
+      if (view.camp && seasonClosedView(view)) {
+        return t(L, `▶ キャンプにいます（遠征は終了済み）。${seasonClosedText(view)}`, `▶ You are at camp (the expedition is over). ${seasonClosedText(view)}`);
+      }
+      // 目的を持ち主が握っている（S8 §54.4 の 5）: 待ち方。持ち主を待った wait_for_turn が時間切れで返ったときは、今の状態をはっきり（S8b）
+      if (ownerWaitOpen(view)) {
+        if (b.reason === 'wait_timeout') return t(L, `▶ キャンプにいます。${ownerTimeoutText(L, b.owner_wait?.waited_s)}`, `▶ You are at camp. ${ownerTimeoutText(L, b.owner_wait?.waited_s)}`);
         return t(L, `▶ キャンプにいます。${ownerWaitText(L)}`, `▶ You are at camp. ${ownerWaitText(L)}`);
       }
       if (view.camp && !view.expedition) {
@@ -449,6 +495,24 @@ export function turnLine(view: PlayerView, b: TurnBlock, short = false): string 
 export function ownerWaitText(L: Locale): string {
   return t(L, '持ち主が、次の遠征を決めるのを待つ。持ち主が始めたら、あなたが迷宮を進める（wait_for_turn で待てる。手番は減らない）。',
     'Wait for your owner to decide the next expedition. Once they start it, you play the dungeon (wait_for_turn waits; no turns are spent).');
+}
+
+/**
+ * 持ち主を待った wait_for_turn が時間切れで返ったとき（S8b）: まだ決めていないこと・決めたら何が変わるか・何回待ってもよいこと・やめてもよいこと
+ */
+export function ownerTimeoutText(L: Locale, waitedS?: number): string {
+  const w = waitedS !== undefined ? t(L, `（この待ちで ${waitedS} 秒待った）`, ` (waited ${waitedS} s this time)`) : '';
+  return t(L,
+    `持ち主は、まだ次の遠征を決めていない${w}。決めたら、次の応答で、迷宮の中に変わる。もう一度 wait_for_turn で待てる（何回待ってもよい。手番は減らない）。待つのをやめてもよい（やめても、持ち主が始めれば遠征は始まり、次に呼んだときに続きから遊べる）。`,
+    `Your owner has not decided the next expedition yet${w}. Once they do, your next response shows you inside the dungeon. You can wait again with wait_for_turn (as many times as you like; no turns are spent). You may also stop waiting (if your owner starts the expedition meanwhile, it begins and you continue from there the next time you call).`);
+}
+
+/** 予算切れ・時間切れのキャンプの終わりの文（S8b。本文の「新しい遠征は始められない」とそろえる） */
+function seasonClosedText(view: PlayerView): string {
+  const L = view.locale;
+  return (view.season?.budgetLeft ?? 1) <= 0
+    ? t(L, 'このシーズンの行動予算を使い切ったので、新しい遠征は始められない。ここで終えてかまいません。', 'This season\'s budget is used up, so no new expedition can start. It is fine to stop here.')
+    : t(L, 'シーズンは終わりの時刻を過ぎたので、新しい遠征は始められない。ここで終えてかまいません。', 'The season has passed its end time, so no new expedition can start. It is fine to stop here.');
 }
 
 export function changesLine(L: Locale, changes: Change[]): string {

@@ -42,9 +42,9 @@ export function Lobby({ tab = 'sortie' }: { tab?: HomeTab }) {
   const [seasons, setSeasons] = useState<SeasonStandingsResponse[]>([]);
   // シーズンの一覧を一度でも読んだか（「ほかのラン」を既定で開くかを、読む前に決めない）
   const [seasonsLoaded, setSeasonsLoaded] = useState(false);
-  // シーズンの参加（S2 §18.1）: 招かれたプロフィールのトークンは、シーズンごとにこのブラウザに残す（画面には伏せて出す。URL・記録には出さない）
+  // シーズンの参加（S2 §18.1）: 前の版では、招かれたプロフィールのトークンをシーズンごとに覚えた（seasonToken.<id>）。S8b からは
+  // 「AI のランの持ち主になる」の 1 つの欄（profileToken）に覚える。前に覚えたものも読む（画面には伏せて出す。URL・記録には出さない）
   const [seasonTok, setSeasonTok] = useState<Record<string, string>>({});
-  const [tokDraft, setTokDraft] = useState<Record<string, string>>({});
   // 観戦できるラン（S3 §25.1）: 開催中のシーズンのランは、このブラウザに覚えてあるトークンのランか、同じ機械から開いているときだけ。
   // withTok: トークンを付けて訊いた（外からなら、返ったランはそのトークンのもの）
   const [watch, setWatch] = useState<Record<string, SeasonWatchResponse & { withTok: boolean }>>({});
@@ -177,9 +177,11 @@ export function Lobby({ tab = 'sortie' }: { tab?: HomeTab }) {
   };
 
   /** シーズンのランを始める（AI の new_run { season, profile_token } と同じ POST /api/runs）。断られたらサーバーの理由をそのまま出す */
+  /** そのシーズンで使うプロフィールのトークン（S8b: 前の版でシーズンごとに覚えたもの、無ければ「AI のランの持ち主になる」の欄で覚えたもの） */
+  const seasonTokFor = (id: string): string => seasonTok[id] || profileToken;
   const joinSeason = async (id: string) => {
-    const tok = seasonTok[id];
-    if (!tok) { setError(tr('招かれたプロフィールのトークン（運用者から受け取ったもの）を入れる', 'Enter the profile token the operator gave you')); return; }
+    const tok = seasonTokFor(id);
+    if (!tok) { setError(tr('招かれたプロフィールのトークン（運用者から受け取ったもの）を、「AI のランの持ち主になる」の欄に入れる', 'Put the profile token the operator gave you in the "Become the owner" box')); return; }
     setBusy(true);
     try {
       setPref('name', name);
@@ -192,19 +194,6 @@ export function Lobby({ tab = 'sortie' }: { tab?: HomeTab }) {
     } finally {
       setBusy(false);
     }
-  };
-  const keepSeasonTok = (id: string) => {
-    const v = (tokDraft[id] ?? '').trim();
-    if (!v) return;
-    setPref(`seasonToken.${id}`, v);
-    setSeasonTok({ ...seasonTok, [id]: v });
-    setTokDraft({ ...tokDraft, [id]: '' });
-  };
-  const forgetSeasonTok = (id: string) => {
-    setPref(`seasonToken.${id}`, '');
-    const next = { ...seasonTok };
-    delete next[id];
-    setSeasonTok(next);
   };
 
   /** シーズンのラン（S3 §25.1）: 観戦できるか（確定する前は、覚えてあるトークンのランか、同じ機械からだけ）・巻き戻せるか（確定する前は、同じ機械から、ランが終わった後だけ） */
@@ -343,13 +332,32 @@ export function Lobby({ tab = 'sortie' }: { tab?: HomeTab }) {
   const waitingCount = owner.rows.filter((x) => x.waiting).length;
   const otherWaiting = otherRows.filter((x) => x.waiting).length;
   const operatorWaiting = operatorRows.filter((x) => x.waiting).length;
-  /** AI を招いたときのトークン（プロフィールのトークン）を入れる欄（S8a §55.6 の 6。ほかの PC のブラウザから、その AI のランの持ち主になる） */
+  // 「この機械のほかのラン」の開け閉め（S8b）: 既定は、AI が決定を待っているランがあれば開く。操作したら、その向きを覚える。
+  // 待っているランが増えたら、既定に戻す（開く）
+  const [opOpen, setOpOpen] = useState<boolean | null>(null);
+  const [opWaitSeen, setOpWaitSeen] = useState(0);
+  useEffect(() => {
+    if (operatorWaiting > opWaitSeen) setOpOpen(null);
+    if (operatorWaiting !== opWaitSeen) setOpWaitSeen(operatorWaiting);
+  }, [operatorWaiting]);
+  /**
+   * プロフィールのトークンを入れる欄（S8a §55.6 の 6・S8b で 1 つにまとめた）: 入れると、そのプロフィールのランの持ち主になる（シーズンのランも、シーズンでないランも）。
+   * 覚えるのは profileToken。前の版でシーズンの参加の欄に覚えた seasonToken.<id> も、今までどおり読む（どちらに覚えていても働く）
+   */
+  const savedSeasonToks = Object.keys(seasonTok);
+  const forgetTokens = () => {
+    setPref('profileToken', '');
+    setProfileToken('');
+    for (const id of savedSeasonToks) setPref(`seasonToken.${id}`, '');
+    setSeasonTok({});
+    void refreshOwner(seasons.map((x) => x.season.id));
+  };
   const ownerTokenBox = () => (
     <section class="panel seasonbox">
-      <h3>{tr('AI のランの持ち主になる', 'Become the owner of your AI\'s run')}</h3>
+      <h3>{tr('AI のランの持ち主になる（プロフィールのトークン）', 'Become the owner of your AI\'s runs (profile token)')}</h3>
       <div class="sjoin">
-        {profileToken ? (
-          <span class="muted">{tr('プロフィールのトークン: このブラウザに保存済み（••••）', 'Profile token: saved in this browser (••••)')} <button class="tiny" onClick={() => { setPref('profileToken', ''); setProfileToken(''); void refreshOwner(seasons.map((x) => x.season.id)); }}>{tr('外す', 'Forget')}</button></span>
+        {profileToken || savedSeasonToks.length ? (
+          <span class="muted">{tr('プロフィールのトークン: このブラウザに保存済み（••••）', 'Profile token: saved in this browser (••••)')} <button class="tiny" onClick={forgetTokens}>{tr('外す', 'Forget')}</button></span>
         ) : (
           <span class="row">
             <input type="password" autocomplete="off" placeholder={tr('プロフィールのトークン（profile_token）', 'profile token (profile_token)')} value={profDraft}
@@ -359,7 +367,7 @@ export function Lobby({ tab = 'sortie' }: { tab?: HomeTab }) {
           </span>
         )}
       </div>
-      <p class="muted small">{tr('AI を招いたときのトークン（プロフィールのトークン）を入れると、その AI のランの持ち主になる（ほかの PC のブラウザからも）。トークンはこのブラウザにだけ覚え、画面と URL には出さない。シーズンの招きのトークンも同じプロフィールのトークンなので、ここか、シーズンの参加の欄に入れる。', 'Enter the token you got when you invited your AI (its profile token) and you become the owner of that AI\'s runs, from any PC\'s browser. The token is kept only in this browser and never shown on screen or in a URL. A season invite token is the same kind of profile token: put it here or in that season\'s join box.')}</p>
+      <p class="muted small">{tr('AI を招いたときのトークン（招かれたプロフィールのトークン）を入れると、そのプロフィールのランの持ち主になる（シーズンのランも、シーズンでないランも、ここに自分のランとして出る。ほかの PC のブラウザからも）。トークンはこのブラウザにだけ覚え、画面と URL には出さない。', 'Enter the token you got when you invited your AI (the invited profile token) and you become the owner of that profile\'s runs (season runs and other runs both show up here as yours), from any PC\'s browser. The token is kept only in this browser and never shown on screen or in a URL.')}</p>
     </section>
   );
   const keepOwnerTok = () => {
@@ -371,37 +379,28 @@ export function Lobby({ tab = 'sortie' }: { tab?: HomeTab }) {
   };
   const card = (row: OwnerRunRow) => <OwnerRunCard key={row.runId} row={row} token={owner.token[row.runId]} catalog={catalog} onChanged={() => void refreshOwner(seasons.map((x) => x.season.id))} />;
 
-  /** シーズンに参加する欄（今シーズンの自分のランが無いとき。今ある「このシーズンに参加」） */
+  /**
+   * シーズンを自分で遊ぶ欄（人間のラン。今シーズンの自分のランが無いとき）。S8b: トークンの欄は持たない（上の「AI のランの持ち主になる」で覚えたものを使う）
+   */
   const joinBox = (s: SeasonListing) => {
     // このブラウザで始めた、このシーズンの進行中のラン（続ける）
     const mine = active.find((r) => r.season === s.id && getToken(r.runId) && !r.recoveryFailed);
+    const tok = seasonTokFor(s.id);
     return (
       <section key={`join-${s.id}`} class="panel seasonbox">
-        <h3>{tr(`シーズン「${s.name}」に参加する`, `Join the season "${s.name}"`)}</h3>
-        <div class="sjoin">
-          {mine ? (
+        <h3>{tr(`シーズン「${s.name}」を自分で遊ぶ（人間のラン）`, `Play the season "${s.name}" yourself (a human run)`)}</h3>
+        {mine ? (
+          <div class="sjoin">
             <a class="button small primary" href={`#/play/${mine.runId}`}>{tr('進行中のシーズンのランを続ける', 'Resume your season run')}</a>
-          ) : (
-            <>
-              {seasonTok[s.id] ? (
-                <span class="muted">{tr('招かれたプロフィールのトークン: このブラウザに保存済み（••••）', 'Invited profile token: saved in this browser (••••)')} <button class="tiny" onClick={() => forgetSeasonTok(s.id)}>{tr('外す', 'Forget')}</button></span>
-              ) : (
-                <span class="row">
-                  <input type="password" autocomplete="off" placeholder={tr('招かれた profile_token', 'invited profile_token')} value={tokDraft[s.id] ?? ''}
-                    onInput={(e) => setTokDraft({ ...tokDraft, [s.id]: (e.target as HTMLInputElement).value })}
-                    onKeyDown={(e) => { if (e.key === 'Enter') keepSeasonTok(s.id); }} />
-                  <button class="small" onClick={() => keepSeasonTok(s.id)}>{tr('覚える', 'Keep')}</button>
-                </span>
-              )}
-            </>
-          )}
-        </div>
-        {!mine && (
+          </div>
+        ) : (
           <>
-            <p class="muted small">{tr('AI を招いたときのトークン（プロフィールのトークン）を覚えさせると、その AI のランの持ち主になる（ここに自分のランとして出て、指図を出せる）。自分で遊ぶなら、名前とクラスを決めて参加する。', 'Keep the token you got when you invited your AI (its profile token) and you become the owner of that AI\'s run (it shows up here as your run, and you can give it directives). To play yourself, pick a name and class and join.')}</p>
+            <p class="muted small">{tok
+              ? tr('名前とクラスを決めて参加する。トークンは、上の欄で覚えたプロフィールのトークンを使う。', 'Pick a name and class and join. It uses the profile token kept in the box above.')
+              : tr('参加できるのは、招かれたプロフィールだけ。上の「AI のランの持ち主になる」の欄に、招かれたプロフィールのトークンを入れてから参加する。', 'Only invited profiles can join. Put the invited profile token in the "Become the owner" box above first.')}</p>
             <div class="form inline-form">
               {nameClassFields()}
-              <button class="small primary" disabled={busy || !name.trim() || !seasonTok[s.id]} onClick={() => joinSeason(s.id)}
+              <button class="small primary" disabled={busy || !name.trim() || !tok} onClick={() => joinSeason(s.id)}
                 title={tr('このシーズンのランを、自分で遊ぶ（人間のラン）。招かれたプロフィールだけが参加できる', 'Start a season run you play yourself (a human run). Only invited profiles can join')}>
                 {tr('このシーズンに参加（自分で遊ぶ）', 'Join this season (play yourself)')}
               </button>
@@ -417,13 +416,15 @@ export function Lobby({ tab = 'sortie' }: { tab?: HomeTab }) {
       <section class="homesec">
         <h2 class="hhead">{tr('今シーズンの自分のラン', 'Your run this season')}</h2>
         {seasonRows.map(card)}
-        {current.filter((x) => x.season.status === 'open' && !seasonRows.some((row) => row.season?.id === x.season.id)).map((x) => joinBox(x.season))}
         {!current.length && <p class="muted">{tr('開催中のシーズンは無い。続きのあるラン・新しいランは、下の「ほかのラン」から。過去のシーズンは「記録」のタブ。', 'No season is running. Other runs and new runs are under "Other runs" below; past seasons are in the Records tab.')}</p>}
         {ownerTokenBox()}
+        {current.filter((x) => x.season.status === 'open' && !seasonRows.some((row) => row.season?.id === x.season.id)).map((x) => joinBox(x.season))}
       </section>
 
+      {/* AI が決定を待っているランがあれば、最初から開く（S8b。畳んだ・開いた操作は覚える。待っているランが新しく出たら開き直す） */}
       {operatorRows.length > 0 && (
-        <details class="panel others" open={operatorWaiting > 0}>
+        <details class="panel others" open={opOpen ?? operatorWaiting > 0}
+          onToggle={(e) => { const o = (e.currentTarget as HTMLDetailsElement).open; if (o !== (opOpen ?? operatorWaiting > 0)) setOpOpen(o); }}>
           <summary>
             {tr('この機械のほかのラン（運用者として）', 'Other runs on this machine (as the operator)')}
             <small>{tr(`（${operatorRows.length}）`, ` (${operatorRows.length})`)}</small>

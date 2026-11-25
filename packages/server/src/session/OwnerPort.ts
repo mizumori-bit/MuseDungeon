@@ -2,7 +2,7 @@
 // 持ち主が見るのは、そのプレイヤーの PlayerView と、そこから作る観測だけ（プレイヤーより多くを見せない）。命令は、プレイヤーと同じ Command を、
 // 同じ道（RunSession.submit → engine の step）で流す。違うのは出どころ（source: owner）だけ。プレイヤーの応答の基準（turn.changes）は動かさない。
 import type { ActionError, Command, DirectiveItem, Observation, OwnerRunRow, OwnerViewResponse, PlayerId, PlayerView } from '@muse/shared';
-import { actionError, CommandSchema, t } from '@muse/shared';
+import { actionError, CommandSchema, ownerWaitOpen, t } from '@muse/shared';
 import { directiveTarget, heldItemOf } from '@muse/engine';
 import type { RunSession } from './RunSession';
 import { SessionPlayerPort } from './PlayerPort';
@@ -22,8 +22,7 @@ export function ownerIneligible(session: RunSession, pid: PlayerId): string | nu
 
 /** AI が持ち主の決定を待っているか（§54.5: キャンプで、目的を握られていて、次の遠征を始められる） */
 export function ownerWaited(view: PlayerView): boolean {
-  if (view.status !== 'at_camp' || !view.camp || !view.directive?.hold.includes('objective')) return false;
-  return !(view.season && (view.season.budgetLeft <= 0 || view.season.ended));
+  return ownerWaitOpen(view);
 }
 
 /** 持ち主の見るもの: プレイヤーの PlayerView と観測（AI に見えているのと同じ文と数字）。何も消費しない・基準を動かさない */

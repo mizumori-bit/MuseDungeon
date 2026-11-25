@@ -253,7 +253,8 @@ describe('S8 §54.4 の 5: wait_for_turn at camp waits for the owner to start (M
     const t0 = (await client.callTool({ name: 'wait_for_turn', arguments: { player_token, timeout_s: 1 } })) as unknown as { structuredContent: { turn: { reason: string; state: string } }; content: { text: string }[] };
     expect(t0.structuredContent.turn.reason).toBe('wait_timeout');
     expect(t0.structuredContent.turn.state).toBe('at_camp');
-    expect(t0.content[0].text).toContain('持ち主から: 静かに');
+    // 伝言は new_run の応答の後に書いた: 最初の応答で「（新しい）」と「変化」（S8b）
+    expect(t0.content[0].text).toContain('持ち主から（新しい）: 静かに');
     const pending = client.callTool({ name: 'wait_for_turn', arguments: { player_token, timeout_s: 20 } }) as unknown as Promise<{ structuredContent: { turn: { reason: string; changes: { code: string; text: string }[] } } }>;
     await new Promise((res) => setTimeout(res, 50));
     expect(errCode(await s.submit(player_id, { type: 'start_expedition', offer: 1 }, { source: 'owner' }))).toBe('ok');

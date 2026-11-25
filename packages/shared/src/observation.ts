@@ -352,7 +352,8 @@ export interface Observation {
      * 指図（S8。SEASON.md §54.4 の 1）: 持ち主が握っている項目と、その 1 行（キャンプでも迷宮でも）。message: 持ち主からの伝言（キャンプだけ）。
      * decided: このランで持ち主が決めた項目。握っている項目も伝言も無ければ無い
      */
-    directive?: { hold: DirectiveItem[]; message?: string; decided?: DirectiveItem[]; text: string };
+    /** message_new: 伝言が、前の応答の後に書かれた・書き換えられた（S8b。応答の基準との差分で、サーバーが付ける。観測だけを作ったときは付かない） */
+    directive?: { hold: DirectiveItem[]; message?: string; message_new?: boolean; decided?: DirectiveItem[]; text: string };
   };
   /** items_omitted: 記憶の中の遠いアイテムのうち省いた件数 */
   visible: { monsters: ObsMonster[]; items: ObsItem[]; players: ObsPlayer[]; features: ObsFeature[]; items_omitted?: number };
@@ -2515,13 +2516,26 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
   if (hold.includes('objective')) out = out.filter(drop(/^start_expedition\b/));
   if (hold.includes('loadout')) out = out.filter(drop(/^(equip|unequip)\b/));
   if (hold.includes('perks')) out = out.filter(drop(/^(choose_perk|choose_boon)\b/));
-  if (hold.includes('objective') && view.status === 'at_camp' && view.camp && !(view.season && (view.season.budgetLeft <= 0 || view.season.ended))) {
+  if (ownerWaitOpen(view)) {
     // 引退の行の前に（キャンプの「できること」の並び: 報告・候補・notes・retire）
     const i = out.indexOf('retire');
     const wait = waitOwnerLine(L);
     out = i >= 0 ? [...out.slice(0, i), wait, ...out.slice(i)] : [...out, wait];
   }
   return out;
+}
+
+/** シーズンの予算を使い切ったか、終わりの時刻を過ぎた（新しい遠征は始められない） */
+export function seasonClosedView(view: PlayerView): boolean {
+  return !!view.season && (view.season.budgetLeft <= 0 || view.season.ended);
+}
+
+/**
+ * AI が持ち主の決定を待っている（S8 §54.4 の 5・§54.5）: キャンプで、目的を握られていて、次の遠征を始められる。
+ * 予算切れ・時間切れのキャンプは待たない（S8b: 待つ行・▶ 行の待ち方を出さず、wait_for_turn はすぐ返す）
+ */
+export function ownerWaitOpen(view: PlayerView): boolean {
+  return view.status === 'at_camp' && !!view.camp && !!view.directive?.hold.includes('objective') && !seasonClosedView(view);
 }
 
 /** キャンプで目的を握られているときの待つ行（S8 §54.4 の 2・5） */
@@ -3023,7 +3037,10 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
     }
     lines.push(t(L, 'できること: ', 'Actions: ') + obs.valid_actions.join(' / '));
     // 持ち主からの伝言（S8 §54.4 の 3）: 区切りの段の前に。聞くかどうかは、あなたが決める
-    if (s.directive?.message) lines.push(t(L, `持ち主から: ${s.directive.message}`, `From your owner: ${s.directive.message}`));
+    // 前の応答から変わっていれば「（新しい）」（S8b）
+    if (s.directive?.message) lines.push(s.directive.message_new
+      ? t(L, `持ち主から（新しい）: ${s.directive.message}`, `From your owner (new): ${s.directive.message}`)
+      : t(L, `持ち主から: ${s.directive.message}`, `From your owner: ${s.directive.message}`));
     if (obs.checkpoint) lines.push(...checkpointLines(L, obs.checkpoint));
     return lines.join('\n');
   }
