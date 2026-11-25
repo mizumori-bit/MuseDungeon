@@ -241,6 +241,8 @@ export function OwnerRunCard({ row, token, catalog, onChanged }: { row: OwnerRun
         {row.season?.participant && row.season.participant !== row.name && <small>{tr(`順位の表では「${row.season.participant}」`, `"${row.season.participant}" in the standings`)}</small>}
         <span class={`tag vstatus ${status === 'at_camp' ? 'at_camp' : status === 'ended' ? 'ended' : 'your_turn'}`}>{where}</span>
         <span class="oacts">
+          {/* 支度の画面（S10。SEASON.md §58.4。ただ 1 つの出撃の窓口。この枠と同じ口を使う） */}
+          {row.eligible && <a class="button small" href={`#/prepare/${row.runId}`}>{tr('支度', 'Prepare')}</a>}
           <a class="button small" href={`#/watch/${row.runId}`}>{tr('観戦', 'Watch')}</a>
           {playable && <a class="button small primary" href={`#/play/${row.runId}`}>{tr('自分で遊ぶ', 'Play')}</a>}
         </span>

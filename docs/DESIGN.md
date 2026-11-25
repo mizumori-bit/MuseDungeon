@@ -1824,7 +1824,7 @@ engine と出来事の形は変えていない（`engineVersion` 0.38.0・`event
 
 ### 42.17 S9: 支度の札・希望・冒険者 1 人に続きは 1 つ（SEASON.md §58.1〜§58.3。PROTOCOL.md §9.14 の「S9」・§5 の「S9 で変えた項目」）
 
-`engineVersion` 0.49.0・`eventVersion` 37（コンテンツの版は変わらない）。指図の無いランは、何も変わらない（出来事の列も）。画面の作り直し（§58.4 の拠点と支度。S10）は、まだしていない。
+`engineVersion` 0.49.0・`eventVersion` 37（コンテンツの版は変わらない）。指図の無いランは、何も変わらない（出来事の列も）。画面の作り直し（§58.4 の拠点と支度。S10）は、§42.18。
 
 - **札と希望は World の指図の中**（`Directive.prep`・`Directive.wishes`）。変えるのは命令 → 出来事（`directive_set`・`directive_prep`・`directive_wish`。どれも `directiveAfter` の代入）→ `applyEvent` だけ。engine の `directive.ts` に、判定と after 値の作り方を集めた: `directiveGate`（門。断りと、覚える希望の下書き）・`setDirective`・`prepare`・`afterOwnerDecision`（持ち主が決めたら「まだ」に戻し、その項目の希望を消す）・`settleCampPrep`（キャンプに着いたとき。`offerExpeditions` の終わりから呼ぶ）・`ownerObjective`（準備完了の後のプレイヤーの `start_expedition` の候補）。決めるものの数え方は、engine は World から（`prepNeedsWorld`）、観測は PlayerView から（`undecidedItems`）同じものを数え、文は shared の `directive.ts`（`prepNeedsParts`・`wishLabel` など。名前の表は Catalog でも Content でも渡せる）。
 - **決定論と再生**: 希望の理由は命令の `thought`（命令の記録にあり、`step` の `meta.thought` で engine に渡る）。希望の断りは出来事を出す（`StepResult` が `ok: false` で `events` を持つ）ので、`RunSession.stepNow` は今までどおり確定して記録する（記録の `resultSeq` が付き、再実行で同じ出来事になる）。同じ希望のくり返しは出来事を出さない（記録もしない）。シーズンのランで断られる `start_expedition` は、取り込み（`season_sync`）を記録する前に `directiveRefusal` で見分けて、取り込まずに `step` へ渡す。
@@ -1834,3 +1834,13 @@ engine と出来事の形は変えていない（`engineVersion` 0.38.0・`event
 - **画面**: 持ち主の枠（`ui/owner.tsx`）に札・AI との行き来・目的を選ぶ・「準備完了」（確かめの窓）・希望と「希望どおりにする」（`activeWishes`・`wishCommand`）。ホームの「冒険を始める」「シーズンに参加」は、`run_in_progress` で確かめの窓を出し、同意で `endPrevious` を付けて出し直す。観戦とリプレイの「思考」の欄に「希望: …」（`ui/narration.ts`）。
 - **S9c（検査の直し）**: 札の状態は `prepStateOf(d, needs)` 1 つで読み、札が無ければ決めるものを数える（engine の `prepStateWorld`・shared の `prepStateView`。装備は覚えが無いので数えない）。希望の出来事 `directive_wish` は、その項目の希望と数だけを持ち、reducer は、その項目だけを置き換える（記録を太らせない）。希望は、中身が同じなら足さず、項目ごとにキャンプからキャンプまで `WISH_LIMIT`（8）回まで。冒険者 1 人に続きは 1 つの数え方は `SessionManager.continuable` 1 つで、シーズンの `canStart` もこれを使う（`SeasonService.continues`）。同じプロフィールの `new_run` は、プロフィールの ID ごとの待ち行列（`byProfile`）で、数えてから参加するまでを順番に流す。MCP の `choose_perk`・`choose_boon` に `thought`。
 - **音**: `hollow` の `sound.json` に合図 `stairs` の仮の音（SOUND_SPEC.md §2.2）。合図を作る `soundStep` は前から `entity_changed_floor` で `stairs` を出していた（遊ぶ画面・観戦の追従・俯瞰のどれも、その出来事が届けば鳴る）。
+### 42.18 S10: 拠点と支度（SEASON.md §58.4。PROTOCOL.md §9.14 の「S10」）
+
+画面だけ。engine・shared の World と出来事・命令の形・版は S9 のまま（`engineVersion` 0.49.0・`eventVersion` 37）。サーバーは `GET /api/profile` に `seasons`（そのプロフィールが招かれたシーズン。`SeasonService.memberships`）を足しただけ。
+
+- **道**（`main.tsx`）: `#/` 拠点・`#/records` 記録・`#/ops` 運用（前の「ほかのラン」と、鍵を外す）は同じ `Lobby` のタブ（読み込んだ中身を保つ）。`#/prepare/<runId>` 支度は `screens/Prepare.tsx`。上のタブは `ui/hub.tsx` の `HubNav`（拠点・記録と、隅の歯車。線で描いた SVG）。遊ぶ・観戦・巻き戻し・シーズンの結果の道は、そのまま。知らない道と前の「出撃」は拠点。
+- **札の文とボタン**は画面から離した関数（`ui/hubState.ts` の `hubCard`。§58.4 の表の 6 つの状態と、人間が自分で遊ぶ冒険者・招かれていない冒険者。テストは `client/test/hub.test.ts`）。入れるのは、持ち主の口の一覧の行（`OwnerRunRow`。AI の観測と同じ関数で作った札・決めていないもの・希望の数・AI との行き来）と、プロフィールの `seasons` だけ。どのシーズンの札にするかは `pickSeason`（その冒険者のランがあるシーズン → 招かれた開催中のシーズン → …）。
+- **鍵**（`ui/keys.ts`）: このブラウザに覚えてある鍵（`profileToken` と、前の版の `seasonToken.<id>`）ごとに、`GET /api/owner/runs` と `GET /api/profile` を呼ぶ（同じプロフィールは 1 枚に）。鍵が無ければ、拠点の真ん中に入れる欄（入れる前に `GET /api/profile` で確かめる。見つからなければ覚えない）。外すのは運用の画面から。鍵は見出しでだけ渡し、画面・URL・console に出さない。
+- **運用者の札**: 同じ機械から開いているとき（`OwnerRunsResponse.local`）、今シーズンのランで、このブラウザの鍵の冒険者でないものを「この機械の冒険者（運用者として）」に小さい札で出す（支度は鍵なしの持ち主の口）。シーズンでないランの運用者の枠（`OwnerRunCard`）は運用の画面に。
+- **支度**（`screens/Prepare.tsx`。上の状態と段ごとの 1 行は `ui/prepState.ts`）: 鍵は、`GET /api/owner/runs` でそのランを自分のもの（`mine`）として返す鍵（無ければ鍵なし＝同じ機械から）。5 秒ごとに `…/owner/view` を読み直す。「任せる／自分で」はすぐ `…/owner/directive` に送る（伝言の書きかけは送らない）。開いている段は握っている項目そのもの（読み直しで閉じない）。伝言は書きかけのあいだサーバーの値で上書きしない。「準備完了」は、書きかけの伝言があれば先に残してから `prepare { ready: true }`。決めていないものが残っていれば確かめの窓（`readyCheck`）。目的の候補は遊ぶ画面のキャンプの `OfferCard`（ボタンの文と「選んだ」の印を渡せるようにした）、装備は `InventoryPanel`、特技と加護は `PerkChoicePanel`・`BoonChoicePanel` を使い回す。見えるものはプレイヤーの PlayerView と観測だけ。
+- **見た目**: 新しい接頭辞（`.hub-`・`.prep-`）のクラスだけで、拠点と支度を札の画面にした（深い紺〜墨の地・羊皮紙色の文字・金の差し色 1 つ。状態のピルは、支度が「まだ」が琥珀・準備完了が緑・迷宮の中が青。名前はシステムのセリフ体）。ほかの画面の見た目は変えていない。絵・演出は後の段（H6）。

@@ -188,6 +188,16 @@ export interface NewRunRequest {
  */
 export interface InheritedHold { hold: DirectiveItem[]; objectiveIgnored: boolean }
 
+/**
+ * プロフィールが招かれたシーズン（S10。SEASON.md §58.4 の拠点の冒険者の札。GET /api/profile の seasons。そのプロフィールのトークンでだけ返る）。
+ * name: 招いたときの表示名（順位の表の名前）。used: 今までに使った予算（ランをまたいで。キャンプでの公開の値ではなく今の値）。
+ * runs: 始めたランの数。died: このシーズンで倒れたことがある。status はシーズンの一覧と同じ
+ */
+export interface ProfileSeasonEntry {
+  id: string; seasonName: string; name: string; status: 'open' | 'ended' | 'final';
+  budget: number; used: number; runs: number; died: boolean;
+}
+
 /** シーズンの一覧の 1 行（S0。GET /api/seasons・list_runs の seasons） */
 /** participants: 1 回でもランを始めた参加者の数、invited: 招いた数（S0a） */
 export interface SeasonListing { id: string; name: string; budget: number; endsAt: number; status: 'open' | 'ended' | 'final'; participants: number; invited: number }

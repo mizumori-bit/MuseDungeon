@@ -4,7 +4,7 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { readJsonStable, writeFileAtomicLogged } from '../log/atomicWrite';
 import type {
-  DirectiveItem, GameEvent, PlayerId, SeasonAward, SeasonListing, SeasonResultView, SeasonSectionRow, SeasonSlay, SeasonSlayBrief, SeasonStandingRow, SeasonStandingsResponse, SeasonSyncCommand, SeasonTitle, SupplyPlace,
+  DirectiveItem, GameEvent, PlayerId, ProfileSeasonEntry, SeasonAward, SeasonListing, SeasonResultView, SeasonSectionRow, SeasonSlay, SeasonSlayBrief, SeasonStandingRow, SeasonStandingsResponse, SeasonSyncCommand, SeasonTitle, SupplyPlace,
 } from '@muse/shared';
 import { awardName, DIRECTIVE_ITEMS, SeasonSlaySchema } from '@muse/shared';
 import type { RunSession } from '../session/RunSession';
@@ -511,6 +511,23 @@ export class SeasonService implements SeasonHooks {
   }
 
   get(id: string): SeasonData | null { return this.store.get(id); }
+
+  /**
+   * そのプロフィールが招かれたシーズン（S10。SEASON.md §58.4 の拠点の冒険者の札。GET /api/profile の seasons）。
+   * 招いたときの表示名・使った予算（今の値）・ランの数・倒れたか。記録が読めないシーズン・招いた者の記録が読めないシーズンは入れない
+   */
+  memberships(profileId: string): ProfileSeasonEntry[] {
+    const out: ProfileSeasonEntry[] = [];
+    for (const id of this.store.ids()) {
+      const d = this.store.get(id);
+      if (!d || this.store.invitesBroken(id)) continue;
+      const inv = this.store.invites(id).find((x) => x.profileId === profileId);
+      if (!inv) continue;
+      const p = this.participant(d, profileId);
+      out.push({ id, seasonName: d.def.name, name: inv.name, status: this.status(d), budget: d.def.budget, used: p ? used(p) : 0, runs: p?.runs.length ?? 0, died: !!p?.died });
+    }
+    return out;
+  }
 
   private participant(d: SeasonData, profileId: string | null): Participant | null {
     return profileId ? d.participants.find((p) => p.profileId === profileId) ?? null : null;

@@ -1,7 +1,7 @@
 // HTTP API（docs/PROTOCOL.md §8）。失敗は ApiError で投げ、画面側でバナー表示する。
 import type {
   ActionError, Catalog, Command, CommandRecord, DirectiveItem, GameEvent, JoinedResponse, JoinRunRequest, LeaderboardEntry,
-  NewRunRequest, OwnerRunsResponse, OwnerViewResponse, ProfileRecords, RunIndex, RunListing, RunMetaFile, SeasonListing, SeasonStandingsResponse, SeasonWatchResponse,
+  NewRunRequest, OwnerRunsResponse, OwnerViewResponse, ProfileRecords, ProfileSeasonEntry, RunIndex, RunListing, RunMetaFile, SeasonListing, SeasonStandingsResponse, SeasonWatchResponse,
   SpectatorPolicy, World,
 } from '@muse/shared';
 
@@ -90,7 +90,8 @@ export const api = {
   config: () => getJSON<{ spectatorPolicy: SpectatorPolicy }>('/api/config'),
   /** プロフィールの記録（V3-7 §7.2。MCP の records と同じ中身） */
   /** プロフィールの表示名・要約・称号（S2 §18.2。MCP の profile と同じ中身） */
-  profile: async (profileToken: string, locale: string) => (await (await request(`/api/profile?locale=${enc(locale)}`, bearer(profileToken))).json()) as { name: string; summary: string; titles?: { name: string; season: string; season_name: string }[] },
+  /** seasons（S10。SEASON.md §58.4）: そのプロフィールが招かれたシーズン（拠点の冒険者の札） */
+  profile: async (profileToken: string, locale: string) => (await (await request(`/api/profile?locale=${enc(locale)}`, bearer(profileToken))).json()) as { profile_id: string; name: string; summary: string; titles?: { name: string; season: string; season_name: string }[]; seasons?: ProfileSeasonEntry[] },
   records: async (profileToken: string, locale: string) => (await (await request(`/api/profile/records?locale=${enc(locale)}`, bearer(profileToken))).json()) as { text: string; records: ProfileRecords },
   /** 持ち主と認められた進行中のラン（S8 §54.7 の「出撃」）。token: プロフィールのトークン（無ければ見出しを付けない） */
   ownerRuns: (token?: string) => ownerGet<OwnerRunsResponse>('/api/owner/runs', token),

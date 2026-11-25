@@ -1,0 +1,100 @@
+// 支度の画面（S10。SEASON.md §58.4）の、上の状態と、段ごとの今の状態の 1 行。画面から離した関数（テストする）。
+// 中身は、そのプレイヤーの PlayerView と観測（持ち主の口の …/owner/view）から取ったものだけ（持ち主に、プレイヤーより多くを見せない）。
+import type { DirectiveItem } from '@muse/shared';
+import { tr } from '../util';
+import type { HubTone } from './hubState';
+
+/** 画面の上の状態: human あなたが遊ぶ・watch 遠征の途中・closed 変えられない・free 全部任せている・pending 支度が「まだ」・ready 準備完了 */
+export type PrepHeadKind = 'human' | 'watch' | 'closed' | 'free' | 'pending' | 'ready';
+
+export interface PrepHeadInput {
+  name: string;
+  /** 指図を出せる冒険者か（人間が自分で遊ぶ冒険者は false） */
+  eligible: boolean;
+  status: 'at_camp' | 'in_dungeon' | 'ended';
+  depth: number | null;
+  hold: readonly DirectiveItem[];
+  prep: 'pending' | 'ready' | null;
+  /** シーズンの写し（シーズンのランだけ） */
+  season: { budgetLeft: number; ended: boolean; final?: boolean } | null;
+}
+
+export interface PrepHead {
+  kind: PrepHeadKind;
+  pill: { text: string; tone: HubTone };
+  line: string;
+  /** 決められる（キャンプにいて、変えられる） */
+  editable: boolean;
+}
+
+/** 上の状態（ピルと 1 行）と、決められるか */
+export function prepHead(x: PrepHeadInput): PrepHead {
+  const n = x.name;
+  if (!x.eligible) return { kind: 'human', editable: false, pill: { text: tr('あなたが遊ぶ', 'You play'), tone: 'muted' }, line: tr(`${n}は、あなたが自分で遊ぶ冒険者。支度は、遊ぶ画面のキャンプで決める`, `You play ${n} yourself. Prepare at camp on the play screen`) };
+  if (x.status === 'ended') return { kind: 'closed', editable: false, pill: { text: tr('終わった', 'Ended'), tone: 'muted' }, line: tr('この冒険は、終わった。記録は、見返せる', 'This adventure has ended. Its records can be looked back on') };
+  if (x.season?.final) return { kind: 'closed', editable: false, pill: { text: tr('終わり', 'Done'), tone: 'muted' }, line: tr('このシーズンは終わった。記録は、見返せる', 'This season is over. Its records can be looked back on') };
+  if (x.status !== 'at_camp') {
+    return {
+      kind: 'watch', editable: false,
+      pill: { text: x.depth !== null ? tr(`迷宮の中・地下${x.depth}階`, `In the dungeon, depth ${x.depth}`) : tr('迷宮の中', 'In the dungeon'), tone: 'blue' },
+      line: tr('遠征の途中は、見守る。支度は、キャンプに戻ってから', 'During an expedition, you watch. Preparations wait until camp'),
+    };
+  }
+  if (x.season && x.season.budgetLeft <= 0) return { kind: 'closed', editable: false, pill: { text: tr('終わり', 'Done'), tone: 'muted' }, line: tr('このシーズンの手番を、使い切った。もう出発しない', 'All of this season\'s turns are used. No more expeditions') };
+  if (x.season?.ended) return { kind: 'closed', editable: false, pill: { text: tr('終わり', 'Done'), tone: 'muted' }, line: tr('シーズンが終わった。新しい遠征は、始まらない', 'The season is over. No new expedition starts') };
+  if (!x.hold.length) return { kind: 'free', editable: true, pill: { text: tr('任せている', 'Left to them'), tone: 'muted' }, line: tr(`全部、任せている。${n}は、自分で決めて出発する`, `Everything is left to ${n}, who decides and sets out on their own`) };
+  if (x.prep === 'ready') return { kind: 'ready', editable: true, pill: { text: tr('準備完了', 'Ready'), tone: 'green' }, line: tr(`準備完了。${n}が来たら、出発する`, `Ready. ${n} sets out when they come`) };
+  return { kind: 'pending', editable: true, pill: { text: tr('支度: まだ', 'Not ready'), tone: 'amber' }, line: tr(`${n}は、あなたの支度を待っている`, `${n} is waiting for your preparations`) };
+}
+
+/** 段の名前 */
+export function prepItemName(x: DirectiveItem): string {
+  return x === 'objective' ? tr('目的', 'Objective') : x === 'loadout' ? tr('装備', 'Equipment') : tr('特技と加護', 'Perks and boons');
+}
+
+/** 段の「任せる」のときの補足（握ることの代価: SEASON.md §54.3） */
+export function prepItemCost(x: DirectiveItem): string {
+  return x === 'objective'
+    ? tr('自分で選ぶと、目的を選んで「準備完了」を出すまで、出発しない。迷宮の中のことは、任せたまま', 'If you choose it, they wait until you pick one and mark ready. Everything inside the dungeon stays with them')
+    : x === 'loadout'
+      ? tr('自分で決めると、迷宮で手に入れた装備は、キャンプで確かめるまで身に着けない', 'If you decide it, gear found in the dungeon is not worn until it is looked over at camp')
+      : tr('自分で選ぶと、遠征の間に覚えられることが増えても、身につけるのはキャンプに戻ってから', 'If you choose them, what they grow able to learn is taken up only back at camp');
+}
+
+export interface PrepLineInput {
+  name: string;
+  held: boolean;
+  /** 選んだ目的の文（目的の段。選んでいなければ null） */
+  chosen?: string | null;
+  /** 身に着けている品の名前（武器・防具・装飾の順） */
+  equipment?: readonly string[];
+  /** 決めていない、新しく持ち物に入った装備の数 */
+  gear?: number;
+  /** 取った特技と、加護の名前 */
+  perks?: readonly string[];
+  boons?: readonly string[];
+  perkPending?: { level: number; options: number } | null;
+  boonPending?: { depth: number; options: number } | null;
+}
+
+/** 段の今の状態の 1 行（「（名前）が決める」「鎚矛・革の鎧」「特技なし ― Lv2 の候補 3 つを選んでいない」） */
+export function prepLine(item: DirectiveItem, x: PrepLineInput): string {
+  const who = tr(`${x.name}が決める`, `${x.name} decides`);
+  if (item === 'objective') {
+    if (!x.held) return who;
+    return x.chosen ? tr(`選んだ: ${x.chosen}`, `Chosen: ${x.chosen}`) : tr('まだ選んでいない ― 候補から 1 つ選ぶ', 'Not chosen yet — pick one of the offers');
+  }
+  if (item === 'loadout') {
+    const base = x.equipment?.length ? x.equipment.join(tr('・', ', ')) : tr('何も身に着けていない', 'Nothing worn');
+    if (!x.held) return tr(`${base}（${who}）`, `${base} (${who})`);
+    return x.gear ? tr(`${base} ― 新しく持ち物に入った装備 ${x.gear} 品を、まだ決めていない`, `${base} — ${x.gear} new piece${x.gear > 1 ? 's' : ''} of gear not decided yet`) : base;
+  }
+  const names = [...(x.perks ?? []), ...(x.boons ?? [])];
+  const base = names.length ? names.join(tr('・', ', ')) : tr('特技なし', 'No perks');
+  const pend = [
+    x.perkPending ? tr(`Lv${x.perkPending.level} の候補 ${x.perkPending.options} つを選んでいない`, `the ${x.perkPending.options} Lv${x.perkPending.level} options not chosen`) : '',
+    x.boonPending ? tr(`加護の候補 ${x.boonPending.options} つを選んでいない`, `the ${x.boonPending.options} boon options not chosen`) : '',
+  ].filter(Boolean).join(tr('・', '; '));
+  if (!x.held) return tr(`${base}（${who}）`, `${base} (${who})`);
+  return pend ? tr(`${base} ― ${pend}`, `${base} — ${pend}`) : base;
+}

@@ -489,3 +489,168 @@ ul.ocost { margin: 0; padding-left: 18px; }
 .line.owner { color: #ffe08a; }
 .line.owner_msg { color: #b4d8ff; }
 .line.wish { color: #d7c4ff; }
+
+/* ---- 拠点と支度（S10。SEASON.md §58.4）: 新しい接頭辞（.hub- / .prep-）だけ。ほかの画面の見た目は変えない ----
+   深い紺〜墨の地に、羊皮紙色の文字、金の差し色 1 つ。状態の札（ピル）: 支度が「まだ」は琥珀・準備完了は緑・迷宮の中は青。
+   名前はセリフ体（システムのもの。外のフォントは読まない）。グラデーション・光る飾り・絵文字は使わない */
+.hub, .hub-nav, .hub-modal {
+  --hub-ink: #0e1320;
+  --hub-card: #151b29;
+  --hub-card2: #1b2234;
+  --hub-line: #2a3246;
+  --hub-parch: #ebe2cb;
+  --hub-parch2: #b8ad94;
+  --hub-faint: #8a8170;
+  --hub-gold: #c9a45c;
+  --hub-gold2: #d8b773;
+  --hub-gold-ink: #1c1609;
+  --hub-amber: #e0a24a;
+  --hub-green: #93c39c;
+  --hub-blue: #93b6e3;
+  --hub-serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, "Yu Mincho", YuMincho, "Hiragino Mincho ProN", "Noto Serif JP", "MS PMincho", serif;
+}
+.hub { flex: 1; min-height: 0; overflow-y: auto; background: var(--hub-ink); color: var(--hub-parch); }
+.hub-col { max-width: 760px; margin: 0 auto; padding: 24px 16px 56px; display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+.hub-col > * { min-width: 0; }
+
+/* 上のタブ（拠点・記録と、隅の歯車） */
+.hub-nav { display: flex; align-items: center; gap: 2px; padding: 0 16px; background: var(--hub-ink); border-bottom: 1px solid var(--hub-line); }
+.hub-tab { padding: 12px 14px 10px; color: var(--hub-parch2); text-decoration: none; letter-spacing: 0.1em; font-size: 14px; border-bottom: 2px solid transparent; }
+.hub-tab:hover { color: var(--hub-parch); }
+.hub-tab.on { color: var(--hub-parch); border-bottom-color: var(--hub-gold); }
+.hub-count { display: inline-block; margin-left: 6px; min-width: 18px; padding: 0 5px; border-radius: 9px; background: var(--hub-amber); color: var(--hub-gold-ink); font-size: 11px; font-weight: 700; line-height: 18px; text-align: center; letter-spacing: 0; }
+.hub-navspace { flex: 1; }
+.hub-gear { display: inline-flex; padding: 8px; color: var(--hub-parch2); border-radius: 8px; }
+.hub-gear:hover, .hub-gear.on { color: var(--hub-gold); }
+.hub-gearicon { display: block; }
+
+/* 冒険者の札 */
+.hub-card, .prep-hero, .prep-sec, .prep-final { background: var(--hub-card); border: 1px solid var(--hub-line); border-radius: 14px; padding: 22px 24px 20px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.hub-card.is-pending { border-color: rgba(224, 162, 74, 0.55); box-shadow: inset 3px 0 0 var(--hub-amber); }
+.hub-card.is-operator { padding: 14px 16px; background: transparent; border-style: dashed; }
+.hub-card.is-operator .hub-name { font-size: 18px; }
+.hub-card.is-operator .hub-where { font-size: 14px; margin-top: 6px; }
+.hub-card.is-operator .hub-stats { margin-top: 8px; padding-top: 8px; }
+.hub-card.is-operator .hub-actions { margin-top: 10px; }
+.hub-card.is-operator .hub-btn.primary { background: transparent; color: var(--hub-gold); font-weight: 600; }
+.hub-card.is-operator .hub-btn.primary:hover { border-color: var(--hub-gold2); color: var(--hub-gold2); }
+.hub-cardhead { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px 12px; flex-wrap: wrap; }
+.hub-who { min-width: 0; }
+.hub-name { margin: 0; font-family: var(--hub-serif); font-weight: 600; font-size: 28px; line-height: 1.2; color: var(--hub-parch); letter-spacing: 0.02em; overflow-wrap: anywhere; }
+.hub-sub { margin-top: 4px; font-size: 12.5px; color: var(--hub-faint); letter-spacing: 0.04em; overflow-wrap: anywhere; }
+.hub-pills { display: flex; flex-wrap: wrap; gap: 6px; }
+.hub-pill { display: inline-block; padding: 3px 11px; border-radius: 999px; font-size: 12px; font-weight: 600; letter-spacing: 0.05em; border: 1px solid transparent; white-space: nowrap; }
+.hub-pill.tone-amber { color: var(--hub-amber); background: rgba(224, 162, 74, 0.13); border-color: rgba(224, 162, 74, 0.38); }
+.hub-pill.tone-green { color: var(--hub-green); background: rgba(147, 195, 156, 0.12); border-color: rgba(147, 195, 156, 0.36); }
+.hub-pill.tone-blue { color: var(--hub-blue); background: rgba(147, 182, 227, 0.12); border-color: rgba(147, 182, 227, 0.36); }
+.hub-pill.tone-gold { color: var(--hub-gold); background: rgba(201, 164, 92, 0.12); border-color: rgba(201, 164, 92, 0.36); }
+.hub-pill.tone-muted { color: var(--hub-parch2); background: rgba(235, 226, 203, 0.05); border-color: var(--hub-line); }
+.hub-where { margin: 12px 0 0; font-size: 16px; color: var(--hub-parch); overflow-wrap: anywhere; }
+.hub-text { margin: 0; font-size: 15px; color: var(--hub-parch); overflow-wrap: anywhere; }
+.hub-card.is-pending .hub-text { color: var(--hub-amber); font-weight: 600; }
+.hub-card.state-camp_ready .hub-text { color: var(--hub-green); }
+.hub-note { margin: 0; font-size: 12.5px; line-height: 1.65; color: var(--hub-parch2); overflow-wrap: anywhere; }
+.hub-note.warn, .hub-err { color: #e8a48e; }
+.hub-err { margin: 0; font-size: 13px; overflow-wrap: anywhere; }
+.hub-stats { display: flex; flex-wrap: wrap; gap: 8px 28px; margin: 14px 0 0; padding: 12px 0 0; border-top: 1px solid var(--hub-line); }
+.hub-stats > div { display: flex; flex-direction: column; gap: 2px; }
+.hub-stats dt { font-size: 11px; color: var(--hub-faint); letter-spacing: 0.08em; }
+.hub-stats dd { margin: 0; font-size: 17px; color: var(--hub-parch); font-variant-numeric: tabular-nums; }
+.hub-stats dd small { color: var(--hub-faint); font-size: 12px; }
+.hub-stats dd.low { color: var(--hub-amber); }
+.hub-actions { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* ボタン（1 画面に主のボタンは 1 つ: .primary） */
+.hub-btn, .prep-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 9px 18px; border-radius: 10px; border: 1px solid var(--hub-line); background: transparent; color: var(--hub-parch); font: inherit; font-size: 14px; letter-spacing: 0.04em; text-decoration: none; cursor: pointer; }
+.hub-btn:hover, .prep-btn:hover { border-color: var(--hub-gold); color: var(--hub-gold); }
+.hub-btn.primary { background: var(--hub-gold); border-color: var(--hub-gold); color: var(--hub-gold-ink); font-weight: 700; }
+.hub-btn.primary:hover { background: var(--hub-gold2); border-color: var(--hub-gold2); color: var(--hub-gold-ink); }
+.hub-btn:disabled, .prep-btn:disabled { opacity: 0.45; cursor: default; }
+.hub-btn.small, .prep-btn.small { padding: 5px 12px; font-size: 12.5px; border-radius: 8px; }
+.hub-btn.big { padding: 12px 30px; font-size: 16px; align-self: flex-start; }
+
+/* 鍵を入れる欄・開催中のシーズンが無いとき */
+.hub-keybox, .hub-empty { display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center; padding: 44px 24px; background: var(--hub-card); border: 1px solid var(--hub-line); border-radius: 14px; }
+.hub-keytitle { margin: 0; font-family: var(--hub-serif); font-size: 22px; font-weight: 600; color: var(--hub-parch); }
+.hub-keyform { display: flex; flex-wrap: wrap; gap: 8px; width: 100%; max-width: 420px; }
+.hub-keyform .hub-input { flex: 1 1 200px; width: auto; }
+.hub-input { width: 100%; min-width: 0; padding: 10px 12px; border-radius: 10px; background: var(--hub-card2); border: 1px solid var(--hub-line); color: var(--hub-parch); font: inherit; font-size: 15px; }
+.hub-input:focus, .prep-msg:focus { outline: none; border-color: var(--hub-gold); }
+.hub-links { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+
+/* この機械の冒険者（運用者として）・順位 */
+.hub-operator, .hub-standings { display: flex; flex-direction: column; gap: 10px; }
+.hub-sechead { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: 0.14em; color: var(--hub-gold); }
+.hub-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+.hub-standhead { display: flex; align-items: flex-end; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.hub-standhead .hub-sub { margin-top: 6px; }
+.hub-dot { display: inline-block; width: 3px; height: 3px; margin: 0 8px; border-radius: 50%; background: var(--hub-faint); vertical-align: middle; }
+.hub-tablewrap { overflow-x: auto; border: 1px solid var(--hub-line); border-radius: 10px; background: var(--hub-card); }
+.hub-tablewrap table.board { font-size: 12.5px; }
+.hub-tablewrap th { color: var(--hub-faint); font-weight: 500; font-size: 11.5px; letter-spacing: 0.06em; }
+.hub-tablewrap th, .hub-tablewrap td { padding: 8px 10px; border-bottom-color: var(--hub-line); white-space: nowrap; }
+.hub-tablewrap tr:last-child td { border-bottom: none; }
+.hub-tablewrap tr.mine td { background: rgba(201, 164, 92, 0.1); }
+.hub-tablewrap .tag.you { background: var(--hub-gold); color: var(--hub-gold-ink); }
+.hub-foot { text-align: center; margin-top: 8px; }
+.hub-foot a, .prep-back:hover { color: var(--hub-gold); }
+
+/* 窓（自分で潜る・続きのある冒険・決めていないもの） */
+.hub-modal { position: fixed; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(5, 7, 12, 0.72); }
+.hub-dialog { width: 100%; max-width: 460px; max-height: calc(100vh - 32px); overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding: 24px; background: var(--hub-card); color: var(--hub-parch); border: 1px solid var(--hub-line); border-radius: 14px; }
+.hub-dtitle { margin: 0; font-family: var(--hub-serif); font-size: 21px; font-weight: 600; }
+.hub-form { display: flex; flex-direction: column; gap: 12px; }
+.hub-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--hub-parch2); letter-spacing: 0.06em; }
+.hub-dactions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.prep-list { margin: 0; padding-left: 20px; font-size: 14px; line-height: 1.7; }
+
+/* 支度（#/prepare/<runId>） */
+.prep-back { align-self: flex-start; font-size: 13px; color: var(--hub-parch2); text-decoration: none; letter-spacing: 0.04em; }
+.prep-headline { margin: 8px 0 0; font-size: 16px; font-weight: 600; color: var(--hub-parch); }
+.prep-headline.tone-amber { color: var(--hub-amber); }
+.prep-headline.tone-green { color: var(--hub-green); }
+.prep-headline.tone-blue { color: var(--hub-blue); }
+.prep-sec { gap: 8px; padding: 18px 20px; }
+.prep-sec.is-held { border-color: rgba(201, 164, 92, 0.38); }
+.prep-sechead { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; flex-wrap: wrap; }
+.prep-sectitle { margin: 0; font-family: var(--hub-serif); font-size: 19px; font-weight: 600; color: var(--hub-parch); }
+.prep-toggle { display: inline-flex; padding: 2px; border: 1px solid var(--hub-line); border-radius: 999px; background: var(--hub-ink); }
+.prep-toggle button { padding: 5px 14px; border: none; border-radius: 999px; background: transparent; color: var(--hub-parch2); font-size: 12.5px; letter-spacing: 0.04em; cursor: pointer; }
+.prep-toggle button.on { background: var(--hub-card2); color: var(--hub-parch); box-shadow: inset 0 0 0 1px var(--hub-gold); }
+.prep-toggle button:disabled { opacity: 1; cursor: default; }
+.prep-toggle button:disabled:not(.on) { opacity: 0.45; }
+.prep-toggle button:not(:disabled):hover { color: var(--hub-gold); }
+.prep-line { margin: 0; font-size: 15px; color: var(--hub-parch); overflow-wrap: anywhere; }
+.prep-cost { margin: 0; font-size: 12px; line-height: 1.6; color: var(--hub-faint); overflow-wrap: anywhere; }
+.prep-wishes { list-style: none; margin: 4px 0 0; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; font-size: 13px; border-radius: 10px; background: rgba(201, 164, 92, 0.07); border: 1px solid rgba(201, 164, 92, 0.24); }
+.prep-wishes li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.prep-wish { color: var(--hub-gold); }
+.prep-reason { color: var(--hub-parch2); }
+.prep-body { margin-top: 6px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.prep-body .panel { background: transparent; border-color: var(--hub-line); }
+.prep-body .perkbox { margin: 0; }
+.prep-offers { margin: 0; }
+.prep-offers li.offer { border-bottom-color: var(--hub-line); }
+.prep-offers li.offer.chosen { padding-left: 8px; padding-right: 8px; border-radius: 8px; background: rgba(147, 195, 156, 0.07); outline: 1px solid rgba(147, 195, 156, 0.4); }
+.prep-offers .ohead { flex-wrap: wrap; }
+.prep-offers .ohead .otext { min-width: 0; overflow-wrap: anywhere; }
+.prep-offers button.primary { background: transparent; border-color: var(--hub-gold); color: var(--hub-gold); }
+.prep .tag.chosen { padding: 1px 10px; font-size: 11.5px; background: rgba(147, 195, 156, 0.16); color: var(--hub-green); }
+.prep-final { gap: 10px; }
+.prep-msglabel { font-size: 12px; color: var(--hub-parch2); letter-spacing: 0.06em; }
+.prep-msg { width: 100%; resize: vertical; padding: 10px 12px; border-radius: 10px; background: var(--hub-card2); border: 1px solid var(--hub-line); color: var(--hub-parch); font: inherit; font-size: 14px; }
+.prep-msgrow { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.prep-msgrow small { color: var(--hub-faint); }
+.prep-msgacts { display: inline-flex; gap: 6px; }
+.prep-ok { margin: 0; font-size: 13px; color: var(--hub-green); overflow-wrap: anywhere; }
+
+.prep-offers .ometa, .prep-offers .ometa > span, .prep-offers .oguard, .prep-offers .ogap, .prep-offers .traits { white-space: normal; overflow-wrap: anywhere; min-width: 0; }
+.prep-offers .ometa { padding-left: 0; }
+.prep-offers .offer .traits { padding-left: 0; }
+.prep-body .inv .name { min-width: 0; overflow-wrap: anywhere; }
+@media (max-width: 480px) {
+  .hub-card, .prep-hero, .prep-sec, .prep-final { padding: 16px; }
+  .hub-name { font-size: 24px; }
+  .hub-nav { padding: 0 8px; }
+  .hub-btn.big { align-self: stretch; }
+}

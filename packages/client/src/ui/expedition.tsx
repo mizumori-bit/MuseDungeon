@@ -400,19 +400,28 @@ export function RestEstimateLine({ est }: { est: RestEstimate }) {
   );
 }
 
-function OfferCard({ o, rules, level, onStart, view, catalog }: { o: ExpeditionOffer; rules: CatalogRules | undefined; level: number; onStart: (offer: number) => void; view?: PlayerView; catalog?: Catalog | null }) {
+/**
+ * 遠征の候補の 1 枚。支度の画面（S10。SEASON.md §58.4）でも使う: actionLabel（ボタンの文。省くと「この遠征に出る」）・chosen（選んだ候補。ボタンの代わりに印）・
+ * disabled（押せない）
+ */
+export function OfferCard({ o, rules, level, onStart, view, catalog, actionLabel, chosen, disabled }: {
+  o: ExpeditionOffer; rules: CatalogRules | undefined; level: number; onStart: (offer: number) => void; view?: PlayerView; catalog?: Catalog | null;
+  actionLabel?: string; chosen?: boolean; disabled?: boolean;
+}) {
   const L = getLocale();
   // 大守護者と、通り道の群れている階も危険度に入れる（AI の候補と同じ。V4-0e §8.1）
   const g = rules ? offerGap(rules, o.objective.targetDepth, o.traits ?? [], level, offerWardenExtra(o)) : null;
   const ft = offerFloorTraitsText(L, rules, o);
   const guarded = o.objective.type === 'retrieve_relic' && o.relicGuarded ? tr('（守護者付き）', ' (guarded)') : '';
   return (
-    <li class={`offer ${o.slot ?? ''}`}>
+    <li class={`offer ${o.slot ?? ''} ${chosen ? 'chosen' : ''}`}>
       <div class="ohead">
         <span class="oidx">{o.index})</span>
         <SlotBadge slot={o.slot} />
         <span class="otext">{objectiveText(L, o.objective)}{guarded}</span>
-        <button class="small primary" onClick={() => onStart(o.index)}>{tr('この遠征に出る', 'Start')}</button>
+        {chosen
+          ? <span class="tag chosen">{tr('選んだ', 'Chosen')}</span>
+          : <button class="small primary" disabled={disabled} onClick={() => onStart(o.index)}>{actionLabel ?? tr('この遠征に出る', 'Start')}</button>}
       </div>
       <div class="ometa">
         <span>{tr(`基礎 +${o.points}`, `base +${o.points}`)}</span>

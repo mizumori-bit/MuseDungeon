@@ -1158,6 +1158,7 @@ S3f の `seq_resume { next }`（`player: null`）も同じ: 起動時の再生�
 | `GET /api/ops/calls?limit=` | S7（SEASON.md §52.1 の 2）。運用の口（サーバーと同じ機械からだけ。外からは 403）: 直近の MCP の呼び出し（新しい順に最大 200 件）`{ long_ms, calls: { at, tool, run, ms, error? }[] }`（受け取った時刻・ツール・ラン・サーバーの側でかかった時間。メモリだけで、ファイルには書かない。引数・トークン・考えは持たない） |
 | `GET /api/seasons` / `GET /api/seasons/:id` | S0（§9.8）。シーズンの一覧 / 1 つのシーズンの順位の表・確定した結果・坑の断面（S2 §9.11。公開された階段の位置は出さない） |
 | `GET /api/owner/runs` | S8（§9.14）。持ち主と認められた進行中のソロのラン `OwnerRunsResponse`。`Authorization: Bearer <profile_token>`（任意） |
+| `GET /api/profile` | V3-7。プロフィールの表示名・要約・称号・ラン（MCP の `profile` と同じ中身）。`Authorization: Bearer <profile_token>`。S10（§9.14）で `seasons`（そのプロフィールが招かれたシーズン `ProfileSeasonEntry[]`）を足した（HTTP だけ） |
 | `GET /api/runs/:id/owner/view`・`POST …/owner/directive`・`POST …/owner/act` | S8（§9.14）。持ち主の口: 見る・指図・握った項目の命令 |
 | `GET /api/seasons/:id/watch` | S3（§9.7）。いま観戦できる、そのシーズンの進行中のラン `{ local, final, runs: { runId, name }[] }`。`Authorization: Bearer <profile_token>`（任意。招かれたプロフィールのもの） |
 
@@ -1556,4 +1557,7 @@ SlayOpening { turns: number; dealt: number; hitTurns: number; taken: number }
   2. **希望**: 中身が同じなら（理由だけが違っても）出来事を足さない。理由は最初のものを残す。応答は「その希望（…）は、もう持ち主に伝えてある（持ち主が決めるのは、キャンプで）。」。項目ごと（目的・装備・特技・加護）に、キャンプからキャンプまでの間に覚えられるのは `WISH_LIMIT`（8）回まで（最初の 1 回を含む。`Directive.wishCount`。キャンプに着いたとき `directive_prep { why: 'camp' }` で消える）。超えたら出来事を足さず「希望は、もう伝えてある（次のキャンプまで、これ以上は変えられない。今の希望: …）。」。どちらも `held_by_owner`・`details.wish: true`・手番なし。出来事 `directive_wish` は、その項目の希望と数（`countAfter`）だけを持つ（指図の全部を持たない）。
   3. **MCP**: `choose_perk`・`choose_boon` に `thought` を足した（前は引数に無く、共通の名前として捨てていたので、MCP から出した特技・加護の希望に理由が届かなかった）。`equip`・`unequip`・`start_expedition` は前から `thought` を受ける。`choose_boon`・`equip`・`unequip` の説明にも「握られているときは、希望として持ち主に伝わる」。
   4. **冒険者 1 人に続きは 1 つ**: 数え方を 1 つの関数（`SessionManager.continuable`）にした。シーズンの `canStart` の「進行中のシーズンのランがある」も、これで見る（`SeasonService.continues`）。新しく数えないもの: キャンプにいて、新しい遠征を始められないシーズンのラン（終わりの時刻を過ぎた・予算を使い切った。`SeasonService.canContinue`）。迷宮の中のランは、シーズンが終わりの時刻を過ぎても、帰るか倒れるまで続けられるので数える。同じプロフィールの `new_run`（シーズンのランも）は、数えてから参加するまでを、プロフィールの ID ごとの待ち行列で順番に流す（同時に来た 2 つで、続きのあるランが 2 つできない。前のものが失敗しても次は流れる）。
+- **S10（SEASON.md §58.4。画面だけ。engine・出来事・命令の形・World と版は S9 のまま）**:
+  1. **`GET /api/profile` に `seasons`**（`ProfileSeasonEntry[]`）: そのプロフィールが招かれたシーズンごとに `{ id, seasonName, name, status, budget, used, runs, died }`（`name` は招いたときの表示名＝順位の表の名前、`used` はランをまたいで使った予算の今の値、`runs` は始めたランの数、`died` はこのシーズンで倒れたことがある）。`Authorization: Bearer <profile_token>` のプロフィールのものだけ（ほかのプロフィールの招きは入らない）。記録が読めないシーズン・招いた者の記録が読めないシーズンは入れない。MCP の `profile` の文と `structuredContent` は変えない（HTTP だけ）。人間の画面の拠点の冒険者の札（「まだ、このシーズンに入っていない」「前の冒険は、倒れて終わった」「手番を使い切った」・残りの手番）に使う。
+  2. 人間の画面: `#/` は拠点（冒険者の札・鍵を入れる欄・この機械の冒険者（運用者として）・今シーズンの順位）、`#/prepare/<runId>` は支度（目的・装備・特技と加護の「任せる／自分で」・伝言・「準備完了」。持ち主の口の `…/owner/view`・`…/owner/directive`・`…/owner/act` を使う）、`#/ops` は運用（前のホームの「ほかのラン」と、鍵を外す）、`#/records` は記録（今のまま）。前の「出撃」は拠点になった（`#/` のまま）。だれが何を見られるか・持ち主の口の守り（§8 の状態を変える口）は変えていない。
 - **pilot**: 持ち主が目的を握るランでは、pilot の `camp.auto_start` を `null` にする（pilot は `held_by_owner` を知らないので、出発を試みては断られ、数秒で自分を止める。pilot の README）。S9 で、特技と加護・装備を握られて札が「まだ」のときも、pilot の出発は断られる（pilot は変えていない）。

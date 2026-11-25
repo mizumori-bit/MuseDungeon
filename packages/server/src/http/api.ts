@@ -164,7 +164,8 @@ export function createApp(manager: SessionManager, config: ServerConfig): App {
         const body = (await readBody(req).catch(() => null)) as { name?: string } | null;
         if (!body?.name || !pp.rename(body.name)) return fail(res, 400, actionError('bad_request', 'name is required', '{ name }'));
       }
-      if (p === '/api/profile') { const r = pp.info(L); return r ? json(res, 200, { text: r.text, ...r.data }) : fail(res, 404, actionError('no_session', 'no profile', '')); }
+      // seasons（S10。SEASON.md §58.4）: そのプロフィールが招かれたシーズン（拠点の冒険者の札。HTTP だけ。MCP の profile の文は変えない）
+      if (p === '/api/profile') { const r = pp.info(L); return r ? json(res, 200, { text: r.text, ...r.data, seasons: manager.seasons.memberships(pp.id) }) : fail(res, 404, actionError('no_session', 'no profile', '')); }
       const r = pp.records(L);
       return r ? json(res, 200, { text: r.text, records: r.data }) : fail(res, 404, actionError('no_session', 'no profile', ''));
     }
