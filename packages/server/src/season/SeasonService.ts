@@ -408,6 +408,8 @@ export interface SeasonHooks {
   /** 階段と特別な場所（S1c §14.5）の報告: サーバーに届いた順で、最初の報告かを決めて残す */
   report(session: RunSession, pid: PlayerId, stairs: readonly { depth: number; x: number; y: number }[], spots?: readonly { depth: number; x: number; y: number; kind: string }[]): SeasonReportResult | null;
   onCommit(session: RunSession, events: readonly GameEvent[]): void;
+  /** シーズンの結果が確定しているか（S9a §57.3 の 4: 確定したシーズンのランは、命令を受けない）。省けば、確定していないとみなす */
+  isFinal?(seasonId: string): boolean;
 }
 
 export class SeasonService implements SeasonHooks {
@@ -424,6 +426,11 @@ export class SeasonService implements SeasonHooks {
     /** 称号の定義（S2 §18.2。content の seasonTitles）。無ければ賞の名前から作る */
     private readonly titleDefs: readonly SeasonTitleDefLite[] = [],
   ) {}
+
+  /** 結果が確定しているか（S9a §57.3 の 4）。ほかのプロセス（運用の道具）が確定して result.json を書いていれば、それも（get がディスクを見直す） */
+  isFinal(seasonId: string): boolean {
+    return !!this.store.get(seasonId)?.result;
+  }
 
   status(d: SeasonData): SeasonListing['status'] {
     if (d.result) return 'final';

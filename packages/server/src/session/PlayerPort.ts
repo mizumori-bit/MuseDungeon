@@ -6,7 +6,7 @@ import type {
 import {
   actionError, briefingLines, briefingShort, buildObservation, checkpointChangeText, withdrawText, buildTurnBlock, campLines, changesLine, compareLines, describeInventory, describeTarget, diffChanges, progressLines, reportLines,
   cheb, compassDir, dirLabel, formatObservationText, guardianDisplayName, kindName, lastWithoutXp, MACRO_COMPLETED_STOPS, mapTextLines, memoryCombatText, memoryKey, mineCount, nameOf, nearDirs, pickableItems, progressText, renderAsciiMap, resultText, t,
-  turnLine, turnSnapshot, turnStateOf, ownerMessageIsNew, fightThreats, fleeRiskText, riskText, threatEstimate, DIR_VEC, collectTargets, collectWhatOf, itemDisplayName, slayGroupText, slaysAt,
+  turnLine, turnSnapshot, turnStateOf, ownerMessageIsNew, directiveUndecided, fightThreats, fleeRiskText, riskText, threatEstimate, DIR_VEC, collectTargets, collectWhatOf, itemDisplayName, slayGroupText, slaysAt,
 } from '@muse/shared';
 import type { MacroReport } from './RunSession';
 import { compareVersions, ENGINE_VERSION } from '@muse/engine';
@@ -69,6 +69,8 @@ export interface PlayerPort {
   waitForTurn(timeoutMs: number): Promise<boolean>;
   /** キャンプで目的を持ち主に握られているとき、持ち主が遠征を始めるまで待つ（S8。SEASON.md §54.4 の 5） */
   waitForOwner(timeoutMs: number): Promise<'started' | 'released' | 'timeout' | 'ended'>;
+  /** 持ち主が、決めていないものを決めるのを待つ（S9a。目的は握られていないキャンプ） */
+  waitForOwnerDecision(timeoutMs: number): Promise<'changed' | 'timeout' | 'ended'>;
   /** 遠征のブリーフィング（開始時・再開時） */
   /** camp: false でキャンプの候補を省く（観測の文と一緒に返すとき。既定は出す） */
   briefing(kind: 'start' | 'resume', opts?: { camp?: boolean }): string[];
@@ -528,6 +530,27 @@ export class SessionPlayerPort implements PlayerPort {
     return this.session.waitForOwner(this.playerId, timeoutMs);
   }
 
+  /**
+   * 持ち主が、決めていないもの（握った特技・加護・装備）を決めるのを待つ（S9a §57.3 の 1。目的は握られていないキャンプ）。
+   * 決めていないもの・指図・居場所のどれかが変わるか、timeoutMs が過ぎるまで。時間は World に入れない（待つだけで、何も記録しない）
+   */
+  async waitForOwnerDecision(timeoutMs: number): Promise<'changed' | 'timeout' | 'ended'> {
+    const key = (): string => {
+      const v = this.view();
+      return JSON.stringify([v.status, v.directive?.hold ?? [], directiveUndecided(v, this.catalog)?.text ?? '']);
+    };
+    const k0 = key();
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const v = this.view();
+      if (v.status === 'dead' || v.status === 'ended') return 'ended';
+      if (key() !== k0) return 'changed';
+      const left = deadline - Date.now();
+      if (left <= 0) return 'timeout';
+      await this.session.waitChange(left);
+    }
+  }
+
   onChange(cb: () => void): () => void {
     return this.session.addListener({ onEvents: () => cb() });
   }
@@ -746,7 +769,13 @@ export class SessionPlayerPort implements PlayerPort {
         if (note) outcome += ' ' + note;
       }
       // 地形が分かる品（残り頁・地図の巻物）を使った（S6 §49.6 の 9: 「使った」としか出なかった）: 分かったことを 1 文
-      if (cmd.type === 'use') {
+      // 地図を書き足す品を使ったときだけ（S9a §57.3 の 5: 回復の薬などで、ほかの理由の knowledge_updated を数えて「新しく地図に載った地形は無かった」と出ていた）。
+      // 品は、使う前の持ち物から引く（未鑑定で使ったなら、使って分かった種類から）
+      const usedItem = cmd.type === 'use' ? before.inventory.find((i) => i.slot === cmd.slot) : undefined;
+      const usedKindOf = (): string | undefined => usedItem?.kind ?? (usedItem?.appearanceId
+        ? (r.events.find((e) => e.type === 'item_identified' && (e as { player?: string }).player === this.playerId && (e as { appearanceId?: string | null }).appearanceId === usedItem.appearanceId) as { kind?: string } | undefined)?.kind
+        : undefined);
+      if (cmd.type === 'use' && usedItem && this.catalog.items[usedKindOf() ?? '']?.maps) {
         const maps = r.events.filter((e) => e.type === 'knowledge_updated' && (e as { player?: string }).player === this.playerId && (e as { visible?: unknown }).visible === null) as { newlySeen?: number[]; mappedAdd?: number[] }[];
         if (maps.length) {
           const cells = maps.reduce((s, e) => s + Math.floor((e.newlySeen?.length ?? 0) / 2), 0);

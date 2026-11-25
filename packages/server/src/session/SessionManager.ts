@@ -479,6 +479,8 @@ export class SessionManager {
     const prof = o.profileToken ? this.profiles.store.resolve(o.profileToken) : null;
     for (const s of this.sessions.values()) {
       if (s.world.status !== 'active' || s.world.meta.mode !== 'solo') continue;
+      // 確定したシーズンのラン（S9a §57.3 の 4）は「出撃」に出さない（命令を受けない。「記録」から見返す）
+      if (this.seasonFinal(s.world.meta.season?.id)) continue;
       const who = this.ownerOf(s, o);
       if (!who) continue;
       const mineId = prof ? s.world.playerOrder.find((x) => s.profileOf(x) === prof.id) : undefined;

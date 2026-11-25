@@ -947,6 +947,17 @@
         { "at": 0.3, "degree": 8, "len": 0.6 }
       ]
     },
+    "stairs": {
+      "start": "now",
+      "gain": 0.16,
+      "octave": 0,
+      "voice": { "wave": "triangle", "attack": 0.004, "decay": 0.12, "sustain": 0.3, "release": 0.1 },
+      "notes": [
+        { "at": 0, "degree": 8, "len": 0.1 },
+        { "at": 0.11, "degree": 5, "len": 0.1 },
+        { "at": 0.22, "degree": 1, "len": 0.16 }
+      ]
+    },
     "objective": {
       "start": "beat",
       "gain": 0.3,

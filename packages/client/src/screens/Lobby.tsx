@@ -203,8 +203,12 @@ export function Lobby({ tab = 'sortie' }: { tab?: HomeTab }) {
     const sw = watch[r.season];
     return !!sw && (sw.final || (sw.local && r.status === 'ended'));
   };
-  const active = (runs ?? []).filter((r) => r.status === 'active');
-  const ended = (runs ?? []).filter((r) => r.status === 'ended').sort((a, b) => b.updatedAt - a.updatedAt);
+  // 確定したシーズンのラン（S9a §57.3 の 4）: 命令を受けない記録。「出撃」には出さず（「再開」を出さない）、「記録」の終わったランに並べる
+  const finalSeasons = new Set(seasons.filter((x) => x.season.status === 'final').map((x) => x.season.id));
+  const closedRun = (r: RunListing) => !!r.season && finalSeasons.has(r.season);
+  // シーズンの一覧を読み込むまでは、シーズンのランを「出撃」に出さない（S9b: 確定したランが、読み込みの前の一瞬だけ出ていた）
+  const active = (runs ?? []).filter((r) => r.status === 'active' && !closedRun(r) && (seasonsLoaded || !r.season));
+  const ended = (runs ?? []).filter((r) => r.status === 'ended' || closedRun(r)).sort((a, b) => b.updatedAt - a.updatedAt);
   const classes = catalog ? Object.entries(catalog.classes) : [];
 
   // ---- 自分のラン・自分の名前（分かる範囲で） ----

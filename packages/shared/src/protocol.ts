@@ -6,7 +6,7 @@ import type { PerceivedEvent } from './filter';
 import type { TurnBlock } from './turn';
 import type { Controller, DirectiveItem, ExpeditionBrief, Locale, Names, ObjectiveType, PlayerId, PlayerState, RunSummary, SeasonSlay, World } from './types';
 import type { PlayerView } from './view';
-import type { Observation } from './observation';
+import type { DirectiveUndecided, Observation } from './observation';
 
 export type SpectatorPolicy = 'omniscient' | 'follow_only' | 'delayed';
 
@@ -263,6 +263,8 @@ export interface OwnerRunRow {
   level: number; hp: number; maxHp: number; depth: number | null; banked: number; budgetLeft?: number; budgetLimit?: number; updatedAt: number;
   /** 自分のラン（S8a）: 送ったプロフィールのトークンのプレイヤー。false は、同じ機械からだけで認めた（運用者として） */
   mine?: boolean;
+  /** 持ち主が、まだ決めていないもの（S9a。SEASON.md §57.3 の 2。AI の観測の self.directive.undecided と同じ）。無ければ無い */
+  undecided?: DirectiveUndecided;
 }
 export interface OwnerRunsResponse { local: boolean; runs: OwnerRunRow[] }
 /** GET /api/runs/:id/owner/view・POST …/owner/directive・…/owner/act の応答。result: POST の結果（断りなら error） */

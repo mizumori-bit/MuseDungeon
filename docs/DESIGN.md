@@ -1809,3 +1809,15 @@ engine と出来事の形は変えていない（`engineVersion` 0.38.0・`event
 - **見え方**: 指図の 1 行・「できること」から握られた行を外す（`buildValidActions` の後で外す）・伝言・「変化」の `owner`・規則の話題 `directive`。文は、世界の中での読み方を添える（SEASON.md §55）。
 - **順位の印**: 参加者の公開の値（`ShownValues.directed`。キャンプで写す）。`SeasonRunRec.directed` は、そのランの `ownerDecided` の写し。
 - **画面（H2）**: ホームを「出撃」（`#/`: 持ち主の枠・今シーズンの順位・ほかのランは畳む）と「記録」（`#/records`: シーズンごとの順位と、各参加者の行のリプレイ・結果の画面・図鑑・実績・過去のラン）に並べ替えた。見た目（色・絵・演出）は変えていない。持ち主の枠は `ui/owner.tsx`（今ある `InventoryPanel`・`PerkChoicePanel` を使い回す）。観戦とリプレイの「思考」の欄に、持ち主の決定と伝言を AI の考えと並べる。
+
+### 42.16 S9a: 決めていないもの・出撃の確かめ・階を移った音・閉じたシーズン・地図の文（SEASON.md §57.3。PROTOCOL.md §9.14 の「S9a」）
+
+版は変えていない（`engineVersion` 0.48.0・`eventVersion` 36。内容のデータ・World・出来事・命令の形もそのまま）。
+
+- **決めていないもの**は、投影の出力だけで作る: shared の `undecidedItems`（どこでも数える）・`directiveUndecided`（キャンプで次の遠征を始められるときだけ。文つき）。元は PlayerView の `build.pending`・`boonChoice`・持ち物（装備の枠は、未鑑定の品も外見の種類から引く。「できること」の `equip` の行と同じ関数 `equipSlotOf`）。観測の `self.directive.undecided`・キャンプの 1 行・「できること」の最初の `start_expedition` の注意・始めた直後の「変化」（`diffChanges` が、遠征の番号が変わった応答で、今の状態から作る）・持ち主の一覧の `OwnerRunRow.undecided` は、すべてこの 1 つから。迷宮の中の指図の行は短くした（`directiveLine` の `inDungeon`）。
+- **待つ**: 目的を握られていないキャンプで決めていないものがあれば、`wait_for_turn` は `SessionPlayerPort.waitForOwnerDecision`（決めていないもの・指図・居場所の組が変わるか、時間切れ）。時間は World に入れない。
+- **閉じたシーズン**: `SeasonHooks.isFinal`（`SeasonService` は `result.json` をディスクから見直す）。`RunSession` の `submit`・`stepNow`・`seasonSyncNow` の入口で `season_ended` を返す（出来事を作らない・記録に書かない）。復旧の再生（`recover` の再実行）は、この門を通らない（記録をそのまま再生し、記録を変えない）。`SessionManager.ownerRuns` は確定したシーズンのランを出さない。運用の道具の `season -- open` は、確定していないほかのシーズンを先に `finalize(…, 'operator')` する。
+- **地図の文**: `CatalogItem.maps`（content の catalog が、効果 `map` を持つ品に付ける。データは変えていない）。`SessionPlayerPort.act` の `use` の後の文は、使った品が `maps` のときだけ。
+- **画面**: 持ち主の枠に「決めていないもの」の目立つ 1 行（`ui/ownerCheck.ts`）と、出撃の確かめの窓（今ある `.modal`・`.dialog`。「戻って決める」に焦点）。ホームの「出撃」は、確定したシーズンのランを出さず（「再開」を出さない）、「記録」の終わったランに並べる。
+- **S9b（検査の直し）**: 確定したシーズンのランは、`RunSession.view` が投影の後に `season.final`・`ended` を付けて「閉じた」見え方にする（World と engine は変えない。観測の頭の 1 行・空の「できること」・▶ 行・待たない `wait_for_turn`。判定は shared の `seasonFinalView` と `seasonClosedView`）。装備の分は AI を待たせず、くり返し知らせない（待ち・注意・始めた直後の「変化」は特技と加護の保留だけ。`choicePending`）。`season -- open` は `--close-previous` が無ければ前のシーズンを確定しない・記録が読めないシーズンがあれば開かない・`.server.lock` に生きたプロセスがあれば注意。
+- **音**: `hollow` の `sound.json` に合図 `stairs` の仮の音（SOUND_SPEC.md §2.2）。合図を作る `soundStep` は前から `entity_changed_floor` で `stairs` を出していた（遊ぶ画面・観戦の追従・俯瞰のどれも、その出来事が届けば鳴る）。
