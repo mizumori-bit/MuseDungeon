@@ -147,9 +147,12 @@ export function createApp(manager: SessionManager, config: ServerConfig): App {
       if (!body?.name) return fail(res, 400, actionError('bad_request', 'name is required', '{ name, classId?, seed?, mode?, locale? }'));
       // controller を省いたら「分からない」（V4-1g G2。ブラウザの画面は human を送る）
       const controller: Controller = body.controller ?? { kind: 'unknown', label: 'http' };
-      const r = await manager.createRun({ ...body, controller });
-      if ('error' in r) return fail(res, r.error.code === 'season_unavailable' ? 409 : 400, r.error);
-      return json(res, 200, { runId: r.session.runId, playerId: r.playerId, token: r.token, profileId: r.profile.id, ...(r.profile.token ? { profileToken: r.profile.token } : {}) });
+      // end_previous（S9 §58.3）: 前のランを引退と同じに終わらせてから。MCP の new_run と同じ名前も受ける
+      const endPrevious = body.endPrevious === true || (body as { end_previous?: unknown }).end_previous === true;
+      const r = await manager.createRun({ ...body, controller, ...(endPrevious ? { endPrevious: true } : {}) });
+      // 冒険者 1 人に続きは 1 つ（S9 §58.3）: 続きのあるランがある（画面は確かめの窓を出し、同意で endPrevious を付けて出し直す）
+      if ('error' in r) return fail(res, r.error.code === 'season_unavailable' || r.error.code === 'run_in_progress' ? 409 : 400, r.error);
+      return json(res, 200, { runId: r.session.runId, playerId: r.playerId, token: r.token, profileId: r.profile.id, ...(r.profile.token ? { profileToken: r.profile.token } : {}), ...(r.inherited ? { inherited: r.inherited } : {}) });
     }
     // プロフィール（V3-7 §7.1）: Authorization: Bearer <profile_token>。MCP の profile・records と同じ中身
     if (p === '/api/profile' || p === '/api/profile/records') {
@@ -161,7 +164,9 @@ export function createApp(manager: SessionManager, config: ServerConfig): App {
         const body = (await readBody(req).catch(() => null)) as { name?: string } | null;
         if (!body?.name || !pp.rename(body.name)) return fail(res, 400, actionError('bad_request', 'name is required', '{ name }'));
       }
-      if (p === '/api/profile') { const r = pp.info(L); return r ? json(res, 200, { text: r.text, ...r.data }) : fail(res, 404, actionError('no_session', 'no profile', '')); }
+      // seasons（S10。SEASON.md §58.4）: そのプロフィールが招かれたシーズン（拠点の冒険者の札。HTTP だけ。MCP の profile の文は変えない）
+      // failed（S10a）: 終わっていないそのシーズンのランが、起動時に復旧できなかった
+      if (p === '/api/profile') { const r = pp.info(L); return r ? json(res, 200, { text: r.text, ...r.data, seasons: manager.seasons.memberships(pp.id, (runId) => !!manager.recoveryFailedError(runId)) }) : fail(res, 404, actionError('no_session', 'no profile', '')); }
       const r = pp.records(L);
       return r ? json(res, 200, { text: r.text, records: r.data }) : fail(res, 404, actionError('no_session', 'no profile', ''));
     }
@@ -189,7 +194,7 @@ export function createApp(manager: SessionManager, config: ServerConfig): App {
         let result: OwnerViewResponse['result'];
         if (sub === '/owner/directive') result = await ownerAct(acc.session, acc.pid, { type: 'set_directive', hold: body!.hold, ...(body!.message !== undefined ? { message: body!.message } : {}) });
         else if (sub === '/owner/act') result = await ownerAct(acc.session, acc.pid, body!.command);
-        return json(res, 200, { ...ownerView(acc.session, acc.pid), ...(result ? { result } : {}) });
+        return json(res, 200, { ...ownerView(acc.session, acc.pid), continuable: manager.continuable(acc.session, acc.pid), ...(result ? { result } : {}) });
       }
       const live = manager.get(runId);
       if (!live && !store?.exists(runId)) return fail(res, 404, actionError('no_session', `unknown run ${runId}`, ''));

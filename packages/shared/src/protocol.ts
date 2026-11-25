@@ -175,6 +175,29 @@ export interface NewRunRequest {
   legacy?: boolean;
   /** シーズンの ID（S0。PROTOCOL §9.1）。シーズンのシードでソロ、Lv1 のキャンプから。seed・mode・objective・legacy は使わない */
   season?: string;
+  /**
+   * 冒険者 1 人に続きは 1 つ（S9。SEASON.md §58.3）: そのプロフィールに続きを遊べるランがあれば、new_run は run_in_progress で断られる。
+   * true なら、前のランを引退（retire と同じ）で終わらせてから、新しいランを始める（確定した点と記録は残る）
+   */
+  endPrevious?: boolean;
+}
+
+/**
+ * new_run で、プロフィールの握る項目を引き継いだ（S9 §58.3）。hold: 入れた握る項目（持ち主の口の set_directive として記録に残る）、
+ * objectiveIgnored: 最初の遠征の目的が渡されていたが、キャンプから始めた（持ち主の支度を待つ）
+ */
+export interface InheritedHold { hold: DirectiveItem[]; objectiveIgnored: boolean }
+
+/**
+ * プロフィールが招かれたシーズン（S10。SEASON.md §58.4 の拠点の冒険者の札。GET /api/profile の seasons。そのプロフィールのトークンでだけ返る）。
+ * name: 招いたときの表示名（順位の表の名前）。used: 今までに使った予算（ランをまたいで。キャンプでの公開の値ではなく今の値）。
+ * runs: 始めたランの数。died: このシーズンで倒れたことがある。status はシーズンの一覧と同じ
+ */
+export interface ProfileSeasonEntry {
+  id: string; seasonName: string; name: string; status: 'open' | 'ended' | 'final';
+  budget: number; used: number; runs: number; died: boolean;
+  /** 終わっていないそのシーズンのランが、サーバーの起動時に復旧できなかった（S10a。V4-1m §37.1 の recoveryFailed。運用者に知らせる） */
+  failed?: true;
 }
 
 /** シーズンの一覧の 1 行（S0。GET /api/seasons・list_runs の seasons） */
@@ -265,11 +288,28 @@ export interface OwnerRunRow {
   mine?: boolean;
   /** 持ち主が、まだ決めていないもの（S9a。SEASON.md §57.3 の 2。AI の観測の self.directive.undecided と同じ）。無ければ無い */
   undecided?: DirectiveUndecided;
+  /** 支度の札（S9。SEASON.md §58.1。握っている項目があるときだけ。objective: 持ち主が選んだ次の遠征） */
+  prep?: { state: 'pending' | 'ready'; objective?: number | 'endless' };
+  /** AI の希望の数（S9 §58.2。今も成り立つものだけ。中身は …/owner/view の view.directive.wishes） */
+  wishes?: number;
+  /** AI との行き来（S9 §58.1。サーバーの控え。World に入れない）。lastCallAgoS: AI が最後に呼び出してからの秒数（このサーバーの起動の後に無ければ null）。waitingNow: いま wait_for_turn で支度を待っている */
+  ai?: { lastCallAgoS: number | null; waitingNow: boolean };
+  /**
+   * 続きを遊べるか（S10a。冒険者 1 人に続きは 1 つの数え方 SessionManager.continuable と同じ判定）。oldVersion: このサーバーと違う版の engine で始まったラン
+   * （続きは遊べない。記録は見返せる）
+   */
+  continuable?: boolean;
+  oldVersion?: true;
 }
 export interface OwnerRunsResponse { local: boolean; runs: OwnerRunRow[] }
 /** GET /api/runs/:id/owner/view・POST …/owner/directive・…/owner/act の応答。result: POST の結果（断りなら error） */
 export interface OwnerViewResponse {
   runId: string; playerId: PlayerId; name: string; eligible: boolean; reason?: string; waiting: boolean;
+  /** AI との行き来（S9 §58.1。OwnerRunRow.ai と同じ） */
+  ai?: { lastCallAgoS: number | null; waitingNow: boolean };
+  /** 続きを遊べるか・違う版で始まったラン（S10a。OwnerRunRow と同じ） */
+  continuable?: boolean;
+  oldVersion?: true;
   view: PlayerView; observation: Observation; text: string;
   result?: { ok: true } | { ok: false; error: ActionError };
 }

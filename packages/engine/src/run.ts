@@ -17,10 +17,13 @@ import { updateKnowledge } from './perception';
 import { placeSeasonFires } from './campfire';
 import { advance, endTurn } from './scheduler';
 import { recomputeStats } from './stats';
-import { directiveGate, noteOwnerDecided, setDirective } from './directive';
+import { afterOwnerDecision, directiveGate, emitWish, noteOwnerDecided, ownerObjective, prepare, setDirective } from './directive';
 
-/** 0.48.0: 指図（S8。SEASON.md §54: set_directive・held_by_owner・持ち主のキャンプでの付け替え） */
-export const ENGINE_VERSION = '0.48.0';
+/**
+ * 0.48.0: 指図（S8。SEASON.md §54: set_directive・held_by_owner・持ち主のキャンプでの付け替え）。
+ * 0.49.0: 支度の札と希望（S9。§58.1・§58.2: prepare・directive_prep・directive_wish。持ち主の口からは遠征を始めない。準備完了の後のプレイヤーの start_expedition は持ち主の選んだ目的で）
+ */
+export const ENGINE_VERSION = '0.49.0';
 
 export interface CreateRunParams {
   runId: string;
@@ -271,12 +274,20 @@ export function step(world: World, content: Content, playerId: PlayerId, cmd: Co
   if (MACRO_COMMANDS.has(cmd.type)) return { ok: false, error: actionError('bad_request', 'macro commands are expanded by the server', 'submit primitive commands'), events: [] };
   // 指図（S8 §54.3）: 握った項目の命令は持ち主の口からだけ。持ち主の口からは、指図と握った項目の命令だけ（キャンプで）。断りは出来事を出さない
   const owner = !!meta.owner;
-  const gate = directiveGate(world, pr, cmd, owner);
-  if (gate) return { ok: false, error: gate, events: [] };
+  const gate = directiveGate(world, content, pr, cmd, owner, meta.thought);
+  if (gate) {
+    // 希望（S9 §58.2）: 握られた項目の命令をプレイヤーの口から出した。断ったうえで、希望として覚える（手番は使わない。同じ希望のくり返しは出さない）
+    if (gate.wish && !gate.wish.same) {
+      const wctx = new Ctx(world, content, meta.cseq, meta.wall);
+      emitWish(wctx, pr, gate.wish);
+      return { ok: false, error: gate.error, events: wctx.finish() };
+    }
+    return { ok: false, error: gate.error, events: [] };
+  }
   const ctx = new Ctx(world, content, meta.cseq, meta.wall);
   if (!meta.auto && !owner) ctx.selfActor = pr.entityId;
-  if (cmd.type === 'set_directive') {
-    const err = setDirective(ctx, pr, cmd);
+  if (cmd.type === 'set_directive' || cmd.type === 'prepare') {
+    const err = cmd.type === 'set_directive' ? setDirective(ctx, pr, cmd) : prepare(ctx, pr, cmd);
     if (err) return { ok: false, error: err, events: [] };
     return { ok: true, events: ctx.finish() };
   }
@@ -289,6 +300,8 @@ export function step(world: World, content: Content, playerId: PlayerId, cmd: Co
     if (owner && (cmd.type === 'choose_perk' || cmd.type === 'choose_boon')) {
       const ev = [...ctx.events].reverse().find((e) => e.type === (cmd.type === 'choose_perk' ? 'perk_chosen' : 'boon_granted')) as { perk?: string; boon?: string } | undefined;
       noteOwnerDecided(ctx, playerId, 'perks', cmd.type, { ...(ev?.perk ?? ev?.boon ? { choice: (ev.perk ?? ev.boon)! } : {}) });
+      // 支度の札は「まだ」に戻り、その項目の希望は消える（S9 §58.1・§58.2）
+      afterOwnerDecision(ctx, playerId, [cmd.type === 'choose_perk' ? 'perk' : 'boon']);
     }
     if (fk) advance(ctx, fk);
     return { ok: true, events: ctx.finish() };
@@ -306,6 +319,7 @@ export function step(world: World, content: Content, playerId: PlayerId, cmd: Co
       : [...before].find((id) => !Object.values(after.equip ?? {}).includes(id));
     const kind = changed ? world.entities[changed]?.kind ?? null : null;
     noteOwnerDecided(ctx, playerId, 'loadout', cmd.type, kind ? { kind, appearanceId: world.secret.appearances[kind] ?? null } : {});
+    afterOwnerDecision(ctx, playerId, ['loadout']);
     return { ok: true, events: ctx.finish() };
   }
   // 階段の報告（S0）はサーバーが共有層に問い合わせて season_sync にする。engine には来ない
@@ -317,12 +331,14 @@ export function step(world: World, content: Content, playerId: PlayerId, cmd: Co
       if (left <= 0) return { ok: false, error: actionError('budget_exhausted', t(L, `このシーズンの行動予算（${world.season.budget.limit} 手番）を使い切った。新しい遠征は始められない。`, `You have used up this season's budget (${world.season.budget.limit} turns). You cannot start another expedition.`), t(L, 'キャンプでは report_stairs で階段を報告できる。ここで終えてよい。', 'At camp you can still report stairs with report_stairs. It is fine to stop here.')), events: [] };
       if (world.season.ended) return { ok: false, error: actionError('season_ended', t(L, `シーズン「${world.season.name}」は終わりの時刻を過ぎた。新しい遠征は始められない。`, `Season "${world.season.name}" has passed its end time. You cannot start another expedition.`), t(L, 'キャンプでは report_stairs で階段を報告できる。ここで終えてよい。', 'At camp you can still report stairs with report_stairs. It is fine to stop here.')), events: [] };
     }
-    const err = startExpedition(ctx, pr, cmd.offer);
+    // 支度が準備完了で、目的を握られている（S9 §58.1）: 引数によらず、持ち主が選んだ目的で始める
+    const chosen = owner ? undefined : ownerObjective(pr);
+    const err = startExpedition(ctx, pr, chosen ?? cmd.offer);
     if (err) return { ok: false, error: err, events: [] };
-    // 持ち主が始めた遠征（S8 §54.6）
-    if (owner) {
+    // 持ち主の選んだ目的で始めた遠征（S8 §54.6 の順位の印。S9: 始めるのはプレイヤー。offer: 使った候補、asked: プレイヤーの命令の候補）
+    if (chosen !== undefined) {
       const xs = world.expeditions ?? [];
-      noteOwnerDecided(ctx, playerId, 'objective', 'start_expedition', xs.length ? { no: xs[xs.length - 1].no } : {});
+      noteOwnerDecided(ctx, playerId, 'objective', 'start_expedition', { ...(xs.length ? { no: xs[xs.length - 1].no } : {}), offer: chosen, asked: cmd.offer });
     }
     const floors = [...new Set(world.playerOrder.map((pid) => world.entities[world.players[pid].entityId]?.pos?.floor).filter((k): k is string => !!k))].sort();
     for (const k of floors) updateKnowledge(ctx, k);

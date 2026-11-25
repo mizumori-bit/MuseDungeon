@@ -25,7 +25,9 @@ ActionError {
       | 'recovery_failed'   // V4-1m: そのランはサーバーの起動時に復旧できなかった（message に理由。ランの記録は残っている）
       | 'confirm_required' | 'cannot_extract' | 'not_at_camp' | 'at_camp'     // 遠征（v2）
       | 'hostile_adjacent' | 'hostile_in_view' | 'hp_floor' | 'nothing_to_do'   // マクロが 1 歩も進めない（V3-2R。手番を使わない）
-      | 'held_by_owner'    // S8（§9.14）: その項目は持ち主が握っている。プレイヤーの口からは通らない（手番を使わない・何も変わらない）
+      | 'held_by_owner'    // S8（§9.14）: その項目は持ち主が握っている。プレイヤーの口からは通らない（手番を使わない）。S9: 支度の札が「まだ」の間の start_expedition も。希望として覚えたときは details.wish（出来事 directive_wish が出る）
+      | 'objective_unchosen'  // S9（§9.14）: 目的を握っているのに、まだ選んでいないので、準備完了にできない（持ち主の prepare）
+      | 'run_in_progress'  // S9（§9.14）: そのプロフィールに、続きを遊べるランがある（new_run。end_previous: true で前のランを終えてから。HTTP は 409）
   message: string      // 何が起きたか
   hint: string         // 次に何をすればよいか
   details?: {
@@ -33,6 +35,8 @@ ActionError {
     blocked_by_traps?: { id: EntityId; kind: string; pos: Pos }[]   // V4-1d: 道をふさいでいる罠（マクロの blocked。そのプレイヤーが見つけている罠だけ。経路の上で近い順。hint にも名前と位置）
     still_inside?: { id: PlayerId; name: string; floor: number }[]  // V4-1f: start_expedition が断られたとき、まだ迷宮にいる仲間と、その階（hint にも名前と階）
     blocked_by_terrain?: { kind: string; pos: Pos }   // S4: unreachable のとき、分かっている地図の上で道をふさいでいる地形（下の注）
+    in_progress?: { run_id: string; season?: string } // S9: run_in_progress のとき、続きを遊べるラン（シーズンのランならシーズンの ID）
+    wish?: boolean                                    // S9: held_by_owner のとき、希望として持ち主に伝えた（同じ希望のくり返しでも付く）
   }
 }
 ```
@@ -88,6 +92,7 @@ turn: {
 | `list_runs` | – | 参加可能・再開可能なラン一覧と、開いているシーズン（`seasons: { id, name, budget, ends_at }[]`。S0 §9.1） |
 | `new_run` | `character_name`, `class?`（`warrior`/`scout`）, `mode?: 'solo'|'coop'`, `seed?`, `locale?`, `objective?: 'auto'|'reach_depth'|'slay_guardian'|'retrieve_relic'|'endless'`, `brief_map?`, `map?`, `inventory?`, `status_line?` | `objective` を省くと**キャンプから始まる**（`at_camp`・`awaiting: 'camp_choice'`。最初の遠征も 3 候補から `start_expedition` で選ぶ。V3-2R）。`objective` を渡せば従来どおり最初の遠征まで始める（`auto` は 1 番目の候補 = 堅実・到達）。`{ run_id, player_token, player_id, briefing, observation, turn }`。`seed` を指定しても結果には返さない。`map` 以下は `set_options` と同じ（`brief_map: false` は `map: 'never'`）。不明な `class` のエラーは職業の一覧を返す |
 | `new_run`（シーズン） | 上の引数に `season: string`（シーズンの ID）, `profile_token`（必須。運用者に招かれたプロフィールのもの） | S0（§9.1）。シーズンのシードでソロ、Lv1 のキャンプから始まる。`seed`・`mode`・`objective`・`legacy` は使わない（継承は受けない）。参加できないときは `season_unavailable`（理由は message。トークンが無い・招かれていない など） |
+| `new_run`（`end_previous`） | 上の引数に `end_previous?: boolean` | S9（§9.14）: `profile_token` のプロフィールに続きを遊べるランがあると `run_in_progress`（`details.in_progress` にランの ID。文に `resume_run` と `end_previous: true` の使い方）。`true` なら、前のランを引退（`retire` と同じ命令。出どころは new_run と同じ口）で終えてから始める。プロフィールに持ち主の握る項目があれば、作った直後に持ち主の口の `set_directive` として入れ、キャンプから始める（`objective` を渡していても。応答に `inherited_hold`・`objective_ignored` と、文の 1 行） |
 | `join_run` | `run_id`, `character_name`, `class?` | 同上（COOP。キャンプから始まる。進んでいる遠征には入らず、次の遠征から一緒に出る。V4-1g） |
 | `resume_run` | `player_token`, `map?`, `inventory?`, `status_line?` | 現在の MCP 接続にプレイヤーを再束縛する。**再開ブリーフィング**（遠征の目的と進捗、現在地、直近の節目 最大 10 件、自分のメモ）＋ `observation` ＋ `turn` |
 | `retire` | `confirm: true` | ランを終了する（キャラクターは戻らない）。スコアを記録。遠征中なら、その遠征の戦利品は失う（キャンプで引退すれば確定点はそのまま） |
@@ -114,7 +119,7 @@ turn: {
 | ツール | 引数 | 結果 |
 |---|---|---|
 | `observe` | `detail?: 'brief'|'full'` | Observation（§3）＋ `turn`。**待たずに返す**（v2） |
-| `wait_for_turn` | `timeout_s?`（既定 20、最大 60） | 自分の手番（または遠征・ランの終了）まで待って Observation ＋ `turn` を返す。既に自分の番なら即時。時間切れは `turn.reason = 'wait_timeout'`。S8（§9.14）: キャンプで目的を持ち主に握られているときは、持ち主が遠征を始める（`turn_arrived`）か、目的を握るのをやめるか、時間が来る（`wait_timeout`）まで待つ（手番は減らない。時間は World に入れない）。S8b: 時間切れの応答は、まだ決まっていないこと・何回待ってもよいこと・やめてもよいことを書き、`turn.owner_wait`。予算切れ・時間切れのシーズンのキャンプでは待たずにすぐ返す |
+| `wait_for_turn` | `timeout_s?`（既定 20、最大 60） | 自分の手番（または遠征・ランの終了）まで待って Observation ＋ `turn` を返す。既に自分の番なら即時。時間切れは `turn.reason = 'wait_timeout'`。S8（§9.14）・S9: キャンプで持ち主の支度の札が「まだ」のときは、準備完了になる（`observed`）か、握るのをすべてやめるか、時間が来る（`wait_timeout`）まで待つ（手番は減らない。時間は World に入れない。S9 で、目的を握られているときと特技・加護の保留があるときの 2 つの待ちを、これ 1 つにまとめた）。S8b: 時間切れの応答は、まだ準備完了でないこと・何回待ってもよいこと・やめてもよいこと（やめると、だれも出発しない）を書き、`turn.owner_wait`。予算切れ・時間切れのシーズンのキャンプでは待たずにすぐ返す |
 | `look` | `target: {x,y} | entity_id` | 対象の説明。モンスターなら「思い出」に基づく既知情報 |
 | `get_map` | `floor?`, `region?: {x,y,w,h}` | 記憶しているフロアの ASCII 地図（上 2 行が x の 10 の位・1 の位、行頭が y）と凡例、既知の注目点一覧（MVP は現在フロアのみ） |
 | `inventory` | – | 所持品と装備の詳細 |
@@ -457,6 +462,14 @@ V3-2R で足した項目（同じく後方互換。会心と経験値のルー�
 - `player_state.reason: 'joined'`（キャンプから始まる参加）。参加コマンドの `atCamp`
 - プレイヤー向けの射影で、見えていた個体が視界の外へ動いた `entity_moved` に `dirOut`（向きだけ。行き先は伏せたまま）
 
+S9 で変えた項目（支度の札・希望・冒険者 1 人に続きは 1 つ。SEASON.md §58.1〜§58.3、中身は §9.14 の「S9」。命令・出来事・観測が増え、engine の決まり（持ち主の口から遠征を始めない・準備完了の後の start_expedition は持ち主の選んだ目的で）が変わったので `engineVersion` 0.49.0・`eventVersion` 37。コンテンツの版は変わらない）。**指図の無いランは、何も変わらない**（命令・出来事・観測・候補のどれも）。0.48.0 で開いたシーズン（s3）では、このサーバーで新しいランは始められない（続きのランは遊べる。0.48.0 の記録の、持ち主が始めた遠征は、この版では断られるので、そのランの再生は食い違いになり、今ある版またぎの扱い（記録を直さず、境目から続ける）になる）:
+
+- 命令 `prepare { objective?: 1〜9 | 'endless', ready?: boolean }`（持ち主の口からだけ・キャンプでだけ・握っている項目があるときだけ。手番を使わない。`FREE_COMMANDS`）。持ち主の口から出せる命令の組は `OWNER_COMMANDS`（`set_directive`・`prepare`・握れる項目の命令。`start_expedition` は engine が断る）
+- 出来事 `directive_prep { player, why: 'camp'|'owner'|'decided', directiveAfter }`・`directive_wish { player, wish, countAfter, kind?, appearanceId? }`（どちらも本人だけ。プレイヤーの出来事にも渡す。`directive_wish` の `kind` は未鑑定なら伏せる。S9c: `directive_wish` は指図の全部を持たず、その項目の希望と数の after 値だけ）。`directive_set` の `directiveAfter` にも `prep?`・`wishes?`。`owner_decided` に `offer?`・`asked?`（プレイヤーが、持ち主の選んだ目的で遠征を始めた）
+- `Directive.prep?: { state: 'pending'|'ready', objective?, seen }`・`Directive.wishes?: DirectiveWish[]`・`Directive.wishCount?`（S9c。項目ごとの希望の数）。`PlayerView.directive` にも（自分のものだけ）。`Observation.self.directive.prep?: { state, objective?, text }`・`undecided.objective?`
+- 断りの code `objective_unchosen`・`run_in_progress`、`details.wish`・`details.in_progress`（§1.1）
+- `ProfileData.hold?`（サーバーが控える握る項目）。`NewRunRequest.endPrevious?`（MCP の `new_run` は `end_previous`）
+
 S8 で変えた項目（指図。SEASON.md §54・§55、中身は §9.14。命令・出来事・観測が増え、engine の決まりが変わったので `engineVersion` 0.48.0・`eventVersion` 36。コンテンツの版は変わらない）。**指図の無いランは、何も変わらない**（命令・出来事・観測・候補のどれも。試運転 t7 の 3 本は、この版で記録の初めから再実行して、版の欄の違う `run_started` のほかは、すべての出来事が一致した）。0.47.0 で開いたシーズン s2 では、このサーバーで新しいランは始められない（続きのランは遊べる）:
 
 - 命令 `set_directive { hold: ('objective'|'loadout'|'perks')[], message?: string(≤280) }`（手番を使わない。持ち主の口からだけ。キャンプでだけ）。命令の記録の `source` に `owner`（持ち主の口から通った命令）。engine の `step` は、記録の `source` が `owner` かどうかを受け取る（`meta.owner`）
@@ -707,7 +720,7 @@ S0b で変えた項目（文と、プレイヤー向けの出来事の射影と�
 - 文: alerts の `new_floor` を「新しい階に到着した」から「階を移った（地下N階）」に（前に来た階でも出るので、作り直された階と読まれないように）
 - get_rules: 経験値の入り方とレベルを combat の「## 経験値とレベル」1 か所にまとめた（数は変えていない。expedition の「その他」はそこを指す）。overview に「階は、ランの間、作られたまま残る」（例外は倒していない節目の階の作り直し。シーズンでは地形と階段の位置が全員に同じ）。season にも同じことを短く。fight の合計とレポートの与ダメージに、とどめの超過分を含まないこと。シーズンの参加の briefing にも「階は、ランの間、作られたまま残る」
 - 運用の道具: `season -- uninvite --id <id> (--name <表示名> | --profile <profile_id>)`（§9.1）
-- 試運転の道具: `npm.cmd run call -- <tool> [key=value …]`・`--tools`（`packages/tools/src/mcp-call.ts`。トークンはファイルに保存して伏せる。`MUSE_PORT` か `MUSE_MCP_URL` が無ければ断る。呼んだ後はセッションの終わり（DELETE）を送る。SEASON.md §7.6・§7.9）
+- 試運転の道具: `npm.cmd run call -- <tool> [key=value …]`・`--tools`（`packages/tools/src/mcp-call.ts`。トークンはファイルに保存して伏せる。`MUSE_PORT` か `MUSE_MCP_URL` が無ければ断る。呼んだ後はセッションの終わり（DELETE）を送る。SEASON.md §7.6・§7.9）。S9（§9.14）: 保存したプロフィールのトークンが `new_run` に付くので、同じプロフィールで 2 回目の `new_run` は `end_previous=true` が要る
 - MCP（§8）: 使われていない MCP セッションを掃除する（SEASON.md §7.9）
 
 S0b で変えた項目のうち、MCP のセッションの掃除（`/mcp`）: 処理中の要求も開いたままの受信の流れ（GET の SSE）も無いまま、プレイヤーを束縛していないセッションは 30 分（`MUSE_MCP_IDLE_MS`）、束縛した（`new_run`・`join_run`・`resume_run` をした）セッションは 6 時間（`MUSE_MCP_BOUND_IDLE_MS`）だれも使わなければ、サーバーが閉じる（1 分ごとに見る）。閉じたセッションの ID で呼ぶと HTTP 404・`{ jsonrpc: '2.0', error: { code: -32000, message: 'Unknown MCP session' }, id: null }`（MCP の決まりどおり、クライアントは新しい `initialize` でつなぎ直す。束縛はセッションごとなので、つなぎ直したら `resume_run` か、`player_token` を渡して呼ぶ）。ターンフィード（`GET /api/player/feed`）は MCP のセッションではないので、掃除しない
@@ -1139,12 +1152,13 @@ S3f の `seq_resume { next }`（`player: null`）も同じ: 起動時の再生�
 | `GET /api/player/feed` | **ターンフィード**（SSE、v2）。`Authorization: Bearer <player_token>` か `?token=`。下記 |
 | `GET /api/health` / `GET /api/config` | 生存確認 / `spectatorPolicy` |
 | `GET /api/content/catalog` | 公開カタログ |
-| `POST /api/runs` / `POST /api/runs/:id/join` | ランを開始・参加（`{ name, classId?, seed?, mode?, locale?, objective?, controller?, season?, profileToken? }`。`season` は S0 §9.1 → `{ runId, playerId, token }`。`controller` を省くと `{ kind: 'unknown' }`。V4-1g。ブラウザの画面は `human` を送る。参加はキャンプから始まる）。開始時は最初の遠征まで始める |
+| `POST /api/runs` / `POST /api/runs/:id/join` | ランを開始・参加（`{ name, classId?, seed?, mode?, locale?, objective?, controller?, season?, profileToken?, endPrevious? }`。`season` は S0 §9.1 → `{ runId, playerId, token, inherited? }`。S9（§9.14）: `profileToken` のプロフィールに続きを遊べるランがあると、開始は 409 `run_in_progress`（`endPrevious: true`（`end_previous` も受ける）で前のランを引退と同じに終えてから）。`controller` を省くと `{ kind: 'unknown' }`。V4-1g。ブラウザの画面は `human` を送る。参加はキャンプから始まる）。開始時は最初の遠征まで始める |
 | `GET /api/runs/:id/commands` | commands.jsonl（AI パネルのツール呼び出し・thought 表示用） |
 | `GET /api/runs/:id/summary` | 終了時サマリー |
 | `GET /api/ops/calls?limit=` | S7（SEASON.md §52.1 の 2）。運用の口（サーバーと同じ機械からだけ。外からは 403）: 直近の MCP の呼び出し（新しい順に最大 200 件）`{ long_ms, calls: { at, tool, run, ms, error? }[] }`（受け取った時刻・ツール・ラン・サーバーの側でかかった時間。メモリだけで、ファイルには書かない。引数・トークン・考えは持たない） |
 | `GET /api/seasons` / `GET /api/seasons/:id` | S0（§9.8）。シーズンの一覧 / 1 つのシーズンの順位の表・確定した結果・坑の断面（S2 §9.11。公開された階段の位置は出さない） |
 | `GET /api/owner/runs` | S8（§9.14）。持ち主と認められた進行中のソロのラン `OwnerRunsResponse`。`Authorization: Bearer <profile_token>`（任意） |
+| `GET /api/profile` | V3-7。プロフィールの表示名・要約・称号・ラン（MCP の `profile` と同じ中身）。`Authorization: Bearer <profile_token>`。S10（§9.14）で `seasons`（そのプロフィールが招かれたシーズン `ProfileSeasonEntry[]`）を足した（HTTP だけ） |
 | `GET /api/runs/:id/owner/view`・`POST …/owner/directive`・`POST …/owner/act` | S8（§9.14）。持ち主の口: 見る・指図・握った項目の命令 |
 | `GET /api/seasons/:id/watch` | S3（§9.7）。いま観戦できる、そのシーズンの進行中のラン `{ local, final, runs: { runId, name }[] }`。`Authorization: Bearer <profile_token>`（任意。招かれたプロフィールのもの） |
 
@@ -1483,14 +1497,14 @@ SlayOpening { turns: number; dealt: number; hitTurns: number; taken: number }
 - **握ったときの決まり**: 握った項目の命令は、持ち主の口からだけ通る。プレイヤーの口（MCP・人間の画面の WS・ボット）からは `held_by_owner`（手番を使わない・何も変わらない）。
   | 握る項目 | 持ち主の口からだけ通る命令（キャンプで） | プレイヤーに残るもの |
   |---|---|---|
-  | `objective` | `start_expedition`（候補の番号・`endless`） | 迷宮の中のすべて（帰還・撤退も） |
+  | `objective` | `start_expedition`（候補の番号・`endless`）。**S9 で改めた**: 持ち主は `prepare { objective }` で選び、準備完了を出す。遠征を始めるのはプレイヤー（下の「S9」の 2・3） | 迷宮の中のすべて（帰還・撤退も）。S9: 遠征を始めること（持ち主の選んだ目的で） |
   | `loadout` | `equip`・`unequip`（盤面にいないまま。手番は無い。呪いの決まりは今までどおり） | 拾う・捨てる・使う・投げる。**迷宮の中では、だれも付け替えない**（持ち主の口からも `not_at_camp`。装備中の品を `drop` するのも `held_by_owner`） |
   | `perks` | `choose_perk`・`choose_boon` | なし。遠征の途中に出た候補は、キャンプで持ち主が選ぶまで残る（選ぶまで、進行は止まらない） |
   - 持ち主の口から出せるのは、`set_directive` と、握った項目の命令だけ（ほかは `bad_request`。マクロ・報告・引退も）。
   - 持ち主の口から通った命令は、命令の記録の `source: 'owner'`。engine の `step` には、記録の `source` から `owner` を渡す（再生は記録だけで同じ判定）。通ると、その命令の出来事の後に `owner_decided { player, item, act, … , decidedAfter }`（`PlayerRecord.ownerDecided`: このランで持ち主が決めた項目）。プレイヤーの呼び出しの数（遠征レポートの `tool_calls`）には数えない。
   - シーズンのランで、目的を握られた `start_expedition` は、取り込み（`season_sync`）を記録する前に断る。
 - **プレイヤーへの見え方**（プレイする AI に届くのは、ツールの名前と応答の文だけ: SEASON.md §52.8）:
-  1. 観測の 1 行（キャンプでも迷宮でも）と `self.directive { hold, message?, decided?, text }`。文は、世界の中での読み方を添える（§55）: 「指図: 目的と装備は、持ち主がキャンプで決める（迷宮で手に入れた装備は、キャンプで確かめるまで身に着けない。あなたの start_expedition・equip・unequip は断られる）。特技と加護は、あなたが決める」。キャンプは、品の正体や呪いの有無を明かさない（鑑定の仕組みとは別）。
+  1. 観測の 1 行（キャンプでも迷宮でも）と `self.directive { hold, message?, decided?, text }`。文は、世界の中での読み方を添える（§55）: 「指図: 目的と装備は、持ち主がキャンプで決める（迷宮で手に入れた装備は、キャンプで確かめるまで身に着けない。あなたの start_expedition・equip・unequip は断られる）。特技と加護は、あなたが決める」（S10a で括弧の中を改めた: 下の S10a の 3）。キャンプは、品の正体や呪いの有無を明かさない（鑑定の仕組みとは別）。
   2. 「できること」: 握られた項目の行（`start_expedition`・`equip`・`unequip`・`choose_perk`・`choose_boon`）は出さない。キャンプで目的を握られているときは `wait_for_turn（待つ: 持ち主が、次の遠征を決める。observe で確かめてもよい。手番は減らない）`。候補の見出しは「持ち主が、この中から決める」。
   3. 伝言: キャンプの観測の「できること」の後、区切りの段（§52.2）の前に「持ち主から: …」。持ち主が遠征を始めた後の最初の応答の「変化」にも、もう 1 回。
   4. 「変化」の `owner`（§1.2）。特技と加護を握られているとき、`perk_pending`・`boon_pending` の知らせは「覚えられる特技が増えた（LvN）: … 身につけるのは、キャンプに戻ってから（持ち主が選ぶ…）」（`data.held_by_owner: true`）。
@@ -1525,4 +1539,30 @@ SlayOpening { turns: number; dealt: number; hitTurns: number; taken: number }
   2. **装備の分は、AI を待たせない・くり返し知らせない**: `wait_for_turn` の新しい待ち（目的を握られていないキャンプ）は、特技と加護の保留があるときだけ（装備だけなら、今までどおりすぐ返る）。「できること」の `start_expedition` の注意も、特技と加護の保留があるときだけ（「持ち主が特技・加護を選ぶ前に始めると、選べるのは、次のキャンプになる…」）。始めた直後の「変化」も、特技と加護だけ（装備の行は出さない）。キャンプの 1 行は、特技・加護を「持ち主が、まだ決めていないもの: …」、装備は「持ち物に、身に着けていない装備 N 品（着けるかどうかは、持ち主が決める）」と続ける（装備だけのときは「まだ決めていないもの」と言わない）。`self.directive.undecided` の形は変えない（`gear` は別の項目）。持ち主の画面の 1 行と出撃の確かめの窓は、装備も出す。
   3. **`season -- open`**: 確定していないほかのシーズンがあれば、その名前と ID を並べ（「開催中のシーズン s3「…」がある。新しいシーズンを開くと、それを確定する（元に戻せない）。よければ --close-previous を付ける」）、**`--close-previous` が付いていなければ、何もせずに 1 で終える**。付いていれば、確定してから開く。そのとき、ランの記録の置き場所の `.server.lock` に生きているプロセスがあれば、確定の前に注意を 1 行出す（止めはしない）。**記録が読めないシーズンがあれば、何も確定せず・開かずに 1 で終える**（どのシーズンの、どのファイルかを出す）。`--close-previous` は値を取らない引数（PowerShell では `npm.cmd run season -- open … --close-previous`。`npm run` が名前付きの引数を消すと、付いていない扱いになり、開かない）。
   4. 人間の画面: シーズンの一覧を読み込むまでは、シーズンのランを「出撃」のランの一覧に出さない（確定したランが、読み込みの前の一瞬だけ出ていた）。
-- **pilot**: 持ち主が目的を握るランでは、pilot の `camp.auto_start` を `null` にする（pilot は `held_by_owner` を知らないので、出発を試みては断られ、数秒で自分を止める。pilot の README）。
+- **S9（SEASON.md §58.1〜§58.3。`engineVersion` 0.49.0・`eventVersion` 37）**: 上の S8・S8b・S9a・S9b のうち、目的の決め方・待ち・決めていないものの数え方を、次のとおりに改める。
+  1. **支度の札**（`Directive.prep { state: 'pending'|'ready', objective?, seen }`）: 握っている項目があるときだけある。**キャンプに着くたびに**（遠征の終わりに候補を出した後）、engine が置き直す: 決めるもの（`PrepNeeds`: 目的を握っている・握られた特技の候補 `build.pending[0]` か加護の候補 `boonChoice` がある・装備を握っていて、`seen` に無い身に着けていない装備できる品が持ち物にある）があれば `pending`（「まだ」）、無ければ `ready`（準備完了。`seen` を今の持ち物の品の ID に覚え直す）。前のキャンプで選んだ目的は消える。出来事 `directive_prep { why: 'camp' }`（変わらなければ出さない）。**初めて握ったとき**（`set_directive` で握る項目が空から増えた）も同じ決め方。**準備完了の後に、持ち主が握る項目を変えた・装備を変えた・特技か加護を選んだ・目的を選び直した**ら `pending` に戻る（`directive_set`・`directive_prep { why: 'decided'|'owner' }`。伝言だけの変更では変わらない）。握るのをすべてやめると、札は消える。S8 の版の記録で握っていて札が無いときは `pending` と読む（`prepStateOf`）。
+  2. **持ち主の `prepare`**: `{ objective }` で目的を選ぶ（目的を握っているとき。このキャンプの候補の番号か `endless`。選び直すと `pending`）。`{ ready: true }` で準備完了（目的を握っていれば、選んでいないと `objective_unchosen`。`seen` を今の持ち物に）。`{ ready: false }` で `pending` に戻す。変わらなければ `nothing_to_do`。同じ命令に両方を書けば、選んでから準備完了。**持ち主の口からの `start_expedition` は `bad_request`**（「遠征を始めるのは、プレイヤー。目的を選んで（prepare { objective }）、準備完了を出す（prepare { ready: true }）。AI が来たら、出発する」）。
+  3. **プレイヤーの `start_expedition`**: 札が「まだ」の間は `held_by_owner`（手番を使わない。目的を握られていれば希望として覚える: 下の 6）。文に、決めていないものと待ち方（「持ち主の支度が、まだ（決めていないもの: 特技（Lv2 の候補 3 つ））。準備完了になるまで、start_expedition は断られる。」）。準備完了なら通る。**目的を握られていれば、引数によらず、持ち主が選んだ目的で始まる**（その命令の出来事の後に `owner_decided { item: 'objective', act: 'start_expedition', no, offer, asked }`。順位の印にもなる）。応答の「変化」（`owner`）に「持ち主が決めた目的で始めた: 遠征 N（…）」、指した候補が違えば「。あなたが指した候補 M ではなく、持ち主の選んだ目的で始まった」。伝言があれば、今までどおり「持ち主から: …」をもう 1 回。シーズンのランで断られる `start_expedition` は、取り込みを記録しない（希望の出来事だけ）。シーズンの予算を使い切った・終わりの時刻を過ぎたキャンプ（World の写しで）では、札を見ずに、今までの断り（`budget_exhausted`・`season_ended`）にする。
+  4. **プレイヤーへの見え方**: キャンプの観測の、指図の行の直後に札の 1 行（`self.directive.prep { state, objective?, text }`。S9a の「持ち主が、まだ決めていないもの」の行は、ここに入る）: 「持ち主の支度: まだ（決めていないもの: 特技（Lv2 の候補 3 つ））。準備完了になるまで、start_expedition は断られる。待つなら wait_for_turn」（決めるものが無いのに「まだ」なら「持ち主が、支度を見直している」）／「持ち主の支度: 準備完了（目的: 候補 2: …。装備と、特技と加護は、決めてある）。start_expedition で出発する（offer に何を渡しても、持ち主が選んだ目的で始まる）」（選ばずに残したものは「特技は、選ばないまま（次のキャンプまで保留）」「新しく持ち物に入った装備 N 品は、着けないまま」）。「できること」: 「まだ」の間は `start_expedition` の行を出さず `wait_for_turn（待つ: 持ち主の支度が、準備完了になるまで待つ。…）`。準備完了で目的を握られていれば `start_expedition N (持ち主が選んだ目的: …。offer に何を渡しても、この目的で始まる)` の 1 行。S9a の「持ち主が特技を選ぶ前に始めると…」の注意は出さない。`turn.awaiting` は「まだ」なら `nothing`、準備完了なら `camp_choice`。`turn.owner_wait` は「まだ」の間。キャンプにいる間に準備完了になったら（「まだ」に戻ったら）、次の応答の「変化」に「持ち主の支度が、準備完了になった（目的: …）。start_expedition で出発する」（「持ち主の支度が、まだに戻った…」）。▶ 行: 「持ち主の支度を待つ。準備完了になったら、あなたが start_expedition で出発する（wait_for_turn で待てる。手番は減らない）」／準備完了で目的を握られていれば「持ち主の支度は準備完了。start_expedition で出発する（持ち主が選んだ目的: …。あなたが呼ぶまで、出発しない）」。時間切れの ▶ 行は「持ち主の支度は、まだ準備完了でない（この待ちで N 秒待った）。…待つのをやめてもよい（やめると、準備完了になっても、だれも出発しない。…）」。特技・加護の知らせ（`perk_pending`・`boon_pending`）の「選ぶまで進行は止まらない」は「あなたの choose_perk は、希望として持ち主に伝わる。遠征の途中は、止まらない。キャンプでは、持ち主の支度を待つ」に。
+  5. **決めていないもの**（`self.directive.undecided`・`OwnerRunRow.undecided`）: `objective?: true`（目的を握っていて、まだ選んでいない。キャンプだけ）を足し、`gear` は「前の準備完了の後に持ち物に入った品」（札の `seen` に無い品）だけを数える（札の無い S8 の版の記録では、身に着けていない品すべて）。文は「持ち主が、まだ決めていないもの: 次の遠征の目的・特技（…）・新しく持ち物に入った装備 N 品」。
+  6. **希望**（`Directive.wishes?: DirectiveWish[]`。出来事 `directive_wish`）: 握られた項目の命令（`choose_perk`・`choose_boon`・`equip`・`unequip`・キャンプで候補を指した `start_expedition`）がプレイヤーの口から来たら、`held_by_owner` で断ったうえで、希望として覚える（手番は使わない。`details.wish: true`。文は「これは、持ち主が決める。あなたの希望（鎧さばき）は、持ち主に伝えた（持ち主が決めるのは、キャンプで）。」）。形: `{ item: 'objective', no, offer, objective }`・`{ item: 'loadout', act: 'equip'|'unequip', target }`・`{ item: 'perk', perk, level }`・`{ item: 'boon', boon, depth }`、どれも `reason?`（命令の `thought`。制御文字・書式の文字を落とし、改行は空白に、280 字まで）。項目ごとに最新の 1 つ（特技と加護は別）。同じ希望（中身と理由が同じ）のくり返しは出来事を足さない。成り立たない命令（候補に無い・その品を持っていない・迷宮の中の `start_expedition`）は希望にならない（今までの断り）。迷宮の中でも出せる。持ち主がその項目を決めた（特技・加護・付け替え・目的を選んだ）か、握るのをやめると消える。成り立たなくなった希望（その候補が無くなった・その品を持っていない・別のキャンプの候補）は持ち主の画面に出さない（`activeWishes`。World からは、決めたとき・やめたときに消す）。`thought` は命令の記録にあり、engine の `step` に渡る（再生でも同じ）。
+  7. **見える者**: 札と希望は、そのプレイヤーの World の `directive` にあり、`PlayerView` には自分のものだけ（持ち主は、そのプレイヤーの PlayerView で見る）。ほかの参加者・シーズンの共有（取り込み・順位の表）には入らない。観戦・リプレイの「思考」の欄に「希望: …」（と理由）・持ち主の `prepare`（「持ち主の支度: 準備完了（目的: 候補 2）」）を、AI の考えと並べる（だれが見られるかは今までどおり）。
+  8. **持ち主の口**: `POST …/owner/act` で `prepare` も受ける（ほかは今までどおり。§8 の状態を変える口の決まり）。`OwnerRunRow` に `prep?: { state, objective? }`・`wishes?`（今も成り立つ希望の数）・`ai?: { lastCallAgoS, waitingNow }`（AI が最後に呼び出してからの秒数（命令と MCP の呼び出し。このサーバーの起動の後に無ければ null）・いま `wait_for_turn` で支度を待っているか。サーバーのメモリの控えで、World に入れない）。`OwnerViewResponse.ai?` も同じ。`waiting` は「キャンプで、札が『まだ』で、次の遠征を始められる」。人間の画面の持ち主の枠（`ui/owner.tsx`）: 札の状態（「支度: まだ。AI は、あなたの支度を待っている」／「支度: 準備完了。AI が来たら、出発する。AI に、声をかける」）・AI との行き来の 1 行・目的の候補の「この目的にする」（選んだ候補に印）・「準備完了」（目的を握っていて選んでいなければ押せない。目的のほかに決めていないものが残っていれば、画面の中の確かめの窓「戻って決める」「このまま準備完了」。S9a の「この目的で出撃」の確かめを、このボタンへ移した）・「「まだ」に戻す」・「（名前）の希望: … ―「理由」」と「希望どおりにする」（その命令を持ち主の口から出す。目的は `prepare { objective }` で選ぶだけ。`wishCommand`）。
+  9. **冒険者 1 人に、続きは 1 つ**（サーバーの決まり。engine は変えない）: プロフィールに続きを遊べるラン（動いていて、その者が迷宮かキャンプにいるラン。協力プレイのランも）があれば、`new_run`（MCP・`POST /api/runs`。シーズンのランも）を `run_in_progress` で断る（`details.in_progress { run_id, season? }`。文にランの ID と `resume_run`・`end_previous: true` の使い方。HTTP は 409）。`end_previous: true`（HTTP は `endPrevious`）なら、そのプロフィールの続きのあるランを、すべて `retire` と同じ命令で終わらせてから（迷宮の中でも通る。出どころは new_run と同じ口: MCP は `mcp`、HTTP は `ws`）始める。引退が断られたら、その理由で断り、新しいランは作らない。シーズンの `canStart` の「進行中のシーズンのランがある」も、同じ形（`run_in_progress`・`end_previous` で通る）。数えないもの: 版が違う（この版の engine で始まっていない）・復旧できなかった（動いていない）・確定したシーズンのラン・終わったラン。トークンなしの `new_run` は、今までどおり新しいプロフィールを作る。`join_run`（協力プレイへの途中参加）は、この決まりの外（今までどおり）。
+  10. **握る項目は、プロフィールに覚える**（`ProfileData.hold?`。サーバーが、持ち主の `set_directive` の確定のたびに控える。伝言は控えない）。そのプロフィールの新しいラン（指図を出せるランだけ: ソロで、人間が自分で遊んでいない）は、作った直後に、それを持ち主の口の `set_directive { hold }` として入れる（記録の `source: 'owner'`）。握っている項目があれば、`new_run` に最初の遠征の目的が付いていても、キャンプから始める（応答に `inherited_hold`・`objective_ignored` と、文「持ち主が握っている項目（目的・特技と加護）を、このプロフィールから引き継いだ。キャンプから始め、持ち主の支度を待つ（渡された最初の遠征の目的は、使わなかった）。」。HTTP は `inherited`）。シーズンのランは、取り込みの後に入れる。
+  11. 人間の画面の「冒険を始める」「シーズンに参加（自分で遊ぶ）」は、`run_in_progress` を受けたら、画面の中の確かめの窓（「この冒険者には、続きを遊べるランがある…新しく始めると、前の冒険は、ここで終わる。記録は、残る」）を出し、同意で `endPrevious` を付けて出し直す。
+  12. 規則: `directive` の話題を書き改めた（希望・持ち主の支度・「遠征の途中は、止まらない。キャンプでは、持ち主の支度を待つ」・目的の決め方・冒険者 1 人に続きは 1 つ。日本語と英語）。`observation` の話題のプロフィールの項目にも 1 文。
+- **S9c（S9 の検査の指摘の直し。版は S9 のまま）**: 上の S9 の 1・6・9 を、次のとおりに改める。
+  1. **札の無い World**（前の版の記録・この版より前に握ったラン）は、「まだ」と決めつけず、決めるものがあるかを、その場で数えて読む（`prepStateOf` に数え方を渡す。engine は `prepStateWorld`、観測・持ち主の画面は `prepStateView`。門・`ownerWaitOpen`・観測の文・`wait_for_turn` で同じ読み方）。決めるものは、目的を握っている・握られた特技か加護の保留。装備は、何が新しいかの覚え（`seen`）が無いので数えない（`self.directive.undecided.gear` も同じ）。決めるものが無ければ準備完了（§58.1）。札の無いランで持ち主が握った項目を決めると、「まだ」の札ができる。
+  2. **希望**: 中身が同じなら（理由だけが違っても）出来事を足さない。理由は最初のものを残す。応答は「その希望（…）は、もう持ち主に伝えてある（持ち主が決めるのは、キャンプで）。」。項目ごと（目的・装備・特技・加護）に、キャンプからキャンプまでの間に覚えられるのは `WISH_LIMIT`（8）回まで（最初の 1 回を含む。`Directive.wishCount`。キャンプに着いたとき `directive_prep { why: 'camp' }` で消える）。超えたら出来事を足さず「希望は、もう伝えてある（次のキャンプまで、これ以上は変えられない。今の希望: …）。」。どちらも `held_by_owner`・`details.wish: true`・手番なし。出来事 `directive_wish` は、その項目の希望と数（`countAfter`）だけを持つ（指図の全部を持たない）。
+  3. **MCP**: `choose_perk`・`choose_boon` に `thought` を足した（前は引数に無く、共通の名前として捨てていたので、MCP から出した特技・加護の希望に理由が届かなかった）。`equip`・`unequip`・`start_expedition` は前から `thought` を受ける。`choose_boon`・`equip`・`unequip` の説明にも「握られているときは、希望として持ち主に伝わる」。
+  4. **冒険者 1 人に続きは 1 つ**: 数え方を 1 つの関数（`SessionManager.continuable`）にした。シーズンの `canStart` の「進行中のシーズンのランがある」も、これで見る（`SeasonService.continues`）。新しく数えないもの: キャンプにいて、新しい遠征を始められないシーズンのラン（終わりの時刻を過ぎた・予算を使い切った。`SeasonService.canContinue`）。迷宮の中のランは、シーズンが終わりの時刻を過ぎても、帰るか倒れるまで続けられるので数える。同じプロフィールの `new_run`（シーズンのランも）は、数えてから参加するまでを、プロフィールの ID ごとの待ち行列で順番に流す（同時に来た 2 つで、続きのあるランが 2 つできない。前のものが失敗しても次は流れる）。
+- **S10（SEASON.md §58.4。画面だけ。engine・出来事・命令の形・World と版は S9 のまま）**:
+  1. **`GET /api/profile` に `seasons`**（`ProfileSeasonEntry[]`）: そのプロフィールが招かれたシーズンごとに `{ id, seasonName, name, status, budget, used, runs, died }`（`name` は招いたときの表示名＝順位の表の名前、`used` はランをまたいで使った予算の今の値、`runs` は始めたランの数、`died` はこのシーズンで倒れたことがある）。`Authorization: Bearer <profile_token>` のプロフィールのものだけ（ほかのプロフィールの招きは入らない）。記録が読めないシーズン・招いた者の記録が読めないシーズンは入れない。MCP の `profile` の文と `structuredContent` は変えない（HTTP だけ）。人間の画面の拠点の冒険者の札（「まだ、このシーズンに入っていない」「前の冒険は、倒れて終わった」「手番を使い切った」・残りの手番）に使う。
+  2. 人間の画面: `#/` は拠点（冒険者の札・鍵を入れる欄・この機械の冒険者（運用者として）・今シーズンの順位）、`#/prepare/<runId>` は支度（目的・装備・特技と加護の「任せる／自分で」・伝言・「準備完了」。持ち主の口の `…/owner/view`・`…/owner/directive`・`…/owner/act` を使う）、`#/ops` は運用（前のホームの「ほかのラン」と、鍵を外す）、`#/records` は記録（今のまま）。前の「出撃」は拠点になった（`#/` のまま）。だれが何を見られるか・持ち主の口の守り（§8 の状態を変える口）は変えていない。
+- **S10a（S10 の検査と、画面で見た指摘の直し。版は S9 のまま）**:
+  1. `OwnerRunRow` と `OwnerViewResponse` に `continuable`（続きを遊べるか。冒険者 1 人に続きは 1 つの数え方 `SessionManager.continuable` と同じ）と `oldVersion?: true`（このサーバーと違う版の engine で始まったラン）。人間の画面は、違う版のランの札を「前の版の冒険（続きは、遊べない）」と「記録を見る」にし、支度の画面は見るだけ。
+  2. `ProfileSeasonEntry.failed?: true`: 終わっていないそのシーズンのランが、サーバーの起動時に復旧できなかった（`recoveryFailed`）。拠点の札は「前の冒険は、サーバーの起動時に読み込めなかった（運用者に知らせる）」で、「自分で潜る」を出さない。
+  3. **観測の指図の行（キャンプ）**の括弧の中を改めた（文だけ。World・出来事は変えない）: 目的を握られていれば「遠征を始めるのは、あなた。持ち主の支度が準備完了になってから」、装備・特技と加護は「あなたが equip・unequip（choose_perk・choose_boon）を出すと、希望として持ち主に伝わる」（前は「あなたの … は断られる」）。例: 「指図: 目的と装備は、持ち主がキャンプで決める（迷宮で手に入れた装備は、キャンプで確かめるまで身に着けない。遠征を始めるのは、あなた。持ち主の支度が準備完了になってから。あなたが equip・unequip を出すと、希望として持ち主に伝わる）。特技と加護は、あなたが決める」。英語は `(…; you start the expedition, once your owner's preparations are ready; if you send equip, unequip, it reaches your owner as a wish)`。迷宮の中の短い行は変えない。
+  4. 人間の画面の支度: 「任せる／自分で」と伝言を残すときは、送る直前に `…/owner/view` を読み直し、その指図に押した 1 つだけを足す・外す（伝言はサーバーの値のまま）／伝言だけを替える（握る項目はサーバーの値のまま）。ほかのタブの変更を古い値で上書きしない。準備完了の間は、段の切り替えと決める操作を押せない（伝言は残せる）。
+- **pilot**: 持ち主が目的を握るランでは、pilot の `camp.auto_start` を `null` にする（pilot は `held_by_owner` を知らないので、出発を試みては断られ、数秒で自分を止める。pilot の README）。S9 で、特技と加護・装備を握られて札が「まだ」のときも、pilot の出発は断られる（pilot は変えていない）。

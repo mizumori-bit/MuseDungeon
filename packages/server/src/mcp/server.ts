@@ -4,8 +4,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { ZodTypeAny } from 'zod';
 import { argListText, argProblems, argShape, exampleOf } from './args';
-import type { ActionError, Command, Controller, ObjectiveChoice, TurnBlock } from '@muse/shared';
-import { actionError, CommandSchema, ownerUndecidedWaitOpen, ownerWaitOpen, seasonFinalView, stripTokenArgs, t } from '@muse/shared';
+import type { ActionError, Command, Controller, InheritedHold, ObjectiveChoice, TurnBlock } from '@muse/shared';
+import { actionError, CommandSchema, directiveItemsText, ownerWaitOpen, seasonFinalView, stripTokenArgs, t } from '@muse/shared';
 import type { PlayerPort, ActionPayload } from '../session/PlayerPort';
 import type { SessionManager } from '../session/SessionManager';
 import { rulesText, RULE_TOPICS } from './rules';
@@ -181,11 +181,18 @@ export function createMcpServer(ctx: McpContext): McpServer {
     port.setOptions({ map, inventory: args.inventory as 'on_change' | 'always' | undefined, status_line: args.status_line as 'short' | 'long' | undefined });
   };
 
-  const joinedOut = async (port: PlayerPort, token: string, runId: string, tool: string, args: Record<string, unknown>, reason: 'run_started' | 'resumed', profile?: { id: string; token?: string }) => {
+  const joinedOut = async (port: PlayerPort, token: string, runId: string, tool: string, args: Record<string, unknown>, reason: 'run_started' | 'resumed', profile?: { id: string; token?: string }, inherited?: InheritedHold) => {
     ctx.boundToken = token;
     applyOptions(port, args);
     // キャンプの候補は観測の文に入るので重ねない
     const briefing = port.briefing(reason === 'resumed' ? 'resume' : 'start', { camp: false });
+    // プロフィールの握る項目を引き継いだ（S9 §58.3）: その理由と、最初の遠征の目的を使わなかったこと
+    if (inherited) {
+      const L = port.locale();
+      const items = directiveItemsText(L, inherited.hold);
+      briefing.unshift(t(L, `持ち主が握っている項目（${items}）を、このプロフィールから引き継いだ。キャンプから始め、持ち主の支度を待つ${inherited.objectiveIgnored ? '（渡された最初の遠征の目的は、使わなかった）' : ''}。`,
+        `Carried over what your owner holds (${items}) from this profile. The run starts at camp and waits for your owner's preparations${inherited.objectiveIgnored ? ' (the first objective you passed was not used)' : ''}.`));
+    }
     const o = port.observeWithTurn(reason, { detail: 'full', consume: true });
     // プロフィール（V3-7 §16.3）: 新しく作ったときだけトークンを返す。次の new_run に渡すと記録と継承が引き継がれる
     const prof = profile?.token
@@ -195,7 +202,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
     const text = head + (briefing.length ? briefing.join('\n') + '\n\n' : '') + o.text;
     // 観戦の「AI の呼び出しの記録」には、トークンを入れない（S3a §27.9 の 4。俯瞰の観戦は、つないだときに直近の記録を受ける）
     record(port, tool, args, text, [token, profile?.token]);
-    return out(text, { run_id: runId, player_token: token, player_id: port.playerId, ...(profile ? { profile_id: profile.id, ...(profile.token ? { profile_token: profile.token } : {}) } : {}), briefing, observation: o.observation, turn: o.turn });
+    return out(text, { run_id: runId, player_token: token, player_id: port.playerId, ...(profile ? { profile_id: profile.id, ...(profile.token ? { profile_token: profile.token } : {}) } : {}), ...(inherited ? { inherited_hold: inherited.hold, objective_ignored: inherited.objectiveIgnored } : {}), briefing, observation: o.observation, turn: o.turn });
   };
 
   server.registerTool('new_run', {
@@ -211,6 +218,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
       profile_token: z.string().optional().describe('前のランで受け取った profile_token。記録・図鑑・実績が積まれ、図鑑の知識の一部を引き継ぐ（省くと新しいプロフィールを作り、応答で返す）'),
       legacy: z.boolean().optional().describe('false で図鑑の知識を引き継がない（既定 true）'),
       season: z.string().max(32).optional().describe('シーズンの ID（list_runs の seasons）。運用者に招かれたプロフィールの profile_token が要る（無い・招かれていなければ断る）。シーズンのシードでソロ、Lv1 のキャンプから始まる。seed・mode・objective・legacy は使わない。倒れた後の新しいランも、同じ profile_token で同じ参加者として数える'),
+      end_previous: z.boolean().optional().describe('冒険者 1 人（プロフィール 1 つ）に、続きを遊べるランは 1 つ。profile_token のプロフィールに続きのあるランがあると run_in_progress で断られる。true なら、前のランを引退と同じに終わらせてから始める（確定した点と記録は残る）'),
       ...optionArgs,
       brief_map: z.boolean().optional().describe('旧引数。false は map: never と同じ'),
     },
@@ -225,9 +233,10 @@ export function createMcpServer(ctx: McpContext): McpServer {
       name: args.character_name, classId, mode: args.mode, seed: args.seed, locale: args.locale, controller,
       objective: args.objective as ObjectiveChoice | undefined, profileToken: args.profile_token, legacy: args.legacy,
       ...(args.season !== undefined ? { season: args.season } : {}),
+      ...(args.end_previous ? { endPrevious: true } : {}),
     });
     if ('error' in r) return errOut(r.error);
-    return joinedOut(r.port, r.token, r.session.runId, 'new_run', { ...args, seed: undefined }, 'run_started', r.profile);
+    return joinedOut(r.port, r.token, r.session.runId, 'new_run', { ...args, seed: undefined }, 'run_started', r.profile, r.inherited);
   });
 
   server.registerTool('join_run', {
@@ -331,7 +340,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
   });
   server.registerTool('start_expedition', {
     title: '遠征を始める',
-    description: 'キャンプで次の遠征を選んで始める（offer は候補の番号 1〜3 か "endless"）。前回 extract した階段から再開する。',
+    description: 'キャンプで次の遠征を選んで始める（offer は候補の番号 1〜3 か "endless"）。前回 extract した階段から再開する。持ち主の支度が「まだ」の間は断られる（観測の「持ち主の支度」の行。wait_for_turn で待てる）。目的を持ち主に握られていれば、準備完了の後は、offer によらず持ち主が選んだ目的で始まる。',
     inputSchema: { ...common, offer: z.union([z.number().int().min(1).max(9), z.literal('endless')]), thought: actionCommon.thought },
   }, async (a) => act('start_expedition', a, { type: 'start_expedition', offer: a.offer }));
   server.registerTool('extract', {
@@ -355,27 +364,19 @@ export function createMcpServer(ctx: McpContext): McpServer {
 
   server.registerTool('wait_for_turn', {
     title: '手番を待つ',
-    description: '自分の手番（または遠征・ランの終了）まで待って観測を返す。既に自分の番なら即座に返る。キャンプで目的を持ち主に握られているとき（観測の「指図」の行）は、持ち主が遠征を始めるまで待つ（手番は減らない。時間切れなら今の状態を返す。何回呼んでもよい）。キャンプで、握られた特技・加護・装備に持ち主がまだ決めていないものがあるとき（観測の「持ち主が、まだ決めていないもの」の行）は、持ち主が決めるまで待つ。Wait until it is your turn (or, at camp with the objective held by your owner, until they start the expedition; at camp with held perks, boons or gear not yet decided, until your owner decides).',
+    description: '自分の手番（または遠征・ランの終了）まで待って観測を返す。既に自分の番なら即座に返る。キャンプで、持ち主の支度が「まだ」のとき（観測の「持ち主の支度: まだ」の行）は、準備完了になるまで待つ（手番は減らない。時間切れなら今の状態を返す。何回呼んでもよい。準備完了になったら、start_expedition で出発する）。Wait until it is your turn (or, at camp while your owner\'s preparations are not ready, until they are; then set out with start_expedition).',
     inputSchema: { ...common, timeout_s: z.number().int().min(1).max(60).optional().describe('最大待ち時間（秒、既定 20、最大 60）') },
   }, async (args) => {
     const port = portOf(args.player_token);
     if (!port) return noSession();
     const v0 = port.view();
-    // キャンプで目的を持ち主に握られている（S8。SEASON.md §54.4 の 5）: 持ち主が遠征を始めるまで待つ（最長は同じ。時間が来たら今の観測）。
-    // 予算切れ・時間切れのキャンプは待たない（S8b。下の道で、すぐ返る）
+    // キャンプで、持ち主の支度の札が「まだ」（S8 §54.4 の 5。S9 §58.1 で、目的を握られているときと、特技・加護の保留があるときの待ちを、これ 1 つにまとめた）:
+    // 準備完了になるまで待つ（最長は同じ。時間が来たら今の観測）。予算切れ・時間切れのキャンプは待たない（S8b。下の道で、すぐ返る）
     if (ownerWaitOpen(v0)) {
       const t0 = Date.now();
       const w = await port.waitForOwner((args.timeout_s ?? 20) * 1000);
       const reason = w === 'timeout' ? 'wait_timeout' : w === 'started' && port.view().status === 'your_turn' ? 'turn_arrived' : 'observed';
       const o = port.observeWithTurn(reason, { detail: 'brief', waitedMs: Date.now() - t0 });
-      record(port, 'wait_for_turn', args, o.text);
-      return out(o.text, { observation: o.observation, turn: o.turn });
-    }
-    // キャンプで、目的は握られていないが、握られた項目に決めていないものがある（S9a。SEASON.md §57.3 の 1）: 持ち主が決めるか、時間が来るまで待つ
-    // （観測の「できること」の start_expedition の行が「待つなら、observe か wait_for_turn」と言う）
-    if (ownerUndecidedWaitOpen(v0, manager.catalog)) {
-      const w = await port.waitForOwnerDecision((args.timeout_s ?? 20) * 1000);
-      const o = port.observeWithTurn(w === 'timeout' ? 'wait_timeout' : 'observed', { detail: 'brief' });
       record(port, 'wait_for_turn', args, o.text);
       return out(o.text, { observation: o.observation, turn: o.turn });
     }
@@ -561,20 +562,21 @@ export function createMcpServer(ctx: McpContext): McpServer {
     inputSchema: { ...actionCommon, id: z.string().regex(/^[sl][0-9]{1,6}$/).optional().describe("置き場の品の ID（season.supply.items の id。's12'・'l1'）") },
   }, async (a) => act('take_supply', a, { type: 'take_supply', ...(a.id ? { id: a.id } : {}) }));
   server.registerTool('choose_perk', {
-    title: '特技を選ぶ', description: 'レベルアップの特技の候補から 1 つ選ぶ（self.perk_choice。手番を消費しない。選ぶまで進行は止まらない）。option は候補の番号（1 から）か特技の ID。',
-    inputSchema: { ...common, option: z.union([z.number().int().min(1).max(9), z.string().min(1)]) },
+    title: '特技を選ぶ', description: 'レベルアップの特技の候補から 1 つ選ぶ（self.perk_choice。手番を消費しない。選ぶまで進行は止まらない）。option は候補の番号（1 から）か特技の ID。持ち主が特技と加護を握っているときは、断られる代わりに、あなたの希望として持ち主に伝わる（観測の「指図」の行。get_rules topic=directive）。',
+    // thought（S9c）: 握られているときは、希望の理由として持ち主に届く（前は引数に無く、共通の名前として捨てていた）
+    inputSchema: { ...common, option: z.union([z.number().int().min(1).max(9), z.string().min(1)]), thought: actionCommon.thought },
   }, async (a) => act('choose_perk', a, { type: 'choose_perk', option: a.option }));
   server.registerTool('choose_boon', {
-    title: '加護を選ぶ', description: '節目の大守護者を倒したときの加護の候補から 1 つ選ぶ（self.boon_choice。手番を消費しない）。option は候補の番号（1 から）か加護の ID。',
-    inputSchema: { ...common, option: z.union([z.number().int().min(1).max(9), z.string().min(1)]) },
+    title: '加護を選ぶ', description: '節目の大守護者を倒したときの加護の候補から 1 つ選ぶ（self.boon_choice。手番を消費しない）。option は候補の番号（1 から）か加護の ID。持ち主が特技と加護を握っているときは、断られる代わりに、あなたの希望として持ち主に伝わる（観測の「指図」の行。get_rules topic=directive）。',
+    inputSchema: { ...common, option: z.union([z.number().int().min(1).max(9), z.string().min(1)]), thought: actionCommon.thought },
   }, async (a) => act('choose_boon', a, { type: 'choose_boon', option: a.option }));
   server.registerTool('pickup', { title: '拾う', description: '足元のアイテムを拾う（item を省くと足元の全て。ただし自分が置いた品は、ほかの品があれば拾わない。拾い直すなら item を渡す）。', inputSchema: { ...actionCommon, item: z.string().regex(/^e_[0-9a-z]{6}$/).optional() } },
     async (a) => act('pickup', a, { type: 'pickup', item: a.item }));
   server.registerTool('drop', { title: '置く', description: '所持品を足元に置く。', inputSchema: { ...actionCommon, slot: SlotZ, qty: z.number().int().positive().optional() } },
     async (a) => act('drop', a, { type: 'drop', slot: a.slot, qty: a.qty }));
-  server.registerTool('equip', { title: '装備', description: '武器・防具・装飾品を装備する。装備すると正体と呪いの有無が分かる（呪われていれば外せない）。呪いと分かっている品は confirm: true が要る。', inputSchema: { ...actionCommon, slot: SlotZ, confirm: z.boolean().optional() } },
+  server.registerTool('equip', { title: '装備', description: '武器・防具・装飾品を装備する。装備すると正体と呪いの有無が分かる（呪われていれば外せない）。呪いと分かっている品は confirm: true が要る。持ち主が装備を握っているときは、断られる代わりに、あなたの希望として持ち主に伝わる（thought が理由になる）。', inputSchema: { ...actionCommon, slot: SlotZ, confirm: z.boolean().optional() } },
     async (a) => act('equip', a, { type: 'equip', slot: a.slot, ...(a.confirm ? { confirm: true } : {}) }));
-  server.registerTool('unequip', { title: '装備解除', description: '装備を外す（スロット文字か weapon/armor/accessory）。', inputSchema: { ...actionCommon, slot: z.union([SlotZ, z.enum(['weapon', 'armor', 'accessory'])]) } },
+  server.registerTool('unequip', { title: '装備解除', description: '装備を外す（スロット文字か weapon/armor/accessory）。持ち主が装備を握っているときは、断られる代わりに、あなたの希望として持ち主に伝わる（thought が理由になる）。', inputSchema: { ...actionCommon, slot: z.union([SlotZ, z.enum(['weapon', 'armor', 'accessory'])]) } },
     async (a) => act('unequip', a, { type: 'unequip', slot: a.slot }));
   server.registerTool('use_item', {
     title: '使う', description: '薬を飲む・巻物を読む・帰還の綱を使う（その場でキャンプへ。目的を除く戦利品の半分が確定。遺物は運べない）。slot はスロット文字か、正体の分かっている品の種類 ID（例 "potion_healing"。同じ種類が複数ならスロット順で最初）。鑑定の巻物は target_slot で対象を選べる（省略時はスロット順で最初の未鑑定品か、呪いの有無を確かめていない装備品）。',

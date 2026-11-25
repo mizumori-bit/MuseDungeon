@@ -321,10 +321,20 @@ export function applyEvent(world: World, ev: GameEvent): void {
     case 'notes_updated':
       world.players[ev.player].knowledge.notes = clone(ev.notesAfter);
       break;
-    // 指図（S8。SEASON.md §54.2・§54.6）: after 値の代入だけ
+    // 指図（S8。SEASON.md §54.2・§54.6）・支度の札と希望（S9 §58.1・§58.2）: after 値の代入だけ
     case 'directive_set':
+    case 'directive_prep':
       world.players[ev.player].directive = clone(ev.directiveAfter);
       break;
+    // 希望（S9c）: その項目の希望と数だけを置き換える（項目ごとに 1 つ。並びは項目の順）
+    case 'directive_wish': {
+      const d = world.players[ev.player].directive;
+      if (!d) break;
+      const order = ['objective', 'loadout', 'perk', 'boon'];
+      d.wishes = [...(d.wishes ?? []).filter((x) => x.item !== ev.wish.item), clone(ev.wish)].sort((a, b) => order.indexOf(a.item) - order.indexOf(b.item));
+      d.wishCount = { ...(d.wishCount ?? {}), [ev.wish.item]: ev.countAfter };
+      break;
+    }
     case 'owner_decided':
       world.players[ev.player].ownerDecided = [...ev.decidedAfter];
       break;

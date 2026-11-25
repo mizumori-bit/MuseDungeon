@@ -11,6 +11,7 @@
 //   プレイヤーごとに別の MUSE_TOKEN_DIR を使う。上書きする前のトークンは *.old.txt に 1 行ずつ残す。
 //   保存したプレイヤーのトークンは、player_token を受け取るツールに自動で付く（resume_run も）。プロフィールのトークンは new_run・join_run に自動で付く
 //   （シーズンの参加には、運用者から受け取ったプロフィールのトークンを profile-token.txt に置く）。
+//   同じプロフィールで 2 回目の new_run は end_previous=true が要る（冒険者 1 人に続きは 1 つ。S9。SEASON.md §58.3）。
 // つなぐ先: MUSE_MCP_URL か、MUSE_PORT のポートの 127.0.0.1。どちらも無ければ断る（既定の 7777 は依頼者のサーバー。S0b §7.9）。
 import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
@@ -26,6 +27,7 @@ export const USAGE = [
   '  例: get_rules topic=season / new_run character_name=Aki / move dir=n "thought=北へ 3 歩" / travel_to to=stairs_down / travel_to to={"x":3,"y":4} / choose_perk option=1',
   '  環境変数: MUSE_PORT か MUSE_MCP_URL（つなぐ先。必須）、MUSE_TOKEN_DIR（トークンの置き場所。既定 trial-runs/tokens。プレイヤーごとに別にする）',
   '  npm.cmd run call -- … も動くが、cmd.exe を通るので、引数に「数字＋空白＋日本語」や JSON の波かっこがあると壊れる（node で直接呼ぶ）',
+  '  同じプロフィールで 2 回目の new_run は end_previous=true が要る（保存したプロフィールのトークンが付く。続きのあるランがあると run_in_progress で断られる。S9）',
 ].join('\n');
 
 /** その引数が文字列しか受け取らないか（JSON にしないでそのまま渡す） */

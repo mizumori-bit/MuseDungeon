@@ -2,14 +2,14 @@
 // 見えるものは、そのプレイヤーの PlayerView と、AI に届くのと同じ観測（GET …/owner/view）だけ。持ち主に、プレイヤーより多くを見せない。
 // 命令は、プレイヤーと同じ Command を持ち主の口（POST …/owner/act）へ送る。通るか・断るかを決めるのはサーバー（engine）で、断りの文はそのまま出す。
 // プロフィールのトークンは、そのランを返したもの（呼び出し側が覚えている）を Authorization の見出しでだけ渡す（画面・URL・console に出さない）。
-import type { ActionError, Catalog, Command, DirectiveItem, Observation, OwnerRunRow, OwnerViewResponse } from '@muse/shared';
-import { DIRECTIVE_ITEMS, directiveItemsText, kindName } from '@muse/shared';
+import type { ActionError, Catalog, Command, DirectiveItem, DirectiveWish, Observation, OwnerRunRow, OwnerViewResponse } from '@muse/shared';
+import { DIRECTIVE_ITEMS, activeWishes, directiveItemsText, kindName, prepStateView, wishCommand, wishItemOf, wishLabel } from '@muse/shared';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { ApiError, api, errorText } from '../api';
 import { getLocale, getToken, inLocale, tr } from '../util';
 import { BoonChoicePanel, PerkChoicePanel } from './build';
 import { InventoryPanel, type InvAction } from './panels';
-import { departureCheck, undecidedLine } from './ownerCheck';
+import { aiPresenceText, readyCheck, undecidedLine } from './ownerCheck';
 
 /** 持ち主の枠の読み直しの間（キャンプにいる間だけ） */
 const OWNER_POLL_MS = 4000;
@@ -48,7 +48,7 @@ function itemLabel(x: DirectiveItem): { name: string; cost: string } {
   if (x === 'objective') {
     return {
       name: tr('目的', 'Objective'),
-      cost: tr('次の遠征の目的は、あなたがキャンプで選ぶ。決めるまで、AI は待つ。迷宮の中のこと（帰還・撤退を含む）は AI が決める', 'You pick the next expedition at camp; the AI waits until you do. Everything inside the dungeon (including extracting) stays with the AI'),
+      cost: tr('次の遠征の目的は、あなたがキャンプで選ぶ。選んで「準備完了」を出すまで、AI は待つ。出発するのは AI（AI が来たら、あなたの選んだ目的で出る）。迷宮の中のこと（帰還・撤退を含む）は AI が決める', 'You pick the next expedition at camp; the AI waits until you choose and mark the preparations ready. The AI sets out (when it comes, with the objective you chose). Everything inside the dungeon (including extracting) stays with the AI'),
     };
   }
   if (x === 'loadout') {
@@ -163,14 +163,16 @@ export function OwnerRunCard({ row, token, catalog, onChanged }: { row: OwnerRun
     });
   };
 
-  /** 握った項目の命令。装備で呪いと分かっている品は、断りの文を見せて確かめてから confirm: true で送り直す */
+  /** 握った項目の命令・支度（prepare）。装備で呪いと分かっている品は、断りの文を見せて確かめてから confirm: true で送り直す */
   const act = async (command: Command) => {
     const r = await post(() => api.ownerAct(row.runId, command, token), (before, after) => {
       if (command.type === 'equip' || command.type === 'unequip') {
         const t = before ? statChangeText(before.observation.self, after.observation.self) : '';
         setNote(t || tr('能力は変わらない。', 'No stat changed.'));
-      } else if (command.type === 'start_expedition') {
-        setNote(tr('遠征を始めた。遠征の途中は、見守る。', 'Expedition started. Watch it from here on.'));
+      } else if (command.type === 'prepare') {
+        setNote(command.ready === true
+          ? tr('準備完了。AI が来たら、出発する。AI に、声をかける。', 'Ready. The AI sets out when it comes. Let your AI know.')
+          : command.ready === false ? tr('「まだ」に戻した。', 'Back to not ready.') : tr('次の遠征の目的を選んだ。よければ「準備完了」を出す。', 'Objective chosen. Mark the preparations ready when you are done.'));
       } else {
         setNote(tr('選んだ。', 'Chosen.'));
       }
@@ -186,14 +188,14 @@ export function OwnerRunCard({ row, token, catalog, onChanged }: { row: OwnerRun
     else if (a === 'unequip') void act({ type: 'unequip', slot });
   };
 
-  // 出撃の確かめ（S9a §57.3 の 2）: 決めていないものが残っているときだけ、画面の中の窓で。既定は「戻って決める」
-  const [confirmStart, setConfirmStart] = useState<{ command: Command; items: string[] } | null>(null);
+  // 準備完了の確かめ（S9 §58.1。S9a §57.3 の 2 の出撃の確かめを、このボタンへ移した）: 目的のほかに決めていないものが残っているときだけ、画面の中の窓で。既定は「戻って決める」
+  const [confirmReady, setConfirmReady] = useState<string[] | null>(null);
   const backRef = useRef<HTMLButtonElement>(null);
-  useEffect(() => { if (confirmStart) backRef.current?.focus(); }, [confirmStart]);
-  const startWith = (command: Command) => {
-    const items = departureCheck(fresh?.observation.self.directive?.undecided);
-    if (items) setConfirmStart({ command, items });
-    else void act(command);
+  useEffect(() => { if (confirmReady) backRef.current?.focus(); }, [confirmReady]);
+  const markReady = () => {
+    const items = readyCheck(fresh?.observation.self.directive?.undecided);
+    if (items) setConfirmReady(items);
+    else void act({ type: 'prepare', ready: true });
   };
 
   const toggle = (x: DirectiveItem) => setHold((h) => (h.includes(x) ? h.filter((y) => y !== x) : ordered([...h, x])));
@@ -217,7 +219,17 @@ export function OwnerRunCard({ row, token, catalog, onChanged }: { row: OwnerRun
     : row.budgetLeft !== undefined && row.budgetLimit !== undefined ? { left: row.budgetLeft, limit: row.budgetLimit } : null;
   // 決めていないもの（S9a §57.3 の 2）: 新しいほうから（AI の観測と同じもの）。キャンプにいるときだけ
   const undecided = atCamp ? (cur ? cur.observation.self.directive?.undecided : row.undecided) : undefined;
-  const undecidedText = eligible ? undecidedLine(undecided, serverHold.includes('objective')) : null;
+  const undecidedText = eligible ? undecidedLine(undecided) : null;
+  // 支度の札（S9 §58.1）: 新しいほうから。キャンプにいて、握っている項目があるときだけ
+  const prepNow = cur ? (prepStateView(cur.view) ? { state: prepStateView(cur.view)!, objective: cur.view.directive?.hold.includes('objective') ? cur.view.directive?.prep?.objective : undefined } : undefined) : row.prep;
+  const prep = atCamp && eligible && serverHold.length ? prepNow : undefined;
+  const aiText = eligible ? aiPresenceText(cur ? cur.ai : row.ai) : null;
+  // AI の希望（S9 §58.2）: 今も成り立つものだけ（中身は読んだ view から）
+  const wishes: DirectiveWish[] = atCamp && view ? activeWishes(view) : [];
+  const wishCount = view ? wishes.length : atCamp ? row.wishes ?? 0 : 0;
+  const wishText = (w: DirectiveWish) => (catalog && view ? wishLabel(L, catalog, w, wishItemOf(view, w)) : w.item);
+  const objectiveHeld = heldNow.includes('objective');
+  const chosen = objectiveHeld ? view?.directive?.prep?.objective : undefined;
   const where = status === 'at_camp' ? tr('キャンプにいる', 'At camp') : status === 'ended' ? tr('終わった', 'Ended') : depth !== null ? tr(`遠征の途中・地下${depth}階`, `On an expedition, depth ${depth}`) : tr('遠征の途中', 'On an expedition');
 
   return (
@@ -229,12 +241,17 @@ export function OwnerRunCard({ row, token, catalog, onChanged }: { row: OwnerRun
         {row.season?.participant && row.season.participant !== row.name && <small>{tr(`順位の表では「${row.season.participant}」`, `"${row.season.participant}" in the standings`)}</small>}
         <span class={`tag vstatus ${status === 'at_camp' ? 'at_camp' : status === 'ended' ? 'ended' : 'your_turn'}`}>{where}</span>
         <span class="oacts">
+          {/* 支度の画面（S10。SEASON.md §58.4。ただ 1 つの出撃の窓口。この枠と同じ口を使う） */}
+          {row.eligible && <a class="button small" href={`#/prepare/${row.runId}`}>{tr('支度', 'Prepare')}</a>}
           <a class="button small" href={`#/watch/${row.runId}`}>{tr('観戦', 'Watch')}</a>
           {playable && <a class="button small primary" href={`#/play/${row.runId}`}>{tr('自分で遊ぶ', 'Play')}</a>}
         </span>
       </h3>
-      {waiting && <div class="waitmark">{tr('AI が、あなたの決定を待っている（次の遠征の目的）', 'The AI is waiting for your decision (the next expedition)')}</div>}
+      {waiting && <div class="waitmark">{tr('支度: まだ。AI は、あなたの支度を待っている（「準備完了」を出すと、AI が来たときに出発する）', 'Preparations: not ready. The AI is waiting for your preparations (mark them ready and it sets out when it comes)')}</div>}
+      {prep?.state === 'ready' && <div class="waitmark ready">{tr('支度: 準備完了。AI が来たら、出発する。AI に、声をかける', 'Preparations: ready. The AI sets out when it comes. Let your AI know')}</div>}
       {undecidedText && <div class="waitmark undecided">{undecidedText}</div>}
+      {aiText && atCamp && <div class="muted small">{aiText}</div>}
+      {wishCount > 0 && !open && <div class="muted small">{tr(`${row.name}の希望が ${wishCount} つある（「詳しく」で見る）`, `${row.name} has ${wishCount} wish${wishCount > 1 ? 'es' : ''} (see Details)`)}</div>}
       <div class="ostat">
         <span>HP {hp}/{maxHp}</span>
         <span>Lv{level}</span>
@@ -295,17 +312,21 @@ export function OwnerRunCard({ row, token, catalog, onChanged }: { row: OwnerRun
                   ) : obs.camp ? (
                     <ul class="offers ooffers">
                       {obs.camp.offers.map((o) => (
-                        <li key={o.index}>
+                        <li key={o.index} class={chosen === o.index ? 'chosen' : ''}>
                           <div class="otext">
                             {o.text}
                             {(o.slays ?? []).map((s, i) => <div key={i} class="muted small oslay">{s.text}</div>)}
                           </div>
-                          <button class="small primary" disabled={busy} onClick={() => startWith({ type: 'start_expedition', offer: o.index })}>{tr('この目的で出撃', 'Start with this')}</button>
+                          {chosen === o.index
+                            ? <span class="tag">{tr('選んだ', 'Chosen')}</span>
+                            : <button class="small primary" disabled={busy} onClick={() => void act({ type: 'prepare', objective: o.index })}>{tr('この目的にする', 'Choose this')}</button>}
                         </li>
                       ))}
-                      <li>
+                      <li class={chosen === 'endless' ? 'chosen' : ''}>
                         <div class="otext">{tr('endless) 目的なしでひたすら潜る', 'endless) no objective, just descend')}</div>
-                        <button class="small" disabled={busy} onClick={() => startWith({ type: 'start_expedition', offer: 'endless' })}>{tr('目的なしで出撃', 'Start endless')}</button>
+                        {chosen === 'endless'
+                          ? <span class="tag">{tr('選んだ', 'Chosen')}</span>
+                          : <button class="small" disabled={busy} onClick={() => void act({ type: 'prepare', objective: 'endless' })}>{tr('目的なしにする', 'Choose endless')}</button>}
                       </li>
                     </ul>
                   ) : <p class="muted">{tr('今は次の遠征を選べない。', 'No expedition can be chosen right now.')}</p>}
@@ -326,11 +347,45 @@ export function OwnerRunCard({ row, token, catalog, onChanged }: { row: OwnerRun
                   <h4>{tr('身につけられる特技と加護（遠征の間に覚えられることが増えた分）', 'Perks and boons to take up (what the AI grew able to learn)')}</h4>
                   {obs.self.perk_choice && (
                     <PerkChoicePanel choice={obs.self.perk_choice} catalog={catalog} classId={view.self.classId} sent={busy}
-                      note={tr('持ち主が選ぶ（指図）。AI の choose_perk は断られる', 'You choose (directive); the AI\'s choose_perk is refused')}
+                      note={tr('持ち主が選ぶ（指図）。AI の choose_perk は、希望としてここに届く', 'You choose (directive); the AI\'s choose_perk reaches you here as a wish')}
                       onChoose={(option) => void act({ type: 'choose_perk', option })} />
                   )}
                   {view.self.boonChoice && <BoonChoicePanel choice={view.self.boonChoice} catalog={catalog} onChoose={(option) => void act({ type: 'choose_boon', option })} />}
                   {!obs.self.perk_choice && !view.self.boonChoice && <p class="muted small">{tr('いま身につけられるものは無い（レベルが上がる・大守護者を倒すと増える）。', 'Nothing to take up now (level-ups and warden kills add some).')}</p>}
+                </div>
+              )}
+              {atCamp && wishes.length > 0 && (
+                <div class="oblock owish">
+                  <h4>{tr(`${row.name}の希望（AI が「自分ならこうする」と言ったもの。決めるのは、あなた）`, `${row.name}'s wishes (what the AI would do; you decide)`)}</h4>
+                  <ul>
+                    {wishes.map((w) => {
+                      const c = wishCommand(view, w);
+                      return (
+                        <li key={w.item}>
+                          {tr(`${row.name}の希望: ${wishText(w)}`, `${row.name}'s wish: ${wishText(w)}`)}{w.reason ? <span class="muted"> ―「{w.reason}」</span> : null}
+                          {c && <button class="small" disabled={busy} onClick={() => void act(c)}>{tr('希望どおりにする', 'Do as wished')}</button>}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              )}
+              {atCamp && heldNow.length > 0 && !seasonOver && (
+                <div class="oblock oprep">
+                  <h4>{tr('支度', 'Preparations')}: {prepStateView(view) === 'ready' ? tr('準備完了', 'ready') : tr('まだ', 'not ready')}</h4>
+                  {prepStateView(view) === 'ready' ? (
+                    <>
+                      <p class="muted small">{tr('AI が来たら、出発する（出発するのは AI。AI に、声をかける）。支度を変えると「まだ」に戻る。', 'The AI sets out when it comes (the AI starts the expedition; let it know). Changing anything puts the preparations back to not ready.')}</p>
+                      <button class="small" disabled={busy} onClick={() => void act({ type: 'prepare', ready: false })}>{tr('「まだ」に戻す', 'Back to not ready')}</button>
+                    </>
+                  ) : (
+                    <>
+                      <p class="muted small">{objectiveHeld && chosen === undefined
+                        ? tr('次の遠征の目的を選ぶと、「準備完了」を出せる。', 'Choose the next expedition to mark the preparations ready.')
+                        : tr('決め終えたら「準備完了」。AI は、それまで出発しない。', 'When you are done, mark them ready. The AI does not set out until then.')}</p>
+                      <button class="small primary" disabled={busy || (objectiveHeld && chosen === undefined)} onClick={markReady}>{tr('準備完了', 'Ready')}</button>
+                    </>
+                  )}
                 </div>
               )}
               <details class="otext-all">
@@ -341,16 +396,16 @@ export function OwnerRunCard({ row, token, catalog, onChanged }: { row: OwnerRun
           )}
         </>
       )}
-      {confirmStart && (
-        <div class="modal" onClick={() => setConfirmStart(null)}>
+      {confirmReady && (
+        <div class="modal" onClick={() => setConfirmReady(null)}>
           <div class="dialog" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}
-            onKeyDown={(e) => { if (e.key === 'Escape') setConfirmStart(null); }}>
+            onKeyDown={(e) => { if (e.key === 'Escape') setConfirmReady(null); }}>
             <h3>{tr('まだ決めていないものがある', 'Some things are not decided yet')}</h3>
-            <ul>{confirmStart.items.map((x) => <li key={x}>{x}</li>)}</ul>
-            <p class="muted small">{tr('このまま出撃すると、決められるのは次のキャンプになる（遠征の間は、だれも選べない・付け替えられない）。', 'If you start now, these wait until the next camp (nobody can choose or change them during the expedition).')}</p>
+            <ul>{confirmReady.map((x) => <li key={x}>{x}</li>)}</ul>
+            <p class="muted small">{tr('このまま準備完了にすると、AI が来たら出発し、決められるのは次のキャンプになる（遠征の間は、だれも選べない・付け替えられない。選ばなかった特技は、次のキャンプまで保留のまま）。', 'If you mark them ready now, the AI sets out when it comes and these wait until the next camp (nobody can choose or change them during the expedition; an unchosen perk stays pending until the next camp).')}</p>
             <div class="row">
-              <button ref={backRef} class="small primary" onClick={() => setConfirmStart(null)}>{tr('戻って決める', 'Go back and decide')}</button>
-              <button class="small" disabled={busy} onClick={() => { const c = confirmStart.command; setConfirmStart(null); void act(c); }}>{tr('このまま出撃', 'Start anyway')}</button>
+              <button ref={backRef} class="small primary" onClick={() => setConfirmReady(null)}>{tr('戻って決める', 'Go back and decide')}</button>
+              <button class="small" disabled={busy} onClick={() => { setConfirmReady(null); void act({ type: 'prepare', ready: true }); }}>{tr('このまま準備完了', 'Ready anyway')}</button>
             </div>
           </div>
         </div>

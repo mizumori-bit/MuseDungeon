@@ -4,7 +4,7 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { readJsonStable, writeFileAtomicLogged } from '../log/atomicWrite';
 import type {
-  DirectiveItem, GameEvent, PlayerId, SeasonAward, SeasonListing, SeasonResultView, SeasonSectionRow, SeasonSlay, SeasonSlayBrief, SeasonStandingRow, SeasonStandingsResponse, SeasonSyncCommand, SeasonTitle, SupplyPlace,
+  DirectiveItem, GameEvent, PlayerId, ProfileSeasonEntry, SeasonAward, SeasonListing, SeasonResultView, SeasonSectionRow, SeasonSlay, SeasonSlayBrief, SeasonStandingRow, SeasonStandingsResponse, SeasonSyncCommand, SeasonTitle, SupplyPlace,
 } from '@muse/shared';
 import { awardName, DIRECTIVE_ITEMS, SeasonSlaySchema } from '@muse/shared';
 import type { RunSession } from '../session/RunSession';
@@ -432,6 +432,23 @@ export class SeasonService implements SeasonHooks {
     return !!this.store.get(seasonId)?.result;
   }
 
+  /**
+   * そのランが、続きを遊べるか（S9c: 冒険者 1 人に続きは 1 つの数え方。SessionManager が自分の関数を渡す）。
+   * canStart の「進行中のシーズンのランがある」は、これで見る（渡されていなければ、今までどおり動いているかだけ）
+   */
+  continues: ((runId: string) => boolean) | null = null;
+
+  /**
+   * そのシーズンで、その参加者が、まだ新しい遠征を始められるか（S9c）: 確定していない・終わりの時刻の前・予算が残っている。
+   * 始められないシーズンのランは、キャンプにいれば、続きを遊べるランに数えない
+   */
+  canContinue(seasonId: string, profileId: string | null): boolean {
+    const d = this.store.get(seasonId);
+    if (!d || this.status(d) !== 'open') return false;
+    const p = this.participant(d, profileId);
+    return !p || used(p) < d.def.budget;
+  }
+
   status(d: SeasonData): SeasonListing['status'] {
     if (d.result) return 'final';
     return this.now() >= d.def.endsAt ? 'ended' : 'open';
@@ -495,12 +512,32 @@ export class SeasonService implements SeasonHooks {
 
   get(id: string): SeasonData | null { return this.store.get(id); }
 
+  /**
+   * そのプロフィールが招かれたシーズン（S10。SEASON.md §58.4 の拠点の冒険者の札。GET /api/profile の seasons）。
+   * 招いたときの表示名・使った予算（今の値）・ランの数・倒れたか。記録が読めないシーズン・招いた者の記録が読めないシーズンは入れない。
+   * failed（S10a）: 終わっていないランのうち、サーバーの起動時に復旧できなかったものがある（SessionManager の判定を渡す）
+   */
+  memberships(profileId: string, failed?: (runId: string) => boolean): ProfileSeasonEntry[] {
+    const out: ProfileSeasonEntry[] = [];
+    for (const id of this.store.ids()) {
+      const d = this.store.get(id);
+      if (!d || this.store.invitesBroken(id)) continue;
+      const inv = this.store.invites(id).find((x) => x.profileId === profileId);
+      if (!inv) continue;
+      const p = this.participant(d, profileId);
+      const stuck = !!failed && !!p?.runs.some((r) => !r.ended && failed(r.runId));
+      out.push({ id, seasonName: d.def.name, name: inv.name, status: this.status(d), budget: d.def.budget, used: p ? used(p) : 0, runs: p?.runs.length ?? 0, died: !!p?.died, ...(stuck ? { failed: true as const } : {}) });
+    }
+    return out;
+  }
+
   private participant(d: SeasonData, profileId: string | null): Participant | null {
     return profileId ? d.participants.find((p) => p.profileId === profileId) ?? null : null;
   }
 
   /** 新しいランを始められるか（PROTOCOL §9.1）。理由の文を返す（日本語 / 英語）。招かれたプロフィールだけ（S0a §4.1） */
-  canStart(id: string, profileId: string | null): { def: SeasonDef; name: string } | { reason: string } {
+  /** inProgress: 進行中のシーズンのランがある（S9 §58.3: SessionManager が run_in_progress にする。end_previous で前のランを終えてから、もう一度見る） */
+  canStart(id: string, profileId: string | null): { def: SeasonDef; name: string } | { reason: string; inProgress?: string } {
     const d = this.store.get(id);
     if (!d && this.store.isBroken(id)) return { reason: `シーズン ${id} の記録が読めない。運用者に知らせる / the records of season ${id} are unreadable; tell the operator` };
     if (!d) return { reason: `そのシーズンは無い / no such season: ${id}` };
@@ -515,8 +552,9 @@ export class SeasonService implements SeasonHooks {
     const p = this.participant(d, profileId);
     if (p) {
       if (used(p) >= d.def.budget) return { reason: `このシーズンの行動予算（${d.def.budget} 手番）を使い切っている / budget used up` };
-      const live = p.runs.find((r) => !r.ended && this.liveRun(r.runId) !== null && this.liveRun(r.runId) !== 'ended');
-      if (live) return { reason: `進行中のシーズンのラン ${live.runId} がある。resume_run で続けるか、retire で終えてから / a season run is in progress: ${live.runId}` };
+      // 続きを遊べるか（S9c）: SessionManager の数え方（冒険者 1 人に続きは 1 つと同じ関数）。無ければ、動いているかだけ
+      const live = p.runs.find((r) => !r.ended && (this.continues ? this.continues(r.runId) : this.liveRun(r.runId) !== null && this.liveRun(r.runId) !== 'ended'));
+      if (live) return { reason: `進行中のシーズンのラン ${live.runId} がある。resume_run で続けるか、end_previous: true を付けて前のランを終えてから / a season run is in progress: ${live.runId}`, inProgress: live.runId };
     }
     return { def: d.def, name: inv.name };
   }

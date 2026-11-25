@@ -82,6 +82,11 @@ export const CommandSchema = z.discriminatedUnion('type', [
    * MCP のツールには出さない。message の制御文字は engine が落とし、落とした後の文字数で 280 字までを数える（S8a。超えれば engine が断る）
    */
   z.object({ type: z.literal('set_directive'), hold: z.array(z.enum(['objective', 'loadout', 'perks'])).max(3), message: z.string().max(2000).optional() }),
+  /**
+   * 支度（S9。SEASON.md §58.1）: 持ち主の口からだけ・キャンプでだけ・握っている項目があるときだけ。手番を使わない。MCP のツールには出さない。
+   * objective: 目的を選ぶ（目的を握っているとき。このキャンプの候補の番号か endless）。ready: true で準備完了（目的を握っていれば、選んでから）、false で「まだ」に戻す
+   */
+  z.object({ type: z.literal('prepare'), objective: z.union([z.number().int().min(1).max(9), z.literal('endless')]).optional(), ready: z.boolean().optional() }),
 ]);
 
 export type Command = z.infer<typeof CommandSchema>;
@@ -90,7 +95,9 @@ export type Target = z.infer<typeof TargetSchema>;
 export type TravelTarget = z.infer<typeof TravelTargetSchema>;
 
 export const MACRO_COMMANDS: ReadonlySet<CommandType> = new Set<CommandType>(['explore', 'travel', 'rest', 'collect', 'fight']);
-export const FREE_COMMANDS: ReadonlySet<CommandType> = new Set<CommandType>(['say', 'note', 'retire', 'choose_perk', 'choose_boon', 'set_directive']);
+export const FREE_COMMANDS: ReadonlySet<CommandType> = new Set<CommandType>(['say', 'note', 'retire', 'choose_perk', 'choose_boon', 'set_directive', 'prepare']);
+/** 持ち主の口から出せる命令（S8 §54.3・S9 §58.1）: 指図・支度と、握れる項目の命令（start_expedition は S9 で断る: 遠征を始めるのはプレイヤー） */
+export const OWNER_COMMANDS: ReadonlySet<CommandType> = new Set<CommandType>(['set_directive', 'prepare', 'start_expedition', 'equip', 'unequip', 'choose_perk', 'choose_boon']);
 /** キャンプでのみ有効（手番に関係しない） */
 export const CAMP_COMMANDS: ReadonlySet<CommandType> = new Set<CommandType>(['start_expedition']);
 
@@ -237,8 +244,12 @@ export type ActionErrorCode =
   | 'hostile_adjacent' | 'hostile_in_view' | 'hp_floor' | 'nothing_to_do'
   /** 逃げる移動（mode: flee）が、次の 1 歩の間に届く敵の最悪の 1 手で倒れうるので始めない（S6 §49.6 の 1。hp_floor によらない） */
   | 'flee_lethal'
-  /** 指図（S8。SEASON.md §54.3）: その項目は持ち主が握っている（プレイヤーの口からは通らない。手番を使わない） */
-  | 'held_by_owner';
+  /** 指図（S8。SEASON.md §54.3）: その項目は持ち主が握っている（プレイヤーの口からは通らない。手番を使わない）。S9: 支度の札が「まだ」の間の start_expedition も */
+  | 'held_by_owner'
+  /** 支度（S9。SEASON.md §58.1）: 目的を握っているのに、まだ選んでいないので、準備完了にできない（持ち主の口） */
+  | 'objective_unchosen'
+  /** 冒険者 1 人に続きは 1 つ（S9。SEASON.md §58.3）: そのプロフィールに、続きを遊べるランがある（new_run。end_previous: true で前のランを終えてから始める） */
+  | 'run_in_progress';
 
 export interface ActionError {
   code: ActionErrorCode;
@@ -251,7 +262,9 @@ export interface ActionError {
   /** still_inside: start_expedition が断られたとき、まだ迷宮にいる仲間と、その階（V4-1f §22.4） */
   /** stop: マクロが 1 歩目で断ったときの止まり方（S1c。今は explore toward の toward_exhausted だけに付ける） */
   /** blocked_by_terrain: unreachable のとき、分かっている地図の上で道をふさいでいる地形（閉じた格子扉・鍵のかかった格子扉・本棚・瓦礫）。道の上で最初の 1 つ（S4 §42.3 の 2） */
-  details?: { blocked_by?: string[]; blocked_by_traps?: { id: string; kind: string; pos: { x: number; y: number } }[]; still_inside?: { id: string; name: string; floor: number }[]; stop?: string; blocked_by_terrain?: { kind: string; pos: { x: number; y: number } } };
+  /** in_progress: run_in_progress のとき、続きを遊べるラン（S9 §58.3。ランの ID と、シーズンのランならシーズンの ID） */
+  /** wish: held_by_owner のとき、希望として持ち主に伝えた（S9 §58.2。同じ希望のくり返しでも付く） */
+  details?: { blocked_by?: string[]; blocked_by_traps?: { id: string; kind: string; pos: { x: number; y: number } }[]; still_inside?: { id: string; name: string; floor: number }[]; stop?: string; blocked_by_terrain?: { kind: string; pos: { x: number; y: number } }; in_progress?: { run_id: string; season?: string }; wish?: boolean };
 }
 
 export function actionError(code: ActionErrorCode, message: string, hint: string): ActionError {

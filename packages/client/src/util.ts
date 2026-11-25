@@ -64,6 +64,21 @@ export function setPref(key: string, value: string): void {
   lsSet(`muse.pref.${key}`, value);
 }
 
+/** 覚えてある設定の名前のうち、prefix で始まるもの（muse.pref. を除いた名前。読めなければ空） */
+export function prefNames(prefix: string): string[] {
+  const out: string[] = [];
+  try {
+    const ls = window.localStorage;
+    for (let i = 0; i < ls.length; i++) {
+      const k = ls.key(i);
+      if (k && k.startsWith(`muse.pref.${prefix}`)) out.push(k.slice('muse.pref.'.length));
+    }
+  } catch {
+    /* 読めない */
+  }
+  return out;
+}
+
 export function navigate(hash: string): void {
   window.location.hash = hash;
 }

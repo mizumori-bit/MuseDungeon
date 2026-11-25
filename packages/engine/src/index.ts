@@ -12,7 +12,7 @@ import './guardianBehaviors';
 import { guardianTypeHandlers, weaknessHandlers } from './guardians';
 
 export { createRun, joinPlayer, resumeSeq, seasonSync, step, isPlayersTurn, ENGINE_VERSION } from './run';
-export { cleanDirectiveMessage, directiveTarget, heldItemOf, directiveGate as directiveRefusal } from './directive';
+export { cleanDirectiveMessage, directiveTarget, heldItemOf, directiveRefusal, prepNeedsWorld, prepStateWorld } from './directive';
 export type { CreateRunParams, StepResult } from './run';
 export { generateFloor, guardianCandidates, selectBiome, selectFloorType, specArmor } from './gen/generate';
 export type { GeneratedFloor, GenOptions, SpawnSpec } from './gen/generate';

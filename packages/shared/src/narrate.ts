@@ -3,8 +3,9 @@ import type { Catalog } from './catalog';
 import { nameOf } from './catalog';
 import { endReasonText, objectiveText } from './expedition';
 import type { ProjectedEvent } from './filter';
-import type { Locale, Names } from './types';
+import type { DirectiveWish, Locale, Names } from './types';
 import { dirTo } from './util';
+import { wishLabel } from './directive';
 import type { Pos } from './types';
 
 export interface NarrateCtx {
@@ -524,6 +525,21 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
     }
     case 'owner_decided':
       return ownerDecidedText(ctx, ev);
+    // 支度の札（S9。SEASON.md §58.1）: 持ち主の prepare だけを文にする（キャンプに着いたときの置き直し・決めた後の戻りは出さない）
+    case 'directive_prep': {
+      if (ev.why !== 'owner') return null;
+      const d = ev.directiveAfter as { hold?: string[]; prep?: { state?: string; objective?: number | 'endless' } } | undefined;
+      const o = d?.hold?.includes('objective') ? d?.prep?.objective : undefined;
+      const ot = o === undefined ? '' : o === 'endless' ? (ja ? '（目的: 目的なし）' : ' (objective: none, endless)') : (ja ? `（目的: 候補 ${o}）` : ` (objective: offer ${o})`);
+      return d?.prep?.state === 'ready' ? (ja ? `持ち主の支度: 準備完了${ot}。` : `Your owner's preparations: ready${ot}.`) : (ja ? `持ち主の支度: まだ${ot}。` : `Your owner's preparations: not ready${ot}.`);
+    }
+    // 希望（S9 §58.2）: 握られた項目の命令を、持ち主に伝えた
+    case 'directive_wish': {
+      const w = ev.wish as DirectiveWish | undefined;
+      if (!w) return null;
+      const label = wishLabel(L, ctx.catalog, w, w.item === 'loadout' ? { kind: (ev.kind as string | null) ?? null, appearanceId: (ev.appearanceId as string | null) ?? null } : null);
+      return ja ? `希望を持ち主に伝えた: ${label}${w.reason ? `（${w.reason}）` : ''}。` : `Wish passed to your owner: ${label}${w.reason ? ` (${w.reason})` : ''}.`;
+    }
     case 'objective_completed':
       return ja ? `遠征の目的を達成した: ${objectiveText(L, ev.objective)}` : `Objective complete: ${objectiveText(L, ev.objective)}`;
     case 'expedition_ended':
@@ -574,6 +590,8 @@ function ownerDecidedText(ctx: NarrateCtx, ev: Record<string, any>): string | nu
   const ja = L !== 'en';
   switch (ev.act) {
     case 'start_expedition':
+      // S9（§58.1）: 始めたのはプレイヤーで、目的は持ち主が選んだもの（offer がある）。S8 の版の記録は、持ち主が始めた遠征
+      if (ev.offer !== undefined) return ja ? `持ち主が決めた目的で、遠征 ${ev.no ?? '?'} を始めた。` : `Expedition ${ev.no ?? '?'} began with the objective your owner chose.`;
       return ja ? `持ち主が、遠征 ${ev.no ?? '?'} を始めた。` : `Your owner started expedition ${ev.no ?? '?'}.`;
     case 'equip':
       return ja ? `持ち主が、装備を変えた: ${itemName(ctx, ev)}を装備。` : `Your owner changed your gear: equipped ${itemName(ctx, ev)}.`;

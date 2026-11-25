@@ -1,13 +1,13 @@
 // Event の型。仕様: docs/PROTOCOL.md §5
 // 規約: イベントは結果値（after 値）を持ち、applyEvent は代入・追加・削除しかしない。
 import type {
-  AiState, BaseStats, CampState, Dir, Directive, DirectiveItem, Entity, EntityId, EquipSlot, Expedition, ExpeditionHaul, ExpeditionEndReason, ExpeditionResult, Floor,
+  AiState, BaseStats, CampState, Dir, Directive, DirectiveItem, DirectiveWish, Entity, EntityId, EquipSlot, Expedition, ExpeditionHaul, ExpeditionEndReason, ExpeditionResult, Floor,
   FloorKey, FloorPos, MonsterMemory, Objective, ObjectiveProgress, PlayerId, PlayerRecord, PlayerStats, Pos,
   RememberedEntity, RngState, RunMeta, RunSummary, SeasonDeposit, SeasonState, SeasonTaken, Sense, Stats, StatusInst, SupplyPlace, WorldSecret, FloorHint, Names,
 } from './types';
 
-/** 2: 遠征・実ダメージ・回復の蓄積値（IMPROVEMENTS_V2）。3: ビルド（特技・能動技・呪い。V3-4）。22: シーズン（S0）。29: 補給の置き場（S3）。30: 帰り支度の取りやめの理由（S3a）。31: 覚えている品の接辞（knowledge_updated.rememberedSet[].affixes。S3c）。32: 食い違ったランの続きの番号（seq_resumed。S3f）。33: 討伐の記録（season_synced.seasonAfter.slays。S4）。34: 討伐の記録の予備動作と動けなかった手番（slays[].tells・openings。S5）。35: 討伐の記録の戦い始めの相手（slays[].wardenStart。S6。engine は変えていないので engineVersion は 0.47.0 のまま）。36: 指図（directive_set・owner_decided。S8）。古いログもそのまま畳み込める */
-export const EVENT_VERSION = 36;
+/** 2: 遠征・実ダメージ・回復の蓄積値（IMPROVEMENTS_V2）。3: ビルド（特技・能動技・呪い。V3-4）。22: シーズン（S0）。29: 補給の置き場（S3）。30: 帰り支度の取りやめの理由（S3a）。31: 覚えている品の接辞（knowledge_updated.rememberedSet[].affixes。S3c）。32: 食い違ったランの続きの番号（seq_resumed。S3f）。33: 討伐の記録（season_synced.seasonAfter.slays。S4）。34: 討伐の記録の予備動作と動けなかった手番（slays[].tells・openings。S5）。35: 討伐の記録の戦い始めの相手（slays[].wardenStart。S6。engine は変えていないので engineVersion は 0.47.0 のまま）。36: 指図（directive_set・owner_decided。S8）。37: 支度の札と希望（directive_prep・directive_wish。Directive.prep・wishes。S9）。古いログもそのまま畳み込める */
+export const EVENT_VERSION = 37;
 
 export interface EventBase {
   seq: number;
@@ -242,9 +242,21 @@ export type GameEvent =
   /**
    * 持ち主の口から、握った項目を決めた（S8 §54.3・§54.6。本人だけ）。同じ命令の出来事（expedition_started・item_equipped など）の後に出る。
    * act: 通った命令。no: 始めた遠征（start_expedition）、kind・appearanceId: 付け替えた品（equip・unequip。未鑑定なら種類は伏せる）、
-   * choice: 選んだ特技・加護の ID。decidedAfter は PlayerRecord.ownerDecided の after 値
+   * choice: 選んだ特技・加護の ID。decidedAfter は PlayerRecord.ownerDecided の after 値。
+   * S9（§58.1）: 目的は、プレイヤーが準備完了の後に start_expedition を出し、持ち主の選んだ目的で始めたとき（offer: 使った候補、asked: プレイヤーの命令の候補）
    */
-  | E<'owner_decided', { player: PlayerId; item: DirectiveItem; act: 'start_expedition' | 'equip' | 'unequip' | 'choose_perk' | 'choose_boon'; no?: number; kind?: string | null; appearanceId?: string | null; choice?: string; decidedAfter: DirectiveItem[] }>
+  | E<'owner_decided', { player: PlayerId; item: DirectiveItem; act: 'start_expedition' | 'equip' | 'unequip' | 'choose_perk' | 'choose_boon'; no?: number; kind?: string | null; appearanceId?: string | null; choice?: string; offer?: number | 'endless'; asked?: number | 'endless'; decidedAfter: DirectiveItem[] }>
+  /**
+   * 支度の札が変わった（S9。SEASON.md §58.1。本人だけ）。why: camp（キャンプに着いた・札ができた。engine が置く）/ owner（持ち主の prepare）/
+   * decided（持ち主が握った項目を決めた・握る項目を変えたので「まだ」に戻った）。directiveAfter は PlayerRecord.directive の after 値
+   */
+  | E<'directive_prep', { player: PlayerId; why: 'camp' | 'owner' | 'decided'; directiveAfter: Directive }>
+  /**
+   * 希望（S9 §58.2。本人だけ）: 握られた項目の命令をプレイヤーの口から出した（断られたうえで覚える）。wish は、その項目の希望の after 値
+   * （項目ごとに 1 つ。ほかの項目の希望は変えない）、countAfter は、その項目の Directive.wishCount の after 値（S9c。指図の全部は持たない）。
+   * kind・appearanceId: 装備の希望の品（未鑑定なら種類は伏せる。思考の欄の文のため）
+   */
+  | E<'directive_wish', { player: PlayerId; wish: DirectiveWish; countAfter: number; kind?: string | null; appearanceId?: string | null }>
   // 遠征
   | E<'expedition_offered', { camp: CampState }>
   | E<'expedition_started', { expedition: Expedition }>

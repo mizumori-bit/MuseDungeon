@@ -6,7 +6,7 @@ import type {
 import {
   actionError, briefingLines, briefingShort, buildObservation, checkpointChangeText, withdrawText, buildTurnBlock, campLines, changesLine, compareLines, describeInventory, describeTarget, diffChanges, progressLines, reportLines,
   cheb, compassDir, dirLabel, formatObservationText, guardianDisplayName, kindName, lastWithoutXp, MACRO_COMPLETED_STOPS, mapTextLines, memoryCombatText, memoryKey, mineCount, nameOf, nearDirs, pickableItems, progressText, renderAsciiMap, resultText, t,
-  turnLine, turnSnapshot, turnStateOf, ownerMessageIsNew, directiveUndecided, fightThreats, fleeRiskText, riskText, threatEstimate, DIR_VEC, collectTargets, collectWhatOf, itemDisplayName, slayGroupText, slaysAt,
+  turnLine, turnSnapshot, turnStateOf, ownerMessageIsNew, fightThreats, fleeRiskText, riskText, threatEstimate, DIR_VEC, collectTargets, collectWhatOf, itemDisplayName, slayGroupText, slaysAt,
 } from '@muse/shared';
 import type { MacroReport } from './RunSession';
 import { compareVersions, ENGINE_VERSION } from '@muse/engine';
@@ -67,10 +67,8 @@ export interface PlayerPort {
   turnLine(b: TurnBlock): string;
   act(cmd: Command, opts: SubmitOpts & { waitTurnMs?: number; map?: boolean }): Promise<ActionPayload>;
   waitForTurn(timeoutMs: number): Promise<boolean>;
-  /** キャンプで目的を持ち主に握られているとき、持ち主が遠征を始めるまで待つ（S8。SEASON.md §54.4 の 5） */
-  waitForOwner(timeoutMs: number): Promise<'started' | 'released' | 'timeout' | 'ended'>;
-  /** 持ち主が、決めていないものを決めるのを待つ（S9a。目的は握られていないキャンプ） */
-  waitForOwnerDecision(timeoutMs: number): Promise<'changed' | 'timeout' | 'ended'>;
+  /** キャンプで持ち主の支度の札が「まだ」のとき、準備完了になるまで待つ（S8 §54.4 の 5。S9 §58.1） */
+  waitForOwner(timeoutMs: number): Promise<'ready' | 'started' | 'released' | 'timeout' | 'ended'>;
   /** 遠征のブリーフィング（開始時・再開時） */
   /** camp: false でキャンプの候補を省く（観測の文と一緒に返すとき。既定は出す） */
   briefing(kind: 'start' | 'resume', opts?: { camp?: boolean }): string[];
@@ -526,29 +524,8 @@ export class SessionPlayerPort implements PlayerPort {
     return this.session.waitForTurn(this.playerId, timeoutMs);
   }
 
-  waitForOwner(timeoutMs: number): Promise<'started' | 'released' | 'timeout' | 'ended'> {
+  waitForOwner(timeoutMs: number): Promise<'ready' | 'started' | 'released' | 'timeout' | 'ended'> {
     return this.session.waitForOwner(this.playerId, timeoutMs);
-  }
-
-  /**
-   * 持ち主が、決めていないもの（握った特技・加護・装備）を決めるのを待つ（S9a §57.3 の 1。目的は握られていないキャンプ）。
-   * 決めていないもの・指図・居場所のどれかが変わるか、timeoutMs が過ぎるまで。時間は World に入れない（待つだけで、何も記録しない）
-   */
-  async waitForOwnerDecision(timeoutMs: number): Promise<'changed' | 'timeout' | 'ended'> {
-    const key = (): string => {
-      const v = this.view();
-      return JSON.stringify([v.status, v.directive?.hold ?? [], directiveUndecided(v, this.catalog)?.text ?? '']);
-    };
-    const k0 = key();
-    const deadline = Date.now() + timeoutMs;
-    for (;;) {
-      const v = this.view();
-      if (v.status === 'dead' || v.status === 'ended') return 'ended';
-      if (key() !== k0) return 'changed';
-      const left = deadline - Date.now();
-      if (left <= 0) return 'timeout';
-      await this.session.waitChange(left);
-    }
   }
 
   onChange(cb: () => void): () => void {
