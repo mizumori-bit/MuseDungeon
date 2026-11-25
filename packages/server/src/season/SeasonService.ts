@@ -514,9 +514,10 @@ export class SeasonService implements SeasonHooks {
 
   /**
    * そのプロフィールが招かれたシーズン（S10。SEASON.md §58.4 の拠点の冒険者の札。GET /api/profile の seasons）。
-   * 招いたときの表示名・使った予算（今の値）・ランの数・倒れたか。記録が読めないシーズン・招いた者の記録が読めないシーズンは入れない
+   * 招いたときの表示名・使った予算（今の値）・ランの数・倒れたか。記録が読めないシーズン・招いた者の記録が読めないシーズンは入れない。
+   * failed（S10a）: 終わっていないランのうち、サーバーの起動時に復旧できなかったものがある（SessionManager の判定を渡す）
    */
-  memberships(profileId: string): ProfileSeasonEntry[] {
+  memberships(profileId: string, failed?: (runId: string) => boolean): ProfileSeasonEntry[] {
     const out: ProfileSeasonEntry[] = [];
     for (const id of this.store.ids()) {
       const d = this.store.get(id);
@@ -524,7 +525,8 @@ export class SeasonService implements SeasonHooks {
       const inv = this.store.invites(id).find((x) => x.profileId === profileId);
       if (!inv) continue;
       const p = this.participant(d, profileId);
-      out.push({ id, seasonName: d.def.name, name: inv.name, status: this.status(d), budget: d.def.budget, used: p ? used(p) : 0, runs: p?.runs.length ?? 0, died: !!p?.died });
+      const stuck = !!failed && !!p?.runs.some((r) => !r.ended && failed(r.runId));
+      out.push({ id, seasonName: d.def.name, name: inv.name, status: this.status(d), budget: d.def.budget, used: p ? used(p) : 0, runs: p?.runs.length ?? 0, died: !!p?.died, ...(stuck ? { failed: true as const } : {}) });
     }
     return out;
   }

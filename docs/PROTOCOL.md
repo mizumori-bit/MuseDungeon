@@ -1504,7 +1504,7 @@ SlayOpening { turns: number; dealt: number; hitTurns: number; taken: number }
   - 持ち主の口から通った命令は、命令の記録の `source: 'owner'`。engine の `step` には、記録の `source` から `owner` を渡す（再生は記録だけで同じ判定）。通ると、その命令の出来事の後に `owner_decided { player, item, act, … , decidedAfter }`（`PlayerRecord.ownerDecided`: このランで持ち主が決めた項目）。プレイヤーの呼び出しの数（遠征レポートの `tool_calls`）には数えない。
   - シーズンのランで、目的を握られた `start_expedition` は、取り込み（`season_sync`）を記録する前に断る。
 - **プレイヤーへの見え方**（プレイする AI に届くのは、ツールの名前と応答の文だけ: SEASON.md §52.8）:
-  1. 観測の 1 行（キャンプでも迷宮でも）と `self.directive { hold, message?, decided?, text }`。文は、世界の中での読み方を添える（§55）: 「指図: 目的と装備は、持ち主がキャンプで決める（迷宮で手に入れた装備は、キャンプで確かめるまで身に着けない。あなたの start_expedition・equip・unequip は断られる）。特技と加護は、あなたが決める」。キャンプは、品の正体や呪いの有無を明かさない（鑑定の仕組みとは別）。
+  1. 観測の 1 行（キャンプでも迷宮でも）と `self.directive { hold, message?, decided?, text }`。文は、世界の中での読み方を添える（§55）: 「指図: 目的と装備は、持ち主がキャンプで決める（迷宮で手に入れた装備は、キャンプで確かめるまで身に着けない。あなたの start_expedition・equip・unequip は断られる）。特技と加護は、あなたが決める」（S10a で括弧の中を改めた: 下の S10a の 3）。キャンプは、品の正体や呪いの有無を明かさない（鑑定の仕組みとは別）。
   2. 「できること」: 握られた項目の行（`start_expedition`・`equip`・`unequip`・`choose_perk`・`choose_boon`）は出さない。キャンプで目的を握られているときは `wait_for_turn（待つ: 持ち主が、次の遠征を決める。observe で確かめてもよい。手番は減らない）`。候補の見出しは「持ち主が、この中から決める」。
   3. 伝言: キャンプの観測の「できること」の後、区切りの段（§52.2）の前に「持ち主から: …」。持ち主が遠征を始めた後の最初の応答の「変化」にも、もう 1 回。
   4. 「変化」の `owner`（§1.2）。特技と加護を握られているとき、`perk_pending`・`boon_pending` の知らせは「覚えられる特技が増えた（LvN）: … 身につけるのは、キャンプに戻ってから（持ち主が選ぶ…）」（`data.held_by_owner: true`）。
@@ -1560,4 +1560,9 @@ SlayOpening { turns: number; dealt: number; hitTurns: number; taken: number }
 - **S10（SEASON.md §58.4。画面だけ。engine・出来事・命令の形・World と版は S9 のまま）**:
   1. **`GET /api/profile` に `seasons`**（`ProfileSeasonEntry[]`）: そのプロフィールが招かれたシーズンごとに `{ id, seasonName, name, status, budget, used, runs, died }`（`name` は招いたときの表示名＝順位の表の名前、`used` はランをまたいで使った予算の今の値、`runs` は始めたランの数、`died` はこのシーズンで倒れたことがある）。`Authorization: Bearer <profile_token>` のプロフィールのものだけ（ほかのプロフィールの招きは入らない）。記録が読めないシーズン・招いた者の記録が読めないシーズンは入れない。MCP の `profile` の文と `structuredContent` は変えない（HTTP だけ）。人間の画面の拠点の冒険者の札（「まだ、このシーズンに入っていない」「前の冒険は、倒れて終わった」「手番を使い切った」・残りの手番）に使う。
   2. 人間の画面: `#/` は拠点（冒険者の札・鍵を入れる欄・この機械の冒険者（運用者として）・今シーズンの順位）、`#/prepare/<runId>` は支度（目的・装備・特技と加護の「任せる／自分で」・伝言・「準備完了」。持ち主の口の `…/owner/view`・`…/owner/directive`・`…/owner/act` を使う）、`#/ops` は運用（前のホームの「ほかのラン」と、鍵を外す）、`#/records` は記録（今のまま）。前の「出撃」は拠点になった（`#/` のまま）。だれが何を見られるか・持ち主の口の守り（§8 の状態を変える口）は変えていない。
+- **S10a（S10 の検査と、画面で見た指摘の直し。版は S9 のまま）**:
+  1. `OwnerRunRow` と `OwnerViewResponse` に `continuable`（続きを遊べるか。冒険者 1 人に続きは 1 つの数え方 `SessionManager.continuable` と同じ）と `oldVersion?: true`（このサーバーと違う版の engine で始まったラン）。人間の画面は、違う版のランの札を「前の版の冒険（続きは、遊べない）」と「記録を見る」にし、支度の画面は見るだけ。
+  2. `ProfileSeasonEntry.failed?: true`: 終わっていないそのシーズンのランが、サーバーの起動時に復旧できなかった（`recoveryFailed`）。拠点の札は「前の冒険は、サーバーの起動時に読み込めなかった（運用者に知らせる）」で、「自分で潜る」を出さない。
+  3. **観測の指図の行（キャンプ）**の括弧の中を改めた（文だけ。World・出来事は変えない）: 目的を握られていれば「遠征を始めるのは、あなた。持ち主の支度が準備完了になってから」、装備・特技と加護は「あなたが equip・unequip（choose_perk・choose_boon）を出すと、希望として持ち主に伝わる」（前は「あなたの … は断られる」）。例: 「指図: 目的と装備は、持ち主がキャンプで決める（迷宮で手に入れた装備は、キャンプで確かめるまで身に着けない。遠征を始めるのは、あなた。持ち主の支度が準備完了になってから。あなたが equip・unequip を出すと、希望として持ち主に伝わる）。特技と加護は、あなたが決める」。英語は `(…; you start the expedition, once your owner's preparations are ready; if you send equip, unequip, it reaches your owner as a wish)`。迷宮の中の短い行は変えない。
+  4. 人間の画面の支度: 「任せる／自分で」と伝言を残すときは、送る直前に `…/owner/view` を読み直し、その指図に押した 1 つだけを足す・外す（伝言はサーバーの値のまま）／伝言だけを替える（握る項目はサーバーの値のまま）。ほかのタブの変更を古い値で上書きしない。準備完了の間は、段の切り替えと決める操作を押せない（伝言は残せる）。
 - **pilot**: 持ち主が目的を握るランでは、pilot の `camp.auto_start` を `null` にする（pilot は `held_by_owner` を知らないので、出発を試みては断られ、数秒で自分を止める。pilot の README）。S9 で、特技と加護・装備を握られて札が「まだ」のときも、pilot の出発は断られる（pilot は変えていない）。

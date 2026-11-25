@@ -4,7 +4,7 @@
 // S9（§58.1・§58.2）: 支度（prepare: 目的を選ぶ・準備完了）もこの口から。遠征を始めるのはプレイヤー（持ち主の start_expedition は engine が断る）。
 import type { ActionError, Command, DirectiveItem, DirectiveUndecided, Observation, OwnerRunRow, OwnerViewResponse, PlayerId, PlayerView } from '@muse/shared';
 import { actionError, activeWishes, CommandSchema, directiveUndecided, OWNER_COMMANDS, ownerWaitOpen, prepStateView, t } from '@muse/shared';
-import { directiveTarget } from '@muse/engine';
+import { directiveTarget, ENGINE_VERSION } from '@muse/engine';
 import type { RunSession } from './RunSession';
 import { SessionPlayerPort } from './PlayerPort';
 
@@ -43,8 +43,14 @@ export function ownerView(session: RunSession, pid: PlayerId): OwnerViewResponse
     eligible: !why, ...(why ? { reason: why } : {}),
     waiting: !why && ownerWaited(view),
     ...(!why ? { ai: aiOf(session, pid) } : {}),
+    ...(oldVersionRun(session) ? { oldVersion: true as const } : {}),
     view, observation: o.observation, text: o.text,
   };
+}
+
+/** このサーバーと違う版の engine で始まったラン（S10a。続きは遊べない: SessionManager.continuable） */
+function oldVersionRun(session: RunSession): boolean {
+  return session.world.meta.engineVersion !== ENGINE_VERSION;
 }
 
 /** 一覧の 1 行（ホームの「出撃」の、自分のランの枠） */
@@ -69,6 +75,7 @@ export function ownerRow(session: RunSession, pid: PlayerId, season?: { name: st
     ...(!why && st ? { prep: { state: st, ...(d?.hold.includes('objective') && d.prep?.objective !== undefined ? { objective: d.prep.objective } : {}) } } : {}),
     ...(wishes ? { wishes } : {}),
     ...(!why ? { ai: aiOf(session, pid) } : {}),
+    ...(oldVersionRun(session) ? { oldVersion: true as const } : {}),
     updatedAt: session.updatedAt,
   };
 }

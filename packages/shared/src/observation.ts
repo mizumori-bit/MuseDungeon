@@ -2351,7 +2351,7 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
   // 加護の候補（大守護者を倒した。V3-3 §3.2）
   const bc = view.self.boonChoice;
   const boonChoiceObs = bc ? { depth: bc.depth, options: bc.options.map((id, i) => ({ option: i + 1, id, name: nameOf(catalog.boons?.[id]?.name, L, shortId(id)), desc: nameOf(catalog.boons?.[id]?.desc, L, '') })) } : undefined;
-  // 特技と加護を持ち主が握っている（S8 §54.3・§54.4）: 候補は、持ち主がキャンプで選ぶまで保留（あなたの choose_perk・choose_boon は断られる）
+  // 特技と加護を持ち主が握っている（S8 §54.3・§54.4）: 候補は、持ち主がキャンプで選ぶまで保留（あなたの choose_perk・choose_boon は、希望として持ち主に伝わる: S9 §58.2）
   const perksHeld = !!view.directive?.hold.includes('perks');
   if (boonChoiceObs && view.status !== 'dead' && view.status !== 'ended') {
     alerts.push({
@@ -2664,7 +2664,8 @@ function itemsJoin(L: Locale, items: readonly DirectiveItem[]): string {
 }
 
 /**
- * 指図の 1 行（S8 §54.4 の 1）: 「指図: 目的と装備は、持ち主が決める（あなたの start_expedition・equip・unequip は断られる）。特技と加護は、あなたが決める」。
+ * 指図の 1 行（S8 §54.4 の 1。S10a で括弧の中を改めた）: 「指図: 目的と装備は、持ち主がキャンプで決める（迷宮で手に入れた装備は、…身に着けない。遠征を始めるのは、あなた。
+ * 持ち主の支度が準備完了になってから。あなたが equip・unequip を出すと、希望として持ち主に伝わる）。特技と加護は、あなたが決める」。
  * inDungeon: 装備を握っていれば、遠征の間はだれも付け替えられないことを添える
  */
 export function directiveLine(L: Locale, hold: readonly DirectiveItem[], inDungeon: boolean): string {
@@ -2676,15 +2677,20 @@ export function directiveLine(L: Locale, hold: readonly DirectiveItem[], inDunge
   if (inDungeon) {
     return t(L, `指図: ${held.map((x) => itemsJoin(L, [x])).join('・')}は、持ち主（キャンプで）`, `Directive: ${itemsJoin(L, held)} are your owner's (at camp)`);
   }
-  const cmds = held.flatMap((x) => x === 'objective' ? ['start_expedition'] : x === 'loadout' ? ['equip', 'unequip'] : ['choose_perk', 'choose_boon']);
+  // 握られた項目の命令（S10a: 断られるのでなく、希望として持ち主に伝わる。S9 §58.2）。目的は、遠征を始めるのはプレイヤー（準備完了の後。§58.1）
+  const wishCmds = held.flatMap((x) => x === 'loadout' ? ['equip', 'unequip'] : x === 'perks' ? ['choose_perk', 'choose_boon'] : []);
   // 世界の中での読み方（依頼者と決めた言い方。§55）: 主は「キャンプで、持ち主が決める」。読み方は添える。キャンプは品の正体や呪いを明かさない（鑑定とは別）
   const readings = [
     held.includes('loadout') ? t(L, '迷宮で手に入れた装備は、キャンプで確かめるまで身に着けない。', 'gear found in the dungeon is not worn until it is looked over at camp; ') : '',
     held.includes('perks') ? t(L, '遠征の間に強くなって覚えられることが増えても、身につけるのはキャンプに戻ってから。', 'what you grow able to learn during an expedition is taken up only back at camp; ') : '',
   ].join('');
+  const tail = [
+    held.includes('objective') ? t(L, '遠征を始めるのは、あなた。持ち主の支度が準備完了になってから', 'you start the expedition, once your owner\'s preparations are ready') : '',
+    wishCmds.length ? t(L, `あなたが ${wishCmds.join('・')} を出すと、希望として持ち主に伝わる`, `if you send ${wishCmds.join(', ')}, it reaches your owner as a wish`) : '',
+  ].filter(Boolean).join(t(L, '。', '; '));
   const rest = free.length ? t(L, `。${itemsJoin(L, free)}は、あなたが決める`, `. You decide ${itemsJoin(L, free)}`) : '';
-  return t(L, `指図: ${itemsJoin(L, held)}は、持ち主がキャンプで決める（${readings}あなたの ${cmds.join('・')} は断られる）${rest}`,
-    `Directive: your owner decides ${itemsJoin(L, held)} at camp (${readings}your ${cmds.join(', ')} are refused)${rest}`);
+  return t(L, `指図: ${itemsJoin(L, held)}は、持ち主がキャンプで決める（${readings}${tail}）${rest}`,
+    `Directive: your owner decides ${itemsJoin(L, held)} at camp (${readings}${tail})${rest}`);
 }
 
 /** 装備の枠（装備できない品は undefined）。未鑑定の品は外見の種類から引く（未鑑定の指輪・首飾り） */

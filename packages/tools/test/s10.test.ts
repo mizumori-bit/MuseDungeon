@@ -45,9 +45,25 @@ describe('S10 §58.4: what the hub card needs from GET /api/profile', () => {
       if ('error' in run) throw new Error(run.error.message);
       body = JSON.parse((await get(tok)).text) as { name: string; seasons: ProfileSeasonEntry[] };
       expect(body.seasons[0]).toMatchObject({ id: 's10a', name: 'ミナ', runs: 1, died: false, status: 'open' });
-      // 持ち主の口の一覧も、その鍵の冒険者のランとして返る（拠点の札の行）
-      const own = await fetch(`${base}/api/owner/runs`, { headers: { authorization: `Bearer ${tok}` } }).then((x) => x.json()) as { runs: { runId: string; mine?: boolean; season?: { participant?: string } }[] };
-      expect(own.runs.find((x) => x.runId === run.session.runId)).toMatchObject({ mine: true, season: { participant: 'ミナ' } });
+      // 持ち主の口の一覧も、その鍵の冒険者のランとして返る（拠点の札の行）。S10a: 続きを遊べる（continuable）・この版のラン（oldVersion は無い）
+      const own = await fetch(`${base}/api/owner/runs`, { headers: { authorization: `Bearer ${tok}` } }).then((x) => x.json()) as { runs: { runId: string; mine?: boolean; continuable?: boolean; oldVersion?: true; season?: { participant?: string } }[] };
+      const row = own.runs.find((x) => x.runId === run.session.runId);
+      expect(row).toMatchObject({ mine: true, continuable: true, season: { participant: 'ミナ' } });
+      expect(row?.oldVersion).toBeUndefined();
+      const view = await fetch(`${base}/api/runs/${run.session.runId}/owner/view`, { headers: { authorization: `Bearer ${tok}` } }).then((x) => x.json()) as { continuable?: boolean; oldVersion?: true };
+      expect(view.continuable).toBe(true);
+      expect(view.oldVersion).toBeUndefined();
+      // S10a §11: 迷宮で手番を使うと、used が動く（ランをまたいだ今の値）
+      expect((await run.port.act({ type: 'start_expedition', offer: 1 }, { source: 'bot' })).ok).toBe(true);
+      for (let i = 0; i < 3; i++) await run.port.act({ type: 'wait' }, { source: 'bot' });
+      const usedNow = run.session.world.entities[run.session.world.players[run.playerId].entityId].actor!.turns;
+      expect(usedNow).toBeGreaterThan(0);
+      body = JSON.parse((await get(tok)).text) as { name: string; seasons: ProfileSeasonEntry[] };
+      expect(body.seasons[0].used).toBe(usedNow);
+      // S10a §4: 終わっていないランが起動時に復旧できなかったときの印（判定は SessionManager から渡す）
+      const profileId = m.profiles.store.resolve(tok)!.id;
+      expect(m.seasons.memberships(profileId, (id) => id === run.session.runId)[0].failed).toBe(true);
+      expect(m.seasons.memberships(profileId, () => false)[0].failed).toBeUndefined();
     } finally {
       await new Promise<void>((res) => app.server.close(() => res()));
       m.closeAll();

@@ -4,10 +4,13 @@ import type { OwnerRunRow, ProfileSeasonEntry, SeasonListing } from '@muse/share
 import { tr } from '../util';
 import { aiPresenceText, undecidedLine } from './ownerCheck';
 
-/** 札の状態（§58.4 の表の 6 つと、人間が自分で遊ぶ冒険者・招かれていない冒険者） */
-export type HubCardState = 'not_joined' | 'not_invited' | 'camp_free' | 'camp_pending' | 'camp_ready' | 'dungeon' | 'over' | 'human';
-/** 状態の札の色: amber 支度が「まだ」・green 準備完了・blue 迷宮の中・gold 印（希望）・muted ふつう */
-export type HubTone = 'amber' | 'green' | 'blue' | 'gold' | 'muted';
+/**
+ * 札の状態（§58.4 の表の 6 つと、人間が自分で遊ぶ冒険者・招かれていない冒険者。S10a: 前の版の冒険（続きは遊べない）・
+ * 起動時に読み込めなかった冒険）
+ */
+export type HubCardState = 'not_joined' | 'not_invited' | 'camp_free' | 'camp_pending' | 'camp_ready' | 'dungeon' | 'over' | 'human' | 'stale' | 'unreadable';
+/** 状態の札の色: amber 支度が「まだ」・green 準備完了・blue 迷宮の中・gold 印（希望）・muted ふつう・operator 運用者として（S10a） */
+export type HubTone = 'amber' | 'green' | 'blue' | 'gold' | 'muted' | 'operator';
 
 /** 主のボタン: href へ移る、か dive（自分で潜る窓を開く） */
 export interface HubAction { label: string; href?: string; dive?: true }
@@ -35,7 +38,7 @@ export interface HubCardInput {
   /** 札のシーズン（無ければシーズンの外） */
   season: Pick<SeasonListing, 'id' | 'status' | 'budget'> | null;
   /** そのシーズンの招き（GET /api/profile の seasons の 1 行）。null: 招かれていない。undefined: 分からない（運用者の札・読めなかった） */
-  membership?: Pick<ProfileSeasonEntry, 'used' | 'budget' | 'died' | 'runs'> | null;
+  membership?: Pick<ProfileSeasonEntry, 'used' | 'budget' | 'died' | 'runs' | 'failed'> | null;
   /** そのシーズンの、続きのあるラン（持ち主の口の一覧の行）。無ければ null */
   row: OwnerRunRow | null;
   /** このブラウザに、そのランを遊ぶ鍵（プレイヤーのトークン）がある（人間が自分で遊ぶラン） */
@@ -58,6 +61,11 @@ export function hubCard(x: HubCardInput): HubCardModel {
     const stats = { level: row.level, banked: row.banked, budget, rank: x.rank };
     const base = { notes: [] as string[], wish: false, highlight: false, stats };
     const inDungeon = row.status === 'in_dungeon';
+    const records: HubAction = { label: tr('記録を見る', 'Records'), href: '#/records' };
+    // 前の版の冒険（S10a）: このサーバーと違う版で始まったラン。続きは遊べない（記録は見返せる）
+    if (row.oldVersion) {
+      return { ...base, state: 'stale', pill: { text: tr('前の版', 'Older version'), tone: 'muted' }, where: tr('前の版の冒険（続きは、遊べない）', 'An adventure from an older version (it cannot be continued)'), text: null, action: records };
+    }
     // 人間が自分で遊ぶ冒険者: 指図は出さない。ボタンは「続きを遊ぶ」（このブラウザに遊ぶ鍵が無ければ、見守る）
     if (!row.eligible) {
       return {
@@ -82,6 +90,10 @@ export function hubCard(x: HubCardInput): HubCardModel {
       : budget && budget.left <= 0 ? tr(`このシーズンの手番を、使い切った。持ち帰った点 ${row.banked}`, `All of this season's turns are used. Points brought home: ${row.banked}`)
         : null;
     if (over) return { ...base, state: 'over', pill: { text: tr('終わり', 'Done'), tone: 'muted' }, where, text: over, action: result };
+    // ほかの理由で続きを遊べない（サーバーの continuable。今の作りでは、ここに来るのは違う版のランだけ）
+    if (row.continuable === false) {
+      return { ...base, state: 'stale', pill: { text: tr('続きは無い', 'Not continuable'), tone: 'muted' }, where: tr('この冒険の続きは、遊べない', 'This adventure cannot be continued'), text: null, action: records };
+    }
     const prepare: HubAction = { label: tr('支度をする', 'Prepare'), href: `#/prepare/${row.runId}` };
     const wish = (row.wishes ?? 0) > 0;
     const ai = aiPresenceText(row.ai);
@@ -117,6 +129,14 @@ export function hubCard(x: HubCardInput): HubCardModel {
     };
   }
   const result: HubAction = { label: tr('結果を見る', 'See the results'), href: `#/season/${s.id}` };
+  // 終わっていないランが、サーバーの起動時に読み込めなかった（S10a）: 自分で潜るは出さない
+  if (m?.failed) {
+    return {
+      ...base, state: 'unreadable', pill: { text: tr('読み込めない', 'Unreadable'), tone: 'amber' },
+      where: tr('前の冒険は、サーバーの起動時に読み込めなかった（運用者に知らせる）', 'The last adventure could not be loaded when the server started (tell the operator)'), text: null,
+      action: { label: tr('記録を見る', 'Records'), href: '#/records' },
+    };
+  }
   if (s.status !== 'open') {
     return { ...base, state: 'over', pill: { text: tr('終わり', 'Done'), tone: 'muted' }, where: tr('シーズンが終わった', 'The season is over'), text: null, action: result };
   }
@@ -144,10 +164,28 @@ export function pickSeason<S extends Pick<SeasonListing, 'id' | 'status'>>(curre
     ?? current[0] ?? null;
 }
 
+/**
+ * 順位の表で、その冒険者の行の名前（S10a §7）: ランがあればそのシーズンの表示名（無ければランの名前）、無ければ招いたときの表示名。
+ * 招きもランも無い（分からない）ときは null（名前だけで、同じ名前の別人の行と結ばない）
+ */
+export function participantName(row: Pick<OwnerRunRow, 'name' | 'season'> | null, membership: Pick<ProfileSeasonEntry, 'name'> | null | undefined): string | null {
+  if (row) return row.season?.participant ?? row.name;
+  return membership ? membership.name : null;
+}
+
 /** そのシーズンの招き。memberships が無ければ undefined（分からない）、招かれていなければ null */
 export function membershipFor<M extends Pick<ProfileSeasonEntry, 'id'>>(memberships: readonly M[] | undefined, seasonId: string): M | null | undefined {
   if (!memberships) return undefined;
   return memberships.find((m) => m.id === seasonId) ?? null;
+}
+
+/**
+ * 順位の表の賞の欄の中身（S10a c）: 「1 位 地下 1 階」の形（順位は小さく薄く、値が主）。値が 0 なら、順位を出さず「—」。
+ * 返すのは文の部品（rank は無いことがある）
+ */
+export function awardCell(c: { value: number; rank: number } | null | undefined, valueText: (v: number) => string): { rank: string | null; value: string } {
+  if (!c || c.value === 0) return { rank: null, value: '—' };
+  return { rank: tr(`${c.rank} 位`, `#${c.rank}`), value: valueText(c.value) };
 }
 
 /** シーズンの残り（「あと 3 日」「あと 5 時間」「終わった」）。終わりの時刻の表示は呼ぶ側で足す */

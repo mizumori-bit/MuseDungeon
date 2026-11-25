@@ -2,8 +2,9 @@
 // §58.4 の表の 6 つの状態・人間が自分で遊ぶ冒険者・運用者の札・招かれていない冒険者
 import { describe, expect, it } from 'vitest';
 import type { OwnerRunRow } from '@muse/shared';
-import { hubCard, membershipFor, pickSeason, seasonLeftText } from '../src/ui/hubState';
-import { prepHead, prepLine } from '../src/ui/prepState';
+import { awardCell, hubCard, membershipFor, participantName, pickSeason, seasonLeftText } from '../src/ui/hubState';
+import { directiveToggle, messageSave, prepHead, prepLine } from '../src/ui/prepState';
+import { screenErrOf } from '../src/ui/screenErr';
 
 const season = { id: 's4', status: 'open' as const, budget: 1000 };
 function row(p: Partial<OwnerRunRow> = {}): OwnerRunRow {
@@ -166,5 +167,71 @@ describe('S10 §58.4: the preparations screen', () => {
     expect(prepLine('perks', { ...x, held: true, perkPending: { level: 2, options: 3 } })).toBe('特技なし ― Lv2 の候補 3 つを選んでいない');
     expect(prepLine('perks', { ...x, held: true, perks: ['頑健'], boons: ['火の加護'], boonPending: { depth: 5, options: 3 } })).toBe('頑健・火の加護 ― 加護の候補 3 つを選んでいない');
     expect(prepLine('perks', { ...x, perks: ['頑健'] })).toBe('頑健（ミュゼ美が決める）');
+  });
+});
+
+describe('S10a: the inspection fixes', () => {
+  it('§1: a switch adds or removes only the pressed item on top of the freshly read directive, and keeps the server message (never the stale screen values)', () => {
+    // 画面は古い値（hold [], message 'A'）のまま。ほかのタブが loadout を握り、伝言を 'B' にした
+    const fresh = { hold: ['loadout'] as ('objective' | 'loadout' | 'perks')[], message: 'B' };
+    expect(directiveToggle(fresh, 'perks', true)).toEqual({ hold: ['loadout', 'perks'], message: 'B' });
+    expect(directiveToggle(fresh, 'objective', true)).toEqual({ hold: ['objective', 'loadout'], message: 'B' });
+    expect(directiveToggle(fresh, 'loadout', false)).toEqual({ hold: [], message: 'B' });
+    // もうそうなっていれば送らない
+    expect(directiveToggle(fresh, 'loadout', true)).toBeNull();
+    expect(directiveToggle(fresh, 'perks', false)).toBeNull();
+    expect(directiveToggle(undefined, 'perks', true)).toEqual({ hold: ['perks'], message: '' });
+    // 伝言を残す: 握る項目は読み直した値のまま、伝言だけ
+    expect(messageSave(fresh, 'C')).toEqual({ hold: ['loadout'], message: 'C' });
+    expect(messageSave(fresh, 'B')).toBeNull();
+    expect(messageSave({ hold: ['perks', 'objective'], message: '' }, 'x'.repeat(300))).toEqual({ hold: ['objective', 'perks'], message: 'x'.repeat(280) });
+  });
+
+  it('§3・§4: an older-version run and a run the server could not load get their own cards, with no way to go down', () => {
+    const stale = hubCard({ ...base, row: row({ oldVersion: true, continuable: false, hold: ['objective'], prep: { state: 'pending' } }) });
+    expect(stale.state).toBe('stale');
+    expect(stale.where).toBe('前の版の冒険（続きは、遊べない）');
+    expect(stale.action).toEqual({ label: '記録を見る', href: '#/records' });
+    expect(stale.highlight).toBe(false);
+    // 版が違えば、人間のランでも「続きを遊ぶ」は出さない
+    expect(hubCard({ ...base, playable: true, row: row({ oldVersion: true, eligible: false }) }).state).toBe('stale');
+    // 続きを遊べる・予算切れの continuable false は、今までどおり
+    expect(hubCard({ ...base, row: row({ continuable: true }) }).state).toBe('camp_free');
+    expect(hubCard({ ...base, row: row({ continuable: false, budgetLeft: 0 }) }).state).toBe('over');
+    const failed = hubCard({ ...base, row: null, membership: { used: 10, budget: 1000, died: false, runs: 1, failed: true } });
+    expect(failed.state).toBe('unreadable');
+    expect(failed.where).toBe('前の冒険は、サーバーの起動時に読み込めなかった（運用者に知らせる）');
+    expect(failed.action.dive).toBeUndefined();
+    // 支度の画面も、見るだけ
+    expect(prepHead({ name: 'ミュゼ美', eligible: true, status: 'at_camp', depth: null, hold: ['objective'], prep: 'pending', season: null, oldVersion: true }))
+      .toMatchObject({ kind: 'closed', editable: false, line: '前の版で始まった冒険。このサーバーでは、続きを遊べない（記録は、見返せる）' });
+  });
+
+  it('§6: the server\'s refusals become words of the screen', () => {
+    expect(screenErrOf(401, 'no_session', 'unknown or missing profile token')).toBe('その鍵は、見つからない。運用者から受け取ったものか、確かめる');
+    expect(screenErrOf(403, 'bad_request', 'この口は、そのランのプレイヤーのプロフィールのトークンか… / owner access needs…')).toBe('この冒険者の鍵が、このブラウザに無い。拠点で、鍵を入れる');
+    expect(screenErrOf(404, 'no_session', 'unknown or finished run')).toBe('この冒険者は、見つからない（冒険が終わったか、このサーバーに無い）');
+    expect(screenErrOf(409, 'run_ended', '')).toBe('この冒険は、終わった。記録で見返せる');
+    expect(screenErrOf(503, 'recovery_failed', '')).toBe('この冒険は、サーバーの起動時に読み込めなかった（運用者に知らせる）');
+    expect(screenErrOf(409, 'season_unavailable', 'このプロフィール（prof_x）は、シーズン s4 に招かれていない。… / not invited')).toBe('この冒険者は、このシーズンに招かれていない。運用者に、招いてもらう');
+    expect(screenErrOf(409, 'season_unavailable', 'このシーズンの行動予算（60 手番）を使い切っている / budget used up')).toBe('このシーズンの手番を、使い切った');
+    expect(screenErrOf(409, 'season_unavailable', 'シーズン s4 は終わっている / season s4 has ended')).toBe('このシーズンは、終わった');
+    expect(screenErrOf(409, 'season_unavailable', 'something else')).toBe('このシーズンには、いま入れない（運用者に確かめる）');
+    expect(screenErrOf(400, 'bad_request', 'name is required')).toBeNull();
+  });
+
+  it('§7: without a run or an invitation, a name alone does not tie a standings row to the card', () => {
+    expect(participantName(null, undefined)).toBeNull();
+    expect(participantName(null, null)).toBeNull();
+    expect(participantName(null, { name: 'ミナ' })).toBe('ミナ');
+    expect(participantName(row({ name: 'Su', season: { id: 's4', name: 'S4', participant: 'ミナ' } }), null)).toBe('ミナ');
+    expect(participantName(row({ name: 'Su', season: { id: 's4', name: 'S4' } }), undefined)).toBe('Su');
+  });
+
+  it('c: "1st  depth 1" — the rank small, the value first; a value of 0 shows "—" without a rank', () => {
+    expect(awardCell({ value: 1, rank: 1 }, (v) => `地下 ${v} 階`)).toEqual({ rank: '1 位', value: '地下 1 階' });
+    expect(awardCell({ value: 3, rank: 2 }, String)).toEqual({ rank: '2 位', value: '3' });
+    expect(awardCell({ value: 0, rank: 1 }, String)).toEqual({ rank: null, value: '—' });
+    expect(awardCell(undefined, String)).toEqual({ rank: null, value: '—' });
   });
 });

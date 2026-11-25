@@ -74,11 +74,15 @@ export function AdventurerCard({ name, className, model, operator, onDive }: { n
   );
 }
 
-/** 鍵を入れる欄（鍵が無いとき、画面の真ん中に 1 つ）。onKeep が Promise で失敗の文を返せば、その文を出す */
-export function KeyEntry({ onKeep }: { onKeep: (tok: string) => Promise<string | null> }) {
+/**
+ * 鍵を入れる欄（鍵が無いとき、画面の真ん中に 1 つ）。onKeep が Promise で失敗の文を返せば、その文を出す。
+ * compact（S10a b）: 運用者として冒険者の札がもう出ているとき。札の下に小さい 1 行（押すと欄が開く）
+ */
+export function KeyEntry({ onKeep, compact }: { onKeep: (tok: string) => Promise<string | null>; compact?: boolean }) {
   const [draft, setDraft] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState(!compact);
   const submit = async () => {
     const tok = draft.trim();
     if (!tok || busy) return;
@@ -88,9 +92,12 @@ export function KeyEntry({ onKeep }: { onKeep: (tok: string) => Promise<string |
     if (e) setErr(e);
     else { setDraft(''); setErr(null); }
   };
+  if (compact && !open) {
+    return <p class="hub-keyline"><button type="button" class="hub-linkbtn" onClick={() => setOpen(true)}>{tr('自分の冒険者の鍵を入れる', 'Enter your own adventurer\'s key')}</button></p>;
+  }
   return (
-    <section class="hub-keybox">
-      <h2 class="hub-keytitle">{tr('冒険者の鍵を入れる', 'Enter your adventurer\'s key')}</h2>
+    <section class={`hub-keybox ${compact ? 'is-compact' : ''}`}>
+      <h2 class="hub-keytitle">{compact ? tr('自分の冒険者の鍵を入れる', 'Enter your own adventurer\'s key') : tr('冒険者の鍵を入れる', 'Enter your adventurer\'s key')}</h2>
       <p class="hub-note">{tr('運用者から受け取った鍵。このブラウザにだけ覚える。', 'The key the operator gave you. It is kept only in this browser.')}</p>
       <form class="hub-keyform" onSubmit={(e) => { e.preventDefault(); void submit(); }}>
         <input class="hub-input" type="password" autocomplete="off" aria-label={tr('鍵', 'Key')} placeholder={tr('鍵', 'Key')} value={draft}
@@ -102,9 +109,9 @@ export function KeyEntry({ onKeep }: { onKeep: (tok: string) => Promise<string |
   );
 }
 
-/** 自分で潜る窓（名前と職を選ぶ）。onDive で今の参加の道（シーズンのランを始める） */
-export function DiveDialog({ name: name0, classId: class0, catalog, busy, onDive, onClose }: {
-  name: string; classId: string; catalog: Catalog | null; busy: boolean; onDive: (name: string, classId: string) => void; onClose: () => void;
+/** 自分で潜る窓（名前と職を選ぶ）。onDive で今の参加の道（シーズンのランを始める）。error: 断られたとき（画面の言葉の文。S10a §6） */
+export function DiveDialog({ name: name0, classId: class0, catalog, busy, error, onDive, onClose }: {
+  name: string; classId: string; catalog: Catalog | null; busy: boolean; error?: string | null; onDive: (name: string, classId: string) => void; onClose: () => void;
 }) {
   const L = getLocale();
   const [name, setName] = useState(name0);
@@ -129,6 +136,7 @@ export function DiveDialog({ name: name0, classId: class0, catalog, busy, onDive
             </select>
           </label>
           {desc && <p class="hub-note">{desc}</p>}
+          {error && <p class="hub-err">{error}</p>}
           <div class="hub-dactions">
             <button type="button" class="hub-btn" onClick={onClose}>{tr('やめる', 'Cancel')}</button>
             <button type="submit" class="hub-btn primary" disabled={busy || !name.trim()}>{tr('潜る', 'Go down')}</button>

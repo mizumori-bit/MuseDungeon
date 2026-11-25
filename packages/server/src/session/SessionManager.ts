@@ -621,7 +621,8 @@ export class SessionManager {
       // シーズンの名前と、その参加者の表示名（順位の表の名前。招いたときの名前。持ち主の画面が自分の行を目立たせる）
       const profId = s.profileOf(pid);
       const participant = d?.participants.find((x) => x.profileId === profId)?.name;
-      runs.push({ ...ownerRow(s, pid, d ? { name: d.def.name, ...(participant ? { participant } : {}) } : undefined), mine: !!mineId });
+      // continuable（S10a）: 続きを遊べるか（冒険者 1 人に続きは 1 つの数え方と同じ）。違う版のラン・始められないシーズンのキャンプは false
+      runs.push({ ...ownerRow(s, pid, d ? { name: d.def.name, ...(participant ? { participant } : {}) } : undefined), mine: !!mineId, continuable: this.continuable(s, pid) });
     }
     return { local: o.local, runs: runs.sort((a, b) => Number(b.waiting) - Number(a.waiting) || b.updatedAt - a.updatedAt) };
   }

@@ -13,7 +13,8 @@ import { ApiError, api, errorText } from '../api';
 import { ErrorBanner, Header, useCatalog, useLocaleRefresh } from '../ui/common';
 import { normName, SeasonSharedFlow, sortStandings, STANDING_SORTS, standingSortName, StandingsTable, type StandingSort } from '../ui/home';
 import { AdventurerCard, DiveDialog, HubNav, KeyEntry } from '../ui/hub';
-import { hubCard, membershipFor, pickSeason, seasonLeftText, type HubCardModel } from '../ui/hubState';
+import { hubCard, membershipFor, participantName, pickSeason, seasonLeftText, type HubCardModel } from '../ui/hubState';
+import { screenErr } from '../ui/screenErr';
 import { forgetKeys, keepKey, storedKeys } from '../ui/keys';
 import { FIRST_EXPEDITION_CHOICES, playerStateLabel, type FirstExpeditionChoice } from '../ui/labels';
 import { OwnerRunCard } from '../ui/owner';
@@ -62,6 +63,7 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
   const [advs, setAdvs] = useState<Adventurer[] | null>(null);
   // 自分で潜る窓（S10）: どのシーズンへ、どの鍵で
   const [dive, setDive] = useState<{ seasonId: string; token: string; name: string } | null>(null);
+  const [diveErr, setDiveErr] = useState<string | null>(null);
   // プロフィールの記録の直近のラン（自分のランを見分ける。トークンごと）
   const [recentMine, setRecentMine] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -213,10 +215,11 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
 
   /**
    * 自分で潜る（S10。拠点の札の「自分で潜る」の窓から）: シーズンのランを始める（AI の new_run { season, profile_token } と同じ POST /api/runs。今の参加の道）。
-   * 断られたらサーバーの理由をそのまま出す。run_in_progress なら確かめの窓（S9 §58.3）
+   * 断られたら、画面の言葉の文で（S10a §6。窓の中か、確かめの窓の後なら上の帯）。run_in_progress なら確かめの窓（S9 §58.3）
    */
   const joinSeason = async (id: string, tok: string, nm: string, cls: string, endPrevious = false) => {
     setBusy(true);
+    setDiveErr(null);
     try {
       setPref('name', nm);
       setPref('class', cls);
@@ -227,7 +230,8 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
     } catch (e) {
       const prev = inProgressOf(e);
       if (prev !== null && !endPrevious) { setDive(null); setEndPrev({ runId: prev, retry: () => joinSeason(id, tok, nm, cls, true) }); }
-      else setError(errorText(e));
+      else if (endPrevious) setError(screenErr(e));
+      else setDiveErr(screenErr(e));
     } finally {
       setBusy(false);
     }
@@ -396,7 +400,7 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
     } catch (e) {
       return e instanceof ApiError && (e.status === 401 || e.status === 404)
         ? tr('その鍵は、見つからない。運用者から受け取ったものか、確かめる', 'That key was not found. Check it is the one the operator gave you')
-        : errorText(e);
+        : screenErr(e);
     }
     keepKey(tok);
     setProfileToken(tok);
@@ -417,13 +421,14 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
     if (!sd) continue;
     const row = rows.find((r) => r.season?.id === sd.id) ?? null;
     const mem = membershipFor(a.seasons, sd.id);
-    const participant = row?.season?.participant ?? mem?.name ?? (a.name || null);
+    // 順位の表の自分の行（S10a §7）: ランか招きがあるときだけ。名前だけで、同じ名前の別人の行と結ばない
+    const participant = participantName(row, mem);
     const st = current.find((x) => x.season.id === sd.id)?.standings.find((r) => participant && normName(r.name) === normName(participant));
     const nm = row?.name ?? mem?.name ?? a.name;
     myCards.push({
       key: `adv-${a.id ?? i}-${sd.id}`, runId: row?.runId ?? null, name: nm, className: classNameOf(row?.classId), participant, seasonId: sd.id,
       model: hubCard({ name: nm, season: sd, membership: mem, row, playable: !!(row && getToken(row.runId)), rank: st?.adventure.rank ?? null, banked: st?.banked }),
-      onDive: () => setDive({ seasonId: sd.id, token: a.token, name: mem?.name ?? nm }),
+      onDive: () => { setDiveErr(null); setDive({ seasonId: sd.id, token: a.token, name: mem?.name ?? nm }); },
     });
   }
   const myCardRuns = new Set(myCards.map((c) => c.runId).filter((x): x is string => !!x));
@@ -438,6 +443,7 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
     }) : [];
   const waitingCount = [...myCards, ...operatorCards].filter((c) => c.model.state === 'camp_pending').length;
   const badKeys = (advs ?? []).filter((a) => !a.ok).length;
+  const needKey = !hasKey || (advs !== null && advs.length > 0 && advs.every((a) => !a.ok));
   /** 順位を出すシーズン: 札のシーズン（無ければ、いちばん上の開催中のシーズン） */
   const shownSeasons = current.filter((x) => myCards.some((c) => c.seasonId === x.season.id) || operatorCards.some((c) => c.seasonId === x.season.id));
   const standingSeasons = shownSeasons.length ? shownSeasons : current.slice(0, 1);
@@ -460,8 +466,8 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
         )}
         {seasonsLoaded && current.length > 0 && (
           <>
-            {/* 鍵が無い・覚えてある鍵がどれも使えない: 真ん中に鍵を入れる欄 1 つ */}
-            {(!hasKey || (advs !== null && advs.length > 0 && advs.every((a) => !a.ok))) && <KeyEntry onKeep={keepOwnerTok} />}
+            {/* 鍵が無い・覚えてある鍵がどれも使えない: 札も無ければ、真ん中に鍵を入れる欄 1 つ。運用者として札がもう出ていれば、札の下に小さい 1 行（S10a b） */}
+            {needKey && !operatorCards.length && <KeyEntry onKeep={keepOwnerTok} />}
             {hasKey && advs === null && <p class="hub-note">{tr('読み込み中…', 'Loading…')}</p>}
             {myCards.map((c) => <AdventurerCard key={c.key} name={c.name} className={c.className} model={c.model} onDive={c.onDive} />)}
             {badKeys > 0 && <p class="hub-note warn">{tr('覚えてある鍵のうち、使えないものがある（歯車の「運用」で外せる）。', 'A key kept in this browser does not work (remove it under the gear, Operations).')}</p>}
@@ -472,6 +478,7 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
                 <div class="hub-grid">
                   {operatorCards.map((c) => <AdventurerCard key={c.key} name={c.name} className={c.className} model={c.model} operator />)}
                 </div>
+                {needKey && <KeyEntry compact onKeep={keepOwnerTok} />}
               </section>
             )}
             {standingSeasons.map(({ season: s, standings }) => (
@@ -800,7 +807,7 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
       <ErrorBanner error={error ?? catErr} onClose={() => setError(null)} />
       {tab === 'records' ? recordsTab() : tab === 'ops' ? ops() : hub()}
       {dive && (
-        <DiveDialog name={dive.name} classId={classId} catalog={catalog} busy={busy}
+        <DiveDialog name={dive.name} classId={classId} catalog={catalog} busy={busy} error={diveErr}
           onDive={(nm, cls) => { setClassId(cls); void joinSeason(dive.seasonId, dive.token, nm, cls); }} onClose={() => setDive(null)} />
       )}
       {endPrev && (

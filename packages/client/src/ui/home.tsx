@@ -4,6 +4,7 @@ import type { ComponentChildren } from 'preact';
 import type { Catalog, SeasonAward, SeasonStandingRow, SeasonStandingsResponse } from '@muse/shared';
 import { kindName } from '@muse/shared';
 import { getLocale, tr } from '../util';
+import { awardCell } from './hubState';
 import { DirectedTag } from './season';
 
 /** 名前を比べる形（順位の表の名前・ランのプレイヤーの名前。サーバーの名前の比べ方に近く: NFKC・前後の空白・大文字小文字） */
@@ -28,6 +29,13 @@ function rankOf(r: SeasonStandingRow, k: StandingSort): number {
 /** 並べ替え（賞ごとの順位。対象外は後ろ。同じなら名前の順） */
 export function sortStandings(rows: readonly SeasonStandingRow[], k: StandingSort): SeasonStandingRow[] {
   return [...rows].sort((a, b) => rankOf(a, k) - rankOf(b, k) || a.name.localeCompare(b.name));
+}
+
+/** 賞の欄（S10a）: 「1 位 地下 1 階」（順位は小さく薄く、値が主）。値が 0 なら「—」。中身は hubState.awardCell */
+function AwardTd({ c, valueText, none }: { c: { value: number; rank: number } | null | undefined; valueText: (v: number) => string; none?: string }) {
+  if (!c && none) return <td class="award none">{none}</td>;
+  const x = awardCell(c, valueText);
+  return <td class="award">{x.rank && <span class="rk">{x.rank}</span>}<span class="av">{x.value}</span></td>;
 }
 
 /**
@@ -55,10 +63,10 @@ export function StandingsTable({ rows, mine, replay }: { rows: readonly SeasonSt
               {(r.titles ?? []).map((x, i) => <span key={i} class="tag title" title={x.seasonName}>{L === 'en' ? x.name.en : x.name.ja}</span>)}
               <DirectedTag items={r.directed} />
             </td>
-            <td>{r.adventure.rank}. {tr(`地下${r.adventure.value}階`, `D${r.adventure.value}`)}</td>
-            <td>{r.contribution.rank}. {r.contribution.value}</td>
-            <td>{r.survival ? `${r.survival.rank}. ${r.survival.value}` : tr('対象外（倒れた）', 'out (fell)')}</td>
-            <td>{r.support ? `${r.support.rank}. ${r.support.value}` : '-'}</td>
+            <AwardTd c={r.adventure} valueText={(v) => tr(`地下 ${v} 階`, `D${v}`)} />
+            <AwardTd c={r.contribution} valueText={(v) => String(v)} />
+            <AwardTd c={r.survival} valueText={(v) => String(v)} none={tr('対象外（倒れた）', 'out (fell)')} />
+            <AwardTd c={r.support} valueText={(v) => String(v)} />
             <td>{r.used}</td><td>{r.runs}</td>
             {replay && <td class="replays">{replay(r)}</td>}
           </tr>

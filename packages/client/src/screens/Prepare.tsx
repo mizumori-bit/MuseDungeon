@@ -7,7 +7,7 @@ import type { ActionError, Command, DirectiveItem, DirectiveWish, OwnerViewRespo
 import { DIRECTIVE_ITEMS, activeWishes, itemDisplayName, kindName, nameOf, ownerOfferText, prepStateView, wishCommand, wishItemOf, wishLabel } from '@muse/shared';
 import type { ComponentChildren } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { ApiError, api, errorText } from '../api';
+import { api } from '../api';
 import { ErrorBanner, Header, useCatalog, useLocaleRefresh } from '../ui/common';
 import { BoonChoicePanel, PerkChoicePanel } from '../ui/build';
 import { OfferCard, rulesOf } from '../ui/expedition';
@@ -16,8 +16,9 @@ import { storedKeys } from '../ui/keys';
 import { statChangeText } from '../ui/owner';
 import { aiPresenceText, readyCheck } from '../ui/ownerCheck';
 import { InventoryPanel, type InvAction } from '../ui/panels';
-import { prepHead, prepItemCost, prepItemName, prepLine } from '../ui/prepState';
-import { getLocale, getToken, inLocale, tr } from '../util';
+import { directiveToggle, messageSave, prepHead, prepItemCost, prepItemName, prepLine } from '../ui/prepState';
+import { screenErr } from '../ui/screenErr';
+import { getLocale, getToken, tr } from '../util';
 
 /** 読み直しの間 */
 const POLL_MS = 5000;
@@ -26,34 +27,35 @@ const MESSAGE_MAX = 280;
 
 const ordered = (xs: readonly DirectiveItem[]): DirectiveItem[] => DIRECTIVE_ITEMS.filter((x) => xs.includes(x));
 
-/** HTTP の断り（サーバーの文は「日本語 / English」を並べたものがある）を画面の言葉で */
-function httpErrText(e: unknown): string {
-  if (e instanceof ApiError && e.error) return `${inLocale(e.error.message)}${e.error.hint ? ` — ${inLocale(e.error.hint)}` : ''}`;
-  return errorText(e);
-}
+/** HTTP の断り（401・403・404・起動時に読み込めなかった など）は、画面の言葉の文に置き換える（S10a §6。ui/screenErr.ts） */
+const httpErrText = screenErr;
 const actionErrText = (err: ActionError) => `${err.message}${err.hint ? ` — ${err.hint}` : ''}`;
 
 /** 希望の項目 → 段 */
 const wishSection = (w: DirectiveWish): DirectiveItem => (w.item === 'objective' ? 'objective' : w.item === 'loadout' ? 'loadout' : 'perks');
 
-/** 段: 見出し・「任せる／自分で」の切り替え・今の状態の 1 行・希望・（自分でにしたとき）決める所 */
-function PrepSection({ item, held, line, editable, busy, onToggle, wish, children }: {
-  item: DirectiveItem; held: boolean; line: string; editable: boolean; busy: boolean; onToggle: (held: boolean) => void;
+/**
+ * 段: 見出し・「任せる／自分で」の切り替え・今の状態の 1 行・希望・（自分でにしたとき）決める所。
+ * locked（S10a §2）: 準備完了の間は、切り替えも決める操作も押せない（薄く。変えるには、先に「支度を見直す」）
+ */
+function PrepSection({ item, held, line, editable, locked, busy, onToggle, wish, children }: {
+  item: DirectiveItem; held: boolean; line: string; editable: boolean; locked: boolean; busy: boolean; onToggle: (held: boolean) => void;
   wish?: ComponentChildren; children?: ComponentChildren;
 }) {
+  const can = editable && !locked && !busy;
   return (
-    <section class={`prep-sec ${held ? 'is-held' : ''}`}>
+    <section class={`prep-sec ${held ? 'is-held' : ''} ${locked ? 'is-locked' : ''}`}>
       <header class="prep-sechead">
         <h3 class="prep-sectitle">{prepItemName(item)}</h3>
         <div class="prep-toggle" role="group" aria-label={prepItemName(item)}>
-          <button type="button" class={!held ? 'on' : ''} aria-pressed={!held} disabled={!editable || busy || !held} onClick={() => onToggle(false)}>{tr('任せる', 'Leave it')}</button>
-          <button type="button" class={held ? 'on' : ''} aria-pressed={held} disabled={!editable || busy || held} onClick={() => onToggle(true)}>{tr('自分で', 'Decide')}</button>
+          <button type="button" class={!held ? 'on' : ''} aria-pressed={!held} disabled={!can || !held} onClick={() => onToggle(false)}>{tr('任せる', 'Leave it')}</button>
+          <button type="button" class={held ? 'on' : ''} aria-pressed={held} disabled={!can || held} onClick={() => onToggle(true)}>{tr('自分で', 'Decide')}</button>
         </div>
       </header>
       <p class="prep-line">{line}</p>
-      {!held && editable && <p class="prep-cost">{prepItemCost(item)}</p>}
-      {wish}
-      {children && <div class="prep-body">{children}</div>}
+      {!held && editable && !locked && <p class="prep-cost">{prepItemCost(item)}</p>}
+      {wish && <div class={locked ? 'prep-locked' : ''} inert={locked}>{wish}</div>}
+      {children && <div class={`prep-body ${locked ? 'prep-locked' : ''}`} inert={locked}>{children}</div>}
     </section>
   );
 }
@@ -151,12 +153,18 @@ export function Prepare({ runId }: { runId: string }) {
   const serverHold = ordered(view?.directive?.hold ?? []);
   const hold = optHold ?? serverHold;
 
-  /** 握る・やめる（すぐ送る。伝言の書きかけは送らない: 下書きのまま残す） */
+  /**
+   * 握る・やめる（すぐ送る）。S10a §1: 送る直前に読み直し、サーバーの今の握る項目に、押した 1 つだけを足す・外す（directiveToggle）。
+   * 伝言は読み直したサーバーの値のまま（書きかけは送らない: 下書きのまま残す。ほかのタブの変更を、古い値で上書きしない）
+   */
   const toggle = (x: DirectiveItem, on: boolean) => {
     if (!data || busyRef.current) return;
-    const next = on ? ordered([...serverHold, x]) : serverHold.filter((y) => y !== x);
-    setOptHold(next);
-    void post(() => api.ownerDirective(runId, { hold: next, message: serverMsg }, tok ?? undefined), () => {
+    setOptHold(on ? ordered([...serverHold, x]) : serverHold.filter((y) => y !== x));
+    void post(async () => {
+      const fresh = await api.ownerView(runId, tok ?? undefined);
+      const d = directiveToggle(fresh.view.directive, x, on);
+      return d ? api.ownerDirective(runId, d, tok ?? undefined) : fresh;
+    }, () => {
       setNote(on
         ? tr(`${prepItemName(x)}は、あなたが決める。`, `You decide: ${prepItemName(x)}.`)
         : tr(`${prepItemName(x)}は、${name}に任せる。`, `${prepItemName(x)} is left to ${name}.`));
@@ -188,9 +196,13 @@ export function Prepare({ runId }: { runId: string }) {
     else if (a === 'unequip') void act({ type: 'unequip', slot });
   };
 
-  /** 伝言を残す（握る項目はそのまま） */
+  /** 伝言を残す（S10a §1: 握る項目は、送る直前に読み直したサーバーの値のまま。準備完了の間も残せる: 札は戻らない） */
   const saveMessage = async (): Promise<boolean> => {
-    const r = await post(() => api.ownerDirective(runId, { hold: serverHold, message: msg.slice(0, MESSAGE_MAX) }, tok ?? undefined), () => {
+    const r = await post(async () => {
+      const fresh = await api.ownerView(runId, tok ?? undefined);
+      const d = messageSave(fresh.view.directive, msg, MESSAGE_MAX);
+      return d ? api.ownerDirective(runId, d, tok ?? undefined) : fresh;
+    }, () => {
       setNote(tr(`伝言を残した。${name}には、キャンプで届く。`, `Message left. ${name} reads it at camp.`));
     });
     return !failed(r);
@@ -210,8 +222,12 @@ export function Prepare({ runId }: { runId: string }) {
   const status = view ? (view.status === 'at_camp' ? 'at_camp' : view.status === 'dead' || view.status === 'ended' || view.runStatus === 'ended' ? 'ended' : 'in_dungeon') : 'in_dungeon';
   const season = view?.season ? { budgetLeft: view.season.budgetLeft, ended: !!view.season.ended, final: !!view.season.final } : null;
   const prepSt = view ? prepStateView(view) : null;
-  const head = view ? prepHead({ name, eligible: !!data?.eligible, status, depth: view.floor?.depth ?? null, hold, prep: prepSt, season }) : null;
+  const head = view ? prepHead({ name, eligible: !!data?.eligible, status, depth: view.floor?.depth ?? null, hold, prep: prepSt, season, oldVersion: !!data?.oldVersion }) : null;
   const editable = !!head?.editable;
+  // 準備完了の間は、段の切り替えと決める操作を押せない（S10a §2）。伝言だけは残せる
+  const locked = head?.kind === 'ready';
+  // 運用者として開いている（鍵が無く、同じ機械から。S10a §5）
+  const asOperator = tok === undefined;
   const chosen = hold.includes('objective') ? view?.directive?.prep?.objective : undefined;
   const wishes: DirectiveWish[] = view && status === 'at_camp' ? activeWishes(view) : [];
   const und = obs?.self.directive?.undecided;
@@ -237,7 +253,7 @@ export function Prepare({ runId }: { runId: string }) {
     return (
       <ul class="prep-wishes">
         {ws.map((w) => {
-          const c = editable ? wishCommand(view, w) : null;
+          const c = editable && !locked ? wishCommand(view, w) : null;
           return (
             <li key={w.item}>
               <span class="prep-wish">{tr(`${name}の希望: ${wishLabel(L, catalog, w, wishItemOf(view, w))}`, `${name}'s wish: ${wishLabel(L, catalog, w, wishItemOf(view, w))}`)}</span>
@@ -278,10 +294,15 @@ export function Prepare({ runId }: { runId: string }) {
                     <h1 class="hub-name">{name}</h1>
                     <div class="hub-sub">{[className, `Lv${view.self.level}`, `HP ${view.self.stats.hp}/${view.self.stats.maxHp}`].filter(Boolean).join(' · ')}</div>
                   </div>
-                  <div class="hub-pills"><HubPill text={head.pill.text} tone={head.pill.tone} /></div>
+                  <div class="hub-pills">
+                    <HubPill text={head.pill.text} tone={head.pill.tone} />
+                    {asOperator && <HubPill text={tr('運用者として', 'As the operator')} tone="operator" />}
+                  </div>
                 </header>
                 <p class="hub-note">{tr('装備', 'Gear')}: {equipNames.length ? equipNames.join(tr('・', ', ')) : tr('何も身に着けていない', 'nothing worn')}</p>
                 <p class={`prep-headline tone-${head.pill.tone}`}>{head.line}</p>
+                {asOperator && <p class="hub-note">{tr('この冒険者の鍵は、このブラウザに無い。サーバーと同じ機械から、運用者として開いている。', 'This browser has no key for this adventurer. You opened it as the operator, on the server machine.')}</p>}
+                {locked && <p class="hub-note">{tr('準備完了の間は、変えられない。変えるには、先に「支度を見直す」', 'While ready, nothing can be changed. To change something, first "Review the preparations"')}</p>}
                 {head.kind === 'watch' && <div class="hub-actions"><a class="hub-btn primary" href={`#/watch/${runId}`}>{tr('見守る', 'Watch')}</a></div>}
                 {head.kind === 'human' && (
                   <div class="hub-actions">
@@ -294,7 +315,7 @@ export function Prepare({ runId }: { runId: string }) {
 
               {data.eligible && (
                 <>
-                  <PrepSection item="objective" held={hold.includes('objective')} line={lineOf('objective')} editable={editable} busy={busy} onToggle={(on) => toggle('objective', on)} wish={wishOf('objective')}>
+                  <PrepSection item="objective" held={hold.includes('objective')} line={lineOf('objective')} editable={editable} locked={locked} busy={busy} onToggle={(on) => toggle('objective', on)} wish={wishOf('objective')}>
                     {decideHere('objective') && view.camp && (
                       <ul class="offers cards prep-offers">
                         {view.camp.offers.map((o) => (
@@ -313,7 +334,7 @@ export function Prepare({ runId }: { runId: string }) {
                     )}
                   </PrepSection>
 
-                  <PrepSection item="loadout" held={hold.includes('loadout')} line={lineOf('loadout')} editable={editable} busy={busy} onToggle={(on) => toggle('loadout', on)} wish={wishOf('loadout')}>
+                  <PrepSection item="loadout" held={hold.includes('loadout')} line={lineOf('loadout')} editable={editable} locked={locked} busy={busy} onToggle={(on) => toggle('loadout', on)} wish={wishOf('loadout')}>
                     {decideHere('loadout') && catalog && (
                       <>
                         <p class="prep-cost">{tr(`命中+${obs.self.attack.acc}・ダメージ${obs.self.attack.dmg}・回避${obs.self.defense.eva}・装甲${obs.self.defense.armor}・速さ${obs.self.speed}`, `acc +${obs.self.attack.acc}, dmg ${obs.self.attack.dmg}, eva ${obs.self.defense.eva}, armor ${obs.self.defense.armor}, speed ${obs.self.speed}`)}</p>
@@ -322,7 +343,7 @@ export function Prepare({ runId }: { runId: string }) {
                     )}
                   </PrepSection>
 
-                  <PrepSection item="perks" held={hold.includes('perks')} line={lineOf('perks')} editable={editable} busy={busy} onToggle={(on) => toggle('perks', on)} wish={wishOf('perks')}>
+                  <PrepSection item="perks" held={hold.includes('perks')} line={lineOf('perks')} editable={editable} locked={locked} busy={busy} onToggle={(on) => toggle('perks', on)} wish={wishOf('perks')}>
                     {decideHere('perks') && (
                       <>
                         {obs.self.perk_choice && (
@@ -361,7 +382,7 @@ export function Prepare({ runId }: { runId: string }) {
                     )}
                     {head.kind === 'ready' && (
                       <>
-                        <p class="hub-note">{tr('AI に、声をかける。見直すと「まだ」に戻る。', 'Let your AI know. Reviewing puts it back to not ready.')}</p>
+                        <p class="hub-note">{tr('変えるには、「支度を見直す」（「まだ」に戻る）', 'To change anything, press "Review the preparations" (it goes back to not ready)')}</p>
                         <button class="hub-btn primary big" disabled={busy} onClick={() => void act({ type: 'prepare', ready: false })}>{tr('支度を見直す', 'Review the preparations')}</button>
                       </>
                     )}

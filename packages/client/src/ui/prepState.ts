@@ -1,6 +1,7 @@
 // 支度の画面（S10。SEASON.md §58.4）の、上の状態と、段ごとの今の状態の 1 行。画面から離した関数（テストする）。
 // 中身は、そのプレイヤーの PlayerView と観測（持ち主の口の …/owner/view）から取ったものだけ（持ち主に、プレイヤーより多くを見せない）。
 import type { DirectiveItem } from '@muse/shared';
+import { DIRECTIVE_ITEMS } from '@muse/shared';
 import { tr } from '../util';
 import type { HubTone } from './hubState';
 
@@ -17,6 +18,8 @@ export interface PrepHeadInput {
   prep: 'pending' | 'ready' | null;
   /** シーズンの写し（シーズンのランだけ） */
   season: { budgetLeft: number; ended: boolean; final?: boolean } | null;
+  /** このサーバーと違う版で始まった冒険（S10a。続きは遊べない） */
+  oldVersion?: boolean;
 }
 
 export interface PrepHead {
@@ -31,6 +34,7 @@ export interface PrepHead {
 export function prepHead(x: PrepHeadInput): PrepHead {
   const n = x.name;
   if (!x.eligible) return { kind: 'human', editable: false, pill: { text: tr('あなたが遊ぶ', 'You play'), tone: 'muted' }, line: tr(`${n}は、あなたが自分で遊ぶ冒険者。支度は、遊ぶ画面のキャンプで決める`, `You play ${n} yourself. Prepare at camp on the play screen`) };
+  if (x.oldVersion) return { kind: 'closed', editable: false, pill: { text: tr('前の版', 'Older version'), tone: 'muted' }, line: tr('前の版で始まった冒険。このサーバーでは、続きを遊べない（記録は、見返せる）', 'This adventure began on an older version. It cannot be continued on this server (its records can be looked back on)') };
   if (x.status === 'ended') return { kind: 'closed', editable: false, pill: { text: tr('終わった', 'Ended'), tone: 'muted' }, line: tr('この冒険は、終わった。記録は、見返せる', 'This adventure has ended. Its records can be looked back on') };
   if (x.season?.final) return { kind: 'closed', editable: false, pill: { text: tr('終わり', 'Done'), tone: 'muted' }, line: tr('このシーズンは終わった。記録は、見返せる', 'This season is over. Its records can be looked back on') };
   if (x.status !== 'at_camp') {
@@ -45,6 +49,28 @@ export function prepHead(x: PrepHeadInput): PrepHead {
   if (!x.hold.length) return { kind: 'free', editable: true, pill: { text: tr('任せている', 'Left to them'), tone: 'muted' }, line: tr(`全部、任せている。${n}は、自分で決めて出発する`, `Everything is left to ${n}, who decides and sets out on their own`) };
   if (x.prep === 'ready') return { kind: 'ready', editable: true, pill: { text: tr('準備完了', 'Ready'), tone: 'green' }, line: tr(`準備完了。${n}が来たら、出発する`, `Ready. ${n} sets out when they come`) };
   return { kind: 'pending', editable: true, pill: { text: tr('支度: まだ', 'Not ready'), tone: 'amber' }, line: tr(`${n}は、あなたの支度を待っている`, `${n} is waiting for your preparations`) };
+}
+
+/** 指図の中身（握る項目と伝言）。サーバーの今の値 */
+export interface DirectiveNow { hold: readonly DirectiveItem[]; message: string }
+
+/**
+ * 「任せる／自分で」で送る指図（S10a §1）: 送る直前に読み直したサーバーの値（fresh）に、押した 1 つだけを足す・外す。伝言はサーバーの値のまま
+ * （画面の古い値や書きかけで、ほかのタブの変更を上書きしない）。変わらなければ null（送らない）
+ */
+export function directiveToggle(fresh: DirectiveNow | null | undefined, item: DirectiveItem, on: boolean): { hold: DirectiveItem[]; message: string } | null {
+  const cur = DIRECTIVE_ITEMS.filter((x) => (fresh?.hold ?? []).includes(x));
+  if (cur.includes(item) === on) return null;
+  const hold = on ? DIRECTIVE_ITEMS.filter((x) => cur.includes(x) || x === item) : cur.filter((x) => x !== item);
+  return { hold, message: fresh?.message ?? '' };
+}
+
+/** 伝言を残すときに送る指図（S10a §1）: 握る項目は読み直したサーバーの値のまま、伝言だけ替える（280 字まで）。変わらなければ null */
+export function messageSave(fresh: DirectiveNow | null | undefined, message: string, max = 280): { hold: DirectiveItem[]; message: string } | null {
+  const hold = DIRECTIVE_ITEMS.filter((x) => (fresh?.hold ?? []).includes(x));
+  const m = [...message].slice(0, max).join('');
+  if (m === (fresh?.message ?? '')) return null;
+  return { hold, message: m };
 }
 
 /** 段の名前 */

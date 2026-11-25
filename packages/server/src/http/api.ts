@@ -165,7 +165,8 @@ export function createApp(manager: SessionManager, config: ServerConfig): App {
         if (!body?.name || !pp.rename(body.name)) return fail(res, 400, actionError('bad_request', 'name is required', '{ name }'));
       }
       // seasons（S10。SEASON.md §58.4）: そのプロフィールが招かれたシーズン（拠点の冒険者の札。HTTP だけ。MCP の profile の文は変えない）
-      if (p === '/api/profile') { const r = pp.info(L); return r ? json(res, 200, { text: r.text, ...r.data, seasons: manager.seasons.memberships(pp.id) }) : fail(res, 404, actionError('no_session', 'no profile', '')); }
+      // failed（S10a）: 終わっていないそのシーズンのランが、起動時に復旧できなかった
+      if (p === '/api/profile') { const r = pp.info(L); return r ? json(res, 200, { text: r.text, ...r.data, seasons: manager.seasons.memberships(pp.id, (runId) => !!manager.recoveryFailedError(runId)) }) : fail(res, 404, actionError('no_session', 'no profile', '')); }
       const r = pp.records(L);
       return r ? json(res, 200, { text: r.text, records: r.data }) : fail(res, 404, actionError('no_session', 'no profile', ''));
     }
@@ -193,7 +194,7 @@ export function createApp(manager: SessionManager, config: ServerConfig): App {
         let result: OwnerViewResponse['result'];
         if (sub === '/owner/directive') result = await ownerAct(acc.session, acc.pid, { type: 'set_directive', hold: body!.hold, ...(body!.message !== undefined ? { message: body!.message } : {}) });
         else if (sub === '/owner/act') result = await ownerAct(acc.session, acc.pid, body!.command);
-        return json(res, 200, { ...ownerView(acc.session, acc.pid), ...(result ? { result } : {}) });
+        return json(res, 200, { ...ownerView(acc.session, acc.pid), continuable: manager.continuable(acc.session, acc.pid), ...(result ? { result } : {}) });
       }
       const live = manager.get(runId);
       if (!live && !store?.exists(runId)) return fail(res, 404, actionError('no_session', `unknown run ${runId}`, ''));

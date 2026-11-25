@@ -648,6 +648,21 @@ ul.ocost { margin: 0; padding-left: 18px; }
 .prep-offers .ometa { padding-left: 0; }
 .prep-offers .offer .traits { padding-left: 0; }
 .prep-body .inv .name { min-width: 0; overflow-wrap: anywhere; }
+/* S10a: 運用者として（支度の画面のピル）・小さい鍵の 1 行・準備完了の間の段・順位の表の「1 位 地下 1 階」 */
+.hub-pill.tone-operator { color: var(--hub-gold); background: transparent; border: 1px dashed rgba(201, 164, 92, 0.6); }
+.hub-keyline { margin: 4px 0 0; }
+.hub-linkbtn { padding: 0; border: none; background: none; color: var(--hub-gold); font: inherit; font-size: 13px; letter-spacing: 0.04em; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.hub-linkbtn:hover { color: var(--hub-gold2); }
+.hub-keybox.is-compact { align-items: stretch; text-align: left; padding: 16px 18px; gap: 8px; }
+.hub-keybox.is-compact .hub-keytitle { font-size: 16px; }
+.hub-keybox.is-compact .hub-keyform { max-width: none; }
+.prep-locked { opacity: 0.45; pointer-events: none; user-select: none; }
+.prep-sec.is-locked .prep-toggle { opacity: 0.6; }
+.board td.award { white-space: nowrap; }
+.board td.award .rk { display: inline-block; min-width: 2.6em; margin-right: 6px; font-size: 10.5px; color: var(--muted); }
+.board td.award .av { font-weight: 600; }
+.hub-tablewrap .board td.award .rk { color: var(--hub-faint); }
+.hub-tablewrap .board td.award .av { color: var(--hub-parch); }
 @media (max-width: 480px) {
   .hub-card, .prep-hero, .prep-sec, .prep-final { padding: 16px; }
   .hub-name { font-size: 24px; }
