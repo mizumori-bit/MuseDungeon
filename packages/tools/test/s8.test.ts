@@ -157,7 +157,8 @@ describe('S8 §54.3・§54.4: objective and equipment held by the owner (records
       expect(own).toContain('持ち主から: 深追いはしない 無理せず');
       expect(o2.turn.changes[0].code).toBe('owner');
       // 迷宮の中: 指図の行（装備はだれも付け替えられない）。持ち主の口は not_at_camp、プレイヤーは held_by_owner（装備中の品を捨てるのも）
-      expect(o2.observation.self.directive?.text).toContain('迷宮で手に入れた装備は、キャンプで確かめるまで身に着けない');
+      // 迷宮の中の行は短い（S9a §57.3 の 1）。決まりの読み方は、キャンプの行と規則に
+      expect(o2.observation.self.directive?.text).toBe('指図: 目的・装備は、持ち主（キャンプで）');
       expect(o2.observation.self.directive?.message).toBeUndefined();
       expect(o2.observation.valid_actions.some((l) => /^(equip|unequip)\b/.test(l))).toBe(false);
       const seqB = w().seq;
@@ -210,7 +211,8 @@ describe('S8 §54.3: perks and boons held — offers wait until the owner picks 
     const o = r.port.observeWithTurn('observed').observation;
     expect(o.alerts.find((a) => a.code === 'perk_pending')?.text).toContain('覚えられる特技が増えた（Lv2）');
     expect(o.valid_actions.some((l) => l.startsWith('choose_perk'))).toBe(false);
-    expect(o.self.directive?.text).toContain('遠征の間に強くなって覚えられることが増えても、身につけるのはキャンプに戻ってから');
+    // 迷宮の中の行は短い（S9a §57.3 の 1）。身につけるのがキャンプに戻ってからであることは、知らせの文に
+    expect(o.self.directive?.text).toBe('指図: 特技と加護は、持ち主（キャンプで）');
     expect(o.alerts.find((a) => a.code === 'perk_pending')?.text).toContain('身につけるのは、キャンプに戻ってから（持ち主が選ぶ');
     expect(JSON.stringify(o)).not.toContain('鑑定');
     // 選ぶまで、進行は止まらない（候補は残る）

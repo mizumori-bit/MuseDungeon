@@ -69,6 +69,8 @@ export function buildCatalog(c: Content): Catalog {
       ...(it.clue ? { clue: it.clue } : {}),
       // 使うと所持品を鑑定する（鑑定の巻物。S1b §12.4 の 8: 対象を付けずに使った結果の文に、対象の選び方を添える）
       ...(it.onUse.some((e) => e.effect === 'identify') ? { identifies: true as const } : {}),
+      // 使うと地図を書き足す（地図の巻物・残り頁。S9a §57.3 の 5: 地図に関わらない品を使った結果の文に「地図に載った地形は無かった」が出ていた）
+      ...(it.onUse.some((e) => e.effect === 'map') ? { maps: true as const } : {}),
     };
   }
   return {

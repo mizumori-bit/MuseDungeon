@@ -1,8 +1,8 @@
 // 持ち主の口（S8。SEASON.md §54.1・§54.5）: 人間の画面から、キャンプで、握った項目を決める。MCP のツールには出さない。
 // 持ち主が見るのは、そのプレイヤーの PlayerView と、そこから作る観測だけ（プレイヤーより多くを見せない）。命令は、プレイヤーと同じ Command を、
 // 同じ道（RunSession.submit → engine の step）で流す。違うのは出どころ（source: owner）だけ。プレイヤーの応答の基準（turn.changes）は動かさない。
-import type { ActionError, Command, DirectiveItem, Observation, OwnerRunRow, OwnerViewResponse, PlayerId, PlayerView } from '@muse/shared';
-import { actionError, CommandSchema, ownerWaitOpen, t } from '@muse/shared';
+import type { ActionError, Command, DirectiveItem, DirectiveUndecided, Observation, OwnerRunRow, OwnerViewResponse, PlayerId, PlayerView } from '@muse/shared';
+import { actionError, CommandSchema, directiveUndecided, ownerWaitOpen, t } from '@muse/shared';
 import { directiveTarget, heldItemOf } from '@muse/engine';
 import type { RunSession } from './RunSession';
 import { SessionPlayerPort } from './PlayerPort';
@@ -53,6 +53,8 @@ export function ownerRow(session: RunSession, pid: PlayerId, season?: { name: st
     hold: [...(d?.hold ?? [])] as DirectiveItem[], message: d?.message ?? '',
     level: view.self.level, hp: view.self.stats.hp, maxHp: view.self.stats.maxHp, depth: view.floor?.depth ?? null,
     banked: view.record.banked, ...(view.season ? { budgetLeft: Math.max(0, view.season.budgetLeft), budgetLimit: view.season.budget.limit } : {}),
+    // 持ち主が、まだ決めていないもの（S9a §57.3 の 2。AI に見えている観測の self.directive.undecided と同じもの）
+    ...((): { undecided?: DirectiveUndecided } => { const u = !why ? directiveUndecided(view, session.deps.catalog) : null; return u ? { undecided: u } : {}; })(),
     updatedAt: session.updatedAt,
   };
 }

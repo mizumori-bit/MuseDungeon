@@ -1,4 +1,4 @@
-// シーズンの運用（S0。PROTOCOL.md §9.1）: 開く・招く・招きの取り消し・一覧・順位・確定・地下 5 階の大守護者の下見。
+// シーズンの運用（S0。PROTOCOL.md §9.1）: 開く（S9a: 確定していないほかのシーズンを先に確定する）・招く・招きの取り消し・一覧・順位・確定・地下 5 階の大守護者の下見。
 // サーバーと同じ置き場所（既定 runs/seasons。MUSE_SEASONS_DIR か --dir）に書く。動いているサーバーは、知らない ID を聞かれたときに読み直す。
 import type { Content } from '@muse/content';
 import { createRun, ENGINE_VERSION, previewWarden } from '@muse/engine';
@@ -44,6 +44,20 @@ export function seasonCli(content: Content, a: SeasonCliArgs, log: (s: string) =
         id: a.id, name: (a.name ?? a.id).slice(0, 32), seed: a.seed, engineVersion: ENGINE_VERSION, contentVersion: content.version,
         budget: a.budget ?? 3000, endsAt, openedAt: Date.now(),
       };
+      // 同じ ID がもうあれば、前のシーズンを確定する前に断る（開けないのに閉じてしまわない）
+      if (store.ids().includes(def.id)) { log(`season ${def.id} already exists`); return 1; }
+      // シーズンの期間は重ならない（S9a。SEASON.md §57.2・§57.3 の 4）: 確定していないシーズンがほかにあれば、先に確定する（close と同じ処理）。
+      // 記録が読めないシーズンは確定し直さない（書かない）。開く道具の出力に、何を確定したかを出す
+      const broken = new Set(svc.brokenSeasons().map((b) => b.id));
+      const unresolved = store.ids().map((id) => svc.get(id)).filter((d): d is NonNullable<typeof d> => !!d && !d.result);
+      if (unresolved.length) log('（新しいシーズンを開く前に、確定していないシーズンを確定する。サーバーを止めてから開く。保存待ちの手番を取りこぼさないため。SEASON.md §22）');
+      for (const d of unresolved) {
+        if (broken.has(d.def.id)) continue;
+        const r = svc.finalize(d, 'operator');
+        log(`前のシーズン ${d.def.id}「${d.def.name}」を確定した（このシーズンのランは、もう命令を受けない。記録は見返せる）。冒険 ${r.winners.adventure.map((w) => w.name).join('・') || '-'}／貢献 ${r.winners.contribution.map((w) => w.name).join('・') || '-'}／生還 ${r.winners.survival.map((w) => w.name).join('・') || '-'}／支援 ${(r.winners.support ?? []).map((w) => w.name).join('・') || '-'}`);
+        log(r.titles?.length ? `  称号: ${r.titles.map((x) => `${x.holder}「${x.name.ja}」`).join('・')}` : '  称号: なし');
+      }
+      for (const id of broken) log(`シーズン ${id} は記録が読めないので、確定しなかった（直してから close する）`);
       try { store.open(def); } catch (e) { log((e as Error).message); return 1; }
       log(`シーズン ${def.id}「${def.name}」を開いた: 予算 ${def.budget} 手番・終わり ${new Date(def.endsAt).toISOString()}・engine ${def.engineVersion}・content ${def.contentVersion}${a.dir ? `（${a.dir}）` : ''}`);
       return 0;
@@ -136,7 +150,7 @@ export function seasonCli(content: Content, a: SeasonCliArgs, log: (s: string) =
       return 0;
     }
     default:
-      log('使い方（PowerShell）: npm.cmd run season -- open --id <id> --seed <seed> --ends "<ISO 時刻>" [--name <名前>] [--budget 3000] / invite --id <id> --name <表示名> [--profile-token <今あるトークン>] / uninvite --id <id> (--name <表示名> | --profile <profile_id>) / invites --id <id> / list / standings --id <id> / close --id <id>（サーバーを止めてから） / wardens --seeds "a,b,c" [--depth 5]  （共通: --dir <置き場所>・--profiles-dir <プロフィールの置き場所>。bash では npm run）');
+      log('使い方（PowerShell）: npm.cmd run season -- open --id <id> --seed <seed> --ends "<ISO 時刻>" [--name <名前>] [--budget 3000]（確定していないほかのシーズンは、先に確定する。サーバーを止めてから） / invite --id <id> --name <表示名> [--profile-token <今あるトークン>] / uninvite --id <id> (--name <表示名> | --profile <profile_id>) / invites --id <id> / list / standings --id <id> / close --id <id>（サーバーを止めてから） / wardens --seeds "a,b,c" [--depth 5]  （共通: --dir <置き場所>・--profiles-dir <プロフィールの置き場所>。bash では npm run）');
       return 1;
   }
 }

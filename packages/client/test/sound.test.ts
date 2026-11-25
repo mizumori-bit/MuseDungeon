@@ -157,6 +157,27 @@ describe('sound engine (Web Audio, faked)', () => {
     expect(eng.stolen).toBeGreaterThan(0);
   });
 
+  it('hollow has a provisional stairs cue: short (up to 0.5 s), 2-3 falling notes, quieter than the other cues; it sounds (S9a §57.3 の 3)', () => {
+    const { def } = parseSoundDef(hollow);
+    const c = def.cues.stairs;
+    expect(c).toBeDefined();
+    const notes = c.notes.filter((n) => n.degree !== undefined);
+    expect(notes.length).toBeGreaterThanOrEqual(2);
+    expect(notes.length).toBeLessThanOrEqual(3);
+    const deg = notes.map((n) => (typeof n.degree === 'number' ? n.degree : 0));
+    for (let i = 1; i < deg.length; i++) expect(deg[i]).toBeLessThan(deg[i - 1]);
+    const end = Math.max(...c.notes.map((n) => n.at + (n.len ?? 0))) + (c.voice?.release ?? 0);
+    expect(end).toBeLessThanOrEqual(0.5);
+    for (const [k, o] of Object.entries(def.cues)) if (k !== 'stairs') expect(c.gain!).toBeLessThan(o.gain!);
+    const { ctx, sources } = fakeContext();
+    const eng = new SoundEngine(ctx as unknown as BaseAudioContext, def, ctx.destination as unknown as AudioNode);
+    eng.setState(base);
+    eng.advance(0.1);
+    const before = sources.length;
+    eng.cue('stairs');
+    expect(sources.length - before).toBe(notes.length);
+  });
+
   it('switches on the beat and keeps the running position (patterns are read from the global position)', () => {
     const { def } = parseSoundDef(hollow);
     const { ctx } = fakeContext();

@@ -52,6 +52,8 @@ export interface CatalogItem {
   heal?: { amount: string; minPct?: number };
   /** 使うと所持品を鑑定する（効果の定義 onUse の identify から。S1b §12.4 の 8） */
   identifies?: true;
+  /** 使うと地図を書き足す（効果の定義 onUse の map から。地図の巻物・残り頁。S9a §57.3 の 5） */
+  maps?: true;
   /** 自分の持ち物の性能（鑑定済みなら定義の値をそのまま見せる。V3-2R §14.3） */
   weapon?: { dmg: string; acc: number };
   armorStats?: { armor: number; eva: number };

@@ -7,7 +7,7 @@ import type { Dir, Locale, Names } from './types';
 import type { Catalog } from './catalog';
 import { nameOf, nextOverreach, overreachStepPoints } from './catalog';
 import { t } from './util';
-import { dirLabel, ownerWaitOpen, seasonClosedView } from './observation';
+import { dirLabel, ownerWaitOpen, seasonClosedView, undecidedStartedTexts } from './observation';
 import type { PlayerView } from './view';
 
 export type TurnState = 'your_turn' | 'waiting_others' | 'at_camp' | 'expedition_ended' | 'run_ended';
@@ -220,6 +220,10 @@ export function diffChanges(prev: TurnSnapshot | null, cur: TurnSnapshot, view: 
       `Your owner settled your gear. Now wearing: weapon ${eq.weapon ?? none}, armor ${eq.armor ?? none}, accessory ${eq.accessory ?? none}`) });
   }
   out.push(...started);
+  // 決めていないものを残して遠征を始めた（S9a §57.3 の 1）: 始めた直後の応答に 1 回（だれが始めても）
+  if (cur.expNo !== null && cur.expNo !== prev.expNo && view.status !== 'at_camp' && view.expedition?.status !== 'ended') {
+    for (const text of undecidedStartedTexts(view, catalog)) out.push({ code: 'owner', text });
+  }
   if (msgNew) out.push({ code: 'owner', text: t(L, `持ち主が、伝言を書いた: ${msg}`, `Your owner wrote a message: ${msg}`) });
   else if (started.length && msg) out.push({ code: 'owner', text: t(L, `持ち主から: ${msg}`, `From your owner: ${msg}`) });
   const sameFloor = prev.floorKey === cur.floorKey;

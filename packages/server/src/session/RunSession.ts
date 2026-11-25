@@ -838,6 +838,9 @@ export class RunSession {
     if (!pr) return { ok: false, error: actionError('no_session', 'no such player', 'resume_run') };
     // 持ち主の口（S8 §54.3）: 指図と握った項目の命令だけ（マクロ・報告などは、ここで断る。engine も断る）。プレイヤーの入力の時刻には数えない
     const owner = opts.source === 'owner';
+    // 確定したシーズンのラン（S9a §57.3 の 4）: どの口からの命令も、手番を使わず、記録に何も残さずに断る（記録は見返せる）
+    const closed = this.seasonFinalRefusal(pid);
+    if (closed) return { ok: false, error: closed };
     if (owner && cmd.type !== 'set_directive' && !heldItemOf(cmd)) return { ok: false, error: actionError('bad_request', t(pr.locale, '持ち主の口から出せるのは、set_directive と、握った項目の命令（start_expedition・equip・unequip・choose_perk・choose_boon）だけ。', 'From the owner you can send set_directive and the held items\' commands (start_expedition, equip, unequip, choose_perk, choose_boon) only.'), '') };
     if (!owner) this.lastInput.set(pid, Date.now());
     if (opts.expectSeq !== undefined && opts.expectSeq !== this.world.seq && !FREE_COMMANDS.has(cmd.type)) {
@@ -862,6 +865,21 @@ export class RunSession {
     return this.enqueue(() => this.stepNow(pid, cmd, opts.source, opts.thought));
   }
 
+  /** シーズンの結果が確定している（S9a §57.3 の 4） */
+  seasonFinal(): boolean {
+    const sid = this.world.meta.season?.id;
+    return !!sid && !!this.deps.season?.isFinal?.(sid);
+  }
+
+  /** 確定したシーズンのランへの命令の断り（S9a §57.3 の 4）。確定していなければ null */
+  private seasonFinalRefusal(pid: PlayerId): ActionError | null {
+    if (!this.seasonFinal()) return null;
+    const L = this.world.players[pid]?.locale ?? 'ja';
+    return actionError('season_ended',
+      t(L, `このシーズン（${this.world.meta.season!.name}）は終わった。このランは、もう命令を受けない。記録は、見返せる。`, `This season (${this.world.meta.season!.name}) is over; this run takes no more commands. Its records can be looked back on.`),
+      t(L, '巻き戻し・シーズンの結果で見返す。新しく遊ぶなら、開催中のシーズンか、シーズンでないランで。', 'Look back with the rewind or the season results. To play on, join a running season or start a run outside seasons.'));
+  }
+
   /** シーズンの取り込みを、キューの中で。参加の直後に SessionManager が呼ぶ */
   syncSeason(pid: PlayerId, reason: 'join' | 'camp' | 'start'): Promise<SubmitResult> {
     return this.enqueue(() => this.seasonSyncNow(pid, reason));
@@ -873,6 +891,9 @@ export class RunSession {
    */
   private seasonSyncNow(pid: PlayerId, reason: SeasonSyncCommand['reason'], src: { source: CommandSource; thought?: string } = { source: 'system' }, report?: SeasonSyncCommand['report']): SubmitResult {
     if (this.closed || !this.world.meta.season || !this.deps.season || this.world.status === 'ended') return { ok: false, error: actionError('bad_request', 'not a season run', '') };
+    // 確定したシーズンのランには、取り込みも記録しない（S9a §57.3 の 4）
+    const fin = this.seasonFinalRefusal(pid);
+    if (fin) return { ok: false, error: fin };
     const season = this.deps.season.sync(this, pid);
     if (!season) return { ok: false, error: actionError('bad_request', 'this player is not a participant of the season', '') };
     const cmd: SeasonSyncCommand = { type: 'season_sync', reason, season, ...(report ? { report } : {}) };
@@ -906,6 +927,9 @@ export class RunSession {
 
   private stepNow(pid: PlayerId, cmd: Command, source: CommandSource, thought?: string, parent?: number): SubmitResult {
     if (this.closed) return { ok: false, error: actionError('no_session', 'session closed', '') };
+    // 確定したシーズンのラン（S9a §57.3 の 4）: 確定より前に始めたマクロの続き・時間切れの待ちも、ここで止める
+    const fin = this.seasonFinalRefusal(pid);
+    if (fin) return { ok: false, error: fin };
     this.resumeSeqIfNeeded();
     const startSeq = this.world.seq;
     const cseq = this.cseq + 1;

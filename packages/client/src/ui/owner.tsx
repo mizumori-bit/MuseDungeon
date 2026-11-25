@@ -9,6 +9,7 @@ import { ApiError, api, errorText } from '../api';
 import { getLocale, getToken, inLocale, tr } from '../util';
 import { BoonChoicePanel, PerkChoicePanel } from './build';
 import { InventoryPanel, type InvAction } from './panels';
+import { departureCheck, undecidedLine } from './ownerCheck';
 
 /** 持ち主の枠の読み直しの間（キャンプにいる間だけ） */
 const OWNER_POLL_MS = 4000;
@@ -185,6 +186,16 @@ export function OwnerRunCard({ row, token, catalog, onChanged }: { row: OwnerRun
     else if (a === 'unequip') void act({ type: 'unequip', slot });
   };
 
+  // 出撃の確かめ（S9a §57.3 の 2）: 決めていないものが残っているときだけ、画面の中の窓で。既定は「戻って決める」
+  const [confirmStart, setConfirmStart] = useState<{ command: Command; items: string[] } | null>(null);
+  const backRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => { if (confirmStart) backRef.current?.focus(); }, [confirmStart]);
+  const startWith = (command: Command) => {
+    const items = departureCheck(fresh?.observation.self.directive?.undecided);
+    if (items) setConfirmStart({ command, items });
+    else void act(command);
+  };
+
   const toggle = (x: DirectiveItem) => setHold((h) => (h.includes(x) ? h.filter((y) => y !== x) : ordered([...h, x])));
 
   const className = catalog ? kindName(catalog, L, row.classId) : row.classId;
@@ -204,6 +215,9 @@ export function OwnerRunCard({ row, token, catalog, onChanged }: { row: OwnerRun
   const cs = cur?.observation.season;
   const budget = cs ? { left: Math.max(0, cs.budget.left), limit: cs.budget.limit }
     : row.budgetLeft !== undefined && row.budgetLimit !== undefined ? { left: row.budgetLeft, limit: row.budgetLimit } : null;
+  // 決めていないもの（S9a §57.3 の 2）: 新しいほうから（AI の観測と同じもの）。キャンプにいるときだけ
+  const undecided = atCamp ? (cur ? cur.observation.self.directive?.undecided : row.undecided) : undefined;
+  const undecidedText = eligible ? undecidedLine(undecided, serverHold.includes('objective')) : null;
   const where = status === 'at_camp' ? tr('キャンプにいる', 'At camp') : status === 'ended' ? tr('終わった', 'Ended') : depth !== null ? tr(`遠征の途中・地下${depth}階`, `On an expedition, depth ${depth}`) : tr('遠征の途中', 'On an expedition');
 
   return (
@@ -220,6 +234,7 @@ export function OwnerRunCard({ row, token, catalog, onChanged }: { row: OwnerRun
         </span>
       </h3>
       {waiting && <div class="waitmark">{tr('AI が、あなたの決定を待っている（次の遠征の目的）', 'The AI is waiting for your decision (the next expedition)')}</div>}
+      {undecidedText && <div class="waitmark undecided">{undecidedText}</div>}
       <div class="ostat">
         <span>HP {hp}/{maxHp}</span>
         <span>Lv{level}</span>
@@ -285,12 +300,12 @@ export function OwnerRunCard({ row, token, catalog, onChanged }: { row: OwnerRun
                             {o.text}
                             {(o.slays ?? []).map((s, i) => <div key={i} class="muted small oslay">{s.text}</div>)}
                           </div>
-                          <button class="small primary" disabled={busy} onClick={() => void act({ type: 'start_expedition', offer: o.index })}>{tr('この目的で出撃', 'Start with this')}</button>
+                          <button class="small primary" disabled={busy} onClick={() => startWith({ type: 'start_expedition', offer: o.index })}>{tr('この目的で出撃', 'Start with this')}</button>
                         </li>
                       ))}
                       <li>
                         <div class="otext">{tr('endless) 目的なしでひたすら潜る', 'endless) no objective, just descend')}</div>
-                        <button class="small" disabled={busy} onClick={() => void act({ type: 'start_expedition', offer: 'endless' })}>{tr('目的なしで出撃', 'Start endless')}</button>
+                        <button class="small" disabled={busy} onClick={() => startWith({ type: 'start_expedition', offer: 'endless' })}>{tr('目的なしで出撃', 'Start endless')}</button>
                       </li>
                     </ul>
                   ) : <p class="muted">{tr('今は次の遠征を選べない。', 'No expedition can be chosen right now.')}</p>}
@@ -325,6 +340,20 @@ export function OwnerRunCard({ row, token, catalog, onChanged }: { row: OwnerRun
             </div>
           )}
         </>
+      )}
+      {confirmStart && (
+        <div class="modal" onClick={() => setConfirmStart(null)}>
+          <div class="dialog" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => { if (e.key === 'Escape') setConfirmStart(null); }}>
+            <h3>{tr('まだ決めていないものがある', 'Some things are not decided yet')}</h3>
+            <ul>{confirmStart.items.map((x) => <li key={x}>{x}</li>)}</ul>
+            <p class="muted small">{tr('このまま出撃すると、決められるのは次のキャンプになる（遠征の間は、だれも選べない・付け替えられない）。', 'If you start now, these wait until the next camp (nobody can choose or change them during the expedition).')}</p>
+            <div class="row">
+              <button ref={backRef} class="small primary" onClick={() => setConfirmStart(null)}>{tr('戻って決める', 'Go back and decide')}</button>
+              <button class="small" disabled={busy} onClick={() => { const c = confirmStart.command; setConfirmStart(null); void act(c); }}>{tr('このまま出撃', 'Start anyway')}</button>
+            </div>
+          </div>
+        </div>
       )}
     </section>
   );
