@@ -3,8 +3,9 @@ import { createReadStream, existsSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import { extname, join, normalize, resolve } from 'node:path';
-import type { ActionError, Controller, GameEvent, JoinRunRequest, NewRunRequest, World } from '@muse/shared';
+import type { ActionError, Controller, GameEvent, JoinRunRequest, NewRunRequest, OwnerViewResponse, World } from '@muse/shared';
 import { actionError, stripSecret } from '@muse/shared';
+import { ownerAct, ownerView } from '../session/OwnerPort';
 import type { ServerConfig } from '../config';
 import { McpHttpHandler } from '../mcp/http';
 import { feedToken, handleFeed } from './feed';
@@ -28,6 +29,14 @@ function json(res: ServerResponse, status: number, body: unknown): void {
 
 function fail(res: ServerResponse, status: number, error: ActionError): void {
   json(res, status, { error });
+}
+
+/** 持ち主の口のプロフィールのトークン（S8）: Authorization: Bearer か、POST の本文の profileToken。URL の ?token= は受けない（§27・§28 の漏れをくり返さない） */
+function ownerToken(req: IncomingMessage, bodyToken?: string): { profileToken?: string } {
+  const auth = req.headers.authorization;
+  const h = auth?.startsWith('Bearer ') ? auth.slice(7).trim() : '';
+  const tok = h || (bodyToken ?? '').trim();
+  return tok ? { profileToken: tok } : {};
 }
 
 async function readBody(req: IncomingMessage, limit = 1_000_000): Promise<unknown> {
@@ -122,6 +131,8 @@ export function createApp(manager: SessionManager, config: ServerConfig): App {
         return r ? json(res, 200, r) : fail(res, 404, actionError('no_session', `unknown season ${wm[1]}`, 'GET /api/seasons'));
       }
     }
+    // 持ち主の口（S8。SEASON.md §54。PROTOCOL §9.14）: 持ち主と認められた進行中のラン。トークンは Authorization の見出しでだけ（URL に出さない）
+    if (p === '/api/owner/runs' && m === 'GET') return json(res, 200, manager.ownerRuns({ local: isLocalRequest(req), ...ownerToken(req) }));
     if (p === '/api/runs' && m === 'GET') return json(res, 200, { runs: manager.listRuns() });
     if (p === '/api/runs' && m === 'POST') {
       const body = (await readBody(req).catch(() => null)) as NewRunRequest | null;
@@ -156,6 +167,21 @@ export function createApp(manager: SessionManager, config: ServerConfig): App {
         const r = await manager.joinRun(runId, { name: body.name, classId: body.classId, locale: body.locale, controller: body.controller ?? { kind: 'unknown', label: 'http' }, profileToken: body.profileToken, legacy: body.legacy });
         if ('error' in r) return fail(res, r.error.code === 'recovery_failed' ? 503 : 400, r.error);
         return json(res, 200, { runId, playerId: r.playerId, token: r.token, profileId: r.profile.id, ...(r.profile.token ? { profileToken: r.profile.token } : {}) });
+      }
+      // 持ち主の口（S8 §54.1・§54.5）: 見る（GET …/owner/view）・指図（POST …/owner/directive）・握った項目の命令（POST …/owner/act）。
+      // 認め方は観戦と同じ（そのプレイヤーのプロフィールのトークンか、同じ機械）。トークンは見出しか本文で受け、応答にも記録にも出さない
+      if (sub === '/owner/view' || sub === '/owner/directive' || sub === '/owner/act') {
+        const post = sub !== '/owner/view';
+        if (post !== (m === 'POST')) return fail(res, 405, actionError('bad_request', `${post ? 'POST' : 'GET'} ${sub}`, ''));
+        const body = post ? ((await readBody(req, 16_000).catch(() => null)) as Record<string, unknown> | null) : null;
+        if (post && (!body || typeof body !== 'object')) return fail(res, 400, actionError('bad_request', 'JSON body is required', sub === '/owner/directive' ? '{ hold: ["objective"|"loadout"|"perks"], message? }' : '{ command }'));
+        const bodyTok = typeof body?.profileToken === 'string' ? body.profileToken : undefined;
+        const acc = manager.ownerAccess(runId, { local: isLocalRequest(req), ...ownerToken(req, bodyTok) });
+        if ('error' in acc) return fail(res, acc.status, acc.error);
+        let result: OwnerViewResponse['result'];
+        if (sub === '/owner/directive') result = await ownerAct(acc.session, acc.pid, { type: 'set_directive', hold: body!.hold, ...(body!.message !== undefined ? { message: body!.message } : {}) });
+        else if (sub === '/owner/act') result = await ownerAct(acc.session, acc.pid, body!.command);
+        return json(res, 200, { ...ownerView(acc.session, acc.pid), ...(result ? { result } : {}) });
       }
       const live = manager.get(runId);
       if (!live && !store?.exists(runId)) return fail(res, 404, actionError('no_session', `unknown run ${runId}`, ''));

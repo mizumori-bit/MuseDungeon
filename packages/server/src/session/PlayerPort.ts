@@ -67,6 +67,8 @@ export interface PlayerPort {
   turnLine(b: TurnBlock): string;
   act(cmd: Command, opts: SubmitOpts & { waitTurnMs?: number; map?: boolean }): Promise<ActionPayload>;
   waitForTurn(timeoutMs: number): Promise<boolean>;
+  /** キャンプで目的を持ち主に握られているとき、持ち主が遠征を始めるまで待つ（S8。SEASON.md §54.4 の 5） */
+  waitForOwner(timeoutMs: number): Promise<'started' | 'released' | 'timeout' | 'ended'>;
   /** 遠征のブリーフィング（開始時・再開時） */
   /** camp: false でキャンプの候補を省く（観測の文と一緒に返すとき。既定は出す） */
   briefing(kind: 'start' | 'resume', opts?: { camp?: boolean }): string[];
@@ -518,6 +520,10 @@ export class SessionPlayerPort implements PlayerPort {
 
   waitForTurn(timeoutMs: number): Promise<boolean> {
     return this.session.waitForTurn(this.playerId, timeoutMs);
+  }
+
+  waitForOwner(timeoutMs: number): Promise<'started' | 'released' | 'timeout' | 'ended'> {
+    return this.session.waitForOwner(this.playerId, timeoutMs);
   }
 
   onChange(cb: () => void): () => void {

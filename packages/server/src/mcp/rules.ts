@@ -2,7 +2,7 @@
 // 数値は content の balance.json（catalog.rules）から作る（ルールブックと実際の挙動が食い違わないように）。
 import type { Catalog, CatalogRules } from '@muse/shared';
 
-export const RULE_TOPICS = ['overview', 'expedition', 'actions', 'combat', 'items', 'classes', 'observation', 'season', 'all'] as const;
+export const RULE_TOPICS = ['overview', 'expedition', 'actions', 'combat', 'items', 'classes', 'observation', 'season', 'directive', 'all'] as const;
 export type RulesTopic = (typeof RULE_TOPICS)[number];
 type Topic = Exclude<RulesTopic, 'all' | 'classes'>;
 
@@ -276,6 +276,16 @@ ${traitsLines(r, true)}
 - 退いた後のキャンプ（S5。シーズンでないランも）: 節目の大守護者と戦った（攻撃し合った）のに倒さずに帰った遠征の後のキャンプで、直前の遠征の比較の次に、その遠征の自分の挑戦の数を、項目ごとに 1 行の表で出す（S5b。左に自分、右に先に倒した者。シーズンのランでは、大守護者の候補に出るのと同じ、最初の 1 件といちばん少ない被害の 1 件。予備動作の行の下に、その予備動作を出す型の説明（その大守護者の型が候補か次の節目に出ていれば）。どの列も 0・なしの行は出ない）。記録が無ければ自分の列だけ。大守護者を倒す候補には、そのランでその大守護者に挑んで退いた、いちばん新しい挑戦（与えた被害・受けた被害・予備動作）も添える。前のキャンプの後に初めて受け取った討伐の記録は、キャンプに 1 回「新しい討伐の記録: …」と出る。自分の挑戦は、そのランの記録からゲームが作るもので、ほかの参加者には渡らない。出るのはその遠征の後のキャンプだけ（次の遠征が終われば、その遠征の振り返りになる）。
 - 見える所: まだその大守護者を倒していない者の、その大守護者を倒す遠征の候補（文と slays）と、キャンプの記録庫の行（節目ごと。camp.archive.slays）。先に倒した者が何人もいれば、最初に載った 1 人と、いちばん少ない被害で倒した 1 人。ほかの参加者には、次の取り込み（キャンプに着いたとき・遠征を始めるとき）で届く。シーズンの順位の表（HTTP）と結果の画面には、開催中は、だれがどの節目を何番目に倒したか（名前・レベル・職業）だけが出て、中身はシーズンが確定してから。賞には数えない（初討伐の称号は別にある）。同じシードなので、記録の武器は、自分の世界でも同じ階にある（拾いに行くのは自分）。
 - ほかの参加者の残したものは、道しるべ（公開された下り階段への道）・野営の火・補給の置き場・公開された特別な場所と階段・討伐の記録だけ。階の異変・書き置き・荒らされた野営の跡などは、迷宮に元からある（ずっと昔の探索者のもの。どのランにも出る）。`,
+    directive: `# 指図（S8。ソロで、人間が自分で遊んでいないランだけ。シーズンでも、シーズンでなくても）
+- あなた（プレイヤー）には、持ち主がいることがある。持ち主は、人間の画面から、キャンプでだけ、項目を「握る」ことができる。握れるのは 3 つ: 目的（次の遠征。start_expedition）・装備（equip・unequip）・特技と加護（choose_perk・choose_boon）。既定は、どれも握らない（あなたが全部決める）。
+- 握られた項目の命令は、あなたからは通らない（断りの code は held_by_owner。手番を使わない。何も変わらない）。握られていることは、観測の「指図: …」の 1 行（self.directive）に出る。握られた項目の行は「できること」に出ない。
+- 目的を握られているとき: キャンプで、持ち主が次の遠征を始めるのを待つ。wait_for_turn は、持ち主が遠征を始めるまで待つ（最長は今までと同じ。時間が来たら今の観測を返す）。observe で確かめてもよい。どちらも手番は減らない。持ち主が始めた後の最初の応答の「変化」に「持ち主が、遠征 N を始めた: …」。迷宮の中のことは、すべてあなたが決める（帰還・撤退も）。
+- 装備を握られているとき: 装備は、持ち主がキャンプで決める。迷宮で手に入れた装備は、キャンプで確かめるまで身に着けない（遠征の間は、あなたも持ち主も付け替えない。今の装備を外すのも、装備中の品を捨てるのも、キャンプまで待つ）。手に入れた装備は、持ち帰れば、キャンプで持ち主が決める。拾う・捨てる（装備中の品を除く）・使う・投げるは、あなたが決める。キャンプは、品の正体や呪いの有無を明かさない（それは今までどおり、巻物・祭壇・使うことで分かる）。
+- 特技と加護を握られているとき: 特技と加護は、持ち主がキャンプで決める。遠征の間に強くなって覚えられることが増えても、身につけるのはキャンプに戻ってから（持ち主が選ぶ。選ぶまで、進行は止まらない。効き目はその分遅れる）。
+- 持ち主の伝言: キャンプの観測の区切りの段の前に「持ち主から: …」（持ち主が遠征を始めた直後の応答の「変化」にも、もう 1 回）。聞くかどうかは、あなたが決める（ゲームは確かめない）。
+- 持ち主が決めたことは、キャンプの観測の「変化」に出る（「持ち主が、装備を変えた: 鎚矛を装備」「持ち主が、特技を選んだ: 頑健」）。遠征の振り返り（review）にも「指図: 目的と装備は、持ち主が決めた」の 1 行。
+- 引退・報告（report_stairs）・野営の火・補給の置き場・notes は、握られない（あなたが決める）。
+- 指図は、ほかの参加者には渡らない。シーズンの順位の表には、持ち主が決めた項目の印（「指図（目的・装備）」）だけが出る（キャンプで更新。順位は分けない）。`,
   };
 }
 
@@ -493,6 +503,16 @@ Free: choose_perk{option} / observe / wait_for_turn / expedition / review / reco
 - After coming back (S5; also outside seasons): at camp after an expedition in which you traded blows with a milestone warden but came back without slaying it, after the last-expedition comparison the numbers of that attempt come as a table, one line per item (S5b; you on the left, the slayers on the right: in a season run the same two as on the warden offer, the first and the one with the least damage taken; under a wind-up line, the description of the type that makes it, when that warden's types are shown on an offer or as the next milestone; lines that are zero or none for everyone are left out). With no record, only your own column. Warden offers also add your latest attempt on that warden in this run (damage dealt and taken, wind-ups). A kill record you receive for the first time since your last camp shows once at camp as "New warden kill record: ...". Your attempt is built by the game from your own run's records and is never shared. It shows only at the camp after that expedition (once the next expedition ends, the comparison is about that one).
 - Where it shows: in the offer to slay that warden (text and slays) for those who have not slain it yet, and in the camp's archive lines (per milestone; camp.archive.slays). With several slayers: the first record and the one that took the least damage. Others get it with their next sync (at camp or when an expedition starts). While the season is open, the standings over HTTP and the results page only show who slew which milestone in what order (name, level, class); the contents come once the season is final. It is not an award (the first-kill title already exists). Same seed: the weapon in the record lies on the same floor in your world too (fetching it is up to you).
 - The only things other participants leave are trails (paths to published stairs), campfires, supply caches, published special places and stairs, and warden kill records. Floor events, notes and ransacked camps are part of the dungeon itself (left by delvers of long ago; they appear in every run).`,
+    directive: `# Directives (S8; solo runs not played by a human, in or out of a season)
+- You (the player) may have an owner. From the browser, at camp only, your owner can "hold" items. Three can be held: the objective (the next expedition; start_expedition), equipment (equip, unequip), and perks and boons (choose_perk, choose_boon). By default nothing is held (you decide everything).
+- Commands for held items do not go through from you (refusal code held_by_owner; no turn is spent; nothing changes). What is held shows in the "Directive: ..." line of the observation (self.directive). Lines for held items do not appear in Actions.
+- Objective held: at camp, wait for your owner to start the next expedition. wait_for_turn waits until they start it (same maximum as before; on timeout it returns the current observation). observe also shows it. Neither spends turns. The first response after they start says "Your owner started expedition N: ..." in Changes. Everything inside the dungeon is yours (returning and withdrawing too).
+- Equipment held: your owner decides equipment at camp. Gear found in the dungeon is not worn until it is looked over at camp (during an expedition neither you nor your owner changes gear; taking off or dropping what you wear also waits for camp). Bring found gear home and your owner decides at camp. Picking up, dropping (except what you wear), using and throwing are yours. Camp does not reveal what an item is or whether it is cursed (that still comes from scrolls, altars and use).
+- Perks and boons held: your owner decides perks and boons at camp. What you grow able to learn during an expedition is taken up only back at camp (your owner picks; the game goes on meanwhile; the effect comes later).
+- Your owner's message: "From your owner: ..." before the break section of the camp observation (and once more in Changes right after they start an expedition). Whether to follow it is up to you (the game does not check).
+- What your owner decided shows in Changes at camp ("Your owner changed your gear: equipped mace", "Your owner chose a perk: Tough"). The expedition review also gets "Directive: the objective and equipment decided by the owner".
+- Retiring, report_stairs, campfires, supply caches and notes are never held (yours).
+- Directives never reach other participants. Season standings show only a mark of which items the owner decided ("directed (objective, equipment)"; updated at camp; standings are not split).`,
   };
 }
 
