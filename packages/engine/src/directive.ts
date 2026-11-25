@@ -80,7 +80,7 @@ export function directiveGate(world: World, pr: PlayerRecord, cmd: Command, owne
   return null;
 }
 
-/** 伝言の文（§54.2）: 制御文字・書式の文字（向きの上書きなど）を落とし、改行とタブは空白に。前後の空白を除いて 280 字まで */
+/** 伝言の文（§54.2）: 制御文字・書式の文字（向きの上書きなど）を落とし、改行とタブは空白に。前後の空白を除く（長さの上限は setDirective が見る） */
 export function cleanDirectiveMessage(s: string): string {
   let out = '';
   let gap = false;
@@ -93,13 +93,18 @@ export function cleanDirectiveMessage(s: string): string {
     out += ch;
     gap = false;
   }
-  return out.trim().slice(0, 280);
+  return out.trim();
 }
+
+/** 伝言の長さの上限（落とした後の文字数。S8a） */
+export const DIRECTIVE_MESSAGE_MAX = 280;
 
 /** set_directive（門を通った後）: 変わっていなければ断る（出来事を出さない） */
 export function setDirective(ctx: Ctx, pr: PlayerRecord, cmd: Extract<Command, { type: 'set_directive' }>): ActionError | null {
   const hold = DIRECTIVE_ITEMS.filter((x) => cmd.hold.includes(x));
   const message = cleanDirectiveMessage(cmd.message ?? '');
+  // 長さは、制御文字などを落とした後の文字数で数える（S8a §55.6 の 10）
+  if (message.length > DIRECTIVE_MESSAGE_MAX) return actionError('bad_request', t(pr.locale, `伝言は ${DIRECTIVE_MESSAGE_MAX} 字まで（いま ${message.length} 字）。`, `A message is up to ${DIRECTIVE_MESSAGE_MAX} characters (now ${message.length}).`), '');
   const cur = pr.directive ?? { hold: [], message: '' };
   if (cur.hold.join(',') === hold.join(',') && cur.message === message) {
     return actionError('nothing_to_do', t(pr.locale, '指図は変わっていない。', 'The directive is unchanged.'), '');

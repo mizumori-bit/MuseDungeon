@@ -131,7 +131,8 @@ describe('S8 §54.3・§54.4: objective and equipment held by the owner (records
       expect(iMsg).toBeLessThan(o.text.indexOf('区切り: '));
       expect(o.observation.valid_actions.some((l) => /^(start_expedition|equip|unequip)\b/.test(l))).toBe(false);
       expect(o.turn.awaiting).toBe('nothing');
-      expect(o.text).toContain('次の遠征は持ち主が決めます。wait_for_turn で');
+      expect(o.text).toContain('▶ キャンプにいます。持ち主が、次の遠征を決めるのを待つ。持ち主が始めたら、あなたが迷宮を進める（wait_for_turn で待てる。手番は減らない）。');
+      expect(o.text).not.toContain('ここで終えてもかまいません');
       // 持ち主: キャンプで付け替える（盤面にいないので手番は無い）
       const seqA = w().seq;
       expect(errCode(await owner(r, { type: 'unequip', slot: armor.slot }))).toBe('ok');

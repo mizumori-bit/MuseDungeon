@@ -465,6 +465,8 @@ export class SessionManager {
     }
     const who = this.ownerOf(session, o);
     if (!who) return { error: actionError('bad_request', 'この口は、そのランのプレイヤーのプロフィールのトークンか、サーバーと同じ機械からだけ / owner access needs the player\'s profile token or the same machine', 'Authorization: Bearer <profile_token>'), status: 403 };
+    // 終わったラン（S8a §55.6 の 12）: 持ち主の口は使えない（見返すのは巻き戻し）
+    if (session.world.status === 'ended') return { error: actionError('run_ended', 'このランは終わっている / the run has ended', '巻き戻しで見返す / rewind it from the records'), status: 409 };
     const pid = who.access === 'owner' ? who.pid : session.world.playerOrder[0];
     if (!pid) return { error: actionError('no_session', 'no player in this run', ''), status: 404 };
     return { session, pid };
@@ -473,19 +475,22 @@ export class SessionManager {
   /** 持ち主と認められた、進行中のラン（S8 §54.7 の「出撃」）。同じ機械からなら、すべての進行中のラン（ソロのものだけ） */
   ownerRuns(o: { local: boolean; profileToken?: string }): OwnerRunsResponse {
     const runs: OwnerRunRow[] = [];
+    // 自分のラン（S8a §55.6 の 11）: トークンのプロフィールのプレイヤー。同じ機械からだけで認めたランは、運用者として（mine: false）
+    const prof = o.profileToken ? this.profiles.store.resolve(o.profileToken) : null;
     for (const s of this.sessions.values()) {
       if (s.world.status !== 'active' || s.world.meta.mode !== 'solo') continue;
       const who = this.ownerOf(s, o);
       if (!who) continue;
-      const pid = who.access === 'owner' ? who.pid : s.world.playerOrder[0];
+      const mineId = prof ? s.world.playerOrder.find((x) => s.profileOf(x) === prof.id) : undefined;
+      const pid = mineId ?? (who.access === 'owner' ? who.pid : s.world.playerOrder[0]);
       const pr = pid ? s.world.players[pid] : undefined;
       if (!pid || !pr || pr.state === 'dead' || pr.state === 'left') continue;
       const sid = s.world.meta.season?.id;
       const d = sid ? this.seasons.get(sid) : null;
       // シーズンの名前と、その参加者の表示名（順位の表の名前。招いたときの名前。持ち主の画面が自分の行を目立たせる）
-      const prof = s.profileOf(pid);
-      const participant = d?.participants.find((x) => x.profileId === prof)?.name;
-      runs.push(ownerRow(s, pid, d ? { name: d.def.name, ...(participant ? { participant } : {}) } : undefined));
+      const profId = s.profileOf(pid);
+      const participant = d?.participants.find((x) => x.profileId === profId)?.name;
+      runs.push({ ...ownerRow(s, pid, d ? { name: d.def.name, ...(participant ? { participant } : {}) } : undefined), mine: !!mineId });
     }
     return { local: o.local, runs: runs.sort((a, b) => Number(b.waiting) - Number(a.waiting) || b.updatedAt - a.updatedAt) };
   }

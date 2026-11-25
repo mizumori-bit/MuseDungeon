@@ -80,6 +80,8 @@ export function Lobby({ tab = 'sortie' }: { tab?: HomeTab }) {
     api.profile(profileToken, L).then((p) => setTitles((p.titles ?? []).map((x) => x.name))).catch(() => setTitles([]));
   }, [profileToken, L]);
   const keepProfile = (tok?: string) => { if (tok) { setPref('profileToken', tok); setProfileToken(tok); } };
+  // 「出撃」のプロフィールのトークンの欄（S8a §55.6 の 6）
+  const [profDraft, setProfDraft] = useState('');
   // 自分のラン（記録のタブの「自分だけ」・順位の表の自分の行）: 覚えてあるトークンのプロフィールの直近のラン
   const tokKey = [profileToken, ...Object.values(seasonTok)].join('\u0000');
   useEffect(() => {
@@ -106,8 +108,9 @@ export function Lobby({ tab = 'sortie' }: { tab?: HomeTab }) {
         const prev = rows.get(row.runId);
         if (!prev || row.updatedAt >= prev.updatedAt) rows.set(row.runId, row);
         // 以後、そのランへの持ち主の呼び出しには、そのランを返したトークンを使う
-        if (x.t && !token[row.runId]) token[row.runId] = x.t;
-        if (x.t && !x.r.local) mine.add(row.runId);
+        // 自分のラン（S8a）: サーバーが、送ったトークンのプレイヤーのランに mine を付ける（同じ機械からだけで認めたランは付かない）
+        if (x.t && row.mine && !token[row.runId]) token[row.runId] = x.t;
+        if (row.mine) mine.add(row.runId);
       }
     }
     if (!any) return;
@@ -326,15 +329,46 @@ export function Lobby({ tab = 'sortie' }: { tab?: HomeTab }) {
   // ---- 出撃 ----
   const current = seasons.filter((x) => x.season.status !== 'final').sort(bySeason);
   const currentIds = new Set(current.map((x) => x.season.id));
-  const isMineRow = (row: OwnerRunRow) => !owner.local || myRunIds.has(row.runId);
-  const seasonRows = owner.rows.filter((row) => row.season && currentIds.has(row.season.id))
-    .sort((a, b) => Number(b.waiting) - Number(a.waiting) || Number(isMineRow(b)) - Number(isMineRow(a)) || b.updatedAt - a.updatedAt);
-  const otherRows = owner.rows.filter((row) => !(row.season && currentIds.has(row.season.id)));
+  // 自分のラン（S8a §55.6 の 11）: このブラウザのトークンのプレイヤーのラン（サーバーの mine）と、このブラウザで遊んだラン。
+  // 同じ機械からだけで認めたランは「この機械のほかのラン（運用者として）」に分けて出す（取り違えないように）
+  const isMineRow = (row: OwnerRunRow) => myRunIds.has(row.runId);
+  const mineRows = owner.rows.filter(isMineRow);
+  const operatorRows = owner.rows.filter((row) => !isMineRow(row));
+  const seasonRows = mineRows.filter((row) => row.season && currentIds.has(row.season.id))
+    .sort((a, b) => Number(b.waiting) - Number(a.waiting) || b.updatedAt - a.updatedAt);
+  const otherRows = mineRows.filter((row) => !(row.season && currentIds.has(row.season.id)));
   const cardIds = new Set(owner.rows.map((x) => x.runId));
   const myActive = active.filter((r) => getToken(r.runId) && !cardIds.has(r.runId));
   const otherActive = active.filter((r) => !getToken(r.runId));
   const waitingCount = owner.rows.filter((x) => x.waiting).length;
   const otherWaiting = otherRows.filter((x) => x.waiting).length;
+  const operatorWaiting = operatorRows.filter((x) => x.waiting).length;
+  /** AI を招いたときのトークン（プロフィールのトークン）を入れる欄（S8a §55.6 の 6。ほかの PC のブラウザから、その AI のランの持ち主になる） */
+  const ownerTokenBox = () => (
+    <section class="panel seasonbox">
+      <h3>{tr('AI のランの持ち主になる', 'Become the owner of your AI\'s run')}</h3>
+      <div class="sjoin">
+        {profileToken ? (
+          <span class="muted">{tr('プロフィールのトークン: このブラウザに保存済み（••••）', 'Profile token: saved in this browser (••••)')} <button class="tiny" onClick={() => { setPref('profileToken', ''); setProfileToken(''); void refreshOwner(seasons.map((x) => x.season.id)); }}>{tr('外す', 'Forget')}</button></span>
+        ) : (
+          <span class="row">
+            <input type="password" autocomplete="off" placeholder={tr('プロフィールのトークン（profile_token）', 'profile token (profile_token)')} value={profDraft}
+              onInput={(e) => setProfDraft((e.target as HTMLInputElement).value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') keepOwnerTok(); }} />
+            <button class="small" onClick={keepOwnerTok}>{tr('覚える', 'Keep')}</button>
+          </span>
+        )}
+      </div>
+      <p class="muted small">{tr('AI を招いたときのトークン（プロフィールのトークン）を入れると、その AI のランの持ち主になる（ほかの PC のブラウザからも）。トークンはこのブラウザにだけ覚え、画面と URL には出さない。シーズンの招きのトークンも同じプロフィールのトークンなので、ここか、シーズンの参加の欄に入れる。', 'Enter the token you got when you invited your AI (its profile token) and you become the owner of that AI\'s runs, from any PC\'s browser. The token is kept only in this browser and never shown on screen or in a URL. A season invite token is the same kind of profile token: put it here or in that season\'s join box.')}</p>
+    </section>
+  );
+  const keepOwnerTok = () => {
+    const tok = profDraft.trim();
+    if (!tok) return;
+    keepProfile(tok);
+    setProfDraft('');
+    void refreshOwner(seasons.map((x) => x.season.id));
+  };
   const card = (row: OwnerRunRow) => <OwnerRunCard key={row.runId} row={row} token={owner.token[row.runId]} catalog={catalog} onChanged={() => void refreshOwner(seasons.map((x) => x.season.id))} />;
 
   /** シーズンに参加する欄（今シーズンの自分のランが無いとき。今ある「このシーズンに参加」） */
@@ -364,7 +398,7 @@ export function Lobby({ tab = 'sortie' }: { tab?: HomeTab }) {
         </div>
         {!mine && (
           <>
-            <p class="muted small">{tr('トークンを覚えさせると、そのプロフィールの AI のラン（MCP で始めたもの）も、ここに自分のランとして出る（指図を出せる）。自分で遊ぶなら、名前とクラスを決めて参加する。', 'Once the token is kept, your AI\'s run on that profile (started over MCP) shows up here as your run, and you can give it directives. To play yourself, pick a name and class and join.')}</p>
+            <p class="muted small">{tr('AI を招いたときのトークン（プロフィールのトークン）を覚えさせると、その AI のランの持ち主になる（ここに自分のランとして出て、指図を出せる）。自分で遊ぶなら、名前とクラスを決めて参加する。', 'Keep the token you got when you invited your AI (its profile token) and you become the owner of that AI\'s run (it shows up here as your run, and you can give it directives). To play yourself, pick a name and class and join.')}</p>
             <div class="form inline-form">
               {nameClassFields()}
               <button class="small primary" disabled={busy || !name.trim() || !seasonTok[s.id]} onClick={() => joinSeason(s.id)}
@@ -382,11 +416,23 @@ export function Lobby({ tab = 'sortie' }: { tab?: HomeTab }) {
     <div class="home">
       <section class="homesec">
         <h2 class="hhead">{tr('今シーズンの自分のラン', 'Your run this season')}</h2>
-        {owner.local && seasonRows.length > 0 && <p class="muted small">{tr('サーバーと同じ機械から開いている: すべての進行中のソロのランの持ち主として出す。', 'Opened on the server machine: you are shown as the owner of every active solo run.')}</p>}
         {seasonRows.map(card)}
-        {current.filter((x) => x.season.status === 'open' && !seasonRows.some((row) => row.season?.id === x.season.id && isMineRow(row))).map((x) => joinBox(x.season))}
+        {current.filter((x) => x.season.status === 'open' && !seasonRows.some((row) => row.season?.id === x.season.id)).map((x) => joinBox(x.season))}
         {!current.length && <p class="muted">{tr('開催中のシーズンは無い。続きのあるラン・新しいランは、下の「ほかのラン」から。過去のシーズンは「記録」のタブ。', 'No season is running. Other runs and new runs are under "Other runs" below; past seasons are in the Records tab.')}</p>}
+        {ownerTokenBox()}
       </section>
+
+      {operatorRows.length > 0 && (
+        <details class="panel others" open={operatorWaiting > 0}>
+          <summary>
+            {tr('この機械のほかのラン（運用者として）', 'Other runs on this machine (as the operator)')}
+            <small>{tr(`（${operatorRows.length}）`, ` (${operatorRows.length})`)}</small>
+            {operatorWaiting > 0 && <span class="waitmark inline">{tr(`AI が、持ち主の決定を待っている ${operatorWaiting}`, `${operatorWaiting} AI waiting for a decision`)}</span>}
+          </summary>
+          <p class="muted small">{tr('サーバーと同じ機械から開いているので、このブラウザにトークンの無いランも、運用者として持ち主の操作ができる。自分のランと取り違えないこと。', 'Opened on the server machine, so you can act as the owner of runs this browser has no token for, as the operator. Do not mistake them for your own runs.')}</p>
+          <div class="home inner">{operatorRows.map(card)}</div>
+        </details>
+      )}
 
       {current.map(({ season: s, standings }) => (
         <section key={`st-${s.id}`} class="panel seasonbox">

@@ -2526,7 +2526,8 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
 
 /** キャンプで目的を握られているときの待つ行（S8 §54.4 の 2・5） */
 export function waitOwnerLine(L: Locale): string {
-  return t(L, 'wait_for_turn（待つ: 持ち主が、次の遠征を決める。observe で確かめてもよい。手番は減らない）', 'wait_for_turn (wait: your owner decides the next expedition; observe also shows it; no turns are spent)');
+  return t(L, 'wait_for_turn（待つ: 持ち主が、次の遠征を決めるのを待つ。持ち主が始めたら、あなたが迷宮を進める。observe で確かめてもよい。手番は減らない）',
+    'wait_for_turn (wait for your owner to decide the next expedition; once they start it, you play the dungeon; observe also shows it; no turns are spent)');
 }
 
 /** 指図の項目の名前の並び（「目的と装備」「目的・装備・特技と加護」） */

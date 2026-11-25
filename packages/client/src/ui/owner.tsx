@@ -254,6 +254,9 @@ export function OwnerRunCard({ row, token, catalog, onChanged }: { row: OwnerRun
               <button class="small primary" disabled={!atCamp || !dirty || busy} onClick={saveDirective}>{tr('指図を保存', 'Save directive')}</button>
               {dirty && atCamp && <button class="small" disabled={busy} onClick={() => { setHold(serverHold); setMsg(serverMsg); }}>{tr('戻す', 'Revert')}</button>}
             </div>
+            <p class="muted small">{row.season
+              ? tr('伝言は、観戦している人にも見える（AI の考えと同じ。開催中のシーズンのランを観戦できるのは、持ち主とサーバーと同じ機械だけ）。', 'The message is visible to spectators too (like the AI\'s thoughts; a run of a season in progress can be watched only by its owner and from the server machine).')
+              : tr('伝言は、観戦している人にも見える（AI の考えと同じ）。', 'The message is visible to spectators too (like the AI\'s thoughts).')}</p>
             {!atCamp && status !== 'ended' && (
               <p class="muted">{tr('遠征の途中は、見守る（指図と伝言はキャンプでだけ変えられる）。', 'During an expedition, you watch (directives and messages change only at camp).')} <a class="button small" href={`#/watch/${row.runId}`}>{tr('観戦する', 'Watch')}</a></p>
             )}
@@ -316,7 +319,7 @@ export function OwnerRunCard({ row, token, catalog, onChanged }: { row: OwnerRun
                 </div>
               )}
               <details class="otext-all">
-                <summary>{tr('AI に見えている観測の文', 'The observation text the AI sees')}</summary>
+                <summary title={tr('AI に届く応答には、ほかに末尾の ▶ 行・変化・区切りの段などが付く', 'The AI\'s responses also carry the ▶ line, changes and the break section')}>{tr('観測（状態）', 'Observation (state)')}</summary>
                 <pre class="records">{fresh.text}</pre>
               </details>
             </div>

@@ -261,6 +261,8 @@ export interface OwnerRunRow {
   status: 'at_camp' | 'in_dungeon' | 'ended'; eligible: boolean; waiting: boolean;
   hold: DirectiveItem[]; message: string;
   level: number; hp: number; maxHp: number; depth: number | null; banked: number; budgetLeft?: number; budgetLimit?: number; updatedAt: number;
+  /** 自分のラン（S8a）: 送ったプロフィールのトークンのプレイヤー。false は、同じ機械からだけで認めた（運用者として） */
+  mine?: boolean;
 }
 export interface OwnerRunsResponse { local: boolean; runs: OwnerRunRow[] }
 /** GET /api/runs/:id/owner/view・POST …/owner/directive・…/owner/act の応答。result: POST の結果（断りなら error） */

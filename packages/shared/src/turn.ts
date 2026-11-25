@@ -417,10 +417,11 @@ export function turnLine(view: PlayerView, b: TurnBlock, short = false): string 
     case 'waiting_others':
       return t(L, '▶ 他のプレイヤーの手番です。遠征は進行中です。wait_for_turn で自分の番を待てます。', '▶ Another player is acting. The expedition continues; wait_for_turn waits for your turn.');
     case 'expedition_ended':
+      // 目的を持ち主が握っている（S8a §55.6 の 8: ここでやめると、持ち主が始めた遠征を、だれも遊ばない）
       if (view.directive?.hold.includes('objective')) {
         return t(L,
-          `▶ 遠征は終了しました（${endReasonText(L, x?.endReason ?? null)}）。これ以上の行動は不要です。次の遠征は持ち主が決めます（wait_for_turn で待てる。手番は減らない）。`,
-          `▶ The expedition has ended (${endReasonText(L, x?.endReason ?? null)}). No further action is required. Your owner decides the next one (wait_for_turn waits; no turns are spent).`);
+          `▶ 遠征は終了しました（${endReasonText(L, x?.endReason ?? null)}）。${ownerWaitText(L)}`,
+          `▶ The expedition has ended (${endReasonText(L, x?.endReason ?? null)}). ${ownerWaitText(L)}`);
       }
       return t(L,
         `▶ 遠征は終了しました（${endReasonText(L, x?.endReason ?? null)}）。これ以上の行動は不要です。次の遠征は start_expedition で選べます。`,
@@ -428,8 +429,7 @@ export function turnLine(view: PlayerView, b: TurnBlock, short = false): string 
     case 'at_camp':
       // 目的を持ち主が握っている（S8 §54.4 の 5）: 待ち方
       if (view.camp && view.directive?.hold.includes('objective')) {
-        return t(L, '▶ キャンプにいます。次の遠征は持ち主が決めます。wait_for_turn で、持ち主が遠征を始めるまで待てます（手番は減らない）。ここで終えてもかまいません。',
-          '▶ You are at camp. Your owner decides the next expedition. wait_for_turn waits until they start it (no turns are spent). It is fine to stop here.');
+        return t(L, `▶ キャンプにいます。${ownerWaitText(L)}`, `▶ You are at camp. ${ownerWaitText(L)}`);
       }
       if (view.camp && !view.expedition) {
         return t(L, '▶ キャンプにいます。最初の遠征を 3 つの候補から start_expedition { offer } で選びます（目標の深さ・推奨レベル・条件を比べて）。',
@@ -443,6 +443,12 @@ export function turnLine(view: PlayerView, b: TurnBlock, short = false): string 
       return t(L, `▶ ランは終了しました（${why}）。これ以上の行動はできません。`, `▶ The run has ended (${why}). No further actions are possible.`);
     }
   }
+}
+
+/** 目的を持ち主が握っているキャンプの待ち方（S8a §55.6 の 8。▶ 行と「できること」の待つ行で同じ言い方） */
+export function ownerWaitText(L: Locale): string {
+  return t(L, '持ち主が、次の遠征を決めるのを待つ。持ち主が始めたら、あなたが迷宮を進める（wait_for_turn で待てる。手番は減らない）。',
+    'Wait for your owner to decide the next expedition. Once they start it, you play the dungeon (wait_for_turn waits; no turns are spent).');
 }
 
 export function changesLine(L: Locale, changes: Change[]): string {

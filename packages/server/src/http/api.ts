@@ -13,7 +13,7 @@ import { MarkerBuilder, spectatorEvent } from '../log/RunStore';
 import type { SessionManager } from '../session/SessionManager';
 import { seasonReplayError } from '../session/SessionManager';
 import { WsHub } from '../ws/hub';
-import { isLocalRequest } from './local';
+import { allowLocalHosts, isLocalRequest, jsonContentType, sameOrigin } from './local';
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
@@ -60,6 +60,8 @@ export interface App {
 }
 
 export function createApp(manager: SessionManager, config: ServerConfig): App {
+  // 「同じ機械」と認める Host の名前に、待ち受けのアドレス（MUSE_HOST）を足す（S8a。127.0.0.1・localhost・[::1] は、もとから）
+  allowLocalHosts(config.host.split(','));
   const mcp = new McpHttpHandler(manager);
   const ws = new WsHub(manager, config);
   const store = manager.store;
@@ -92,6 +94,12 @@ export function createApp(manager: SessionManager, config: ServerConfig): App {
       const body = m === 'POST' ? await readBody(req, 4_000_000).catch(() => undefined) : undefined;
       await mcp.handle(req, res, body);
       return;
+    }
+    // 状態を変える口（S8a。SEASON.md §55.6）: Origin があれば要求の Host と同じ origin だけ（トークンで認める口も）、本文は application/json だけ。
+    // ブラウザの別のページからは、text/plain の POST・フォームを送れず、JSON は事前の問い合わせ（CORS の見出しを返さない）で止まる。/mcp は SDK が JSON だけを受ける
+    if (p.startsWith('/api/') && m !== 'GET' && m !== 'HEAD' && m !== 'OPTIONS') {
+      if (!sameOrigin(req)) return fail(res, 403, actionError('bad_request', 'cross-origin request refused: Origin must be the same origin as Host / 別の origin からの要求は受けない', ''));
+      if (!jsonContentType(req)) return fail(res, 415, actionError('bad_request', 'Content-Type must be application/json / 本文は application/json だけ', ''));
     }
     if (p === '/api/health') return json(res, 200, { ok: true, contentVersion: manager.catalog.contentVersion });
     if (p === '/api/player/feed' && m === 'GET') {

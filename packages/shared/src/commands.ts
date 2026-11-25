@@ -79,9 +79,9 @@ export const CommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('take_supply'), id: z.string().regex(/^[sl][0-9]{1,6}$/).optional() }),
   /**
    * 指図（S8。SEASON.md §54.2）: 握る項目と伝言。持ち主の口（source: owner）からだけ通り、プレイヤーがキャンプにいるときだけ。手番を使わない。
-   * MCP のツールには出さない。message の制御文字は engine が落とす
+   * MCP のツールには出さない。message の制御文字は engine が落とし、落とした後の文字数で 280 字までを数える（S8a。超えれば engine が断る）
    */
-  z.object({ type: z.literal('set_directive'), hold: z.array(z.enum(['objective', 'loadout', 'perks'])).max(3), message: z.string().max(280).optional() }),
+  z.object({ type: z.literal('set_directive'), hold: z.array(z.enum(['objective', 'loadout', 'perks'])).max(3), message: z.string().max(2000).optional() }),
 ]);
 
 export type Command = z.infer<typeof CommandSchema>;

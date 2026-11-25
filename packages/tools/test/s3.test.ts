@@ -653,7 +653,8 @@ describe('S3a §27.9: leaks', () => {
   });
 
   it('the same machine: a loopback peer with forwarded addresses all on this machine (the dev proxy) is local; any other address is not', () => {
-    const req = (remote: string, headers: Record<string, string> = {}) => ({ socket: { remoteAddress: remote }, headers } as unknown as IncomingMessage);
+    // S8a: 同じ機械と認めるには、Host が許しの一覧（受けたポートつき）であることも要る（ここでは接続元と見出しの組み合わせだけを見る）
+    const req = (remote: string, headers: Record<string, string> = {}) => ({ socket: { remoteAddress: remote, localPort: 7777 }, headers: { host: '127.0.0.1:7777', ...headers } } as unknown as IncomingMessage);
     expect(isLocalRequest(req('127.0.0.1'))).toBe(true);
     expect(isLocalRequest(req('::1'))).toBe(true);
     expect(isLocalRequest(req('127.0.0.1', { 'x-forwarded-for': '127.0.0.1' }))).toBe(true);
