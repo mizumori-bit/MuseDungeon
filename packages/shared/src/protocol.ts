@@ -4,8 +4,9 @@ import type { ActionError, Command, CommandRecord } from './commands';
 import type { GameEvent } from './events';
 import type { PerceivedEvent } from './filter';
 import type { TurnBlock } from './turn';
-import type { Controller, ExpeditionBrief, Locale, Names, ObjectiveType, PlayerId, PlayerState, RunSummary, SeasonSlay, World } from './types';
+import type { Controller, DirectiveItem, ExpeditionBrief, Locale, Names, ObjectiveType, PlayerId, PlayerState, RunSummary, SeasonSlay, World } from './types';
 import type { PlayerView } from './view';
+import type { Observation } from './observation';
 
 export type SpectatorPolicy = 'omniscient' | 'follow_only' | 'delayed';
 
@@ -192,6 +193,10 @@ export interface SeasonStandingRow {
   banked?: number;
   /** その参加者の称号（S2 §18.2。確定したシーズンのすべてで付いたもの。HTTP の応答で付ける） */
   titles?: SeasonTitle[];
+  /** 指図の印（S8。SEASON.md §54.6）: そのシーズンで、持ち主の口から決めた項目（キャンプで更新）。順位は分けない。決めていなければ無い */
+  directed?: DirectiveItem[];
+  /** その参加者のシーズンのラン（S8 §54.7。HTTP の応答で付ける。確定したシーズンと、同じ機械からの接続だけ） */
+  runIds?: string[];
 }
 
 /**
@@ -244,6 +249,28 @@ export interface SeasonResultView {
  * local: サーバーと同じ機械からの接続、final: シーズンの結果が確定している（どちらも、すべてのランを見られる）。name は順位の表の名前
  */
 export interface SeasonWatchResponse { local: boolean; final: boolean; runs: { runId: string; name: string }[] }
+
+// ---- 持ち主の口（S8。SEASON.md §54.5。PROTOCOL §9.14）----
+/**
+ * GET /api/owner/runs の 1 行: 持ち主と認められた、進行中のラン（このブラウザのプロフィールのトークン、か同じ機械から）。
+ * eligible: 指図を出せるラン（ソロで、人間が自分で遊んでいない）。waiting: AI がキャンプで、持ち主が次の遠征を始めるのを待っている
+ */
+export interface OwnerRunRow {
+  /** season.participant: そのシーズンでの自分の表示名（順位の表の名前。招いたときの名前） */
+  runId: string; playerId: PlayerId; name: string; classId: string; season?: { id: string; name: string; participant?: string };
+  status: 'at_camp' | 'in_dungeon' | 'ended'; eligible: boolean; waiting: boolean;
+  hold: DirectiveItem[]; message: string;
+  level: number; hp: number; maxHp: number; depth: number | null; banked: number; budgetLeft?: number; budgetLimit?: number; updatedAt: number;
+  /** 自分のラン（S8a）: 送ったプロフィールのトークンのプレイヤー。false は、同じ機械からだけで認めた（運用者として） */
+  mine?: boolean;
+}
+export interface OwnerRunsResponse { local: boolean; runs: OwnerRunRow[] }
+/** GET /api/runs/:id/owner/view・POST …/owner/directive・…/owner/act の応答。result: POST の結果（断りなら error） */
+export interface OwnerViewResponse {
+  runId: string; playerId: PlayerId; name: string; eligible: boolean; reason?: string; waiting: boolean;
+  view: PlayerView; observation: Observation; text: string;
+  result?: { ok: true } | { ok: false; error: ActionError };
+}
 
 /** GET /api/seasons/:id（S0 §9.8・S2 §18.3） */
 export interface SeasonStandingsResponse {

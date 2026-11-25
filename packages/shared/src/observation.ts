@@ -14,7 +14,7 @@ import type { ReportCompare } from './expeditionStats';
 import { kindName } from './narrate';
 import type { NavGrid } from './nav';
 import { buildNavGrid, distanceField, findFrontiers } from './nav';
-import type { Dir, EntityRole, Expedition, ExpeditionOffer, HaulParts, Locale, MonsterMemory, Names, ObjectiveType, OfferSlot, Pos, SeasonAward, SeasonSlay, SeasonSlayFacts, SlayOpening, SupplyPlace } from './types';
+import type { Dir, DirectiveItem, EntityRole, Expedition, ExpeditionOffer, HaulParts, Locale, MonsterMemory, Names, ObjectiveType, OfferSlot, Pos, SeasonAward, SeasonSlay, SeasonSlayFacts, SlayOpening, SupplyPlace } from './types';
 import { awardName, awardText, fireUsedDepths, myCampfires, publicSpotAt, publicStairsAt, seasonBudgetText, SUPPLY_CATEGORIES, supplyPlaceName } from './season';
 import type { SupplyView } from './season';
 import { DIRS, DIR_VEC } from './types';
@@ -348,6 +348,11 @@ export interface Observation {
     boons_brief?: boolean;
     /** 選べる加護の候補（大守護者を倒した。choose_boon { option }。V3-3 §3.2） */
     boon_choice?: { depth: number; options: { option: number; id: string; name: string; desc: string }[] };
+    /**
+     * 指図（S8。SEASON.md §54.4 の 1）: 持ち主が握っている項目と、その 1 行（キャンプでも迷宮でも）。message: 持ち主からの伝言（キャンプだけ）。
+     * decided: このランで持ち主が決めた項目。握っている項目も伝言も無ければ無い
+     */
+    directive?: { hold: DirectiveItem[]; message?: string; decided?: DirectiveItem[]; text: string };
   };
   /** items_omitted: 記憶の中の遠いアイテムのうち省いた件数 */
   visible: { monsters: ObsMonster[]; items: ObsItem[]; players: ObsPlayer[]; features: ObsFeature[]; items_omitted?: number };
@@ -2309,20 +2314,28 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
   // 加護の候補（大守護者を倒した。V3-3 §3.2）
   const bc = view.self.boonChoice;
   const boonChoiceObs = bc ? { depth: bc.depth, options: bc.options.map((id, i) => ({ option: i + 1, id, name: nameOf(catalog.boons?.[id]?.name, L, shortId(id)), desc: nameOf(catalog.boons?.[id]?.desc, L, '') })) } : undefined;
+  // 特技と加護を持ち主が握っている（S8 §54.3・§54.4）: 候補は、持ち主がキャンプで選ぶまで保留（あなたの choose_perk・choose_boon は断られる）
+  const perksHeld = !!view.directive?.hold.includes('perks');
   if (boonChoiceObs && view.status !== 'dead' && view.status !== 'ended') {
     alerts.push({
       code: 'boon_pending',
-      text: t(L, `加護を選べる（地下${bc!.depth}階の大守護者）: ${boonChoiceObs.options.map((o) => `${o.option} ${o.name}`).join(' / ')}（choose_boon。手番は使わない）`,
-        `Boon to choose (warden of depth ${bc!.depth}): ${boonChoiceObs.options.map((o) => `${o.option} ${o.name}`).join(' / ')} (choose_boon; takes no turn)`),
-      data: { depth: bc!.depth, options: [...bc!.options] },
+      text: perksHeld
+        ? t(L, `受けられる加護がある（地下${bc!.depth}階の大守護者）: ${boonChoiceObs.options.map((o) => `${o.option} ${o.name}`).join(' / ')}。身につけるのは、キャンプに戻ってから（持ち主が選ぶ。指図。あなたの choose_boon は断られる。選ぶまで進行は止まらない）`,
+          `A boon awaits (warden of depth ${bc!.depth}): ${boonChoiceObs.options.map((o) => `${o.option} ${o.name}`).join(' / ')}. You take it up back at camp (your owner picks; directive; your choose_boon is refused; the game goes on meanwhile)`)
+        : t(L, `加護を選べる（地下${bc!.depth}階の大守護者）: ${boonChoiceObs.options.map((o) => `${o.option} ${o.name}`).join(' / ')}（choose_boon。手番は使わない）`,
+          `Boon to choose (warden of depth ${bc!.depth}): ${boonChoiceObs.options.map((o) => `${o.option} ${o.name}`).join(' / ')} (choose_boon; takes no turn)`),
+      data: { depth: bc!.depth, options: [...bc!.options], ...(perksHeld ? { held_by_owner: true } : {}) },
     });
   }
   if (perkChoiceObs && view.status !== 'dead' && view.status !== 'ended') {
     alerts.push({
       code: 'perk_pending',
-      text: t(L, `特技を選べる（Lv${offer!.level}）: ${perkChoiceObs.options.map((o) => `${o.option} ${o.name}`).join(' / ')}（choose_perk。手番は使わない）`,
-        `Perk to choose (Lv${offer!.level}): ${perkChoiceObs.options.map((o) => `${o.option} ${o.name}`).join(' / ')} (choose_perk; takes no turn)`),
-      data: { level: offer!.level, options: [...offer!.options], more: perkChoiceObs.more },
+      text: perksHeld
+        ? t(L, `覚えられる特技が増えた（Lv${offer!.level}）: ${perkChoiceObs.options.map((o) => `${o.option} ${o.name}`).join(' / ')}。身につけるのは、キャンプに戻ってから（持ち主が選ぶ。指図。あなたの choose_perk は断られる。選ぶまで進行は止まらない）`,
+          `You can learn a new perk (Lv${offer!.level}): ${perkChoiceObs.options.map((o) => `${o.option} ${o.name}`).join(' / ')}. You take it up back at camp (your owner picks; directive; your choose_perk is refused; the game goes on meanwhile)`)
+        : t(L, `特技を選べる（Lv${offer!.level}）: ${perkChoiceObs.options.map((o) => `${o.option} ${o.name}`).join(' / ')}（choose_perk。手番は使わない）`,
+          `Perk to choose (Lv${offer!.level}): ${perkChoiceObs.options.map((o) => `${o.option} ${o.name}`).join(' / ')} (choose_perk; takes no turn)`),
+      data: { level: offer!.level, options: [...offer!.options], more: perkChoiceObs.more, ...(perksHeld ? { held_by_owner: true } : {}) },
     });
   }
   const mineCount = items.filter((i) => i.mine).reduce((a, i) => a + i.qty, 0);
@@ -2400,6 +2413,18 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
     valid_actions,
   };
   if (rest && rest.blocked_by !== 'hostile_hunting') obs.self.rest_estimate = rest;
+  // 指図（S8 §54.4 の 1）: 握っている項目の 1 行（キャンプでも迷宮でも）。伝言はキャンプだけ
+  {
+    const d = view.directive;
+    if (d && (d.hold.length || d.message) && view.status !== 'dead' && view.status !== 'ended') {
+      obs.self.directive = {
+        hold: [...d.hold],
+        ...(d.message && view.status === 'at_camp' ? { message: d.message } : {}),
+        ...(d.decided.length ? { decided: [...d.decided] } : {}),
+        text: directiveLine(L, d.hold, view.status !== 'at_camp'),
+      };
+    }
+  }
   // fight の被弾の前の判定の数（S2a §20.10 の 5: pilot がマクロと同じ判定をするため）
   if (me.pos && view.status !== 'at_camp') {
     const threats = fightThreats(catalog, view.entities.filter((e) => e.cat === 'monster'), me.pos);
@@ -2477,7 +2502,64 @@ function abilityHandlerOf(catalog: Catalog, id: string): string | undefined {
   return Object.entries(catalog.abilities).find(([k]) => k === id || k.endsWith(`:${id}`))?.[1].handler;
 }
 
+/**
+ * 「できること」（S8 §54.4 の 2: 握られた項目の行は出さない。断られる行を出さない: §48.11・§49.6）。キャンプで目的を握られているときは、待つ行を 1 つ
+ */
 function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): string[] {
+  const lines = buildValidActionsRaw(view, catalog, x);
+  const hold = view.directive?.hold ?? [];
+  if (!hold.length) return lines;
+  const L = view.locale;
+  const drop = (re: RegExp) => (l: string) => !re.test(l);
+  let out = lines;
+  if (hold.includes('objective')) out = out.filter(drop(/^start_expedition\b/));
+  if (hold.includes('loadout')) out = out.filter(drop(/^(equip|unequip)\b/));
+  if (hold.includes('perks')) out = out.filter(drop(/^(choose_perk|choose_boon)\b/));
+  if (hold.includes('objective') && view.status === 'at_camp' && view.camp && !(view.season && (view.season.budgetLeft <= 0 || view.season.ended))) {
+    // 引退の行の前に（キャンプの「できること」の並び: 報告・候補・notes・retire）
+    const i = out.indexOf('retire');
+    const wait = waitOwnerLine(L);
+    out = i >= 0 ? [...out.slice(0, i), wait, ...out.slice(i)] : [...out, wait];
+  }
+  return out;
+}
+
+/** キャンプで目的を握られているときの待つ行（S8 §54.4 の 2・5） */
+export function waitOwnerLine(L: Locale): string {
+  return t(L, 'wait_for_turn（待つ: 持ち主が、次の遠征を決めるのを待つ。持ち主が始めたら、あなたが迷宮を進める。observe で確かめてもよい。手番は減らない）',
+    'wait_for_turn (wait for your owner to decide the next expedition; once they start it, you play the dungeon; observe also shows it; no turns are spent)');
+}
+
+/** 指図の項目の名前の並び（「目的と装備」「目的・装備・特技と加護」） */
+function itemsJoin(L: Locale, items: readonly DirectiveItem[]): string {
+  const name = (x: DirectiveItem) => x === 'objective' ? t(L, '目的', 'the objective') : x === 'loadout' ? t(L, '装備', 'equipment') : t(L, '特技と加護', 'perks and boons');
+  const ns = items.map(name);
+  if (L === 'en') return ns.length <= 2 ? ns.join(' and ') : `${ns.slice(0, -1).join(', ')} and ${ns[ns.length - 1]}`;
+  return ns.length <= 2 ? ns.join('と') : `${ns.slice(0, -1).join('・')}と${ns[ns.length - 1]}`;
+}
+
+/**
+ * 指図の 1 行（S8 §54.4 の 1）: 「指図: 目的と装備は、持ち主が決める（あなたの start_expedition・equip・unequip は断られる）。特技と加護は、あなたが決める」。
+ * inDungeon: 装備を握っていれば、遠征の間はだれも付け替えられないことを添える
+ */
+export function directiveLine(L: Locale, hold: readonly DirectiveItem[], inDungeon: boolean): string {
+  const all: DirectiveItem[] = ['objective', 'loadout', 'perks'];
+  const held = all.filter((x) => hold.includes(x));
+  const free = all.filter((x) => !hold.includes(x));
+  if (!held.length) return t(L, '指図: 持ち主は何も握っていない（すべてあなたが決める）', 'Directive: your owner holds nothing (you decide everything)');
+  void inDungeon;
+  const cmds = held.flatMap((x) => x === 'objective' ? ['start_expedition'] : x === 'loadout' ? ['equip', 'unequip'] : ['choose_perk', 'choose_boon']);
+  // 世界の中での読み方（依頼者と決めた言い方。§55）: 主は「キャンプで、持ち主が決める」。読み方は添える。キャンプは品の正体や呪いを明かさない（鑑定とは別）
+  const readings = [
+    held.includes('loadout') ? t(L, '迷宮で手に入れた装備は、キャンプで確かめるまで身に着けない。', 'gear found in the dungeon is not worn until it is looked over at camp; ') : '',
+    held.includes('perks') ? t(L, '遠征の間に強くなって覚えられることが増えても、身につけるのはキャンプに戻ってから。', 'what you grow able to learn during an expedition is taken up only back at camp; ') : '',
+  ].join('');
+  const rest = free.length ? t(L, `。${itemsJoin(L, free)}は、あなたが決める`, `. You decide ${itemsJoin(L, free)}`) : '';
+  return t(L, `指図: ${itemsJoin(L, held)}は、持ち主がキャンプで決める（${readings}あなたの ${cmds.join('・')} は断られる）${rest}`,
+    `Directive: your owner decides ${itemsJoin(L, held)} at camp (${readings}your ${cmds.join(', ')} are refused)${rest}`);
+}
+
+function buildValidActionsRaw(view: PlayerView, catalog: Catalog, x: VAInput): string[] {
   const L = view.locale;
   const out: string[] = [];
   // 特技の候補（手番を消費しない。V3-4 §4.1）
@@ -2884,6 +2966,8 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
   if (obs.status === 'at_camp') {
     // キャンプ専用の形: 成績と候補だけ
     lines.push(`[seq ${obs.seq} | ${t(L, 'キャンプ', 'Camp')} | HP ${s.hp}/${s.max_hp} | Lv${s.level} | ${statusText.at_camp[L === 'en' ? 1 : 0]}]`);
+    // 指図（S8 §54.4 の 1）
+    if (s.directive) lines.push(s.directive.text);
     const pt = partyText(L, obs.party ?? []);
     if (pt) lines.push(pt);
     // シーズン（S0 §9.6）: 予算・賞ごとの順位・報告していない階段
@@ -2927,7 +3011,9 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
         ? t(L, 'このシーズンの行動予算を使い切った。新しい遠征は始められない（報告と引退はできる。ここで終えてよい）', 'You have used up this season\'s budget. No more expeditions (you can still report and retire; it is fine to stop here)')
         : t(L, 'シーズンは終わりの時刻を過ぎた。新しい遠征は始められない（報告と引退はできる。ここで終えてよい）', 'The season has passed its end time. No more expeditions (you can still report and retire; it is fine to stop here)'));
     } else if (obs.camp) {
-      lines.push(t(L, `次の遠征の候補（遠征 ${obs.camp.next_no}）。start_expedition { offer } で始める:`, `Offers for expedition ${obs.camp.next_no} (start with start_expedition { offer }):`));
+      lines.push(s.directive?.hold.includes('objective')
+        ? t(L, `次の遠征の候補（遠征 ${obs.camp.next_no}）。持ち主が、この中から決める（指図。あなたの start_expedition は断られる）:`, `Offers for expedition ${obs.camp.next_no} (your owner picks one; directive: your start_expedition is refused):`)
+        : t(L, `次の遠征の候補（遠征 ${obs.camp.next_no}）。start_expedition { offer } で始める:`, `Offers for expedition ${obs.camp.next_no} (start with start_expedition { offer }):`));
       for (const o of obs.camp.offers) lines.push('  ' + o.text);
       lines.push('  ' + t(L, 'endless) 目的なしでひたすら潜る（offer: "endless"）', 'endless) no objective, just descend (offer: "endless")'));
     }
@@ -2936,6 +3022,8 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
       for (const e of collapseRepeats(obs.recent_events)) lines.push(`- ${e}`);
     }
     lines.push(t(L, 'できること: ', 'Actions: ') + obs.valid_actions.join(' / '));
+    // 持ち主からの伝言（S8 §54.4 の 3）: 区切りの段の前に。聞くかどうかは、あなたが決める
+    if (s.directive?.message) lines.push(t(L, `持ち主から: ${s.directive.message}`, `From your owner: ${s.directive.message}`));
     if (obs.checkpoint) lines.push(...checkpointLines(L, obs.checkpoint));
     return lines.join('\n');
   }
@@ -2944,6 +3032,8 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
   const floorText = s.floor ? t(L, `地下${s.floor.depth}階 ${s.floor.biome_name}${ftText}`, `Depth ${s.floor.depth} ${s.floor.biome_name}${ftText}`) : '-';
   const posText = s.pos ? t(L, `位置(${s.pos.x},${s.pos.y})`, `pos(${s.pos.x},${s.pos.y})`) : '';
   lines.push(`[seq ${obs.seq} | ${floorText} | HP ${s.hp}/${s.max_hp} | Lv${s.level} | ${posText ? posText + ' | ' : ''}${statusText[obs.status][L === 'en' ? 1 : 0]}]`);
+  // 指図（S8 §54.4 の 1）: 迷宮の中でも 1 行
+  if (s.directive) lines.push(s.directive.text);
   // シーズン（S0 §9.6）: 迷宮の中は予算の残りだけ（順位は出さない）
   if (obs.season) lines.push(obs.season.text);
   if (obs.season?.fire_used) lines.push(obs.season.fire_used.text);

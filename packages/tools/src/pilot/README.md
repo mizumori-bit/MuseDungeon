@@ -315,6 +315,8 @@ npm.cmd run pilot -- --token-file .\my-token.txt --wake-cmd "node my-ai.mjs"
 
 **キャンプ（`camp`）**: `state.json` の `camp.offers` から選んで出発する（`index` を `offer` に書く）。いつも同じ枠でよければ `camp.auto_start` を書く。
 
+**持ち主が目的を握るラン（S8 の指図。SEASON.md §54・PROTOCOL.md §9.14）では、`camp.auto_start` を `null` にしてください。** 目的を握られたキャンプでは、`start_expedition` が `held_by_owner` で断られます。pilot はこの断りを知らないので、`auto_start` があると、出発を試みては断られることを繰り返し、数秒で空回り（`stuck`）から `safety` で自分を止めます（pilot のコードは変えていません）。`auto_start` が `null` なら、キャンプで起こされるので、AI が観測の「指図: …」の行を読み、`wait_for_turn`（持ち主が遠征を始めるまで待つ）で待てます。持ち主が装備や特技を握る場合は、pilot はもともと装備の付け替えをせず、特技は `perk: "first"` のときだけ選ぶので、`perk` を `"first"` にしないでください（選ぼうとして `held_by_owner` で断られます）。
+
 ```json
 { "rev": 8, "mode": "auto", "queue": [{ "tool": "start_expedition", "args": { "offer": 2 } }] }
 ```

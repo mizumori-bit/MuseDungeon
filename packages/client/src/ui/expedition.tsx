@@ -465,7 +465,7 @@ function CampRecords({ nextNo }: { nextNo: number }) {
     api.records(tok, L).then((r) => setLine(recordsCampLine(L, r.records))).catch(() => setLine(null));
   }, [nextNo]);
   if (!line) return null;
-  return <p class="muted records-line">{line} <a href="#/">{tr('（ロビーで全文）', '(full text in the lobby)')}</a></p>;
+  return <p class="muted records-line">{line} <a href="#/records">{tr('（ホームの「記録」で全文）', '(full text in Home > Records)')}</a></p>;
 }
 
 /**

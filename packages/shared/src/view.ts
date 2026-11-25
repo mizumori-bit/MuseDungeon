@@ -4,7 +4,7 @@ import type {
   CampState, Controller, Entity, EntityId, EntityRole, EquipSlot, Expedition, ExpeditionEndReason, ExpeditionResult, FloorKey,
   Locale, MonsterMemory, Objective, OfferSlot, PlayerBuild, PlayerId, PlayerState, Pos, RememberedEntity, SeasonState, Stats, StatusInst, World, Sense, FloorHint, Names, Intent, RelicInfo, MilestoneInfo,
 } from './types';
-import type { Dir } from './types';
+import type { Dir, DirectiveItem } from './types';
 import { cheb, compassDir } from './util';
 import { projectSupplies, seasonBudgetLeft, seasonStairsCounts } from './season';
 import type { SupplyTakenView, SupplyView } from './season';
@@ -255,6 +255,11 @@ export interface PlayerView {
      */
     cache?: SupplyView[]; cacheHidden?: { depth: number; count: number; place: SupplyPlace }[]; supplyTaken?: (SupplyView & { no: number })[]; myDeposits?: SupplyView[]; cacheNews?: SupplyTakenView[];
   };
+  /**
+   * 自分の指図（S8。SEASON.md §54.4）: 持ち主が握っている項目・持ち主からの伝言・このランで持ち主が決めた項目。指図の無いランには無い。
+   * ほかの参加者の指図は入らない
+   */
+  directive?: { hold: DirectiveItem[]; message: string; decided: DirectiveItem[] };
 }
 
 export function hpState(hp: number, maxHp: number): HpState {
@@ -637,6 +642,9 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
     milestonesCleared: [...(world.milestones?.cleared ?? [])],
     record: { banked: rec.stats.banked ?? 0, lost: rec.stats.lost ?? 0, expeditions: rec.stats.expeditions ?? 0 },
     ...(world.season ? { season: seasonView(world, playerId) } : {}),
+    // 指図（S8 §54.4）: 自分のものだけ。握っている・伝言がある・持ち主が決めたことがあるときだけ
+    ...(rec.directive?.hold.length || rec.directive?.message || rec.ownerDecided?.length
+      ? { directive: { hold: [...(rec.directive?.hold ?? [])], message: rec.directive?.message ?? '', decided: [...(rec.ownerDecided ?? [])] } } : {}),
   };
 }
 

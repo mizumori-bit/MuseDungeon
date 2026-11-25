@@ -5,6 +5,7 @@ import { awardName, guardianDisplayName, kindName, nameOf, slayGroupText, slayOb
 import { useEffect, useState } from 'preact/hooks';
 import { api, errorText } from '../api';
 import { ErrorBanner, Header, useCatalog, useLocaleRefresh } from '../ui/common';
+import { DirectedTag } from '../ui/season';
 import { fmtTime, getLocale, tr } from '../util';
 
 const AWARDS: SeasonAward['id'][] = ['adventure', 'contribution', 'survival', 'support'];
@@ -51,7 +52,8 @@ export function Season({ id }: { id: string }) {
   return (
     <div class="page">
       <Header title={s ? tr(`シーズン「${s.name}」`, `Season "${s.name}"`) : tr('シーズン', 'Season')}>
-        <a class="button small" href="#/">{tr('ロビーへ', 'Lobby')}</a>
+        <a class="button small" href="#/records">{tr('記録へ', 'Records')}</a>
+        <a class="button small" href="#/">{tr('ホームへ', 'Home')}</a>
       </Header>
       <ErrorBanner error={error} onClose={() => setError(null)} />
       {!data && !error && <div class="muted">{tr('読み込み中…', 'Loading…')}</div>}
@@ -74,7 +76,7 @@ export function Season({ id }: { id: string }) {
                   <div key={aid} class="awardcol">
                     <h4>{awardName(L, aid)}</h4>
                     <ol>
-                      {ranked.map(({ r, c }) => <li key={r.name} class={c.rank === 1 ? 'lead' : ''}>{c.rank}. {r.name} — {valueText(aid, c.value)}</li>)}
+                      {ranked.map(({ r, c }) => <li key={r.name} class={c.rank === 1 ? 'lead' : ''}>{c.rank}. {r.name} <DirectedTag items={r.directed} /> — {valueText(aid, c.value)}</li>)}
                     </ol>
                     {out.length > 0 && <div class="muted small">{tr(`対象外（倒れた）: ${out.map((r) => r.name).join('・')}`, `Not eligible (fell): ${out.map((r) => r.name).join(', ')}`)}</div>}
                   </div>
@@ -100,7 +102,7 @@ export function Season({ id }: { id: string }) {
               </tr></thead>
               <tbody>{rows.map((r) => (
                 <tr key={r.name}>
-                  <td>{r.name} {(r.titles ?? []).map((x, i) => <span key={i} class="tag title" title={x.seasonName}>{nm(x)}</span>)}</td>
+                  <td>{r.name} {(r.titles ?? []).map((x, i) => <span key={i} class="tag title" title={x.seasonName}>{nm(x)}</span>)}<DirectedTag items={r.directed} /></td>
                   <td>{tr(`地下${r.adventure.value}階`, `D${r.adventure.value}`)}</td>
                   <td>{r.banked ?? '-'}</td><td>{r.used}</td>
                   <td>{r.died ? tr('倒れた', 'yes') : '-'}</td><td>{r.runs}</td>

@@ -517,6 +517,13 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
     }
     case 'expedition_started':
       return ja ? `遠征 ${ev.expedition?.no} が始まった: ${objectiveText(L, ev.expedition?.objective)}` : `Expedition ${ev.expedition?.no} begins: ${objectiveText(L, ev.expedition?.objective)}`;
+    // 指図（S8。SEASON.md §54.4）: 本人にだけ届く（ほかの参加者には渡らない）
+    case 'directive_set': {
+      const d = ev.directiveAfter as { hold?: string[]; message?: string } | undefined;
+      return directiveSetText(L, d?.hold ?? [], !!d?.message);
+    }
+    case 'owner_decided':
+      return ownerDecidedText(ctx, ev);
     case 'objective_completed':
       return ja ? `遠征の目的を達成した: ${objectiveText(L, ev.objective)}` : `Objective complete: ${objectiveText(L, ev.objective)}`;
     case 'expedition_ended':
@@ -541,6 +548,41 @@ export function narrate(evIn: ProjectedEvent, ctx: NarrateCtx): string | null {
     }
     case 'entity_removed':
       return null;
+    default:
+      return null;
+  }
+}
+
+/** 指図の項目の名前（S8。SEASON.md §54。並びは目的・装備・特技と加護） */
+export function directiveItemsText(L: Locale, items: readonly string[]): string {
+  const name = (x: string) => x === 'objective' ? (L === 'en' ? 'objective' : '目的') : x === 'loadout' ? (L === 'en' ? 'equipment' : '装備') : (L === 'en' ? 'perks and boons' : '特技と加護');
+  const order = ['objective', 'loadout', 'perks'];
+  return order.filter((x) => items.includes(x)).map(name).join(L === 'en' ? ', ' : '・');
+}
+
+/** 持ち主が指図を変えた（S8 §54.4）。伝言の中身は出さない（キャンプの観測の「持ち主から」に出る） */
+export function directiveSetText(L: Locale, hold: readonly string[], message: boolean): string {
+  const held = directiveItemsText(L, hold);
+  return L === 'en'
+    ? `Your owner changed the directive: ${held ? `they decide ${held} at camp` : 'they hold nothing (you decide everything)'}${message ? '; a message is in the camp observation ("From your owner")' : ''}.`
+    : `持ち主が指図を変えた: ${held ? `${held}は持ち主がキャンプで決める` : '何も握っていない（すべてあなたが決める）'}${message ? '。伝言あり（キャンプの観測の「持ち主から」）' : ''}。`;
+}
+
+/** 持ち主が、握った項目を決めた（S8 §54.4 の 4） */
+function ownerDecidedText(ctx: NarrateCtx, ev: Record<string, any>): string | null {
+  const L = ctx.locale;
+  const ja = L !== 'en';
+  switch (ev.act) {
+    case 'start_expedition':
+      return ja ? `持ち主が、遠征 ${ev.no ?? '?'} を始めた。` : `Your owner started expedition ${ev.no ?? '?'}.`;
+    case 'equip':
+      return ja ? `持ち主が、装備を変えた: ${itemName(ctx, ev)}を装備。` : `Your owner changed your gear: equipped ${itemName(ctx, ev)}.`;
+    case 'unequip':
+      return ja ? `持ち主が、装備を変えた: ${itemName(ctx, ev)}を外した。` : `Your owner changed your gear: removed ${itemName(ctx, ev)}.`;
+    case 'choose_perk':
+      return ja ? `持ち主が、特技を選んだ: ${nameOf(ctx.catalog.perks[ev.choice]?.name, L, ev.choice ?? '?')}。` : `Your owner chose a perk: ${nameOf(ctx.catalog.perks[ev.choice]?.name, L, ev.choice ?? '?')}.`;
+    case 'choose_boon':
+      return ja ? `持ち主が、加護を選んだ: ${nameOf(ctx.catalog.boons?.[ev.choice]?.name, L, ev.choice ?? '?')}。` : `Your owner chose a boon: ${nameOf(ctx.catalog.boons?.[ev.choice]?.name, L, ev.choice ?? '?')}.`;
     default:
       return null;
   }

@@ -132,12 +132,15 @@ export function StatusPanel({ view, catalog, speed, floor }: { view: PlayerView;
 export type InvAction = 'use' | 'equip' | 'unequip' | 'drop' | 'throw';
 
 /**
- * exposed: 隣に起きている追跡中の敵がいる（薬・巻物を使う間にその敵が行動する。V3-2R3 §20.4）。使うボタンに印を付ける
+ * exposed: 隣に起きている追跡中の敵がいる（薬・巻物を使う間にその敵が行動する。V3-2R3 §20.4）。使うボタンに印を付ける。
+ * actions: 出す操作のボタン（省くとすべて。持ち主の枠は装備・外すだけ: S8 §54.3）
  */
-export function InventoryPanel({ view, catalog, onAction, focused, selected, onSelect, exposed }: {
+export function InventoryPanel({ view, catalog, onAction, focused, selected, onSelect, exposed, actions }: {
   view: PlayerView; catalog: Catalog; onAction?: (a: InvAction, slot: string) => void; focused?: boolean; selected?: string | null; onSelect?: (slot: string) => void; exposed?: boolean;
+  actions?: readonly InvAction[];
 }) {
   const L = getLocale();
+  const can = (a: InvAction) => !actions || actions.includes(a);
   const treasure = view.inventory.reduce((a, it) => a + (it.value ?? 0), 0);
   const lifeline = lifelineEffectText(catalog.rules?.lifeline?.turns);
   return (
@@ -184,22 +187,22 @@ export function InventoryPanel({ view, catalog, onAction, focused, selected, onS
               </span>
               {onAction && (
                 <span class="acts">
-                  {usable && (
+                  {usable && can('use') && (
                     <button class={`tiny ${bound ? 'lifeline' : ''} ${risky ? 'exposed' : ''}`} onClick={(e) => { e.stopPropagation(); onAction('use', it.slot); }}
                       title={bound ? tr(`帰還の綱を使う（L）: ${lifeline}。確認が出る`, `Use the lifeline (L): ${lifeline}. Asks to confirm`)
                         : risky ? tr('使う間に隣の敵が行動する', 'Adjacent enemies act while you use it') : undefined}>
                       {bound ? tr('綱を使う', 'Use') : tr('使う', 'Use')}{risky ? ' ⚠' : ''}
                     </button>
                   )}
-                  {ci?.slot && !it.equipped && !worse && (
+                  {ci?.slot && !it.equipped && !worse && can('equip') && (
                     <button class="tiny" disabled={slotStuck} title={slotStuck ? tr('その部位の装備が呪われていて外せない', 'The item in that slot is cursed and cannot be removed') : curseTag?.title}
                       onClick={(e) => { e.stopPropagation(); onAction('equip', it.slot); }}>{tr('装備', 'Equip')}{curse === 'cursed' ? ' ⚠' : curse ? ' ?' : ''}</button>
                   )}
-                  {it.equipped && (
+                  {it.equipped && can('unequip') && (
                     <button class="tiny" disabled={stuck} title={stuck ? cursedRemoveText() : undefined} onClick={(e) => { e.stopPropagation(); onAction('unequip', it.slot); }}>{tr('外す', 'Remove')}</button>
                   )}
-                  {throwable && !it.equipped && <button class="tiny" onClick={(e) => { e.stopPropagation(); onAction('throw', it.slot); }}>{tr('投げる', 'Throw')}</button>}
-                  {!bound && (
+                  {throwable && !it.equipped && can('throw') && <button class="tiny" onClick={(e) => { e.stopPropagation(); onAction('throw', it.slot); }}>{tr('投げる', 'Throw')}</button>}
+                  {!bound && can('drop') && (
                     <button class="tiny" disabled={stuck} title={stuck ? cursedRemoveText() : undefined} onClick={(e) => { e.stopPropagation(); onAction('drop', it.slot); }}>{tr('置く', 'Drop')}</button>
                   )}
                 </span>
@@ -458,7 +461,22 @@ export function PartyPanel({ world, catalog, follow, onFollow }: { world: World;
   );
 }
 
-export interface ThoughtLine { seq: number; player: string; name: string; text: string }
+/**
+ * 思考の欄の 1 行。kind（S8。SEASON.md §54.6）: 無ければ AI の考え、owner は持ち主が決めたこと（owner_decided）、owner_msg は持ち主の指図と伝言（directive_set）。
+ * sub: 添える 1 行（伝言の行の、握った項目など）
+ */
+export interface ThoughtLine { seq: number; player: string; name: string; text: string; kind?: 'owner' | 'owner_msg'; sub?: string }
+
+/** 思考の欄の 1 行を描く（持ち主の行は見出しを替える） */
+function ThoughtRow({ t }: { t: ThoughtLine }) {
+  if (t.kind === 'owner') {
+    return <div class="line owner"><b>{tr('持ち主が決めた', 'The owner decided')}</b> <small>{t.name} #{t.seq}</small><br />{t.text}</div>;
+  }
+  if (t.kind === 'owner_msg') {
+    return <div class="line owner_msg"><b>{tr('持ち主から', 'From the owner')}</b> <small>{t.name} #{t.seq}</small><br />{t.text}{t.sub ? <div class="muted small">{t.sub}</div> : null}</div>;
+  }
+  return <div class="line thought"><b>{t.name}</b> <small>#{t.seq}</small><br />{t.text}</div>;
+}
 
 export function AiPanel({ thoughts, activities, commands, observationText }: {
   thoughts: ThoughtLine[]; activities?: AgentActivity[]; commands?: CommandRecord[]; observationText: string | null;
@@ -481,7 +499,7 @@ export function AiPanel({ thoughts, activities, commands, observationText }: {
         <div class="lines">
           {showCmd && lastCmd && <div class="line command"><small>{tr('思考なし・直前の命令', 'No thought; last command')} #{lastCmd.seq}</small><br /><code>{commandBrief(lastCmd)}</code></div>}
           {thoughts.length === 0 && !showCmd && <div class="muted">{tr('まだ thought はありません', 'No thoughts yet')}</div>}
-          {thoughts.slice(-30).reverse().map((t) => <div key={t.seq} class="line thought"><b>{t.name}</b> <small>#{t.seq}</small><br />{t.text}</div>)}
+          {thoughts.slice(-30).reverse().map((t) => <ThoughtRow key={`${t.kind ?? 'thought'}-${t.seq}-${t.player}`} t={t} />)}
         </div>
       )}
       {tab === 'calls' && (

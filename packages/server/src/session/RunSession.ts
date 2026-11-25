@@ -3,14 +3,14 @@
 import { randomBytes } from 'node:crypto';
 import type { Catalog } from '@muse/shared';
 import type { Content } from '@muse/content';
-import { createRun, isPlayersTurn, joinPlayer, resumeSeq, seasonSync, step } from '@muse/engine';
+import { createRun, directiveRefusal, heldItemOf, isPlayersTurn, joinPlayer, resumeSeq, seasonSync, step } from '@muse/engine';
 import type {
   ActionError, AgentActivity, Command, CommandRecord, CommandSource, Dir, Expedition, ExpeditionReport, GameEvent, JoinCommand, LegacyMonster, MacroStop, ProjectedEvent,
   PerceivedEvent, PlayerId, PlayerView, Pos, ReportCall, RunMetaFile, RunSummary, SeasonSlay, SeasonSlayFacts, SeasonSyncCommand, SeqResumeCommand, TurnSnapshot, World,
-  CheckpointLedger,
+  CheckpointLedger, DirectiveItem,
 } from '@muse/shared';
 import {
-  actionError, applyEvent, buildExpeditionReport, canonicalHash, guardianDisplayName, compareReports, emptyWorld, filterEventsForPlayer, FREE_COMMANDS, MACRO_COMMANDS,
+  DIRECTIVE_ITEMS, actionError, applyEvent, buildExpeditionReport, canonicalHash, guardianDisplayName, compareReports, emptyWorld, filterEventsForPlayer, FREE_COMMANDS, MACRO_COMMANDS,
   CHECKPOINT_EVERY, checkpointCamp, checkpointStep, monsterInView,
   fleeOptionsText, fleeRiskText, macroNext, macroProbe, macroStart, macroStopError, narrate, projectPlayerView, publicStairsAt, riskText, fightRiskStop, fightThreats, threatEstimate, seasonReportable, seasonReportableSpots, selfTurnMarks, t,
 } from '@muse/shared';
@@ -282,7 +282,8 @@ export class RunSession {
     let lastSeq = 0;
     for (const rec of commands) {
       const pid = rec.player;
-      if (pid && rec.source !== 'timeout' && rec.source !== 'system' && rec.command.type !== 'join') {
+      // 持ち主の命令（S8）は、プレイヤーの呼び出しに数えない
+      if (pid && rec.source !== 'timeout' && rec.source !== 'system' && rec.source !== 'owner' && rec.command.type !== 'join') {
         if (rec.macro) {
           this.macroKinds.set(rec.cseq, rec.command.type);
           this.pushCall(pid, { seq: lastSeq + 1, kind: 'macro_call', type: rec.command.type });
@@ -311,7 +312,8 @@ export class RunSession {
     if (cmd.type === 'season_sync') return seasonSync(this.world, this.deps.content, rec.player!, cmd, { cseq: rec.cseq, wall: rec.wall, thought: rec.thought }).events;
     // 食い違ったランの続きの番号（S3f §40.2 の 2）: 記録の番号で出す
     if (cmd.type === 'seq_resume') return resumeSeq(this.world, this.deps.content, cmd, { cseq: rec.cseq, wall: rec.wall }).events;
-    const r = step(this.world, this.deps.content, rec.player!, cmd, { cseq: rec.cseq, wall: rec.wall, thought: rec.thought, auto: rec.source === 'timeout' || rec.source === 'system' });
+    // 持ち主の口から通った命令（S8 §54.3）は、記録の source から（再生は記録だけで同じ判定になる）
+    const r = step(this.world, this.deps.content, rec.player!, cmd, { cseq: rec.cseq, wall: rec.wall, thought: rec.thought, auto: rec.source === 'timeout' || rec.source === 'system', owner: rec.source === 'owner' });
     return r.events;
   }
 
@@ -682,7 +684,12 @@ export class RunSession {
       if (e.type === 'item_identified' && e.player === pid && e.appearanceId) known.add(e.appearanceId);
     }
     const ctx = this.narrateCtx(view);
+    // 持ち主が決めた項目（S8 §54.6）: この遠征の前のキャンプ（前の遠征の終わりの後）から、この遠征の終わりまでの owner_decided
+    const prevEnd = Math.max(0, ...(this.world.expeditions ?? []).filter((y) => y.no < x.no && y.participants.includes(pid) && y.endSeq !== null).map((y) => y.endSeq!));
+    const owner = new Set<DirectiveItem>();
+    for (let i = this.indexOfSeq(prevEnd + 1); i < i1; i++) { const e = this.history[i]; if (e.type === 'owner_decided' && e.player === pid) owner.add(e.item); }
     return buildExpeditionReport({
+      ...(owner.size ? { owner: DIRECTIVE_ITEMS.filter((d) => owner.has(d)) } : {}),
       locale: view.locale, catalog: this.deps.catalog, selfId: view.self.id, no: x.no,
       events: filterEventsForPlayer(slice, pid, view), marks: selfTurnMarks(slice, view.self.id),
       calls: (this.calls.get(pid) ?? []).filter((c) => c.seq >= from && c.seq <= to),
@@ -808,11 +815,31 @@ export class RunSession {
     }
   }
 
+  /**
+   * 持ち主の決定を待つ（S8。SEASON.md §54.4 の 5）: キャンプで目的を握られている間、持ち主が遠征を始める（キャンプを出る）か、目的を握るのをやめるか、
+   * timeoutMs が過ぎるまで。時間は World に入れない（待つだけで、何も記録しない）
+   */
+  async waitForOwner(pid: PlayerId, timeoutMs: number): Promise<'started' | 'released' | 'timeout' | 'ended'> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const pr = this.world.players[pid];
+      if (this.world.status === 'ended' || !pr || pr.state === 'dead' || pr.state === 'left') return 'ended';
+      if (pr.state !== 'at_camp') return 'started';
+      if (!pr.directive?.hold.includes('objective')) return 'released';
+      const left = deadline - Date.now();
+      if (left <= 0) return 'timeout';
+      await this.waitChange(left);
+    }
+  }
+
   /** コマンドを投入する。マクロはここで基本行動に展開する（AI も人間も同じ） */
   async submit(pid: PlayerId, cmd: Command, opts: SubmitOpts): Promise<SubmitResult> {
     const pr = this.world.players[pid];
     if (!pr) return { ok: false, error: actionError('no_session', 'no such player', 'resume_run') };
-    this.lastInput.set(pid, Date.now());
+    // 持ち主の口（S8 §54.3）: 指図と握った項目の命令だけ（マクロ・報告などは、ここで断る。engine も断る）。プレイヤーの入力の時刻には数えない
+    const owner = opts.source === 'owner';
+    if (owner && cmd.type !== 'set_directive' && !heldItemOf(cmd)) return { ok: false, error: actionError('bad_request', t(pr.locale, '持ち主の口から出せるのは、set_directive と、握った項目の命令（start_expedition・equip・unequip・choose_perk・choose_boon）だけ。', 'From the owner you can send set_directive and the held items\' commands (start_expedition, equip, unequip, choose_perk, choose_boon) only.'), '') };
+    if (!owner) this.lastInput.set(pid, Date.now());
     if (opts.expectSeq !== undefined && opts.expectSeq !== this.world.seq && !FREE_COMMANDS.has(cmd.type)) {
       return {
         ok: false,
@@ -824,7 +851,13 @@ export class RunSession {
     if (cmd.type === 'report_stairs') return this.enqueue(() => this.reportNow(pid, opts));
     // シーズン（S0 §9.4）: 遠征を始めるときに取り込む（予算・終わりの時刻・公開された階段・順位）
     if (cmd.type === 'start_expedition' && this.world.meta.season && this.deps.season && pr.state === 'at_camp') {
-      return this.enqueue(() => { this.seasonSyncNow(pid, 'start'); return this.stepNow(pid, cmd, opts.source, opts.thought); });
+      return this.enqueue(() => {
+        // 目的を握られた start_expedition（S8 §54.3）は、取り込みを記録する前に断る（断りは World を変えない）
+        const held = this.world.players[pid] ? directiveRefusal(this.world, this.world.players[pid], cmd, owner) : null;
+        if (held) return { ok: false as const, error: held };
+        this.seasonSyncNow(pid, 'start');
+        return this.stepNow(pid, cmd, opts.source, opts.thought);
+      });
     }
     return this.enqueue(() => this.stepNow(pid, cmd, opts.source, opts.thought));
   }
@@ -877,11 +910,11 @@ export class RunSession {
     const startSeq = this.world.seq;
     const cseq = this.cseq + 1;
     const wall = Date.now();
-    const r = step(this.world, this.deps.content, pid, cmd, { cseq, wall, thought, auto: source === 'timeout' || source === 'system' });
+    const r = step(this.world, this.deps.content, pid, cmd, { cseq, wall, thought, auto: source === 'timeout' || source === 'system', owner: source === 'owner' });
     if (!r.ok && !r.events.length) return { ok: false, error: r.error };
     this.cseq = cseq;
-    // 呼び出しの記録は確定の前に（確定の中で遠征レポートが作られ、残る。V3-7 のプロフィールの更新）
-    if (source !== 'timeout' && source !== 'system' && r.events.length) this.pushCall(pid, { seq: r.events[0].seq, kind: parent ? 'macro_step' : 'call', type: cmd.type, ...(parent ? { macro: this.macroKinds.get(parent) } : {}) });
+    // 呼び出しの記録は確定の前に（確定の中で遠征レポートが作られ、残る。V3-7 のプロフィールの更新）。持ち主の命令（S8）は数えない
+    if (source !== 'timeout' && source !== 'system' && source !== 'owner' && r.events.length) this.pushCall(pid, { seq: r.events[0].seq, kind: parent ? 'macro_step' : 'call', type: cmd.type, ...(parent ? { macro: this.macroKinds.get(parent) } : {}) });
     this.commit({ cseq, player: pid, command: cmd, source, wall, thought, parent }, r.events);
     if (!r.ok) return { ok: false, error: r.error };
     return { ok: true, events: r.events, startSeq };

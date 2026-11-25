@@ -1,13 +1,13 @@
 // Event の型。仕様: docs/PROTOCOL.md §5
 // 規約: イベントは結果値（after 値）を持ち、applyEvent は代入・追加・削除しかしない。
 import type {
-  AiState, BaseStats, CampState, Dir, Entity, EntityId, EquipSlot, Expedition, ExpeditionHaul, ExpeditionEndReason, ExpeditionResult, Floor,
+  AiState, BaseStats, CampState, Dir, Directive, DirectiveItem, Entity, EntityId, EquipSlot, Expedition, ExpeditionHaul, ExpeditionEndReason, ExpeditionResult, Floor,
   FloorKey, FloorPos, MonsterMemory, Objective, ObjectiveProgress, PlayerId, PlayerRecord, PlayerStats, Pos,
   RememberedEntity, RngState, RunMeta, RunSummary, SeasonDeposit, SeasonState, SeasonTaken, Sense, Stats, StatusInst, SupplyPlace, WorldSecret, FloorHint, Names,
 } from './types';
 
-/** 2: 遠征・実ダメージ・回復の蓄積値（IMPROVEMENTS_V2）。3: ビルド（特技・能動技・呪い。V3-4）。22: シーズン（S0）。29: 補給の置き場（S3）。30: 帰り支度の取りやめの理由（S3a）。31: 覚えている品の接辞（knowledge_updated.rememberedSet[].affixes。S3c）。32: 食い違ったランの続きの番号（seq_resumed。S3f）。33: 討伐の記録（season_synced.seasonAfter.slays。S4）。34: 討伐の記録の予備動作と動けなかった手番（slays[].tells・openings。S5）。35: 討伐の記録の戦い始めの相手（slays[].wardenStart。S6。engine は変えていないので engineVersion は 0.47.0 のまま）。古いログもそのまま畳み込める */
-export const EVENT_VERSION = 35;
+/** 2: 遠征・実ダメージ・回復の蓄積値（IMPROVEMENTS_V2）。3: ビルド（特技・能動技・呪い。V3-4）。22: シーズン（S0）。29: 補給の置き場（S3）。30: 帰り支度の取りやめの理由（S3a）。31: 覚えている品の接辞（knowledge_updated.rememberedSet[].affixes。S3c）。32: 食い違ったランの続きの番号（seq_resumed。S3f）。33: 討伐の記録（season_synced.seasonAfter.slays。S4）。34: 討伐の記録の予備動作と動けなかった手番（slays[].tells・openings。S5）。35: 討伐の記録の戦い始めの相手（slays[].wardenStart。S6。engine は変えていないので engineVersion は 0.47.0 のまま）。36: 指図（directive_set・owner_decided。S8）。古いログもそのまま畳み込める */
+export const EVENT_VERSION = 36;
 
 export interface EventBase {
   seq: number;
@@ -237,6 +237,14 @@ export type GameEvent =
   | E<'fire_return', { player: PlayerId; phase: 'start' | 'cancel' | 'done'; depth: number; x: number; y: number; by: string; turns?: number; reason?: 'hostile' | 'moved' | 'not_complete' | 'damaged'; completed?: boolean;
       foe?: { id: string; kind: string; pos: Pos }; dealt?: number; sourceKind?: string | null }>
   | E<'notes_updated', { player: PlayerId; notesAfter: string[] }>
+  /** 指図を変えた（S8。SEASON.md §54.2。持ち主の口からの set_directive。本人だけ）。directiveAfter は PlayerRecord.directive の after 値 */
+  | E<'directive_set', { player: PlayerId; directiveAfter: Directive }>
+  /**
+   * 持ち主の口から、握った項目を決めた（S8 §54.3・§54.6。本人だけ）。同じ命令の出来事（expedition_started・item_equipped など）の後に出る。
+   * act: 通った命令。no: 始めた遠征（start_expedition）、kind・appearanceId: 付け替えた品（equip・unequip。未鑑定なら種類は伏せる）、
+   * choice: 選んだ特技・加護の ID。decidedAfter は PlayerRecord.ownerDecided の after 値
+   */
+  | E<'owner_decided', { player: PlayerId; item: DirectiveItem; act: 'start_expedition' | 'equip' | 'unequip' | 'choose_perk' | 'choose_boon'; no?: number; kind?: string | null; appearanceId?: string | null; choice?: string; decidedAfter: DirectiveItem[] }>
   // 遠征
   | E<'expedition_offered', { camp: CampState }>
   | E<'expedition_started', { expedition: Expedition }>

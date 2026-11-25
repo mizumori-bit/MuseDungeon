@@ -53,18 +53,19 @@ export function BoonChoicePanel({ choice, catalog, onChoose }: {
 /**
  * 特技の候補（choose_perk。手番を使わない。キャンプでも選べる）。
  * focused: キーボードで番号を受け付けている（p）。sent: 選んで返事を待っている間は押せない。
- * collapsed: 「あとで」で畳んだ（1 行だけ出す）
+ * collapsed: 「あとで」で畳んだ（1 行だけ出す）。onCollapse を渡さなければ「あとで」は出さない。
+ * note: 見出しの補足（省くと遊ぶ画面の補足。持ち主の枠では、キーボードの案内の無い文を渡す。S8）
  */
-export function PerkChoicePanel({ choice, catalog, classId, focused, sent, collapsed, onChoose, onCollapse, onExpand }: {
+export function PerkChoicePanel({ choice, catalog, classId, focused, sent, collapsed, onChoose, onCollapse, onExpand, note }: {
   choice: PerkChoice; catalog: Catalog | null | undefined; classId: string; focused?: boolean; sent?: boolean; collapsed?: boolean;
-  onChoose: (option: number) => void; onCollapse: () => void; onExpand: () => void;
+  onChoose: (option: number) => void; onCollapse?: () => void; onExpand?: () => void; note?: string;
 }) {
   const L = getLocale();
-  if (collapsed && !focused) {
+  if (collapsed && !focused && onExpand) {
     return (
       <div class="perkbox collapsed">
         <span>{perkChoiceHead(choice.level, choice.more)}</span>
-        <button class="tiny" onClick={onExpand} title={perkChoiceNote()}>{tr('開く', 'Open')} (p)</button>
+        <button class="tiny" onClick={onExpand} title={note ?? perkChoiceNote()}>{tr('開く', 'Open')} (p)</button>
       </div>
     );
   }
@@ -72,8 +73,8 @@ export function PerkChoicePanel({ choice, catalog, classId, focused, sent, colla
     <div class={`perkbox ${focused ? 'focused' : ''}`}>
       <div class="phead">
         <b>{perkChoiceHead(choice.level, choice.more)}</b>
-        <small class="muted">{perkChoiceNote()}</small>
-        <button class="tiny right" onClick={onCollapse} title={tr('畳む（後で p で開く）', 'Collapse (open later with p)')}>{tr('あとで', 'Later')}</button>
+        <small class="muted">{note ?? perkChoiceNote()}</small>
+        {onCollapse && <button class="tiny right" onClick={onCollapse} title={tr('畳む（後で p で開く）', 'Collapse (open later with p)')}>{tr('あとで', 'Later')}</button>}
       </div>
       <ul class="perkopts">
         {choice.options.map((o) => {
@@ -91,7 +92,7 @@ export function PerkChoicePanel({ choice, catalog, classId, focused, sent, colla
                 {ab && <span class="pab" title={nameOf(ab.desc, L, '')}>{tr(`能動技: ${nameOf(ab.name, L, '')}`, `ability: ${nameOf(ab.name, L, '')}`)}</span>}
               </div>
               <div class="pdesc">{desc}</div>
-              <button class="small" disabled={sent} onClick={() => onChoose(o.option)}>{tr('選ぶ', 'Choose')} ({o.option})</button>
+              <button class="small" disabled={sent} onClick={() => onChoose(o.option)}>{tr('選ぶ', 'Choose')}{onCollapse ? ` (${o.option})` : ''}</button>
             </li>
           );
         })}

@@ -4,9 +4,9 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { readJsonStable, writeFileAtomicLogged } from '../log/atomicWrite';
 import type {
-  GameEvent, PlayerId, SeasonAward, SeasonListing, SeasonResultView, SeasonSectionRow, SeasonSlay, SeasonSlayBrief, SeasonStandingRow, SeasonStandingsResponse, SeasonSyncCommand, SeasonTitle, SupplyPlace,
+  DirectiveItem, GameEvent, PlayerId, SeasonAward, SeasonListing, SeasonResultView, SeasonSectionRow, SeasonSlay, SeasonSlayBrief, SeasonStandingRow, SeasonStandingsResponse, SeasonSyncCommand, SeasonTitle, SupplyPlace,
 } from '@muse/shared';
-import { awardName, SeasonSlaySchema } from '@muse/shared';
+import { awardName, DIRECTIVE_ITEMS, SeasonSlaySchema } from '@muse/shared';
 import type { RunSession } from '../session/RunSession';
 import type { ProfileStore } from '../session/profiles';
 import { buildSlays, incapStatuses } from './slays';
@@ -28,7 +28,8 @@ export interface SeasonDef {
 }
 
 /** firesSeen（S1a）: そのランの火の使用（fire_used）のうち、記録（log.jsonl）に書いた数。数える処理はやり直しても同じ（火ごとの users で 1 人 1 回） */
-export interface SeasonRunRec { runId: string; startedAt: number; turns: number; deepest: number; banked: number; died: boolean; ended: boolean; firesSeen?: number }
+/** directed（S8。SEASON.md §54.6）: そのランで、持ち主の口から決めた項目（World の ownerDecided の写し） */
+export interface SeasonRunRec { runId: string; startedAt: number; turns: number; deepest: number; banked: number; died: boolean; ended: boolean; firesSeen?: number; directed?: DirectiveItem[] }
 
 export interface Participant {
   profileId: string;
@@ -48,7 +49,8 @@ export interface Participant {
   shown?: ShownValues;
 }
 
-export interface ShownValues { best: { depth: number; used: number }; used: number; died: boolean; banked: number; runs: number }
+/** directed（S8 §54.6）: そのシーズンで持ち主の口から決めた項目（すべてのランの和。順位の印。キャンプで更新） */
+export interface ShownValues { best: { depth: number; used: number }; used: number; died: boolean; banked: number; runs: number; directed?: DirectiveItem[] }
 
 /** 招いた者（S0a。SEASON.md §4.1）。invites.json は運用の道具だけが書き、サーバーは読むだけ。トークンは入れない */
 export interface SeasonInvite { profileId: string; name: string; invitedAt: number }
@@ -146,7 +148,8 @@ const started = (ps: readonly Participant[]) => ps.filter((p) => p.runs.length >
 const banked = (p: Participant) => p.runs.reduce((a, r) => a + r.banked, 0);
 /** 今の値（内部。予算の残り・同着の決め方の元） */
 export function liveShown(p: Participant): ShownValues {
-  return { best: { ...p.best }, used: used(p), died: p.died, banked: banked(p), runs: p.runs.length };
+  const directed = DIRECTIVE_ITEMS.filter((x) => p.runs.some((r) => r.directed?.includes(x)));
+  return { best: { ...p.best }, used: used(p), died: p.died, banked: banked(p), runs: p.runs.length, ...(directed.length ? { directed } : {}) };
 }
 /** 公開の値（キャンプに着いた時点の写し。無ければ今の値） */
 const shownOf = (p: Participant): ShownValues => p.shown ?? liveShown(p);
@@ -205,6 +208,8 @@ export function computeStandings(ps: readonly Participant[], fires: readonly Pub
     survival: S(p).died ? null : { value: banked(p), rank: sur.get(p)! },
     support: { value: support(p), rank: sup.get(p)! },
     banked: banked(p),
+    // 指図の印（S8 §54.6）: 公開の値（キャンプで更新）から。順位は分けない
+    ...(S(p).directed?.length ? { directed: [...S(p).directed!] } : {}),
   })).sort((a, b) => a.adventure.rank - b.adventure.rank || a.name.localeCompare(b.name));
   const award = (p: Participant, id: SeasonAward['id']): SeasonAward => {
     if (id === 'support') return { id, value: support(p), rank: sup.get(p) ?? null, entrants: list.length, leader: supLead, gap: supLead ? supLead.value - support(p) : null };
@@ -621,6 +626,8 @@ export class SeasonService implements SeasonHooks {
     run.turns = turns;
     if (pr.stats.deepest > run.deepest) run.deepest = pr.stats.deepest;
     if ((pr.stats.banked ?? 0) !== run.banked) { run.banked = pr.stats.banked ?? 0; big = true; }
+    // 持ち主の口から決めた項目（S8 §54.6）: 内部の値はすぐ写し、公開の値（順位の印）はキャンプで（下の shown）
+    if ((pr.ownerDecided ?? []).join(',') !== (run.directed ?? []).join(',')) { run.directed = [...(pr.ownerDecided ?? [])]; big = true; }
     if (died && !run.died) { run.died = true; p.died = true; big = true; this.store.log(d.def.id, { type: 'died', profileId: p.profileId, runId: run.runId, used: used(p), cause: pr.stats.deathCause }); }
     if (ended && !run.ended) { run.ended = true; big = true; this.store.log(d.def.id, { type: 'run_ended', profileId: p.profileId, runId: run.runId, used: used(p), died }); }
     if (run.deepest > p.best.depth) {
@@ -1004,9 +1011,11 @@ export class SeasonService implements SeasonHooks {
     const d = this.store.get(id);
     if (!d) return null;
     const pOf = (name: string) => d.participants.find((p) => nameKey(p.name) === nameKey(name));
+    // その参加者のシーズンのラン（S8 §54.7: 「記録」の各参加者の行のリプレイ）。確定したシーズンと、同じ機械からだけ（開催中は、だれが見られるかの決まりのまま）
+    const withRuns = !!d.result || !!opts.full;
     const decorate = (r: SeasonStandingRow): SeasonStandingRow => {
       const p = pOf(r.name);
-      return { ...r, banked: r.banked ?? (p ? banked(p) : 0), titles: p ? this.titlesOf(p.profileId) : [] };
+      return { ...r, banked: r.banked ?? (p ? banked(p) : 0), titles: p ? this.titlesOf(p.profileId) : [], ...(withRuns && p ? { runIds: p.runs.map((x) => x.runId) } : {}) };
     };
     const rows = (d.result?.standings ?? computeStandings(started(d.participants), d.fires, d.supplies).rows).map(decorate);
     let result: SeasonResultView | undefined;

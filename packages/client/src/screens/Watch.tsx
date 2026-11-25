@@ -13,7 +13,7 @@ import { ErrorBanner, Header, MapView, ThemePicker, useCatalog, useLocaleRefresh
 import { SoundControls } from '../ui/sound';
 import { CampScene } from '../ui/camp';
 import { AgentWaitBadge, directorExpInfo, ExpeditionStatusPanel, followExpInfo, NotesBlock, type ExpInfo } from '../ui/expedition';
-import { narrateWorld, perceivedLines, thoughtsFrom } from '../ui/narration';
+import { narrateWorld, ownerLinesFromPerceived, perceivedLines, thoughtsFrom } from '../ui/narration';
 import { AiPanel, MessageLog, PartyPanel, SummaryDialog, type LogLine, type ThoughtLine } from '../ui/panels';
 import { getLocale, getPref, setPref, tr } from '../util';
 
@@ -88,8 +88,9 @@ export function Watch({ runId }: { runId: string }) {
       const r = rs.find((x) => x.runId === runId) ?? null;
       setListing(r);
       if (r && !followRef.current) setFollow(r.players.find((p) => p.state === 'alive' || p.state === 'at_camp')?.id ?? r.players[0]?.id ?? null);
-      // 開催中のシーズンのラン（S3 §25.1）: このブラウザに覚えてある、招かれたプロフィールのトークンを hello に入れる（URL には出さない）
-      seasonTokRef.current = r?.season ? getPref(`seasonToken.${r.season}`, '') || null : null;
+      // 開催中のシーズンのラン（S3 §25.1）: このブラウザに覚えてある、招かれたプロフィールのトークンを hello に入れる（URL には出さない）。
+      // シーズンの招きのトークンが無ければ、プロフィールのトークン（持ち主の枠から来たとき。S8 §54.5）
+      seasonTokRef.current = r?.season ? getPref(`seasonToken.${r.season}`, '') || getPref('profileToken', '') || null : null;
       // シーズンのラン（S0 §9.7）は、進行中はサーバーの設定によらず追従視点だけ。
       // 終わったランも、シーズンが確定する前で同じ機械からでなければ追従だけ（持ち主の観戦は俯瞰を送らない。S3）
       let pol = await conf;
@@ -213,10 +214,12 @@ export function Watch({ runId }: { runId: string }) {
       }
       if (!applied.length) return;
       if (c) setLog((l) => [...l, ...narrateWorld(applied, w, c, getLocale(), modeRef.current === 'follow' ? followRef.current : null)].slice(-400));
-      const th2 = thoughtsFrom(applied, w);
+      // AI の考えと、持ち主の決定・伝言（S8 §54.6）。吹き出しは AI の考えだけ
+      const th2 = thoughtsFrom(applied, w, c);
       if (th2.length) {
         setThoughts((t) => [...t, ...th2].slice(-100));
         for (const t of th2) {
+          if (t.kind) continue;
           const eid = w.players[t.player]?.entityId;
           if (eid) bubblesRef.current.push({ id: eid, text: t.text, until: performance.now() + 4000 });
         }
@@ -232,6 +235,9 @@ export function Watch({ runId }: { runId: string }) {
         const m = f.msg;
         viewRef.current = m.view;
         setLog((l) => [...l, ...perceivedLines(m.events)].slice(-400));
+        // 持ち主の決定と伝言（S8 §54.6）: 追従だけの観戦では、view の枠の出来事から。AI の考えと seq の順に並べる
+        const own = ownerLinesFromPerceived(m.events, m.view, catalogRef.current);
+        if (own.length) setThoughts((t) => [...t, ...own.filter((x) => !t.some((y) => y.kind === x.kind && y.seq === x.seq))].sort((a, b) => a.seq - b.seq).slice(-100));
         setTick((n) => n + 1);
         render(undefined, m.events);
         soundDirector.update(m.view, m.events.map((e) => e.event), catalogRef.current);

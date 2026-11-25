@@ -7,9 +7,10 @@ import { buildCatalog } from '@muse/content';
 import { checkRunGaps, compareVersions, ENGINE_VERSION } from '@muse/engine';
 import type {
   ActionError, AgentActivity, Catalog, Controller, ExpeditionOffer, JoinCommand, Locale, NewRunRequest, ObjectiveChoice, PlayerId, RunListing,
-  RunListingPlayer, SeasonWatchResponse,
+  RunListingPlayer, SeasonWatchResponse, OwnerRunRow, OwnerRunsResponse,
 } from '@muse/shared';
 import { actionError } from '@muse/shared';
+import { ownerRow } from './OwnerPort';
 import type { ServerConfig } from '../config';
 import { RunStore } from '../log/RunStore';
 import { readTokensStrict, repairMeta, repairSummary } from '../log/repair';
@@ -436,11 +437,62 @@ export class SessionManager {
   seasonWatchAccess(session: RunSession, o: { local: boolean; profileToken?: string }): { access: 'public' | 'local' } | { access: 'owner'; pid: PlayerId } | { error: ActionError } {
     const sid = session.world.meta.season?.id;
     if (!sid || this.seasonFinal(sid)) return { access: 'public' };
+    const who = this.ownerOf(session, o);
+    if (who) return who;
+    return { error: seasonWatchError(!!o.profileToken) };
+  }
+
+  /**
+   * そのランの持ち主か（S3 §25.1 の観戦の認め方。S8 §54.1 の持ち主の口も、これを使う）: サーバーと同じ機械からの接続（local: すべてのプレイヤー）か、
+   * そのランのプレイヤーのプロフィールのトークン（owner: そのプレイヤー）。どちらでもなければ null
+   */
+  ownerOf(session: RunSession, o: { local: boolean; profileToken?: string }): { access: 'local' } | { access: 'owner'; pid: PlayerId } | null {
     if (o.local) return { access: 'local' };
     const prof = o.profileToken ? this.profiles.store.resolve(o.profileToken) : null;
     const pid = prof ? session.world.playerOrder.find((p) => session.profileOf(p) === prof.id) : undefined;
-    if (pid) return { access: 'owner', pid };
-    return { error: seasonWatchError(!!o.profileToken) };
+    return pid ? { access: 'owner', pid } : null;
+  }
+
+  /**
+   * 持ち主の口（S8 §54.1）: そのランで、持ち主と認められたプレイヤー（同じ機械からなら最初のプレイヤー。持ち主の口はソロのランだけなので 1 人）。
+   * 認められなければ断り（トークンが違う・外からの接続）
+   */
+  ownerAccess(runId: string, o: { local: boolean; profileToken?: string }): { session: RunSession; pid: PlayerId } | { error: ActionError; status: number } {
+    const session = this.sessions.get(runId);
+    if (!session) {
+      const f = this.recoveryFailedError(runId);
+      return f ? { error: f, status: 503 } : { error: actionError('no_session', `unknown or finished run ${runId}`, 'GET /api/owner/runs'), status: 404 };
+    }
+    const who = this.ownerOf(session, o);
+    if (!who) return { error: actionError('bad_request', 'この口は、そのランのプレイヤーのプロフィールのトークンか、サーバーと同じ機械からだけ / owner access needs the player\'s profile token or the same machine', 'Authorization: Bearer <profile_token>'), status: 403 };
+    // 終わったラン（S8a §55.6 の 12）: 持ち主の口は使えない（見返すのは巻き戻し）
+    if (session.world.status === 'ended') return { error: actionError('run_ended', 'このランは終わっている / the run has ended', '巻き戻しで見返す / rewind it from the records'), status: 409 };
+    const pid = who.access === 'owner' ? who.pid : session.world.playerOrder[0];
+    if (!pid) return { error: actionError('no_session', 'no player in this run', ''), status: 404 };
+    return { session, pid };
+  }
+
+  /** 持ち主と認められた、進行中のラン（S8 §54.7 の「出撃」）。同じ機械からなら、すべての進行中のラン（ソロのものだけ） */
+  ownerRuns(o: { local: boolean; profileToken?: string }): OwnerRunsResponse {
+    const runs: OwnerRunRow[] = [];
+    // 自分のラン（S8a §55.6 の 11）: トークンのプロフィールのプレイヤー。同じ機械からだけで認めたランは、運用者として（mine: false）
+    const prof = o.profileToken ? this.profiles.store.resolve(o.profileToken) : null;
+    for (const s of this.sessions.values()) {
+      if (s.world.status !== 'active' || s.world.meta.mode !== 'solo') continue;
+      const who = this.ownerOf(s, o);
+      if (!who) continue;
+      const mineId = prof ? s.world.playerOrder.find((x) => s.profileOf(x) === prof.id) : undefined;
+      const pid = mineId ?? (who.access === 'owner' ? who.pid : s.world.playerOrder[0]);
+      const pr = pid ? s.world.players[pid] : undefined;
+      if (!pid || !pr || pr.state === 'dead' || pr.state === 'left') continue;
+      const sid = s.world.meta.season?.id;
+      const d = sid ? this.seasons.get(sid) : null;
+      // シーズンの名前と、その参加者の表示名（順位の表の名前。招いたときの名前。持ち主の画面が自分の行を目立たせる）
+      const profId = s.profileOf(pid);
+      const participant = d?.participants.find((x) => x.profileId === profId)?.name;
+      runs.push({ ...ownerRow(s, pid, d ? { name: d.def.name, ...(participant ? { participant } : {}) } : undefined), mine: !!mineId });
+    }
+    return { local: o.local, runs: runs.sort((a, b) => Number(b.waiting) - Number(a.waiting) || b.updatedAt - a.updatedAt) };
   }
 
   /** いま観戦できる、そのシーズンの進行中のラン（S3。GET /api/seasons/:id/watch。人間の画面のロビーの「観戦」） */

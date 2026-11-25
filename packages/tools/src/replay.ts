@@ -95,7 +95,8 @@ export function verifyRunDir(content: Content, dir: string): VerifyResult {
     else if (rec.command.type === 'season_sync') re.push(...seasonSync(world, content, rec.player!, rec.command, { cseq: rec.cseq, wall: rec.wall, thought: rec.thought }).events);
     // 食い違ったランの続きの番号（S3f §40.2 の 2）: 記録の番号で出す
     else if (rec.command.type === 'seq_resume') re.push(...resumeSeq(world, content, rec.command, { cseq: rec.cseq, wall: rec.wall }).events);
-    else re.push(...step(world, content, rec.player!, rec.command, { cseq: rec.cseq, wall: rec.wall, thought: rec.thought }).events);
+    // 出どころは記録の source から（サーバーの再実行と同じ: 時間切れ・システムは auto、持ち主の口は owner。S8 §54.3）
+    else re.push(...step(world, content, rec.player!, rec.command, { cseq: rec.cseq, wall: rec.wall, thought: rec.thought, auto: rec.source === 'timeout' || rec.source === 'system', owner: rec.source === 'owner' }).events);
   }
   const target = base ? events.filter((e) => e.seq > base.seq) : events;
   const reexecMatches = canonicalHash(noWall(re)) === canonicalHash(noWall(target));

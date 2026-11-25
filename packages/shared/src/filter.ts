@@ -26,6 +26,8 @@ const PLAYER_VISIBLE: ReadonlySet<EventType> = new Set<EventType>([
   'fire_placed', 'fire_used', 'fire_return',
   // 補給の置き場（S3 §25.2。本人だけ）
   'supply_deposited', 'supply_taken',
+  // 指図（S8。SEASON.md §54。本人だけ）: 持ち主の決定と伝言（ほかの参加者には渡らない）
+  'directive_set', 'owner_decided',
 ]);
 
 /** 自分に関するときだけ渡す種別 */
@@ -57,6 +59,8 @@ const SELF_ONLY: Partial<Record<EventType, (ev: any, playerId: PlayerId, selfId:
   fire_return: (ev, p) => ev.player === p,
   supply_deposited: (ev, p) => ev.player === p,
   supply_taken: (ev, p) => ev.player === p,
+  directive_set: (ev, p) => ev.player === p,
+  owner_decided: (ev, p) => ev.player === p,
 };
 
 /** プレイヤー向けに縮約したイベント（seenBy/masks/put/del を除去済み） */

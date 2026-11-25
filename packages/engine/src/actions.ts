@@ -65,6 +65,11 @@ function selfSeen(ctx: Ctx, e: Entity) {
   return ctx.perceive(e.pos!.floor, [{ field: 'actor', pos: e.pos, entity: e.id }], [e.player!]);
 }
 
+/** 本人にだけ・その場の者に（盤面にいないキャンプでは本人だけ。S8: 持ち主がキャンプで付け替える） */
+function selfOrCamp(ctx: Ctx, e: Entity): { seenBy: string[]; masks?: Record<string, string[]> } & { floor: string | null } {
+  return e.pos ? { ...selfSeen(ctx, e), floor: e.pos.floor } : { seenBy: [e.player!], floor: null };
+}
+
 /** 罠を作動させる */
 export function triggerTrap(ctx: Ctx, victim: Entity, trap: Entity): void {
   const key = trap.pos!.floor;
@@ -274,7 +279,7 @@ function unequipEvents(ctx: Ctx, e: Entity, slotName: EquipSlot): void {
   const it = ctx.world.entities[id];
   const actor = structuredClone(me);
   delete actor.equip![slotName];
-  ctx.emit({ type: 'item_unequipped', actor: e.id, item: id, kind: it.kind, appearanceId: appearanceOf(ctx, it.kind), slotName, affixes: [...(it.item?.affixes ?? [])], put: [actor], ...selfSeen(ctx, me), floor: me.pos!.floor });
+  ctx.emit({ type: 'item_unequipped', actor: e.id, item: id, kind: it.kind, appearanceId: appearanceOf(ctx, it.kind), slotName, affixes: [...(it.item?.affixes ?? [])], put: [actor], ...selfOrCamp(ctx, me) });
   recomputeStats(ctx, ctx.world.entities[e.id], 'unequip');
 }
 
@@ -331,10 +336,10 @@ actions.register('equip', (ctx, e, pr, cmd: Extract<Command, { type: 'equip' }>)
       const me = ctx.world.entities[e.id];
       const actor = structuredClone(me);
       actor.equip = { ...(actor.equip ?? {}), [slotName]: it.id };
-      ctx.emit({ type: 'item_equipped', actor: e.id, item: it.id, kind: it.kind, appearanceId: appearanceOf(ctx, it.kind), slotName, affixes: [...(it.item?.affixes ?? [])], put: [actor], ...selfSeen(ctx, me), floor: me.pos!.floor });
+      ctx.emit({ type: 'item_equipped', actor: e.id, item: it.id, kind: it.kind, appearanceId: appearanceOf(ctx, it.kind), slotName, affixes: [...(it.item?.affixes ?? [])], put: [actor], ...selfOrCamp(ctx, me) });
       // 装備すると正体（装飾品）と呪いの有無が分かる（呪われていれば外せなくなる。V3-4 §4.4）
       if (appearanceOf(ctx, it.kind) && !ctx.world.players[pr.id].knowledge.identified.includes(it.kind)) {
-        ctx.emit({ type: 'item_identified', player: pr.id, kind: it.kind, appearanceId: appearanceOf(ctx, it.kind), seenBy: [pr.id], floor: me.pos!.floor });
+        ctx.emit({ type: 'item_identified', player: pr.id, kind: it.kind, appearanceId: appearanceOf(ctx, it.kind), seenBy: [pr.id], floor: me.pos?.floor ?? null });
       }
       inspectItem(ctx, ctx.world.entities[e.id], ctx.world.entities[it.id], 'equip');
       recomputeStats(ctx, ctx.world.entities[e.id], 'equip');

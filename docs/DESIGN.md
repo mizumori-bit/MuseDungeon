@@ -1796,3 +1796,16 @@ engine と出来事の形は変えていない（`engineVersion` 0.38.0・`event
 - **被害の 3 つの数**（S7a で改めた）: 止まる判定の `threatEstimate` は S1d のまま。記録の平均の「ふつう」は `usualEstimate`（表示だけ。`riskText`・`incoming`・階段の行。`chaseEstimate.usual`）。マクロ・「できること」・`self.fight_risk`（pilot）は使わない。
 - **区切りの出る応答**（S7a）: `RunSession.checkpointDue` は、控えの「区切りの手番の後の、敵の見えていない手番」の中に、応答の終わり（呼び出しの記録 `calls` で、次の自分の呼び出しがマクロの一歩でない）があれば、出したとみなす。控えは 1 つ前の 100 手番の区切りの手前から畳む（その区切りが、まだ出ていないことがある）。
 - **S7b**（検査の指摘）: `explore toward` の幅は、`MacroState.towardWidth`（いちばん広げた幅。狭め直さない）・`goalWidth`（行き先を選んだときの幅）・`towardDir`（呼び出しの初めの方角）で決める。空回りの見張りは `visits`（入ったマスの回数。explore toward だけ。同じマスに 3 回目に入る前に `no_progress`）。前は、幅と方角を毎手選び直していて、風の方角が e と se の間を行き来すると、通路の両端を交互に狙い直した。
+
+### 42.15 S8: 指図（H1）とホームの並べ替え（H2）（SEASON.md §54・§55。PROTOCOL.md §9.14・§5 の「S8 で変えた項目」）
+
+`engineVersion` 0.48.0・`eventVersion` 36（コンテンツの版は変わらない）。指図の無いランは、何も変わらない。
+
+- **役が 3 つ**: プレイヤー・**持ち主**・観戦者。持ち主は人間とは限らない役で、AI と人間を命令で分けない決まりはそのまま。持ち主の口から通る命令も、プレイヤーと同じ `Command` を同じ道（`RunSession.submit` → engine の `step`）で流す。違うのは出どころだけ（命令の記録の `source: 'owner'`）。
+- **決定論**: 握っているかどうかは World（`PlayerRecord.directive`。命令 `set_directive` → 出来事 `directive_set` → `applyEvent`）、だれの口から来たかは、記録の `source` から engine に渡す（`step` の `meta.owner`）。判定は engine の `directiveGate`（`packages/engine/src/directive.ts`）1 か所で、step の初めに置く。断りは出来事を出さない（手番も World も変わらない）。再実行（`RunSession.reexecute`・道具の `replay-verify`）は記録の `source` から同じ値を渡すので、記録だけで一致する。持ち主が決めたことは `owner_decided`（`PlayerRecord.ownerDecided`: 順位の印の元）。
+- **キャンプでの付け替え**: 今までの engine は、キャンプでは `equip`・`unequip` を受けなかった（`at_camp`）。装備を握った持ち主のキャンプの付け替えだけ、迷宮の中と同じ検証と出来事（`actions` の `equip`・`unequip` をそのまま。`floor` は null・本人にだけ・手番は無い）で通す。握っていないランのキャンプの付け替えは、今までどおり断る。
+- **持ち主の口**: HTTP（`/api/owner/runs`・`/api/runs/:id/owner/view|directive|act`）。認め方は観戦と同じ（`SessionManager.ownerOf`。`seasonWatchAccess` も同じ関数を使う）。見せるのはプレイヤーの PlayerView と観測（`SessionPlayerPort.observe` を、消費せず・応答の基準を動かさずに呼ぶ）。持ち主の命令は、プレイヤーの応答の基準（`turn.changes`）を動かさないので、AI の次の応答の「変化」に「持ち主が、…」が出る。MCP には出さない。
+- **待つ**: `wait_for_turn` は、キャンプで目的を握られていれば `RunSession.waitForOwner`（キャンプを出る・目的を握るのをやめる・時間切れ）を待つ。時間は World に入れない。
+- **見え方**: 指図の 1 行・「できること」から握られた行を外す（`buildValidActions` の後で外す）・伝言・「変化」の `owner`・規則の話題 `directive`。文は、世界の中での読み方を添える（SEASON.md §55）。
+- **順位の印**: 参加者の公開の値（`ShownValues.directed`。キャンプで写す）。`SeasonRunRec.directed` は、そのランの `ownerDecided` の写し。
+- **画面（H2）**: ホームを「出撃」（`#/`: 持ち主の枠・今シーズンの順位・ほかのランは畳む）と「記録」（`#/records`: シーズンごとの順位と、各参加者の行のリプレイ・結果の画面・図鑑・実績・過去のラン）に並べ替えた。見た目（色・絵・演出）は変えていない。持ち主の枠は `ui/owner.tsx`（今ある `InventoryPanel`・`PerkChoicePanel` を使い回す）。観戦とリプレイの「思考」の欄に、持ち主の決定と伝言を AI の考えと並べる。

@@ -443,3 +443,43 @@ button.off { opacity: 0.6; }
 .board.section .tag.deep { background: #1d3340; }
 .board.section .spot, .board.section .fire { display: inline-block; margin-right: 8px; }
 .board.section .fire { color: #ffb070; }
+
+/* ホームの並べ替え（S8 の H2。SEASON.md §54.7）と持ち主の枠（H1。§54.5）。色は今ある組み合わせを使い回す */
+.home { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding: 12px 16px; }
+.home.inner { flex: none; overflow: visible; padding: 8px 0 0; }
+.home .lobby { padding: 0; overflow: visible; }
+.homesec { display: flex; flex-direction: column; gap: 8px; }
+.hhead { margin: 0; font-size: 14px; color: #ffe08a; }
+.hometabs .waitdot { color: #ffe08a; font-weight: 700; }
+details.others > summary, details.recseason > summary { cursor: pointer; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+details.others[open] > summary, details.recseason[open] > summary { margin-bottom: 8px; }
+.recbar { gap: 10px; }
+.board tr.mine td, .runs li.mine { background: #22324a; }
+.tag.you { background: #1e5a78; }
+.tag.directed { background: #2a3a5a; color: #cfe4ff; }
+.board td.replays .row { gap: 3px; }
+.unrun { display: inline-flex; align-items: center; gap: 4px; margin-right: 10px; }
+ul.sflow { margin: 2px 0; padding-left: 18px; font-size: 12px; }
+.inline-form { flex-direction: row; flex-wrap: wrap; align-items: flex-end; }
+.panel.owner { border-color: #3f6a3a; }
+.panel.owner.waiting { border-color: #a88a3a; }
+.panel.owner h3 { flex-wrap: wrap; }
+.panel.owner .oacts { margin-left: auto; display: inline-flex; gap: 4px; }
+.waitmark { display: inline-block; margin: 2px 0 6px; padding: 2px 10px; border-radius: 6px; background: #5a4a15; color: #ffe08a; font-weight: 700; font-size: 13px; }
+.waitmark.inline { margin: 0; font-size: 11.5px; }
+.ostat { display: flex; flex-wrap: wrap; gap: 2px 14px; font-size: 12.5px; margin-bottom: 6px; }
+.ostat .low { color: #ffab91; }
+.directive { display: flex; flex-direction: column; gap: 4px; }
+.directive .lbl { font-size: 12px; color: var(--muted); }
+.directive label.ohold { font-size: 13px; }
+.directive textarea.omsg { width: 100%; font: inherit; font-size: 13px; color: var(--fg); background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; resize: vertical; }
+ul.ocost { margin: 0; padding-left: 18px; }
+.oerr { color: #ffb4a8; font-size: 12.5px; margin: 4px 0; }
+.onote { color: #8fe0a0; font-size: 12.5px; margin: 4px 0; }
+.odetail { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+.oblock h4 { margin: 4px 0; font-size: 12.5px; color: #ffe08a; }
+.ooffers li { align-items: flex-start; }
+.ooffers .otext { white-space: pre-wrap; font-size: 12.5px; }
+.ooffers .oslay { margin-top: 2px; }
+.line.owner { color: #ffe08a; }
+.line.owner_msg { color: #b4d8ff; }

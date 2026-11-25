@@ -77,6 +77,11 @@ export const CommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('deposit_supply'), slot: SlotSchema }),
   /** 補給の置き場から品を 1 つ取る（S3 §25.2。1 手番・1 回の遠征で 1 つまで）。id は観測の品の ID（'s12'・'l1'）。置き場に 1 つだけなら省ける */
   z.object({ type: z.literal('take_supply'), id: z.string().regex(/^[sl][0-9]{1,6}$/).optional() }),
+  /**
+   * 指図（S8。SEASON.md §54.2）: 握る項目と伝言。持ち主の口（source: owner）からだけ通り、プレイヤーがキャンプにいるときだけ。手番を使わない。
+   * MCP のツールには出さない。message の制御文字は engine が落とし、落とした後の文字数で 280 字までを数える（S8a。超えれば engine が断る）
+   */
+  z.object({ type: z.literal('set_directive'), hold: z.array(z.enum(['objective', 'loadout', 'perks'])).max(3), message: z.string().max(2000).optional() }),
 ]);
 
 export type Command = z.infer<typeof CommandSchema>;
@@ -85,7 +90,7 @@ export type Target = z.infer<typeof TargetSchema>;
 export type TravelTarget = z.infer<typeof TravelTargetSchema>;
 
 export const MACRO_COMMANDS: ReadonlySet<CommandType> = new Set<CommandType>(['explore', 'travel', 'rest', 'collect', 'fight']);
-export const FREE_COMMANDS: ReadonlySet<CommandType> = new Set<CommandType>(['say', 'note', 'retire', 'choose_perk', 'choose_boon']);
+export const FREE_COMMANDS: ReadonlySet<CommandType> = new Set<CommandType>(['say', 'note', 'retire', 'choose_perk', 'choose_boon', 'set_directive']);
 /** キャンプでのみ有効（手番に関係しない） */
 export const CAMP_COMMANDS: ReadonlySet<CommandType> = new Set<CommandType>(['start_expedition']);
 
@@ -195,7 +200,11 @@ export const JoinSchema = z.object({
 });
 export type JoinCommand = z.infer<typeof JoinSchema>;
 
-export type CommandSource = 'mcp' | 'ws' | 'macro' | 'timeout' | 'bot' | 'system';
+/**
+ * owner（S8。SEASON.md §54.3）: 持ち主の口から通った命令（指図と、握った項目の命令）。engine には、記録の source から「持ち主の口か」を渡す
+ * （再生も、記録だけで同じ判定になる）
+ */
+export type CommandSource = 'mcp' | 'ws' | 'macro' | 'timeout' | 'bot' | 'system' | 'owner';
 
 export interface CommandRecord {
   cseq: number;
@@ -227,7 +236,9 @@ export type ActionErrorCode =
   // マクロが 1 歩も進めないと分かったとき（手番を使わない。V3-2R §14.2）
   | 'hostile_adjacent' | 'hostile_in_view' | 'hp_floor' | 'nothing_to_do'
   /** 逃げる移動（mode: flee）が、次の 1 歩の間に届く敵の最悪の 1 手で倒れうるので始めない（S6 §49.6 の 1。hp_floor によらない） */
-  | 'flee_lethal';
+  | 'flee_lethal'
+  /** 指図（S8。SEASON.md §54.3）: その項目は持ち主が握っている（プレイヤーの口からは通らない。手番を使わない） */
+  | 'held_by_owner';
 
 export interface ActionError {
   code: ActionErrorCode;
