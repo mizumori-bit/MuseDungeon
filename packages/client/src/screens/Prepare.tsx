@@ -267,7 +267,7 @@ export function Prepare({ runId }: { runId: string }) {
   };
   const rules = rulesOf(catalog);
   const className = view && catalog ? kindName(catalog, L, view.self.classId) : view?.self.classId ?? '';
-  const ai = data?.eligible ? aiPresenceText(data.ai) : null;
+  const ai = data?.eligible ? aiPresenceText(data.ai, name) : null;
   const objectiveUnchosen = hold.includes('objective') && chosen === undefined;
 
   return (

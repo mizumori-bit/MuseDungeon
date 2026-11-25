@@ -319,7 +319,11 @@ export interface DirectiveUndecided {
  * 支度の札の観測（S9。SEASON.md §58.1）: キャンプで、次の遠征を始められるときだけ。state: pending（まだ）/ ready（準備完了）。
  * objective: 持ち主が選んだ次の遠征（目的を握られていて、準備完了のとき）。text: 観測の 1 行
  */
-export interface ObsDirectivePrep { state: 'pending' | 'ready'; objective?: number | 'endless'; text: string }
+export interface ObsDirectivePrep {
+  state: 'pending' | 'ready'; objective?: number | 'endless'; text: string;
+  /** 持ち主の様子（S11。「まだ」のとき、本人の応答にだけ、サーバーが足す） */
+  owner_presence?: string;
+}
 
 export interface Observation {
   seq: number;
@@ -373,9 +377,10 @@ export interface Observation {
      * decided: このランで持ち主が決めた項目。握っている項目も伝言も無ければ無い
      */
     /** message_new: 伝言が、前の応答の後に書かれた・書き換えられた（S8b。応答の基準との差分で、サーバーが付ける。観測だけを作ったときは付かない） */
+    /** message_kept: 伝言が、前のキャンプのときから変わっていない（S11。応答の基準で、サーバーが付ける。message_new とは同時に付かない） */
     /** undecided: 握られた項目のうち、持ち主がまだ決めていないもの（S9a。SEASON.md §57.3 の 1。キャンプで、次の遠征を始められるときだけ） */
     /** prep: 支度の札（S9 §58.1。キャンプで、次の遠征を始められるときだけ） */
-    directive?: { hold: DirectiveItem[]; message?: string; message_new?: boolean; decided?: DirectiveItem[]; undecided?: DirectiveUndecided; prep?: ObsDirectivePrep; text: string };
+    directive?: { hold: DirectiveItem[]; message?: string; message_new?: boolean; message_kept?: boolean; decided?: DirectiveItem[]; undecided?: DirectiveUndecided; prep?: ObsDirectivePrep; text: string };
   };
   /** items_omitted: 記憶の中の遠いアイテムのうち省いた件数 */
   visible: { monsters: ObsMonster[]; items: ObsItem[]; players: ObsPlayer[]; features: ObsFeature[]; items_omitted?: number };
@@ -538,6 +543,11 @@ export interface ObservationOptions {
   versionNote?: string;
   /** この応答の間に、見えていない相手から撃たれた方角（古い順。V4-0c §4.3） */
   unseenShots?: Dir[];
+  /**
+   * キャンプで、支度の札が「まだ」のとき: 持ち主の様子の 1 行（S11。サーバーが、持ち主の口の最後の呼び出しの控えから作る。本人の応答にだけ渡す。
+   * 観測だけを作ったとき（持ち主の画面の写し）には付かない）
+   */
+  ownerPresence?: string;
 }
 
 const DIR_JA: Record<Dir, string> = { n: '北', ne: '北東', e: '東', se: '南東', s: '南', sw: '南西', w: '西', nw: '北西' };
@@ -2455,14 +2465,16 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
     const d = view.directive;
     if (d && (d.hold.length || d.message) && view.status !== 'dead' && view.status !== 'ended') {
       const und = directiveUndecided(view, catalog);
-      const prep = directivePrepObs(view, catalog);
+      const prep0 = directivePrepObs(view, catalog);
+      const prep = prep0?.state === 'pending' && opts.ownerPresence ? { ...prep0, owner_presence: opts.ownerPresence } : prep0;
       obs.self.directive = {
         hold: [...d.hold],
         ...(d.message && view.status === 'at_camp' ? { message: d.message } : {}),
         ...(d.decided.length ? { decided: [...d.decided] } : {}),
         ...(und ? { undecided: und } : {}),
         ...(prep ? { prep } : {}),
-        text: directiveLine(L, d.hold, view.status !== 'at_camp'),
+        // 札が「まだ」の間は、希望の出し方を札の行に 1 つにまとめる（S11）
+        text: directiveLine(L, d.hold, view.status !== 'at_camp', { wishes: prep?.state !== 'pending' }),
       };
     }
   }
@@ -2613,7 +2625,7 @@ export function ownerOfferText(L: Locale, view: PlayerView, offer: number | 'end
 /** 準備完了で、目的を握られているときの start_expedition の行（S9 §58.1） */
 function ownerStartLine(L: Locale, view: PlayerView): string {
   const o = view.directive!.prep!.objective!;
-  return `start_expedition ${o} (${t(L, `持ち主が選んだ目的: ${ownerOfferText(L, view, o)}。offer に何を渡しても、この目的で始まる`, `the objective your owner chose: ${ownerOfferText(L, view, o)}; whatever offer you pass, it starts with this`)})`;
+  return `start_expedition (${t(L, `引数なし。持ち主が選んだ目的で始まる: ${ownerOfferText(L, view, o)}`, `no arguments; it starts with the objective your owner chose: ${ownerOfferText(L, view, o)}`)})`;
 }
 
 /**
@@ -2630,7 +2642,8 @@ export function directivePrepObs(view: PlayerView, catalog: Catalog | undefined)
   if (st === 'pending') {
     const parts = u ? prepNeedsParts(L, u) : [];
     const what = parts.length ? t(L, `決めていないもの: ${parts.join('・')}`, `not yet decided: ${parts.join('; ')}`) : t(L, '持ち主が、支度を見直している', 'your owner is going over the preparations');
-    return { state: 'pending', text: t(L, `持ち主の支度: まだ（${what}）。準備完了になるまで、start_expedition は断られる。待つなら wait_for_turn`, `Your owner's preparations: not ready (${what}). Until they are, start_expedition is refused. To wait, use wait_for_turn`) };
+    const wish = wishHowText(L, view);
+    return { state: 'pending', text: t(L, `持ち主の支度: まだ（${what}）。準備完了になるまで、start_expedition は断られる。待つなら wait_for_turn${wish ? `。${wish}` : ''}`, `Your owner's preparations: not ready (${what}). Until they are, start_expedition is refused. To wait, use wait_for_turn${wish ? `. ${wish}` : ''}`) };
   }
   const hold = d!.hold;
   const o = hold.includes('objective') ? d!.prep?.objective : undefined;
@@ -2650,9 +2663,26 @@ export function directivePrepObs(view: PlayerView, catalog: Catalog | undefined)
   if (done.length) parts.push(t(L, `${itemsJoin(L, done)}は、決めてある`, `${itemsJoin(L, done)} decided`));
   parts.push(...left);
   const go = o !== undefined
-    ? t(L, 'start_expedition で出発する（offer に何を渡しても、持ち主が選んだ目的で始まる）', 'Set out with start_expedition (whatever offer you pass, it starts with the objective your owner chose)')
+    ? t(L, 'start_expedition（引数なし）で出発する（持ち主が選んだ目的で始まる）', 'Set out with start_expedition (no arguments; it starts with the objective your owner chose)')
     : t(L, 'start_expedition で出発する（次の遠征は、あなたが選ぶ）', 'Set out with start_expedition (you choose the next expedition)');
   return { state: 'ready', ...(o !== undefined ? { objective: o } : {}), text: t(L, `持ち主の支度: 準備完了（${parts.join('。')}）。${go}`, `Your owner's preparations: ready (${parts.join('; ')}). ${go}`) };
+}
+
+/**
+ * 札が「まだ」のときの、希望の出し方（S11）: 「決めてほしいものがあれば、その命令を出す（断られるが、希望として持ち主に届く）: start_expedition offer=N・choose_perk option=N」。
+ * 握られている項目の分だけ（特技と加護は、いま候補があるものだけ）。無ければ空
+ */
+function wishHowText(L: Locale, view: PlayerView): string {
+  const hold = view.directive?.hold ?? [];
+  const cmds = [
+    hold.includes('objective') ? 'start_expedition offer=N' : '',
+    hold.includes('loadout') ? ['equip slot=x', 'unequip slot=x'] : [],
+    hold.includes('perks') && perkChoice(view) ? 'choose_perk option=N' : '',
+    hold.includes('perks') && view.self.boonChoice?.options.length ? 'choose_boon option=N' : '',
+  ].flat().filter(Boolean);
+  if (!cmds.length) return '';
+  return t(L, `決めてほしいものがあれば、その命令を出す（断られるが、希望として持ち主に届く）: ${cmds.join('・')}`,
+    `If you want something decided, send that command (it is refused, but reaches your owner as a wish): ${cmds.join(', ')}`);
 }
 
 /** 指図の項目の名前の並び（「目的と装備」「目的・装備・特技と加護」） */
@@ -2668,7 +2698,7 @@ function itemsJoin(L: Locale, items: readonly DirectiveItem[]): string {
  * 持ち主の支度が準備完了になってから。あなたが equip・unequip を出すと、希望として持ち主に伝わる）。特技と加護は、あなたが決める」。
  * inDungeon: 装備を握っていれば、遠征の間はだれも付け替えられないことを添える
  */
-export function directiveLine(L: Locale, hold: readonly DirectiveItem[], inDungeon: boolean): string {
+export function directiveLine(L: Locale, hold: readonly DirectiveItem[], inDungeon: boolean, opts: { wishes?: boolean } = {}): string {
   const all: DirectiveItem[] = ['objective', 'loadout', 'perks'];
   const held = all.filter((x) => hold.includes(x));
   const free = all.filter((x) => !hold.includes(x));
@@ -2686,7 +2716,7 @@ export function directiveLine(L: Locale, hold: readonly DirectiveItem[], inDunge
   ].join('');
   const tail = [
     held.includes('objective') ? t(L, '遠征を始めるのは、あなた。持ち主の支度が準備完了になってから', 'you start the expedition, once your owner\'s preparations are ready') : '',
-    wishCmds.length ? t(L, `あなたが ${wishCmds.join('・')} を出すと、希望として持ち主に伝わる`, `if you send ${wishCmds.join(', ')}, it reaches your owner as a wish`) : '',
+    wishCmds.length && opts.wishes !== false ? t(L, `あなたが ${wishCmds.join('・')} を出すと、希望として持ち主に伝わる`, `if you send ${wishCmds.join(', ')}, it reaches your owner as a wish`) : '',
   ].filter(Boolean).join(t(L, '。', '; '));
   const rest = free.length ? t(L, `。${itemsJoin(L, free)}は、あなたが決める`, `. You decide ${itemsJoin(L, free)}`) : '';
   return t(L, `指図: ${itemsJoin(L, held)}は、持ち主がキャンプで決める（${readings}${tail}）${rest}`,
@@ -3175,6 +3205,8 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
     // 指図（S8 §54.4 の 1）と、持ち主の支度の札（S9 §58.1。決めていないものも、この行に）
     if (s.directive) lines.push(s.directive.text);
     if (s.directive?.prep) lines.push(s.directive.prep.text);
+    // 持ち主の様子（S11。札が「まだ」のとき、本人の応答にだけ）
+    if (s.directive?.prep?.owner_presence) lines.push(s.directive.prep.owner_presence);
     const pt = partyText(L, obs.party ?? []);
     if (pt) lines.push(pt);
     // シーズン（S0 §9.6）: 予算・賞ごとの順位・報告していない階段
@@ -3223,7 +3255,7 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
       const chosen = s.directive?.prep?.objective;
       lines.push(s.directive?.hold.includes('objective')
         ? chosen !== undefined
-          ? t(L, `次の遠征の候補（遠征 ${obs.camp.next_no}）。持ち主が選んだ: ${chosen === 'endless' ? '目的なし（endless）' : `候補 ${chosen}`}（start_expedition で、この目的で始まる）:`, `Offers for expedition ${obs.camp.next_no} (your owner chose ${chosen === 'endless' ? 'no objective (endless)' : `offer ${chosen}`}; start_expedition starts it):`)
+          ? t(L, `次の遠征の候補（遠征 ${obs.camp.next_no}）。持ち主が選んだ: ${chosen === 'endless' ? '目的なし（endless）' : `候補 ${chosen}`}（準備完了の後、start_expedition（引数なし）で、この目的で始まる）:`, `Offers for expedition ${obs.camp.next_no} (your owner chose ${chosen === 'endless' ? 'no objective (endless)' : `offer ${chosen}`}; once ready, start_expedition with no arguments starts it):`)
           : t(L, `次の遠征の候補（遠征 ${obs.camp.next_no}）。持ち主が、この中から選ぶ（指図。持ち主の支度が準備完了になったら、あなたの start_expedition で、持ち主が選んだ目的で始まる）:`, `Offers for expedition ${obs.camp.next_no} (your owner picks one; directive: once your owner's preparations are ready, your start_expedition starts the one they chose):`)
         : t(L, `次の遠征の候補（遠征 ${obs.camp.next_no}）。start_expedition { offer } で始める:`, `Offers for expedition ${obs.camp.next_no} (start with start_expedition { offer }):`));
       for (const o of obs.camp.offers) lines.push('  ' + o.text);
@@ -3236,9 +3268,12 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
     lines.push(t(L, 'できること: ', 'Actions: ') + obs.valid_actions.join(' / '));
     // 持ち主からの伝言（S8 §54.4 の 3）: 区切りの段の前に。聞くかどうかは、あなたが決める
     // 前の応答から変わっていれば「（新しい）」（S8b）
+    // 前のキャンプから変わっていなければ「（前のキャンプと同じ伝言）」（S11）
     if (s.directive?.message) lines.push(s.directive.message_new
       ? t(L, `持ち主から（新しい）: ${s.directive.message}`, `From your owner (new): ${s.directive.message}`)
-      : t(L, `持ち主から: ${s.directive.message}`, `From your owner: ${s.directive.message}`));
+      : s.directive.message_kept
+        ? t(L, `持ち主から（前のキャンプと同じ伝言）: ${s.directive.message}`, `From your owner (same message as at the last camp): ${s.directive.message}`)
+        : t(L, `持ち主から: ${s.directive.message}`, `From your owner: ${s.directive.message}`));
     if (obs.checkpoint) lines.push(...checkpointLines(L, obs.checkpoint));
     return lines.join('\n');
   }

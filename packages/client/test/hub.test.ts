@@ -57,7 +57,7 @@ describe('S10 §58.4: the adventurer card on the hub', () => {
     expect(m.highlight).toBe(true);
     expect(m.pill).toEqual({ text: '支度: まだ', tone: 'amber' });
     expect(m.text).toBe('あなたの支度を、待っている');
-    expect(m.notes).toEqual(['決めていないもの: 特技（Lv2 の候補 3 つ）', 'AI は、いま wait_for_turn で、あなたの支度を待っている']);
+    expect(m.notes).toEqual(['決めていないもの: 特技（Lv2 の候補 3 つ）', 'ミュゼ美は、今、あなたの支度を待っている']);
     expect(m.wish).toBe(true);
     expect(m.action).toEqual({ label: '支度をする', href: '#/prepare/run_abc' });
   });
@@ -165,8 +165,8 @@ describe('S10 §58.4: the preparations screen', () => {
     expect(prepLine('loadout', { ...x, held: true, gear: 2 })).toBe('鎚矛・革の鎧 ― 新しく持ち物に入った装備 2 品を、まだ決めていない');
     expect(prepLine('loadout', { ...x, held: true, equipment: [] })).toBe('何も身に着けていない');
     expect(prepLine('perks', { ...x, held: true, perkPending: { level: 2, options: 3 } })).toBe('特技なし ― Lv2 の候補 3 つを選んでいない');
-    expect(prepLine('perks', { ...x, held: true, perks: ['頑健'], boons: ['火の加護'], boonPending: { depth: 5, options: 3 } })).toBe('頑健・火の加護 ― 加護の候補 3 つを選んでいない');
-    expect(prepLine('perks', { ...x, perks: ['頑健'] })).toBe('頑健（ミュゼ美が決める）');
+    expect(prepLine('perks', { ...x, held: true, perks: ['頑健'], boons: ['火の加護'], boonPending: { depth: 5, options: 3 } })).toBe('特技: 頑健 ／ 加護: 火の加護 ― 加護の候補 3 つを選んでいない');
+    expect(prepLine('perks', { ...x, perks: ['頑健'] })).toBe('特技: 頑健（ミュゼ美が決める）');
   });
 });
 

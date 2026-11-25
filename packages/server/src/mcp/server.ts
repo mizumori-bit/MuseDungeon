@@ -5,7 +5,7 @@ import { z } from 'zod';
 import type { ZodTypeAny } from 'zod';
 import { argListText, argProblems, argShape, exampleOf } from './args';
 import type { ActionError, Command, Controller, InheritedHold, ObjectiveChoice, TurnBlock } from '@muse/shared';
-import { actionError, CommandSchema, directiveItemsText, ownerWaitOpen, seasonFinalView, stripTokenArgs, t } from '@muse/shared';
+import { actionError, CommandSchema, directiveItemsText, ownerWaitOpen, seasonFinalView, stripTokenArgs, t, withoutOwnerPresence } from '@muse/shared';
 import type { PlayerPort, ActionPayload } from '../session/PlayerPort';
 import type { SessionManager } from '../session/SessionManager';
 import { rulesText, RULE_TOPICS } from './rules';
@@ -107,7 +107,8 @@ export function createMcpServer(ctx: McpContext): McpServer {
     // 引数のトークン（名前に token を含む引数・トークンの値）は、どの深さでも記録に残さない（S7 §52.1 の 1: 観戦の「直前の命令」に引数を出す）
     const all = [_t, _p, ...secrets, ...(ctx.boundToken ? [ctx.boundToken] : [])];
     const safe = stripTokenArgs(rest, all) as Record<string, unknown>;
-    manager.recordActivity(port.runId, { playerId: port.playerId, seq: port.view().seq, tool, args: safe, text: withoutTokens(text, all), wall: Date.now() });
+    // 持ち主の様子（S11）は本人にだけ出す文なので、観戦に流す記録からは除く
+    manager.recordActivity(port.runId, { playerId: port.playerId, seq: port.view().seq, tool, args: safe, text: withoutTokens(withoutOwnerPresence(text), all), wall: Date.now() });
   };
 
   const act = async (tool: string, args: Record<string, unknown>, cmd: Command) => {
@@ -340,9 +341,21 @@ export function createMcpServer(ctx: McpContext): McpServer {
   });
   server.registerTool('start_expedition', {
     title: '遠征を始める',
-    description: 'キャンプで次の遠征を選んで始める（offer は候補の番号 1〜3 か "endless"）。前回 extract した階段から再開する。持ち主の支度が「まだ」の間は断られる（観測の「持ち主の支度」の行。wait_for_turn で待てる）。目的を持ち主に握られていれば、準備完了の後は、offer によらず持ち主が選んだ目的で始まる。',
-    inputSchema: { ...common, offer: z.union([z.number().int().min(1).max(9), z.literal('endless')]), thought: actionCommon.thought },
-  }, async (a) => act('start_expedition', a, { type: 'start_expedition', offer: a.offer }));
+    description: 'キャンプで次の遠征を選んで始める（offer は候補の番号 1〜3 か "endless"）。前回 extract した階段から再開する。持ち主の支度が「まだ」の間は断られる（観測の「持ち主の支度」の行。wait_for_turn で待てる）。目的を持ち主に握られていれば、準備完了の後は、引数なし（offer を省く）で、持ち主が選んだ目的で始まる（offer を渡しても、持ち主が選んだ目的で始まる）。目的を握られていなければ、offer が要る。',
+    inputSchema: { ...common, offer: z.union([z.number().int().min(1).max(9), z.literal('endless')]).optional().describe('候補の番号 1〜3 か "endless"。目的を持ち主に握られ、支度が準備完了なら省ける（持ち主が選んだ目的で始まる）'), thought: actionCommon.thought },
+  }, async (a) => {
+    if (a.offer !== undefined) return act('start_expedition', a, { type: 'start_expedition', offer: a.offer });
+    // offer なし（S11）: 目的を握られていれば、持ち主が選んだ目的をサーバーが入れる（engine の命令の形は変えない）。準備完了でなければ、希望は覚えずに断る
+    const port = portOf(a.player_token as string | undefined);
+    if (!port) return noSession();
+    const bare = port.bareStart();
+    if (bare.offer !== undefined) return act('start_expedition', a, { type: 'start_expedition', offer: bare.offer });
+    if (!bare.error) return missingArg('start_expedition', a, 'offer', 'start_expedition { offer: 1 }');
+    const tb = port.turnBlock('action_rejected');
+    const va = port.observe({ map: false }).observation.valid_actions;
+    record(port, 'start_expedition', a, `${bare.error.code} ${bare.error.message}`);
+    return errOut(port.withOwnerPresence(bare.error), va, { block: tb, line: port.turnLine(tb) });
+  });
   server.registerTool('extract', {
     title: '帰還・撤退',
     description: `階段の上で遠征を終える。目的を達成していれば帰還（達成）、未達成なら confirm: true で撤退（目的を除いた半分・生還）。追跡中の敵が見えていてもできる（敵は階段を追ってこない）。階段から遠ければ帰還の綱（use_item）。シーズンのランでは、野営の火の上か隣からも帰れる（追ってくる敵が見えていなければ。帰り支度 ${fireRules?.returnTurns ?? 5} 手番。途中で追ってくる敵が見えたら取りやめ。次の遠征はそこから始まる）。`,

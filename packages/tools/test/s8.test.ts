@@ -126,7 +126,9 @@ describe('S8 §54.3・§54.4: objective and equipment held by the owner (records
       // 観測の行・「できること」・伝言（区切りの段の前）・待ち方
       const o = r.port.observeWithTurn('observed');
       // S10a: 括弧の中は、遠征を始めるのはプレイヤー（準備完了の後）・握られた命令は希望として伝わる
-      expect(o.observation.self.directive?.text).toBe('指図: 目的と装備は、持ち主がキャンプで決める（迷宮で手に入れた装備は、キャンプで確かめるまで身に着けない。遠征を始めるのは、あなた。持ち主の支度が準備完了になってから。あなたが equip・unequip を出すと、希望として持ち主に伝わる）。特技と加護は、あなたが決める');
+      // S11: 札が「まだ」の間は、希望の出し方を札の行に 1 つにまとめる（指図の行からは外す）
+      expect(o.observation.self.directive?.text).toBe('指図: 目的と装備は、持ち主がキャンプで決める（迷宮で手に入れた装備は、キャンプで確かめるまで身に着けない。遠征を始めるのは、あなた。持ち主の支度が準備完了になってから）。特技と加護は、あなたが決める');
+      expect(o.observation.self.directive?.prep?.text).toContain('。決めてほしいものがあれば、その命令を出す（断られるが、希望として持ち主に届く）: start_expedition offer=N・equip slot=x・unequip slot=x');
       expect(o.observation.self.directive?.message).toBe('深追いはしない 無理せず');
       expect(o.text).toContain('持ち主が、この中から選ぶ（指図。持ち主の支度が準備完了になったら、あなたの start_expedition で、持ち主が選んだ目的で始まる）');
       const iMsg = o.text.indexOf('持ち主から: 深追いはしない 無理せず');

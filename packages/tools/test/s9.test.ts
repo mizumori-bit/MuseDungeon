@@ -116,7 +116,7 @@ describe('S9 §58.1: the preparations card', () => {
     expect(prepOf(r)).toEqual({ state: 'pending', seen: expect.any(Array) });
     // 観測の 1 行・「できること」・▶ 行・待ち方
     let o = r.port.observeWithTurn('observed');
-    expect(o.observation.self.directive?.prep).toEqual({ state: 'pending', text: '持ち主の支度: まだ（決めていないもの: 次の遠征の目的）。準備完了になるまで、start_expedition は断られる。待つなら wait_for_turn' });
+    expect(o.observation.self.directive?.prep).toMatchObject({ state: 'pending', text: '持ち主の支度: まだ（決めていないもの: 次の遠征の目的）。準備完了になるまで、start_expedition は断られる。待つなら wait_for_turn。決めてほしいものがあれば、その命令を出す（断られるが、希望として持ち主に届く）: start_expedition offer=N' });
     const lines = o.text.split('\n');
     expect(lines[lines.findIndex((l) => l.startsWith('指図: ')) + 1]).toBe(o.observation.self.directive!.prep!.text);
     expect(o.observation.valid_actions.some((l) => l.startsWith('start_expedition'))).toBe(false);
@@ -146,20 +146,21 @@ describe('S9 §58.1: the preparations card', () => {
     expect(prepOf(r)).toMatchObject({ state: 'ready', objective: 2 });
     o = r.port.observeWithTurn('observed');
     const offer2 = r.port.view().camp!.offers.find((x) => x.index === 2)!;
-    expect(o.observation.self.directive?.prep).toEqual({ state: 'ready', objective: 2, text: `持ち主の支度: 準備完了（目的: 候補 2: ${objectiveText('ja', offer2.objective)}）。start_expedition で出発する（offer に何を渡しても、持ち主が選んだ目的で始まる）` });
-    expect(ownerLines(o)).toEqual([`持ち主の支度が、準備完了になった（目的: 候補 2: ${objectiveText('ja', offer2.objective)}）。start_expedition で出発する`]);
+    expect(o.observation.self.directive?.prep).toEqual({ state: 'ready', objective: 2, text: `持ち主の支度: 準備完了（目的: 候補 2: ${objectiveText('ja', offer2.objective)}）。start_expedition（引数なし）で出発する（持ち主が選んだ目的で始まる）` });
+    expect(ownerLines(o)).toEqual([`持ち主の支度が、準備完了になった（目的: 候補 2: ${objectiveText('ja', offer2.objective)}）。start_expedition（引数なし）で出発する`]);
     const starts = o.observation.valid_actions.filter((l) => l.startsWith('start_expedition'));
-    expect(starts).toEqual([`start_expedition 2 (持ち主が選んだ目的: 候補 2: ${objectiveText('ja', offer2.objective)}。offer に何を渡しても、この目的で始まる)`]);
+    expect(starts).toEqual([`start_expedition (引数なし。持ち主が選んだ目的で始まる: 候補 2: ${objectiveText('ja', offer2.objective)})`]);
     expect(o.turn.awaiting).toBe('camp_choice');
     expect(o.turn.owner_wait).toBeUndefined();
-    expect(o.text.split('\n').at(-1)).toContain('▶ キャンプにいます。持ち主の支度は準備完了。start_expedition で出発する（持ち主が選んだ目的: 候補 2');
+    expect(o.text.split('\n').at(-1)).toContain('▶ キャンプにいます。持ち主の支度は準備完了。start_expedition（引数なし）で出発する（持ち主が選んだ目的: 候補 2');
     // AI が別の候補を指して始める → 持ち主が選んだ目的で始まる
     const s = await act(r.port, { type: 'start_expedition', offer: 1 });
     expect(errCode(s)).toBe('ok');
     expect(r.port.view().expedition?.objective).toEqual(offer2.objective);
     if (s.ok) {
       const own = ownerLines(s);
-      expect(own[0]).toBe(`持ち主が決めた目的で始めた: 遠征 1（${objectiveText('ja', offer2.objective)}）。あなたが指した候補 1 ではなく、持ち主の選んだ目的で始まった`);
+      // S11: その前に AI が候補 3 を希望していた（あなたの希望は、…）
+      expect(own[0]).toMatch(new RegExp(`^持ち主が決めた目的で始めた: 遠征 1（${objectiveText('ja', offer2.objective)}）（あなたの希望は、候補 3: [^）]+）。あなたが指した候補 1 ではなく、持ち主の選んだ目的で始まった$`));
       expect(own).toContain('持ち主から: 静かに');
     }
     expect(r.session.world.players[r.playerId].ownerDecided).toEqual(['objective']);
@@ -195,7 +196,7 @@ describe('S9 §58.1: the preparations card', () => {
     await lifelineHome(a);
     expect(prepOf(a)?.state).toBe('pending');
     o = a.port.observeWithTurn('observed');
-    expect(o.observation.self.directive?.prep?.text).toBe('持ち主の支度: まだ（決めていないもの: 特技（Lv2 の候補 3 つ））。準備完了になるまで、start_expedition は断られる。待つなら wait_for_turn');
+    expect(o.observation.self.directive?.prep?.text).toBe('持ち主の支度: まだ（決めていないもの: 特技（Lv2 の候補 3 つ））。準備完了になるまで、start_expedition は断られる。待つなら wait_for_turn。決めてほしいものがあれば、その命令を出す（断られるが、希望として持ち主に届く）: choose_perk option=N');
     const r1 = await act(a.port, { type: 'start_expedition', offer: 1 });
     expect(errCode(r1)).toBe('held_by_owner');
     if (!r1.ok) {
@@ -229,7 +230,7 @@ describe('S9 §58.1: the preparations card', () => {
     expect(prepOf(b)?.state).toBe('pending');
     o = b.port.observeWithTurn('observed');
     expect(o.observation.self.directive?.undecided?.gear).toBe(1);
-    expect(o.observation.self.directive?.prep?.text).toBe('持ち主の支度: まだ（決めていないもの: 新しく持ち物に入った装備 1 品）。準備完了になるまで、start_expedition は断られる。待つなら wait_for_turn');
+    expect(o.observation.self.directive?.prep?.text).toBe('持ち主の支度: まだ（決めていないもの: 新しく持ち物に入った装備 1 品）。準備完了になるまで、start_expedition は断られる。待つなら wait_for_turn。決めてほしいものがあれば、その命令を出す（断られるが、希望として持ち主に届く）: equip slot=x・unequip slot=x');
     expect(m.ownerRuns({ local: true }).runs.find((x) => x.runId === b.session.runId)?.prep).toEqual({ state: 'pending' });
     expect(errCode(await owner(b, { type: 'prepare', ready: true }))).toBe('ok');
     expect(prepOf(b)?.seen).toContain(gid);

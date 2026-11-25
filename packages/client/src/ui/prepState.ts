@@ -115,8 +115,9 @@ export function prepLine(item: DirectiveItem, x: PrepLineInput): string {
     if (!x.held) return tr(`${base}（${who}）`, `${base} (${who})`);
     return x.gear ? tr(`${base} ― 新しく持ち物に入った装備 ${x.gear} 品を、まだ決めていない`, `${base} — ${x.gear} new piece${x.gear > 1 ? 's' : ''} of gear not decided yet`) : base;
   }
-  const names = [...(x.perks ?? []), ...(x.boons ?? [])];
-  const base = names.length ? names.join(tr('・', ', ')) : tr('特技なし', 'No perks');
+  // 特技と加護を分けて書く（S11: 「特技: 強打・鎧さばき ／ 加護: 執念」）
+  const perks = x.perks?.length ? tr(`特技: ${x.perks.join('・')}`, `Perks: ${x.perks.join(', ')}`) : tr('特技なし', 'No perks');
+  const base = x.boons?.length ? tr(`${perks} ／ 加護: ${x.boons.join('・')}`, `${perks} / Boons: ${x.boons.join(', ')}`) : perks;
   const pend = [
     x.perkPending ? tr(`Lv${x.perkPending.level} の候補 ${x.perkPending.options} つを選んでいない`, `the ${x.perkPending.options} Lv${x.perkPending.level} options not chosen`) : '',
     x.boonPending ? tr(`加護の候補 ${x.boonPending.options} つを選んでいない`, `the ${x.boonPending.options} boon options not chosen`) : '',

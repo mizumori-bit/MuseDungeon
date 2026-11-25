@@ -96,7 +96,7 @@ export function hubCard(x: HubCardInput): HubCardModel {
     }
     const prepare: HubAction = { label: tr('支度をする', 'Prepare'), href: `#/prepare/${row.runId}` };
     const wish = (row.wishes ?? 0) > 0;
-    const ai = aiPresenceText(row.ai);
+    const ai = aiPresenceText(row.ai, n);
     if (!row.hold.length) {
       return { ...base, state: 'camp_free', pill: { text: tr('任せている', 'Left to them'), tone: 'muted' }, where, text: tr(`次の遠征は、${n}が、自分で決めて出発する`, `${n} will choose the next expedition and set out on their own`), action: prepare };
     }

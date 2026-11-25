@@ -1845,3 +1845,12 @@ engine と出来事の形は変えていない（`engineVersion` 0.38.0・`event
 - **支度**（`screens/Prepare.tsx`。上の状態と段ごとの 1 行は `ui/prepState.ts`）: 鍵は、`GET /api/owner/runs` でそのランを自分のもの（`mine`）として返す鍵（無ければ鍵なし＝同じ機械から）。5 秒ごとに `…/owner/view` を読み直す。「任せる／自分で」はすぐ `…/owner/directive` に送る（伝言の書きかけは送らない）。開いている段は握っている項目そのもの（読み直しで閉じない）。伝言は書きかけのあいだサーバーの値で上書きしない。「準備完了」は、書きかけの伝言があれば先に残してから `prepare { ready: true }`。決めていないものが残っていれば確かめの窓（`readyCheck`）。目的の候補は遊ぶ画面のキャンプの `OfferCard`（ボタンの文と「選んだ」の印を渡せるようにした）、装備は `InventoryPanel`、特技と加護は `PerkChoicePanel`・`BoonChoicePanel` を使い回す。見えるものはプレイヤーの PlayerView と観測だけ。
 - **見た目**: 新しい接頭辞（`.hub-`・`.prep-`）のクラスだけで、拠点と支度を札の画面にした（深い紺〜墨の地・羊皮紙色の文字・金の差し色 1 つ。状態のピルは、支度が「まだ」が琥珀・準備完了が緑・迷宮の中が青。名前はシステムのセリフ体）。ほかの画面の見た目は変えていない。絵・演出は後の段（H6）。
 - **S10a（検査と、画面で見た指摘の直し）**: 支度の「任せる／自分で」と伝言は、送る直前に `…/owner/view` を読み直し、押した 1 つだけを足す・外す／伝言だけを替える（`ui/prepState.ts` の `directiveToggle`・`messageSave`。ほかのタブの変更を古い値で上書きしない）。準備完了の間は、段の切り替えと決める操作を押せない（`inert` と薄い見た目。伝言は残せる）。`OwnerRunRow`・`OwnerViewResponse` に `continuable`・`oldVersion`、`ProfileSeasonEntry` に `failed` を足し、違う版の冒険と、起動時に読み込めなかった冒険の札を分けた（「自分で潜る」を出さない）。拠点・支度・「自分で潜る」の窓の断りは画面の言葉に置き換える（`ui/screenErr.ts`。運用の画面はサーバーの文のまま）。招きもランも無いときは、名前だけで順位の表の行と結ばない（`participantName`）。同じ機械から開いて運用者の札が出ているときの鍵の欄は、札の下の小さい 1 行（押すと開く）。順位の表の賞の欄は「1 位 地下 1 階」（順位は小さく薄く。値が 0 なら「—」。記録のタブも同じ部品）。観測の指図の行（キャンプ）の括弧の中は、遠征を始めるのはプレイヤー（準備完了の後）・握られた命令は希望として伝わる、に改めた（文だけ。PROTOCOL.md §9.14 の S10a の 3）。
+
+### 42.19 S11: 支度を待つ AI への文の直し（PROTOCOL.md §9.14 の「S11」）
+
+engine・World・出来事・命令の形・内容のデータと版は S9 のまま（`engineVersion` 0.49.0・`eventVersion` 37・内容 `cff6932f0071`）。開催中のシーズン s4 で、新しいランを始められるまま入れられる直しだけ。
+
+- **引数なしの `start_expedition`**: MCP の口だけで受ける（`mcp/server.ts`）。サーバーが持ち主の選んだ候補を入れて、今までと同じ `Command` を流す（記録の命令も同じ形）。準備完了でないときの断りは、engine の `bareStartRefusal`（門の断りと同じ文。希望は覚えない。step を通らないので、出来事も記録も出ない）。
+- **持ち主の様子**: 持ち主の口の最後の呼び出しは `RunSession` のメモリ（AI の最後の呼び出し `lastCall` と同じ持ち方）。文は shared の `ownerPresenceText`、足すのは `SessionPlayerPort.render`（`ObservationOptions.ownerPresence`）と、`held_by_owner` の断りの hint（`withOwnerPresence`）。観測だけを作る `observe`（持ち主の画面の写し・WS の観測）には付けない。決定論の再生には関わらない（World に入らず、出来事にも命令にも載らない）。
+- **希望との並べ**: 希望は持ち主が決めると World から消え、`owner_decided` にも載っていないので、サーバーが応答を組むときに、ランの記録（`history`）を決定からさかのぼって、その項目の最後の `directive_wish` を探す（`wishBeforeDecision`）。文は `diffChanges` の新しい引数 `ownerNotes`（seq → 添え書き）。記録だけから決まるので、起動し直した後も同じに作れる。
+- **前のキャンプと同じ伝言**: 応答の基準に、迷宮の中の応答のときの伝言（`ownerMsgOutside`）を覚える。伝言はキャンプでしか変わらないので、それが前のキャンプの終わりの伝言。基準はメモリなので、起動し直した後は、次の遠征まで添えない。

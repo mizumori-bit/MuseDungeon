@@ -7,7 +7,7 @@ import { createRun, directiveRefusal, isPlayersTurn, joinPlayer, prepStateWorld,
 import type {
   ActionError, AgentActivity, Command, CommandRecord, CommandSource, Dir, Expedition, ExpeditionReport, GameEvent, JoinCommand, LegacyMonster, MacroStop, ProjectedEvent,
   PerceivedEvent, PlayerId, PlayerView, Pos, ReportCall, RunMetaFile, RunSummary, SeasonSlay, SeasonSlayFacts, SeasonSyncCommand, SeqResumeCommand, TurnSnapshot, World,
-  CheckpointLedger, DirectiveItem,
+  CheckpointLedger, DirectiveItem, DirectiveWish,
 } from '@muse/shared';
 import {
   DIRECTIVE_ITEMS, OWNER_COMMANDS, actionError, applyEvent, buildExpeditionReport, canonicalHash, guardianDisplayName, compareReports, emptyWorld, filterEventsForPlayer, FREE_COMMANDS, MACRO_COMMANDS,
@@ -123,6 +123,8 @@ export class RunSession {
   private readonly lastInput = new Map<PlayerId, number>();
   /** プレイヤー（AI）が最後に呼び出した時刻（S9 §58.1。命令と MCP の呼び出し。持ち主・サーバーの命令は数えない。メモリだけで、起動し直すと空） */
   private readonly lastCall = new Map<PlayerId, number>();
+  /** 持ち主の口（…/owner/view・directive・act）が最後に来た時刻（S11。World に入れない。記録に書かない。メモリだけで、起動し直すと空） */
+  private readonly ownerCall = new Map<PlayerId, number>();
   /** 持ち主の支度を wait_for_turn で待っている呼び出しの数（S9 §58.1。メモリだけ） */
   private readonly ownerWaiting = new Map<PlayerId, number>();
   /** 応答テキストの表示オプション（ゲームには影響しない。World の外） */
@@ -798,6 +800,48 @@ export class RunSession {
   /** プレイヤーが最後に呼び出した時刻（S9 §58.1。このサーバーの起動の後に呼び出しが無ければ null） */
   lastCallAt(pid: PlayerId): number | null {
     return this.lastCall.get(pid) ?? null;
+  }
+
+  /** 持ち主の口が来た（S11。HTTP の持ち主の口が、認めた後に呼ぶ。now はテストで差し替える） */
+  noteOwnerCall(pid: PlayerId, now = Date.now()): void {
+    this.ownerCall.set(pid, Math.max(this.ownerCall.get(pid) ?? 0, now));
+  }
+
+  /** 持ち主の口が最後に来た時刻（S11。このサーバーの起動の後に来ていなければ null） */
+  lastOwnerCallAt(pid: PlayerId): number | null {
+    return this.ownerCall.get(pid) ?? null;
+  }
+
+  /**
+   * 持ち主が決めた出来事（owner_decided）の前に、その項目に出ていた AI の希望（S11）。希望は、持ち主が決めた時点で World から消えるので、ランの記録をさかのぼって探す
+   * （出来事の形は変えない）。その項目の前の決定・希望を消した指図（directive_set・持ち主の prepare の後の値に、その項目の希望が無い）に当たったら、無い。
+   * 目的は、決めた遠征の番号の希望だけ（持ち主の prepare で目的を選んだ時点で消えるので、指図の値は見ない）。
+   * 返す kind は記録の正体（比べるだけ。文には使わない: 文は、プレイヤーに見えている品から作る）
+   */
+  /** その seq の出来事（ランの記録から。無ければ undefined） */
+  eventAtSeq(seq: number): GameEvent | undefined {
+    const e = this.history[this.indexOfSeq(seq)];
+    return e && e.seq === seq ? e : undefined;
+  }
+
+  wishBeforeDecision(pid: PlayerId, seq: number): { wish: DirectiveWish; kind: string | null } | null {
+    const i0 = this.indexOfSeq(seq);
+    const d = this.history[i0];
+    if (!d || d.seq !== seq || d.type !== 'owner_decided' || d.player !== pid) return null;
+    const key: DirectiveWish['item'] = d.act === 'choose_perk' ? 'perk' : d.act === 'choose_boon' ? 'boon' : d.item === 'loadout' ? 'loadout' : 'objective';
+    const keyOf = (e: Extract<GameEvent, { type: 'owner_decided' }>): DirectiveWish['item'] => (e.act === 'choose_perk' ? 'perk' : e.act === 'choose_boon' ? 'boon' : e.item === 'loadout' ? 'loadout' : 'objective');
+    for (let i = i0 - 1; i >= 0; i--) {
+      const e = this.history[i];
+      if (!('player' in e) || e.player !== pid) continue;
+      if (e.type === 'owner_decided' && keyOf(e) === key) return null;
+      if (e.type === 'directive_wish' && e.wish.item === key) {
+        if (key === 'objective' && (e.wish.item !== 'objective' || e.wish.no !== d.no)) return null;
+        const kind = e.wish.item === 'loadout' ? this.world.entities[e.wish.target]?.kind ?? (e.kind ?? null) : null;
+        return { wish: structuredClone(e.wish), kind };
+      }
+      if (key !== 'objective' && (e.type === 'directive_set' || (e.type === 'directive_prep' && e.why === 'owner')) && !(e.directiveAfter.wishes ?? []).some((w) => w.item === key)) return null;
+    }
+    return null;
   }
 
   recordAgentActivity(a: AgentActivity): void {
