@@ -353,9 +353,10 @@ export const DIRECTIVE_ITEMS: readonly DirectiveItem[] = ['objective', 'loadout'
 /**
  * 指図（S8 §54.2）。hold: 握る項目（並びは DIRECTIVE_ITEMS の順）、message: 伝言（280 字まで。無ければ空）。
  * prep: 支度の札（S9 §58.1。握っている項目があるときだけ）。wishes: 希望（S9 §58.2。項目ごとに最新の 1 つ。特技と加護は別）。
- * S8 の版の記録の after 値には prep・wishes が無い（握っていて札が無ければ「まだ」と読む: prepStateOf）
+ * wishCount: この キャンプからキャンプまでの間に、項目ごとに覚えた希望の数（S9c。WISH_LIMIT まで。キャンプに着くと消える）。
+ * S8 の版の記録の after 値には prep・wishes が無い（握っていて札が無ければ、決めるものを数えて読む: prepStateOf）
  */
-export interface Directive { hold: DirectiveItem[]; message: string; prep?: DirectivePrep; wishes?: DirectiveWish[] }
+export interface Directive { hold: DirectiveItem[]; message: string; prep?: DirectivePrep; wishes?: DirectiveWish[]; wishCount?: Partial<Record<WishItem, number>> }
 
 /**
  * 支度の札（S9。SEASON.md §58.1）。state: pending（まだ）/ ready（準備完了）。キャンプに着くたびに engine が置き直す（決めるものが無ければ ready）。
@@ -375,11 +376,19 @@ export type DirectiveWish =
   | { item: 'boon'; boon: string; depth: number; reason?: string };
 export type WishItem = DirectiveWish['item'];
 
-/** 支度の札の状態（S9 §58.1）: 握っている項目が無ければ null。握っていて札が無い（S8 の版の記録）なら pending */
-export function prepStateOf(d: { hold: readonly DirectiveItem[]; prep?: { state: 'pending' | 'ready' } } | undefined | null): 'pending' | 'ready' | null {
+/**
+ * 支度の札の状態（S9 §58.1）: 握っている項目が無ければ null。札があれば、その状態。
+ * 札が無い（前の版の記録・この版より前に握ったラン。S9c）なら、決めるものがあるかを、その場で数えて読む（needs。無ければ準備完了）。
+ * engine は World から（prepStateWorld）、観測は PlayerView から（prepStateView）、同じものを数えて渡す
+ */
+export function prepStateOf(d: { hold: readonly DirectiveItem[]; prep?: { state: 'pending' | 'ready' } } | undefined | null, needs: () => boolean): 'pending' | 'ready' | null {
   if (!d?.hold.length) return null;
-  return d.prep?.state ?? 'pending';
+  if (d.prep) return d.prep.state;
+  return needs() ? 'pending' : 'ready';
 }
+
+/** 希望を、キャンプからキャンプまでの間に、項目ごとに覚え直せる回数（S9c。engine の定数。キャンプに着くと数え直す） */
+export const WISH_LIMIT = 8;
 
 export type PlayerState = 'alive' | 'dead' | 'left' | 'at_camp';
 

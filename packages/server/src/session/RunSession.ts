@@ -3,14 +3,14 @@
 import { randomBytes } from 'node:crypto';
 import type { Catalog } from '@muse/shared';
 import type { Content } from '@muse/content';
-import { createRun, directiveRefusal, isPlayersTurn, joinPlayer, resumeSeq, seasonSync, step } from '@muse/engine';
+import { createRun, directiveRefusal, isPlayersTurn, joinPlayer, prepStateWorld, resumeSeq, seasonSync, step } from '@muse/engine';
 import type {
   ActionError, AgentActivity, Command, CommandRecord, CommandSource, Dir, Expedition, ExpeditionReport, GameEvent, JoinCommand, LegacyMonster, MacroStop, ProjectedEvent,
   PerceivedEvent, PlayerId, PlayerView, Pos, ReportCall, RunMetaFile, RunSummary, SeasonSlay, SeasonSlayFacts, SeasonSyncCommand, SeqResumeCommand, TurnSnapshot, World,
   CheckpointLedger, DirectiveItem,
 } from '@muse/shared';
 import {
-  DIRECTIVE_ITEMS, OWNER_COMMANDS, actionError, applyEvent, buildExpeditionReport, canonicalHash, guardianDisplayName, compareReports, emptyWorld, filterEventsForPlayer, FREE_COMMANDS, MACRO_COMMANDS, prepStateOf,
+  DIRECTIVE_ITEMS, OWNER_COMMANDS, actionError, applyEvent, buildExpeditionReport, canonicalHash, guardianDisplayName, compareReports, emptyWorld, filterEventsForPlayer, FREE_COMMANDS, MACRO_COMMANDS,
   CHECKPOINT_EVERY, checkpointCamp, checkpointStep, monsterInView,
   fleeOptionsText, fleeRiskText, macroNext, macroProbe, macroStart, macroStopError, narrate, projectPlayerView, publicStairsAt, riskText, fightRiskStop, fightThreats, threatEstimate, seasonReportable, seasonReportableSpots, seasonFinalText, selfTurnMarks, t,
 } from '@muse/shared';
@@ -843,7 +843,7 @@ export class RunSession {
         const pr = this.world.players[pid];
         if (this.world.status === 'ended' || !pr || pr.state === 'dead' || pr.state === 'left' || this.closed) return 'ended';
         if (pr.state !== 'at_camp') return 'started';
-        const st = prepStateOf(pr.directive);
+        const st = prepStateWorld(this.world, this.deps.content, pr);
         if (st === null) return 'released';
         if (st === 'ready') return 'ready';
         const left = deadline - Date.now();

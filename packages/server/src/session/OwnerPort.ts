@@ -3,7 +3,7 @@
 // 同じ道（RunSession.submit → engine の step）で流す。違うのは出どころ（source: owner）だけ。プレイヤーの応答の基準（turn.changes）は動かさない。
 // S9（§58.1・§58.2）: 支度（prepare: 目的を選ぶ・準備完了）もこの口から。遠征を始めるのはプレイヤー（持ち主の start_expedition は engine が断る）。
 import type { ActionError, Command, DirectiveItem, DirectiveUndecided, Observation, OwnerRunRow, OwnerViewResponse, PlayerId, PlayerView } from '@muse/shared';
-import { actionError, activeWishes, CommandSchema, directiveUndecided, OWNER_COMMANDS, ownerWaitOpen, prepStateOf, t } from '@muse/shared';
+import { actionError, activeWishes, CommandSchema, directiveUndecided, OWNER_COMMANDS, ownerWaitOpen, prepStateView, t } from '@muse/shared';
 import { directiveTarget } from '@muse/engine';
 import type { RunSession } from './RunSession';
 import { SessionPlayerPort } from './PlayerPort';
@@ -53,7 +53,7 @@ export function ownerRow(session: RunSession, pid: PlayerId, season?: { name: st
   const why = ownerIneligible(session, pid);
   const d = view.directive;
   const sm = session.world.meta.season;
-  const st = prepStateOf(d);
+  const st = prepStateView(view);
   const wishes = !why && view.status === 'at_camp' ? activeWishes(view).length : 0;
   return {
     runId: session.runId, playerId: pid, name: view.self.name, classId: view.self.classId,

@@ -2565,7 +2565,7 @@ function buildValidActions(view: PlayerView, catalog: Catalog, x: VAInput): stri
     const i = out.indexOf('retire');
     const wait = waitOwnerLine(L);
     out = i >= 0 ? [...out.slice(0, i), wait, ...out.slice(i)] : [...out, wait];
-  } else if (view.status === 'at_camp' && view.camp && !seasonClosedView(view) && hold.includes('objective') && prepStateOf(view.directive) === 'ready' && view.directive?.prep?.objective !== undefined) {
+  } else if (view.status === 'at_camp' && view.camp && !seasonClosedView(view) && hold.includes('objective') && prepStateView(view) === 'ready' && view.directive?.prep?.objective !== undefined) {
     const line = ownerStartLine(L, view);
     const i = out.indexOf(notesActionLine(L));
     out = i >= 0 ? [...out.slice(0, i), line, ...out.slice(i)] : [...out, line];
@@ -2583,7 +2583,18 @@ export function seasonClosedView(view: PlayerView): boolean {
  * 次の遠征を始められる。予算切れ・時間切れ・確定したシーズンのキャンプは待たない（S8b: 待つ行・▶ 行の待ち方を出さず、wait_for_turn はすぐ返す）
  */
 export function ownerWaitOpen(view: PlayerView): boolean {
-  return view.status === 'at_camp' && !!view.camp && prepStateOf(view.directive) === 'pending' && !seasonClosedView(view);
+  return view.status === 'at_camp' && !!view.camp && prepStateView(view) === 'pending' && !seasonClosedView(view);
+}
+
+/**
+ * 支度の札の状態（PlayerView から。S9c）: 札が無い（前の版の記録・この版より前に握ったラン）なら、決めるものを数えて読む
+ * （目的を握っている・握られた特技か加護の保留。装備は、何が新しいかの覚えが無いので数えない。engine の prepStateWorld と同じ読み方）
+ */
+export function prepStateView(view: PlayerView): 'pending' | 'ready' | null {
+  return prepStateOf(view.directive, () => {
+    const h = view.directive!.hold;
+    return h.includes('objective') || (h.includes('perks') && (!!perkChoice(view) || !!view.self.boonChoice?.options.length));
+  });
 }
 
 /** キャンプで支度の札が「まだ」のときの待つ行（S8 §54.4 の 2・5。S9 §58.1） */
@@ -2612,7 +2623,7 @@ function ownerStartLine(L: Locale, view: PlayerView): string {
  */
 export function directivePrepObs(view: PlayerView, catalog: Catalog | undefined): ObsDirectivePrep | null {
   const d = view.directive;
-  const st = prepStateOf(d);
+  const st = prepStateView(view);
   if (!st || view.status !== 'at_camp' || !view.camp || seasonClosedView(view)) return null;
   const L = view.locale;
   const u = undecidedItems(view, catalog);
@@ -2699,10 +2710,11 @@ export function undecidedItems(view: PlayerView, catalog: Catalog | undefined): 
     const bc = view.self.boonChoice;
     if (bc) out.boon = { depth: bc.depth, options: bc.options.length };
   }
-  // 装備（S9 §58.1）: 前の準備完了（か札ができた）の後に持ち物に入った品だけ（札の seen に無い品。札が無い S8 の版の記録では、身に着けていない品すべて）
-  if (hold.includes('loadout') && catalog) {
-    const seen = view.directive?.prep ? new Set(view.directive.prep.seen) : null;
-    const n = view.inventory.filter((it) => !it.equipped && !!equipSlotOf(catalog, it) && !seen?.has(it.id)).length;
+  // 装備（S9 §58.1）: 前の準備完了（か札ができた）の後に持ち物に入った品だけ（札の seen に無い品）。
+  // 札が無い（前の版の記録。S9c）ときは、何が新しいかの覚えが無いので数えない（engine の prepNeedsWorld と同じ）
+  if (hold.includes('loadout') && catalog && view.directive?.prep) {
+    const seen = new Set(view.directive.prep.seen);
+    const n = view.inventory.filter((it) => !it.equipped && !!equipSlotOf(catalog, it) && !seen.has(it.id)).length;
     if (n) out.gear = n;
   }
   return out.objective || out.perk || out.boon || out.gear ? out : null;

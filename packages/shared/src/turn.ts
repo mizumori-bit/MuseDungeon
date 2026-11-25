@@ -7,9 +7,8 @@ import type { Dir, Locale, Names } from './types';
 import type { Catalog } from './catalog';
 import { nameOf, nextOverreach, overreachStepPoints } from './catalog';
 import { t } from './util';
-import { dirLabel, ownerOfferText, ownerWaitOpen, seasonClosedView, seasonFinalText, seasonFinalView, undecidedStartedTexts } from './observation';
+import { dirLabel, ownerOfferText, ownerWaitOpen, prepStateView, seasonClosedView, seasonFinalText, seasonFinalView, undecidedStartedTexts } from './observation';
 import type { PlayerView } from './view';
-import { prepStateOf } from './types';
 
 export type TurnState = 'your_turn' | 'waiting_others' | 'at_camp' | 'expedition_ended' | 'run_ended';
 export type TurnReason =
@@ -146,7 +145,7 @@ export function turnSnapshot(view: PlayerView, obs: Observation, state: TurnStat
     nextCampMin: obs.expedition?.haul?.next_camp?.min_target_depth ?? null,
     crossed: x?.crossedDepth ?? 0,
     ownerMsg: view.directive?.message ?? '',
-    prep: prepStateOf(view.directive) ? `${prepStateOf(view.directive)}:${view.directive?.prep?.objective ?? ''}` : '',
+    prep: prepStateView(view) ? `${prepStateView(view)}:${view.directive?.prep?.objective ?? ''}` : '',
   };
 }
 
@@ -236,7 +235,7 @@ export function diffChanges(prev: TurnSnapshot | null, cur: TurnSnapshot, view: 
   }
   // 支度の札（S9 §58.1）: キャンプにいる間に、準備完了になった・「まだ」に戻った（前の応答もキャンプのときだけ。キャンプに着いたときの置き直しは出さない）
   if (view.status === 'at_camp' && (prev.state === 'at_camp' || prev.state === 'expedition_ended') && prev.prep !== undefined && cur.prep !== prev.prep && !seasonClosedView(view)) {
-    const st = prepStateOf(view.directive);
+    const st = prepStateView(view);
     const o = view.directive?.hold.includes('objective') ? view.directive?.prep?.objective : undefined;
     if (st === 'ready') out.push({ code: 'owner', text: t(L, `持ち主の支度が、準備完了になった${o !== undefined ? `（目的: ${ownerOfferText(L, view, o)}）` : ''}。start_expedition で出発する`, `Your owner's preparations are ready${o !== undefined ? ` (objective: ${ownerOfferText(L, view, o)})` : ''}. Set out with start_expedition`) });
     else if (st === 'pending' && prev.prep.startsWith('ready')) out.push({ code: 'owner', text: t(L, '持ち主の支度が、まだに戻った（持ち主が、支度を見直している）', 'Your owner\'s preparations are no longer ready (your owner is going over them)') });
@@ -442,7 +441,7 @@ export function turnStateOf(view: PlayerView, expeditionEndedNow: boolean): { st
   if (view.status === 'at_camp') {
     if (expeditionEndedNow) return { state: 'expedition_ended', awaiting: 'nothing' };
     // 持ち主の支度が「まだ」（S9 §58.1。S8 §54.4 の「目的を握られている」を改めた）: 次の遠征は、まだ始められない。準備完了なら、あなたが start_expedition で出発する
-    return { state: 'at_camp', awaiting: view.camp && prepStateOf(view.directive) !== 'pending' ? 'camp_choice' : 'nothing' };
+    return { state: 'at_camp', awaiting: view.camp && prepStateView(view) !== 'pending' ? 'camp_choice' : 'nothing' };
   }
   if (view.status === 'your_turn') return { state: 'your_turn', awaiting: 'action' };
   return { state: 'waiting_others', awaiting: 'nothing' };
@@ -505,7 +504,7 @@ export function turnLine(view: PlayerView, b: TurnBlock, short = false): string 
         return t(L, `▶ キャンプにいます。${ownerWaitText(L)}`, `▶ You are at camp. ${ownerWaitText(L)}`);
       }
       // 準備完了で、目的を握られている（S9 §58.1）: 出発するのは、あなた（持ち主が選んだ目的で）
-      if (view.camp && view.directive?.hold.includes('objective') && prepStateOf(view.directive) === 'ready' && view.directive.prep?.objective !== undefined) {
+      if (view.camp && view.directive?.hold.includes('objective') && prepStateView(view) === 'ready' && view.directive.prep?.objective !== undefined) {
         const o = ownerOfferText(L, view, view.directive.prep.objective);
         return t(L, `▶ キャンプにいます。持ち主の支度は準備完了。start_expedition で出発する（持ち主が選んだ目的: ${o}。あなたが呼ぶまで、出発しない）。`,
           `▶ You are at camp. Your owner's preparations are ready. Set out with start_expedition (the objective your owner chose: ${o}; nothing starts until you call it).`);

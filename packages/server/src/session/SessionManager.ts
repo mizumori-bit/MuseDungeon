@@ -63,6 +63,8 @@ export class SessionManager {
     this.catalog = buildCatalog(content);
     this.profiles = new ProfileService(content, this.catalog, new ProfileStore(config.profilesDir));
     this.seasons = new SeasonService(new SeasonStore(config.seasonsDir ?? null), { engineVersion: ENGINE_VERSION, contentVersion: content.version }, (runId) => this.liveRunState(runId), Date.now, content.balance.season.supportMinHealPct, content.lists.seasonTitles);
+    // canStart の「進行中のシーズンのランがある」は、冒険者 1 人に続きは 1 つと同じ数え方で（S9c）
+    this.seasons.continues = (runId) => { const s = this.sessions.get(runId); return !!s && s.world.playerOrder.some((pid) => this.continuable(s, pid)); };
     this.deps = { content, catalog: this.catalog, config, profiles: this.profiles, season: this.seasons };
     this.store = config.runsDir ? new RunStore(config.runsDir) : null;
     // 終わりの時刻の後の確定（SEASON.md §2.1）: 1 分ごとに見る
@@ -254,20 +256,52 @@ export class SessionManager {
   }
 
   /**
-   * そのプロフィールの、続きを遊べるラン（S9。SEASON.md §58.3）: 動いていて、その者が迷宮かキャンプにいるラン。
-   * 数えないもの: 版が違う（この版の engine で始まっていない）・復旧できなかった（動いていない）・確定したシーズンのラン・終わったラン。協力プレイのランも数える
+   * そのプレイヤーが、そのランの続きを遊べるか（S9 §58.3。S9c: 冒険者 1 人に続きは 1 つの数え方は、この 1 つ。シーズンの canStart の
+   * 「進行中のシーズンのランがある」も、これで見る）: 動いていて、この版の engine で始まり、その者が迷宮かキャンプにいる。
+   * シーズンのランは、確定していない。キャンプにいるなら、まだ新しい遠征を始められる（終わりの時刻の前・予算が残っている）。
+   * 迷宮にいれば、シーズンが終わりの時刻を過ぎていても、帰るか倒れるまで続けられるので数える
+   */
+  continuable(s: RunSession, pid: PlayerId): boolean {
+    const w = s.world;
+    if (w.status !== 'active' || w.meta.engineVersion !== ENGINE_VERSION) return false;
+    const st = w.players[pid]?.state;
+    if (st !== 'alive' && st !== 'at_camp') return false;
+    const sid = w.meta.season?.id;
+    if (sid) {
+      if (this.seasonFinal(sid)) return false;
+      if (st === 'at_camp' && !this.seasons.canContinue(sid, s.profileOf(pid))) return false;
+    }
+    return true;
+  }
+
+  /**
+   * そのプロフィールの、続きを遊べるラン（S9。SEASON.md §58.3。数え方は continuable）。
+   * 数えないもの: 版が違う・復旧できなかった（動いていない）・確定したシーズンのラン・新しい遠征を始められないシーズンのキャンプ・終わったラン。協力プレイのランも数える
    */
   liveRunsOf(profileId: string): { session: RunSession; pid: PlayerId }[] {
     const out: { session: RunSession; pid: PlayerId }[] = [];
     for (const s of this.sessions.values()) {
-      const w = s.world;
-      if (w.status !== 'active' || w.meta.engineVersion !== ENGINE_VERSION || this.seasonFinal(w.meta.season?.id)) continue;
-      for (const pid of w.playerOrder) {
-        const st = w.players[pid].state;
-        if (s.profileOf(pid) === profileId && (st === 'alive' || st === 'at_camp')) out.push({ session: s, pid });
+      for (const pid of s.world.playerOrder) {
+        if (s.profileOf(pid) === profileId && this.continuable(s, pid)) out.push({ session: s, pid });
       }
     }
     return out.sort((a, b) => a.session.createdAt - b.session.createdAt || (a.session.runId < b.session.runId ? -1 : 1));
+  }
+
+  /** プロフィールの ID ごとの待ち行列（S9c: 数えてから参加するまでを、同じプロフィールについて順番に流す） */
+  private readonly profileQueue = new Map<string, Promise<unknown>>();
+
+  /** 同じプロフィールの new_run を、順番に流す（前のものが失敗しても、次は流れる） */
+  private async byProfile<T>(profileId: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.profileQueue.get(profileId) ?? Promise.resolve();
+    const run = prev.catch(() => undefined).then(fn);
+    const tail = run.catch(() => undefined);
+    this.profileQueue.set(profileId, tail);
+    try {
+      return await run;
+    } finally {
+      if (this.profileQueue.get(profileId) === tail) this.profileQueue.delete(profileId);
+    }
   }
 
   /**
@@ -321,9 +355,14 @@ export class SessionManager {
     // 知らないプロフィールのトークンは、ランを作る前に断る（断った後に、誰もいないランが残らない）
     const known = req.profileToken ? this.profiles.store.resolve(req.profileToken) : null;
     if (req.profileToken && !known) return { error: unknownProfileError() };
+    // 同じプロフィールの new_run は、数えてから参加するまでを順番に（S9c: 同時に来た 2 つで、続きのあるランが 2 つできないように）
+    return known ? this.byProfile(known.id, () => this.createPlainRun(req, known.id)) : this.createPlainRun(req, null);
+  }
+
+  private async createPlainRun(req: NewRunRequest & { controller: Controller }, profileId: string | null): Promise<Joined | { error: ActionError }> {
     const source = req.controller.kind === 'agent' ? 'mcp' : 'ws';
     // 冒険者 1 人に続きは 1 つ（S9 §58.3）。トークンなしの new_run は、今までどおり新しいプロフィールを作る
-    if (known) { const e = await this.endPreviousRuns(known.id, req.endPrevious, source, req.classId); if (e) return { error: e }; }
+    if (profileId) { const e = await this.endPreviousRuns(profileId, req.endPrevious, source, req.classId); if (e) return { error: e }; }
     // 握る項目を引き継ぐときは、キャンプから（持ち主の支度を待つ）
     const inherit = this.holdFor(req.profileToken, req.controller, req.mode);
     const session = RunSession.create(this.deps, { seed: req.seed, mode: req.mode ?? 'solo' });
@@ -355,6 +394,11 @@ export class SessionManager {
       return { error: actionError('season_unavailable', 'そのプロフィールのトークンは見つからない。運用者から受け取った profile_token を確かめる / unknown profile_token; check the token the operator gave you', '運用者に招いてもらう / ask the operator to invite you') };
     }
     const profileId = prof?.id ?? null;
+    // 同じプロフィールの new_run は、数えてから参加するまでを順番に（S9c）
+    return profileId ? this.byProfile(profileId, () => this.createSeasonRunLocked(req, profileId)) : this.createSeasonRunLocked(req, null);
+  }
+
+  private async createSeasonRunLocked(req: NewRunRequest & { controller: Controller; season: string }, profileId: string | null): Promise<Joined | { error: ActionError }> {
     const source = req.controller.kind === 'agent' ? 'mcp' : 'ws';
     // 始められるか（前のランを終わらせる前に。終わらせても始められないなら、何も終わらせない）。進行中のシーズンのランは、続きは 1 つの決まりで見る（S9 §58.3）
     const chk0 = this.seasons.canStart(req.season, profileId);

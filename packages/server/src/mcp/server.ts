@@ -563,19 +563,20 @@ export function createMcpServer(ctx: McpContext): McpServer {
   }, async (a) => act('take_supply', a, { type: 'take_supply', ...(a.id ? { id: a.id } : {}) }));
   server.registerTool('choose_perk', {
     title: '特技を選ぶ', description: 'レベルアップの特技の候補から 1 つ選ぶ（self.perk_choice。手番を消費しない。選ぶまで進行は止まらない）。option は候補の番号（1 から）か特技の ID。持ち主が特技と加護を握っているときは、断られる代わりに、あなたの希望として持ち主に伝わる（観測の「指図」の行。get_rules topic=directive）。',
-    inputSchema: { ...common, option: z.union([z.number().int().min(1).max(9), z.string().min(1)]) },
+    // thought（S9c）: 握られているときは、希望の理由として持ち主に届く（前は引数に無く、共通の名前として捨てていた）
+    inputSchema: { ...common, option: z.union([z.number().int().min(1).max(9), z.string().min(1)]), thought: actionCommon.thought },
   }, async (a) => act('choose_perk', a, { type: 'choose_perk', option: a.option }));
   server.registerTool('choose_boon', {
-    title: '加護を選ぶ', description: '節目の大守護者を倒したときの加護の候補から 1 つ選ぶ（self.boon_choice。手番を消費しない）。option は候補の番号（1 から）か加護の ID。',
-    inputSchema: { ...common, option: z.union([z.number().int().min(1).max(9), z.string().min(1)]) },
+    title: '加護を選ぶ', description: '節目の大守護者を倒したときの加護の候補から 1 つ選ぶ（self.boon_choice。手番を消費しない）。option は候補の番号（1 から）か加護の ID。持ち主が特技と加護を握っているときは、断られる代わりに、あなたの希望として持ち主に伝わる（観測の「指図」の行。get_rules topic=directive）。',
+    inputSchema: { ...common, option: z.union([z.number().int().min(1).max(9), z.string().min(1)]), thought: actionCommon.thought },
   }, async (a) => act('choose_boon', a, { type: 'choose_boon', option: a.option }));
   server.registerTool('pickup', { title: '拾う', description: '足元のアイテムを拾う（item を省くと足元の全て。ただし自分が置いた品は、ほかの品があれば拾わない。拾い直すなら item を渡す）。', inputSchema: { ...actionCommon, item: z.string().regex(/^e_[0-9a-z]{6}$/).optional() } },
     async (a) => act('pickup', a, { type: 'pickup', item: a.item }));
   server.registerTool('drop', { title: '置く', description: '所持品を足元に置く。', inputSchema: { ...actionCommon, slot: SlotZ, qty: z.number().int().positive().optional() } },
     async (a) => act('drop', a, { type: 'drop', slot: a.slot, qty: a.qty }));
-  server.registerTool('equip', { title: '装備', description: '武器・防具・装飾品を装備する。装備すると正体と呪いの有無が分かる（呪われていれば外せない）。呪いと分かっている品は confirm: true が要る。', inputSchema: { ...actionCommon, slot: SlotZ, confirm: z.boolean().optional() } },
+  server.registerTool('equip', { title: '装備', description: '武器・防具・装飾品を装備する。装備すると正体と呪いの有無が分かる（呪われていれば外せない）。呪いと分かっている品は confirm: true が要る。持ち主が装備を握っているときは、断られる代わりに、あなたの希望として持ち主に伝わる（thought が理由になる）。', inputSchema: { ...actionCommon, slot: SlotZ, confirm: z.boolean().optional() } },
     async (a) => act('equip', a, { type: 'equip', slot: a.slot, ...(a.confirm ? { confirm: true } : {}) }));
-  server.registerTool('unequip', { title: '装備解除', description: '装備を外す（スロット文字か weapon/armor/accessory）。', inputSchema: { ...actionCommon, slot: z.union([SlotZ, z.enum(['weapon', 'armor', 'accessory'])]) } },
+  server.registerTool('unequip', { title: '装備解除', description: '装備を外す（スロット文字か weapon/armor/accessory）。持ち主が装備を握っているときは、断られる代わりに、あなたの希望として持ち主に伝わる（thought が理由になる）。', inputSchema: { ...actionCommon, slot: z.union([SlotZ, z.enum(['weapon', 'armor', 'accessory'])]) } },
     async (a) => act('unequip', a, { type: 'unequip', slot: a.slot }));
   server.registerTool('use_item', {
     title: '使う', description: '薬を飲む・巻物を読む・帰還の綱を使う（その場でキャンプへ。目的を除く戦利品の半分が確定。遺物は運べない）。slot はスロット文字か、正体の分かっている品の種類 ID（例 "potion_healing"。同じ種類が複数ならスロット順で最初）。鑑定の巻物は target_slot で対象を選べる（省略時はスロット順で最初の未鑑定品か、呪いの有無を確かめていない装備品）。',

@@ -77,9 +77,22 @@ export function wishReason(clean: (s: string) => string, thought: string | undef
   return s || undefined;
 }
 
-/** 2 つの希望が同じか（項目・中身・理由。同じ希望のくり返しは出来事を足さない） */
+/** 2 つの希望の中身が同じか（項目と中身。理由は見ない。S9c: 中身が同じなら出来事を足さず、理由は最初のものを残す） */
 export function sameWish(a: DirectiveWish | undefined, b: DirectiveWish): boolean {
-  return !!a && JSON.stringify(a) === JSON.stringify(b);
+  if (!a) return false;
+  const { reason: _ra, ...ra } = a;
+  const { reason: _rb, ...rb } = b;
+  return JSON.stringify(ra) === JSON.stringify(rb);
+}
+
+/** 希望をもう伝えてある（同じ中身）ときの応答の文（S9c） */
+export function wishAlreadyText(L: Locale, label: string): string {
+  return t(L, `その希望（${label}）は、もう持ち主に伝えてある（持ち主が決めるのは、キャンプで）。`, `That wish (${label}) has already been passed to your owner (they decide at camp).`);
+}
+
+/** 希望を覚え直せる回数を使い切ったときの応答の文（S9c） */
+export function wishLimitText(L: Locale, current: string | null): string {
+  return t(L, `希望は、もう伝えてある（次のキャンプまで、これ以上は変えられない${current ? `。今の希望: ${current}` : ''}）。`, `Your wish has already been passed on (it cannot change again until the next camp${current ? `; current wish: ${current}` : ''}).`);
 }
 
 /**

@@ -3,7 +3,7 @@
 // 命令は、プレイヤーと同じ Command を持ち主の口（POST …/owner/act）へ送る。通るか・断るかを決めるのはサーバー（engine）で、断りの文はそのまま出す。
 // プロフィールのトークンは、そのランを返したもの（呼び出し側が覚えている）を Authorization の見出しでだけ渡す（画面・URL・console に出さない）。
 import type { ActionError, Catalog, Command, DirectiveItem, DirectiveWish, Observation, OwnerRunRow, OwnerViewResponse } from '@muse/shared';
-import { DIRECTIVE_ITEMS, activeWishes, directiveItemsText, kindName, prepStateOf, wishCommand, wishItemOf, wishLabel } from '@muse/shared';
+import { DIRECTIVE_ITEMS, activeWishes, directiveItemsText, kindName, prepStateView, wishCommand, wishItemOf, wishLabel } from '@muse/shared';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { ApiError, api, errorText } from '../api';
 import { getLocale, getToken, inLocale, tr } from '../util';
@@ -221,7 +221,7 @@ export function OwnerRunCard({ row, token, catalog, onChanged }: { row: OwnerRun
   const undecided = atCamp ? (cur ? cur.observation.self.directive?.undecided : row.undecided) : undefined;
   const undecidedText = eligible ? undecidedLine(undecided) : null;
   // 支度の札（S9 §58.1）: 新しいほうから。キャンプにいて、握っている項目があるときだけ
-  const prepNow = cur ? (prepStateOf(cur.view.directive) ? { state: prepStateOf(cur.view.directive)!, objective: cur.view.directive?.hold.includes('objective') ? cur.view.directive?.prep?.objective : undefined } : undefined) : row.prep;
+  const prepNow = cur ? (prepStateView(cur.view) ? { state: prepStateView(cur.view)!, objective: cur.view.directive?.hold.includes('objective') ? cur.view.directive?.prep?.objective : undefined } : undefined) : row.prep;
   const prep = atCamp && eligible && serverHold.length ? prepNow : undefined;
   const aiText = eligible ? aiPresenceText(cur ? cur.ai : row.ai) : null;
   // AI の希望（S9 §58.2）: 今も成り立つものだけ（中身は読んだ view から）
@@ -370,8 +370,8 @@ export function OwnerRunCard({ row, token, catalog, onChanged }: { row: OwnerRun
               )}
               {atCamp && heldNow.length > 0 && !seasonOver && (
                 <div class="oblock oprep">
-                  <h4>{tr('支度', 'Preparations')}: {prepStateOf(view.directive) === 'ready' ? tr('準備完了', 'ready') : tr('まだ', 'not ready')}</h4>
-                  {prepStateOf(view.directive) === 'ready' ? (
+                  <h4>{tr('支度', 'Preparations')}: {prepStateView(view) === 'ready' ? tr('準備完了', 'ready') : tr('まだ', 'not ready')}</h4>
+                  {prepStateView(view) === 'ready' ? (
                     <>
                       <p class="muted small">{tr('AI が来たら、出発する（出発するのは AI。AI に、声をかける）。支度を変えると「まだ」に戻る。', 'The AI sets out when it comes (the AI starts the expedition; let it know). Changing anything puts the preparations back to not ready.')}</p>
                       <button class="small" disabled={busy} onClick={() => void act({ type: 'prepare', ready: false })}>{tr('「まだ」に戻す', 'Back to not ready')}</button>

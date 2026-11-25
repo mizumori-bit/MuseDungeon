@@ -5,7 +5,7 @@
 // 希望（S9。§58.2）: 握られた項目の命令をプレイヤーの口から出すと、断ったうえで、出来事 directive_wish で覚える（手番は使わない）。
 import type { Content } from '@muse/content';
 import type { ActionError, Command, Directive, DirectiveItem, DirectivePrep, DirectiveWish, EquipSlot, PlayerRecord, PrepNeeds, World, WishItem } from '@muse/shared';
-import { actionError, DIRECTIVE_ITEMS, EQUIP_SLOTS, prepNeedsAny, prepNeedsParts, prepStateOf, putWish, sameWish, seasonBudgetLeft, t, wishLabel, wishReason, wishToldText } from '@muse/shared';
+import { actionError, DIRECTIVE_ITEMS, EQUIP_SLOTS, prepNeedsAny, prepNeedsParts, prepStateOf, sameWish, seasonBudgetLeft, t, WISH_LIMIT, wishAlreadyText, wishLabel, wishLimitText, wishReason, wishToldText } from '@muse/shared';
 import type { Ctx } from './ctx';
 
 /** 指図を出せるラン（§54.1）: ソロで、プレイヤーが人間でないもの（人間が自分で遊ぶランと、協力プレイには出さない） */
@@ -99,13 +99,19 @@ export function prepNeedsWorld(world: World, content: Content, pr: PlayerRecord,
     if (p[0]?.options.length) out.perk = { level: p[0].level, options: p[0].options.length, more: Math.max(0, p.length - 1) };
     if (me?.boonChoice?.options.length) out.boon = { depth: me.boonChoice.depth, options: me.boonChoice.options.length };
   }
-  if (hold.includes('loadout')) {
-    const seen = new Set(prep?.seen ?? []);
+  // 装備: 札の seen に無い品だけ。札が無い（前の版の記録。S9c）ときは、何が新しいかの覚えが無いので数えない（AI を意味なく待たせない）
+  if (hold.includes('loadout') && prep) {
+    const seen = new Set(prep.seen);
     const worn = new Set(Object.values(me?.equip ?? {}).filter((x): x is string => !!x));
     const n = (me?.inv?.items ?? []).filter((id) => !seen.has(id) && !worn.has(id) && !!content.items[world.entities[id]?.kind ?? '']?.equip).length;
     if (n) out.gear = n;
   }
   return out;
+}
+
+/** 支度の札の状態（World から。札が無ければ、決めるものを数えて読む。S9c） */
+export function prepStateWorld(world: World, content: Content, pr: PlayerRecord): 'pending' | 'ready' | null {
+  return prepStateOf(pr.directive, () => prepNeedsAny(prepNeedsWorld(world, content, pr, pr.directive!.hold, undefined)));
 }
 
 /** 新しい札（決めるものが無ければ準備完了、あれば「まだ」。seen は今の持ち物） */
@@ -114,9 +120,10 @@ function freshPrep(world: World, content: Content, pr: PlayerRecord, hold: reado
   return prepNeedsAny(prepNeedsWorld(world, content, pr, hold, base)) ? base : { state: 'ready', seen: invIds(world, pr) };
 }
 
-/** 指図の after 値（prep・wishes は、あるときだけ。並びを決めて、同じ中身が同じ値になるように） */
-function directiveOf(hold: DirectiveItem[], message: string, prep: DirectivePrep | undefined, wishes: DirectiveWish[] | undefined): Directive {
-  return { hold, message, ...(prep ? { prep } : {}), ...(wishes?.length ? { wishes } : {}) };
+/** 指図の after 値（prep・wishes・wishCount は、あるときだけ。並びを決めて、同じ中身が同じ値になるように） */
+function directiveOf(hold: DirectiveItem[], message: string, prep: DirectivePrep | undefined, wishes: DirectiveWish[] | undefined, wishCount?: Directive['wishCount']): Directive {
+  const wc = wishCount && Object.keys(wishCount).length ? { ...wishCount } : undefined;
+  return { hold, message, ...(prep ? { prep } : {}), ...(wishes?.length ? { wishes } : {}), ...(wc ? { wishCount: wc } : {}) };
 }
 
 /** 希望の項目が、握る項目のどれに当たるか */
@@ -124,8 +131,12 @@ function wishHeld(w: WishItem): DirectiveItem {
   return w === 'objective' ? 'objective' : w === 'loadout' ? 'loadout' : 'perks';
 }
 
-/** 覚える希望の下書き（S9 §58.2）。same: いま覚えている希望と同じ（出来事を足さない） */
-export interface WishDraft { wish: DirectiveWish; label: string; kind: string | null; appearanceId: string | null; same: boolean }
+/**
+ * 覚える希望の下書き（S9 §58.2）。same: いま覚えている希望と中身が同じ（出来事を足さない。理由は最初のものを残す。S9c）。
+ * limited: この項目を、このキャンプからキャンプまでの間に WISH_LIMIT 回覚えた（出来事を足さない。S9c）。current: いまの希望の名前（limited の文）。
+ * countAfter: 覚えたときの、この項目の数
+ */
+export interface WishDraft { wish: DirectiveWish; label: string; kind: string | null; appearanceId: string | null; same: boolean; limited: boolean; current: string | null; countAfter: number }
 
 /** 門の結果: 断り（wish があれば、希望として覚えてから断る） */
 export interface GateRefusal { error: ActionError; wish?: WishDraft }
@@ -139,9 +150,20 @@ function wishFor(world: World, content: Content, pr: PlayerRecord, cmd: Command,
   if (!me) return null;
   const cur = pr.directive?.wishes ?? [];
   const r = reason ? { reason } : {};
-  const done = (wish: DirectiveWish, kind: string | null = null, appearanceId: string | null = null): WishDraft => {
+  // 品の名前は、プレイヤーの知っている形で（未鑑定なら外見）
+  const labelOf = (wish: DirectiveWish, kind: string | null, appearanceId: string | null): string => {
     const known = !kind || !content.items[kind]?.unidentified || pr.knowledge.identified.includes(kind);
-    return { wish, label: wishLabel(L, content, wish, kind || appearanceId ? { kind: known ? kind : null, appearanceId } : null), kind, appearanceId, same: sameWish(cur.find((x) => x.item === wish.item), wish) };
+    return wishLabel(L, content, wish, kind || appearanceId ? { kind: known ? kind : null, appearanceId } : null);
+  };
+  const done = (wish: DirectiveWish, kind: string | null = null, appearanceId: string | null = null): WishDraft => {
+    const prev = cur.find((x) => x.item === wish.item);
+    const count = pr.directive?.wishCount?.[wish.item] ?? 0;
+    const same = sameWish(prev, wish);
+    const prevKind = prev?.item === 'loadout' ? world.entities[prev.target]?.kind ?? null : null;
+    return {
+      wish, label: labelOf(wish, kind, appearanceId), kind, appearanceId, same, limited: !same && count >= WISH_LIMIT,
+      current: prev ? labelOf(prev, prevKind, prevKind ? world.secret.appearances[prevKind] ?? null : null) : null, countAfter: count + 1,
+    };
   };
   switch (cmd.type) {
     case 'start_expedition': {
@@ -221,8 +243,15 @@ export function directiveGate(world: World, content: Content, pr: PlayerRecord, 
     if (!atCamp) return { error: actionError('not_at_camp', t(L, '持ち主が決めるのは、キャンプでだけ（遠征の途中は、見守る）。', 'The owner decides only at camp (during an expedition, you watch).'), t(L, 'AI がキャンプに戻ってから。', 'Wait until your AI is back at camp.')) };
     return null;
   }
-  const state = prepStateOf(d);
+  const state = prepStateWorld(world, content, pr);
   const reason = wishReason(cleanDirectiveMessage, thought);
+  // 希望の断り（S9c）: 中身が同じ・覚え直せる回数を使い切った なら、出来事を足さない（wish を付けない）
+  const wishRefusal = (w: WishDraft, it: DirectiveItem, inDungeon: boolean, pending: string | null): GateRefusal => {
+    const e = wishError(L, w.label, it, inDungeon, pending);
+    if (w.same) return { error: { ...e, message: wishAlreadyText(L, w.label) + (pending ? t(L, `持ち主の支度は、まだ（${pending}）。`, ` Your owner's preparations are not ready yet (${pending}).`) : '') } };
+    if (w.limited) return { error: { ...e, message: wishLimitText(L, w.current) + (pending ? t(L, `持ち主の支度は、まだ（${pending}）。`, ` Your owner's preparations are not ready yet (${pending}).`) : '') } };
+    return { error: e, wish: w };
+  };
   // シーズンの予算を使い切った・終わりの時刻を過ぎたキャンプ: 支度を待たない（step の今の断り budget_exhausted・season_ended に任せる。S8b と同じ考え）
   const seasonClosed = !!world.season && ((seasonBudgetLeft(world, pr.id) ?? 1) <= 0 || world.season.ended);
   if (cmd.type === 'start_expedition' && atCamp && seasonClosed) return null;
@@ -232,7 +261,7 @@ export function directiveGate(world: World, content: Content, pr: PlayerRecord, 
       if (atCamp && state === 'ready' && d?.prep?.objective !== undefined) return null;
       const pending = atCamp ? pendingText(L, prepNeedsWorld(world, content, pr, hold, d?.prep)) : null;
       const w = atCamp ? wishFor(world, content, pr, cmd, reason) : null;
-      if (w) return { error: wishError(L, w.label, 'objective', false, pending), wish: w };
+      if (w) return wishRefusal(w, 'objective', false, pending);
       const e = heldError(L, 'objective', !atCamp);
       if (pending) e.message += t(L, `持ち主の支度は、まだ（${pending}）。`, ` Your owner's preparations are not ready yet (${pending}).`);
       return { error: e };
@@ -247,7 +276,7 @@ export function directiveGate(world: World, content: Content, pr: PlayerRecord, 
   if (item && hold.includes(item)) {
     const inDungeon = pr.state === 'alive';
     const w = wishFor(world, content, pr, cmd, reason);
-    return w ? { error: wishError(L, w.label, item, inDungeon, null), wish: w } : { error: heldError(L, item, inDungeon) };
+    return w ? wishRefusal(w, item, inDungeon, null) : { error: heldError(L, item, inDungeon) };
   }
   // 装備を握っている遠征の間は、装備中の品を捨てられない（付け替えに数える。§54.3「遠征の間は、だれも付け替えられない」）
   if (cmd.type === 'drop' && hold.includes('loadout') && pr.state === 'alive' && equippedSlot(world, pr, cmd.slot)) return { error: heldError(L, 'loadout', true) };
@@ -259,12 +288,13 @@ export function directiveRefusal(world: World, content: Content, pr: PlayerRecor
   return directiveGate(world, content, pr, cmd, owner)?.error ?? null;
 }
 
-/** 希望を覚える（S9 §58.2。門が wish を返したとき。同じ希望のくり返しは出さない） */
+/**
+ * 希望を覚える（S9 §58.2。門が wish を返したとき。中身が同じ・回数を使い切ったときは、門が wish を付けない）。
+ * 出来事は、その項目の希望と数だけを持つ（S9c: 指図の全部を持たない）
+ */
 export function emitWish(ctx: Ctx, pr: PlayerRecord, w: WishDraft): void {
-  if (w.same) return;
-  const cur = pr.directive ?? { hold: [], message: '' };
-  const after = directiveOf([...cur.hold], cur.message, cur.prep ? structuredClone(cur.prep) : undefined, putWish(cur.wishes, w.wish).map((x) => structuredClone(x)));
-  ctx.emit({ type: 'directive_wish', player: pr.id, wish: structuredClone(w.wish), ...(w.wish.item === 'loadout' ? { kind: w.kind, appearanceId: w.appearanceId } : {}), directiveAfter: after, seenBy: [pr.id], floor: null });
+  if (w.same || w.limited) return;
+  ctx.emit({ type: 'directive_wish', player: pr.id, wish: structuredClone(w.wish), countAfter: w.countAfter, ...(w.wish.item === 'loadout' ? { kind: w.kind, appearanceId: w.appearanceId } : {}), seenBy: [pr.id], floor: null });
 }
 
 /** 伝言の文（§54.2）: 制御文字・書式の文字（向きの上書きなど）を落とし、改行とタブは空白に。前後の空白を除く（長さの上限は setDirective が見る） */
@@ -311,7 +341,9 @@ export function setDirective(ctx: Ctx, pr: PlayerRecord, cmd: Extract<Command, {
     prep = { state: 'pending', ...keep, seen: cur.prep ? [...cur.prep.seen] : invIds(w, pr) };
   } else prep = freshPrep(w, ctx.content, pr, hold);
   const wishes = (cur.wishes ?? []).filter((x) => hold.includes(wishHeld(x.item))).map((x) => structuredClone(x));
-  ctx.emit({ type: 'directive_set', player: pr.id, directiveAfter: directiveOf(hold, message, prep, wishes), seenBy: [pr.id], floor: null });
+  // 希望の数（S9c）は、握り続けている項目の分だけ持ち越す（キャンプに着くまで数え直さない）
+  const wc = Object.fromEntries(Object.entries(cur.wishCount ?? {}).filter(([k]) => hold.includes(wishHeld(k as WishItem)))) as Directive['wishCount'];
+  ctx.emit({ type: 'directive_set', player: pr.id, directiveAfter: directiveOf(hold, message, prep, wishes, wc), seenBy: [pr.id], floor: null });
   return null;
 }
 
@@ -355,7 +387,7 @@ export function prepare(ctx: Ctx, pr: PlayerRecord, cmd: Extract<Command, { type
   if (!changed) return actionError('nothing_to_do', t(L, '支度は変わっていない。', 'The preparations are unchanged.'), '');
   // 並びを決める（同じ中身が同じ値になるように）
   const ordered: DirectivePrep = { state: prep.state, ...(prep.objective !== undefined ? { objective: prep.objective } : {}), seen: prep.seen };
-  ctx.emit({ type: 'directive_prep', player: pr.id, why: 'owner', directiveAfter: directiveOf([...hold], cur.message, ordered, wishes), seenBy: [pr.id], floor: null });
+  ctx.emit({ type: 'directive_prep', player: pr.id, why: 'owner', directiveAfter: directiveOf([...hold], cur.message, ordered, wishes, cur.wishCount), seenBy: [pr.id], floor: null });
   return null;
 }
 
@@ -367,10 +399,11 @@ export function afterOwnerDecision(ctx: Ctx, pid: string, items: readonly WishIt
   const cur = pr?.directive;
   if (!cur) return;
   const wishes = (cur.wishes ?? []).filter((x) => !items.includes(x.item));
-  const prep = cur.prep?.state === 'ready' ? { ...structuredClone(cur.prep), state: 'pending' as const } : cur.prep ? structuredClone(cur.prep) : undefined;
-  if (wishes.length === (cur.wishes ?? []).length && prep?.state === cur.prep?.state) return;
-  const ordered = prep ? { state: prep.state, ...(prep.objective !== undefined ? { objective: prep.objective } : {}), seen: prep.seen } : undefined;
-  ctx.emit({ type: 'directive_prep', player: pid, why: 'decided', directiveAfter: directiveOf([...cur.hold], cur.message, ordered, wishes.map((x) => structuredClone(x))), seenBy: [pid], floor: null });
+  // 札が無い（前の版の記録。S9c）: 持ち主が決めたので、「まだ」の札を作る（今の持ち物から覚え始める）
+  const prep: DirectivePrep = cur.prep?.state === 'ready' ? { ...structuredClone(cur.prep), state: 'pending' as const } : cur.prep ? structuredClone(cur.prep) : { state: 'pending', seen: invIds(ctx.world, pr) };
+  if (wishes.length === (cur.wishes ?? []).length && cur.prep && prep.state === cur.prep.state) return;
+  const ordered = { state: prep.state, ...(prep.objective !== undefined ? { objective: prep.objective } : {}), seen: prep.seen };
+  ctx.emit({ type: 'directive_prep', player: pid, why: 'decided', directiveAfter: directiveOf([...cur.hold], cur.message, ordered, wishes.map((x) => structuredClone(x)), cur.wishCount), seenBy: [pid], floor: null });
 }
 
 /**
@@ -384,7 +417,8 @@ export function settleCampPrep(ctx: Ctx): void {
     const cur = pr.directive;
     if (pr.state !== 'at_camp' || !cur?.hold.length || !directiveTarget(w, pr)) continue;
     const next = freshPrep(w, ctx.content, pr, cur.hold, cur.prep?.seen ?? invIds(w, pr));
-    if (JSON.stringify(cur.prep ?? null) === JSON.stringify(next)) continue;
+    // 希望の数（S9c）は、キャンプに着いたら数え直す
+    if (JSON.stringify(cur.prep ?? null) === JSON.stringify(next) && !cur.wishCount) continue;
     ctx.emit({ type: 'directive_prep', player: pid, why: 'camp', directiveAfter: directiveOf([...cur.hold], cur.message, next, cur.wishes?.map((x) => structuredClone(x))), seenBy: [pid], floor: null });
   }
 }

@@ -252,10 +252,11 @@ export type GameEvent =
    */
   | E<'directive_prep', { player: PlayerId; why: 'camp' | 'owner' | 'decided'; directiveAfter: Directive }>
   /**
-   * 希望（S9 §58.2。本人だけ）: 握られた項目の命令をプレイヤーの口から出した（断られたうえで覚える）。wish は覚えた希望、
-   * kind・appearanceId: 装備の希望の品（未鑑定なら種類は伏せる。思考の欄の文のため）。directiveAfter は PlayerRecord.directive の after 値
+   * 希望（S9 §58.2。本人だけ）: 握られた項目の命令をプレイヤーの口から出した（断られたうえで覚える）。wish は、その項目の希望の after 値
+   * （項目ごとに 1 つ。ほかの項目の希望は変えない）、countAfter は、その項目の Directive.wishCount の after 値（S9c。指図の全部は持たない）。
+   * kind・appearanceId: 装備の希望の品（未鑑定なら種類は伏せる。思考の欄の文のため）
    */
-  | E<'directive_wish', { player: PlayerId; wish: DirectiveWish; kind?: string | null; appearanceId?: string | null; directiveAfter: Directive }>
+  | E<'directive_wish', { player: PlayerId; wish: DirectiveWish; countAfter: number; kind?: string | null; appearanceId?: string | null }>
   // 遠征
   | E<'expedition_offered', { camp: CampState }>
   | E<'expedition_started', { expedition: Expedition }>

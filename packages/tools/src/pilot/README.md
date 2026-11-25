@@ -33,7 +33,7 @@ npm.cmd run pilot -- --token-file .\my-token.txt --wake-cmd "node my-ai.mjs"
 |---|---|
 | `--token-file <パス>` | つなぐプレイヤーのトークン（`new_run` の応答や、ロビーで出るトークン）を書いたファイル。環境変数 `MUSE_PLAYER_TOKEN` でもよい |
 | `--token <player_token>` | トークンを引数で渡す（記録に残るので、`--token-file` か環境変数を勧める） |
-| `--new-run <名前>` | 新しいランを作って始める（`--class warrior` などで職業、`--mode coop` で協力プレイのラン） |
+| `--new-run <名前>` | 新しいランを作って始める（`--class warrior` などで職業、`--mode coop` で協力プレイのラン）。プロフィールのトークンを付けずに作る（毎回新しいプロフィール）ので、「冒険者 1 人に続きは 1 つ」（S9。プロフィールに続きのあるランがあると `new_run` が `run_in_progress` で断られる）には当たらない。続きのあるプロフィールで新しいランを始めるなら、先にそのランを終える（`new_run { end_previous: true }`）か、ロビー・`call.mjs` で作ってから `--token-file` でつなぐ |
 | `--dir <フォルダ>` | 3 つのファイルの置き場所（既定 `./pilot-data/<run_id>/`。リポジトリの外でもよい） |
 | `--wake-cmd "<コマンド>"` | 起こす・知らせるときに実行するコマンド。標準入力に、起こした時点の写し（`wakes/<連番>.json` の中身。下）、環境変数に `MUSE_PILOT_WAKE`（その写しのパス）・`MUSE_PILOT_STATE`（state.json のパス）・`MUSE_PILOT_ORDERS`（orders.json のパス）・`MUSE_PILOT_LEVEL`（`notify`・`wake`・`escalate`）・`MUSE_PILOT_REASON`（理由）。`notify` で AI を呼びたくなければ、`MUSE_PILOT_LEVEL` を見て何もせずに終える |
 | `--wake-url <URL>` | 起こす・知らせるときに POST する先（本文は、起こした時点の写しに `state_path`・`orders_path`・`wake_path` を足したもの） |
@@ -315,7 +315,7 @@ npm.cmd run pilot -- --token-file .\my-token.txt --wake-cmd "node my-ai.mjs"
 
 **キャンプ（`camp`）**: `state.json` の `camp.offers` から選んで出発する（`index` を `offer` に書く）。いつも同じ枠でよければ `camp.auto_start` を書く。
 
-**持ち主が目的を握るラン（S8 の指図。SEASON.md §54・PROTOCOL.md §9.14）では、`camp.auto_start` を `null` にしてください。** 目的を握られたキャンプでは、`start_expedition` が `held_by_owner` で断られます。pilot はこの断りを知らないので、`auto_start` があると、出発を試みては断られることを繰り返し、数秒で空回り（`stuck`）から `safety` で自分を止めます（pilot のコードは変えていません）。`auto_start` が `null` なら、キャンプで起こされるので、AI が観測の「指図: …」の行を読み、`wait_for_turn`（持ち主が遠征を始めるまで待つ）で待てます。持ち主が装備や特技を握る場合は、pilot はもともと装備の付け替えをせず、特技は `perk: "first"` のときだけ選ぶので、`perk` を `"first"` にしないでください（選ぼうとして `held_by_owner` で断られます）。
+**持ち主が目的を握るラン（S8 の指図。SEASON.md §54・PROTOCOL.md §9.14）では、`camp.auto_start` を `null` にしてください。** 目的を握られたキャンプでは、`start_expedition` が `held_by_owner` で断られます。pilot はこの断りを知らないので、`auto_start` があると、出発を試みては断られることを繰り返し、数秒で空回り（`stuck`）から `safety` で自分を止めます（pilot のコードは変えていません）。`auto_start` が `null` なら、キャンプで起こされるので、AI が観測の「指図: …」と「持ち主の支度: …」の行を読み、`wait_for_turn`（持ち主の支度が準備完了になるまで待つ。S9: 持ち主は遠征を始めない。準備完了になったら、AI が `start_expedition` で出発する）で待てます。S9 では、特技と加護・装備を握られて支度が「まだ」のキャンプでも、`start_expedition` は断られます。持ち主が装備や特技を握る場合は、pilot はもともと装備の付け替えをせず、特技は `perk: "first"` のときだけ選ぶので、`perk` を `"first"` にしないでください（選ぼうとして `held_by_owner` で断られます）。
 
 ```json
 { "rev": 8, "mode": "auto", "queue": [{ "tool": "start_expedition", "args": { "offer": 2 } }] }

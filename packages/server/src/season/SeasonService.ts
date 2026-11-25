@@ -432,6 +432,23 @@ export class SeasonService implements SeasonHooks {
     return !!this.store.get(seasonId)?.result;
   }
 
+  /**
+   * そのランが、続きを遊べるか（S9c: 冒険者 1 人に続きは 1 つの数え方。SessionManager が自分の関数を渡す）。
+   * canStart の「進行中のシーズンのランがある」は、これで見る（渡されていなければ、今までどおり動いているかだけ）
+   */
+  continues: ((runId: string) => boolean) | null = null;
+
+  /**
+   * そのシーズンで、その参加者が、まだ新しい遠征を始められるか（S9c）: 確定していない・終わりの時刻の前・予算が残っている。
+   * 始められないシーズンのランは、キャンプにいれば、続きを遊べるランに数えない
+   */
+  canContinue(seasonId: string, profileId: string | null): boolean {
+    const d = this.store.get(seasonId);
+    if (!d || this.status(d) !== 'open') return false;
+    const p = this.participant(d, profileId);
+    return !p || used(p) < d.def.budget;
+  }
+
   status(d: SeasonData): SeasonListing['status'] {
     if (d.result) return 'final';
     return this.now() >= d.def.endsAt ? 'ended' : 'open';
@@ -516,7 +533,8 @@ export class SeasonService implements SeasonHooks {
     const p = this.participant(d, profileId);
     if (p) {
       if (used(p) >= d.def.budget) return { reason: `このシーズンの行動予算（${d.def.budget} 手番）を使い切っている / budget used up` };
-      const live = p.runs.find((r) => !r.ended && this.liveRun(r.runId) !== null && this.liveRun(r.runId) !== 'ended');
+      // 続きを遊べるか（S9c）: SessionManager の数え方（冒険者 1 人に続きは 1 つと同じ関数）。無ければ、動いているかだけ
+      const live = p.runs.find((r) => !r.ended && (this.continues ? this.continues(r.runId) : this.liveRun(r.runId) !== null && this.liveRun(r.runId) !== 'ended'));
       if (live) return { reason: `進行中のシーズンのラン ${live.runId} がある。resume_run で続けるか、end_previous: true を付けて前のランを終えてから / a season run is in progress: ${live.runId}`, inProgress: live.runId };
     }
     return { def: d.def, name: inv.name };
