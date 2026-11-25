@@ -1,7 +1,7 @@
 // ターン契約（IMPROVEMENTS_V2 §1.2）: 全応答に付ける turn ブロックと、テキスト末尾の状態行。
 // state / awaiting は事実の通知であり、行動の提案ではない。changes は PlayerView と観測だけから作る。
 import type { Observation } from './observation';
-import { endReasonText } from './expedition';
+import { endReasonText, objectiveText } from './expedition';
 import type { PerceivedEvent } from './filter';
 import type { Dir, Locale, Names } from './types';
 import type { Catalog } from './catalog';
@@ -35,7 +35,9 @@ export type ChangeCode =
   /** 節目の階が作り直された（V4-0a §1.1。遠征の開始の応答） */
   | 'floor_reset'
   /** 遠征の途中の区切り（S7。SEASON.md §52.2 の 2）: 自分の手番で 100 手番ごとに、敵が見えていない手番に 1 回だけ */
-  | 'checkpoint';
+  | 'checkpoint'
+  /** 持ち主が決めた（S8。SEASON.md §54.4 の 4）・持ち主が始めた遠征の伝言（§54.4 の 3）。ほかの変化より先に出す */
+  | 'owner';
 
 export interface Change { code: ChangeCode; text: string; entity?: string }
 
@@ -137,7 +139,7 @@ export function turnSnapshot(view: PlayerView, obs: Observation, state: TurnStat
 }
 
 const PRIORITY: ChangeCode[] = [
-  'floor_reset', 'guardian_slain', 'guardian', 'intel', 'boon', 'story', 'floor_changed', 'objective_complete', 'objective_progress', 'next_camp', 'can_extract', 'hp_low', 'killed', 'died_seen', 'hp_dropped', 'new_hostile',
+  'owner', 'floor_reset', 'guardian_slain', 'guardian', 'intel', 'boon', 'story', 'floor_changed', 'objective_complete', 'objective_progress', 'next_camp', 'can_extract', 'hp_low', 'killed', 'died_seen', 'hp_dropped', 'new_hostile',
   'level_up', 'status_gained', 'status_lost', 'woke', 'perk', 'item_found', 'stairs_found', 'reappeared', 'hostile_gone', 'first_seen',
 ];
 
@@ -179,6 +181,16 @@ export function diffChanges(prev: TurnSnapshot | null, cur: TurnSnapshot, view: 
   if (!prev) return pub ? [{ code: 'floor_changed', text: pub }] : [];
   const firsts = catalog ? firstSeen(prev, cur, view, catalog) : [];
   const out: Change[] = [];
+  // 持ち主が決めた（S8 §54.4 の 4）: 遠征を始めた・装備を変えた・特技を選んだ。持ち主が始めた遠征には、伝言をもう 1 回（§54.4 の 3）
+  for (const e of events) {
+    if (e.seq <= prev.seq || e.type !== 'owner_decided' || !e.text) continue;
+    const ev = e.event as { act?: string; no?: number };
+    if (ev.act === 'start_expedition') {
+      const xo = view.expedition && view.expedition.no === ev.no ? objectiveText(L, view.expedition.objective) : '';
+      out.push({ code: 'owner', text: t(L, `持ち主が、遠征 ${ev.no ?? '?'} を始めた${xo ? `: ${xo}` : ''}`, `Your owner started expedition ${ev.no ?? '?'}${xo ? `: ${xo}` : ''}`) });
+      if (view.directive?.message) out.push({ code: 'owner', text: t(L, `持ち主から: ${view.directive.message}`, `From your owner: ${view.directive.message}`) });
+    } else out.push({ code: 'owner', text: e.text.replace(/[。.]$/, '') });
+  }
   const sameFloor = prev.floorKey === cur.floorKey;
   if (!sameFloor && cur.depth !== null) {
     // この階を作ったときに効いた条件（V4-0e §8.1）: 着いたときに 1 回
@@ -373,7 +385,8 @@ export function turnStateOf(view: PlayerView, expeditionEndedNow: boolean): { st
   if (view.status === 'ended' || view.status === 'dead') return { state: 'run_ended', awaiting: 'nothing' };
   if (view.status === 'at_camp') {
     if (expeditionEndedNow) return { state: 'expedition_ended', awaiting: 'nothing' };
-    return { state: 'at_camp', awaiting: view.camp ? 'camp_choice' : 'nothing' };
+    // 目的を持ち主が握っている（S8 §54.4）: 次の遠征はあなたの選ぶことではない
+    return { state: 'at_camp', awaiting: view.camp && !view.directive?.hold.includes('objective') ? 'camp_choice' : 'nothing' };
   }
   if (view.status === 'your_turn') return { state: 'your_turn', awaiting: 'action' };
   return { state: 'waiting_others', awaiting: 'nothing' };
@@ -404,10 +417,20 @@ export function turnLine(view: PlayerView, b: TurnBlock, short = false): string 
     case 'waiting_others':
       return t(L, '▶ 他のプレイヤーの手番です。遠征は進行中です。wait_for_turn で自分の番を待てます。', '▶ Another player is acting. The expedition continues; wait_for_turn waits for your turn.');
     case 'expedition_ended':
+      if (view.directive?.hold.includes('objective')) {
+        return t(L,
+          `▶ 遠征は終了しました（${endReasonText(L, x?.endReason ?? null)}）。これ以上の行動は不要です。次の遠征は持ち主が決めます（wait_for_turn で待てる。手番は減らない）。`,
+          `▶ The expedition has ended (${endReasonText(L, x?.endReason ?? null)}). No further action is required. Your owner decides the next one (wait_for_turn waits; no turns are spent).`);
+      }
       return t(L,
         `▶ 遠征は終了しました（${endReasonText(L, x?.endReason ?? null)}）。これ以上の行動は不要です。次の遠征は start_expedition で選べます。`,
         `▶ The expedition has ended (${endReasonText(L, x?.endReason ?? null)}). No further action is required. You can choose the next one with start_expedition.`);
     case 'at_camp':
+      // 目的を持ち主が握っている（S8 §54.4 の 5）: 待ち方
+      if (view.camp && view.directive?.hold.includes('objective')) {
+        return t(L, '▶ キャンプにいます。次の遠征は持ち主が決めます。wait_for_turn で、持ち主が遠征を始めるまで待てます（手番は減らない）。ここで終えてもかまいません。',
+          '▶ You are at camp. Your owner decides the next expedition. wait_for_turn waits until they start it (no turns are spent). It is fine to stop here.');
+      }
       if (view.camp && !view.expedition) {
         return t(L, '▶ キャンプにいます。最初の遠征を 3 つの候補から start_expedition { offer } で選びます（目標の深さ・推奨レベル・条件を比べて）。',
           '▶ You are at camp. Choose the first expedition from the 3 offers with start_expedition { offer } (compare depth, recommended level and traits).');

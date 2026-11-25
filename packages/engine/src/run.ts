@@ -17,8 +17,10 @@ import { updateKnowledge } from './perception';
 import { placeSeasonFires } from './campfire';
 import { advance, endTurn } from './scheduler';
 import { recomputeStats } from './stats';
+import { directiveGate, noteOwnerDecided, setDirective } from './directive';
 
-export const ENGINE_VERSION = '0.47.0';
+/** 0.48.0: 指図（S8。SEASON.md §54: set_directive・held_by_owner・持ち主のキャンプでの付け替え） */
+export const ENGINE_VERSION = '0.48.0';
 
 export interface CreateRunParams {
   runId: string;
@@ -257,21 +259,53 @@ export function resumeSeq(world: World, content: Content, cmd: SeqResumeCommand,
   return { ok: true, events: ctx.events };
 }
 
-/** meta.auto: 時間切れの待機・サーバーが代わりに出した命令（V4-1j §30.6。その手番は、仲間の last_act に数えない） */
-export function step(world: World, content: Content, playerId: PlayerId, cmd: Command, meta: { cseq: number | null; wall: number; thought?: string; auto?: boolean }): StepResult {
+/**
+ * meta.auto: 時間切れの待機・サーバーが代わりに出した命令（V4-1j §30.6。その手番は、仲間の last_act に数えない）。
+ * meta.owner: 持ち主の口から来た命令（S8。SEASON.md §54.3。記録の source が owner）。握った項目の命令は、これが true のときだけ通る
+ */
+export function step(world: World, content: Content, playerId: PlayerId, cmd: Command, meta: { cseq: number | null; wall: number; thought?: string; auto?: boolean; owner?: boolean }): StepResult {
   const pr = world.players[playerId];
   if (!pr) return { ok: false, error: actionError('no_session', 'no such player', 'join_run / resume_run'), events: [] };
   const L = pr.locale;
   if (world.status === 'ended') return { ok: false, error: actionError('run_ended', t(L, 'ランは終了している。', 'The run has ended.'), t(L, 'new_run で新しいランを始める。', 'Start a new run with new_run.')), events: [] };
   if (MACRO_COMMANDS.has(cmd.type)) return { ok: false, error: actionError('bad_request', 'macro commands are expanded by the server', 'submit primitive commands'), events: [] };
+  // 指図（S8 §54.3）: 握った項目の命令は持ち主の口からだけ。持ち主の口からは、指図と握った項目の命令だけ（キャンプで）。断りは出来事を出さない
+  const owner = !!meta.owner;
+  const gate = directiveGate(world, pr, cmd, owner);
+  if (gate) return { ok: false, error: gate, events: [] };
   const ctx = new Ctx(world, content, meta.cseq, meta.wall);
-  if (!meta.auto) ctx.selfActor = pr.entityId;
+  if (!meta.auto && !owner) ctx.selfActor = pr.entityId;
+  if (cmd.type === 'set_directive') {
+    const err = setDirective(ctx, pr, cmd);
+    if (err) return { ok: false, error: err, events: [] };
+    return { ok: true, events: ctx.finish() };
+  }
   if (FREE_COMMANDS.has(cmd.type)) {
     const me = world.entities[pr.entityId];
     const fk = me.pos?.floor ?? null;
     const err = freeCommand(ctx, pr, cmd);
     if (err) return { ok: false, error: err, events: [] };
+    // 持ち主が選んだ特技・加護（S8 §54.6）。門を通った持ち主の命令は、キャンプでだけ
+    if (owner && (cmd.type === 'choose_perk' || cmd.type === 'choose_boon')) {
+      const ev = [...ctx.events].reverse().find((e) => e.type === (cmd.type === 'choose_perk' ? 'perk_chosen' : 'boon_granted')) as { perk?: string; boon?: string } | undefined;
+      noteOwnerDecided(ctx, playerId, 'perks', cmd.type, { ...(ev?.perk ?? ev?.boon ? { choice: (ev.perk ?? ev.boon)! } : {}) });
+    }
     if (fk) advance(ctx, fk);
+    return { ok: true, events: ctx.finish() };
+  }
+  // 持ち主がキャンプで装備を付け替える（S8 §54.3）: 盤面にいないので手番は無い。検証と出来事は迷宮の中の equip・unequip と同じ
+  if (owner && pr.state === 'at_camp' && (cmd.type === 'equip' || cmd.type === 'unequip')) {
+    const me = world.entities[pr.entityId];
+    const prep = actions.get(cmd.type)(ctx, me, pr, cmd);
+    if ('error' in prep) return { ok: false, error: prep.error, events: [] };
+    const before = new Set(Object.values(me.equip ?? {}).filter(Boolean));
+    prep.run();
+    const after = world.entities[pr.entityId];
+    const changed = cmd.type === 'equip'
+      ? Object.values(after.equip ?? {}).find((id) => !!id && !before.has(id))
+      : [...before].find((id) => !Object.values(after.equip ?? {}).includes(id));
+    const kind = changed ? world.entities[changed]?.kind ?? null : null;
+    noteOwnerDecided(ctx, playerId, 'loadout', cmd.type, kind ? { kind, appearanceId: world.secret.appearances[kind] ?? null } : {});
     return { ok: true, events: ctx.finish() };
   }
   // 階段の報告（S0）はサーバーが共有層に問い合わせて season_sync にする。engine には来ない
@@ -285,6 +319,11 @@ export function step(world: World, content: Content, playerId: PlayerId, cmd: Co
     }
     const err = startExpedition(ctx, pr, cmd.offer);
     if (err) return { ok: false, error: err, events: [] };
+    // 持ち主が始めた遠征（S8 §54.6）
+    if (owner) {
+      const xs = world.expeditions ?? [];
+      noteOwnerDecided(ctx, playerId, 'objective', 'start_expedition', xs.length ? { no: xs[xs.length - 1].no } : {});
+    }
     const floors = [...new Set(world.playerOrder.map((pid) => world.entities[world.players[pid].entityId]?.pos?.floor).filter((k): k is string => !!k))].sort();
     for (const k of floors) updateKnowledge(ctx, k);
     checkObjective(ctx);

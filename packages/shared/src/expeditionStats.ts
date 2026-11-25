@@ -7,7 +7,7 @@ import type { GameEvent } from './events';
 import { partsText, multText } from './expedition';
 import type { ProjectedEvent } from './filter';
 import { kindName } from './narrate';
-import type { ExpeditionEndReason, HaulParts, Locale, Names } from './types';
+import type { DirectiveItem, ExpeditionEndReason, HaulParts, Locale, Names } from './types';
 import { t } from './util';
 
 export type MomentKind = 'hp_min' | 'big_hit_taken' | 'near_death_escape' | 'guardian_fight' | 'warden_fight' | 'level_up' | 'discovery';
@@ -43,6 +43,8 @@ export interface ExpeditionReport {
   moments: ReportMoment[];
   /** 死亡したとき: 倒した相手、直前 10 件の出来事、直近 20 手番の HP */
   death?: { killer: string | null; via: string; self_inflicted?: boolean; last_events: string[]; hp_trace: number[] };
+  /** 持ち主が決めた項目（S8 §54.6。「目的と装備は、持ち主が決めた」） */
+  owner?: DirectiveItem[];
 }
 
 export interface ReportInput {
@@ -71,6 +73,8 @@ export interface ReportInput {
   guardianNames?: { warden?: Record<number, string>; objective?: string };
   /** この遠征の目的の賞金首（与えた・受けたを数える。V3-8 §53.3） */
   bountyIds?: readonly string[];
+  /** 持ち主が決めた項目（S8。SEASON.md §54.6: この遠征の前のキャンプとこの遠征で、持ち主の口から決めたもの） */
+  owner?: readonly DirectiveItem[];
 }
 
 /** 自分の手番の記録（自分の actor_scheduled の after 値だけを読む） */
@@ -374,6 +378,7 @@ export function buildExpeditionReport(inp: ReportInput): ExpeditionReport {
     no: inp.no, objective, status: reason === null ? 'in_progress' : 'ended', reason,
     ...(payout ? { payout } : {}),
     combat, economy, tempo, moments,
+    ...(inp.owner?.length ? { owner: [...inp.owner] } : {}),
   };
   if (death) {
     const d = death;
@@ -451,12 +456,21 @@ export function progressLines(L: Locale, r: ExpeditionReport): string[] {
   return [t(L, `途中経過（遠征 ${r.no}）:`, `Progress so far (expedition ${r.no}):`), combatLine(L, r), tempoLine(L, r)];
 }
 
+/** 遠征レポートの 1 行（S8 §54.6）: 「目的と装備は、持ち主が決めた」 */
+export function ownerReportLine(L: Locale, items: readonly DirectiveItem[]): string {
+  const name = (x: DirectiveItem) => x === 'objective' ? t(L, '目的', 'the objective') : x === 'loadout' ? t(L, '装備', 'equipment') : t(L, '特技と加護', 'perks and boons');
+  const ns = (['objective', 'loadout', 'perks'] as const).filter((x) => items.includes(x)).map(name);
+  return t(L, `指図: ${ns.join('と')}は、持ち主が決めた`, `Directive: ${ns.join(' and ')} decided by the owner`);
+}
+
 /** レポートの文（12 行以内）。payout / compare を他の行で出しているときは省ける */
 export function reportLines(L: Locale, r: ExpeditionReport, opts: { payout?: boolean; compare?: boolean } = {}): string[] {
   const lines: string[] = [];
   lines.push(r.status === 'in_progress'
     ? t(L, `途中経過（遠征 ${r.no}）:`, `Progress so far (expedition ${r.no}):`)
     : t(L, `振り返り（遠征 ${r.no}・${reasonText(L, r.reason)}）:`, `Review (expedition ${r.no}, ${reasonText(L, r.reason)}):`));
+  // 持ち主が決めた項目（S8 §54.6）
+  if (r.owner?.length) lines.push(ownerReportLine(L, r.owner));
   if (opts.payout !== false && r.payout) {
     lines.push(t(L, `確定 +${r.payout.banked}（${partsText(L, r.payout.parts) || 'なし'}、倍率 ${multText(r.payout.multiplier_pct)}）${r.payout.lost ? `／失った ${r.payout.lost}` : ''}`,
       `Banked +${r.payout.banked} (${partsText(L, r.payout.parts) || 'none'}, ${multText(r.payout.multiplier_pct)})${r.payout.lost ? `; lost ${r.payout.lost}` : ''}`));

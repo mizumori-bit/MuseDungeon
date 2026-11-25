@@ -338,7 +338,20 @@ export interface PlayerRecord {
    * （source: timeout）と、サーバーが代わりに出した命令（system）は数えない。まだ無ければ 0 とみなす
    */
   lastAct?: number;
+  /**
+   * 指図（S8。SEASON.md §54.2）: 持ち主が握った項目と、持ち主から自分の AI への伝言。持ち主の口からの set_directive（出来事 directive_set）でだけ変わる。
+   * 指図の無いランには無い
+   */
+  directive?: Directive;
+  /** このランで、持ち主の口から決めた項目（S8 §54.6。出来事 owner_decided の after 値。順位の印の元。握っただけでは入らない） */
+  ownerDecided?: DirectiveItem[];
 }
+
+/** 指図で握れる項目（S8 §54.2）: 遠征の目的・装備・特技と加護 */
+export type DirectiveItem = 'objective' | 'loadout' | 'perks';
+export const DIRECTIVE_ITEMS: readonly DirectiveItem[] = ['objective', 'loadout', 'perks'];
+/** 指図（S8 §54.2）。hold: 握る項目（並びは DIRECTIVE_ITEMS の順）、message: 伝言（280 字まで。無ければ空） */
+export interface Directive { hold: DirectiveItem[]; message: string }
 
 export type PlayerState = 'alive' | 'dead' | 'left' | 'at_camp';
 

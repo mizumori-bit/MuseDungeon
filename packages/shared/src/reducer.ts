@@ -321,6 +321,13 @@ export function applyEvent(world: World, ev: GameEvent): void {
     case 'notes_updated':
       world.players[ev.player].knowledge.notes = clone(ev.notesAfter);
       break;
+    // 指図（S8。SEASON.md §54.2・§54.6）: after 値の代入だけ
+    case 'directive_set':
+      world.players[ev.player].directive = clone(ev.directiveAfter);
+      break;
+    case 'owner_decided':
+      world.players[ev.player].ownerDecided = [...ev.decidedAfter];
+      break;
     case 'expedition_offered':
       world.camp = clone(ev.camp);
       break;
