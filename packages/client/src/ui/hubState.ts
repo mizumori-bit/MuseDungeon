@@ -47,6 +47,21 @@ export interface HubCardInput {
   rank: number | null;
   /** 順位の表の確定点（ランが無いとき。無ければ 0） */
   banked?: number;
+  /** サーバーと同じ PC から開いている（持ち主の口の一覧の local。S12a: 名簿に入っていない札の、すること） */
+  local?: boolean;
+}
+
+/** シーズンを開く・冒険者を招く道具の、README の中の場所（S12a。README に「シーズン」の節は無いので、開発用コマンドの表の season の行） */
+const README_SEASON = () => tr('README の「開発用コマンド」の season', 'the `season` command in the README\'s command table');
+
+/**
+ * 開催中のシーズンが無いときの、拠点の文（S12a。SEASON.md §63.2 の 1）。local: サーバーと同じ PC から開いている。
+ * 同じ PC から開いている人は、自分が運用者（シーズンを開く人）であることが多い
+ */
+export function noSeasonText(local: boolean): string {
+  return local
+    ? tr(`シーズンは、運用の道具で開く（${README_SEASON()}）。シーズンでない冒険は、右上の歯車（運用）から。`, `A season is opened with the operator tool (${README_SEASON()}). Adventures outside a season are under the gear at the top right (Operations).`)
+    : tr('シーズンを開いた人が、次のシーズンを開いたら、ここに冒険者の札が出る。シーズンでない冒険は、右上の歯車（運用）から。', 'When whoever runs the seasons opens the next one, your adventurer appears here. Adventures outside a season are under the gear at the top right (Operations).');
 }
 
 const depthText = (d: number | null) => (d !== null ? tr(`地下${d}階を進んでいる`, `Making their way through depth ${d}`) : tr('迷宮を進んでいる', 'Making their way through the dungeon'));
@@ -121,10 +136,15 @@ export function hubCard(x: HubCardInput): HubCardModel {
   const budget = m ? { left: Math.max(0, m.budget - m.used), limit: m.budget } : s ? { left: s.budget, limit: s.budget } : null;
   const stats = { level: null, banked: x.banked ?? 0, budget, rank: x.rank };
   const base = { notes: [] as string[], wish: false, highlight: false, stats };
+  // 名簿に入っていない（S12a。SEASON.md §63.2 の 1）: 何が起きていて、どうすればよいか。「招かれていない」は、オンラインのサーバーに
+  // つながっていない、と読まれたので、札に出さない。サーバーと同じ PC から開く人は、自分がシーズンを開いた人のことが多い
   if (m === null || !s) {
     return {
-      ...base, state: 'not_invited', pill: { text: tr('招かれていない', 'Not invited'), tone: 'muted' },
-      where: tr('このシーズンには、まだ招かれていない', 'Not invited to this season yet'), text: tr('運用者に、招いてもらう', 'Ask the operator for an invitation'),
+      ...base, state: 'not_invited', pill: { text: tr('名簿に無い', 'Not on the roster'), tone: 'muted' },
+      where: tr('このシーズンの名簿に、まだ入っていない', 'Not on this season\'s roster yet'),
+      text: x.local
+        ? tr(`このシーズンを開いたのが自分なら、運用の道具で、冒険者を招く（${README_SEASON()}）`, `If you opened this season yourself, invite the adventurer with the operator tool (${README_SEASON()})`)
+        : tr('このシーズンを開いた人に、加えてもらう', 'Ask whoever opened this season to add you'),
       action: { label: tr('記録を見る', 'Records'), href: '#/records' },
     };
   }

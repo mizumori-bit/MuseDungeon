@@ -21,7 +21,8 @@ export function screenErrOf(status: number, code: string | null | undefined, mes
   if (code === 'recovery_failed' || status === 503) return tr('この冒険は、サーバーの起動時に読み込めなかった（運用者に知らせる）', 'This adventure could not be loaded when the server started (tell the operator)');
   if (code === 'run_ended') return tr('この冒険は、終わった。記録で見返せる', 'This adventure has ended. Look it back up in the records');
   if (code === 'season_unavailable') {
-    if (message.includes('招かれていない')) return tr('この冒険者は、このシーズンに招かれていない。運用者に、招いてもらう', 'This adventurer is not invited to this season. Ask the operator for an invitation');
+    // サーバーの文（「招かれていない」）は変えない。画面では、札と同じ言い方に（S12a）
+    if (message.includes('招かれていない')) return tr('この冒険者は、このシーズンの名簿に、まだ入っていない。このシーズンを開いた人に、加えてもらう', 'This adventurer is not on this season\'s roster yet. Ask whoever opened this season to add you');
     if (message.includes('使い切って')) return tr('このシーズンの手番を、使い切った', 'All of this season\'s turns are used');
     if (message.includes('終わっている')) return tr('このシーズンは、終わった', 'This season is over');
     if (message.includes('版')) return tr('このシーズンは、このサーバーと版が違う（運用者に知らせる）', 'This season is on a different version from this server (tell the operator)');

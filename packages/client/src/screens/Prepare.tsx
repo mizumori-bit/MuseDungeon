@@ -1,7 +1,7 @@
 // 支度（S10。SEASON.md §58.4。#/prepare/<runId>）: ただ 1 つの出撃の窓口。1 枚の画面に、冒険者・目的・装備・特技と加護（段ごとに「任せる／自分で」）・伝言・「準備完了」。
 // 見えるものは、そのプレイヤーの PlayerView と、AI に届くのと同じ観測（持ち主の口の …/owner/view）だけ（持ち主に、プレイヤーより多くを見せない）。
 // 命令は、プレイヤーと同じ Command を持ち主の口へ送る（通るか・断るかはサーバー（engine）が決め、断りの文はそのまま出す）。
-// 鍵は、そのランを返したもの（このブラウザに覚えてある鍵のうち、そのランの冒険者のもの）を Authorization の見出しでだけ渡す。無ければ同じ機械から。
+// 鍵は、そのランを返したもの（このブラウザに覚えてある鍵のうち、そのランの冒険者のもの）を Authorization の見出しでだけ渡す。無ければ同じ PC から。
 // 5 秒ごとに読み直す。開いている段（「自分で」にした段）と、書きかけの伝言は、読み直しで消えない。
 import type { ActionError, Command, DirectiveItem, DirectiveWish, OwnerViewResponse } from '@muse/shared';
 import { DIRECTIVE_ITEMS, activeWishes, itemDisplayName, kindName, nameOf, ownerOfferText, prepStateView, wishCommand, wishItemOf, wishLabel } from '@muse/shared';
@@ -16,7 +16,7 @@ import { storedKeys } from '../ui/keys';
 import { statChangeText } from '../ui/owner';
 import { aiPresenceText, readyCheck } from '../ui/ownerCheck';
 import { InventoryPanel, type InvAction } from '../ui/panels';
-import { directiveToggle, messageSave, prepHead, prepItemCost, prepItemName, prepLine } from '../ui/prepState';
+import { directiveToggle, messageSave, prepHead, prepItemCost, prepItemName, prepLine, readyNudge, type ReadyNudge } from '../ui/prepState';
 import { screenErr } from '../ui/screenErr';
 import { getLocale, getToken, tr } from '../util';
 
@@ -64,7 +64,7 @@ export function Prepare({ runId }: { runId: string }) {
   useLocaleRefresh();
   const { catalog, error: catErr } = useCatalog();
   const L = getLocale();
-  // 鍵: undefined = 同じ機械から（鍵なし）、null = まだ探している
+  // 鍵: undefined = 同じ PC から（鍵なし）、null = まだ探している
   const [tok, setTok] = useState<string | undefined | null>(null);
   const [data, setData] = useState<OwnerViewResponse | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
@@ -79,8 +79,12 @@ export function Prepare({ runId }: { runId: string }) {
   const [confirmReady, setConfirmReady] = useState<string[] | null>(null);
   const backRef = useRef<HTMLButtonElement>(null);
   useEffect(() => { if (confirmReady) backRef.current?.focus(); }, [confirmReady]);
+  // 準備完了の後の窓（S12a。SEASON.md §63.2 の 2）: 押して通ったときだけ。既定のボタンは「拠点へ戻る」
+  const [nudge, setNudge] = useState<ReadyNudge | null>(null);
+  const hubRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => { if (nudge) hubRef.current?.focus(); }, [nudge]);
 
-  // そのランの冒険者の鍵を探す（持ち主の口の一覧で、その鍵の冒険者のランとして返るもの）。無ければ鍵なし（同じ機械から）
+  // そのランの冒険者の鍵を探す（持ち主の口の一覧で、その鍵の冒険者のランとして返るもの）。無ければ鍵なし（同じ PC から）
   useEffect(() => {
     let alive = true;
     void (async () => {
@@ -179,6 +183,12 @@ export function Prepare({ runId }: { runId: string }) {
         const t = before ? statChangeText(before.observation.self, after.observation.self) : '';
         setNote(t || tr('能力は変わらない。', 'No stat changed.'));
       } else if (command.type === 'prepare') {
+        const n = readyNudge({
+          name: after.view.self.name, sent: command.ready === true, ok: true,
+          before: before ? prepStateView(before.view) : null, after: prepStateView(after.view),
+          aiWaiting: !!before?.ai?.waitingNow || !!after.ai?.waitingNow,
+        });
+        if (n) setNudge(n);
         setNote(command.ready === true
           ? tr(`準備完了。${name}が来たら、出発する。AI に、声をかける。`, `Ready. ${name} sets out when they come. Let your AI know.`)
           : command.ready === false ? tr('「まだ」に戻した。決め直したら、もう一度「準備完了」。', 'Back to not ready. Mark ready again when you are done.')
@@ -227,7 +237,7 @@ export function Prepare({ runId }: { runId: string }) {
   const editable = !!head?.editable;
   // 準備完了の間は、段の切り替えと決める操作を押せない（S10a §2）。伝言だけは残せる
   const locked = head?.kind === 'ready';
-  // 運用者として開いている（鍵が無く、同じ機械から。S10a §5）
+  // 運用者として開いている（鍵が無く、同じ PC から。S10a §5）
   const asOperator = tok === undefined;
   const chosen = hold.includes('objective') ? view?.directive?.prep?.objective : undefined;
   const wishes: DirectiveWish[] = view && status === 'at_camp' ? activeWishes(view) : [];
@@ -302,7 +312,7 @@ export function Prepare({ runId }: { runId: string }) {
                 </header>
                 <p class="hub-note">{tr('装備', 'Gear')}: {equipNames.length ? equipNames.join(tr('・', ', ')) : tr('何も身に着けていない', 'nothing worn')}</p>
                 <p class={`prep-headline tone-${head.pill.tone}`}>{head.line}</p>
-                {asOperator && <p class="hub-note">{tr('この冒険者の鍵は、このブラウザに無い。サーバーと同じ機械から、運用者として開いている。', 'This browser has no key for this adventurer. You opened it as the operator, on the server machine.')}</p>}
+                {asOperator && <p class="hub-note">{tr('この冒険者の鍵は、このブラウザに無い。サーバーと同じ PC から、運用者として開いている。', 'This browser has no key for this adventurer. You opened it as the operator, on the server PC.')}</p>}
                 {locked && <p class="hub-note">{tr('準備完了の間は、変えられない。変えるには、先に「支度を見直す」', 'While ready, nothing can be changed. To change something, first "Review the preparations"')}</p>}
                 {head.kind === 'watch' && <div class="hub-actions"><a class="hub-btn primary" href={`#/watch/${runId}`}>{tr('見守る', 'Watch')}</a></div>}
                 {head.kind === 'human' && (
@@ -410,6 +420,47 @@ export function Prepare({ runId }: { runId: string }) {
           </div>
         </div>
       )}
+      {nudge && !confirmReady && <ReadyNudgeDialog nudge={nudge} hubRef={hubRef} onStay={() => setNudge(null)} />}
+    </div>
+  );
+}
+
+/**
+ * 準備完了の後の窓（S12a）: 次にすること（AI に声をかける）を、その場で言う。画面のボタンは、AI を起こせない（§58.0 の 4）。
+ * 写せる 1 文は、押すとクリップボードに写る。写せない環境（http の別の PC から など）では、選んで写せる文として出す
+ */
+function ReadyNudgeDialog({ nudge, hubRef, onStay }: { nudge: ReadyNudge; hubRef: { current: HTMLButtonElement | null }; onStay: () => void }) {
+  const [copied, setCopied] = useState<'ok' | 'no' | null>(null);
+  const canCopy = typeof navigator !== 'undefined' && !!navigator.clipboard?.writeText;
+  const copy = async () => {
+    if (!nudge.copy) return;
+    try {
+      await navigator.clipboard.writeText(nudge.copy);
+      setCopied('ok');
+    } catch {
+      setCopied('no');
+    }
+  };
+  const toHub = () => { window.location.hash = '#/'; };
+  return (
+    <div class="hub-modal" onClick={onStay}>
+      <div class="hub-dialog" role="dialog" aria-modal="true" aria-labelledby="ready-nudge-title" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => { if (e.key === 'Escape') onStay(); }}>
+        <h2 id="ready-nudge-title" class="hub-dtitle">{nudge.title}</h2>
+        <p class="hub-note">{nudge.body}</p>
+        {nudge.copy && (
+          <div class="prep-nudge">
+            <p class="prep-nudgetext">{nudge.copy}</p>
+            {canCopy && copied !== 'no' && (
+              <button type="button" class="prep-btn small" onClick={() => void copy()}>{copied === 'ok' ? tr('写した', 'Copied') : tr('この文を写す', 'Copy this')}</button>
+            )}
+            {(!canCopy || copied === 'no') && <p class="hub-note">{tr('この文を選んで、写す。', 'Select the sentence and copy it.')}</p>}
+          </div>
+        )}
+        <div class="hub-dactions">
+          <button ref={hubRef} type="button" class="hub-btn primary" onClick={toHub}>{tr('拠点へ戻る', 'Back to the hub')}</button>
+          <button type="button" class="hub-btn" onClick={onStay}>{tr('ここに残る', 'Stay here')}</button>
+        </div>
+      </div>
     </div>
   );
 }

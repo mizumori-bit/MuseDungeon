@@ -479,7 +479,7 @@ function CampRecords({ nextNo }: { nextNo: number }) {
 
 /**
  * 今あるメモ（S7。SEASON.md §52.2 の 4）: キャンプで、自分用メモを新しい順に読むだけで出す（AI のキャンプの観測と同じ 8 件まで）。
- * 観戦（追従）でも、持ち主と同じ機械からの観戦（開催中のシーズンの決まりのまま）で、相手のメモが読める
+ * 観戦（追従）でも、持ち主と同じ PC からの観戦（開催中のシーズンの決まりのまま）で、相手のメモが読める
  */
 export function NotesBlock({ notes, who }: { notes: readonly string[]; who?: string }) {
   if (!notes.length) return null;

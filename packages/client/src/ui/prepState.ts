@@ -51,6 +51,37 @@ export function prepHead(x: PrepHeadInput): PrepHead {
   return { kind: 'pending', editable: true, pill: { text: tr('支度: まだ', 'Not ready'), tone: 'amber' }, line: tr(`${n}は、あなたの支度を待っている`, `${n} is waiting for your preparations`) };
 }
 
+/** 準備完了の後の窓（S12a。SEASON.md §63.2 の 2） */
+export interface ReadyNudge {
+  title: string;
+  body: string;
+  /** AI に渡す 1 文（写せる）。AI がもう待っているときは null */
+  copy: string | null;
+}
+
+/** AI に渡す 1 文（S12a）。冒険者の名前は入れない（AI の側で、だれのことか分かる） */
+export function readyNudgeCopy(): string {
+  return tr('支度ができたよ。MuseDungeon の続きを遊んで。', 'I\'m ready. Please continue our MuseDungeon run.');
+}
+
+/**
+ * 「準備完了」を押して通ったときに出す窓。出さないなら null。
+ * 出すのは、押した（sent）・通った（ok）・押す前は準備完了でなく（before）、押した後に準備完了（after）のときだけ。
+ * 決めるものが無くて最初から準備完了のキャンプ・「支度を見直す」・断られたときは、出さない。
+ * aiWaiting: AI が、今、wait_for_turn で待っている（サーバーの ai.waitingNow。押す前か後のどちらかで true）
+ */
+export function readyNudge(x: { name: string; sent: boolean; ok: boolean; before: 'pending' | 'ready' | null; after: 'pending' | 'ready' | null; aiWaiting: boolean }): ReadyNudge | null {
+  if (!x.sent || !x.ok || x.before === 'ready' || x.after !== 'ready') return null;
+  const n = x.name;
+  const title = tr(`${n}に、声をかける`, `Let ${n} know`);
+  if (x.aiWaiting) return { title, body: tr(`${n}は、今、待っている。すぐに出発する`, `${n} is waiting right now and sets out at once`), copy: null };
+  return {
+    title,
+    body: tr(`支度は済んだ。${n}が来たら、出発する。画面からは、${n}を呼べない。チャットなどで、遊ぶように伝える`, `The preparations are done. ${n} sets out when they come. This screen cannot call ${n}. Tell them to play, in a chat or the like`),
+    copy: readyNudgeCopy(),
+  };
+}
+
 /** 指図の中身（握る項目と伝言）。サーバーの今の値 */
 export interface DirectiveNow { hold: readonly DirectiveItem[]; message: string }
 

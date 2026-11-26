@@ -60,7 +60,7 @@ const bearer = (token: string): RequestInit => ({ headers: { authorization: `Bea
 
 /**
  * 持ち主の口（S8。SEASON.md §54.5）: プロフィールのトークンは Authorization の見出しでだけ渡す（URL・本文・画面・console に出さない）。
- * トークンが無ければ見出しも付けない（同じ機械からの接続なら、それで通る）
+ * トークンが無ければ見出しも付けない（同じ PC からの接続なら、それで通る）
  */
 async function ownerGet<T>(path: string, token?: string): Promise<T> {
   return (await (await request(path, token ? bearer(token) : undefined)).json()) as T;
