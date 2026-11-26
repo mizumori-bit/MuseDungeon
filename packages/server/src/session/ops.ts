@@ -3,7 +3,7 @@
 // ここは認め方を持たない。シーズンを開くのと招くのは、運用の道具（tools/src/season.ts）と同じ関数（SeasonService の openBlockers・open・invite）。
 // 鍵（プロフィールのトークン）は、冒険者を足した応答の 1 回だけ。シードは、どの応答にも出さない。どちらも、ログ・記録・エラーの文に出さない。
 import { randomBytes } from 'node:crypto';
-import type { ActionError, Controller, Locale, OpsAdventurerAdded, OpsEnrolled, OpsRosterEntry, OpsRosterResponse, OpsSeasonOpened } from '@muse/shared';
+import type { ActionError, Controller, Locale, OpsAdventurerAdded, OpsCodexResponse, OpsEnrolled, OpsRosterEntry, OpsRosterResponse, OpsSeasonOpened } from '@muse/shared';
 import { actionError } from '@muse/shared';
 import type { SeasonDef } from '../season/SeasonService';
 import { normalizeName } from './names';
@@ -196,4 +196,21 @@ export function opsEnroll(m: SessionManager, key: string | undefined, body: unkn
   const inv = m.seasons.invite(t.id, name, m.profiles.store, key);
   if ('error' in inv) return bad(inv.error);
   return { status: 200, body: { seasonId: t.id, name: inv.name, profileId: inv.profileId } };
+}
+
+/**
+ * GET /api/ops/codex?locale=ja|en（S16b。SEASON.md §70.4 の 4）: このサーバーのプロフィールの全員の、図鑑と実績（画面の「図鑑」のタブが合わせて出す）。
+ * 中身は `GET /api/profile/records` の `codex`・`feats` と同じ（プロフィールの記録から作る。地図・シード・開催中の進み具合は、もとから入っていない）。
+ * 鍵・そのハッシュ・ランの一覧・最高到達などの 1 人ずつの記録は返さない。図鑑も実績も 1 つも無いプロフィールは載せない
+ */
+export function opsCodex(m: SessionManager, L: Locale): OpsCodexResponse {
+  const profiles: OpsCodexResponse['profiles'] = [];
+  for (const id of m.profiles.store.ids()) {
+    const r = m.profiles.records(id, L);
+    if (!r) continue;
+    const { codex, feats } = r.records;
+    if (codex.found === 0 && feats.earned === 0) continue;
+    profiles.push({ profileId: id, name: r.records.profile.name, codex, feats });
+  }
+  return { profiles };
 }

@@ -1157,7 +1157,7 @@ S3f の `seq_resume { next }`（`player: null`）も同じ: 起動時の再生�
 | `GET /api/runs/:id/commands` | commands.jsonl（AI パネルのツール呼び出し・thought 表示用） |
 | `GET /api/runs/:id/summary` | 終了時サマリー |
 | `GET /api/ops/calls?limit=` | S7（SEASON.md §52.1 の 2）。運用の口（サーバーと同じ機械からだけ。外からは 403）: 直近の MCP の呼び出し（新しい順に最大 200 件）`{ long_ms, calls: { at, tool, run, ms, error? }[] }`（受け取った時刻・ツール・ラン・サーバーの側でかかった時間。メモリだけで、ファイルには書かない。引数・トークン・考えは持たない） |
-| `GET /api/ops/roster`・`POST /api/ops/season`・`POST /api/ops/adventurers`・`POST /api/ops/enroll`・`POST /api/ops/uninvite` | S12b・S12c（§9.15。SEASON.md §63.7）。拠点の運用者の口（サーバーと同じ PC からだけ。鍵があっても、外からは 403）: 今のシーズンの名簿・新しいシーズンを始める・冒険者を足す（AI に任せる／自分で潜る）・鍵のある冒険者を今のシーズンに加える・まだ入っていない招きを取り消す |
+| `GET /api/ops/roster`・`GET /api/ops/codex`・`POST /api/ops/season`・`POST /api/ops/adventurers`・`POST /api/ops/enroll`・`POST /api/ops/uninvite` | S12b・S12c・S16b（§9.15。SEASON.md §63.7・§70.4）。拠点の運用者の口（サーバーと同じ PC からだけ。鍵があっても、外からは 403）: 今のシーズンの名簿・プロフィールの全員の図鑑と実績（S16b）・新しいシーズンを始める・冒険者を足す（AI に任せる／自分で潜る）・鍵のある冒険者を今のシーズンに加える・まだ入っていない招きを取り消す |
 | `GET /api/seasons` / `GET /api/seasons/:id` | S0（§9.8）。シーズンの一覧 / 1 つのシーズンの順位の表・確定した結果・坑の断面（S2 §9.11。公開された階段の位置は出さない） |
 | `GET /api/owner/runs` | S8（§9.14）。持ち主と認められた進行中のソロのラン `OwnerRunsResponse`。`Authorization: Bearer <profile_token>`（任意） |
 | `GET /api/profile` | V3-7。プロフィールの表示名・要約・称号・ラン（MCP の `profile` と同じ中身）。`Authorization: Bearer <profile_token>`。S10（§9.14）で `seasons`（そのプロフィールが招かれたシーズン `ProfileSeasonEntry[]`）を足した（HTTP だけ） |
@@ -1590,6 +1590,7 @@ engine・World・出来事・命令の形・内容のデータと版は S9 の�
 
 **認め方**: 4 つとも、サーバーと同じ PC からの要求だけ（`isLocalRequest` の 1 つの判定。接続元・`Host`・`Origin` を見る。§8 の S8a）。鍵（プロフィールのトークン）があっても、外からは 403。状態を変える 3 つは、§8 の「状態を変える口」の守り（同じ origin だけ・`application/json` だけ）を先に通る。応答は、どれも `Cache-Control: no-store`。鍵とシードは、URL・サーバーのログ・記録・エラーの文に出さない（鍵を返すのは、冒険者を足した応答の 1 回だけ）。
 
+- `GET /api/ops/codex?locale=ja|en`（S16b。SEASON.md §70.4 の 4。読むだけ。同じ守り）→ `OpsCodexResponse { profiles: { profileId, name, codex, feats }[] }`: このサーバーのプロフィールの全員の図鑑と実績（`codex`・`feats` は `GET /api/profile/records` の `records` の同じ名前のものと同じ形）。図鑑も実績も 1 つも無いプロフィールは載せない。作られた順。鍵・そのハッシュ・シード・ランの ID・最高到達などの 1 人ずつの記録は入れない。人間の画面の「図鑑」のタブが、持ち主の口の一覧が `local` のときだけ呼ぶ（ほかの PC からは、鍵ごとの `GET /api/profile/records` を画面の側で合わせる）。
 - `GET /api/ops/roster` → `OpsRosterResponse { season, roster, pending, canOpen, next?, broken? }`:
   - `season`: 今のシーズン（開催中＝終わりの時刻の前で確定していないもの。重なっていれば、終わりの時刻の遅いもの）`{ id, name, budget, endsAt }`。無ければ `null`。
   - `roster`: その名簿（招いた者の全部。招いた順）`OpsRosterEntry { name, profileId, kind, runs, used, budget, died, runId, failed? }`。`kind` は拠点で足したときの種類（`ai`・`human`）、無ければ、いちばん新しいランの操作の種類（`agent` → `ai`・`human` → `human`）、分からなければ `null`。`runId` は、いちばん新しいラン（無ければ `null`）。`failed` は、終わっていないランが起動時に読み込めなかった。鍵は入らない。

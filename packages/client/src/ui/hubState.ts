@@ -67,11 +67,17 @@ export interface HubCardInput {
  * 同じ PC から開いている人は、自分が運用者（シーズンを開く人）であることが多い。S12b: 同じ PC からは、拠点の「新しいシーズンを始める」で始める
  * （broken: 記録が読めないシーズンがあって、始められない）
  */
+// S16b（SEASON.md §70.4 の 6）: シーズンでない冒険の入口は、画面から外した（#/legacy）。ここでは案内しない
 export function noSeasonText(local: boolean, broken = false): string {
-  if (local && broken) return tr('記録が読めないシーズンがあるので、新しいシーズンは始められない（運用の道具で、直してから）。シーズンでない冒険は、右上の歯車（運用）から。', 'A season\'s records cannot be read, so a new season cannot be started (fix it with the operator tool first). Adventures outside a season are under the gear at the top right (Operations).');
+  if (local && broken) return tr('記録が読めないシーズンがあるので、新しいシーズンは始められない（運用の道具で、直してから）。', 'A season\'s records cannot be read, so a new season cannot be started (fix it with the operator tool first).');
   return local
-    ? tr('下の「新しいシーズンを始める」で始めると、ここに冒険者の札が出る。シーズンでない冒険は、右上の歯車（運用）から。', 'Start one with "Start a new season" below, and your adventurers appear here. Adventures outside a season are under the gear at the top right (Operations).')
-    : tr('シーズンを開いた人が、次のシーズンを開いたら、ここに冒険者の札が出る。シーズンでない冒険は、右上の歯車（運用）から。', 'When whoever runs the seasons opens the next one, your adventurer appears here. Adventures outside a season are under the gear at the top right (Operations).');
+    ? tr('下の「新しいシーズンを始める」で始めると、ここに冒険者の札が出る。', 'Start one with "Start a new season" below, and your adventurers appear here.')
+    : tr('シーズンを開いた人が、次のシーズンを開いたら、ここに冒険者の札が出る。', 'When whoever runs the seasons opens the next one, your adventurer appears here.');
+}
+
+/** シーズンのタブへ（S16b: 前の「記録を見る」。シーズンが分かれば、そのシーズンを開く） */
+function seasonAction(id?: string | null): HubAction {
+  return { label: tr('シーズンを見る', 'See the season'), href: id ? `#/season/${id}` : '#/season' };
 }
 
 const depthText = (d: number | null) => (d !== null ? tr(`地下${d}階を進んでいる`, `Making their way through depth ${d}`) : tr('迷宮を進んでいる', 'Making their way through the dungeon'));
@@ -86,7 +92,7 @@ export function hubCard(x: HubCardInput): HubCardModel {
     const stats = { level: row.level, banked: row.banked, budget, rank: x.rank };
     const base = { notes: [] as string[], wish: false, highlight: false, stats };
     const inDungeon = row.status === 'in_dungeon';
-    const records: HubAction = { label: tr('記録を見る', 'Records'), href: '#/records' };
+    const records: HubAction = seasonAction(s?.id ?? row.season?.id);
     // 前の版の冒険（S10a）: このサーバーと違う版で始まったラン。続きは遊べない（記録は見返せる）
     if (row.oldVersion) {
       return { ...base, state: 'stale', pill: { text: tr('前の版', 'Older version'), tone: 'muted' }, where: tr('前の版の冒険（続きは、遊べない）', 'An adventure from an older version (it cannot be continued)'), text: null, action: records };
@@ -105,7 +111,7 @@ export function hubCard(x: HubCardInput): HubCardModel {
     if (inDungeon) {
       return { ...base, state: 'dungeon', pill: { text: tr('迷宮の中', 'In the dungeon'), tone: 'blue' }, where: depthText(row.depth), text: null, action: { label: tr('見守る', 'Watch'), href: `#/watch/${row.runId}` } };
     }
-    const result: HubAction = { label: tr('結果を見る', 'See the results'), href: s ? `#/season/${s.id}` : '#/records' };
+    const result: HubAction = { label: tr('結果を見る', 'See the results'), href: s ? `#/season/${s.id}` : '#/season' };
     if (row.status === 'ended') {
       return { ...base, state: 'over', pill: { text: tr('終わった', 'Ended'), tone: 'muted' }, where: tr('この冒険は、終わった', 'This adventure has ended'), text: null, action: result };
     }
@@ -150,7 +156,7 @@ export function hubCard(x: HubCardInput): HubCardModel {
   // つながっていない、と読まれたので、札に出さない。サーバーと同じ PC から開く人は、自分がシーズンを開いた人のことが多い
   // S12b: サーバーと同じ PC からは、拠点のボタンで、今のシーズンの名簿に加える（S12a の「運用の道具で招く」の文を置き換えた）
   if (m === null || !s) {
-    const records: HubAction = { label: tr('記録を見る', 'Records'), href: '#/records' };
+    const records: HubAction = seasonAction(s?.id);
     const enroll = !!x.local && !!x.canEnroll && s?.status === 'open';
     return {
       ...base, state: 'not_invited', pill: { text: tr('名簿に無い', 'Not on the roster'), tone: 'muted' },
@@ -169,7 +175,7 @@ export function hubCard(x: HubCardInput): HubCardModel {
     return {
       ...base, state: 'unreadable', pill: { text: tr('読み込めない', 'Unreadable'), tone: 'amber' },
       where: tr('前の冒険は、サーバーの起動時に読み込めなかった（運用者に知らせる）', 'The last adventure could not be loaded when the server started (tell the operator)'), text: null,
-      action: { label: tr('記録を見る', 'Records'), href: '#/records' },
+      action: seasonAction(s.id),
     };
   }
   if (s.status !== 'open') {

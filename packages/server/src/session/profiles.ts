@@ -84,6 +84,15 @@ export class ProfileStore {
     return this.byId.get(id) ?? null;
   }
 
+  /**
+   * 読めたプロフィールのすべての ID（S16b: 運用者の図鑑。サーバーと同じ PC からだけの口が使う）。作られた順。
+   * 運用の道具が作ったものも拾うように、先に読み直す（読めないファイルは、今までどおり読まない）
+   */
+  ids(): string[] {
+    this.scan();
+    return [...this.byId.values()].sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1)).map((p) => p.id);
+  }
+
   save(p: ProfileData): void {
     const f = this.byId.get(p.id);
     if (!f) return;
