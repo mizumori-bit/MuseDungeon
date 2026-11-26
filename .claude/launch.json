@@ -11,6 +11,15 @@
       "port": 7777
     },
     {
+      "name": "muse-share",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "packages/server/bin/muse-launch.mjs",
+        "--share"
+      ],
+      "port": 7777
+    },
+    {
       "name": "sound-audition",
       "runtimeExecutable": "node",
       "runtimeArgs": [
