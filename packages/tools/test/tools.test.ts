@@ -160,7 +160,8 @@ describe('baseline bots', () => {
     const avg = depths.reduce((a, b) => a + b, 0) / depths.length;
     console.log(`greedy bot: runs=${n} avgDepth=${avg.toFixed(2)} max=${Math.max(...depths)} briefObsChars(avg)=${Math.round(briefChars.reduce((a, b) => a + b, 0) / Math.max(1, briefChars.length))}`);
     expect(avg).toBeGreaterThanOrEqual(1);
-  });
+  // 上限を、この試験だけ延ばす（S16d: 何も変えなくても 115 秒ほどかかり、全体の上限 120 秒に、ほぼ届いていた。機械が重いと時間切れで落ちる）
+  }, 300_000);
 
   it('random bot does not crash the engine', async () => {
     const manager = new SessionManager(content, loadConfig({ runsDir: null }));
