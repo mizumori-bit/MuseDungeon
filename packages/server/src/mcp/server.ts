@@ -3,7 +3,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { ZodTypeAny } from 'zod';
-import { argListText, argProblems, argShape, exampleOf, issueTexts, type ArgIssue } from './args';
+import { argListText, argProblems, argShape, briefArgs, briefNames, exampleOf, issueTexts, type ArgIssue } from './args';
 import type { ActionError, Command, Controller, InheritedHold, ObjectiveChoice, TurnBlock } from '@muse/shared';
 import { actionError, CommandSchema, directiveItemsText, ownerWaitOpen, seasonFinalView, stripTokenArgs, t, withoutOwnerPresence } from '@muse/shared';
 import type { PlayerPort, ActionPayload } from '../session/PlayerPort';
@@ -651,7 +651,9 @@ export function createMcpServer(ctx: McpContext): McpServer {
     const ex = exampleOf(tool, shape);
     // 足りない要る引数があれば、それを先に言い、知らない名前もあわせて書く（S1d §17.1）
     const unknown = names.unknown, missing = names.missing;
-    const unk = unknown.length ? (ja ? `${tool} に ${unknown.join('・')} という名前の引数は無い。` : `${tool} has no argument named ${unknown.join(', ')}. `) : '';
+    // 文と記録に出す名前は、数と長さを切る（S16e: 検査の前なので、いくつでも・どんな長さでも来る）
+    const unkShown = briefNames(unknown);
+    const unk = unknown.length ? (ja ? `${tool} に ${unkShown.join('・')} という名前の引数は無い。` : `${tool} has no argument named ${unkShown.join(', ')}. `) : '';
     // 引数の形の誤り（S16d）: どの引数が、どう違うか（受ける形）。手番は使わない
     const bad = names.invalid.length ? issueTexts(names.invalid, shape, args, ja) : [];
     const msg = bad.length
@@ -666,8 +668,9 @@ export function createMcpServer(ctx: McpContext): McpServer {
     const tb = port.turnBlock('action_rejected');
     const va = port.observe({ map: false }).observation.valid_actions;
     // 活動の記録には、知らない名前の引数の値を残さない（名前違いでトークンを渡された場合のため。S1d §17.1）。名前だけ残す
-    const known: Record<string, unknown> = Object.fromEntries(Object.entries(args).filter(([k]) => !unknown.includes(k)));
-    record(port, tool, { ...known, ...(unknown.length ? { unknown_args: [...unknown] } : {}) }, `${err.code} ${err.message}`);
+    // 残す値は、短く切る（S16e: ここは SDK の検査より前なので、長さの上限が効いていない。切らないと、長い thought・大きい配列が、観戦に流れる）
+    const known: Record<string, unknown> = briefArgs(Object.fromEntries(Object.entries(args).filter(([k]) => !unknown.includes(k))));
+    record(port, tool, { ...known, ...(unknown.length ? { unknown_args: unkShown } : {}) }, `${err.code} ${err.message}`);
     return errOut(err, va, { block: tb, line: port.turnLine(tb) });
   });
   // 呼び出しの時間の控え（S7 §52.1 の 2）: 受け取りから返すまで（引数の断りも、SDK の検査も、ハンドラも含む）。引数・トークン・考えは控えない

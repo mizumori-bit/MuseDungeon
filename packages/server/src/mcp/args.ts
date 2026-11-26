@@ -101,6 +101,9 @@ function regexForm(src: string): string {
   if (src === '^e_[0-9a-z]{6}$') return "'e_xxxxxx'";
   if (src === '^[a-z]$') return "'a'〜'z'";
   if (src === '^[sl][0-9]{1,6}$') return "'s12' / 'l1'";
+  // fight の with（S16e: 正規表現のままでは、AI に読めない。SEASON.md §52.8）
+  if (src.startsWith('^\\[?([a-z]|(core:)?[a-z][a-z0-9_]+)(,')) return "'a' / 'javelin' / 'javelin,throwing_knife'";
+  if (src === '^([a-z]|(core:)?[a-z][a-z0-9_]+)$') return "'a' / 'javelin'";
   return `/${src}/`;
 }
 
@@ -151,7 +154,8 @@ function shownValue(path: (string | number)[], args: Record<string, unknown>): s
  */
 export function issueTexts(issues: readonly ArgIssue[], shape: Record<string, ZodTypeAny>, args: Record<string, unknown>, ja: boolean): string[] {
   const out: string[] = [];
-  for (const i of issues) {
+  // 文にするのは、はじめの ISSUE_TEXT_MAX 件まで（S16e: 要素の多い配列は、要素ごとに誤りが出て、応答がふくらむ）
+  for (const i of issues.slice(0, ISSUE_TEXT_MAX)) {
     const name = i.path.length ? i.path.join('.') : (ja ? '引数' : 'arguments');
     const val = shownValue(i.path, args);
     const got = val !== null ? (ja ? `（${val} が来た）` : ` (got ${val})`) : '';
@@ -160,7 +164,10 @@ export function issueTexts(issues: readonly ArgIssue[], shape: Record<string, Zo
     let what: string;
     switch (i.code) {
       case 'invalid_type':
-        what = i.expected === 'integer' ? (ja ? 'は整数' : 'must be an integer') : (ja ? `の型が違う（${String(i.expected)} を受ける）` : `has the wrong type (expects ${String(i.expected)})`);
+        // 受ける形を後ろに書くときは、型の名前を重ねない（S16e）
+        what = i.expected === 'integer' ? (ja ? 'は整数' : 'must be an integer')
+          : form ? (ja ? 'の型が違う' : 'has the wrong type')
+          : (ja ? `の型が違う（${clip(String(i.expected), 60)} を受ける）` : `has the wrong type (expects ${clip(String(i.expected), 60)})`);
         break;
       case 'invalid_enum_value':
         what = ja ? `は ${(i.options ?? []).map((o) => `'${String(o)}'`).join(' / ')} のどれか` : `must be one of ${(i.options ?? []).map((o) => `'${String(o)}'`).join(' / ')}`;
@@ -187,8 +194,43 @@ export function issueTexts(issues: readonly ArgIssue[], shape: Record<string, Zo
     }
     // 選べる値を書いた文には、受ける形を重ねない
     const formText = form && i.code !== 'invalid_enum_value' && i.code !== 'invalid_literal' ? (ja ? `。受ける形: ${form}` : `. Accepted: ${form}`) : '';
-    out.push(ja ? `${name} ${what}${got}${formText}` : `${name} ${what}${got}${formText}`);
+    out.push(`${clip(name, 60)} ${what}${got}${formText}`);
   }
+  const rest = issues.length - ISSUE_TEXT_MAX;
+  if (rest > 0) out.push(ja ? `ほか ${rest} 件` : `and ${rest} more`);
+  return out;
+}
+
+/** 断りの文にする、形の誤りの数の上限（S16e） */
+export const ISSUE_TEXT_MAX = 3;
+
+/** 長い文字列を切る */
+function clip(s: string, max: number): string {
+  return s.length > max ? `${s.slice(0, max - 1)}…` : s;
+}
+
+/**
+ * 引数の検査の前に断った呼び出しを、活動の記録に残すときの、短くした引数（S16e）。SDK の検査を通っていない値なので、長さの上限が効いていない
+ * （20 万文字の thought・数千個の配列が、そのまま観戦に流れた）。文字列は 120 文字まで、ほかの値は JSON の 60 文字まで
+ */
+export function briefArgs(args: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(args)) {
+    if (typeof v === 'string') out[k] = clip(v, 120);
+    else if (typeof v === 'number' || typeof v === 'boolean' || v === null) out[k] = v;
+    else {
+      let s: string;
+      try { s = JSON.stringify(v) ?? String(v); } catch { s = String(v); }
+      out[k] = s.length > 60 ? clip(s, 60) : v;
+    }
+  }
+  return out;
+}
+
+/** 断りの文と記録に出す、知らない引数の名前（S16e: 数と長さを切る） */
+export function briefNames(names: readonly string[], max = 5): string[] {
+  const out = names.slice(0, max).map((n) => clip(n, 40));
+  if (names.length > max) out.push(`…(+${names.length - max})`);
   return out;
 }
 

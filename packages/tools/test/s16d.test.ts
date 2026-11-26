@@ -178,4 +178,52 @@ describe('S16d: argument shape errors get the game-form refusal', () => {
       await new Promise<void>((r2) => app.server.close(() => r2()));
     }
   });
+
+  // S16e（S16d の検査の指摘）: ここは SDK の検査より前なので、値の長さの上限が効いていない。応答と、観戦に流す記録を、ふくらませない
+  it('huge values, thousands of bad elements and many unknown names: the reply and the spectator record stay small', async () => {
+    const m = new SessionManager(content, loadConfig({ runsDir: null, profilesDir: null, seasonsDir: null, waitOthersMs: 100 }));
+    const app = createApp(m, m.config);
+    await new Promise<void>((res) => app.server.listen(0, '127.0.0.1', () => res()));
+    const url = new URL(`http://127.0.0.1:${(app.server.address() as AddressInfo).port}/mcp`);
+    const client = new Client({ name: 'test', version: '0' });
+    await client.connect(new StreamableHTTPClientTransport(url));
+    try {
+      await client.callTool({ name: 'new_run', arguments: { character_name: 'Big', objective: 'reach_depth' } });
+      const seen: { tool: string; args: string; text: string }[] = [];
+      const orig = m.recordActivity.bind(m);
+      m.recordActivity = (runId, a) => { seen.push({ tool: a.tool, args: JSON.stringify(a.args), text: a.text }); orig(runId, a); };
+      const size = (r: Res) => JSON.stringify(r).length;
+
+      // 20 万文字の thought（上限 280 文字）
+      const long = await client.callTool({ name: 'wait', arguments: { thought: 'x'.repeat(200_000) } }) as unknown as Res;
+      expect(long.structuredContent?.error.code).toBe('bad_request');
+      expect(size(long)).toBeLessThan(20_000);
+
+      // 5000 個の、型の違う要素: 文にするのは、はじめの 3 件と「ほか N 件」
+      const many = await client.callTool({ name: 'collect', arguments: { kinds: Array.from({ length: 5000 }, () => 1) } }) as unknown as Res;
+      expect(many.structuredContent?.error.code).toBe('bad_request');
+      expect(many.structuredContent?.error.message).toMatch(/ほか \d+ 件/);
+      expect(size(many)).toBeLessThan(20_000);
+
+      // 200 個の、長い、知らない名前
+      const names = Object.fromEntries(Array.from({ length: 200 }, (_, i) => [`${'n'.repeat(300)}${i}`, 1]));
+      const unk = await client.callTool({ name: 'wait', arguments: names }) as unknown as Res;
+      expect(unk.structuredContent?.error.code).toBe('bad_request');
+      expect(size(unk)).toBeLessThan(20_000);
+
+      // 観戦に流す記録も、短い（3 回とも残る）
+      expect(seen).toHaveLength(3);
+      for (const s of seen) expect(s.args.length + s.text.length).toBeLessThan(6000);
+      m.recordActivity = orig;
+
+      // fight の with の受ける形は、正規表現でなく、読める書き方
+      const w = await client.callTool({ name: 'fight', arguments: { target: 'e_000000', with: 'X!' } }) as unknown as Res;
+      expect(w.structuredContent?.error.message).toContain("'javelin'");
+      expect(w.structuredContent?.error.message).not.toContain('[a-z]');
+    } finally {
+      await client.close();
+      m.closeAll();
+      await new Promise<void>((r2) => app.server.close(() => r2()));
+    }
+  });
 });
