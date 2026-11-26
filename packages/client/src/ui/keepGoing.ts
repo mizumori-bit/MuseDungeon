@@ -1,11 +1,12 @@
 // 続けて遊ばせる（S14。SEASON.md §65.2・§65.4 の 1 と 3。画面だけ）: 持ち主が、拠点の札から、限り（遠征をあと N 回）を決めて始める。
-// このアプリのタブが開いている間だけ、ブラウザが、決まった時に、呼び鈴（ui/bell.ts の文字列。ID と、決まった 1 語だけ）を開く。サーバーは、何もしない。
+// このアプリのタブが開いている間だけ、ブラウザが、決まった時に、呼び鈴（ui/bell.ts。この PC の受け口へ、ID と、決まった 1 語と、合言葉だけ）を送る。サーバーは、何もしない。
+// S15（SEASON.md §68.2 の 1）: 呼び鈴は受け口の 1 つだけ（人の操作が要らない）。リンクの鳴らし方に伴う「鳴らす時が来たら、光らせて、押してもらう」の流れは、外した。
 // ここは、決める所（いつ鳴らすか・止まるか・数え方・2 つのタブのどちらが鳴らすか）と、このブラウザに覚える状態だけ。時刻は外から渡す（テストする）。
 // 鳴らす役（ui/KeepGoingRunner.tsx。アプリの根）と、拠点の札（screens/Lobby.tsx・ui/keepGoingUi.tsx）が、同じ状態を読む。
 // 覚える所は localStorage（ランの ID・残りの回数を決める値・始めたときの遠征の数・鳴らした回数と時刻）。鍵は覚えない（鍵は今までどおり ui/keys.ts）。
 import type { OwnerPace, OwnerRunRow } from '@muse/shared';
 import { getPref, setPref, tr } from '../util';
-import { bellPortFailText, type BellVia } from './bell';
+import { bellPortFailText } from './bell';
 
 /** 決まり（§65.2）。時間はミリ秒 */
 export const KG = {
@@ -43,8 +44,8 @@ export type KgStopReason = 'done' | 'ended' | 'budget' | 'season_over' | 'by_own
 const STOP_REASONS: readonly KgStopReason[] = ['done', 'ended', 'budget', 'season_over', 'by_owner', 'held', 'bell_off', 'bell_setup', 'not_owner', 'no_wake', 'tabs_closed'];
 export type KgWhere = 'camp' | 'dungeon';
 
-/** 鳴らした 1 回（maybeBlocked: ブラウザが止めたかもしれない（リンクだけ）。via: 鳴らし方（S14a。無ければリンク）。failed: 受け口に送れなかった） */
-export interface KgRing { at: number; where: KgWhere; maybeBlocked: boolean; via?: BellVia; failed?: true }
+/** 鳴らした 1 回（failed: 受け口に送れなかった） */
+export interface KgRing { at: number; where: KgWhere; failed?: true }
 
 /** 1 人の冒険者の「続けて遊ばせる」の状態（このブラウザの localStorage） */
 export interface KgState {
@@ -69,14 +70,12 @@ export interface KgState {
   rings: number;
   /** 鳴らした記録（新しい 5 つ） */
   log: KgRing[];
-  /** ブラウザが止めたかもしれない呼び鈴（「今、鳴らす」を押すまで、札を光らせる） */
-  attention: { at: number; where: KgWhere } | null;
   /** ランが一覧に無かった回数（続けて） */
   missing: number;
   /** 最後に見た様子 */
   seen: { ended: number; where: KgWhere; at: number } | null;
   stop: { reason: KgStopReason; at: number } | null;
-  /** 最後に見た、持ち主の希望（進め方）。pilot なら、呼び鈴の文字列に &mode=pilot（「今、鳴らす」でも同じ文字列にするため） */
+  /** 最後に見た、持ち主の希望（進め方）。pilot なら、呼び鈴の本文に mode=pilot（「もう一度鳴らす」でも同じ本文にするため） */
   pace?: OwnerPace | null;
   /** 受け口に送れなかった（S14a。そのポート）。次に送れるか、AI が起きたら消える */
   portFail?: { at: number; port: number } | null;
@@ -105,13 +104,13 @@ export function kgClampN(n: unknown): number {
 export function kgStart(x: { runId: string; seasonId: string | null; name: string; total: number; ended: number; now: number; pace?: OwnerPace | null }): KgState {
   return {
     v: 1, runId: x.runId, seasonId: x.seasonId, name: x.name, total: kgClampN(x.total), startEnded: Math.max(0, x.ended), startedAt: x.now, status: 'running',
-    campKey: null, campRings: 0, dungeonRungFor: null, lastRingAt: null, rings: 0, log: [], attention: null, missing: 0, seen: null, stop: null,
+    campKey: null, campRings: 0, dungeonRungFor: null, lastRingAt: null, rings: 0, log: [], missing: 0, seen: null, stop: null,
     pace: x.pace === 'pilot' ? 'pilot' : null, portFail: null, unknownSince: null,
   };
 }
 
 export function kgStopped(st: KgState, reason: KgStopReason, now: number): KgState {
-  return { ...st, status: 'stopped', stop: { reason, at: now }, attention: null };
+  return { ...st, status: 'stopped', stop: { reason, at: now } };
 }
 
 /** 残りの回数（終わった遠征の数から） */
@@ -121,7 +120,7 @@ export function kgLeft(st: Pick<KgState, 'total' | 'startEnded'>, ended: number)
 
 /**
  * 札に「続けて遊ばせる」を出すか（§65.4 の 3）: start 出す／held 握っている項目がある（小さく、続けては呼ばない、と出す）／null 出さない。
- * 条件: 持ち主と認められている（一覧に行がある）・AI の冒険者・続きを遊べる・握っている項目が無い・呼び鈴の設定が「自分の道具を呼ぶ」
+ * 条件: 持ち主と認められている（一覧に行がある）・AI の冒険者・続きを遊べる・握っている項目が無い・呼び鈴の設定が「この PC の受け口を呼ぶ」
  */
 export function kgOffer(x: { row: KgRow | null; bellOn: boolean }): 'start' | 'held' | null {
   const r = x.row;
@@ -171,12 +170,12 @@ export function kgStep(st: KgState, obs: KgObs, ctx: { now: number; bellOn: bool
   const known = typeof ago === 'number' && Number.isFinite(ago);
   s = { ...s, unknownSince: known ? null : s.unknownSince ?? now };
   const silent = known ? Math.max(0, ago) * 1000 : now - (s.unknownSince ?? now);
-  // AI が、今、呼び出している・待っている（または、鳴らした後に呼び出した）: 起きている。札の光と、受け口に送れなかった知らせは消す
-  if ((s.attention || s.portFail) && (s.lastRingAt === null || silent < now - s.lastRingAt)) s = { ...s, attention: null, portFail: null };
+  // AI が、今、呼び出している・待っている（または、鳴らした後に呼び出した）: 起きている。受け口に送れなかった知らせは消す
+  if (s.portFail && (s.lastRingAt === null || silent < now - s.lastRingAt)) s = { ...s, portFail: null };
   if (row.ai?.waitingNow) return none(s);
   const cooled = s.lastRingAt === null || now - s.lastRingAt >= KG.RING_COOLDOWN_MS;
   if (where === 'camp') {
-    if (s.campKey !== ended) s = { ...s, campKey: ended, campRings: 0, attention: null, portFail: null };
+    if (s.campKey !== ended) s = { ...s, campKey: ended, campRings: 0, portFail: null };
     if (silent < KG.CAMP_SILENT_MS) return none(s);
     const sinceRing = s.campRings > 0 && s.lastRingAt !== null ? now - s.lastRingAt : Number.POSITIVE_INFINITY;
     if (s.campRings >= KG.CAMP_RINGS_MAX) return none(sinceRing >= KG.CAMP_RING_GAP_MS ? kgStopped(s, 'no_wake', now) : s);
@@ -187,15 +186,9 @@ export function kgStep(st: KgState, obs: KgObs, ctx: { now: number; bellOn: bool
   return { state: { ...s, dungeonRungFor: ended }, ring: 'dungeon' };
 }
 
-/**
- * 鳴らしたことを覚える（maybeBlocked なら、札を光らせる: リンクの設定だけ）。via: 鳴らし方（S14a。受け口は、人の操作が要らないので光らせない）
- */
-export function kgRang(st: KgState, where: KgWhere, now: number, maybeBlocked: boolean, via: BellVia = 'link'): KgState {
-  const blocked = via === 'link' && maybeBlocked;
-  return {
-    ...st, lastRingAt: now, rings: st.rings + 1, log: [...st.log, { at: now, where, maybeBlocked: blocked, ...(via === 'port' ? { via } : {}) }].slice(-5),
-    attention: blocked ? { at: now, where } : null,
-  };
+/** 鳴らしたことを覚える */
+export function kgRang(st: KgState, where: KgWhere, now: number): KgState {
+  return { ...st, lastRingAt: now, rings: st.rings + 1, log: [...st.log, { at: now, where }].slice(-5) };
 }
 
 /** 受け口に送れなかった（S14a）: 最後の記録に印を付け、札と下の帯に「受け口が、動いていない」 */
@@ -207,18 +200,6 @@ export function kgPortFailed(st: KgState, port: number, now: number): KgState {
 /** 受け口に送れた（S14a）: 送れなかった知らせを消す */
 export function kgPortOk(st: KgState): KgState {
   return st.portFail ? { ...st, portFail: null } : st;
-}
-
-/**
- * ブラウザが、この呼び鈴を止めたかもしれないか（分かる範囲で）。Chromium 系のブラウザ（Chrome・Edge）は、外の道具を開くリンクを、
- * 人の操作の後に 1 回だけ通し、次は、また人が操作するまで止める（ページからは、止めたかどうかを知る手立てが無い）。
- * activation: 今、人の操作の直後か（navigator.userActivation.isActive。分からなければ null）。lastLaunchAt: このアプリのタブが、最後に呼び鈴を開いた時刻。
- * lastInputAt: このアプリのタブで、人が最後に操作した時刻
- */
-export function kgMaybeBlocked(x: { activation: boolean | null; lastLaunchAt: number | null; lastInputAt: number | null }): boolean {
-  if (x.activation === true) return false;
-  if (x.lastLaunchAt === null) return false;
-  return x.lastInputAt === null || x.lastInputAt <= x.lastLaunchAt;
 }
 
 // ---- 2 つのタブ ----
@@ -290,7 +271,7 @@ export function kgStopText(reason: KgStopReason, name: string, total: number): s
     case 'season_over': return tr('シーズンが終わった。新しい遠征は、始まらない。', 'The season is over. No new expedition starts.');
     case 'by_owner': return tr('あなたが止めた。', 'You stopped it.');
     case 'held': return tr('握る項目ができた（キャンプごとに、支度を決める）。', 'Something is now held (you prepare at each camp).');
-    case 'bell_off': return tr('呼び鈴の設定を「使わない」にした。', 'The bell was set to Off.');
+    case 'bell_off': return tr('呼び鈴が「使わない」になった（運用の画面で、この PC の受け口を決める）。', 'The bell is now Off (set the receiver on this PC on the Operations screen).');
     case 'bell_setup': return tr('呼び鈴の設定を見直す（覚えた受け口のポートか合言葉の形が違うので、鳴らさなかった。運用の画面で、決め直す）。', 'Check the bell settings (the saved receiver port or passphrase is not valid, so it did not ring; set them again on the Operations screen).');
     case 'not_owner': return tr('この冒険者の持ち主と、認められなくなった（鍵を外した など）。', 'You are no longer recognized as this adventurer\'s owner (the key was removed, for example).');
     case 'no_wake': return tr(`${name}が、起きない（同じキャンプで、呼び鈴を ${KG.CAMP_RINGS_MAX} 回鳴らしても、遠征が始まらなかった）。`, `${name} does not wake (the bell rang ${KG.CAMP_RINGS_MAX} times at the same camp and no expedition started).`);
@@ -319,25 +300,16 @@ export function kgLastRingText(st: Pick<KgState, 'log' | 'rings'>, fmt: (ms: num
   return tr(`最後に呼び鈴を鳴らした: ${fmt(r.at)}（${r.where === 'camp' ? 'キャンプ' : '迷宮の中'}。全部で ${st.rings} 回）`, `Last rang the bell: ${fmt(r.at)} (${r.where === 'camp' ? 'at camp' : 'in the dungeon'}; ${st.rings} in all)`);
 }
 
-/** 呼び鈴を鳴らせなかったかもしれないときの文 */
-export function kgBlockedText(name: string): string {
-  return tr(`${name}の呼び鈴を、鳴らせなかったかもしれない。ブラウザは、人の操作なしに、この種類のリンクを開くのを止めることがある。「今、鳴らす」を押す。ブラウザが開くか尋ねたら、この種類のリンクを開くのを、いつも許す、にする。`,
-    `${name}'s bell may not have rung. Browsers can stop pages from opening this kind of link without a person's action. Press "Ring now". If the browser asks, choose to always allow this kind of link.`);
+/** 鳴らし方の 1 行（札と窓）: この PC の受け口へ、自動で送る */
+export function kgViaText(port?: number | null): string {
+  return tr(`自動で鳴らす（この PC の受け口${port ? `、ポート ${port}` : ''}）。`, `Rings on its own (this PC's receiver${port ? `, port ${port}` : ''}).`);
 }
 
-/** 鳴らし方の 1 行（S14a。札と窓）: リンクは、ブラウザが止めることがあるので、知らせて押してもらう。受け口は、自動で鳴らす */
-export function kgViaText(via: BellVia, port?: number | null): string {
-  return via === 'port'
-    ? tr(`自動で鳴らす（この PC の受け口${port ? `、ポート ${port}` : ''}）。`, `Rings on its own (this PC's receiver${port ? `, port ${port}` : ''}).`)
-    : tr('鳴らす時が来たら、知らせるので、押す（ブラウザは、人の操作なしの呼び鈴を止めることがある）。', 'When it is time to ring, you are told, so press it (browsers can stop a bell rung without a person\'s action).');
-}
-
-/** 始める窓の説明（3〜4 行。via: 今の呼び鈴の鳴らし方） */
-export function kgExplainLines(name: string, via: BellVia = 'link', port?: number | null): string[] {
+/** 始める窓の説明（3 行） */
+export function kgExplainLines(name: string, port?: number | null): string[] {
   return [
     tr('このアプリのタブを開いている間だけ動く（どの画面にいてもよい。タブを全部閉じたら止まり、次に開いても、自動では再開しない）。', 'It works only while a tab of this app is open (any screen will do; closing every tab stops it, and it does not restart by itself).'),
-    tr(`${name}が黙ったら、呼び鈴を鳴らす（キャンプで 2 分・迷宮の中で 5 分）。${kgViaText(via, port)}鳴らすたびに、AI の利用枠を使う。`, `When ${name} goes quiet, it rings the bell (2 min at camp, 5 min in the dungeon). ${kgViaText(via, port)} Each ring uses your AI's quota.`),
-    ...(via === 'link' ? [tr('席を外すなら、運用の画面で、呼び鈴を「この PC の受け口を呼ぶ」にする。', 'If you will be away, set the bell to "Call a receiver on this PC" on the Operations screen.')] : []),
+    tr(`${name}が黙ったら、呼び鈴を鳴らす（キャンプで 2 分・迷宮の中で 5 分）。${kgViaText(port)}鳴らすたびに、AI の利用枠を使う。`, `When ${name} goes quiet, it rings the bell (2 min at camp, 5 min in the dungeon). ${kgViaText(port)} Each ring uses your AI's quota.`),
     tr(`止まる: 回数に達した・倒れた・予算を使い切った・シーズンが終わった・握る項目ができた・呼び鈴を「使わない」にした・同じキャンプで ${KG.CAMP_RINGS_MAX} 回鳴らしても起きない・「止める」。今、迷宮の中なら、その遠征も 1 回に数える。`, `It stops when: the count is reached, they fall, the budget runs out, the season ends, something becomes held, the bell is set to Off, ${KG.CAMP_RINGS_MAX} rings at one camp do not wake them, or you press Stop. An expedition under way now counts as one.`),
   ];
 }
@@ -352,8 +324,6 @@ export function kgPortFailText(name: string, port: number): string {
 
 const KEY = 'keepGoing';
 const TABS = 'keepGoing.tabs';
-const LAUNCH = 'keepGoing.launch';
-const INPUT = 'keepGoing.input';
 
 const listeners = new Set<() => void>();
 /** 状態が変わったら呼ぶ（同じタブ。ほかのタブの変更は storage の知らせで） */
@@ -378,7 +348,8 @@ const whereOf = (v: unknown): KgWhere => { if (v === 'camp' || v === 'dungeon') 
 
 /**
  * 覚えてある 1 つの状態を確かめて、整える（S14b: 書き換えられた値で、鳴り続けない）。total は 1〜10・campRings は 0〜3 の整数・
- * 時刻と数は 0 以上の整数・鳴らした記録は 5 つまで。知らない形（数でない・ID の形が違う・理由が無いもの など）は null（捨てる）
+ * 時刻と数は 0 以上の整数・鳴らした記録は 5 つまで。知らない形（数でない・ID の形が違う・理由が無いもの など）は null（捨てる）。
+ * 前の版が覚えた、リンクの鳴らし方の印（attention・maybeBlocked・via）は、読まずに捨てる（S15）
  */
 export function kgSanitize(v: unknown, runId: string): KgState | null {
   try {
@@ -395,9 +366,8 @@ export function kgSanitize(v: unknown, runId: string): KgState | null {
     if (s.status === 'stopped' && !stop) return null;
     const log = (Array.isArray(s.log) ? s.log : []).slice(-5).map((r) => {
       const x = r as Record<string, unknown>;
-      return { at: nat(x?.at), where: whereOf(x?.where), maybeBlocked: x?.maybeBlocked === true, ...(x?.via === 'port' ? { via: 'port' as const } : {}), ...(x?.failed === true ? { failed: true as const } : {}) };
+      return { at: nat(x?.at), where: whereOf(x?.where), ...(x?.failed === true ? { failed: true as const } : {}) };
     });
-    const att = s.attention as { at?: unknown; where?: unknown } | null | undefined;
     const pf = s.portFail as { at?: unknown; port?: unknown } | null | undefined;
     const seen = s.seen as { ended?: unknown; where?: unknown; at?: unknown } | null | undefined;
     const port = pf ? nat(pf.port) : 0;
@@ -407,7 +377,6 @@ export function kgSanitize(v: unknown, runId: string): KgState | null {
       total: kgClampN(s.total), startEnded: nat(s.startEnded), startedAt: nat(s.startedAt), status: s.status,
       campKey: natOrNull(s.campKey), campRings: Math.min(KG.CAMP_RINGS_MAX, nat(s.campRings ?? 0)), dungeonRungFor: natOrNull(s.dungeonRungFor),
       lastRingAt: natOrNull(s.lastRingAt), rings: nat(s.rings ?? 0), log,
-      attention: att ? { at: nat(att.at), where: whereOf(att.where) } : null,
       missing: Math.min(KG.MISSING_MAX, nat(s.missing ?? 0)),
       seen: seen ? { ended: nat(seen.ended), where: whereOf(seen.where), at: nat(seen.at) } : null,
       stop,
@@ -468,16 +437,7 @@ export function kgWriteTabs(t: KgTabs): void {
   setPref(TABS, JSON.stringify(t));
 }
 
-const num = (k: string): number | null => {
-  const n = Number(getPref(k, ''));
-  return Number.isFinite(n) && n > 0 ? n : null;
-};
-export const kgLastLaunch = (): number | null => num(LAUNCH);
-export const kgNoteLaunch = (now: number): void => setPref(LAUNCH, String(now));
-export const kgLastInput = (): number | null => num(INPUT);
-export const kgNoteInput = (now: number): void => setPref(INPUT, String(now));
-
-/** 呼び鈴の文字列に添える進め方（一覧の行から） */
+/** 呼び鈴の本文に添える進め方（一覧の行から） */
 export function kgPace(row: KgRow | null): OwnerPace | null {
   return row?.pace === 'pilot' ? 'pilot' : null;
 }

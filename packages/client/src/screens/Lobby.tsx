@@ -22,6 +22,8 @@ import { FIRST_EXPEDITION_CHOICES, playerStateLabel, type FirstExpeditionChoice 
 import { OwnerRunCard } from '../ui/owner';
 import type { KgState } from '../ui/keepGoing';
 import { KeepGoingBox, useKeepGoing } from '../ui/keepGoingUi';
+import { SoundControls, useHubMusic } from '../ui/sound';
+import { rewindAllowed, watchAllowed } from '../ui/replayGate';
 import { fmtTime, getLocale, getPref, getToken, inLocale, navigate, saveToken, setPref, tr } from '../util';
 
 export type HomeTab = 'hub' | 'records' | 'ops';
@@ -48,6 +50,8 @@ const bySeason = (a: SeasonStandingsResponse, b: SeasonStandingsResponse) => SEA
 
 export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
   useLocaleRefresh();
+  // 拠点の曲（S15。SEASON.md §68.2 の 5）: 拠点・記録・運用のタブの間
+  useHubMusic();
   const { catalog, error: catErr } = useCatalog();
   const [runs, setRuns] = useState<RunListing[] | null>(null);
   const [board, setBoard] = useState<LeaderboardEntry[]>([]);
@@ -77,7 +81,7 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
   // 鍵を 1 回だけ見せる窓（AI に任せる冒険者を足した直後。このブラウザには覚えない。閉じたら消える）
   const [keyOnce, setKeyOnce] = useState<{ name: string; seasonId: string; key: string } | null>(null);
   // 呼び鈴の設定（S12b。SEASON.md §63.6。このブラウザにだけ覚える）
-  // S14a: 鳴らし方は 3 つ（使わない・リンク・この PC の受け口）
+  // S15: 鳴らし方は、使わない・この PC の受け口の 2 つ（リンクは外した）
   const [bellCfg, setBellCfg] = useState<BellConfig>(readBellConfig());
   // 続けて遊ばせる（S14）: このブラウザに覚えてある状態（鳴らす役は、アプリの根の KeepGoingRunner）
   const kgStates = useKeepGoing();
@@ -264,11 +268,12 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
   };
 
   /** シーズンのラン（S3 §25.1）: 観戦できるか（確定する前は、覚えてあるトークンのランか、同じ PC からだけ）・巻き戻せるか（確定する前は、同じ PC から、ランが終わった後だけ） */
-  const canWatch = (r: RunListing) => !r.season || !!watch[r.season]?.runs.some((x) => x.runId === r.runId);
+  const canWatch = (r: RunListing) => watchAllowed({ season: r.season, runId: r.runId, watchable: r.season ? watch[r.season]?.runs.map((x) => x.runId) ?? null : null });
+  // 巻き戻しを開けるか（S15: 画面とサーバーの決まりを 1 つの関数に。ui/replayGate.ts）
   const canRewind = (r: RunListing) => {
     if (!r.season) return true;
     const sw = watch[r.season];
-    return !!sw && (sw.final || (sw.local && r.status === 'ended'));
+    return !!sw && rewindAllowed({ season: r.season, status: r.status, final: sw.final, local: sw.local });
   };
   // 確定したシーズンのラン（S9a §57.3 の 4）: 命令を受けない記録。「出撃」には出さず（「再開」を出さない）、「記録」の終わったランに並べる
   const finalSeasons = new Set(seasons.filter((x) => x.season.status === 'final').map((x) => x.season.id));
@@ -567,7 +572,7 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
   const cardRunIds = new Set([...myCards, ...operatorCards].map((c) => c.runId).filter((x): x is string => !!x));
   const kgFor = (c: HubEntry): KgState | null => (c.runId ? kgStates[c.runId] : undefined)
     ?? Object.values(kgStates).find((s) => s.status === 'stopped' && s.seasonId === c.seasonId && s.name === c.name && !cardRunIds.has(s.runId)) ?? null;
-  const kgBox = (c: HubEntry) => <KeepGoingBox row={c.row} name={c.name} bellOn={bellOn(bellCfg)} problem={bellProblem(bellCfg)} via={bellCfg.mode === 'port' ? 'port' : 'link'} port={bellCfg.port} st={kgFor(c)} />;
+  const kgBox = (c: HubEntry) => <KeepGoingBox row={c.row} name={c.name} bellOn={bellOn(bellCfg)} problem={bellProblem(bellCfg)} port={bellCfg.port} st={kgFor(c)} />;
   const badKeys = (advs ?? []).filter((a) => !a.ok).length;
   const needKey = !hasKey || (advs !== null && advs.length > 0 && advs.every((a) => !a.ok));
   /** 順位を出すシーズン: 札のシーズン（無ければ、いちばん上の開催中のシーズン） */
@@ -598,14 +603,14 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
                 冒険者を足せるなら、札の下に小さい 1 行（S10a b・S12b） */}
             {needKey && !operatorCards.length && !rosterSeason && <KeyEntry onKeep={keepOwnerTok} />}
             {hasKey && advs === null && <p class="hub-note">{tr('読み込み中…', 'Loading…')}</p>}
-            {myCards.map((c) => <AdventurerCard key={c.key} name={c.name} className={c.className} model={c.model} onDive={c.onDive} onEnroll={c.onEnroll} busy={busy} extra={kgBox(c)} alert={!!kgFor(c)?.attention} />)}
+            {myCards.map((c) => <AdventurerCard key={c.key} name={c.name} className={c.className} model={c.model} onDive={c.onDive} onEnroll={c.onEnroll} busy={busy} extra={kgBox(c)} />)}
             {badKeys > 0 && <p class="hub-note warn">{tr('覚えてある鍵のうち、使えないものがある（歯車の「運用」で外せる）。', 'A key kept in this browser does not work (remove it under the gear, Operations).')}</p>}
             {operatorCards.length > 0 && (
               <section class="hub-operator">
                 <h3 class="hub-sechead">{tr('この PC の冒険者（運用者として）', 'Adventurers on this PC (as the operator)')}</h3>
                 <p class="hub-note">{tr('サーバーと同じ PC から開いているので、鍵の無い冒険者も、支度ができる。自分の冒険者と、取り違えないこと。', 'Opened on the server PC, so you can prepare adventurers you hold no key for. Do not mistake them for your own.')}</p>
                 <div class="hub-grid">
-                  {operatorCards.map((c) => <AdventurerCard key={c.key} name={c.name} className={c.className} model={c.model} operator onUninvite={c.onUninvite} busy={busy} extra={kgBox(c)} alert={!!kgFor(c)?.attention} />)}
+                  {operatorCards.map((c) => <AdventurerCard key={c.key} name={c.name} className={c.className} model={c.model} operator onUninvite={c.onUninvite} busy={busy} extra={kgBox(c)} />)}
                 </div>
                 {needKey && !rosterSeason && <KeyEntry compact onKeep={keepOwnerTok} />}
               </section>
@@ -947,7 +952,9 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
 
   return (
     <div class="page">
-      <Header title={tab === 'ops' ? tr('運用', 'Operations') : tab === 'records' ? tr('記録', 'Records') : undefined} />
+      <Header title={tab === 'ops' ? tr('運用', 'Operations') : tab === 'records' ? tr('記録', 'Records') : undefined}>
+        <SoundControls />
+      </Header>
       <HubNav tab={tab} waiting={waitingCount} />
       <ErrorBanner error={error ?? catErr} onClose={() => setError(null)} />
       {tab === 'records' ? recordsTab() : tab === 'ops' ? ops() : hub()}

@@ -8,7 +8,7 @@ import { DIRECTIVE_ITEMS, activeWishes, itemDisplayName, kindName, nameOf, owner
 import type { ComponentChildren } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { api } from '../api';
-import { bellAllowedNow, bellProblem, bellRingOf, bellView, readBellConfig, ringBell, ringPort, type BellRing, type BellView } from '../ui/bell';
+import { bellProblem, bellRingOf, bellView, readBellConfig, ringPort, type BellRing, type BellView } from '../ui/bell';
 import { ErrorBanner, Header, useCatalog, useLocaleRefresh } from '../ui/common';
 import { BoonChoicePanel, PerkChoicePanel } from '../ui/build';
 import { OfferCard, rulesOf } from '../ui/expedition';
@@ -19,6 +19,7 @@ import { aiPresenceText, readyCheck } from '../ui/ownerCheck';
 import { InventoryPanel, type InvAction } from '../ui/panels';
 import { directiveToggle, messageSave, paceLine, paceNote, paceSavedNote, prepHead, prepItemCost, prepItemName, prepLine, readyNudge, type ReadyNudge } from '../ui/prepState';
 import { screenErr } from '../ui/screenErr';
+import { SoundControls, useHubMusic } from '../ui/sound';
 import { getLocale, getToken, tr } from '../util';
 
 /** 読み直しの間 */
@@ -85,6 +86,8 @@ function PaceSection({ name, pace, editable, busy, onChange }: { name: string; p
 
 export function Prepare({ runId }: { runId: string }) {
   useLocaleRefresh();
+  // 拠点の曲（S15。SEASON.md §68.2 の 5）
+  useHubMusic();
   const { catalog, error: catErr } = useCatalog();
   const L = getLocale();
   // 鍵: undefined = 同じ PC から（鍵なし）、null = まだ探している
@@ -104,16 +107,12 @@ export function Prepare({ runId }: { runId: string }) {
   useEffect(() => { if (confirmReady) backRef.current?.focus(); }, [confirmReady]);
   // 準備完了の後の窓（S12a。SEASON.md §63.2 の 2）: 押して通ったときだけ。既定のボタンは「拠点へ戻る」（S12b: 呼び鈴をまだ鳴らしていなければ「呼び鈴を鳴らす」）
   const [nudge, setNudge] = useState<ReadyNudge | null>(null);
-  // 呼び鈴（S12b。SEASON.md §63.6）: 鳴らすもの（使わない・AI がもう待っている・ID の形が違うときは null）と、この窓で鳴らした回数。
-  // S14a: 受け口の設定なら、送る要求。送れなかったら、そのポート（「受け口が、動いていない」）
+  // 呼び鈴（S12b・S14a・S15。SEASON.md §63.6・§68.2 の 1）: 受け口に送る要求（使わない・AI がもう待っている・ID の形が違うときは null）と、この窓で鳴らした回数。
+  // 送れなかったら、そのポート（「受け口が、動いていない」）
   // problem（S14b）: 覚えた受け口のポート・合言葉の形が違う（鳴らさずに「呼び鈴の設定を見直す」）
   const [bell, setBell] = useState<{ ring: BellRing | null; rung: number; failedPort: number | null; problem?: string | null }>({ ring: null, rung: 0, failedPort: null });
-  /** 鳴らす。リンクは、自動のとき（押した流れの中）はブラウザが許すときだけ。受け口は、人の操作が要らないので、いつも送る */
-  const ringNow = (r: BellRing, auto: boolean) => {
-    if (r.via === 'link') {
-      if ((!auto || bellAllowedNow()) && ringBell(r.url)) setBell((b) => ({ ...b, rung: b.rung + 1 }));
-      return;
-    }
+  /** 鳴らす（受け口へ送る。人の操作が要らないので、押した流れの中でも、いつも送る） */
+  const ringNow = (r: BellRing) => {
     void ringPort(r).then((ok) => { if (aliveRef.current) setBell((b) => ({ ...b, rung: ok ? b.rung + 1 : b.rung, failedPort: ok ? null : r.port })); });
   };
 
@@ -214,12 +213,11 @@ export function Prepare({ runId }: { runId: string }) {
           aiWaiting: !!before?.ai?.waitingNow || !!after.ai?.waitingNow,
         });
         if (n) {
-          // 呼び鈴（S12b）: AI がまだ待っていないときだけ。準備完了を押した流れの中で、ブラウザが許すなら、自動で 1 回鳴らす（許されなければ、何もしない）。
-          // 受け口（S14a）は、同じ流れで送る
+          // 呼び鈴（S12b・S14a）: AI がまだ待っていないときだけ。準備完了を押した流れの中で、受け口に 1 回送る
           const cfg = readBellConfig();
           const ring = n.copy ? bellRingOf(cfg, { season: after.view.season?.id ?? null, run: runId, pace: after.pace }) : null;
           setBell({ ring, rung: 0, failedPort: null, problem: n.copy ? bellProblem(cfg) : null });
-          if (ring) ringNow(ring, true);
+          if (ring) ringNow(ring);
           setNudge(n);
         }
         setNote(command.ready === true
@@ -322,12 +320,13 @@ export function Prepare({ runId }: { runId: string }) {
 
   return (
     <div class="page">
-      <Header title={tr('支度', 'Preparations')} />
+      <Header title={tr('支度', 'Preparations')} back>
+        <SoundControls />
+      </Header>
       <HubNav tab={null} />
       <ErrorBanner error={catErr} />
       <div class="hub prep">
         <div class="hub-col">
-          <a class="prep-back" href="#/">{tr('← 拠点へ', '← Back to the hub')}</a>
           {!data && !loadErr && <p class="hub-note">{tr('読み込み中…', 'Loading…')}</p>}
           {!data && loadErr && (
             <section class="hub-empty">
@@ -463,8 +462,8 @@ export function Prepare({ runId }: { runId: string }) {
         </div>
       )}
       {nudge && !confirmReady && (
-        <ReadyNudgeDialog nudge={nudge} bell={bellView({ url: bell.ring?.url ?? null, aiWaiting: !nudge.copy, rung: bell.rung, failedPort: bell.failedPort })} bellProblem={bell.problem ?? null}
-          onRing={() => { if (bell.ring) ringNow(bell.ring, false); }} onStay={() => setNudge(null)} />
+        <ReadyNudgeDialog nudge={nudge} bell={bellView({ ring: bell.ring, aiWaiting: !nudge.copy, rung: bell.rung, failedPort: bell.failedPort })} bellProblem={bell.problem ?? null}
+          onRing={() => { if (bell.ring) ringNow(bell.ring); }} onStay={() => setNudge(null)} />
       )}
     </div>
   );

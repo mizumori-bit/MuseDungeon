@@ -1,9 +1,10 @@
 // 音の進行役（docs/SOUND_SPEC.md §4・§6・§12）。画面（遊ぶ・観戦・リプレイ）は、届いた視界と出来事を update に渡すだけ。
+// 拠点・支度・記録・運用・シーズンの結果の画面は、hub（S15）で、決まった音の状態（場面 hub）を渡す。
 // - 既定は無音。音を出すのは、利用者が画面で音のテーマを選んだときだけ（ブラウザも操作なしの再生を許さない）。設定は端末に覚える。
 // - 音の状態は shared の soundStep（視界と届いた出来事だけから作る）。場面が 1 秒より短く行って戻るときは切り替えない。
 // - 同じ合図が 0.15 秒以内に重なったら 1 つにまとめる。画面を開いた最初の視界（それまでの出来事がまとめて届く）では合図を鳴らさない。
 import type { Catalog, PlayerView, ProjectedEvent, SoundCue, SoundMemory, SoundState } from '@muse/shared';
-import { soundStep } from '@muse/shared';
+import { hubSoundState, soundStep } from '@muse/shared';
 import { getPref, setPref } from '../util';
 import { parseSoundDef, type SoundDef } from './def';
 import { SoundEngine, type EngineInfo } from './engine';
@@ -25,6 +26,8 @@ const CUE_MERGE_MS = 150;
 /** 予約の先読み（秒）と、予約の間隔（ミリ秒） */
 const LOOKAHEAD = 0.2;
 const TICK_MS = 50;
+/** 拠点の曲の画面を離れてから、止めるまでの待ち（次の画面が開く間。拠点の曲どうしの画面なら、その間に取りやめる） */
+const HUB_GRACE_MS = 300;
 const BASE = (import.meta as unknown as { env?: { BASE_URL?: string } }).env?.BASE_URL ?? '/';
 
 type Ctor = typeof AudioContext;
@@ -57,6 +60,8 @@ export class SoundDirector {
   private readonly lastCue = new Map<string, number>();
   private readonly listeners = new Set<() => void>();
   private gestureHooked = false;
+  /** 拠点の曲を止めるまでの待ち（S15a。leaveHub） */
+  private hubTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     if (typeof window === 'undefined') return;
@@ -100,6 +105,38 @@ export class SoundDirector {
     this.latest = step.state;
     this.commit();
     if (!fresh && !opts.quiet) for (const c of step.cues) this.cue(c);
+  }
+
+  /**
+   * 拠点・支度・記録・運用の画面にいる（S15。SOUND_SPEC §2.1 の hub）: 視界の無い、決まった音の状態を渡す。
+   * 画面を移ったので、場面の揺れの待ち（1 秒）は使わず、次の拍の頭で替える（パートの出入りはフェード）。
+   * 音を出すかどうかは今までどおり（音のテーマが「切」なら何もしない。ブラウザは、人が 1 回操作するまで鳴らさない）
+   */
+  hub(): void {
+    // 拠点の曲どうしの画面を移った（拠点 → 支度 → 記録）: 止めるのを取りやめ、途切れずに続ける
+    if (this.hubTimer) { clearTimeout(this.hubTimer); this.hubTimer = null; }
+    if (this.stream === 'hub' && this.latest?.scene === 'hub') return;
+    this.stream = 'hub';
+    this.memory = null;
+    this.committed = null;
+    this.pending = null;
+    this.latest = hubSoundState();
+    this.commit();
+  }
+
+  /**
+   * 拠点の曲の画面を離れた（S15a）: 少し待って（HUB_GRACE_MS）、その間に次の画面が音の状態を渡さず（観戦が断られた・鍵が無い・最初の見え方の前 など）、
+   * 拠点の曲の画面にも戻らなければ、音楽を止める（次の画面が音の状態を渡すまで、無音）。拠点の曲どうしの画面を移るときは、hub() が取りやめる
+   */
+  leaveHub(): void {
+    if (this.stream !== 'hub') return;
+    if (this.hubTimer) clearTimeout(this.hubTimer);
+    this.hubTimer = setTimeout(() => {
+      this.hubTimer = null;
+      if (this.stream !== 'hub') return;
+      this.leave();
+      this.engine?.silence();
+    }, HUB_GRACE_MS);
   }
 
   /** 画面を離れた（次に開いた画面の最初の視界は、新しい流れとして扱う） */

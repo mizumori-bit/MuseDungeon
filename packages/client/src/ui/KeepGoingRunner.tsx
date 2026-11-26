@@ -1,14 +1,13 @@
 // 続けて遊ばせる（S14。SEASON.md §65.2・§65.4）の、鳴らす役。アプリの根（main.tsx）に置くので、どの画面（拠点・支度・観戦・記録・運用）にいても、
 // このアプリのタブが開いていれば続く。決める所は ui/keepGoing.ts（時刻を外から渡す関数）。ここは、時計・このブラウザの印・一覧の読み直し・鳴らすことだけ。
 // タブを 2 つ開いていても、鳴らすのは、生きているタブのうち 1 つ（kgLeader）。タブを全部閉じたら止まり、次に開いても、自動では再開しない（kgOnOpen）。
-// 鳴らす時が来て、ブラウザが止めたかもしれないときは、どの画面でも、下の帯と札を光らせ、短い音を鳴らし、「今、鳴らす」を押してもらう。
+// 受け口に送れなかったときは、どの画面でも、下の帯に「受け口が、動いていない」と「もう一度鳴らす」（S15: リンクの鳴らし方と、光らせて押してもらう流れは、外した）。
 import { useEffect } from 'preact/hooks';
 import { bellOn, bellProblem, bellRingOf, readBellConfig } from './bell';
 import {
-  KG, kgBlockedText, kgHeartbeat, kgLastInput, kgLastLaunch, kgLeader, kgLeave, kgMaybeBlocked, kgNoteInput, kgOnOpen, kgPace, kgPortFailText, kgRead, kgReadAll, kgReadTabs,
-  kgStep, kgStopped, kgWrite, kgWriteTabs, type KgState,
+  KG, kgHeartbeat, kgLeader, kgLeave, kgOnOpen, kgPace, kgPortFailText, kgRead, kgReadAll, kgReadTabs, kgStep, kgStopped, kgWrite, kgWriteTabs, type KgState,
 } from './keepGoing';
-import { activationNow, kgChime, kgObserveRun, kgRingNow, kgRingVia } from './keepGoingRing';
+import { kgObserveRun, kgRingNow, kgRingVia } from './keepGoingRing';
 import { useKeepGoing } from './keepGoingUi';
 import { tr } from '../util';
 
@@ -49,7 +48,7 @@ function navType(): string | null {
   }
 }
 
-/** アプリの根に置く: 鳴らす役と、呼び鈴を鳴らせなかったかもしれないときの帯（どの画面でも） */
+/** アプリの根に置く: 鳴らす役と、受け口に送れなかったときの帯（どの画面でも） */
 export function KeepGoingRunner() {
   const states = useKeepGoing();
   useEffect(() => {
@@ -65,13 +64,6 @@ export function KeepGoingRunner() {
     }
     kgWriteTabs(kgHeartbeat(tabs0, me, now0).tabs);
     let busy = false;
-    let lastInput = 0;
-    const onInput = () => {
-      const t = Date.now();
-      if (t - lastInput < 2000) return;
-      lastInput = t;
-      kgNoteInput(t);
-    };
     const tick = async () => {
       const now = Date.now();
       const hb = kgHeartbeat(kgReadTabs(), me, now);
@@ -97,10 +89,8 @@ export function KeepGoingRunner() {
           if (kgLeader(kgReadTabs(), t) !== me) continue;
           const r = bellRingOf(cfg, { season: state.seasonId, run: state.runId, pace });
           if (!r) { kgWrite(kgStopped(state, 'bell_setup', t)); continue; }
-          // リンク: ブラウザが止めたかもしれないなら、光らせて押してもらう。受け口（S14a）: 人の操作が要らないので、そのまま送る
-          const blocked = r.via === 'link' && kgMaybeBlocked({ activation: activationNow(), lastLaunchAt: kgLastLaunch(), lastInputAt: kgLastInput() });
-          await kgRingVia(r, state, ring, t, blocked);
-          if (blocked) kgChime();
+          // 受け口（S14a）: 人の操作が要らないので、そのまま送る
+          await kgRingVia(r, state, ring, t);
         }
       } finally {
         busy = false;
@@ -114,36 +104,25 @@ export function KeepGoingRunner() {
       try { window.sessionStorage.setItem(RELOAD_KEY, String(Date.now())); } catch { /* 覚えられない */ }
     };
     const onShow = () => { kgWriteTabs(kgHeartbeat(kgReadTabs(), me, Date.now()).tabs); };
-    window.addEventListener('pointerdown', onInput, true);
-    window.addEventListener('keydown', onInput, true);
     window.addEventListener('pagehide', onHide);
     window.addEventListener('pageshow', onShow);
     return () => {
       clearTimeout(first);
       clearInterval(timer);
-      window.removeEventListener('pointerdown', onInput, true);
-      window.removeEventListener('keydown', onInput, true);
       window.removeEventListener('pagehide', onHide);
       window.removeEventListener('pageshow', onShow);
     };
   }, []);
 
-  // リンクの呼び鈴を、ブラウザが止めたかもしれない（光らせて押してもらう）・受け口に送れなかった（S14a。知らせるだけ）
-  const need = Object.values(states).filter((s) => s.status === 'running' && (s.attention || s.portFail));
-  const glow = need.filter((s) => s.attention).length;
-  // タブの名前にも印（ほかのタブを見ているときに気づけるように。リンクのときだけ）
-  useEffect(() => {
-    const mark = '● ';
-    const base = document.title.startsWith(mark) ? document.title.slice(mark.length) : document.title;
-    document.title = glow ? `${mark}${base}` : base;
-  }, [glow]);
+  // 受け口に送れなかった（S14a。知らせるだけ）
+  const need = Object.values(states).filter((s) => s.status === 'running' && s.portFail);
   if (!need.length) return null;
   return (
     <div class="kg-bar" role="alert">
       {need.map((s) => (
         <div key={s.runId} class="kg-barrow">
-          <p class="kg-bartext">{s.attention ? kgBlockedText(s.name) : kgPortFailText(s.name, s.portFail!.port)}</p>
-          <button type="button" class="hub-btn primary kg-ring" onClick={() => void kgRingNow(s)}>{s.attention ? tr('今、鳴らす', 'Ring now') : tr('もう一度鳴らす', 'Ring again')}</button>
+          <p class="kg-bartext">{kgPortFailText(s.name, s.portFail!.port)}</p>
+          <button type="button" class="hub-btn primary kg-ring" onClick={() => void kgRingNow(s)}>{tr('もう一度鳴らす', 'Ring again')}</button>
         </div>
       ))}
     </div>

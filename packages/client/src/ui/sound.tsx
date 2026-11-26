@@ -4,6 +4,19 @@ import { useEffect, useState } from 'preact/hooks';
 import { soundDirector } from '../sound/director';
 import { tr } from '../util';
 
+/**
+ * 拠点の曲（S15。SEASON.md §68.2 の 5）: 拠点・支度・記録・運用・シーズンの結果の画面にいる間、場面 hub の音の状態を渡す。
+ * 観戦・遊ぶ・リプレイの画面へ移ると、その画面が、自分の音の状態を渡す（次の拍の頭で替わる）。
+ * S15a: 離れるときは、拠点の曲を止める（次の画面が音の状態を渡すまで、無音。観戦が断られた・最初の見え方の前 などで、拠点の曲が残らない）。
+ * 拠点の曲どうしの画面を移るとき（拠点 → 支度 → 記録）は、すぐ次の画面が hub() を呼ぶので、途切れない
+ */
+export function useHubMusic(): void {
+  useEffect(() => {
+    soundDirector.hub();
+    return () => soundDirector.leaveHub();
+  }, []);
+}
+
 export function SoundControls() {
   const [, force] = useState(0);
   useEffect(() => soundDirector.subscribe(() => force((n) => n + 1)), []);

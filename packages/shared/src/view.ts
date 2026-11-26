@@ -661,10 +661,14 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
   };
 }
 
-/** 観戦用: secret の seed と rng を除去した World（外見表は追従視点の再射影に必要なので残す） */
+/**
+ * 観戦用: secret の seed と rng を除去した World（外見表は追従視点の再射影に必要なので残す）。
+ * 終わったランはシードを残す（同じシードで同じダンジョンを再現できる）。ただし、シーズンのランは、終わってもシードを出さない（S0。S15a: 前は、
+ * 終わったシーズンのランのキーフレームと俯瞰のスナップショットに、シーズンのシードが残っていた）
+ */
 export function stripSecret(world: World): World {
   const w = structuredClone(world);
-  w.secret = { seed: world.status === 'ended' ? world.secret.seed : '', rng: {}, appearances: { ...world.secret.appearances } };
+  w.secret = { seed: world.status === 'ended' && !world.meta.season ? world.secret.seed : '', rng: {}, appearances: { ...world.secret.appearances } };
   return w;
 }
 

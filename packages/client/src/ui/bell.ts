@@ -1,24 +1,23 @@
-// 呼び鈴（S12b。SEASON.md §63.6）: 準備完了を押した人のブラウザが、決まった文字列 `musedungeon-bell://ready?season=<ID>&run=<ID>` を開く。
-// S14（§65.4）: 持ち主の希望（進め方）が pilot のときは `&mode=pilot` を添える。「続けて遊ばせる」（ui/keepGoing.ts）の間も、同じ文字列を開く。
-// S14a: 鳴らし方を、もう 1 つ。**この PC の受け口を呼ぶ**: `http://127.0.0.1:<ポート>/musedungeon-bell` へ、1 行の本文を POST する（応答は読まない）。
-//   ブラウザは、外の道具のリンクを、人の操作なしでは続けて開かせない（Chromium 系は、操作の後に 1 回だけ）が、この形は、人の操作が要らない。
-//   送り先の名前は、いつも 127.0.0.1（設定で変えられるのは、ポートだけ。ほかの名前・アドレスへは、送らない）。
+// 呼び鈴（S12b・S14a。SEASON.md §63.6・§65.4）: 準備完了を押した人のブラウザが、この PC の受け口（`http://127.0.0.1:<ポート>/musedungeon-bell`）へ、
+// 1 行の本文を POST する（応答は読まない）。人の操作は要らない。送り先の名前は、いつも 127.0.0.1（設定で変えられるのは、ポートだけ。ほかの名前・アドレスへは、送らない）。
+// S15（SEASON.md §68.2 の 1）: 鳴らし方を、受け口の 1 つに絞った（リンク `musedungeon-bell://…` を開く鳴らし方と、「鳴らす時が来たら、押してもらう」の流れは、外した）。
+//   前に「自分の道具を呼ぶ（リンク）」を覚えていたブラウザは、「使わない」として読む（設定の画面に 1 行、そう出す）。
+// S14（§65.4）: 持ち主の希望（進め方）が pilot のときは `mode=pilot` を添える。「続けて遊ばせる」（ui/keepGoing.ts）の間も、同じ本文を送る。
 // サーバーは何も変わらない（送り先も資格も持たず、何も実行しない）。受け取って、AI にどう知らせるかは、その PC の持ち主の道具が決める（ゲームでは用意しない）。
 // 入れるのは、シーズンとランの 2 つの ID だけ（[A-Za-z0-9_-] だけであることを確かめてから。合わなければ鳴らさない）と、決まった 1 語（mode=pilot）と、
 // 受け口の合言葉（設定の検査を通ったものだけ）。冒険者の名前・伝言など、だれかが決めた文は入れない（受ける道具と、その先の AI への、差し込みの口を作らない）。
-// 設定は、このブラウザにだけ覚える（サーバーへ送らない）。文字列・本文を組む関数と、窓の文は、画面から離した関数（テストする）。
+// 設定は、このブラウザにだけ覚える（サーバーへ送らない）。本文を組む関数と、窓の文は、画面から離した関数（テストする）。
 import type { OwnerPace } from '@muse/shared';
 import { getPref, setPref, tr } from '../util';
 
-/** 設定: 使わない（既定）・自分の道具を呼ぶ（リンク）・この PC の受け口を呼ぶ（S14a） */
-export type BellMode = 'off' | 'tool' | 'port';
+/** 設定: 使わない（既定）・この PC の受け口を呼ぶ */
+export type BellMode = 'off' | 'port';
 /**
  * 設定の全部（port: 受け口のポート。key: 合言葉。どちらも検査を通ったものだけ。無ければ null）。
- * bad（S14b）: 覚えてあるポートか合言葉が、形の検査を通らない（書き換えられた など）。受け口の設定では鳴らさず、「呼び鈴の設定を見直す」と出す
+ * bad（S14b）: 覚えてあるポートか合言葉が、形の検査を通らない（書き換えられた など）。受け口の設定では鳴らさず、「呼び鈴の設定を見直す」と出す。
+ * legacyLink（S15）: 前の版で「自分の道具を呼ぶ（リンク）」を覚えていた（今は「使わない」として読む）
  */
-export interface BellConfig { mode: BellMode; port: number | null; key: string | null; bad?: 'port' | 'key' }
-/** 鳴らし方（札と窓の文を変える）: link リンク・port 受け口 */
-export type BellVia = 'link' | 'port';
+export interface BellConfig { mode: BellMode; port: number | null; key: string | null; bad?: 'port' | 'key'; legacyLink?: true }
 
 const PREF = 'bell';
 const PREF_PORT = 'bell.port';
@@ -61,14 +60,15 @@ export function bellPortParse(text: string): number | null {
 
 export function readBellConfig(): BellConfig {
   const m = getPref(PREF, 'off');
-  const mode: BellMode = m === 'tool' || m === 'port' ? m : 'off';
+  // 前の版のリンク（'tool'）は、使わないとして読む（S15）
+  const mode: BellMode = m === 'port' ? 'port' : 'off';
   const portText = getPref(PREF_PORT, '');
   const keyText = getPref(PREF_KEY, '');
   const port = bellPortParse(portText);
   const key = bellKeyValid(keyText) ? keyText : null;
   // 覚えてある値が、形の検査を通らない（空は「無い」で、合言葉は任意）
   const bad = mode === 'port' ? (port === null ? 'port' as const : keyText && key === null ? 'key' as const : undefined) : undefined;
-  return { mode, port, key, ...(bad ? { bad } : {}) };
+  return { mode, port, key, ...(bad ? { bad } : {}), ...(m === 'tool' ? { legacyLink: true as const } : {}) };
 }
 
 /** 受け口の設定に足りない・違う所があるときの 1 行（S14b。無ければ null） */
@@ -77,6 +77,13 @@ export function bellProblem(c: BellConfig): string | null {
   return c.bad === 'key'
     ? tr('呼び鈴の設定を見直す（覚えた合言葉の形が違う。運用の画面で、決め直す）', 'Check the bell settings (the saved passphrase is not valid; set it again on the Operations screen)')
     : tr('呼び鈴の設定を見直す（受け口のポートが決まっていない。運用の画面で、決める）', 'Check the bell settings (the receiver port is not set; set it on the Operations screen)');
+}
+
+/** 前の版でリンクの鳴らし方を選んでいたときの 1 行（S15。設定の画面に出す。無ければ null） */
+export function bellLegacyNote(c: BellConfig): string | null {
+  if (!c.legacyLink || c.mode !== 'off') return null;
+  return tr('前に選んでいた「自分の道具を呼ぶ（リンク）」は、なくなった。今は「使わない」になっている。鳴らすなら、「この PC の受け口を呼ぶ」にする。',
+    'The "Call your own tool (link)" you chose before is gone; the bell is now Off. To ring, choose "Call a receiver on this PC".');
 }
 
 /** 設定を覚える（検査を通らないポート・合言葉は覚えない） */
@@ -99,11 +106,7 @@ export function bellOn(c: BellConfig): boolean {
   return c.mode !== 'off';
 }
 
-export function saveBell(mode: BellMode): void {
-  setPref(PREF, mode);
-}
-
-/** 呼び鈴の文字列に入れてよい ID（シーズン・ラン） */
+/** 呼び鈴の本文に入れてよい ID（シーズン・ラン） */
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
 export interface BellIds { season: string | null | undefined; run: string; pace?: OwnerPace | null }
@@ -113,18 +116,8 @@ function idsOk(ids: BellIds): boolean {
 }
 
 /**
- * 呼び鈴の文字列（自分の道具を呼ぶ）。使わない・ID の形が違う（入れられない文字がある）ときは null（鳴らさない）。
- * シーズンでない冒険（season が null）は season を省く（`musedungeon-bell://ready?run=<ID>`）。
- * pace（S14。SEASON.md §65.4 の 2）: 持ち主の希望（進め方）が pilot のときだけ、決まった 1 語 `&mode=pilot` を添える（self・無いときは、今までと同じ文字列）
- */
-export function bellUrl(mode: BellMode, ids: BellIds): string | null {
-  if (mode !== 'tool' || !idsOk(ids)) return null;
-  const base = ids.season ? `musedungeon-bell://ready?season=${ids.season}&run=${ids.run}` : `musedungeon-bell://ready?run=${ids.run}`;
-  return ids.pace === 'pilot' ? `${base}&mode=pilot` : base;
-}
-
-/**
  * 受け口に送る本文（S14a）: 1 行の `season=<ID>&run=<ID>[&mode=pilot][&key=<合言葉>]`（シーズンでない冒険は run= から）。
+ * pace（S14。SEASON.md §65.4 の 2）: 持ち主の希望（進め方）が pilot のときだけ、決まった 1 語 `mode=pilot` を添える。
  * ID・合言葉の形が違えば null（送らない）
  */
 export function bellBody(ids: BellIds, key: string | null | undefined): string | null {
@@ -148,13 +141,11 @@ export function bellPortRequest(c: BellConfig, ids: BellIds): BellPortRequest | 
   };
 }
 
-/** 鳴らすもの: リンク（開く文字列）か、受け口（送る要求）。鳴らさないなら null */
-export type BellRing = { via: 'link'; url: string } | ({ via: 'port' } & BellPortRequest);
+/** 鳴らすもの（受け口に送る要求）。鳴らさないなら null */
+export type BellRing = BellPortRequest;
 
 export function bellRingOf(c: BellConfig, ids: BellIds): BellRing | null {
-  if (c.mode === 'tool') { const url = bellUrl('tool', ids); return url ? { via: 'link', url } : null; }
-  if (c.mode === 'port') { const r = bellPortRequest(c, ids); return r ? { via: 'port', ...r } : null; }
-  return null;
+  return bellPortRequest(c, ids);
 }
 
 /** 受け口に送る（応答は読まない。つながらなければ false。10 秒で応答が無ければ、届いたとみなす）。f はテストで差し替える */
@@ -188,42 +179,13 @@ export interface BellView {
 }
 
 /**
- * rung: この窓で鳴らした回数（準備完了を押した流れの中で、ブラウザが許して自動で鳴らしたら 1。受け口は、送れたら 1）。
+ * ring: 送る要求（使わない・ID の形が違うときは null）。rung: この窓で鳴らした回数（準備完了を押した流れの中で、受け口に送れたら 1）。
  * まだなら「呼び鈴を鳴らす」（既定のボタン）、鳴らした後は「鳴らした」と「もう一度鳴らす」。
  * failedPort（S14a）: 受け口に送れなかった（そのポート）。「受け口が、動いていない」と「もう一度鳴らす」（既定のボタン）
  */
-export function bellView(x: { url: string | null; aiWaiting: boolean; rung: number; failedPort?: number | null }): BellView | null {
-  if (!x.url || x.aiWaiting) return null;
+export function bellView(x: { ring: BellRing | null; aiWaiting: boolean; rung: number; failedPort?: number | null }): BellView | null {
+  if (!x.ring || x.aiWaiting) return null;
   if (x.failedPort !== null && x.failedPort !== undefined) return { label: tr('もう一度鳴らす', 'Ring again'), note: bellPortFailText(x.failedPort), primary: true };
   if (x.rung <= 0) return { label: tr('呼び鈴を鳴らす', 'Ring the bell'), note: null, primary: true };
   return { label: tr('もう一度鳴らす', 'Ring again'), note: tr('呼び鈴を鳴らした（受ける道具が、知らせる）', 'Rang the bell (your receiving tool passes it on)'), primary: false };
-}
-
-/**
- * ブラウザが、今、外の道具を開くのを許しそうか（押した直後のひととき: navigator.userActivation）。分からないブラウザでは、試す。
- * 許されないときは、自動では鳴らさない（窓のボタンで鳴らす）
- */
-export function bellAllowedNow(): boolean {
-  try {
-    const ua = (navigator as Navigator & { userActivation?: { isActive: boolean } }).userActivation;
-    return ua ? ua.isActive : true;
-  } catch {
-    return false;
-  }
-}
-
-/** 鳴らす（文字列を開く。受ける道具が無ければ、ブラウザは何もしないか、知らせを出す）。試せたら true */
-export function ringBell(url: string): boolean {
-  try {
-    const a = document.createElement('a');
-    a.href = url;
-    a.rel = 'noopener noreferrer';
-    a.style.display = 'none';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    return true;
-  } catch {
-    return false;
-  }
 }

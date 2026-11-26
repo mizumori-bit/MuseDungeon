@@ -215,7 +215,8 @@ export function InventoryPanel({ view, catalog, onAction, focused, selected, onS
   );
 }
 
-export interface LogLine { seq: number; text: string; kind?: 'error' | 'info' | 'chat' | 'thought' }
+/** kind の act（S15）: 観戦の、命令ごとの 1 行（seq は、その命令の出来事の前: 前の命令の番号 + 0.5） */
+export interface LogLine { seq: number; text: string; kind?: 'error' | 'info' | 'chat' | 'thought' | 'act' }
 
 export function MessageLog({ lines, title }: { lines: LogLine[]; title?: string }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -254,7 +255,7 @@ export function AlertsBar({ alerts, onEscape }: { alerts: Alert[]; onEscape?: (s
         const worst = stairs && typeof a.data?.worst_if_chased === 'number' ? a.data.worst_if_chased : null;
         const deadly = worst !== null && typeof a.data?.hp === 'number' && worst >= a.data.hp;
         return (
-          <span key={a.code} class={`alert ${a.code} ${URGENT_ALERTS.includes(a.code) ? 'urgent' : ''}`}>
+          <span key={a.code} class={`alert ${a.code} ${URGENT_ALERTS.includes(a.code) ? 'urgent' : ''}`} title={a.text}>
             {a.code === 'lethal_range' || a.code === 'lethal_2turns' ? `⚠ ${a.text}` : a.text}
             {stairs && onEscape && (
               <button class={`tiny flee aact ${deadly ? 'danger' : ''}`} onClick={() => onEscape(stairs)}

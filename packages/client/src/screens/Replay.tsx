@@ -18,6 +18,8 @@ import { filterEventsForPlayer } from '@muse/shared';
 import { soundDirector } from '../sound/director';
 import { SoundControls } from '../ui/sound';
 import { CampScene } from '../ui/camp';
+import { oldVersionText, replayErrText, watchAllowed } from '../ui/replayGate';
+import { keyForRun } from '../ui/keys';
 
 const CHUNK = 5000;
 const SPEEDS = [0.25, 0.5, 1, 2, 4, 8, 16];
@@ -66,6 +68,15 @@ export function Replay({ runId }: { runId: string }) {
   const [follow, setFollow] = useState<string | null>(null);
   const [markerFilter, setMarkerFilter] = useState<string>('all');
   const [, setTick] = useState(0);
+  /**
+   * 見返せない理由（S15。SEASON.md §68.2 の 6）: blocked は巻き戻しの口が断った（開催中のシーズンの、終わっていないラン など）。
+   * old は出来事を畳めなかった（作られた版が古い）。どちらも、地図の場所に 1 文を出す（進まないまま黙らない）
+   */
+  const [blocked, setBlocked] = useState<string | null>(null);
+  const [old, setOld] = useState<string | null>(null);
+  /** 断られたとき、その場で観戦できる人か（S15a。「見守る」を出す） */
+  const [canWatch, setCanWatch] = useState(false);
+  const metaRef = useRef<RunMetaFile | null>(null);
 
   const eventsRef = useRef<GameEvent[]>([]);
   const loadedToRef = useRef(0);
@@ -124,6 +135,12 @@ export function Replay({ runId }: { runId: string }) {
     }
   };
 
+  /** 出来事を畳めなかった: 「作られた版が古く、見返せない」と、どこで止まったか（S15） */
+  const foldFailed = (seq: number, e: unknown) => {
+    setOld(oldVersionText(metaRef.current?.engineVersion));
+    setError(`#${seq}: ${(e as Error).message}`);
+  };
+
   const keyframeWorld = async (kf: number): Promise<World> => {
     let w = kfCache.current.get(kf);
     if (!w) {
@@ -152,7 +169,7 @@ export function Replay({ runId }: { runId: string }) {
     const evs = eventsRef.current;
     let i = upperBound(evs, from);
     while (i < evs.length && evs[i].seq <= target) {
-      try { applyEvent(w, evs[i]); } catch (e) { setError(`#${evs[i].seq}: ${(e as Error).message}`); break; }
+      try { applyEvent(w, evs[i]); } catch (e) { foldFailed(evs[i].seq, e); break; }
       i++;
     }
     worldRef.current = w;
@@ -180,7 +197,7 @@ export function Replay({ runId }: { runId: string }) {
         void seek(ev.seq);
         break;
       }
-      try { applyEvent(w, ev); } catch (e) { setError(`#${ev.seq}: ${(e as Error).message}`); break; }
+      try { applyEvent(w, ev); } catch (e) { foldFailed(ev.seq, e); setPlaying(false); break; }
       applied.push(ev);
       if (!byTurn && ++count >= n) break;
       if (byTurn && ev.type === 'turn_began') break;
@@ -204,12 +221,17 @@ export function Replay({ runId }: { runId: string }) {
   useEffect(() => {
     let alive = true;
     (async () => {
+      // 先にランの meta（巻き戻しの口の前。開催中のシーズンのランでも、名前と版は読める）: 断られたときの理由と、版が古いときの文に使う
+      const m = await api.meta(runId).catch(() => null);
+      if (!alive) return;
+      metaRef.current = m;
+      if (m) setMeta(m);
       try {
         const idx = await api.index(runId);
         if (!alive) return;
         indexRef.current = idx;
         setIndex(idx);
-        api.meta(runId).then((m) => alive && setMeta(m)).catch(() => undefined);
+        setBlocked(null);
         api.commands(runId).then((c) => alive && setCommands(c)).catch(() => undefined);
         let first = true;
         for (let from = 1; from <= idx.lastSeq; from += CHUNK) {
@@ -229,7 +251,23 @@ export function Replay({ runId }: { runId: string }) {
         }
         if (first) await seek(0);
       } catch (e) {
-        if (alive) setError(errorText(e));
+        // 巻き戻しの口が断った（開催中のシーズンの、終わっていないラン など）: 理由を地図の場所に（S15）
+        if (alive) {
+          if (!indexRef.current) {
+            setBlocked(replayErrText(e, m?.season ?? null));
+            // 「見守る」は、その場で観戦できる人（持ち主の鍵か、同じ PC）にだけ（S15a）。シーズンのランは、観戦できるランの一覧で確かめる。分からなければ出さない
+            if (m?.status === 'active') {
+              let watchable: string[] | null = null;
+              if (m.season) {
+                const tok = await keyForRun(runId).catch(() => undefined);
+                const sw = await api.seasonWatch(m.season, tok ?? undefined).catch(() => null);
+                watchable = sw ? sw.runs.map((r) => r.runId) : null;
+              }
+              if (alive) setCanWatch(watchAllowed({ season: m.season ?? null, runId, watchable }));
+            }
+          }
+          else setError(errorText(e));
+        }
       }
     })();
     return () => { alive = false; };
@@ -239,7 +277,8 @@ export function Replay({ runId }: { runId: string }) {
   useEffect(() => {
     const t = setInterval(async () => {
       const idx = indexRef.current;
-      if (!idx || meta?.status === 'ended') return;
+      // シーズンのランは、見返せる時には、もう進まない（確定したか、終わった。S15）
+      if (!idx || meta?.status === 'ended' || meta?.season) return;
       try {
         const n = await api.index(runId);
         indexRef.current = n;
@@ -369,10 +408,11 @@ export function Replay({ runId }: { runId: string }) {
 
   return (
     <div class="page replay">
-      <Header title={`${tr('リプレイ', 'Replay')} ${runId}`}>
+      <Header title={`${tr('リプレイ', 'Replay')} ${runId}`} back>
         <ThemePicker themes={th.themes} themeId={th.themeId} onChange={th.setThemeId} />
         <SoundControls />
-        {meta?.status === 'active' && <a class="button small" href={`#/watch/${runId}`}>{tr('ライブへ', 'Go live')}</a>}
+        {/* シーズンのランは、見返せるときには、もう進まない（確定したシーズンの、キャンプにいるままのラン）ので、ライブへは出さない（S15） */}
+        {meta?.status === 'active' && !meta.season && <a class="button small" href={`#/watch/${runId}`}>{tr('ライブへ', 'Go live')}</a>}
       </Header>
       <ErrorBanner error={error ?? catErr ?? th.error} onClose={() => setError(null)} />
       <div class="toolbar">
@@ -444,7 +484,17 @@ export function Replay({ runId }: { runId: string }) {
       <div class="layout">
         <div class="main">
           <MapView theme={th.theme} onReady={(r) => { rRef.current = r; render(); setTick((n) => n + 1); }}
-            overlay={mode === 'follow' && follow && w && w.status !== 'ended' && w.players[follow]?.state === 'at_camp' ? <CampScene theme={th.theme} /> : undefined} />
+            overlay={
+              <>
+                {mode === 'follow' && follow && w && w.status !== 'ended' && w.players[follow]?.state === 'at_camp' && <CampScene theme={th.theme} />}
+                {(blocked || old) && (
+                  <div class="replaymsg" role="status">
+                    <p>{blocked ?? old}</p>
+                    {blocked && canWatch && <a class="button small" href={`#/watch/${runId}`}>{tr('見守る', 'Watch')}</a>}
+                  </div>
+                )}
+              </>
+            } />
         </div>
         <aside class="side">
           <ExpeditionStatusPanel info={expInfo} />

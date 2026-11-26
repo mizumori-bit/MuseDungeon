@@ -188,7 +188,17 @@ describe('S3 §25.1: a run of a season in progress can be watched only by its pa
       // 確定した後は、だれでも巻き戻せる
       m.seasons.finalize(m.seasons.get(SID)!, 'operator');
       expect((await get(`/api/runs/${runA}/events`, REMOTE)).status).toBe(200);
-      const wf = (await (await get(`/api/seasons/${SID}/watch`, REMOTE)).json()) as W;
+      // S15（SEASON.md §68.2 の 6）: キャンプにいるまま（引退せずに）確定したランも、だれでも巻き戻せる（前は、ランが終わっていないので断っていた）。
+      // シードは出さない（シーズンのラン）
+      expect(b.session.world.status).not.toBe('ended');
+      for (const sub of ['events', 'keyframes', 'index', 'commands', 'summary']) {
+        expect((await get(`/api/runs/${b.session.runId}/${sub}`, REMOTE)).status, sub).toBe(200);
+        expect((await get(`/api/runs/${b.session.runId}/${sub}`)).status, sub).toBe(200);
+      }
+      const evText = await (await get(`/api/runs/${b.session.runId}/events`, REMOTE)).text();
+      expect(evText).not.toContain('s3-season-1');
+      expect(evText.length).toBeGreaterThan(0);
+      const wf =(await (await get(`/api/seasons/${SID}/watch`, REMOTE)).json()) as W;
       expect(wf.final).toBe(true);
       expect(wf.runs.map((x) => x.name)).toEqual(['Ben']);
       // ランの一覧に、記録だけのランにもシーズンの ID が付く（ロビーが巻き戻しを出し分ける）

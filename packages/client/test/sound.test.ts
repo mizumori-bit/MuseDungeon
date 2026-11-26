@@ -1,9 +1,11 @@
 // 鳴らす仕組みの確認（docs/SOUND_SPEC.md §4・§6・§12）: 定義の読み方（hollow の sound.json）、規則の当て方、
 // 同時に鳴る音の上限（場面を切り替えた直後の余韻を含めて 16 を超えない）。Web Audio は偽物の AudioContext で数える。
 import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { SoundState } from '@muse/shared';
+import { hubSoundState } from '@muse/shared';
 import { degreeToFreq, matchCond, MAX_VOICES, notesAt, parseSoundDef, resolveSound } from '../src/sound/def';
+import { SoundDirector } from '../src/sound/director';
 import { SoundEngine } from '../src/sound/engine';
 import { liveAt, planSteals, type VoiceSlot } from '../src/sound/voices';
 
@@ -46,6 +48,22 @@ describe('sound definition (format 1)', () => {
     expect(odd.tempo).toBe(1.5);
     const odd2 = resolveSound({ ...def, rules: [...def.rules, { when: { weather: 'rain' }, set: { tempo: 1.2 } }] }, base);
     expect(odd2.tempo).toBe(1);
+  });
+
+  it('S15: the hub scene (a provisional tune) is built from the camp tune, a little quieter and slower, with no drums', () => {
+    const { def } = parseSoundDef(hollow);
+    const hub = resolveSound(def, hubSoundState());
+    const camp = resolveSound(def, { ...hubSoundState(), scene: 'camp' });
+    expect(hubSoundState()).toMatchObject({ scene: 'hub', threat: 0, depth_band: 0, depth_tier: 0, biome: 'none', floor_kind: 'other', sense: 'none', stake: 0 });
+    expect(hub.scale).toBe('light');
+    expect(hub.tempo).toBeLessThan(camp.tempo);
+    for (const p of ['bass', 'pad', 'lead'] as const) {
+      expect(hub.parts[p].on).toBe(true);
+      expect(hub.parts[p].pattern).toBe(camp.parts[p].pattern);
+      expect(hub.parts[p].gain).toBeLessThan(camp.parts[p].gain);
+    }
+    expect(hub.parts.perc.on).toBe(false);
+    expect(hub.parts.glint.on).toBe(false);
   });
 
   it('conditions, degrees and pattern positions', () => {
@@ -176,6 +194,53 @@ describe('sound engine (Web Audio, faked)', () => {
     const before = sources.length;
     eng.cue('stairs');
     expect(sources.length - before).toBe(notes.length);
+  });
+
+  it('S15a: silence stops scheduling music until the next state; the parts come back in on the next state', () => {
+    const { def } = parseSoundDef(hollow);
+    const { ctx, sources } = fakeContext();
+    const eng = new SoundEngine(ctx as unknown as BaseAudioContext, def, ctx.destination as unknown as AudioNode);
+    eng.setState(hubSoundState());
+    ctx.currentTime = 0;
+    eng.advance(2);
+    expect(eng.info().parts.length).toBeGreaterThan(0);
+    eng.silence();
+    const n = sources.length;
+    ctx.currentTime = 2;
+    eng.advance(6);
+    expect(sources.length).toBe(n);
+    expect(eng.info().parts).toEqual([]);
+    eng.setState({ ...base, scene: 'combat' });
+    eng.advance(8);
+    expect(sources.length).toBeGreaterThan(n);
+    expect(eng.info().parts.some((p) => p.startsWith('bass:bass_combat'))).toBe(true);
+  });
+
+  it('S15a: leaving a hub screen stops the hub tune after a short wait, unless another hub screen opens first or the next screen gives its own state', () => {
+    vi.useFakeTimers();
+    try {
+      const d = new SoundDirector();
+      d.hub();
+      expect(d.snapshot().state?.scene).toBe('hub');
+      // 拠点 → 支度（拠点の曲どうし）: 止めない
+      d.leaveHub();
+      vi.advanceTimersByTime(100);
+      d.hub();
+      vi.advanceTimersByTime(5000);
+      expect(d.snapshot().state?.scene).toBe('hub');
+      // 拠点 → 観戦（断られて、音の状態が来ない）: 止まる（無音）
+      d.leaveHub();
+      vi.advanceTimersByTime(299);
+      expect(d.snapshot().state?.scene).toBe('hub');
+      vi.advanceTimersByTime(2);
+      expect(d.snapshot().state).toBeNull();
+      expect(d.snapshot().heard).toBeNull();
+      // 戻ると、また鳴る
+      d.hub();
+      expect(d.snapshot().state?.scene).toBe('hub');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('switches on the beat and keeps the running position (patterns are read from the global position)', () => {

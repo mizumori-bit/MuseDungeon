@@ -50,11 +50,16 @@ export function ErrorBanner({ error, onClose }: { error: string | null; onClose?
   );
 }
 
-export function Header({ title, children }: { title?: string; children?: ComponentChildren }) {
+/**
+ * 上の帯。back（S15。SEASON.md §68.2 の 4）: 見出しの左に「← 拠点へ」（遊ぶ・観戦・リプレイ・シーズンの結果・支度）。
+ * 拠点へ移るだけ（遊ぶ画面で遠征の途中に押しても、ランは止まらない。ロゴを押したときと同じ）
+ */
+export function Header({ title, children, back }: { title?: string; children?: ComponentChildren; back?: boolean }) {
   const [, force] = useState(0);
   return (
     <header class="topbar">
       <a class="brand" href="#/">MuseDungeon</a>
+      {back && <a class="hdr-back" href="#/">{tr('← 拠点へ', '← Back to the hub')}</a>}
       {title && <span class="title">{title}</span>}
       <div class="spacer" />
       {children}

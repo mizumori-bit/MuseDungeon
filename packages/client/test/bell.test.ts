@@ -1,55 +1,64 @@
-// S12b（SEASON.md §63.6）: 呼び鈴の文字列と、準備完了の後の窓のボタン。画面から離した関数のテスト。
-// 入れるのは 2 つの ID だけ（[A-Za-z0-9_-] だけ。合わなければ鳴らさない）・使わない（既定）・AI がもう待っていれば出さない・日英
+// S12b（SEASON.md §63.6）・S15（§68.2 の 1）: 呼び鈴は、この PC の受け口の 1 つだけ。準備完了の後の窓のボタン。画面から離した関数のテスト。
+// 使わない（既定）・前の版のリンクの設定は「使わない」として読む・AI がもう待っていれば出さない・日英
 import { afterEach, describe, expect, it } from 'vitest';
-import { bellAllowedNow, bellUrl, bellView, readBell } from '../src/ui/bell';
+import { bellLegacyNote, bellOn, bellPortRequest, bellRingOf, bellView, readBell, readBellConfig, type BellConfig } from '../src/ui/bell';
 import { setLocale } from '../src/util';
 
 afterEach(() => setLocale('ja'));
 
-describe('S12b §63.6: the bell string', () => {
-  it('only the season and run IDs, in a fixed form', () => {
-    expect(bellUrl('tool', { season: 's5', run: 'run_ab12cd' })).toBe('musedungeon-bell://ready?season=s5&run=run_ab12cd');
-    expect(bellUrl('tool', { season: 'T-9_x', run: 'run_Z' })).toBe('musedungeon-bell://ready?season=T-9_x&run=run_Z');
-    // シーズンでない冒険は season を省く
-    expect(bellUrl('tool', { season: null, run: 'run_ab12cd' })).toBe('musedungeon-bell://ready?run=run_ab12cd');
-    expect(bellUrl('tool', { season: undefined, run: 'run_ab12cd' })).toBe('musedungeon-bell://ready?run=run_ab12cd');
-  });
+const ids = { season: 's5', run: 'run_ab12cd' };
 
-  it('does not ring when an ID carries anything outside [A-Za-z0-9_-], or when the bell is off', () => {
-    for (const bad of ['run_a&x=1', 'run a', 'run_a\n', 'run_a?', 'run_a#', 'run_a/..', '名前', 'run_a%20', '', 'r'.repeat(65), 'run_a=b', 'run_a;b']) {
-      expect(bellUrl('tool', { season: 's5', run: bad })).toBeNull();
-      expect(bellUrl('tool', { season: bad, run: 'run_ab12cd' })).toBeNull();
-    }
-    expect(bellUrl('off', { season: 's5', run: 'run_ab12cd' })).toBeNull();
+/** このブラウザの覚え（localStorage）を差し替えて fn を走らせる */
+function withPrefs(prefs: Record<string, string>, fn: () => void): void {
+  const g = globalThis as { window?: unknown };
+  const had = Object.getOwnPropertyDescriptor(g, 'window');
+  const mem = new Map<string, string>(Object.entries(prefs).map(([k, v]) => [`muse.pref.${k}`, v]));
+  const ls = { getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => void mem.set(k, v), removeItem: (k: string) => void mem.delete(k), key: (i: number) => [...mem.keys()][i] ?? null, get length() { return mem.size; } };
+  try {
+    Object.defineProperty(g, 'window', { value: { localStorage: ls }, configurable: true });
+    fn();
+  } finally {
+    if (had) Object.defineProperty(g, 'window', had);
+    else delete g.window;
+  }
+}
+
+describe('S15 §68.2 の 1: one bell, the receiver on this PC', () => {
+  it('off by default; a browser that kept the old link setting reads it as off, and the settings say so once', () => {
     // 既定は使わない（このブラウザに何も覚えていない・読めない）
     expect(readBell()).toBe('off');
+    withPrefs({ bell: 'tool', 'bell.port': '47123', 'bell.key': '' }, () => {
+      const c = readBellConfig();
+      expect(c.mode).toBe('off');
+      expect(c.legacyLink).toBe(true);
+      expect(bellOn(c)).toBe(false);
+      expect(bellRingOf(c, ids)).toBeNull();
+      expect(bellLegacyNote(c)).toContain('「自分の道具を呼ぶ（リンク）」は、なくなった');
+    });
+    withPrefs({ bell: 'off' }, () => {
+      expect(bellLegacyNote(readBellConfig())).toBeNull();
+    });
+    withPrefs({ bell: 'port', 'bell.port': '47123' }, () => {
+      const c = readBellConfig();
+      expect(c.legacyLink).toBeUndefined();
+      expect(bellLegacyNote(c)).toBeNull();
+      expect(bellRingOf(c, ids)?.url).toBe('http://127.0.0.1:47123/musedungeon-bell');
+    });
+    // 知らない設定の値も、使わない
+    withPrefs({ bell: 'link', 'bell.port': '47123' }, () => expect(readBellConfig().mode).toBe('off'));
   });
 
-  it('the button in the window after "Ready": ring (the default) → rang / ring again; none when off, invalid, or the AI is already waiting', () => {
-    const url = 'musedungeon-bell://ready?season=s5&run=run_ab12cd';
-    expect(bellView({ url, aiWaiting: false, rung: 0 })).toEqual({ label: '呼び鈴を鳴らす', note: null, primary: true });
-    expect(bellView({ url, aiWaiting: false, rung: 1 })).toEqual({ label: 'もう一度鳴らす', note: '呼び鈴を鳴らした（受ける道具が、知らせる）', primary: false });
-    expect(bellView({ url, aiWaiting: true, rung: 0 })).toBeNull();
-    expect(bellView({ url: null, aiWaiting: false, rung: 0 })).toBeNull();
+  it('the button in the window after "Ready": ring (the default) → rang / ring again; none when off or the AI is already waiting', () => {
+    const cfg: BellConfig = { mode: 'port', port: 47123, key: null };
+    const ring = bellPortRequest(cfg, ids)!;
+    expect(bellView({ ring, aiWaiting: false, rung: 0 })).toEqual({ label: '呼び鈴を鳴らす', note: null, primary: true });
+    expect(bellView({ ring, aiWaiting: false, rung: 1 })).toEqual({ label: 'もう一度鳴らす', note: '呼び鈴を鳴らした（受ける道具が、知らせる）', primary: false });
+    expect(bellView({ ring, aiWaiting: true, rung: 0 })).toBeNull();
+    expect(bellView({ ring: null, aiWaiting: false, rung: 0 })).toBeNull();
+    // 送れなかった: 「受け口が、動いていない」と「もう一度鳴らす」（残す知らせ）
+    expect(bellView({ ring, aiWaiting: false, rung: 0, failedPort: 47123 })).toEqual({ label: 'もう一度鳴らす', note: '受け口が、動いていない（ポート 47123）', primary: true });
     setLocale('en');
-    expect(bellView({ url, aiWaiting: false, rung: 0 })).toEqual({ label: 'Ring the bell', note: null, primary: true });
-    expect(bellView({ url, aiWaiting: false, rung: 2 })).toEqual({ label: 'Ring again', note: 'Rang the bell (your receiving tool passes it on)', primary: false });
-  });
-
-  it('whether the browser lets it ring now: unknown browsers try', () => {
-    // テストの環境（node）には navigator.userActivation が無い
-    const g = globalThis as { navigator?: unknown };
-    const had = Object.getOwnPropertyDescriptor(g, 'navigator');
-    try {
-      Object.defineProperty(g, 'navigator', { value: {}, configurable: true });
-      expect(bellAllowedNow()).toBe(true);
-      Object.defineProperty(g, 'navigator', { value: { userActivation: { isActive: false } }, configurable: true });
-      expect(bellAllowedNow()).toBe(false);
-      Object.defineProperty(g, 'navigator', { value: { userActivation: { isActive: true } }, configurable: true });
-      expect(bellAllowedNow()).toBe(true);
-    } finally {
-      if (had) Object.defineProperty(g, 'navigator', had);
-      else delete g.navigator;
-    }
+    expect(bellView({ ring, aiWaiting: false, rung: 0 })).toEqual({ label: 'Ring the bell', note: null, primary: true });
+    expect(bellView({ ring, aiWaiting: false, rung: 2 })).toEqual({ label: 'Ring again', note: 'Rang the bell (your receiving tool passes it on)', primary: false });
   });
 });
