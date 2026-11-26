@@ -699,3 +699,8 @@ ul.ocost { margin: 0; padding-left: 18px; }
   .kg-navmark { margin-right: 2px; padding: 1px 6px; font-size: 11px; }
   .kg-bar { left: 8px; right: 8px; bottom: 8px; }
 }
+/* S14a: 呼び鈴の受け口の設定（運用の画面） */
+.kg-bellform { display: flex; flex-direction: column; gap: 6px; margin: 6px 0; }
+.kg-bellform label.inline { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.kg-bellform input[type="text"] { flex: 1 1 220px; min-width: 0; font-family: ui-monospace, Consolas, monospace; }
+.kg-bellform input[type="number"] { width: 8em; }

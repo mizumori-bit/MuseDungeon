@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { bellUrl } from '../src/ui/bell';
 import {
-  KG, kgAlive, kgBeat, kgClampN, kgExplainLines, kgForget, kgLastRingText, kgLeader, kgLeft, kgMaybeBlocked, kgOffer, kgOnOpen, kgRang, kgRead, kgReadAll, kgRunningText,
+  KG, kgAlive, kgBeat, kgClampN, kgExplainLines, kgForget, kgLastRingText, kgLeader, kgLeft, kgMaybeBlocked, kgOffer, kgOnOpen, kgPortFailed, kgPortFailText, kgPortOk, kgRang, kgRead, kgReadAll, kgRunningText, kgViaText,
   kgStart, kgStep, kgStoppedText, kgStopText, kgWrite, type KgObs, type KgRow, type KgState,
 } from '../src/ui/keepGoing';
 import { paceLine, paceNote, paceSavedNote } from '../src/ui/prepState';
@@ -156,8 +156,17 @@ describe('S14 §65.4 の 3: where the button shows', () => {
     expect(kgClampN(0)).toBe(1);
     expect(kgClampN(11)).toBe(10);
     expect(kgClampN('x')).toBe(KG.N_DEFAULT);
-    expect(kgExplainLines('ミュゼ美')).toHaveLength(3);
-    expect(kgExplainLines('ミュゼ美')[1]).toContain('AI の利用枠を使う');
+    // リンク: 知らせるので押す・席を外すなら受け口、の 1 行（S14a）。受け口: 自動で鳴らす
+    const link = kgExplainLines('ミュゼ美', 'link');
+    expect(link).toHaveLength(4);
+    expect(link[1]).toContain('AI の利用枠を使う');
+    expect(link[1]).toContain('鳴らす時が来たら、知らせるので、押す');
+    expect(link[2]).toBe('席を外すなら、運用の画面で、呼び鈴を「この PC の受け口を呼ぶ」にする。');
+    const port = kgExplainLines('ミュゼ美', 'port', 47123);
+    expect(port).toHaveLength(3);
+    expect(port[1]).toContain('自動で鳴らす（この PC の受け口、ポート 47123）');
+    expect(port.join('')).not.toContain('席を外すなら');
+    expect(kgViaText('port', 47123)).toBe('自動で鳴らす（この PC の受け口、ポート 47123）。');
   });
 });
 
@@ -220,6 +229,23 @@ describe('S14 §65.4 の 5: the browser may stop the bell', () => {
     expect(r.attention).toEqual({ at: T0, where: 'camp' });
     expect(r.log).toEqual([{ at: T0, where: 'camp', maybeBlocked: true }]);
     expect(kgLastRingText(r, () => '12:00')).toBe('最後に呼び鈴を鳴らした: 12:00（キャンプ。全部で 1 回）');
+  });
+
+  it('S14a: the receiver on this PC needs no action, so it never asks to be pressed; a failed post says the receiver is not running, until it gets through or the AI wakes', () => {
+    // 受け口は、止めたかもしれない扱いにしない（光らせない）
+    // 鳴らしたキャンプ（終わった遠征 0）
+    const p = kgRang({ ...start(), campKey: 0, campRings: 1 }, 'camp', T0, true, 'port');
+    expect(p.attention).toBeNull();
+    expect(p.log).toEqual([{ at: T0, where: 'camp', maybeBlocked: false, via: 'port' }]);
+    const f = kgPortFailed(p, 47123, T0 + S);
+    expect(f.portFail).toEqual({ at: T0 + S, port: 47123 });
+    expect(f.log.at(-1)).toEqual({ at: T0, where: 'camp', maybeBlocked: false, via: 'port', failed: true });
+    expect(kgPortFailText('ミュゼ美', 47123)).toBe('ミュゼ美の呼び鈴を、受け口に送れなかった。受け口が、動いていない（ポート 47123）。受ける道具を起こしてから、「もう一度鳴らす」。');
+    expect(kgPortOk(f).portFail).toBeNull();
+    // AI が起きた（鳴らした後に呼び出した）: 消える
+    expect(kgStep(f, row({ ai: silentFor(0) }), on(T0 + 20 * S)).state.portFail).toBeNull();
+    // まだ黙っている: 残る
+    expect(kgStep(f, row({ ai: silentFor(5 * MIN) }), on(T0 + 20 * S)).state.portFail).toEqual({ at: T0 + S, port: 47123 });
   });
 });
 

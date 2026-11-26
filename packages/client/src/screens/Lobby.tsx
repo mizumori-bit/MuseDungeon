@@ -10,7 +10,8 @@ import type { LeaderboardEntry, Locale, OpsRosterResponse, OwnerRunRow, ProfileR
 import { endReasonText, kindName, nameOf, objectiveText } from '@muse/shared';
 import { useEffect, useState } from 'preact/hooks';
 import { ApiError, api, errorText } from '../api';
-import { readBell, saveBell, type BellMode } from '../ui/bell';
+import { bellMode, readBellConfig, type BellConfig } from '../ui/bell';
+import { BellSettings } from '../ui/bellSettings';
 import { ErrorBanner, Header, useCatalog, useLocaleRefresh } from '../ui/common';
 import { normName, SeasonSharedFlow, sortStandings, STANDING_SORTS, standingSortName, StandingsTable, type StandingSort } from '../ui/home';
 import { AddAdventurerDialog, AdventurerCard, DiveDialog, HubNav, KeyEntry, KeyOnceDialog, OpenSeasonDialog, UninviteDialog } from '../ui/hub';
@@ -76,8 +77,8 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
   // 鍵を 1 回だけ見せる窓（AI に任せる冒険者を足した直後。このブラウザには覚えない。閉じたら消える）
   const [keyOnce, setKeyOnce] = useState<{ name: string; seasonId: string; key: string } | null>(null);
   // 呼び鈴の設定（S12b。SEASON.md §63.6。このブラウザにだけ覚える）
-  const [bell, setBellState] = useState<BellMode>(readBell());
-  const setBell = (m: BellMode) => { saveBell(m); setBellState(m); };
+  // S14a: 鳴らし方は 3 つ（使わない・リンク・この PC の受け口）
+  const [bellCfg, setBellCfg] = useState<BellConfig>(readBellConfig());
   // 続けて遊ばせる（S14）: このブラウザに覚えてある状態（鳴らす役は、アプリの根の KeepGoingRunner）
   const kgStates = useKeepGoing();
   // プロフィールの記録の直近のラン（自分のランを見分ける。トークンごと）
@@ -566,7 +567,7 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
   const cardRunIds = new Set([...myCards, ...operatorCards].map((c) => c.runId).filter((x): x is string => !!x));
   const kgFor = (c: HubEntry): KgState | null => (c.runId ? kgStates[c.runId] : undefined)
     ?? Object.values(kgStates).find((s) => s.status === 'stopped' && s.seasonId === c.seasonId && s.name === c.name && !cardRunIds.has(s.runId)) ?? null;
-  const kgBox = (c: HubEntry) => <KeepGoingBox row={c.row} name={c.name} bellOn={bell === 'tool'} st={kgFor(c)} />;
+  const kgBox = (c: HubEntry) => <KeepGoingBox row={c.row} name={c.name} bellOn={bellMode(bellCfg) !== 'off'} via={bellCfg.mode === 'port' ? 'port' : 'link'} port={bellCfg.port} st={kgFor(c)} />;
   const badKeys = (advs ?? []).filter((a) => !a.ok).length;
   const needKey = !hasKey || (advs !== null && advs.length > 0 && advs.every((a) => !a.ok));
   /** 順位を出すシーズン: 札のシーズン（無ければ、いちばん上の開催中のシーズン） */
@@ -670,18 +671,8 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
         <p class="muted small">{tr('AI を招いたときのプロフィールのトークン（運用者から受け取った鍵）。このブラウザにだけ覚え、画面と URL には出さない。覚えると、そのプロフィールのランが、拠点（今シーズンのもの）とこの画面（シーズンでないもの）に、自分のものとして出る。', 'The profile token from when your AI was invited (the key the operator gave you). It is kept only in this browser and never shown on screen or in a URL. With it, that profile\'s runs show up as yours on the hub (this season) and here (other runs).')}</p>
       </section>
 
-      {/* 呼び鈴（S12b。SEASON.md §63.6）: このブラウザにだけ覚える。サーバーへは送らない */}
-      <section class="panel seasonbox">
-        <h3>{tr('呼び鈴', 'Bell')}</h3>
-        <div class="row" role="radiogroup" aria-label={tr('呼び鈴', 'Bell')}>
-          <label class="check"><input type="radio" name="bell" checked={bell === 'off'} onChange={() => setBell('off')} />{tr('使わない', 'Off')}</label>
-          <label class="check"><input type="radio" name="bell" checked={bell === 'tool'} onChange={() => setBell('tool')} />{tr('自分の道具を呼ぶ', 'Call your own tool')}</label>
-        </div>
-        <p class="muted small">{tr('「準備完了」を押したとき、このブラウザが、決まった文字列（musedungeon-bell://ready?season=…&run=…。入るのは、シーズンとランの ID だけ）を開く。動くのは、押した人の PC の上で、ゲームは、何も送らない。', 'When you press "Ready", this browser opens a fixed string (musedungeon-bell://ready?season=…&run=…, carrying only the season and run IDs). It runs on the PC of whoever pressed it; the game sends nothing.')}</p>
-        <p class="muted small">{tr('支度の「進め方」を「pilot で進める」にした冒険者は、終わりに &mode=pilot が付く（受ける道具が、使ってよい）。', 'For an adventurer whose "How to play" is "With pilot", &mode=pilot is added at the end (your receiving tool may use it).')}</p>
-        <p class="muted small">{tr('受け取って AI に知らせる道具は、自分で用意する（README の「呼び鈴」）。この設定は、このブラウザにだけ覚える。', 'You provide the tool that receives it and tells your AI (see "Bell" in the README). This setting is kept only in this browser.')}</p>
-        <p class="muted small">{tr('「自分の道具を呼ぶ」のときだけ、拠点の札に「続けて遊ばせる」が出る（決めた回数の遠征まで、AI が黙ったら、このブラウザが呼び鈴を鳴らす。「使わない」にすると止まる）。', 'Only with "Call your own tool" do hub cards offer "Keep them going" (up to the number of expeditions you set, this browser rings the bell when your AI goes quiet; switching to Off stops it).')}</p>
-      </section>
+      {/* 呼び鈴（S12b・S14a。SEASON.md §63.6・§65.4）: このブラウザにだけ覚える。サーバーへは送らない */}
+      <BellSettings cfg={bellCfg} onChange={setBellCfg} />
 
       {/* AI が決定を待っているランがあれば、最初から開く（S8b。畳んだ・開いた操作は覚える。待っているランが新しく出たら開き直す） */}
       {operatorRows.length > 0 && (

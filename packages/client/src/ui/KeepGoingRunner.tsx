@@ -3,12 +3,12 @@
 // タブを 2 つ開いていても、鳴らすのは、生きているタブのうち 1 つ（kgLeader）。タブを全部閉じたら止まり、次に開いても、自動では再開しない（kgOnOpen）。
 // 鳴らす時が来て、ブラウザが止めたかもしれないときは、どの画面でも、下の帯と札を光らせ、短い音を鳴らし、「今、鳴らす」を押してもらう。
 import { useEffect } from 'preact/hooks';
-import { bellUrl, readBell, ringBell } from './bell';
+import { bellMode, bellRingOf, readBellConfig } from './bell';
 import {
-  KG, kgBeat, kgBlockedText, kgLastInput, kgLastLaunch, kgLeader, kgMaybeBlocked, kgNoteInput, kgNoteLaunch, kgOnOpen, kgPace, kgRang, kgRead, kgReadAll, kgReadTabs,
+  KG, kgBeat, kgBlockedText, kgLastInput, kgLastLaunch, kgLeader, kgMaybeBlocked, kgNoteInput, kgOnOpen, kgPace, kgPortFailText, kgRead, kgReadAll, kgReadTabs,
   kgStep, kgStopped, kgWrite, kgWriteTabs, type KgState,
 } from './keepGoing';
-import { activationNow, kgChime, kgObserveRun, kgRingNow } from './keepGoingRing';
+import { activationNow, kgChime, kgObserveRun, kgRingNow, kgRingVia } from './keepGoingRing';
 import { useKeepGoing } from './keepGoingUi';
 import { tr } from '../util';
 
@@ -76,18 +76,18 @@ export function KeepGoingRunner() {
           const fresh = kgRead(st0.runId);
           if (!fresh || fresh.status !== 'running') continue;
           const t = Date.now();
-          const { state: s1, ring } = kgStep(fresh, obs, { now: t, bellOn: readBell() === 'tool' });
+          const cfg = readBellConfig();
+          const { state: s1, ring } = kgStep(fresh, obs, { now: t, bellOn: bellMode(cfg) !== 'off' });
           const pace = obs.kind === 'row' ? kgPace(obs.row) : fresh.pace ?? null;
           const state: KgState = { ...s1, pace };
           if (!ring) { kgWrite(state); continue; }
           // 鳴らす直前に、もう一度、鳴らす役か確かめる（ほかのタブが開いた直後など）
           if (kgLeader(kgReadTabs(), t) !== me) continue;
-          const url = bellUrl('tool', { season: state.seasonId, run: state.runId, pace });
-          if (!url) { kgWrite(kgStopped(state, 'bell_off', t)); continue; }
-          const blocked = kgMaybeBlocked({ activation: activationNow(), lastLaunchAt: kgLastLaunch(), lastInputAt: kgLastInput() });
-          ringBell(url);
-          kgNoteLaunch(t);
-          kgWrite(kgRang(state, ring, t, blocked));
+          const r = bellRingOf(cfg, { season: state.seasonId, run: state.runId, pace });
+          if (!r) { kgWrite(kgStopped(state, 'bell_off', t)); continue; }
+          // リンク: ブラウザが止めたかもしれないなら、光らせて押してもらう。受け口（S14a）: 人の操作が要らないので、そのまま送る
+          const blocked = r.via === 'link' && kgMaybeBlocked({ activation: activationNow(), lastLaunchAt: kgLastLaunch(), lastInputAt: kgLastInput() });
+          await kgRingVia(r, state, ring, t, blocked);
           if (blocked) kgChime();
         }
       } finally {
@@ -118,20 +118,22 @@ export function KeepGoingRunner() {
     };
   }, []);
 
-  const need = Object.values(states).filter((s) => s.status === 'running' && s.attention);
-  // タブの名前にも印（ほかのタブを見ているときに気づけるように）
+  // リンクの呼び鈴を、ブラウザが止めたかもしれない（光らせて押してもらう）・受け口に送れなかった（S14a。知らせるだけ）
+  const need = Object.values(states).filter((s) => s.status === 'running' && (s.attention || s.portFail));
+  const glow = need.filter((s) => s.attention).length;
+  // タブの名前にも印（ほかのタブを見ているときに気づけるように。リンクのときだけ）
   useEffect(() => {
     const mark = '● ';
     const base = document.title.startsWith(mark) ? document.title.slice(mark.length) : document.title;
-    document.title = need.length ? `${mark}${base}` : base;
-  }, [need.length]);
+    document.title = glow ? `${mark}${base}` : base;
+  }, [glow]);
   if (!need.length) return null;
   return (
     <div class="kg-bar" role="alert">
       {need.map((s) => (
         <div key={s.runId} class="kg-barrow">
-          <p class="kg-bartext">{kgBlockedText(s.name)}</p>
-          <button type="button" class="hub-btn primary kg-ring" onClick={() => kgRingNow(s)}>{tr('今、鳴らす', 'Ring now')}</button>
+          <p class="kg-bartext">{s.attention ? kgBlockedText(s.name) : kgPortFailText(s.name, s.portFail!.port)}</p>
+          <button type="button" class="hub-btn primary kg-ring" onClick={() => void kgRingNow(s)}>{s.attention ? tr('今、鳴らす', 'Ring now') : tr('もう一度鳴らす', 'Ring again')}</button>
         </div>
       ))}
     </div>

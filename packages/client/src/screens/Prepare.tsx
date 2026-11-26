@@ -8,7 +8,7 @@ import { DIRECTIVE_ITEMS, activeWishes, itemDisplayName, kindName, nameOf, owner
 import type { ComponentChildren } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { api } from '../api';
-import { bellAllowedNow, bellUrl, bellView, readBell, ringBell, type BellView } from '../ui/bell';
+import { bellAllowedNow, bellRingOf, bellView, readBellConfig, ringBell, ringPort, type BellRing, type BellView } from '../ui/bell';
 import { ErrorBanner, Header, useCatalog, useLocaleRefresh } from '../ui/common';
 import { BoonChoicePanel, PerkChoicePanel } from '../ui/build';
 import { OfferCard, rulesOf } from '../ui/expedition';
@@ -104,8 +104,17 @@ export function Prepare({ runId }: { runId: string }) {
   useEffect(() => { if (confirmReady) backRef.current?.focus(); }, [confirmReady]);
   // 準備完了の後の窓（S12a。SEASON.md §63.2 の 2）: 押して通ったときだけ。既定のボタンは「拠点へ戻る」（S12b: 呼び鈴をまだ鳴らしていなければ「呼び鈴を鳴らす」）
   const [nudge, setNudge] = useState<ReadyNudge | null>(null);
-  // 呼び鈴（S12b。SEASON.md §63.6）: 鳴らす文字列（使わない・AI がもう待っている・ID の形が違うときは null）と、この窓で鳴らした回数
-  const [bell, setBell] = useState<{ url: string | null; rung: number }>({ url: null, rung: 0 });
+  // 呼び鈴（S12b。SEASON.md §63.6）: 鳴らすもの（使わない・AI がもう待っている・ID の形が違うときは null）と、この窓で鳴らした回数。
+  // S14a: 受け口の設定なら、送る要求。送れなかったら、そのポート（「受け口が、動いていない」）
+  const [bell, setBell] = useState<{ ring: BellRing | null; rung: number; failedPort: number | null }>({ ring: null, rung: 0, failedPort: null });
+  /** 鳴らす。リンクは、自動のとき（押した流れの中）はブラウザが許すときだけ。受け口は、人の操作が要らないので、いつも送る */
+  const ringNow = (r: BellRing, auto: boolean) => {
+    if (r.via === 'link') {
+      if ((!auto || bellAllowedNow()) && ringBell(r.url)) setBell((b) => ({ ...b, rung: b.rung + 1 }));
+      return;
+    }
+    void ringPort(r).then((ok) => { if (aliveRef.current) setBell((b) => ({ ...b, rung: ok ? b.rung + 1 : b.rung, failedPort: ok ? null : r.port })); });
+  };
 
   // そのランの冒険者の鍵を探す（持ち主の口の一覧で、その鍵の冒険者のランとして返るもの）。無ければ鍵なし（同じ PC から）
   useEffect(() => {
@@ -204,10 +213,11 @@ export function Prepare({ runId }: { runId: string }) {
           aiWaiting: !!before?.ai?.waitingNow || !!after.ai?.waitingNow,
         });
         if (n) {
-          // 呼び鈴（S12b）: AI がまだ待っていないときだけ。準備完了を押した流れの中で、ブラウザが許すなら、自動で 1 回鳴らす（許されなければ、何もしない）
-          const url = n.copy ? bellUrl(readBell(), { season: after.view.season?.id ?? null, run: runId, pace: after.pace }) : null;
-          const rung = url && bellAllowedNow() && ringBell(url) ? 1 : 0;
-          setBell({ url, rung });
+          // 呼び鈴（S12b）: AI がまだ待っていないときだけ。準備完了を押した流れの中で、ブラウザが許すなら、自動で 1 回鳴らす（許されなければ、何もしない）。
+          // 受け口（S14a）は、同じ流れで送る
+          const ring = n.copy ? bellRingOf(readBellConfig(), { season: after.view.season?.id ?? null, run: runId, pace: after.pace }) : null;
+          setBell({ ring, rung: 0, failedPort: null });
+          if (ring) ringNow(ring, true);
           setNudge(n);
         }
         setNote(command.ready === true
@@ -451,8 +461,8 @@ export function Prepare({ runId }: { runId: string }) {
         </div>
       )}
       {nudge && !confirmReady && (
-        <ReadyNudgeDialog nudge={nudge} bell={bellView({ url: bell.url, aiWaiting: !nudge.copy, rung: bell.rung })}
-          onRing={() => { if (bell.url && ringBell(bell.url)) setBell((b) => ({ ...b, rung: b.rung + 1 })); }} onStay={() => setNudge(null)} />
+        <ReadyNudgeDialog nudge={nudge} bell={bellView({ url: bell.ring?.url ?? null, aiWaiting: !nudge.copy, rung: bell.rung, failedPort: bell.failedPort })}
+          onRing={() => { if (bell.ring) ringNow(bell.ring, false); }} onStay={() => setNudge(null)} />
       )}
     </div>
   );

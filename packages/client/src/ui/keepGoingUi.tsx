@@ -3,9 +3,10 @@
 import type { OwnerRunRow } from '@muse/shared';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { fmtTime, tr } from '../util';
+import type { BellVia } from './bell';
 import {
   KG, kgClampN, kgExplainLines, kgForget, kgLastRingText, kgLeft, kgOffer, kgReadAll, kgRunningText, kgStart, kgStopped, kgStoppedText, kgSubscribe, kgWrite,
-  kgBlockedText, kgNoteInput, type KgState,
+  kgBlockedText, kgNoteInput, kgPortFailText, kgViaText, type KgState,
 } from './keepGoing';
 import { kgPrimeChime, kgRingNow } from './keepGoingRing';
 
@@ -27,7 +28,7 @@ export function KeepGoingNavMark() {
   const states = useKeepGoing();
   const running = Object.values(states).filter((s) => s.status === 'running');
   if (!running.length) return null;
-  const alert = running.some((s) => s.attention);
+  const alert = running.some((s) => s.attention || s.portFail);
   return (
     <a class={`kg-navmark ${alert ? 'is-alert' : ''}`} href="#/" title={running.map((s) => s.name).join(tr('・', ', '))}>
       {tr(`続けて遊ばせている ${running.length}`, `Keeping going: ${running.length}`)}
@@ -39,7 +40,7 @@ export function KeepGoingNavMark() {
  * 札の中の段（拠点の冒険者の札）: 動いている間は「続けて遊ばせている（あと 2 回）」と「止める」、止まったら理由の 1 行、
  * 動いていなければ「続けて遊ばせる」（出せる冒険者だけ）か、握っている項目があるときの小さい 1 行
  */
-export function KeepGoingBox({ row, name, bellOn, st }: { row: OwnerRunRow | null; name: string; bellOn: boolean; st: KgState | null }) {
+export function KeepGoingBox({ row, name, bellOn, via, port, st }: { row: OwnerRunRow | null; name: string; bellOn: boolean; via: BellVia; port: number | null; st: KgState | null }) {
   const [dlg, setDlg] = useState<number | null>(null);
   const ended = row?.expeditionsEnded ?? st?.seen?.ended ?? 0;
   const offer = kgOffer({ row, bellOn });
@@ -63,11 +64,17 @@ export function KeepGoingBox({ row, name, bellOn, st }: { row: OwnerRunRow | nul
         {st.attention && (
           <div class="kg-alert">
             <p class="hub-note warn">{kgBlockedText(name)}</p>
-            <button type="button" class="hub-btn primary" onClick={() => kgRingNow(st)}>{tr('今、鳴らす', 'Ring now')}</button>
+            <button type="button" class="hub-btn primary" onClick={() => void kgRingNow(st)}>{tr('今、鳴らす', 'Ring now')}</button>
+          </div>
+        )}
+        {!st.attention && st.portFail && (
+          <div class="kg-alert">
+            <p class="hub-note warn">{kgPortFailText(name, st.portFail.port)}</p>
+            <button type="button" class="hub-btn primary" onClick={() => void kgRingNow(st)}>{tr('もう一度鳴らす', 'Ring again')}</button>
           </div>
         )}
         {last && <p class="hub-note">{last}</p>}
-        <p class="hub-note">{tr('このタブ（このアプリのどれかのタブ）を開いている間だけ、動く。', 'It works only while a tab of this app stays open.')}</p>
+        <p class="hub-note">{kgViaText(via, port)}{tr('このタブ（このアプリのどれかのタブ）を開いている間だけ、動く。', ' It works only while a tab of this app stays open.')}</p>
       </div>
     );
   } else if (st?.status === 'stopped') {
@@ -94,13 +101,13 @@ export function KeepGoingBox({ row, name, bellOn, st }: { row: OwnerRunRow | nul
   return (
     <>
       {body}
-      {dlg !== null && <KeepGoingDialog name={name} initial={dlg} onStart={start} onClose={() => setDlg(null)} />}
+      {dlg !== null && <KeepGoingDialog name={name} initial={dlg} via={via} port={port} onStart={start} onClose={() => setDlg(null)} />}
     </>
   );
 }
 
-/** 始める窓: 「遠征を、あと N 回」（1〜10。既定 3）と「始める」。説明を 3 行 */
-export function KeepGoingDialog({ name, initial, onStart, onClose }: { name: string; initial: number; onStart: (n: number) => void; onClose: () => void }) {
+/** 始める窓: 「遠征を、あと N 回」（1〜10。既定 3）と「始める」。説明を 3〜4 行（リンクの設定のときは、席を外すなら受け口、の 1 行） */
+export function KeepGoingDialog({ name, initial, via, port, onStart, onClose }: { name: string; initial: number; via: BellVia; port: number | null; onStart: (n: number) => void; onClose: () => void }) {
   const [n, setN] = useState(String(kgClampN(initial)));
   const ref = useRef<HTMLInputElement>(null);
   useEffect(() => { ref.current?.focus(); }, []);
@@ -114,7 +121,7 @@ export function KeepGoingDialog({ name, initial, onStart, onClose }: { name: str
           <label class="hub-field">{tr(`遠征を、あと何回（${KG.N_MIN}〜${KG.N_MAX}）`, `How many more expeditions (${KG.N_MIN}-${KG.N_MAX})`)}
             <input ref={ref} class="hub-input" type="number" min={KG.N_MIN} max={KG.N_MAX} step={1} value={n} onInput={(e) => setN((e.target as HTMLInputElement).value)} />
           </label>
-          {kgExplainLines(name).map((x, i) => <p key={i} class="hub-note">{x}</p>)}
+          {kgExplainLines(name, via, port).map((x, i) => <p key={i} class="hub-note">{x}</p>)}
           <div class="hub-dactions">
             <button type="button" class="hub-btn" onClick={onClose}>{tr('やめる', 'Cancel')}</button>
             <button type="submit" class="hub-btn primary" disabled={!ok}>{tr('始める', 'Start')}</button>

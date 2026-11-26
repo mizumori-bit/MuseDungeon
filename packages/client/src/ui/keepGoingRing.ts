@@ -1,9 +1,9 @@
 // 続けて遊ばせる（S14）の、ブラウザの側の小さい道具: 一覧の読み直し・呼び鈴を開く・短い音。決める所は ui/keepGoing.ts。
 import type { OwnerRunRow } from '@muse/shared';
 import { api } from '../api';
-import { bellUrl, ringBell } from './bell';
+import { bellRingOf, readBellConfig, ringBell, ringPort, type BellRing } from './bell';
 import { keyForRun } from './keys';
-import { kgNoteInput, kgNoteLaunch, kgRang, kgRead, kgWrite, type KgObs, type KgState } from './keepGoing';
+import { kgNoteInput, kgNoteLaunch, kgPortFailed, kgPortOk, kgRang, kgRead, kgWrite, type KgObs, type KgState, type KgWhere } from './keepGoing';
 
 /** 人の操作の直後か（分からなければ null） */
 export function activationNow(): boolean | null {
@@ -72,15 +72,32 @@ export async function kgObserveRun(st: Pick<KgState, 'runId' | 'seasonId'>): Pro
   }
 }
 
-/** 「今、鳴らす」（人が押した: ブラウザは通す）。札の光を消し、鳴らした記録に足す（キャンプで鳴らした回数には数えない） */
-export function kgRingNow(st: KgState): void {
-  const url = bellUrl('tool', { season: st.seasonId, run: st.runId, pace: st.pace ?? null });
-  if (!url) return;
+/**
+ * 鳴らす（今の設定の鳴らし方で）。リンクは開くだけ（届いたかは分からない）。受け口は送って、つながらなければ false（S14a）。
+ * 鳴らした記録と、受け口に送れなかった知らせを、状態に書く。maybeBlocked: リンクを、人の操作なしに開いた（止められたかもしれない）
+ */
+export async function kgRingVia(r: BellRing, st: KgState, where: KgWhere, now: number, maybeBlocked: boolean): Promise<boolean> {
+  if (r.via === 'link') {
+    ringBell(r.url);
+    kgNoteLaunch(now);
+    kgWrite(kgRang(st, where, now, maybeBlocked, 'link'));
+    return true;
+  }
+  // 送っている間に、ほかのタブが重ねて鳴らさないよう、先に鳴らした記録を書く
+  kgWrite(kgRang(st, where, now, false, 'port'));
+  const ok = await ringPort(r);
+  const cur = kgRead(st.runId);
+  if (cur) kgWrite(ok ? kgPortOk(cur) : kgPortFailed(cur, r.port, Date.now()));
+  return ok;
+}
+
+/** 「今、鳴らす」「もう一度鳴らす」（人が押した: ブラウザはリンクも通す）。札の光を消し、鳴らした記録に足す（キャンプで鳴らした回数には数えない） */
+export async function kgRingNow(st: KgState): Promise<void> {
+  const r = bellRingOf(readBellConfig(), { season: st.seasonId, run: st.runId, pace: st.pace ?? null });
+  if (!r) return;
   kgPrimeChime();
   const now = Date.now();
   kgNoteInput(now);
-  ringBell(url);
-  kgNoteLaunch(now);
   const fresh = kgRead(st.runId) ?? st;
-  kgWrite(kgRang(fresh, fresh.attention?.where ?? fresh.seen?.where ?? 'camp', now, false));
+  await kgRingVia(r, fresh, fresh.attention?.where ?? fresh.seen?.where ?? 'camp', now, false);
 }
