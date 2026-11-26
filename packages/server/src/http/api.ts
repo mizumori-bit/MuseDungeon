@@ -14,6 +14,7 @@ import type { SessionManager } from '../session/SessionManager';
 import { seasonReplayError } from '../session/SessionManager';
 import { WsHub } from '../ws/hub';
 import { allowLocalHosts, isLocalRequest, jsonContentType, sameOrigin } from './local';
+import { opsAddAdventurer, opsEnroll, opsOpenSeason, opsRoster } from '../session/ops';
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
@@ -117,6 +118,22 @@ export function createApp(manager: SessionManager, config: ServerConfig): App {
       if (!isLocalRequest(req)) return fail(res, 403, actionError('bad_request', 'only from the same machine as the server', ''));
       const limit = Math.max(1, Math.min(200, Number(url.searchParams.get('limit') ?? 200) || 200));
       return json(res, 200, { long_ms: manager.calls.longMs, calls: manager.calls.list(limit) });
+    }
+    // 拠点の運用者の口（S12b。SEASON.md §63.7。PROTOCOL §9.15）: 名簿・シーズンを始める・冒険者を足す・鍵のある冒険者を今のシーズンに加える。
+    // サーバーと同じ PC からだけ（鍵があっても、ほかの PC からは断る。判定は isLocalRequest の 1 つ。状態を変えるものは、上の守り（同じ origin・JSON だけ）を通った後）
+    if (p === '/api/ops/roster' || p === '/api/ops/season' || p === '/api/ops/adventurers' || p === '/api/ops/enroll') {
+      const post = p !== '/api/ops/roster';
+      if (post !== (m === 'POST')) return fail(res, 405, actionError('bad_request', `${post ? 'POST' : 'GET'} ${p}`, ''));
+      if (!isLocalRequest(req)) return fail(res, 403, actionError('bad_request', 'only from the same PC as the server / サーバーと同じ PC からだけ', ''));
+      if (!post) return json(res, 200, opsRoster(manager));
+      const BAD = Symbol('bad');
+      const body = await readBody(req, 16_000).catch(() => BAD);
+      // 読めない本文（JSON でない・大きすぎる）で、既定の値のシーズンを開かない
+      if (body === BAD || (body !== undefined && (body === null || typeof body !== 'object' || Array.isArray(body)))) return fail(res, 400, actionError('bad_request', 'JSON の本文（オブジェクト）が要る / a JSON object body is required', ''));
+      const r = p === '/api/ops/season' ? opsOpenSeason(manager, body)
+        : p === '/api/ops/adventurers' ? await opsAddAdventurer(manager, body)
+          : opsEnroll(manager, ownerToken(req).profileToken, body);
+      return 'error' in r ? fail(res, r.status, r.error) : json(res, 200, r.body);
     }
     if (p === '/api/content/catalog') return json(res, 200, manager.catalog);
     // 開催中のシーズンのランは載せない（S3a §27.9 の 3）

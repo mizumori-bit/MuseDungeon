@@ -606,6 +606,12 @@ ul.ocost { margin: 0; padding-left: 18px; }
 /* 準備完了の後の窓の、AI に渡す 1 文（S12a）: 選んで写せる */
 .prep-nudge { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 12px 14px; border-radius: 10px; background: var(--hub-card2); border: 1px solid var(--hub-line); }
 .prep-nudgetext { margin: 0; font-size: 15px; line-height: 1.6; color: var(--hub-parch); user-select: all; -webkit-user-select: all; overflow-wrap: anywhere; }
+/* 拠点の運用者の窓（S12b）: 冒険者を足す（AI に任せる／自分で潜る）・鍵を 1 回だけ見せる・名簿の下の「冒険者を足す」 */
+.hub-kind { align-self: flex-start; }
+.hub-kind button { padding: 7px 16px; font-size: 13.5px; }
+.prep-nudgetext.hub-key { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 14px; word-break: break-all; }
+.hub-add { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
+.prep-bellnote { margin: 0; font-size: 13px; color: var(--hub-green); }
 
 /* 支度（#/prepare/<runId>） */
 .prep-back { align-self: flex-start; font-size: 13px; color: var(--hub-parch2); text-decoration: none; letter-spacing: 0.04em; }

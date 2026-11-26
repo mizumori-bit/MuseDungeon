@@ -8,6 +8,7 @@ import { DIRECTIVE_ITEMS, activeWishes, itemDisplayName, kindName, nameOf, owner
 import type { ComponentChildren } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { api } from '../api';
+import { bellAllowedNow, bellUrl, bellView, readBell, ringBell, type BellView } from '../ui/bell';
 import { ErrorBanner, Header, useCatalog, useLocaleRefresh } from '../ui/common';
 import { BoonChoicePanel, PerkChoicePanel } from '../ui/build';
 import { OfferCard, rulesOf } from '../ui/expedition';
@@ -79,10 +80,10 @@ export function Prepare({ runId }: { runId: string }) {
   const [confirmReady, setConfirmReady] = useState<string[] | null>(null);
   const backRef = useRef<HTMLButtonElement>(null);
   useEffect(() => { if (confirmReady) backRef.current?.focus(); }, [confirmReady]);
-  // 準備完了の後の窓（S12a。SEASON.md §63.2 の 2）: 押して通ったときだけ。既定のボタンは「拠点へ戻る」
+  // 準備完了の後の窓（S12a。SEASON.md §63.2 の 2）: 押して通ったときだけ。既定のボタンは「拠点へ戻る」（S12b: 呼び鈴をまだ鳴らしていなければ「呼び鈴を鳴らす」）
   const [nudge, setNudge] = useState<ReadyNudge | null>(null);
-  const hubRef = useRef<HTMLButtonElement>(null);
-  useEffect(() => { if (nudge) hubRef.current?.focus(); }, [nudge]);
+  // 呼び鈴（S12b。SEASON.md §63.6）: 鳴らす文字列（使わない・AI がもう待っている・ID の形が違うときは null）と、この窓で鳴らした回数
+  const [bell, setBell] = useState<{ url: string | null; rung: number }>({ url: null, rung: 0 });
 
   // そのランの冒険者の鍵を探す（持ち主の口の一覧で、その鍵の冒険者のランとして返るもの）。無ければ鍵なし（同じ PC から）
   useEffect(() => {
@@ -188,7 +189,13 @@ export function Prepare({ runId }: { runId: string }) {
           before: before ? prepStateView(before.view) : null, after: prepStateView(after.view),
           aiWaiting: !!before?.ai?.waitingNow || !!after.ai?.waitingNow,
         });
-        if (n) setNudge(n);
+        if (n) {
+          // 呼び鈴（S12b）: AI がまだ待っていないときだけ。準備完了を押した流れの中で、ブラウザが許すなら、自動で 1 回鳴らす（許されなければ、何もしない）
+          const url = n.copy ? bellUrl(readBell(), { season: after.view.season?.id ?? null, run: runId }) : null;
+          const rung = url && bellAllowedNow() && ringBell(url) ? 1 : 0;
+          setBell({ url, rung });
+          setNudge(n);
+        }
         setNote(command.ready === true
           ? tr(`準備完了。${name}が来たら、出発する。AI に、声をかける。`, `Ready. ${name} sets out when they come. Let your AI know.`)
           : command.ready === false ? tr('「まだ」に戻した。決め直したら、もう一度「準備完了」。', 'Back to not ready. Mark ready again when you are done.')
@@ -420,16 +427,24 @@ export function Prepare({ runId }: { runId: string }) {
           </div>
         </div>
       )}
-      {nudge && !confirmReady && <ReadyNudgeDialog nudge={nudge} hubRef={hubRef} onStay={() => setNudge(null)} />}
+      {nudge && !confirmReady && (
+        <ReadyNudgeDialog nudge={nudge} bell={bellView({ url: bell.url, aiWaiting: !nudge.copy, rung: bell.rung })}
+          onRing={() => { if (bell.url && ringBell(bell.url)) setBell((b) => ({ ...b, rung: b.rung + 1 })); }} onStay={() => setNudge(null)} />
+      )}
     </div>
   );
 }
 
 /**
  * 準備完了の後の窓（S12a）: 次にすること（AI に声をかける）を、その場で言う。画面のボタンは、AI を起こせない（§58.0 の 4）。
- * 写せる 1 文は、押すとクリップボードに写る。写せない環境（http の別の PC から など）では、選んで写せる文として出す
+ * 写せる 1 文は、押すとクリップボードに写る。写せない環境（http の別の PC から など）では、選んで写せる文として出す。
+ * bell（S12b）: 呼び鈴のボタン（使わない・AI がもう待っているときは null）。まだ鳴らしていなければ、既定のボタン。鳴らした後は「鳴らした」と「もう一度鳴らす」
  */
-function ReadyNudgeDialog({ nudge, hubRef, onStay }: { nudge: ReadyNudge; hubRef: { current: HTMLButtonElement | null }; onStay: () => void }) {
+function ReadyNudgeDialog({ nudge, bell, onRing, onStay }: { nudge: ReadyNudge; bell: BellView | null; onRing: () => void; onStay: () => void }) {
+  const hubRef = useRef<HTMLButtonElement>(null);
+  const bellRef = useRef<HTMLButtonElement>(null);
+  // 既定のボタンに、はじめの 1 回だけ移る（鳴らした後に、もう一度鳴らすへ移らない）
+  useEffect(() => { (bell?.primary ? bellRef : hubRef).current?.focus(); }, []);
   const [copied, setCopied] = useState<'ok' | 'no' | null>(null);
   const canCopy = typeof navigator !== 'undefined' && !!navigator.clipboard?.writeText;
   const copy = async () => {
@@ -456,8 +471,10 @@ function ReadyNudgeDialog({ nudge, hubRef, onStay }: { nudge: ReadyNudge; hubRef
             {(!canCopy || copied === 'no') && <p class="hub-note">{tr('この文を選んで、写す。', 'Select the sentence and copy it.')}</p>}
           </div>
         )}
+        {bell?.note && <p class="prep-bellnote">{bell.note}</p>}
         <div class="hub-dactions">
-          <button ref={hubRef} type="button" class="hub-btn primary" onClick={toHub}>{tr('拠点へ戻る', 'Back to the hub')}</button>
+          {bell && <button ref={bellRef} type="button" class={`hub-btn ${bell.primary ? 'primary' : ''}`} onClick={onRing}>{bell.label}</button>}
+          <button ref={hubRef} type="button" class={`hub-btn ${bell?.primary ? '' : 'primary'}`} onClick={toHub}>{tr('拠点へ戻る', 'Back to the hub')}</button>
           <button type="button" class="hub-btn" onClick={onStay}>{tr('ここに残る', 'Stay here')}</button>
         </div>
       </div>

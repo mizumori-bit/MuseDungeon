@@ -347,6 +347,41 @@ export interface JoinRunRequest { name: string; classId?: string; locale?: Local
 /** profileToken は新しく作ったときだけ（渡したトークンは返さない） */
 export interface JoinedResponse { runId: string; playerId: PlayerId; token: string; profileId?: string; profileToken?: string }
 
+/**
+ * 拠点の運用者の口（S12b。SEASON.md §63.7。PROTOCOL §9.15）: サーバーと同じ PC からだけ。鍵（プロフィールのトークン）は、冒険者を足した応答の 1 回だけ。
+ * 名簿の 1 行: name 招いたときの表示名・kind 拠点で足したときの種類（無ければ、いちばん新しいランの操作の種類。分からなければ null）・
+ * runs 始めたランの数・used 使った予算・died このシーズンで倒れたことがある・runId いちばん新しいランの ID・failed 終わっていないランが起動時に読み込めなかった
+ */
+export interface OpsRosterEntry {
+  name: string; profileId: string; kind: 'ai' | 'human' | null;
+  runs: number; used: number; budget: number; died: boolean; runId: string | null; failed?: true;
+}
+/**
+ * GET /api/ops/roster: season 今のシーズン（開催中。無ければ null）とその名簿。pending: 確定していない、ほかのシーズン（終わりの時刻を過ぎて、結果を待っている）。
+ * canOpen: 新しいシーズンを始められる（確定していないシーズンも、記録が読めないシーズンも無い）。next: そのときの既定（ID・名前の数・名前・日数・予算）。
+ * broken: 記録が読めないシーズンがある
+ */
+export interface OpsRosterResponse {
+  season: { id: string; name: string; budget: number; endsAt: number } | null;
+  roster: OpsRosterEntry[];
+  pending: { id: string; name: string }[];
+  canOpen: boolean;
+  next?: { id: string; number: number; name: string; days: number; budget: number };
+  broken?: true;
+}
+/** POST /api/ops/season の応答（シードは入れない） */
+export interface OpsSeasonOpened { season: { id: string; name: string; budget: number; endsAt: number } }
+/**
+ * POST /api/ops/adventurers の応答: profileToken は、この 1 回だけ（名簿・ほかの口からは読めない）。
+ * 自分で潜る（kind human）ときは、POST /api/runs と同じ runId・playerId・token も
+ */
+export interface OpsAdventurerAdded {
+  seasonId: string; name: string; profileId: string; kind: 'ai' | 'human'; profileToken: string;
+  runId?: string; playerId?: PlayerId; token?: string;
+}
+/** POST /api/ops/enroll の応答。already: もう招かれていた */
+export interface OpsEnrolled { seasonId: string; name: string; profileId: string; already?: true }
+
 /** /api/runs/:id/commands の 1 行 */
 export type CommandLine = CommandRecord;
 

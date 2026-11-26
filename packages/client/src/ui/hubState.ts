@@ -8,12 +8,12 @@ import { aiPresenceText, undecidedLine } from './ownerCheck';
  * 札の状態（§58.4 の表の 6 つと、人間が自分で遊ぶ冒険者・招かれていない冒険者。S10a: 前の版の冒険（続きは遊べない）・
  * 起動時に読み込めなかった冒険）
  */
-export type HubCardState = 'not_joined' | 'not_invited' | 'camp_free' | 'camp_pending' | 'camp_ready' | 'dungeon' | 'over' | 'human' | 'stale' | 'unreadable';
+export type HubCardState = 'not_joined' | 'not_invited' | 'camp_free' | 'camp_pending' | 'camp_ready' | 'dungeon' | 'over' | 'human' | 'stale' | 'unreadable' | 'waiting_ai';
 /** 状態の札の色: amber 支度が「まだ」・green 準備完了・blue 迷宮の中・gold 印（希望）・muted ふつう・operator 運用者として（S10a） */
 export type HubTone = 'amber' | 'green' | 'blue' | 'gold' | 'muted' | 'operator';
 
-/** 主のボタン: href へ移る、か dive（自分で潜る窓を開く） */
-export interface HubAction { label: string; href?: string; dive?: true }
+/** 主のボタン: href へ移る、か dive（自分で潜る窓を開く）、か enroll（S12b: このブラウザの鍵の冒険者を、今のシーズンの名簿に加える） */
+export interface HubAction { label: string; href?: string; dive?: true; enroll?: true }
 
 export interface HubCardModel {
   state: HubCardState;
@@ -28,7 +28,8 @@ export interface HubCardModel {
   wish: boolean;
   /** 支度が「まだ」（目立たせる） */
   highlight: boolean;
-  action: HubAction;
+  /** 主のボタン。null: ボタンを出さない（S12b: 鍵を使って入ってくる AI を待っている札） */
+  action: HubAction | null;
   stats: { level: number | null; banked: number; budget: { left: number; limit: number } | null; rank: number | null };
 }
 
@@ -49,18 +50,24 @@ export interface HubCardInput {
   banked?: number;
   /** サーバーと同じ PC から開いている（持ち主の口の一覧の local。S12a: 名簿に入っていない札の、すること） */
   local?: boolean;
+  /**
+   * 名簿の札（S12b。SEASON.md §63.7 の 2）: サーバーと同じ PC から開いたときの、この PC の冒険者のうち、このブラウザに鍵の無いもの。
+   * kind: 拠点で足したときの種類（分からなければ null。AI と同じに読む）
+   */
+  roster?: { kind: 'ai' | 'human' | null };
+  /** 今のシーズンの名簿に加えられる（S12b: サーバーと同じ PC から開いていて、そのシーズンが開催中）。名簿に無い札のボタンが「このシーズンに加える」 */
+  canEnroll?: boolean;
 }
-
-/** シーズンを開く・冒険者を招く道具の、README の中の場所（S12a。README に「シーズン」の節は無いので、開発用コマンドの表の season の行） */
-const README_SEASON = () => tr('README の「開発用コマンド」の season', 'the `season` command in the README\'s command table');
 
 /**
  * 開催中のシーズンが無いときの、拠点の文（S12a。SEASON.md §63.2 の 1）。local: サーバーと同じ PC から開いている。
- * 同じ PC から開いている人は、自分が運用者（シーズンを開く人）であることが多い
+ * 同じ PC から開いている人は、自分が運用者（シーズンを開く人）であることが多い。S12b: 同じ PC からは、拠点の「新しいシーズンを始める」で始める
+ * （broken: 記録が読めないシーズンがあって、始められない）
  */
-export function noSeasonText(local: boolean): string {
+export function noSeasonText(local: boolean, broken = false): string {
+  if (local && broken) return tr('記録が読めないシーズンがあるので、新しいシーズンは始められない（運用の道具で、直してから）。シーズンでない冒険は、右上の歯車（運用）から。', 'A season\'s records cannot be read, so a new season cannot be started (fix it with the operator tool first). Adventures outside a season are under the gear at the top right (Operations).');
   return local
-    ? tr(`シーズンは、運用の道具で開く（${README_SEASON()}）。シーズンでない冒険は、右上の歯車（運用）から。`, `A season is opened with the operator tool (${README_SEASON()}). Adventures outside a season are under the gear at the top right (Operations).`)
+    ? tr('下の「新しいシーズンを始める」で始めると、ここに冒険者の札が出る。シーズンでない冒険は、右上の歯車（運用）から。', 'Start one with "Start a new season" below, and your adventurers appear here. Adventures outside a season are under the gear at the top right (Operations).')
     : tr('シーズンを開いた人が、次のシーズンを開いたら、ここに冒険者の札が出る。シーズンでない冒険は、右上の歯車（運用）から。', 'When whoever runs the seasons opens the next one, your adventurer appears here. Adventures outside a season are under the gear at the top right (Operations).');
 }
 
@@ -81,15 +88,15 @@ export function hubCard(x: HubCardInput): HubCardModel {
     if (row.oldVersion) {
       return { ...base, state: 'stale', pill: { text: tr('前の版', 'Older version'), tone: 'muted' }, where: tr('前の版の冒険（続きは、遊べない）', 'An adventure from an older version (it cannot be continued)'), text: null, action: records };
     }
-    // 人間が自分で遊ぶ冒険者: 指図は出さない。ボタンは「続きを遊ぶ」（このブラウザに遊ぶ鍵が無ければ、見守る）
+    // 人間が自分で遊ぶ冒険者: 指図は出さない。ボタンは「潜る」（S12b。遊ぶ画面へ。このブラウザに遊ぶ鍵が無ければ、見守る）
     if (!row.eligible) {
       return {
         ...base, state: 'human',
         pill: inDungeon ? { text: tr('迷宮の中', 'In the dungeon'), tone: 'blue' } : { text: tr('あなたが遊ぶ', 'You play'), tone: 'muted' },
         where: inDungeon ? depthText(row.depth) : tr('キャンプにいる', 'At camp'),
-        text: tr('あなたが、自分で遊んでいる冒険者', 'An adventurer you play yourself'),
+        text: tr('あなたが、自分で潜る冒険者', 'An adventurer you play yourself'),
         notes: x.playable ? [] : [tr('このブラウザでは、続きを遊べない（始めたブラウザで遊ぶ）', 'This browser cannot continue it (play it from the browser that started it)')],
-        action: x.playable ? { label: tr('続きを遊ぶ', 'Continue'), href: `#/play/${row.runId}` } : { label: tr('見守る', 'Watch'), href: `#/watch/${row.runId}` },
+        action: x.playable ? { label: tr('潜る', 'Go down'), href: `#/play/${row.runId}` } : { label: tr('見守る', 'Watch'), href: `#/watch/${row.runId}` },
       };
     }
     if (inDungeon) {
@@ -138,14 +145,19 @@ export function hubCard(x: HubCardInput): HubCardModel {
   const base = { notes: [] as string[], wish: false, highlight: false, stats };
   // 名簿に入っていない（S12a。SEASON.md §63.2 の 1）: 何が起きていて、どうすればよいか。「招かれていない」は、オンラインのサーバーに
   // つながっていない、と読まれたので、札に出さない。サーバーと同じ PC から開く人は、自分がシーズンを開いた人のことが多い
+  // S12b: サーバーと同じ PC からは、拠点のボタンで、今のシーズンの名簿に加える（S12a の「運用の道具で招く」の文を置き換えた）
   if (m === null || !s) {
+    const records: HubAction = { label: tr('記録を見る', 'Records'), href: '#/records' };
+    const enroll = !!x.local && !!x.canEnroll && s?.status === 'open';
     return {
       ...base, state: 'not_invited', pill: { text: tr('名簿に無い', 'Not on the roster'), tone: 'muted' },
       where: tr('このシーズンの名簿に、まだ入っていない', 'Not on this season\'s roster yet'),
-      text: x.local
-        ? tr(`このシーズンを開いたのが自分なら、運用の道具で、冒険者を招く（${README_SEASON()}）`, `If you opened this season yourself, invite the adventurer with the operator tool (${README_SEASON()})`)
-        : tr('このシーズンを開いた人に、加えてもらう', 'Ask whoever opened this season to add you'),
-      action: { label: tr('記録を見る', 'Records'), href: '#/records' },
+      text: enroll
+        ? tr(`名簿に加えると、${n}は、この鍵で、このシーズンに入れる（AI に任せるか、自分で潜る）`, `Once on the roster, ${n} can enter this season with this key (leave it to an AI, or go down yourself)`)
+        : x.local
+          ? tr('このシーズンは、もう名簿に加えられない（開催中のシーズンだけ）', 'This season no longer takes new names (only a running season does)')
+          : tr('このシーズンを開いた人に、加えてもらう', 'Ask whoever opened this season to add you'),
+      action: enroll ? { label: tr('このシーズンに加える', 'Add to this season'), enroll: true } : records,
     };
   }
   const result: HubAction = { label: tr('結果を見る', 'See the results'), href: `#/season/${s.id}` };
@@ -166,6 +178,23 @@ export function hubCard(x: HubCardInput): HubCardModel {
   const where = m && m.runs > 0
     ? (m.died ? tr('前の冒険は、倒れて終わった', 'The last adventure ended in a fall') : tr('前の冒険は、終わった', 'The last adventure has ended'))
     : tr('まだ、このシーズンに入っていない', 'Not in this season yet');
+  // 名簿の札（S12b）: このブラウザに鍵が無いので、ここからは潜れない。AI は、鍵を使って入ってくる
+  if (x.roster) {
+    const again = !!m && m.runs > 0;
+    if (x.roster.kind === 'human') {
+      return {
+        ...base, state: 'human', pill: { text: tr('あなたが遊ぶ', 'You play'), tone: 'muted' }, where,
+        text: tr('自分で潜る冒険者。この冒険者の鍵は、このブラウザに無い（鍵のあるブラウザから潜る）', 'An adventurer played by a person. This browser has no key for them (go down from the browser that has it)'),
+        action: null,
+      };
+    }
+    return {
+      ...base, state: 'waiting_ai', pill: { text: tr('まだ入っていない', 'Not in yet'), tone: 'muted' }, where,
+      text: again ? tr(`${n}が、鍵を使って、もう一度入ってくるのを、待っている`, `Waiting for ${n} to come in again with their key`) : tr(`${n}が、鍵を使って入ってくるのを、待っている`, `Waiting for ${n} to come in with their key`),
+      notes: again ? [] : [tr('鍵は、足したときに 1 回だけ出た。無くしたら、足し直す', 'The key was shown once, when you added them. If it is lost, add them again')],
+      action: null,
+    };
+  }
   return {
     ...base, state: 'not_joined', pill: { text: tr('まだ入っていない', 'Not in yet'), tone: 'muted' }, where,
     text: tr('AI に、声をかける（AI が、鍵を使って入ってくる）。自分で潜ることもできる', 'Let your AI know (it comes in with the key). You can also go down yourself'),

@@ -52,8 +52,11 @@ export interface Participant {
 /** directed（S8 §54.6）: そのシーズンで持ち主の口から決めた項目（すべてのランの和。順位の印。キャンプで更新） */
 export interface ShownValues { best: { depth: number; used: number }; used: number; died: boolean; banked: number; runs: number; directed?: DirectiveItem[] }
 
-/** 招いた者（S0a。SEASON.md §4.1）。invites.json は運用の道具だけが書き、サーバーは読むだけ。トークンは入れない */
-export interface SeasonInvite { profileId: string; name: string; invitedAt: number }
+/**
+ * 招いた者（S0a。SEASON.md §4.1）。invites.json は運用の道具と、拠点の運用者の口（S12b。サーバーと同じ PC からだけ）が書く。トークンは入れない。
+ * kind（S12b）: 拠点の「冒険者を足す」で選んだ種類（AI に任せる・自分で潜る）。運用の道具で招いた者には無い
+ */
+export interface SeasonInvite { profileId: string; name: string; invitedAt: number; kind?: 'ai' | 'human' }
 
 /** 表示名の比べ方（前後の空白を除き、全角と半角・大文字と小文字を区別しない） */
 export function nameKey(name: string): string {
@@ -340,7 +343,9 @@ export class SeasonStore {
     const d: SeasonData = { def, participants: [], public: [], spots: [], fires: [], deeds: [], supplies: [], slays: [], result: null };
     if (!this.writeJson(def.id, 'season.json', def)) throw new Error(`season ${def.id}: season.json を書けなかった`);
     this.data.set(def.id, d);
-    this.log(def.id, { type: 'opened', def });
+    // シードは記録の 1 行に写さない（S12b: シードを持つのは season.json だけ）
+    const { seed: _seed, ...shown } = def;
+    this.log(def.id, { type: 'opened', def: shown });
     return d;
   }
 
@@ -466,7 +471,7 @@ export class SeasonService implements SeasonHooks {
    * 招く（S0a。SEASON.md §4.1。運用の道具から）: token を渡せば今あるプロフィールを、無ければその表示名で新しいプロフィールを作って招く。
    * 新しく作ったときだけトークンを返す（表示はこの 1 回だけ）。表示名はそのシーズンの中で重ならないこと
    */
-  invite(id: string, name: string, profiles: ProfileStore, token?: string): { profileId: string; name: string; token?: string } | { error: string } {
+  invite(id: string, name: string, profiles: ProfileStore, token?: string, opts: { kind?: 'ai' | 'human' } = {}): { profileId: string; name: string; token?: string } | { error: string } {
     const d = this.store.get(id);
     if (!d && this.store.isBroken(id)) return { error: `シーズン ${id} の記録が読めない（起動時の記録か season -- list で、どのファイルかを見る） / the records of season ${id} are unreadable` };
     if (!d) return { error: `シーズン ${id} は無い / no such season` };
@@ -484,9 +489,62 @@ export class SeasonService implements SeasonHooks {
     let newToken: string | undefined;
     if (existing) profileId = existing.id;
     else { const c = profiles.create(display, now); profileId = c.profile.id; newToken = c.token; }
-    this.store.addInvite(id, { profileId, name: display, invitedAt: now });
-    this.store.log(id, { type: 'invited', profileId, name: display, newProfile: !existing });
+    this.store.addInvite(id, { profileId, name: display, invitedAt: now, ...(opts.kind ? { kind: opts.kind } : {}) });
+    this.store.log(id, { type: 'invited', profileId, name: display, newProfile: !existing, ...(opts.kind ? { kind: opts.kind } : {}) });
     return { profileId, name: display, ...(newToken ? { token: newToken } : {}) };
+  }
+
+  /**
+   * 新しいシーズンを開く前の確かめ（S12b。運用の道具の open と、拠点の運用者の口が、同じ関数で見る）:
+   * exists 同じ ID のシーズンがある（読めないものも）・broken 記録が読めないシーズン・unresolved 確定していないシーズン（開催中・確定待ち）
+   */
+  openBlockers(id: string): { exists: boolean; broken: { id: string; files: string[] }[]; unresolved: SeasonData[] } {
+    const ids = this.store.ids();
+    return {
+      exists: ids.includes(id),
+      broken: this.brokenSeasons(),
+      unresolved: ids.map((x) => this.store.get(x)).filter((d): d is SeasonData => !!d && !d.result),
+    };
+  }
+
+  /** シーズンを開く（S12b。運用の道具の open と、拠点の運用者の口。開いてよいかは、呼ぶ側が openBlockers で見る） */
+  open(def: SeasonDef): SeasonData {
+    return this.store.open(def);
+  }
+
+  /**
+   * 拠点から開くシーズンの、既定の ID と名前（S12b。SEASON.md §63.7）: `s<N>`・「シーズン<N>」。N は、今ある `s<数>` の ID のいちばん大きい数 + 1
+   * （無ければ、今あるシーズンの数 + 1）から、ID も名前も、今あるシーズンと重ならない数
+   */
+  nextDefault(): { id: string; number: number; name: string } {
+    const ids = this.store.ids();
+    const nums = ids.map((x) => /^s(\d+)$/.exec(x)).filter((m): m is RegExpExecArray => !!m).map((m) => Number(m[1]));
+    const names = new Set(this.list().map((s) => nameKey(s.name)));
+    let n = nums.length ? Math.max(...nums) + 1 : ids.length + 1;
+    while (ids.includes(`s${n}`) || names.has(nameKey(`シーズン${n}`))) n++;
+    return { id: `s${n}`, number: n, name: `シーズン${n}` };
+  }
+
+  /** 今のシーズン（S12b。拠点の運用者の口が、冒険者を足す先）: 開催中（終わりの時刻の前で、確定していない）のもの。重なっていれば、終わりの時刻の遅いもの */
+  currentOpen(): SeasonData | null {
+    const open = this.store.ids().map((x) => this.store.get(x)).filter((d): d is SeasonData => !!d && this.status(d) === 'open');
+    return open.sort((a, b) => b.def.endsAt - a.def.endsAt || (a.def.id < b.def.id ? 1 : -1))[0] ?? null;
+  }
+
+  /**
+   * 名簿（S12b。拠点の運用者の口）: そのシーズンに招いた者の全部（招いた順）。鍵は無い（invites.json にトークンは無い）。
+   * 使った予算・ランの数・倒れたか・いちばん新しいランの ID。kind は、拠点で足したときの種類（無ければ null。呼ぶ側が、ランの操作の種類で埋める）。
+   * failed: 終わっていないランが、起動時に読み込めなかった（memberships と同じ）
+   */
+  roster(id: string, failed?: (runId: string) => boolean): { name: string; profileId: string; kind: 'ai' | 'human' | null; runs: number; used: number; died: boolean; runId: string | null; failed?: true }[] {
+    const d = this.store.get(id);
+    if (!d || this.store.invitesBroken(id)) return [];
+    return this.store.invites(id).map((inv) => {
+      const p = this.participant(d, inv.profileId);
+      const last = p?.runs.length ? [...p.runs].sort((a, b) => a.startedAt - b.startedAt)[p.runs.length - 1] : null;
+      const stuck = !!failed && !!p?.runs.some((r) => !r.ended && failed(r.runId));
+      return { name: inv.name, profileId: inv.profileId, kind: inv.kind ?? null, runs: p?.runs.length ?? 0, used: p ? used(p) : 0, died: !!p?.died, runId: last?.runId ?? null, ...(stuck ? { failed: true as const } : {}) };
+    });
   }
 
   /**

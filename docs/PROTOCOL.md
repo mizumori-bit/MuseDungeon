@@ -1156,6 +1156,7 @@ S3f の `seq_resume { next }`（`player: null`）も同じ: 起動時の再生�
 | `GET /api/runs/:id/commands` | commands.jsonl（AI パネルのツール呼び出し・thought 表示用） |
 | `GET /api/runs/:id/summary` | 終了時サマリー |
 | `GET /api/ops/calls?limit=` | S7（SEASON.md §52.1 の 2）。運用の口（サーバーと同じ機械からだけ。外からは 403）: 直近の MCP の呼び出し（新しい順に最大 200 件）`{ long_ms, calls: { at, tool, run, ms, error? }[] }`（受け取った時刻・ツール・ラン・サーバーの側でかかった時間。メモリだけで、ファイルには書かない。引数・トークン・考えは持たない） |
+| `GET /api/ops/roster`・`POST /api/ops/season`・`POST /api/ops/adventurers`・`POST /api/ops/enroll` | S12b（§9.15。SEASON.md §63.7）。拠点の運用者の口（サーバーと同じ PC からだけ。鍵があっても、外からは 403）: 今のシーズンの名簿・新しいシーズンを始める・冒険者を足す（AI に任せる／自分で潜る）・鍵のある冒険者を今のシーズンに加える |
 | `GET /api/seasons` / `GET /api/seasons/:id` | S0（§9.8）。シーズンの一覧 / 1 つのシーズンの順位の表・確定した結果・坑の断面（S2 §9.11。公開された階段の位置は出さない） |
 | `GET /api/owner/runs` | S8（§9.14）。持ち主と認められた進行中のソロのラン `OwnerRunsResponse`。`Authorization: Bearer <profile_token>`（任意） |
 | `GET /api/profile` | V3-7。プロフィールの表示名・要約・称号・ラン（MCP の `profile` と同じ中身）。`Authorization: Bearer <profile_token>`。S10（§9.14）で `seasons`（そのプロフィールが招かれたシーズン `ProfileSeasonEntry[]`）を足した（HTTP だけ） |
@@ -1189,7 +1190,7 @@ S3f の `seq_resume { next }`（`player: null`）も同じ: 起動時の再生�
 - **招く**（S0a。SEASON.md §4.1）: 運用者が `npm.cmd run season -- invite --id <id> --name <表示名> [--profile-token <今あるトークン>]`。
   - `--profile-token` を省くと、その表示名で新しいプロフィールを作り、そのトークンを**この 1 回だけ**表示する。運用者が参加者へ手で渡す。渡すと、今あるプロフィールを招く（トークンは表示しない）。
   - 表示名は、同じシーズンの中で重ならないこと（前後の空白を除き、大文字と小文字・全角と半角を区別しないで比べる）。重なれば断る。同じプロフィールを 2 回は招けない。
-  - 招いた者は `seasons/<id>/invites.json`（`{ profileId, name, invitedAt }[]`。トークンは入れない）。このファイルを書くのは運用の道具だけで、サーバーは参加のたびに読み直す（起動し直さなくてよい）。
+  - 招いた者は `seasons/<id>/invites.json`（`{ profileId, name, invitedAt, kind? }[]`。トークンは入れない。`kind` は S12b の拠点で足したときの種類 `ai`・`human`）。このファイルを書くのは運用の道具と、S12b からは拠点の運用者の口（§9.15。サーバーと同じ PC からだけ）で、サーバーは参加のたびに読み直す（起動し直さなくてよい）。
   - `season -- invites --id <id>`: 招いた者の一覧（表示名・プロフィールの ID・ランの数。トークンは出さない）。
   - **招きの取り消し**（S0b。SEASON.md §6.2 の 5）: `season -- uninvite --id <id> --name <表示名>`（招いたときと同じ比べ方）か `--profile <profile_id>`。**このシーズンのランを 1 回も始めていない者だけ**（始めた者は、順位と予算の記録があるので断る）。`invites.json` から外し、`log.jsonl` に `uninvited`。プロフィールそのものは消さない（そのトークンでは、もうこのシーズンのランを始められない。シーズンでないランには使える）。外した表示名は、また使える。確定したシーズンでは断る。
 - **参加**: `new_run { season: <id>, profile_token }`（HTTP は `POST /api/runs { season, profileToken }`）。`profile_token` は必須で、そのシーズンに招かれたプロフィールのものだけ。1 つのプロフィールが、1 つのシーズンに 1 人の参加者で、順位の表の名前は招いたときの表示名（`character_name` はキャラクターの名前で、順位には使わない）。倒れた後の新しいランも、同じトークンで同じ参加者として数え、予算は続きから。
@@ -1581,3 +1582,27 @@ SlayOpening { turns: number; dealt: number; hitTurns: number; taken: number }
   5. **前のキャンプと同じ伝言**は、このキャンプに着いた後に、持ち主が伝言を動かしていない（`directive_set` の伝言が、一度も今の伝言と違わない）ときだけ（消して同じ文に戻した・別の文から元の文に戻した、には添えない）。伝言だけで、何も握っていないランにも出る（設計どおり）。
   6. **札の行の希望の出し方**は、届くものだけ: その項目の希望を、このキャンプまでに使い切っていれば言わない（`PlayerView.directive.wishCount` を足した）。装備は、着けられる品があれば `equip slot=x`、身に着けている品があれば `unequip slot=x`。
 - **pilot**: 持ち主が目的を握るランでは、pilot の `camp.auto_start` を `null` にする（pilot は `held_by_owner` を知らないので、出発を試みては断られ、数秒で自分を止める。pilot の README）。S9 で、特技と加護・装備を握られて札が「まだ」のときも、pilot の出発は断られる（pilot は変えていない）。
+
+### 9.15 拠点の運用者の口と、呼び鈴（S12b。SEASON.md §63.6・§63.7）
+
+engine・World・出来事・命令の形・内容のデータと版は S9 のまま（`engineVersion` 0.49.0・`eventVersion` 37・内容 `cff6932f0071`）。サーバーに HTTP の口を 4 つ足し、画面を足した。MCP は変えていない。
+
+**認め方**: 4 つとも、サーバーと同じ PC からの要求だけ（`isLocalRequest` の 1 つの判定。接続元・`Host`・`Origin` を見る。§8 の S8a）。鍵（プロフィールのトークン）があっても、外からは 403。状態を変える 3 つは、§8 の「状態を変える口」の守り（同じ origin だけ・`application/json` だけ）を先に通る。応答は、どれも `Cache-Control: no-store`。鍵とシードは、URL・サーバーのログ・記録・エラーの文に出さない（鍵を返すのは、冒険者を足した応答の 1 回だけ）。
+
+- `GET /api/ops/roster` → `OpsRosterResponse { season, roster, pending, canOpen, next?, broken? }`:
+  - `season`: 今のシーズン（開催中＝終わりの時刻の前で確定していないもの。重なっていれば、終わりの時刻の遅いもの）`{ id, name, budget, endsAt }`。無ければ `null`。
+  - `roster`: その名簿（招いた者の全部。招いた順）`OpsRosterEntry { name, profileId, kind, runs, used, budget, died, runId, failed? }`。`kind` は拠点で足したときの種類（`ai`・`human`）、無ければ、いちばん新しいランの操作の種類（`agent` → `ai`・`human` → `human`）、分からなければ `null`。`runId` は、いちばん新しいラン（無ければ `null`）。`failed` は、終わっていないランが起動時に読み込めなかった。鍵は入らない。
+  - `pending`: 確定していない、ほかのシーズン（終わりの時刻を過ぎて、結果を待っている）。`canOpen`: 新しいシーズンを始められる（確定していないシーズンも、記録が読めないシーズンも無い）。`next`: そのときの既定 `{ id, number, name, days: 7, budget: 3000 }`。`broken: true`: 記録が読めないシーズンがある。
+- `POST /api/ops/season` `{ name?, days?, budget? }` → `OpsSeasonOpened { season: { id, name, budget, endsAt } }`（シードは返さない）:
+  - 既定は、名前「シーズン<N>」・7 日・3,000 手番。ID はサーバーが決める（`s<N>`。N は、今ある `s<数>` の ID のいちばん大きい数 + 1、無ければシーズンの数 + 1 から、ID も名前も重ならない数）。終わりの時刻は、今から `days` × 24 時間。
+  - 検査: `days` は 1〜60 の整数、`budget` は 100〜20,000 の整数、`name` は文字列で、制御文字と見えない書式の文字（ゼロ幅・向きの指定など）を落として前後の空白を除いた後、32 字（コードポイント）まで（空なら既定）。違えば 400。本文が JSON のオブジェクトでなければ 400（既定の値で開かない）。
+  - シードは、サーバーが暗号用の乱数で決める（`season.json` だけに書く。記録の 1 行 `log.jsonl` の `opened` にも写さない。運用の道具の `open` も同じ）。
+  - **確定していないシーズン（開催中・確定待ち）が 1 つでもあれば、409**「開催中のシーズンがある。閉じるのは、運用の道具で」（画面からは、シーズンを閉じられない）。記録が読めないシーズンがあるときも 409。
+  - 開いてよいかの判定と開く関数は、運用の道具の `season -- open` と同じ（`SeasonService.openBlockers`・`SeasonService.open`）。
+- `POST /api/ops/adventurers` `{ name, kind: "ai" | "human", classId?, locale? }` → `OpsAdventurerAdded { seasonId, name, profileId, kind, profileToken, runId?, playerId?, token? }`:
+  - 今のシーズン（上の `season`）に足す。無ければ 409。そのシーズンの版がサーバーと違えば 409。
+  - `ai`: プロフィールを作り、招く（運用の道具の `invite` と同じ関数 `SeasonService.invite`。表示名はシーズンの中で重ならない・32 字まで。名前は上と同じに掃除する）。応答の `profileToken` が鍵で、**この 1 回だけ**（名簿・ほかの口・記録からは読めない。プロフィールのファイルはハッシュだけ）。AI は、これを `new_run { season, profile_token }` に使う。
+  - `human`: そのうえで、人間のラン（`controller` は `human`・そのシーズン・`classId` の職。知らない職は、何も作らずに 400）を始め、`POST /api/runs` と同じ `runId`・`playerId`・`token` も返す。ランを始められなければ、招きを取り消して断る（プロフィールは残る。鍵は返さない）。
+- `POST /api/ops/enroll`（`Authorization: Bearer <鍵>`。本文の `profileToken` は受けない）`{ name? }` → `OpsEnrolled { seasonId, name, profileId, already? }`: その鍵のプロフィールを、今のシーズンに招く（表示名は `name`、無ければプロフィールの名前）。もう招かれていれば、そのまま 200（`already: true`。表示名は変えない）。鍵が無い・知らない鍵は 401。
+- **人間の画面**（拠点。同じ PC から開いて、持ち主の口の一覧が `local` のときだけ、`GET /api/ops/roster` を呼ぶ。ほかの PC からは呼ばない）: 札は、このブラウザに鍵のある冒険者と、名簿のほかの冒険者（運用者として）。まだ入っていない AI の札は「（名前）が、鍵を使って入ってくるのを、待っている」（ボタンなし）。自分で潜る冒険者の札のボタンは「潜る」。名簿の下に「冒険者を足す」。開催中のシーズンが無く、始められるときは「新しいシーズンを始める」（始めたら、そのまま「冒険者を足す」の窓）。鍵があって名簿に無い冒険者の札は「このシーズンに加える」。自分で潜る冒険者を足したときの鍵は、このブラウザの `profileToken` が空ならそこへ、別の鍵があれば上書きせずに、ほかの鍵の並び（`adventurerKeys`）へ覚える。AI に任せる冒険者の鍵は、覚えない（1 回だけ見せる窓。外を押しても、Escape でも閉じない）。
+- **呼び鈴**（SEASON.md §63.6。画面だけ。サーバーは何も変わらない）: 運用の画面の設定（このブラウザにだけ覚える）は「使わない」（既定）か「自分の道具を呼ぶ」。準備完了を押して通り、AI がまだ待っていないとき、押した人のブラウザが `musedungeon-bell://ready?season=<シーズンの ID>&run=<ランの ID>` を開く（シーズンでない冒険は `musedungeon-bell://ready?run=<ランの ID>`）。入れるのは、この 2 つの ID だけで、どちらも `[A-Za-z0-9_-]`（64 字まで）でなければ鳴らさない。押した流れの中で、ブラウザが許すなら（`navigator.userActivation.isActive`。分からないブラウザでは試す）自動で 1 回、窓のボタンでもう一度。鳴るのは、人が準備完了を押したときだけ（決めるものが無くて最初から準備完了のキャンプでは鳴らない）。受ける道具は、ゲームでは用意しない。メールの下書き（`mailto:`）は作らない（ゲームは、メールアドレスを扱わない）。
