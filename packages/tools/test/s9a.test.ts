@@ -84,7 +84,7 @@ describe('S9a §57.3 の 1: what the owner has not decided yet, by name', () => 
     expect(o.observation.self.directive?.undecided).toEqual({ perk: { level: 2, options: opts.length, more: 0 }, text: `持ち主が、まだ決めていないもの: 特技（Lv2 の候補 ${opts.length} つ）` });
     const lines = o.text.split('\n');
     const iDir = lines.findIndex((l) => l.startsWith('指図: '));
-    expect(lines[iDir + 1]).toBe(`持ち主の支度: まだ（決めていないもの: 特技（Lv2 の候補 ${opts.length} つ））。準備完了になるまで、start_expedition は断られる。待つなら wait_for_turn`);
+    expect(lines[iDir + 1]).toBe(`持ち主の支度: まだ（決めていないもの: 特技（Lv2 の候補 ${opts.length} つ））。準備完了になるまで、start_expedition は断られる。待つなら wait_for_turn。決めてほしいものがあれば、その命令を出す（断られるが、希望として持ち主に届く）: choose_perk option=N`);
     // 「できること」: 「まだ」の間は start_expedition の行を出さない（待つ行）
     expect(o.observation.valid_actions.some((l) => l.startsWith('start_expedition'))).toBe(false);
     expect(o.observation.valid_actions.some((l) => l.startsWith('wait_for_turn（待つ: 持ち主の支度'))).toBe(true);

@@ -6,7 +6,7 @@ import type {
 import {
   actionError, briefingLines, briefingShort, buildObservation, checkpointChangeText, withdrawText, buildTurnBlock, campLines, changesLine, compareLines, describeInventory, describeTarget, diffChanges, progressLines, reportLines,
   cheb, compassDir, dirLabel, formatObservationText, guardianDisplayName, kindName, lastWithoutXp, MACRO_COMPLETED_STOPS, mapTextLines, memoryCombatText, memoryKey, mineCount, nameOf, nearDirs, pickableItems, progressText, renderAsciiMap, resultText, t,
-  turnLine, turnSnapshot, turnStateOf, ownerMessageIsNew, fightThreats, fleeRiskText, riskText, threatEstimate, DIR_VEC, collectTargets, collectWhatOf, itemDisplayName, slayGroupText, slaysAt,
+  turnLine, turnSnapshot, turnStateOf, ownerMessageIsNew, ownerMessageKept, ownerPresenceText, ownerWaitOpen, prepStateView, seasonClosedView, wishItemOf, wishLabel, wishNoteText, fightThreats, fleeRiskText, riskText, threatEstimate, DIR_VEC, collectTargets, collectWhatOf, itemDisplayName, slayGroupText, slaysAt,
 } from '@muse/shared';
 import type { MacroReport } from './RunSession';
 import { compareVersions, ENGINE_VERSION } from '@muse/engine';
@@ -69,6 +69,15 @@ export interface PlayerPort {
   waitForTurn(timeoutMs: number): Promise<boolean>;
   /** キャンプで持ち主の支度の札が「まだ」のとき、準備完了になるまで待つ（S8 §54.4 の 5。S9 §58.1） */
   waitForOwner(timeoutMs: number): Promise<'ready' | 'started' | 'released' | 'timeout' | 'ended'>;
+  /**
+   * 引数（offer）なしの start_expedition を受けられるか（S11・S11a）: キャンプで、目的を握られ、支度が準備完了で、持ち主が目的を選んである（次の遠征を始められる）。
+   * 受けられないときは、引数の断り（offer が要る。握られていないランと同じ文）
+   */
+  bareStartOk(): boolean;
+  /** held_by_owner の断りの hint に、持ち主の様子を足す（S11。キャンプで札が「まだ」のときだけ） */
+  withOwnerPresence(e: ActionError): ActionError;
+  /** 持ち主の様子の 1 行（S11。キャンプで札が「まだ」のときだけ。now はテストで差し替える） */
+  ownerPresence(view: PlayerView, now?: number): string | undefined;
   /** 遠征のブリーフィング（開始時・再開時） */
   /** camp: false でキャンプの候補を省く（観測の文と一緒に返すとき。既定は出す） */
   briefing(kind: 'start' | 'resume', opts?: { camp?: boolean }): string[];
@@ -468,18 +477,22 @@ export class SessionPlayerPort implements PlayerPort {
     const versionNote = view.status === 'at_camp' && !prev?.versionNoted && !!created && compareVersions(created, ENGINE_VERSION) < 0
       ? t(L, `このランは古い版で始まった（engine ${created}）。階の一部が姿を変えることがある`, `This run began on an older version (engine ${created}). Some floors may change shape`) : undefined;
     const shots = unseenShots(p.recent, view.self.id);
-    const observation = buildObservation(view, this.catalog, { detail: p.detail ?? 'brief', map: true, recent: lastWithoutXp(p.recent, 10), lifelineShort, boonsShort, campCompare: this.campCompare(view), ...this.campSlayExtras(view), offerNotes: this.offerNotes(view), records: this.campRecords(view), ...(versionNote ? { versionNote } : {}), ...(shots.length ? { unseenShots: shots } : {}) });
+    // 持ち主の様子（S11）: キャンプで札が「まだ」のとき、本人の応答にだけ（観測だけを作る observe（持ち主の画面の写し）には付けない）
+    const ownerPresence = this.ownerPresence(view);
+    const observation = buildObservation(view, this.catalog, { detail: p.detail ?? 'brief', map: true, recent: lastWithoutXp(p.recent, 10), lifelineShort, boonsShort, campCompare: this.campCompare(view), ...this.campSlayExtras(view), offerNotes: this.offerNotes(view), records: this.campRecords(view), ...(versionNote ? { versionNote } : {}), ...(shots.length ? { unseenShots: shots } : {}), ...(ownerPresence ? { ownerPresence } : {}) });
     const state = turnStateOf(view, p.expeditionEndedNow ?? false).state;
     const cur = turnSnapshot(view, observation, state);
     const longLife = observation.valid_actions.some((a) => a.includes('次の遠征はこの遠征を始めた階段から') || a.includes('the next expedition starts from where this one began'));
     cur.lifeNo = lifelineShort ? prev?.lifeNo : longLife ? xNo : prev?.lifeNo;
     cur.boonKey = xNo !== undefined && boonKey ? boonKey : prev?.boonKey;
     cur.versionNoted = prev?.versionNoted || !!versionNote;
+    // 前のキャンプの伝言（S11）: 迷宮の中の応答の伝言を覚える（伝言はキャンプでしか変わらない）
+    cur.ownerMsgOutside = view.status !== 'at_camp' ? cur.ownerMsg : prev?.ownerMsgOutside;
     let changes: TurnBlock['changes'] = [];
     if (p.changes) {
       // 文になった出来事と、知覚した他の者の移動（見えなくなった敵の最後に見た位置。V4-0c §4.2）
       const events = prev ? [...this.session.messages(this.playerId).filter((m) => m.seq > prev.seq), ...this.session.movesSince(this.playerId, prev.seq)].sort((a, b) => a.seq - b.seq) : [];
-      changes = diffChanges(prev, cur, view, observation, events, this.catalog);
+      changes = diffChanges(prev, cur, view, observation, events, this.catalog, this.wishNotes(view, events));
       // 遠征の途中の区切り（S7 §52.2 の 2・S7a・S7b）: 上限の外に 1 回だけ。どの手番か・出したかは記録から決まる。
       // 判定するのは、基準を進める応答だけ（観戦の先読み peek では呼ばない）。応答を作る時点で敵が見えていれば（協力プレイで仲間の番を待つ間など）出さない
       // （控えは応答のたびに作っておく: 初めて要るときに、長い記録を畳まなくて済むように）
@@ -488,6 +501,9 @@ export class SessionPlayerPort implements PlayerPort {
     }
     // 伝言が前の応答から変わった（S8b）: キャンプの「持ち主から」の行に「（新しい）」。変化を出す応答だけ（基準と比べる）
     if (p.changes && observation.self.directive && ownerMessageIsNew(prev, view)) observation.self.directive.message_new = true;
+    // 前のキャンプから変わっていない伝言（S11）: 「（前のキャンプと同じ伝言）」
+    // S11a: このキャンプで伝言を動かした（消して同じ文に戻した など）なら、添えない
+    else if (p.changes && observation.self.directive?.message && ownerMessageKept(prev, view) && !this.session.ownerMessageMovedAtCamp(this.playerId, observation.self.directive.message)) observation.self.directive.message_kept = true;
     const turn = buildTurnBlock(view, { reason, interruptedBy: p.interruptedBy, changes, expeditionEndedNow: p.expeditionEndedNow, waitedMs: p.waitedMs });
     // 地図: auto は、階が変わった・新しいセルを知った・敵の出入りがあった応答だけ
     let mapMode: 'show' | 'unchanged' | 'none' = 'show';
@@ -505,6 +521,53 @@ export class SessionPlayerPort implements PlayerPort {
       : formatObservationText(observation, L, { inventory: invShow, map: mapMode === 'unchanged' ? 'unchanged' : 'show', expedition: expShort ? 'short' : 'full' });
     const text = [body, changesLine(L, turn.changes), turnLine(view, turn, !long)].filter(Boolean).join('\n');
     return { observation, text, turn };
+  }
+
+  /** 持ち主の様子の 1 行（S11。キャンプで札が「まだ」のときだけ。持ち主の口の最後の呼び出しの控えから。World に入れない） */
+  ownerPresence(view: PlayerView, now = Date.now()): string | undefined {
+    if (!ownerWaitOpen(view)) return undefined;
+    const at = this.session.lastOwnerCallAt(this.playerId);
+    return ownerPresenceText(view.locale, at === null ? null : Math.max(0, now - at));
+  }
+
+  /**
+   * 持ち主が決めた出来事に添える、希望との並べ（S11）: seq → 「（あなたの希望どおり）」「（あなたの希望は、頑健）」。希望はランの記録から（RunSession.wishBeforeDecision）。
+   * 装備は、続けて決めた付け替えをまとめて 1 つ（最初の付け替えの前の希望が、そのどれかと同じなら「希望どおり」）。品の名前は、プレイヤーに見えている形
+   */
+  private wishNotes(view: PlayerView, events: readonly PerceivedEvent[]): Record<number, string> {
+    const L = view.locale;
+    const out: Record<number, string> = {};
+    const decided = events.filter((e) => e.type === 'owner_decided');
+    if (!decided.length) return out;
+    const raw = (seq: number) => {
+      const e = this.session.eventAtSeq(seq);
+      return e && e.seq === seq && e.type === 'owner_decided' ? e : null;
+    };
+    let gearDone = false;
+    for (const pe of decided) {
+      const d = raw(pe.seq);
+      if (!d) continue;
+      if (d.item === 'loadout') {
+        if (gearDone) continue;
+        gearDone = true;
+        const w = this.session.wishBeforeDecision(this.playerId, d.seq);
+        if (!w || w.wish.item !== 'loadout') continue;
+        const wish = w.wish;
+        // 品の ID で比べる（S11a: 同じ種類の別の品は、希望どおりではない）。比べられない付け替えがあって、ほかに当たりが無ければ、添えない
+        const gear = decided.map((x) => raw(x.seq)).filter((y): y is NonNullable<typeof y> => !!y && y.item === 'loadout').map((y) => ({ act: y.act, item: this.session.decidedItemOf(this.playerId, y.seq) }));
+        const same = gear.some((y) => y.act === wish.act && y.item === wish.target);
+        if (!same && gear.some((y) => y.item === null)) continue;
+        out[d.seq] = wishNoteText(L, same, wishLabel(L, this.catalog, wish, wishItemOf(view, wish)));
+        continue;
+      }
+      const w = this.session.wishBeforeDecision(this.playerId, d.seq);
+      if (!w) continue;
+      const wish = w.wish;
+      const same = wish.item === 'perk' || wish.item === 'boon' ? (wish.item === 'perk' ? wish.perk : wish.boon) === d.choice
+        : wish.item === 'objective' ? wish.offer === d.offer : false;
+      out[d.seq] = wishNoteText(L, same, wishLabel(L, this.catalog, wish));
+    }
+    return out;
   }
 
   observeWithTurn(reason: TurnReason, opts: { detail?: 'brief' | 'full'; map?: boolean; consume?: boolean; changes?: boolean | 'peek'; waitedMs?: number } = {}): ObserveResult {
@@ -526,6 +589,20 @@ export class SessionPlayerPort implements PlayerPort {
 
   waitForOwner(timeoutMs: number): Promise<'ready' | 'started' | 'released' | 'timeout' | 'ended'> {
     return this.session.waitForOwner(this.playerId, timeoutMs);
+  }
+
+  bareStartOk(): boolean {
+    const view = this.view();
+    const d = view.directive;
+    return view.status === 'at_camp' && view.runStatus !== 'ended' && !!view.camp && !seasonClosedView(view) && !!d?.hold.includes('objective')
+      && prepStateView(view) === 'ready' && d.prep?.objective !== undefined;
+  }
+
+  withOwnerPresence(e: ActionError): ActionError {
+    if (e.code !== 'held_by_owner') return e;
+    const p = this.ownerPresence(this.view());
+    const en = this.locale() === 'en';
+    return p ? { ...e, hint: `${e.hint ? `${e.hint}${en ? ' ' : ''}` : ''}${p}${en ? '.' : '。'}` } : e;
   }
 
   onChange(cb: () => void): () => void {
@@ -572,6 +649,8 @@ export class SessionPlayerPort implements PlayerPort {
           ? t(L0, `目的なしの遠征なので、extract は撤退になる（${what}）。`, `This expedition has no objective, so extracting is a withdrawal (${what}).`)
           : t(L0, `目的は未達成。今 extract すると撤退になる（${what}）。`, `The objective is not complete; extracting now is a withdrawal (${what}).`) };
       }
+      // 持ち主の支度を待つ断り（S11）: hint に持ち主の様子
+      error = this.withOwnerPresence(error);
       const payload: ActionFailure = { ok: false, error, valid_actions: valid, turn: res.turn };
       return payload;
     }

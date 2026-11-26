@@ -223,7 +223,7 @@ export function OwnerRunCard({ row, token, catalog, onChanged }: { row: OwnerRun
   // 支度の札（S9 §58.1）: 新しいほうから。キャンプにいて、握っている項目があるときだけ
   const prepNow = cur ? (prepStateView(cur.view) ? { state: prepStateView(cur.view)!, objective: cur.view.directive?.hold.includes('objective') ? cur.view.directive?.prep?.objective : undefined } : undefined) : row.prep;
   const prep = atCamp && eligible && serverHold.length ? prepNow : undefined;
-  const aiText = eligible ? aiPresenceText(cur ? cur.ai : row.ai) : null;
+  const aiText = eligible ? aiPresenceText(cur ? cur.ai : row.ai, row.name) : null;
   // AI の希望（S9 §58.2）: 今も成り立つものだけ（中身は読んだ view から）
   const wishes: DirectiveWish[] = atCamp && view ? activeWishes(view) : [];
   const wishCount = view ? wishes.length : atCamp ? row.wishes ?? 0 : 0;

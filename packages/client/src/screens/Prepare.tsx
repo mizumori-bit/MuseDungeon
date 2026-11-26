@@ -98,7 +98,8 @@ export function Prepare({ runId }: { runId: string }) {
   const load = async () => {
     if (tok === null) return;
     try {
-      const d = await api.ownerView(runId, tok);
+      // 支度の画面の読み込みの印（S11a: 待っている AI に「持ち主は、今、支度の画面を開いている」と伝える元）
+      const d = await api.ownerView(runId, tok, 'prepare');
       if (!aliveRef.current || busyRef.current) return;
       setData(d);
       setLoadErr(null);
@@ -267,7 +268,7 @@ export function Prepare({ runId }: { runId: string }) {
   };
   const rules = rulesOf(catalog);
   const className = view && catalog ? kindName(catalog, L, view.self.classId) : view?.self.classId ?? '';
-  const ai = data?.eligible ? aiPresenceText(data.ai) : null;
+  const ai = data?.eligible ? aiPresenceText(data.ai, name) : null;
   const objectiveUnchosen = hold.includes('objective') && chosen === undefined;
 
   return (

@@ -96,7 +96,8 @@ export const api = {
   /** 持ち主と認められた進行中のラン（S8 §54.7 の「出撃」）。token: プロフィールのトークン（無ければ見出しを付けない） */
   ownerRuns: (token?: string) => ownerGet<OwnerRunsResponse>('/api/owner/runs', token),
   /** 持ち主の見るもの（そのプレイヤーの PlayerView と、AI に届くのと同じ観測）。認められなければ 403 */
-  ownerView: (runId: string, token?: string) => ownerGet<OwnerViewResponse>(`/api/runs/${enc(runId)}/owner/view`, token),
+  /** at: 'prepare' は支度の画面の読み込み（S11a: サーバーは、これと持ち主の決定だけを「持ち主が支度の画面を開いている」に数える。拠点・運用の札の読み直しは付けない） */
+  ownerView: (runId: string, token?: string, at?: 'prepare') => ownerGet<OwnerViewResponse>(`/api/runs/${enc(runId)}/owner/view${at ? `?at=${at}` : ''}`, token),
   /** 指図（握る項目と伝言）。キャンプでだけ通る。断りは result.error */
   ownerDirective: (runId: string, d: { hold: DirectiveItem[]; message: string }, token?: string) => ownerPost<OwnerViewResponse>(`/api/runs/${enc(runId)}/owner/directive`, d, token),
   /** 握った項目の命令（start_expedition・equip・unequip・choose_perk・choose_boon）。断りは result.error */

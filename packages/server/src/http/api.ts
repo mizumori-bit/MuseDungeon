@@ -191,6 +191,9 @@ export function createApp(manager: SessionManager, config: ServerConfig): App {
         const bodyTok = typeof body?.profileToken === 'string' ? body.profileToken : undefined;
         const acc = manager.ownerAccess(runId, { local: isLocalRequest(req), ...ownerToken(req, bodyTok) });
         if ('error' in acc) return fail(res, acc.status, acc.error);
+        // 持ち主が、今、支度の画面を開いているか（S11。待っている AI に伝える。メモリだけ: World にも記録にも入れない）。
+        // 数えるのは、支度の画面の読み込み（?at=prepare）と、持ち主の決定（directive・act）だけ（S11a: 拠点・運用の札の自動の読み直しは数えない）
+        if (post || url.searchParams.get('at') === 'prepare') acc.session.noteOwnerCall(acc.pid);
         let result: OwnerViewResponse['result'];
         if (sub === '/owner/directive') result = await ownerAct(acc.session, acc.pid, { type: 'set_directive', hold: body!.hold, ...(body!.message !== undefined ? { message: body!.message } : {}) });
         else if (sub === '/owner/act') result = await ownerAct(acc.session, acc.pid, body!.command);

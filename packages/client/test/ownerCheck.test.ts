@@ -25,7 +25,9 @@ describe('S9a §57.3 の 2・S9 §58.1: the owner card says what is undecided, a
   it('the AI presence line (from the server\'s memory)', () => {
     expect(aiPresenceText(undefined)).toBeNull();
     expect(aiPresenceText({ lastCallAgoS: null, waitingNow: false })).toBe('このサーバーが起動してから、AI の呼び出しは無い');
-    expect(aiPresenceText({ lastCallAgoS: 5, waitingNow: true })).toBe('AI は、いま wait_for_turn で、あなたの支度を待っている');
+    expect(aiPresenceText({ lastCallAgoS: 5, waitingNow: true })).toBe('AIは、今、あなたの支度を待っている');
+    // 画面の言葉（S11）: 冒険者の名前で
+    expect(aiPresenceText({ lastCallAgoS: 5, waitingNow: true }, 'ミュゼ美')).toBe('ミュゼ美は、今、あなたの支度を待っている');
     expect(aiPresenceText({ lastCallAgoS: 42, waitingNow: false })).toBe('AI の最後の呼び出し: 42 秒前');
     expect(aiPresenceText({ lastCallAgoS: 180, waitingNow: false })).toBe('AI の最後の呼び出し: 3 分前');
     expect(aiPresenceText({ lastCallAgoS: 7300, waitingNow: false })).toBe('AI の最後の呼び出し: 2 時間前');

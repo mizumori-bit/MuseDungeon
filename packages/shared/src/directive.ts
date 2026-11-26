@@ -90,6 +90,53 @@ export function wishAlreadyText(L: Locale, label: string): string {
   return t(L, `その希望（${label}）は、もう持ち主に伝えてある（持ち主が決めるのは、キャンプで）。`, `That wish (${label}) has already been passed to your owner (they decide at camp).`);
 }
 
+/**
+ * 持ち主が決めたものに添える、希望との並べ（S11）: 「（あなたの希望どおり）」「（あなたの希望は、頑健）」。
+ * 希望は、持ち主が決めた時点で World から消えるので、サーバーがランの記録（決める前の希望の出来事）から決めて渡す
+ */
+export function wishNoteText(L: Locale, same: boolean, label: string): string {
+  return same ? t(L, '（あなたの希望どおり）', ' (as you wished)') : t(L, `（あなたの希望は、${label}）`, ` (your wish was: ${label})`);
+}
+
+/** 「持ち主は、今、支度の画面を開いている」と言える間（S11。持ち主の画面は 5 秒ごとに読み直す） */
+export const OWNER_PRESENCE_NOW_MS = 15_000;
+
+/**
+ * 待っている AI に、持ち主の様子を伝える 1 行（S11）。agoMs: 持ち主の口が最後に来てからの時間（サーバーのメモリの控え。このサーバーの起動の後に無ければ null）。
+ * 本人の応答にだけ、サーバーが足す（World に入れない。観戦・ほかの参加者には出さない）
+ */
+export function ownerPresenceText(L: Locale, agoMs: number | null): string {
+  const head = agoMs === null
+    ? t(L, '持ち主は、まだ、支度の画面を開いていない（このサーバーが起動してから）', 'Your owner has not opened the preparations screen yet (since this server started)')
+    : agoMs <= OWNER_PRESENCE_NOW_MS
+      ? t(L, '持ち主は、今、支度の画面を開いている', 'Your owner has the preparations screen open right now')
+      : agoMs < 3_600_000
+        ? t(L, `持ち主が、最後に支度の画面を開いたのは、${Math.max(1, Math.floor(agoMs / 60_000))} 分前`, `Your owner last opened the preparations screen ${Math.max(1, Math.floor(agoMs / 60_000))} min ago`)
+        : t(L, `持ち主が、最後に支度の画面を開いたのは、${Math.floor(agoMs / 3_600_000)} 時間前`, `Your owner last opened the preparations screen ${Math.floor(agoMs / 3_600_000)} h ago`);
+  return t(L, `${head}。持ち主は人で、決めるのに数分かかることがある。wait_for_turn timeout_s=60 を、くり返してよい`,
+    `${head}. Your owner is a person and may take a few minutes to decide. You may repeat wait_for_turn timeout_s=60`);
+}
+
+/** ownerPresenceText の文（日英。後ろの句点まで）に当たる正規表現（観戦に流す文から除く） */
+const PRESENCE_RE = new RegExp([
+  '(持ち主は、今、支度の画面を開いている|持ち主が、最後に支度の画面を開いたのは、[0-9]+ (分|時間)前|持ち主は、まだ、支度の画面を開いていない（このサーバーが起動してから）)。持ち主は人で、決めるのに数分かかることがある。wait_for_turn timeout_s=60 を、くり返してよい。?',
+  '(Your owner has the preparations screen open right now|Your owner last opened the preparations screen [0-9]+ (min|h) ago|Your owner has not opened the preparations screen yet \\(since this server started\\))\\. Your owner is a person and may take a few minutes to decide\\. You may repeat wait_for_turn timeout_s=60\\.?',
+].join('|'), 'g');
+
+/**
+ * 応答の文から、持ち主の様子（ownerPresenceText）を除く（S11）。本人にだけ出す文なので、観戦の「AI の呼び出しの記録」に流す文からは外す。
+ * その文だけの行は、行ごと落とす
+ */
+export function withoutOwnerPresence(text: string): string {
+  if (!text.includes('支度の画面') && !text.includes('preparations screen')) return text;
+  const out: string[] = [];
+  for (const l of text.split('\n')) {
+    const r = l.replace(PRESENCE_RE, '').replace(/ +$/, '');
+    if (r.length || !l.length) out.push(r);
+  }
+  return out.join('\n');
+}
+
 /** 希望を覚え直せる回数を使い切ったときの応答の文（S9c） */
 export function wishLimitText(L: Locale, current: string | null): string {
   return t(L, `希望は、もう伝えてある（次のキャンプまで、これ以上は変えられない${current ? `。今の希望: ${current}` : ''}）。`, `Your wish has already been passed on (it cannot change again until the next camp${current ? `; current wish: ${current}` : ''}).`);

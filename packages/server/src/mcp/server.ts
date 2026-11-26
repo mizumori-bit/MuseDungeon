@@ -5,7 +5,7 @@ import { z } from 'zod';
 import type { ZodTypeAny } from 'zod';
 import { argListText, argProblems, argShape, exampleOf } from './args';
 import type { ActionError, Command, Controller, InheritedHold, ObjectiveChoice, TurnBlock } from '@muse/shared';
-import { actionError, CommandSchema, directiveItemsText, ownerWaitOpen, seasonFinalView, stripTokenArgs, t } from '@muse/shared';
+import { actionError, CommandSchema, directiveItemsText, ownerWaitOpen, seasonFinalView, stripTokenArgs, t, withoutOwnerPresence } from '@muse/shared';
 import type { PlayerPort, ActionPayload } from '../session/PlayerPort';
 import type { SessionManager } from '../session/SessionManager';
 import { rulesText, RULE_TOPICS } from './rules';
@@ -29,6 +29,8 @@ function listArg(v: string | string[] | undefined): string[] | undefined {
   return list.length ? list : undefined;
 }
 const PosZ = z.object({ x: z.number().int(), y: z.number().int() });
+/** start_expedition の候補（S11a: 引数の断りでは、省けないプレイヤーには要る引数として扱う） */
+const OfferZ = z.union([z.number().int().min(1).max(9), z.literal('endless')]);
 const SlotZ = z.string().regex(/^[a-z]$/).describe('所持品のスロット文字 a〜z / inventory slot letter');
 const TargetZ = z.union([DirZ, PosZ, z.string().regex(/^e_[0-9a-z]{6}$/)]).describe('方向 | {x,y} | エンティティ ID');
 const common = {
@@ -107,10 +109,11 @@ export function createMcpServer(ctx: McpContext): McpServer {
     // 引数のトークン（名前に token を含む引数・トークンの値）は、どの深さでも記録に残さない（S7 §52.1 の 1: 観戦の「直前の命令」に引数を出す）
     const all = [_t, _p, ...secrets, ...(ctx.boundToken ? [ctx.boundToken] : [])];
     const safe = stripTokenArgs(rest, all) as Record<string, unknown>;
-    manager.recordActivity(port.runId, { playerId: port.playerId, seq: port.view().seq, tool, args: safe, text: withoutTokens(text, all), wall: Date.now() });
+    // 持ち主の様子（S11）は本人にだけ出す文なので、観戦に流す記録からは除く
+    manager.recordActivity(port.runId, { playerId: port.playerId, seq: port.view().seq, tool, args: safe, text: withoutTokens(withoutOwnerPresence(text), all), wall: Date.now() });
   };
 
-  const act = async (tool: string, args: Record<string, unknown>, cmd: Command) => {
+  const act = async (tool: string, args: Record<string, unknown>, cmd: Command, extra: { bareStart?: boolean } = {}) => {
     const port = portOf(args.player_token as string | undefined);
     if (!port) return noSession();
     // 引数の形が合わないときも、ゲームのエラー形式（code / hint / valid_actions / turn）で返す（V3-2R §14.7）
@@ -128,7 +131,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
     }
     const r: ActionPayload = await port.act(cmd, {
       source: 'mcp', thought: args.thought as string | undefined, expectSeq: args.expect_seq as number | undefined,
-      waitTurnMs: waitMs, map: ctx.briefMap,
+      waitTurnMs: waitMs, map: ctx.briefMap, ...extra,
     });
     const text = port.formatActionText(r);
     record(port, tool, args, text);
@@ -340,9 +343,19 @@ export function createMcpServer(ctx: McpContext): McpServer {
   });
   server.registerTool('start_expedition', {
     title: '遠征を始める',
-    description: 'キャンプで次の遠征を選んで始める（offer は候補の番号 1〜3 か "endless"）。前回 extract した階段から再開する。持ち主の支度が「まだ」の間は断られる（観測の「持ち主の支度」の行。wait_for_turn で待てる）。目的を持ち主に握られていれば、準備完了の後は、offer によらず持ち主が選んだ目的で始まる。',
-    inputSchema: { ...common, offer: z.union([z.number().int().min(1).max(9), z.literal('endless')]), thought: actionCommon.thought },
-  }, async (a) => act('start_expedition', a, { type: 'start_expedition', offer: a.offer }));
+    description: 'キャンプで次の遠征を選んで始める（offer は候補の番号 1〜3 か "endless"）。前回 extract した階段から再開する。持ち主の支度が「まだ」の間は断られる（観測の「持ち主の支度」の行。wait_for_turn で待てる）。目的を持ち主に握られていれば、準備完了の後は、offer によらず持ち主が選んだ目的で始まる。offer: 候補の番号（目的を持ち主が決めていて、支度が準備完了のときだけ、省ける）。',
+    // offer は、ツールの定義の上では任意（全員に同じ定義を渡すため）。引数の断りでは、プレイヤーを見て、省けないときは「要る」と書く（S11a: 下の startShape）
+    inputSchema: { ...common, offer: OfferZ.optional().describe('候補の番号 1〜3 か "endless"（目的を持ち主が決めていて、支度が準備完了のときだけ、省ける）'), thought: actionCommon.thought },
+  }, async (a) => {
+    if (a.offer !== undefined) return act('start_expedition', a, { type: 'start_expedition', offer: a.offer });
+    // offer なし（S11・S11a）: 引数の断りの前で、受けられることを確かめてある。サーバーが、命令の列の中で、持ち主が選んだ候補を入れる（engine の命令の形は変えない）。
+    // ここの offer は形を通すための仮（列の中で入れ直す）
+    const port = portOf(a.player_token as string | undefined);
+    if (!port) return noSession();
+    const o = port.view().directive?.prep?.objective;
+    if (!port.bareStartOk() || o === undefined) return missingArg('start_expedition', a, 'offer', 'start_expedition { offer: 1 }');
+    return act('start_expedition', a, { type: 'start_expedition', offer: o }, { bareStart: true });
+  });
   server.registerTool('extract', {
     title: '帰還・撤退',
     description: `階段の上で遠征を終える。目的を達成していれば帰還（達成）、未達成なら confirm: true で撤退（目的を除いた半分・生還）。追跡中の敵が見えていてもできる（敵は階段を追ってこない）。階段から遠ければ帰還の綱（use_item）。シーズンのランでは、野営の火の上か隣からも帰れる（追ってくる敵が見えていなければ。帰り支度 ${fireRules?.returnTurns ?? 5} 手番。途中で追ってくる敵が見えたら取りやめ。次の遠征はそこから始まる）。`,
@@ -610,7 +623,13 @@ export function createMcpServer(ctx: McpContext): McpServer {
   server.registerTool('say', { title: '発言', description: 'COOP 用チャット。手番を消費しない。', inputSchema: { ...common, text: z.string().min(1).max(280) } },
     async (a) => act('say', a, { type: 'say', text: a.text }));
 
-  interceptArgs(server, (tool, args, names, shape) => {
+  // start_expedition の引数の形（S11a）: 目的を握られ、支度が準備完了のとき（引数なしで受けられる）だけ offer は任意。ほかは、main の版と同じに「要る」
+  const startShape = (tool: string, args: Record<string, unknown>, shape: Record<string, ZodTypeAny>): Record<string, ZodTypeAny> => {
+    if (tool !== 'start_expedition' || !('offer' in shape)) return shape;
+    const port = portOf(args.player_token as string | undefined);
+    return port?.bareStartOk() ? shape : { ...shape, offer: OfferZ };
+  };
+  interceptArgs(server, startShape, (tool, args, names, shape) => {
     // 引数の名前の断り（S1c §14.4 の 2）: ゲームの断りの形で返す。束縛されていなければ、本文と structuredContent だけ
     const port = portOf(args.player_token as string | undefined);
     const L = port?.locale() ?? 'ja';
@@ -665,7 +684,7 @@ function timeCalls(server: McpServer, done: (tool: string, args: Record<string, 
  * 無ければ SDK の処理（検査・ハンドラ）へそのまま渡す。ツール一覧（tools/list）は変えない。
  * SDK 1.32.2 の内部（McpServer の _registeredTools・Server の _requestHandlers）を使う。形が違えば何もしない（今までどおり SDK が断る）
  */
-function interceptArgs(server: McpServer, onBad: (tool: string, args: Record<string, unknown>, names: { unknown: string[]; missing: string[] }, shape: Record<string, ZodTypeAny>) => ToolResult | Promise<ToolResult>): void {
+function interceptArgs(server: McpServer, shapeFor: (tool: string, args: Record<string, unknown>, shape: Record<string, ZodTypeAny>) => Record<string, ZodTypeAny>, onBad: (tool: string, args: Record<string, unknown>, names: { unknown: string[]; missing: string[] }, shape: Record<string, ZodTypeAny>) => ToolResult | Promise<ToolResult>): void {
   const inner = server.server as unknown as { _requestHandlers?: Map<string, (req: unknown, extra: unknown) => Promise<unknown>> };
   const tools = (server as unknown as { _registeredTools?: Record<string, { inputSchema?: unknown }> })._registeredTools;
   const orig = inner._requestHandlers?.get('tools/call');
@@ -673,7 +692,8 @@ function interceptArgs(server: McpServer, onBad: (tool: string, args: Record<str
   inner._requestHandlers.set('tools/call', async (req, extra) => {
     const p = (req as { params?: { name?: string; arguments?: Record<string, unknown> } }).params;
     const tool = p?.name ? tools[p.name] : undefined;
-    const shape = tool ? argShape(tool.inputSchema) : null;
+    const shape0 = tool ? argShape(tool.inputSchema) : null;
+    const shape = p?.name && shape0 ? shapeFor(p.name, p.arguments ?? {}, shape0) : shape0;
     if (p?.name && shape) {
       const pr = argProblems(shape, p.arguments);
       if (pr.unknown.length || pr.missing.length) return onBad(p.name, p.arguments ?? {}, pr, shape);

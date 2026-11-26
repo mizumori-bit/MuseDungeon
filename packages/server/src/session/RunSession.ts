@@ -3,11 +3,11 @@
 import { randomBytes } from 'node:crypto';
 import type { Catalog } from '@muse/shared';
 import type { Content } from '@muse/content';
-import { createRun, directiveRefusal, isPlayersTurn, joinPlayer, prepStateWorld, resumeSeq, seasonSync, step } from '@muse/engine';
+import { bareStartRefusal, createRun, directiveRefusal, isPlayersTurn, joinPlayer, prepStateWorld, resumeSeq, seasonSync, step } from '@muse/engine';
 import type {
   ActionError, AgentActivity, Command, CommandRecord, CommandSource, Dir, Expedition, ExpeditionReport, GameEvent, JoinCommand, LegacyMonster, MacroStop, ProjectedEvent,
   PerceivedEvent, PlayerId, PlayerView, Pos, ReportCall, RunMetaFile, RunSummary, SeasonSlay, SeasonSlayFacts, SeasonSyncCommand, SeqResumeCommand, TurnSnapshot, World,
-  CheckpointLedger, DirectiveItem,
+  CheckpointLedger, DirectiveItem, DirectiveWish,
 } from '@muse/shared';
 import {
   DIRECTIVE_ITEMS, OWNER_COMMANDS, actionError, applyEvent, buildExpeditionReport, canonicalHash, guardianDisplayName, compareReports, emptyWorld, filterEventsForPlayer, FREE_COMMANDS, MACRO_COMMANDS,
@@ -46,6 +46,11 @@ export interface SubmitOpts {
   source: CommandSource;
   thought?: string;
   expectSeq?: number;
+  /**
+   * 引数（offer）なしの start_expedition（S11・S11a。MCP の口から）: 命令の列の中で、もう一度確かめてから、持ち主が選んだ候補を入れる。
+   * 準備完了でなくなっていたら、希望にせず、出来事を足さずに断る。記録の命令は、入れた候補の start_expedition（命令の形は変えない）
+   */
+  bareStart?: boolean;
 }
 
 /** 応答テキストの表示オプション（IMPROVEMENTS_V3 §1.8） */
@@ -123,6 +128,8 @@ export class RunSession {
   private readonly lastInput = new Map<PlayerId, number>();
   /** プレイヤー（AI）が最後に呼び出した時刻（S9 §58.1。命令と MCP の呼び出し。持ち主・サーバーの命令は数えない。メモリだけで、起動し直すと空） */
   private readonly lastCall = new Map<PlayerId, number>();
+  /** 持ち主の口（…/owner/view・directive・act）が最後に来た時刻（S11。World に入れない。記録に書かない。メモリだけで、起動し直すと空） */
+  private readonly ownerCall = new Map<PlayerId, number>();
   /** 持ち主の支度を wait_for_turn で待っている呼び出しの数（S9 §58.1。メモリだけ） */
   private readonly ownerWaiting = new Map<PlayerId, number>();
   /** 応答テキストの表示オプション（ゲームには影響しない。World の外） */
@@ -800,6 +807,80 @@ export class RunSession {
     return this.lastCall.get(pid) ?? null;
   }
 
+  /** 持ち主の口が来た（S11。HTTP の持ち主の口が、認めた後に呼ぶ。now はテストで差し替える） */
+  noteOwnerCall(pid: PlayerId, now = Date.now()): void {
+    this.ownerCall.set(pid, Math.max(this.ownerCall.get(pid) ?? 0, now));
+  }
+
+  /** 持ち主の口が最後に来た時刻（S11。このサーバーの起動の後に来ていなければ null） */
+  lastOwnerCallAt(pid: PlayerId): number | null {
+    return this.ownerCall.get(pid) ?? null;
+  }
+
+  /**
+   * 持ち主が決めた出来事（owner_decided）の前に、その項目に出ていた AI の希望（S11）。希望は、持ち主が決めた時点で World から消えるので、ランの記録をさかのぼって探す
+   * （出来事の形は変えない）。その項目の前の決定・希望を消した指図（directive_set・持ち主の prepare の後の値に、その項目の希望が無い）に当たったら、無い。
+   * 目的は、決めた遠征の番号の希望だけ（持ち主の prepare で目的を選んだ時点で消えるので、指図の値は見ない）。
+   * 返す kind は記録の正体（比べるだけ。文には使わない: 文は、プレイヤーに見えている品から作る）
+   */
+  /** その seq の出来事（ランの記録から。無ければ undefined） */
+  eventAtSeq(seq: number): GameEvent | undefined {
+    const e = this.history[this.indexOfSeq(seq)];
+    return e && e.seq === seq ? e : undefined;
+  }
+
+  wishBeforeDecision(pid: PlayerId, seq: number): { wish: DirectiveWish } | null {
+    const i0 = this.indexOfSeq(seq);
+    const d = this.history[i0];
+    if (!d || d.seq !== seq || d.type !== 'owner_decided' || d.player !== pid) return null;
+    const key: DirectiveWish['item'] = d.act === 'choose_perk' ? 'perk' : d.act === 'choose_boon' ? 'boon' : d.item === 'loadout' ? 'loadout' : 'objective';
+    const keyOf = (e: Extract<GameEvent, { type: 'owner_decided' }>): DirectiveWish['item'] => (e.act === 'choose_perk' ? 'perk' : e.act === 'choose_boon' ? 'boon' : e.item === 'loadout' ? 'loadout' : 'objective');
+    for (let i = i0 - 1; i >= 0; i--) {
+      const e = this.history[i];
+      if (!('player' in e) || e.player !== pid) continue;
+      if (e.type === 'owner_decided' && keyOf(e) === key) return null;
+      if (e.type === 'directive_wish' && e.wish.item === key) {
+        if (key === 'objective' && (e.wish.item !== 'objective' || e.wish.no !== d.no)) return null;
+        return { wish: structuredClone(e.wish) };
+      }
+      // 目的（S11a）: 持ち主の prepare で目的を選ぶと希望は消えるので、指図の希望の一覧では止めない。握るのをやめた指図（後の値の hold に目的が無い）で止める
+      // （握るのをやめると希望は消える。握り直した後の決定に、前の希望を添えない）
+      if (key === 'objective' && e.type === 'directive_set' && !e.directiveAfter.hold.includes('objective')) return null;
+      if (key !== 'objective' && (e.type === 'directive_set' || (e.type === 'directive_prep' && e.why === 'owner')) && !(e.directiveAfter.wishes ?? []).some((w) => w.item === key)) return null;
+    }
+    return null;
+  }
+
+  /**
+   * 持ち主が付け替えた品の ID（S11a。装備の決定 owner_decided の直前の、同じ命令の item_equipped・item_unequipped から。出来事の形は変えない）。見つからなければ null
+   */
+  decidedItemOf(pid: PlayerId, seq: number): string | null {
+    const i0 = this.indexOfSeq(seq);
+    const d = this.history[i0];
+    if (!d || d.seq !== seq || d.type !== 'owner_decided' || d.player !== pid || d.item !== 'loadout') return null;
+    const me = this.world.players[pid]?.entityId;
+    const want = d.act === 'equip' ? 'item_equipped' : 'item_unequipped';
+    for (let i = i0 - 1; i >= 0 && i >= i0 - 8; i--) {
+      const e = this.history[i];
+      if (e.type === 'owner_decided') return null;
+      if (e.type === want && e.actor === me) return e.item;
+    }
+    return null;
+  }
+
+  /**
+   * このキャンプに着いてから、持ち主が伝言を動かしたか（S11a）: キャンプに着いた後の指図（directive_set）の伝言が、一度でも base と違えば true
+   * （消して同じ文に戻した・別の文から元の文に戻した、も「動いた」）
+   */
+  ownerMessageMovedAtCamp(pid: PlayerId, base: string): boolean {
+    for (let i = this.history.length - 1; i >= 0; i--) {
+      const e = this.history[i];
+      if (e.type === 'player_state' && e.player === pid && e.state === 'at_camp') return false;
+      if (e.type === 'directive_set' && e.player === pid && e.directiveAfter.message !== base) return true;
+    }
+    return false;
+  }
+
   recordAgentActivity(a: AgentActivity): void {
     if (a.playerId) this.lastCall.set(a.playerId, Math.max(this.lastCall.get(a.playerId) ?? 0, a.wall));
     this.agentActivity.push(a);
@@ -884,18 +965,47 @@ export class RunSession {
     if (MACRO_COMMANDS.has(cmd.type) || (cmd.type === 'wait' && (cmd.turns ?? 1) > 1)) return this.runMacro(pid, cmd, opts);
     // シーズン（S0 §9.4）: 階段の報告はサーバーが共有層に問い合わせ、season_sync として記録する
     if (cmd.type === 'report_stairs') return this.enqueue(() => this.reportNow(pid, opts));
-    // シーズン（S0 §9.4）: 遠征を始めるときに取り込む（予算・終わりの時刻・公開された階段・順位）
-    if (cmd.type === 'start_expedition' && this.world.meta.season && this.deps.season && pr.state === 'at_camp') {
+    // 引数なしの start_expedition（S11a）: 列の中で確かめ直して、候補を入れる
+    if (cmd.type === 'start_expedition' && opts.bareStart && !owner) {
       return this.enqueue(() => {
-        // 断られる start_expedition（S8 §54.3・S9 §58.1: 目的を握られている・支度が「まだ」・持ち主の口）は、取り込みを記録する前に断る。
-        // 希望（S9 §58.2）を覚える断りは、engine が出来事を出すので、取り込みをせずに step へ渡す
-        const held = this.world.players[pid] ? directiveRefusal(this.world, this.deps.content, this.world.players[pid], cmd, owner) : null;
-        if (held) return this.stepNow(pid, cmd, opts.source, opts.thought);
-        this.seasonSyncNow(pid, 'start');
-        return this.stepNow(pid, cmd, opts.source, opts.thought);
+        const b = this.resolveBareStart(pid);
+        if ('error' in b) return { ok: false, error: b.error };
+        return this.startNow(pid, { type: 'start_expedition', offer: b.offer }, opts, owner);
       });
     }
+    if (cmd.type === 'start_expedition') return this.enqueue(() => this.startNow(pid, cmd, opts, owner));
     return this.enqueue(() => this.stepNow(pid, cmd, opts.source, opts.thought));
+  }
+
+  /** start_expedition（キューの中から）。シーズン（S0 §9.4）: 遠征を始めるときに取り込む（予算・終わりの時刻・公開された階段・順位） */
+  private startNow(pid: PlayerId, cmd: Command, opts: SubmitOpts, owner: boolean): SubmitResult {
+    const pr = this.world.players[pid];
+    if (this.world.meta.season && this.deps.season && pr?.state === 'at_camp') {
+      // 断られる start_expedition（S8 §54.3・S9 §58.1: 目的を握られている・支度が「まだ」・持ち主の口）は、取り込みを記録する前に断る。
+      // 希望（S9 §58.2）を覚える断りは、engine が出来事を出すので、取り込みをせずに step へ渡す
+      const held = directiveRefusal(this.world, this.deps.content, pr, cmd, owner);
+      if (held) return this.stepNow(pid, cmd, opts.source, opts.thought);
+      this.seasonSyncNow(pid, 'start');
+    }
+    return this.stepNow(pid, cmd, opts.source, opts.thought);
+  }
+
+  /**
+   * 引数なしの start_expedition の候補（S11a。キューの中で）: キャンプにいなければ（ランが終わった・倒れた・迷宮の中）、どの候補でも始まらないので、ほかの命令と同じ順の断りに任せる。
+   * 目的を握るのをやめていたら、引数の断り。準備完了でなくなっていたら、希望にせずに断る（出来事を出さない）。準備完了なら、持ち主が選んだ候補
+   */
+  private resolveBareStart(pid: PlayerId): { offer: number | 'endless' } | { error: ActionError } {
+    const w = this.world;
+    const pr = w.players[pid];
+    const fallback = w.camp?.offers[0]?.index ?? 'endless';
+    if (!pr || pr.state !== 'at_camp' || w.status === 'ended') return { offer: fallback };
+    const d = pr.directive;
+    if (!d?.hold.includes('objective')) {
+      return { error: actionError('bad_request', t(pr.locale, 'start_expedition には offer が要る（持ち主は、目的を握るのをやめた）。', 'start_expedition needs offer (your owner no longer holds the objective).'), t(pr.locale, '例: start_expedition { offer: 1 }', 'e.g. start_expedition { offer: 1 }')) };
+    }
+    const err = bareStartRefusal(w, this.deps.content, pr);
+    if (err) return { error: err };
+    return { offer: d.prep?.objective ?? fallback };
   }
 
   /** シーズンの結果が確定している（S9a §57.3 の 4） */

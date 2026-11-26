@@ -45,7 +45,7 @@ export function heldError(L: 'ja' | 'en', item: DirectiveItem, inDungeon: boolea
   // 世界の中での読み方（依頼者と決めた言い方。SEASON.md §55）: 主は「キャンプで、持ち主が決める」。読み方は添える。「鑑定」とは言わない（キャンプは品の正体や呪いを明かさない）
   if (item === 'objective') {
     return actionError('held_by_owner',
-      t(L, '次の遠征の目的は、持ち主がキャンプで決める（指図）。あなたの start_expedition は、持ち主の支度が準備完了になるまで断られる（準備完了の後は、持ち主が選んだ目的で始まる）。', 'Your owner decides the next expedition at camp (directive). Your start_expedition is refused until your owner\'s preparations are ready (after that, it starts with the objective your owner chose).'),
+      t(L, '次の遠征の目的は、持ち主がキャンプで決める（指図）。あなたの start_expedition は、持ち主の支度が準備完了になるまで断られる（準備完了の後は、引数なしの start_expedition で、持ち主が選んだ目的で始まる）。', 'Your owner decides the next expedition at camp (directive). Your start_expedition is refused until your owner\'s preparations are ready (after that, start_expedition with no arguments starts the objective your owner chose).'),
       prepWaitHint(L));
   }
   if (item === 'loadout') {
@@ -66,7 +66,7 @@ export function heldError(L: 'ja' | 'en', item: DirectiveItem, inDungeon: boolea
 function wishError(L: 'ja' | 'en', label: string, item: DirectiveItem, inDungeon: boolean, pending: string | null): ActionError {
   const head = wishToldText(L, label);
   const hint = item === 'objective'
-    ? t(L, '持ち主の支度が準備完了になったら、start_expedition で出発する（目的は、持ち主が選んだもの）。', 'Once your owner\'s preparations are ready, set out with start_expedition (with the objective your owner chose).') + prepWaitHint(L)
+    ? t(L, '持ち主の支度が準備完了になったら、start_expedition（引数なし）で出発する（目的は、持ち主が選んだもの）。', 'Once your owner\'s preparations are ready, set out with start_expedition, no arguments (with the objective your owner chose).') + prepWaitHint(L)
     : inDungeon
       ? item === 'loadout'
         ? t(L, '今の装備のまま進む。手に入れた装備は、持ち帰れば、キャンプで持ち主が決める。', 'Carry on with what you wear; bring found gear home and your owner decides at camp.')
@@ -281,6 +281,25 @@ export function directiveGate(world: World, content: Content, pr: PlayerRecord, 
   // 装備を握っている遠征の間は、装備中の品を捨てられない（付け替えに数える。§54.3「遠征の間は、だれも付け替えられない」）
   if (cmd.type === 'drop' && hold.includes('loadout') && pr.state === 'alive' && equippedSlot(world, pr, cmd.slot)) return { error: heldError(L, 'loadout', true) };
   return null;
+}
+
+/**
+ * 引数（offer）なしの start_expedition（S11。サーバーが MCP の口で受け、持ち主が選んだ目的を入れて流す）: 目的を握られていて、持ち主の選んだ目的で今は始められないときの断り
+ * （希望は覚えない: 指した候補が無いので。手番を使わず、出来事を出さない。step を通らないので、記録にも残らない）。
+ * 目的を握られていない・準備完了で目的が選ばれている・シーズンの予算切れか時間切れのキャンプ（step の今の断りに任せる）なら null
+ */
+export function bareStartRefusal(world: World, content: Content, pr: PlayerRecord): ActionError | null {
+  const L = pr.locale;
+  const d = pr.directive;
+  const hold = d?.hold ?? [];
+  if (!hold.includes('objective')) return null;
+  const atCamp = pr.state === 'at_camp' && world.status !== 'ended';
+  const seasonClosed = !!world.season && ((seasonBudgetLeft(world, pr.id) ?? 1) <= 0 || world.season.ended);
+  if (atCamp && seasonClosed) return null;
+  if (atCamp && prepStateWorld(world, content, pr) === 'ready' && d?.prep?.objective !== undefined) return null;
+  const e = heldError(L, 'objective', !atCamp);
+  if (atCamp) e.message += t(L, `持ち主の支度は、まだ（${pendingText(L, prepNeedsWorld(world, content, pr, hold, d?.prep))}）。`, ` Your owner's preparations are not ready yet (${pendingText(L, prepNeedsWorld(world, content, pr, hold, d?.prep))}).`);
+  return e;
 }
 
 /** 断るかどうかだけ（出来事は作らない。RunSession が、シーズンの取り込みを記録する前に確かめる） */

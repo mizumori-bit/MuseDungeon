@@ -110,6 +110,11 @@ export interface TurnSnapshot {
   crossed?: number;
   /** 持ち主の伝言（S8b。前の応答から変わったかの判定。無ければ空） */
   ownerMsg?: string;
+  /**
+   * 最後にキャンプの外（迷宮の中）で応答したときの伝言（S11。伝言はキャンプでしか変わらないので、これが前のキャンプの終わりの伝言。
+   * キャンプの「（前のキャンプと同じ伝言）」の判定。まだ迷宮で応答していなければ undefined）
+   */
+  ownerMsgOutside?: string;
   /** 支度の札（S9 §58.1。「状態:選んだ目的」。握っていなければ空。準備完了になったことを「変化」に出す判定） */
   prep?: string;
 }
@@ -149,6 +154,15 @@ export function turnSnapshot(view: PlayerView, obs: Observation, state: TurnStat
   };
 }
 
+/**
+ * 伝言が、前のキャンプのときから変わっていない（S11）: キャンプにいて、伝言があり、前の応答の後に書き換えられておらず、前の遠征の間の伝言と同じ。
+ * 前の遠征の間に応答していない（ランの最初のキャンプ・起動し直した後）なら、言わない
+ */
+export function ownerMessageKept(prev: TurnSnapshot | null, view: PlayerView): boolean {
+  const m = view.directive?.message ?? '';
+  return view.status === 'at_camp' && !!m && !ownerMessageIsNew(prev, view) && prev?.ownerMsgOutside !== undefined && prev.ownerMsgOutside === m;
+}
+
 /** 伝言が、前の応答の後に書かれた・書き換えられた（S8b）。前の応答が無ければ（つないだ最初・起動し直した後）、新しいとは言わない */
 export function ownerMessageIsNew(prev: TurnSnapshot | null, view: PlayerView): boolean {
   const m = view.directive?.message ?? '';
@@ -184,9 +198,10 @@ function firstSeen(prev: TurnSnapshot, cur: TurnSnapshot, view: PlayerView, cata
 
 /**
  * 前回の要約からの変化。prev が無ければ空。
- * events: 前回の要約以降に知覚した出来事（撃破・死亡の区別に使う）
+ * events: 前回の要約以降に知覚した出来事（撃破・死亡の区別に使う）。
+ * ownerNotes: 持ち主が決めた出来事（owner_decided の seq）に添える、希望との並べ（S11。「（あなたの希望どおり）」。サーバーがランの記録から作る）
  */
-export function diffChanges(prev: TurnSnapshot | null, cur: TurnSnapshot, view: PlayerView, obs: Observation, events: readonly PerceivedEvent[] = [], catalog?: Catalog): Change[] {
+export function diffChanges(prev: TurnSnapshot | null, cur: TurnSnapshot, view: PlayerView, obs: Observation, events: readonly PerceivedEvent[] = [], catalog?: Catalog, ownerNotes: Readonly<Record<number, string>> = {}): Change[] {
   const L = view.locale;
   // 公開された下り階段（シーズン。S2a §20.6 の 1）: 着いたとき・遠征を始めたときに、道しるべが地図にあることを 1 回言う（自分の目で見る前だけ）
   const ks = cur.depth !== null ? obs.navigation.known_stairs.find((s) => s.type === 'down' && s.public_by) : undefined;
@@ -205,28 +220,30 @@ export function diffChanges(prev: TurnSnapshot | null, cur: TurnSnapshot, view: 
   // 並び: 特技と加護 → 装備の経過とまとめ → 遠征の開始 → 伝言（どれも code owner。ほかの変化より先）
   const gear: Change[] = [];
   const started: Change[] = [];
+  let gearNote = '';
   for (const e of events) {
     if (e.seq <= prev.seq || e.type !== 'owner_decided' || !e.text) continue;
     const ev = e.event as { act?: string; no?: number; offer?: number | 'endless'; asked?: number | 'endless' };
+    const note = ownerNotes[e.seq] ?? '';
     if (ev.act === 'start_expedition') {
       const xo = view.expedition && view.expedition.no === ev.no ? objectiveText(L, view.expedition.objective) : '';
       // S9（§58.1）: 遠征を始めたのはプレイヤーで、目的は持ち主が選んだもの。引数の候補が違っていたら、そのことも（S8 の版の記録の、持ち主が始めた遠征は今までの文）
       if (ev.offer !== undefined) {
         const differ = ev.asked !== undefined && ev.asked !== ev.offer;
         const askedText = ev.asked === 'endless' ? t(L, '目的なし（endless）', 'no objective (endless)') : t(L, `候補 ${ev.asked} `, `offer ${ev.asked}`);
-        started.push({ code: 'owner', text: t(L, `持ち主が決めた目的で始めた: 遠征 ${ev.no ?? '?'}${xo ? `（${xo}）` : ''}${differ ? `。あなたが指した${askedText}ではなく、持ち主の選んだ目的で始まった` : ''}`,
-          `Started with the objective your owner chose: expedition ${ev.no ?? '?'}${xo ? ` (${xo})` : ''}${differ ? `; it started with your owner's choice, not the ${askedText} you named` : ''}`) });
+        started.push({ code: 'owner', text: t(L, `持ち主が決めた目的で始めた: 遠征 ${ev.no ?? '?'}${xo ? `（${xo}）` : ''}${note}${differ ? `。あなたが指した${askedText}ではなく、持ち主の選んだ目的で始まった` : ''}`,
+          `Started with the objective your owner chose: expedition ${ev.no ?? '?'}${xo ? ` (${xo})` : ''}${note}${differ ? `; it started with your owner's choice, not the ${askedText} you named` : ''}`) });
       } else started.push({ code: 'owner', text: t(L, `持ち主が、遠征 ${ev.no ?? '?'} を始めた${xo ? `: ${xo}` : ''}`, `Your owner started expedition ${ev.no ?? '?'}${xo ? `: ${xo}` : ''}`) });
-    } else if (ev.act === 'equip' || ev.act === 'unequip') gear.push({ code: 'owner', text: e.text.replace(/[。.]$/, '') });
-    else out.push({ code: 'owner', text: e.text.replace(/[。.]$/, '') });
+    } else if (ev.act === 'equip' || ev.act === 'unequip') { gear.push({ code: 'owner', text: e.text.replace(/[。.]$/, '') }); gearNote ||= note; }
+    else out.push({ code: 'owner', text: e.text.replace(/[。.]$/, '') + note });
   }
   // 装備のまとめ（S8b）: 途中の経過（3 行まで。多ければまとめだけ）の後に、今の装備を 1 行
   if (gear.length) {
     if (gear.length <= 3) out.push(...gear);
     const eq = obs.self.equipment;
     const none = t(L, 'なし', 'none');
-    out.push({ code: 'owner', text: t(L, `持ち主が、装備を決めた。今の装備: 武器 ${eq.weapon ?? none}・防具 ${eq.armor ?? none}・装飾 ${eq.accessory ?? none}`,
-      `Your owner settled your gear. Now wearing: weapon ${eq.weapon ?? none}, armor ${eq.armor ?? none}, accessory ${eq.accessory ?? none}`) });
+    out.push({ code: 'owner', text: t(L, `持ち主が、装備を決めた。今の装備: 武器 ${eq.weapon ?? none}・防具 ${eq.armor ?? none}・装飾 ${eq.accessory ?? none}${gearNote}`,
+      `Your owner settled your gear. Now wearing: weapon ${eq.weapon ?? none}, armor ${eq.armor ?? none}, accessory ${eq.accessory ?? none}${gearNote}`) });
   }
   out.push(...started);
   // 決めていないものを残して遠征を始めた（S9a §57.3 の 1）: 始めた直後の応答に 1 回（だれが始めても）
@@ -237,7 +254,7 @@ export function diffChanges(prev: TurnSnapshot | null, cur: TurnSnapshot, view: 
   if (view.status === 'at_camp' && (prev.state === 'at_camp' || prev.state === 'expedition_ended') && prev.prep !== undefined && cur.prep !== prev.prep && !seasonClosedView(view)) {
     const st = prepStateView(view);
     const o = view.directive?.hold.includes('objective') ? view.directive?.prep?.objective : undefined;
-    if (st === 'ready') out.push({ code: 'owner', text: t(L, `持ち主の支度が、準備完了になった${o !== undefined ? `（目的: ${ownerOfferText(L, view, o)}）` : ''}。start_expedition で出発する`, `Your owner's preparations are ready${o !== undefined ? ` (objective: ${ownerOfferText(L, view, o)})` : ''}. Set out with start_expedition`) });
+    if (st === 'ready') out.push({ code: 'owner', text: t(L, `持ち主の支度が、準備完了になった${o !== undefined ? `（目的: ${ownerOfferText(L, view, o)}）` : ''}。start_expedition${o !== undefined ? '（引数なし）' : ''}で出発する`, `Your owner's preparations are ready${o !== undefined ? ` (objective: ${ownerOfferText(L, view, o)})` : ''}. Set out with start_expedition${o !== undefined ? ' (no arguments)' : ''}`) });
     else if (st === 'pending' && prev.prep.startsWith('ready')) out.push({ code: 'owner', text: t(L, '持ち主の支度が、まだに戻った（持ち主が、支度を見直している）', 'Your owner\'s preparations are no longer ready (your owner is going over them)') });
   }
   if (msgNew) out.push({ code: 'owner', text: t(L, `持ち主が、伝言を書いた: ${msg}`, `Your owner wrote a message: ${msg}`) });
@@ -506,8 +523,8 @@ export function turnLine(view: PlayerView, b: TurnBlock, short = false): string 
       // 準備完了で、目的を握られている（S9 §58.1）: 出発するのは、あなた（持ち主が選んだ目的で）
       if (view.camp && view.directive?.hold.includes('objective') && prepStateView(view) === 'ready' && view.directive.prep?.objective !== undefined) {
         const o = ownerOfferText(L, view, view.directive.prep.objective);
-        return t(L, `▶ キャンプにいます。持ち主の支度は準備完了。start_expedition で出発する（持ち主が選んだ目的: ${o}。あなたが呼ぶまで、出発しない）。`,
-          `▶ You are at camp. Your owner's preparations are ready. Set out with start_expedition (the objective your owner chose: ${o}; nothing starts until you call it).`);
+        return t(L, `▶ キャンプにいます。持ち主の支度は準備完了。start_expedition（引数なし）で出発する（持ち主が選んだ目的: ${o}。あなたが呼ぶまで、出発しない）。`,
+          `▶ You are at camp. Your owner's preparations are ready. Set out with start_expedition, no arguments (the objective your owner chose: ${o}; nothing starts until you call it).`);
       }
       if (view.camp && !view.expedition) {
         return t(L, '▶ キャンプにいます。最初の遠征を 3 つの候補から start_expedition { offer } で選びます（目標の深さ・推奨レベル・条件を比べて）。',

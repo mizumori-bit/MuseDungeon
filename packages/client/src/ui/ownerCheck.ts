@@ -30,10 +30,13 @@ export function readyCheck(u: DirectiveUndecided | undefined | null): string[] |
   return parts.length ? parts : null;
 }
 
-/** AI との行き来の 1 行（S9 §58.1: サーバーの控えから）。いま待っている・最後の呼び出しからの時間・このサーバーの起動の後に呼び出しが無い */
-export function aiPresenceText(ai: { lastCallAgoS: number | null; waitingNow: boolean } | undefined | null): string | null {
+/**
+ * AI との行き来の 1 行（S9 §58.1: サーバーの控えから）。いま待っている・最後の呼び出しからの時間・このサーバーの起動の後に呼び出しが無い。
+ * name: 冒険者の名前（S11: 画面の言葉で「（名前）は、今、あなたの支度を待っている」。無ければ「AI」）
+ */
+export function aiPresenceText(ai: { lastCallAgoS: number | null; waitingNow: boolean } | undefined | null, name?: string): string | null {
   if (!ai) return null;
-  if (ai.waitingNow) return tr('AI は、いま wait_for_turn で、あなたの支度を待っている', 'The AI is waiting for your preparations right now (wait_for_turn)');
+  if (ai.waitingNow) return tr(`${name || 'AI'}は、今、あなたの支度を待っている`, `${name || 'Your AI'} is waiting for your preparations right now`);
   if (ai.lastCallAgoS === null) return tr('このサーバーが起動してから、AI の呼び出しは無い', 'No call from the AI since this server started');
   const s = ai.lastCallAgoS;
   const ago = s < 60 ? tr(`${s} 秒前`, `${s} s ago`) : s < 3600 ? tr(`${Math.floor(s / 60)} 分前`, `${Math.floor(s / 60)} min ago`) : tr(`${Math.floor(s / 3600)} 時間前`, `${Math.floor(s / 3600)} h ago`);
