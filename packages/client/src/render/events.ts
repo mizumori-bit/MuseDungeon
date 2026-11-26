@@ -1,13 +1,43 @@
 // ゲームイベント（World 用・プレイヤー向け縮約版のどちらでも）→ 演出用 ViewEvent。
 import type { Catalog } from '@muse/shared';
 import type { AssetRef } from '../theme/types';
+import { getLocale } from '../util';
 import type { ViewEvent } from './types';
 
 type AnyEv = Record<string, any> & { type: string };
 
-/** director=true のとき、未鑑定になり得る種別は常に外見で描く */
+/** 敵の大きな行動の短い名前（S16a。観測・文と同じ呼び方。カタログに名前の無い行動） */
+function foeActName(kind: 'swing' | 'charge' | 'summon' | 'rage'): string {
+  const ja = getLocale() === 'ja';
+  switch (kind) {
+    case 'swing': return ja ? '大振り' : 'Heavy swing';
+    case 'charge': return ja ? '突進' : 'Charge';
+    case 'summon': return ja ? '手下を呼ぶ' : 'Call minions';
+    default: return ja ? '怒り' : 'Rage';
+  }
+}
+
+/** 能動技の表示名（カタログの名前。無ければ ID の後ろ） */
+export function abilityName(catalog: Catalog | null, id: string): string {
+  const n = catalog?.abilities[id]?.name;
+  return n ? n[getLocale()] ?? n.ja : id.split(':').pop() ?? id;
+}
+
+/**
+ * director=true のとき、未鑑定になり得る種別は常に外見で描く。
+ * 見えていない者（ID が伏せられた）の分は作らない（届いた出来事だけから。S16a）
+ */
 export function toViewEvents(events: readonly AnyEv[], catalog: Catalog | null, director = false): ViewEvent[] {
   const out: ViewEvent[] = [];
+  // 同じ束に、当たった攻撃の出来事が届いている一撃（攻撃者 > 相手 の組ごとの数）。その数だけ、被害からは踏み込みを重ねない。
+  // 数え切った後の被害（同じ組の、攻撃の出来事が届いていない当たり）は、当たりごとに踏み込みを出す（S16d）
+  const swung = new Map<string, number>();
+  for (const ev of events) {
+    if (ev.type === 'attack' && ev.hit && ev.attacker && ev.target) {
+      const k = `${ev.attacker}>${ev.target}`;
+      swung.set(k, (swung.get(k) ?? 0) + 1);
+    }
+  }
   for (const ev of events) {
     switch (ev.type) {
       case 'entity_moved':
@@ -17,6 +47,13 @@ export function toViewEvents(events: readonly AnyEv[], catalog: Catalog | null, 
         if (ev.to) out.push({ kind: 'attack', id: ev.attacker ?? null, from: ev.from ?? null, to: ev.to, hit: !!ev.hit, crit: !!ev.crit, ranged: !!ev.ranged });
         break;
       case 'damaged':
+        // 攻撃の出来事が届いていない当たり（会心でない当たりは文にならず、遊ぶ画面・追従だけの観戦の枠に届かない。S16a）: 被害から踏み込みを作る
+        if (ev.source && ev.target && (ev.via === 'melee' || ev.via === 'ranged')) {
+          const k = `${ev.source}>${ev.target}`;
+          const n = swung.get(k) ?? 0;
+          if (n > 0) swung.set(k, n - 1);
+          else out.push({ kind: 'strike', id: ev.source, target: ev.target, ranged: ev.via === 'ranged' });
+        }
         if (ev.amount > 0) out.push({ kind: 'damage', id: ev.target, amount: ev.amount });
         break;
       case 'healed':
@@ -24,6 +61,16 @@ export function toViewEvents(events: readonly AnyEv[], catalog: Catalog | null, 
         break;
       case 'died':
         if (ev.pos) out.push({ kind: 'die', id: ev.id, pos: ev.pos });
+        break;
+      case 'ability_used':
+        // 能動技の名前（S16a。§70.3 の 2）: 使った者が見えているときだけ（見えていなければ actor は伏せてある）
+        if (ev.actor && ev.ability) out.push({ kind: 'ability', id: ev.actor, name: abilityName(catalog, ev.ability) });
+        break;
+      case 'monster_acted':
+        if (ev.id) out.push({ kind: 'ability', id: ev.id, name: foeActName('swing') });
+        break;
+      case 'guardian_acted':
+        if (ev.id && ev.act !== 'missed') out.push({ kind: 'ability', id: ev.id, name: foeActName(ev.act === 'charged' ? 'charge' : ev.act === 'summoned' ? 'summon' : 'rage') });
         break;
       case 'item_thrown': {
         const to = ev.landed ?? ev.to;

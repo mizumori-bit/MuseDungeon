@@ -1,7 +1,7 @@
 // HTTP API（docs/PROTOCOL.md §8）。失敗は ApiError で投げ、画面側でバナー表示する。
 import type {
   ActionError, Catalog, Command, CommandRecord, DirectiveItem, GameEvent, JoinedResponse, JoinRunRequest, LeaderboardEntry,
-  NewRunRequest, OpsAdventurerAdded, OpsEnrolled, OpsRosterResponse, OpsSeasonOpened, OwnerPace, OwnerRunsResponse, OwnerViewResponse, ProfileRecords, ProfileSeasonEntry, RunIndex, RunListing, RunMetaFile, SeasonListing, SeasonStandingsResponse, SeasonWatchResponse,
+  NewRunRequest, OpsAdventurerAdded, OpsCodexResponse, OpsEnrolled, OpsRosterResponse, OpsSeasonOpened, OwnerPace, OwnerRunsResponse, OwnerViewResponse, ProfileRecords, ProfileSeasonEntry, RunIndex, RunListing, RunMetaFile, SeasonListing, SeasonStandingsResponse, SeasonWatchResponse,
   SpectatorPolicy, World,
 } from '@muse/shared';
 
@@ -114,6 +114,8 @@ export const api = {
   opsEnroll: (token: string, name?: string) => ownerPost<OpsEnrolled>('/api/ops/enroll', name ? { name } : {}, token),
   /** 招きを取り消す（S12c。ランを 1 回も始めていない招きだけ） */
   opsUninvite: (profileId: string) => postJSON<{ seasonId: string; name: string; profileId: string }>('/api/ops/uninvite', { profileId }),
+  /** このサーバーのプロフィールの全員の図鑑と実績（S16b。図鑑のタブ。サーバーと同じ PC からだけ。画面は、持ち主の口の一覧が local のときだけ呼ぶ） */
+  opsCodex: (locale: string) => getJSON<OpsCodexResponse>(`/api/ops/codex?locale=${enc(locale)}`),
 };
 
 let catalogPromise: Promise<Catalog> | null = null;

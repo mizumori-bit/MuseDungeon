@@ -467,7 +467,9 @@ export class SeasonService implements SeasonHooks {
   }
 
   private listing(d: SeasonData): SeasonListing {
-    return { id: d.def.id, name: d.def.name, budget: d.def.budget, endsAt: d.def.endsAt, status: this.status(d), participants: started(d.participants).length, invited: this.store.invites(d.def.id).length };
+    // openedAt（S16d）: 開いた時刻。秘密ではない（一覧の「開催の新しい順」に使う）。記録に無ければ付けない
+    const opened = typeof d.def.openedAt === 'number' && Number.isFinite(d.def.openedAt) ? { openedAt: d.def.openedAt } : {};
+    return { id: d.def.id, name: d.def.name, budget: d.def.budget, endsAt: d.def.endsAt, ...opened, status: this.status(d), participants: started(d.participants).length, invited: this.store.invites(d.def.id).length };
   }
 
   /**

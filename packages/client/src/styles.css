@@ -150,8 +150,11 @@ th, td { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--line
 .dialog h2 { margin-top: 0; }
 
 @media (max-width: 800px) {
-  .layout { flex-direction: column; }
-  .layout .side { width: auto; max-width: none; border-left: none; border-top: 1px solid var(--line); max-height: 45vh; }
+  /* 縦に並べるとき（S16d）: 地図の列は中身の高さのまま（縮めない）、全体を縦に送る。前は、地図の列が縮み、はみ出した操作のボタンの行の上に、
+     右の枠（下に回った枠）が重なっていた（main からの不具合。800px 以下） */
+  .layout { flex-direction: column; overflow-y: auto; }
+  .layout .main { flex: 1 0 auto; }
+  .layout .side { flex: none; width: auto; max-width: none; border-left: none; border-top: 1px solid var(--line); max-height: 45vh; }
   .mapwrap { min-height: 50vh; }
   .topbar, .toolbar, .lobby { padding-left: 16px; padding-right: 16px; }
 }
@@ -211,6 +214,27 @@ th, td { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--line
 .watch .toolbar { flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; white-space: nowrap; scrollbar-width: none; }
 .watch .toolbar::-webkit-scrollbar { display: none; }
 .watch .toolbar > * { flex: none; }
+/* 観戦の見出し（S16a。SEASON.md §70.3 の 5）: 広い幅では 1 段（題は「…」で切る）。狭い幅では、道具の束（接続・テーマ・音・巻き戻し）を 2 段目に 1 行で
+   （束の中は折り返さず、はみ出したら横に送る）。段の数は幅だけで決まる（音の状態などの出入りで変わらない。地図の枠の高さを変えない: S15） */
+.watch .topbar { flex-wrap: nowrap; }
+.watch .topbar > * { flex: none; }
+.watch .topbar .title { flex: 0 1 auto; min-width: 4em; }
+.watch .topbar .spacer { flex: 1 1 0; min-width: 0; }
+.watch .topbar .hdr-tools { display: flex; align-items: center; gap: 10px; flex: 0 1 auto; min-width: 0; flex-wrap: nowrap; white-space: nowrap; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+.watch .topbar .hdr-tools::-webkit-scrollbar { display: none; }
+.watch .topbar .hdr-tools > * { flex: none; }
+/* 狭い幅（S16d）: 折り返しに任せず、格子で 2 段に固定する。1 段目（題字・拠点へ・題・言葉）は折り返さず、長い文は「…」で切る
+   （英語の「← Back to the hub」や、細い画面でも、段の数は変わらない） */
+@media (max-width: 1100px) {
+  .watch .topbar { display: grid; grid-template-columns: minmax(0, max-content) minmax(0, max-content) minmax(0, 1fr) auto; column-gap: 10px; row-gap: 6px; }
+  .watch .topbar > .brand { grid-row: 1; grid-column: 1; }
+  .watch .topbar > .hdr-back { grid-row: 1; grid-column: 2; }
+  .watch .topbar > .title { grid-row: 1; grid-column: 3; max-width: none; }
+  .watch .topbar > button { grid-row: 1; grid-column: 4; }
+  .watch .topbar > .brand, .watch .topbar > .hdr-back, .watch .topbar > .title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .watch .topbar .spacer { display: none; }
+  .watch .topbar .hdr-tools { grid-row: 2; grid-column: 1 / -1; }
+}
 .watch .macro .tag { margin: 0 2px; font-size: 12px; }
 
 /* S15: リプレイを見返せないときの 1 文（開催中のシーズンの、終わっていないラン・版が古く畳めないラン） */
@@ -264,13 +288,6 @@ button.exit { border-color: #2e8a4e; background: #1f4a30; }
 .slot-badge.safe { background: #1f3f2a; border-color: #3f7a4e; color: #b8f0c4; }
 .slot-badge.standard { background: #1f3550; border-color: #3a6a96; color: #cfe4ff; }
 .slot-badge.ambitious { background: #4f2418; border-color: #a0502e; color: #ffcfb8; }
-/* 候補の難しさ: 推奨レベルとの差（正なら推奨より低い）と条件の危険度（V3-2R §14.4） */
-.ogap { white-space: nowrap; color: #cfd6e6; }
-.ogap .gapn { font-weight: normal; }
-.ogap.ok .gapn { color: #8fe0a0; }
-.ogap.over .gapn { color: #ffab91; font-weight: 700; }
-.ogap.over.far .gapn { color: #ff6e6e; }
-.ogap .tdanger { color: #ffcc80; }
 .traits { list-style: none; margin: 2px 0 0; padding: 0; font-size: 12px; }
 .traits li { padding: 1px 0; }
 .traits .tmult { color: #ffe08a; }
@@ -451,6 +468,15 @@ label.check { display: flex; gap: 0.4rem; align-items: center; }
 .soundctl { display: inline-flex; align-items: center; gap: 6px; }
 .soundctl input[type='range'] { width: 72px; }
 .soundctl small.error { color: #e49a8a; }
+/* 音の案内（S16a。SEASON.md §70.3 の 1）: 画面の左下に重ねる札（場所を取らない: 地図の枠の高さを変えない）。
+   地図の自動行動の知らせ（下の中央）と、右上の拡大の釦を避ける。押すか、キーを打つと消える */
+.soundhint { position: fixed; left: 16px; bottom: 16px; z-index: 20; display: inline-flex; align-items: center; gap: 8px; max-width: calc(100vw - 32px);
+  padding: 8px 16px; font-size: 14px; letter-spacing: 0.04em; color: #f1e7cf; background: rgba(20, 16, 8, 0.94); border: 1px solid #c9a45c; border-radius: 8px;
+  box-shadow: 0 0 0 0 rgba(201, 164, 92, 0.5); cursor: pointer; white-space: normal; text-align: left; animation: soundhint 2.4s ease-out infinite; }
+.soundhint:hover, .soundhint:focus-visible { border-color: #ffd98a; }
+.soundhint-icon { font-size: 18px; color: #d7b47a; line-height: 1; }
+@keyframes soundhint { 0% { box-shadow: 0 0 0 0 rgba(201, 164, 92, 0.45); } 70% { box-shadow: 0 0 0 10px rgba(201, 164, 92, 0); } 100% { box-shadow: 0 0 0 0 rgba(201, 164, 92, 0); } }
+@media (prefers-reduced-motion: reduce) { .soundhint { animation: none; } }
 
 /* キャンプの絵（docs/ASSET_SPEC.md §7.7）: 地図を隠す。キャンプのパネルや印はこの上に重なる */
 .campscene { position: absolute; inset: 0; overflow: hidden; animation: campfade 0.4s ease-out; }
@@ -633,7 +659,8 @@ ul.ocost { margin: 0; padding-left: 18px; }
 .hub-standhead { display: flex; align-items: flex-end; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
 .hub-standhead .hub-sub { margin-top: 6px; }
 .hub-dot { display: inline-block; width: 3px; height: 3px; margin: 0 8px; border-radius: 50%; background: var(--hub-faint); vertical-align: middle; }
-.hub-tablewrap { overflow-x: auto; border: 1px solid var(--hub-line); border-radius: 10px; background: var(--hub-card); }
+/* position: relative（S16d）: 表の見出しの .sr-only（絶対配置）が、横に送る枠の外に出て、狭い画面のページの幅を広げていた */
+.hub-tablewrap { position: relative; overflow-x: auto; border: 1px solid var(--hub-line); border-radius: 10px; background: var(--hub-card); }
 .hub-tablewrap table.board { font-size: 12.5px; }
 .hub-tablewrap th { color: var(--hub-faint); font-weight: 500; font-size: 11.5px; letter-spacing: 0.06em; }
 .hub-tablewrap th, .hub-tablewrap td { padding: 8px 10px; border-bottom-color: var(--hub-line); white-space: nowrap; }
@@ -642,6 +669,85 @@ ul.ocost { margin: 0; padding-left: 18px; }
 .hub-tablewrap .tag.you { background: var(--hub-gold); color: var(--hub-gold-ink); }
 .hub-foot { text-align: center; margin-top: 8px; }
 .hub-foot a { color: var(--hub-gold); }
+
+/* 入口のタブ（S16b。SEASON.md §70.4）: リーダーボード・シーズン・図鑑・設定。拠点と同じ地・札・見出し・金の差し色 1 つ（.ent- の接頭辞だけ） */
+.hub-nav { overflow-x: auto; scrollbar-width: none; }
+.hub-nav::-webkit-scrollbar { display: none; }
+.hub-tab { white-space: nowrap; flex: none; }
+.hub-col.is-wide { max-width: 980px; }
+.ent-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px 20px; flex-wrap: wrap; }
+.ent-headtext { min-width: 0; flex: 1 1 320px; }
+.ent-title { margin: 0; font-family: var(--hub-serif); font-weight: 600; font-size: 30px; line-height: 1.2; color: var(--hub-parch); letter-spacing: 0.02em; overflow-wrap: anywhere; }
+.ent-head .hub-sub { margin-top: 8px; line-height: 1.7; }
+.ent-pick { display: flex; flex-direction: column; gap: 4px; min-width: 200px; flex: 0 1 280px; }
+.ent-picklabel { font-size: 11px; color: var(--hub-faint); letter-spacing: 0.1em; }
+.ent-sec { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.ent-sechead { display: flex; align-items: center; justify-content: space-between; gap: 8px 14px; flex-wrap: wrap; }
+.ent-tools { display: flex; align-items: center; gap: 8px 14px; flex-wrap: wrap; }
+.ent-check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--hub-parch2); cursor: pointer; }
+.ent-check input { accent-color: var(--hub-gold); }
+.hub-input.ent-select { width: auto; padding: 6px 10px; font-size: 13px; border-radius: 8px; }
+.ent-card { background: var(--hub-card); border: 1px solid var(--hub-line); border-radius: 14px; padding: 16px 20px; min-width: 0; }
+.ent-card ul.sflow, .ent-card ul.slays { margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.8; color: var(--hub-parch); }
+.ent-card ul.slays .slay { color: var(--hub-parch2); font-size: 12.5px; }
+.ent-fold > summary { cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--hub-parch); list-style: none; }
+.ent-fold > summary::-webkit-details-marker { display: none; }
+.ent-fold > summary::after { content: '＋'; color: var(--hub-faint); font-size: 12px; }
+.ent-fold[open] > summary::after { content: '－'; }
+.ent-fold[open] > summary { margin-bottom: 10px; }
+.ent-runbtns { display: inline-flex; align-items: center; gap: 6px; }
+.hub-input.ent-older { max-width: 12em; padding: 4px 8px; font-size: 12px; }
+.ent-unrun { display: inline-flex; align-items: center; gap: 6px; margin: 4px 12px 0 0; }
+.ent-titles { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.ent-titles li { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 10px; background: var(--hub-card); border: 1px solid rgba(201, 164, 92, 0.32); }
+.ent-holder { font-family: var(--hub-serif); font-size: 15px; color: var(--hub-parch); }
+.hub-tablewrap td.num, .hub-tablewrap th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.hub-tablewrap td.rank { color: var(--hub-faint); }
+.hub-tablewrap td.wrap { white-space: normal; min-width: 8em; }
+.hub-tablewrap td { vertical-align: middle; }
+.hub-tablewrap .board.section tr.milestone td:first-child { color: var(--hub-amber); }
+.hub-tablewrap .board.section .fire { color: #e8b07a; }
+.hub-tablewrap td.replays { text-align: right; }
+.hub-tablewrap td.primary-col { color: var(--hub-gold); }
+.ent-who { color: var(--hub-parch); }
+.ent-class { margin-left: 6px; color: var(--hub-faint); }
+.ent-more { align-self: flex-start; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+.ent-meta { font-size: 12.5px; color: var(--hub-faint); font-variant-numeric: tabular-nums; letter-spacing: 0.04em; }
+/* 図鑑: 分類ごとの進み・項目（名前と、小さく、見つけた人） */
+.ent-count { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.ent-countnum { font-family: var(--hub-serif); font-size: 34px; color: var(--hub-gold); line-height: 1; font-variant-numeric: tabular-nums; }
+.ent-counttotal { font-size: 15px; color: var(--hub-parch2); font-variant-numeric: tabular-nums; }
+.ent-countwho { flex-basis: 100%; font-size: 12px; color: var(--hub-faint); letter-spacing: 0.04em; }
+.ent-bar { height: 3px; border-radius: 2px; background: var(--hub-line); overflow: hidden; }
+.ent-bar > span { display: block; height: 100%; background: var(--hub-gold); }
+.ent-entries { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; }
+.ent-entry { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 10px; background: var(--hub-card); border: 1px solid var(--hub-line); min-width: 0; }
+.ent-entryname { font-size: 14px; color: var(--hub-parch); overflow-wrap: anywhere; }
+.ent-finders { font-size: 11.5px; color: var(--hub-faint); letter-spacing: 0.03em; overflow-wrap: anywhere; }
+.ent-feats { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; align-items: start; }
+.ent-featlist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.ent-featlist li { display: flex; flex-direction: column; gap: 1px; }
+.ent-featname { font-size: 13.5px; color: var(--hub-gold); }
+.ent-featdesc { font-size: 12px; color: var(--hub-parch2); line-height: 1.55; }
+/* 設定: 鍵・呼び鈴（呼び鈴の部品は運用の画面のもの。札の中で、地と枠を外す） */
+.ent-setting { display: flex; flex-direction: column; gap: 10px; }
+.ent-keyrow { display: flex; align-items: center; justify-content: space-between; gap: 8px 14px; flex-wrap: wrap; }
+.ent-keystate { font-size: 14px; color: var(--hub-parch); font-variant-numeric: tabular-nums; }
+.hub-keyform.ent-keyform { max-width: 480px; }
+.ent-bell > .panel { background: transparent; border: none; padding: 0; margin: 0; color: var(--hub-parch); }
+.ent-bell > .panel > h3 { margin: 0 0 8px; font-family: var(--hub-serif); font-size: 19px; font-weight: 600; color: var(--hub-parch); }
+.ent-bell .muted { color: var(--hub-parch2); }
+.ent-bell input, .ent-bell button { background: var(--hub-card2); border-color: var(--hub-line); color: var(--hub-parch); }
+.ent-bell button.primary { background: var(--hub-gold); border-color: var(--hub-gold); color: var(--hub-gold-ink); }
+.ent-bell input[type="radio"] { accent-color: var(--hub-gold); }
+/* 古い入口（#/legacy）の見出しの 1 行 */
+.legacy-head { margin: 0; padding: 8px 12px; border: 1px dashed var(--line); border-radius: 8px; color: var(--muted); font-size: 13px; }
+@media (max-width: 800px) {
+  .ent-title { font-size: 26px; }
+  .ent-pick { flex: 1 1 100%; }
+  .hub-tab { padding: 12px 10px 10px; letter-spacing: 0.06em; }
+}
 
 /* 窓（自分で潜る・続きのある冒険・決めていないもの） */
 .hub-modal { position: fixed; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(5, 7, 12, 0.72); }
@@ -685,13 +791,6 @@ ul.ocost { margin: 0; padding-left: 18px; }
 .prep-body { margin-top: 6px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .prep-body .panel { background: transparent; border-color: var(--hub-line); }
 .prep-body .perkbox { margin: 0; }
-.prep-offers { margin: 0; }
-.prep-offers li.offer { border-bottom-color: var(--hub-line); }
-.prep-offers li.offer.chosen { padding-left: 8px; padding-right: 8px; border-radius: 8px; background: rgba(147, 195, 156, 0.07); outline: 1px solid rgba(147, 195, 156, 0.4); }
-.prep-offers .ohead { flex-wrap: wrap; }
-.prep-offers .ohead .otext { min-width: 0; overflow-wrap: anywhere; }
-.prep-offers button.primary { background: transparent; border-color: var(--hub-gold); color: var(--hub-gold); }
-.prep .tag.chosen { padding: 1px 10px; font-size: 11.5px; background: rgba(147, 195, 156, 0.16); color: var(--hub-green); }
 .prep-final { gap: 10px; }
 .prep-msglabel { font-size: 12px; color: var(--hub-parch2); letter-spacing: 0.06em; }
 .prep-msg { width: 100%; resize: vertical; padding: 10px 12px; border-radius: 10px; background: var(--hub-card2); border: 1px solid var(--hub-line); color: var(--hub-parch); font: inherit; font-size: 14px; }
@@ -700,10 +799,87 @@ ul.ocost { margin: 0; padding-left: 18px; }
 .prep-msgacts { display: inline-flex; gap: 6px; }
 .prep-ok { margin: 0; font-size: 13px; color: var(--hub-green); overflow-wrap: anywhere; }
 
-.prep-offers .ometa, .prep-offers .ometa > span, .prep-offers .oguard, .prep-offers .ogap, .prep-offers .traits { white-space: normal; overflow-wrap: anywhere; min-width: 0; }
-.prep-offers .ometa { padding-left: 0; }
-.prep-offers .offer .traits { padding-left: 0; }
 .prep-body .inv .name { min-width: 0; overflow-wrap: anywhere; }
+
+/* S16c（SEASON.md §70.5）: 目的の札（支度と、自分で潜るときのキャンプで同じ部品: ui/campCards.tsx）。
+   大きく: どこで・何を・基礎点・推奨のレベルと自分のレベルとの差（色分けだけ。S16d: 段の言葉の印はやめた）。小さく: 倍率・条件の名前・見込み。たたむ: 「くわしく」（候補の文も） */
+.ocards { list-style: none; margin: 4px 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+.ocard { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 0 0 12px; border: 1px solid var(--hub-line); border-radius: 12px; background: var(--hub-card2); }
+.ocard.is-chosen { border-color: var(--hub-gold); box-shadow: inset 0 0 0 1px var(--hub-gold); }
+.ocard.endless { grid-column: 1 / -1; }
+.ocard-pick { display: flex; flex-direction: column; align-items: stretch; gap: 4px; padding: 14px 16px 4px; border: none; border-radius: 12px 12px 0 0; background: transparent; color: var(--hub-parch); font: inherit; text-align: left; cursor: pointer; min-width: 0; }
+.ocard-pick:disabled { cursor: default; }
+.ocard-pick:focus-visible { outline: 2px solid var(--hub-gold); outline-offset: -2px; }
+.ocard-pick:not(:disabled):hover .ocard-sel { color: var(--hub-gold); border-color: var(--hub-gold); }
+.ocard-top { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ocard-no { min-width: 1.4em; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; color: var(--hub-faint); }
+.ocard-sel { margin-left: auto; padding: 2px 10px; border: 1px solid var(--hub-line); border-radius: 999px; font-size: 12px; color: var(--hub-parch2); white-space: nowrap; }
+.ocard.is-chosen .ocard-sel { background: var(--hub-gold); border-color: var(--hub-gold); color: var(--hub-gold-ink); font-weight: 700; }
+.ocard-where { margin-top: 4px; font-family: var(--hub-serif); font-size: 24px; font-weight: 600; line-height: 1.15; color: var(--hub-parch); }
+.ocard-what { font-size: 15px; color: var(--hub-parch); overflow-wrap: anywhere; }
+.ocard-stats { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; margin-top: 4px; font-size: 13px; color: var(--hub-parch2); font-variant-numeric: tabular-nums; }
+.ocard-pts { font-size: 15px; font-weight: 700; color: var(--hub-gold); }
+.ocard-lv.ok { color: var(--hub-green); }
+.ocard-lv.over { color: var(--hub-amber); }
+.ocard-lv.over.far { color: #e8a48e; font-weight: 600; }
+.ocard-td { color: var(--hub-amber); }
+.ocard-facts, .ocard-note, .ocard-more { margin: 0 16px; font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; min-width: 0; }
+.ocard-facts { color: var(--hub-faint); }
+.ocard-note { color: var(--hub-parch2); }
+.ocard-stats .ocard-note { margin: 0; }
+.ocard-more { color: var(--hub-parch2); }
+.ocard-more > summary { cursor: pointer; color: var(--hub-gold); letter-spacing: 0.04em; }
+.ocard-more .ocard-note { margin: 6px 0 0; }
+.ocard-more .traits { margin-top: 6px; font-size: 12px; }
+.ocard-more .traits .tdesc { color: var(--hub-faint); }
+.ocard-full { margin: 8px 0 0; padding: 8px 10px; border-radius: 8px; background: var(--hub-ink); color: var(--hub-parch2); font-size: 11.5px; line-height: 1.6; overflow-wrap: anywhere; }
+
+/* S16c: 自分で潜るときのキャンプの 1 枚（遊ぶ画面。キャンプにいる間は、地図の代わりにこれだけ。地図の枠は出さない） */
+.camp-hero { overflow: hidden; }
+.camp-art { position: relative; height: 160px; margin: -22px -24px 8px; border-bottom: 1px solid var(--hub-line); }
+.camp-result { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--hub-line); }
+.camp-result .result.payout { margin: 0; font-size: 13px; color: var(--hub-parch2); }
+.camp-result .result.payout .rhead { color: var(--hub-parch); font-weight: 600; }
+.camp-result .result.payout .gain { color: var(--hub-green); }
+.camp-result .muted { color: var(--hub-faint); }
+.camp-go { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
+.camp-small { padding: 14px 18px; }
+.camp-small .prep-sectitle { font-size: 16px; }
+.camp-small .seasoncamp > h3 { margin: 0 0 4px; font-size: 12.5px; font-weight: 500; color: var(--hub-faint); }
+.camp-small .seasoncamp { margin: 0; padding: 0; border: none; background: transparent; font-size: 12.5px; color: var(--hub-parch2); }
+.camp-small .seasoncamp table.awards td { border-bottom-color: var(--hub-line); }
+.camp-small .seasoncamp table.awards tr.lead td { color: var(--hub-gold); }
+.camp-fold { padding: 0; gap: 0; }
+.camp-foldhead { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; padding: 14px 20px; cursor: pointer; list-style: none; }
+.camp-foldhead::-webkit-details-marker { display: none; }
+.camp-foldhead::before { content: '▸'; color: var(--hub-faint); }
+.camp-fold[open] > .camp-foldhead::before { content: '▾'; }
+.camp-foldtitle { font-family: var(--hub-serif); font-size: 16px; font-weight: 600; color: var(--hub-parch); }
+.camp-foldsum { flex: 1 1 200px; min-width: 0; font-size: 12.5px; color: var(--hub-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.camp-fold > .prep-body { margin: 0; padding: 0 20px 16px; }
+.camp-slays { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; font-size: 12.5px; }
+.camp .chat { margin-top: 6px; }
+.camp-foot { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.camp-foot .records-line { margin: 0; font-size: 12.5px; color: var(--hub-parch2); }
+.camp-foot .records-line a { color: var(--hub-gold); }
+.hub-btn.camp-retire { color: #e8a48e; border-color: rgba(232, 164, 142, 0.4); }
+/* S16d: キャンプの断りと知らせ（主のボタンの下）・キャンプに着いた手番の変化（前の遠征の結果の札の中） */
+.camp-notice .notice { padding: 10px 14px; border-radius: 10px; border: 1px solid rgba(224, 162, 74, 0.5); background: rgba(224, 162, 74, 0.1); color: var(--hub-amber); font-size: 13.5px; overflow-wrap: anywhere; }
+.camp-notice .notice .nacts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.camp-changes ul { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 6px; }
+.camp-changes .chg { font-size: 12px; color: var(--hub-parch); overflow-wrap: anywhere; }
+.camp-changeshead { font-size: 12px; color: var(--hub-faint); letter-spacing: 0.04em; }
+.camp-turnline { margin: 8px 0 0; font-size: 12px; color: var(--hub-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* S16d: シーズンの ID の小さい字・図鑑の冒険者ごとの札の、1 人ずつの記録（目立たせない） */
+.ent-title .ent-id { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 13px; font-weight: normal; color: var(--hub-faint); letter-spacing: 0; }
+.ent-record { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--hub-line); display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.ent-record .hub-note { margin: 0; }
+.ent-record pre.records { align-self: stretch; margin: 4px 0 0; }
+@media (max-width: 480px) {
+  .camp-art { height: 120px; margin: -16px -16px 8px; }
+  .camp-fold > .prep-body { padding: 0 16px 14px; }
+  .camp-foldhead { padding: 12px 16px; }
+}
 /* S10a: 運用者として（支度の画面のピル）・小さい鍵の 1 行・準備完了の間の段・順位の表の「1 位 地下 1 階」 */
 .hub-pill.tone-operator { color: var(--hub-gold); background: transparent; border: 1px dashed rgba(201, 164, 92, 0.6); }
 .hub-keyline { margin: 4px 0 0; }

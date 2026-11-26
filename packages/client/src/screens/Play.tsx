@@ -18,8 +18,8 @@ import {
 } from '../ui/panels';
 import { ErrorBanner, Header, MapView, ThemePicker, useCatalog, useLocaleRefresh, useTheme } from '../ui/common';
 import { SoundControls } from '../ui/sound';
-import { CampScene } from '../ui/camp';
-import { BriefingCard, CampPanel, completesOnExtract, ExpeditionPanel, extractConfirmText, lifelineConfirmText, RestEstimateLine, rulesOf, TurnBar } from '../ui/expedition';
+import { CampView } from '../ui/campView';
+import { BriefingCard, completesOnExtract, ExpeditionPanel, extractConfirmText, lifelineConfirmText, RestEstimateLine, rulesOf, TurnBar } from '../ui/expedition';
 import { abilityDisplayName, AbilityBar, BoonChoicePanel, DirPad, PerkChoicePanel } from '../ui/build';
 import {
   abilityModeHint, abilityNoTargetText, abilityNotReadyText, abilityPickHint, abilityReady, cursedRemoveText, DIR_ARROW, extractBlockLabel, lifelineEffectText, perkModeHint, reachAttackLabel,
@@ -209,6 +209,8 @@ export function Play({ runId }: { runId: string }) {
   const eventsRef = useRef<PerceivedEvent[]>([]);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
+  /** キャンプの確かめの窓が開いている（S16d: 開いている間は、キーの受け口を止める） */
+  const dialogRef = useRef(false);
   /** target: 狙いのマスにいる敵（「投擲で決着」の対象） */
   const [aim, setAim] = useState<{ text: string; blocked: boolean; target?: string } | null>(null);
   catalogRef.current = catalog;
@@ -850,6 +852,8 @@ ${tr('それでも装備しますか？', 'Equip it anyway?')}`)) send({ ...last
       const tg = e.target as HTMLElement | null;
       if (tg && (tg.tagName === 'INPUT' || tg.tagName === 'TEXTAREA' || tg.tagName === 'SELECT')) return;
       if (e.ctrlKey || e.metaKey || e.altKey) return;
+      // キャンプの確かめの窓が開いている間は、遊ぶ画面のキーを受けない（p の後の数字で特技が選ばれないように。S16d。窓の Esc は窓が受ける）
+      if (dialogRef.current) return;
       const v = viewRef.current;
       if (!v) return;
       const md = modeRef.current;
@@ -1038,6 +1042,8 @@ ${tr('それでも装備しますか？', 'Equip it anyway?')}`)) send({ ...last
   const turnText = view ? turnLine(view, buildTurnBlock(view, { reason: 'action_completed', changes })) : '';
   const restEst = obs?.self.rest_estimate;
   const atCamp = view?.status === 'at_camp';
+  // キャンプの間は地図（MapView）を出さない（S16c）。外した地図の描き手は使わない（迷宮に戻ると、地図が新しい描き手を渡す: onReady）
+  useEffect(() => { if (atCamp) rRef.current = null; }, [atCamp]);
   const exp = view?.expedition ?? null;
   const expActive = !!exp && exp.status !== 'ended' && !atCamp;
   const modeHint = mode === 'target'
@@ -1050,6 +1056,22 @@ ${tr('それでも装備しますか？', 'Equip it anyway?')}`)) send({ ...last
             : mode === 'ability' ? abilityModeHint()
               : mode === 'abtarget' && abPick ? abilityPickHint(abPick.name, abPick.target) : null;
 
+  // 断りと知らせ（flash）の 1 枚。迷宮では地図の重ね絵の中、キャンプでは主のボタンのすぐ下（S16d: キャンプは地図を外したので、出ていなかった）
+  const noticeEl = notice && (
+    <div class="notice" role="status">
+      ⚠ {notice.text}
+      {notice.actions && (
+        <div class="nacts">
+          {notice.actions.map((a, i) => (
+            <button key={i} class={`tiny ${a.run ? 'lifeline' : 'flee'}`} title={a.title}
+              onClick={() => { setNotice(null); if (a.run) a.run(); else if (a.command) send(a.command); }}>{a.label}</button>
+          ))}
+          <button class="tiny" onClick={() => setNotice(null)}>{tr('閉じる', 'Close')}</button>
+        </div>
+      )}
+    </div>
+  );
+
   if (!token) {
     return (
       <div class="page">
@@ -1060,8 +1082,8 @@ ${tr('それでも装備しますか？', 'Equip it anyway?')}`)) send({ ...last
   }
 
   return (
-    <div class="page play">
-      <Header title={`${tr('プレイ', 'Play')} ${runId}`} back>
+    <div class={`page play ${atCamp ? 'at-camp' : ''}`}>
+      <Header title={view ? `${tr('プレイ', 'Play')} · ${view.self.name}` : tr('プレイ', 'Play')} back>
         {view && <span class={`tag vstatus ${view.status}`}>{viewStatusLabel(view.status)}</span>}
         {view && (
           <span class="tag banked" title={tr('持ち帰って確定した点（スコア）。遠征中の戦利品は帰還まで未確定', 'Banked points (your score). The haul of the current expedition is unbanked until you extract')}>
@@ -1079,6 +1101,14 @@ ${tr('それでも装備しますか？', 'Equip it anyway?')}`)) send({ ...last
         <a class="button small" href={`#/watch/${runId}`}>{tr('観戦画面', 'Spectate')}</a>
       </Header>
       <ErrorBanner error={error ?? catErr ?? th.error} onClose={() => setError(null)} />
+      {/* キャンプにいる間は、地図の代わりに、拠点・支度と同じ札の 1 枚（S16c。SEASON.md §70.5）。キャンプの絵（ASSET_SPEC §7.7）は、その上の札の帯 */}
+      {view && atCamp ? (
+        <CampView runId={runId} view={view} obs={obs} catalog={catalog} theme={th.theme}
+          perkFocused={mode === 'perk'} perkSent={perkSent === perkK} onChoosePerk={choosePerk} onChooseBoon={(option) => send({ type: 'choose_boon', option })}
+          onStart={startExpedition} onRetire={retire} onReport={() => send({ type: 'report_stairs' })}
+          log={log} onSay={(text) => send({ type: 'say', text })} notice={noticeEl} turnText={turnText} changes={changes}
+          onDialog={(open) => { dialogRef.current = open; if (open && modeRef.current !== 'normal') setMode('normal'); }} />
+      ) : (
       <div class="layout">
         <div class="main">
           {/* 特技の候補は下の枠で選ぶので、同じ内容の注意（perk_pending）は出さない。
@@ -1118,20 +1148,7 @@ ${tr('それでも装備しますか？', 'Equip it anyway?')}`)) send({ ...last
                         </button>
                       </div>
                     )}
-                    {notice && (
-                      <div class="notice">
-                        ⚠ {notice.text}
-                        {notice.actions && (
-                          <div class="nacts">
-                            {notice.actions.map((a, i) => (
-                              <button key={i} class={`tiny ${a.run ? 'lifeline' : 'flee'}`} title={a.title}
-                                onClick={() => { setNotice(null); if (a.run) a.run(); else if (a.command) send(a.command); }}>{a.label}</button>
-                            ))}
-                            <button class="tiny" onClick={() => setNotice(null)}>{tr('閉じる', 'Close')}</button>
-                          </div>
-                        )}
-                      </div>
-                    )}
+                    {noticeEl}
                   </div>
                 )}
                 {mode === 'pick' && pick && (
@@ -1160,9 +1177,6 @@ ${tr('それでも装備しますか？', 'Equip it anyway?')}`)) send({ ...last
                 )}
                 {macro?.state === 'running' && <div class="macro">{tr('自動行動中', 'Auto')}: {macro.kind} ({macro.steps})</div>}
                 {view && view.status === 'waiting_others' && <div class="macro">{tr('他のプレイヤーの手番を待っています…', 'Waiting for other players…')}</div>}
-                {/* キャンプにいる間は地図を隠してキャンプの絵（ASSET_SPEC §7.7）。パネルはその上 */}
-                {view && atCamp && <CampScene theme={th.theme} />}
-                {view && atCamp && <div class="campwrap"><CampPanel runId={runId} view={view} catalog={catalog} onStart={startExpedition} onRetire={retire} season={obs?.season} canReport={!!obs?.valid_actions.some((l) => l.startsWith('report_stairs'))} onReport={() => send({ type: 'report_stairs' })} /></div>}
                 {exp && expActive && briefingNo === exp.no && <BriefingCard x={exp} catalog={catalog} onClose={() => setBriefingNo(null)} />}
                 {view && view.status === 'dead' && !summary && (
                   <div class="deadbox">{tr('あなたは倒れた。', 'You have fallen.')} <a href={`#/watch/${runId}`}>{tr('観戦を続ける', 'Keep watching')}</a> / <a href={`#/replay/${runId}`}>{tr('リプレイ', 'Replay')}</a></div>
@@ -1287,6 +1301,7 @@ ${tr('それでも装備しますか？', 'Equip it anyway?')}`)) send({ ...last
           </div>
         </aside>
       </div>
+      )}
       {summary && <SummaryDialog summary={summary} catalog={catalog} onClose={() => setSummary(null)} />}
     </div>
   );

@@ -1632,6 +1632,7 @@ engine と出来事の形は変えていない（`engineVersion` 0.38.0・`event
 - **予備動作は、相手が 1 回動いてから**: 大振り・突進の構えに、構えた相手とその手番の数（`hold`）を持たせ、相手が動くまで出さない（速い敵が、構えと大振りをプレイヤーの 1 手番の間に続けて出し、予備動作が一度も見えなかった）。fight は、自分を的にした構えが見えている間は 2 手目から止まる。
 - **マクロ**: explore の toward は、その方角に行ける境界が無くなったら止まる。動かない敵を避けた大きな遠回りは文で言う。気づいていない守護者も眠っている敵と同じに覚える。travel の数え直しは、その呼び出しで初めて見た障害だけ。collect の `kinds` は未鑑定の品を外見の区分で比べ、`kinds` だけなら `items`。引数なしの pickup は、ほかの品があれば自分の置いた品を拾わない（品に `droppedBy`）。
 - **引数の名前の断り**: MCP のサーバーが、SDK の入力の検査の前に、定義に無い名前・足りない要る引数を受けて、ゲームの断りの形で返す（SDK 1.32.2 の内部の表を包む。`packages/server/src/mcp/args.ts`）。ツール一覧は変えない。
+  S16d: 引数の形の誤り（型・値の範囲・選べる値）も、同じ所で、登録した inputSchema の `safeParseAsync` で先に確かめ、同じ形で返す（どの引数がどう違うか・受ける形。`issueTexts`）。SDK の内部の形が違えば、今までどおり SDK が断る。
 
 ### 40.4 S1d: S1c の検査の指摘と設計の判断（SEASON.md §16.2・§17）
 
@@ -1845,7 +1846,7 @@ engine と出来事の形は変えていない（`engineVersion` 0.38.0・`event
 
 画面だけ。engine・shared の World と出来事・命令の形・版は S9 のまま（`engineVersion` 0.49.0・`eventVersion` 37）。サーバーは `GET /api/profile` に `seasons`（そのプロフィールが招かれたシーズン。`SeasonService.memberships`）を足しただけ。
 
-- **道**（`main.tsx`）: `#/` 拠点・`#/records` 記録・`#/ops` 運用（前の「ほかのラン」と、鍵を外す）は同じ `Lobby` のタブ（読み込んだ中身を保つ）。`#/prepare/<runId>` 支度は `screens/Prepare.tsx`。上のタブは `ui/hub.tsx` の `HubNav`（拠点・記録と、隅の歯車。線で描いた SVG）。遊ぶ・観戦・巻き戻し・シーズンの結果の道は、そのまま。知らない道と前の「出撃」は拠点。
+- **道**（`main.tsx`。S16b で改めた: 道の読み方は `ui/entrance.ts` の `parseRoute`。`#/` 拠点・`#/leaderboard`・`#/season`（`#/season/<id>`。前の結果の画面 `screens/Season.tsx` は、このタブに入れて消した）・`#/codex`・歯車の `#/settings`（鍵と呼び鈴）と、どこからもリンクしない `#/legacy`（シーズンでないラン・協力の入口）。前の `#/records` は `#/season` へ、`#/ops` は `#/settings` へ、履歴を増やさずに送る。シーズンのタブは `ui/seasonPage.tsx`、リーダーボードと図鑑は `ui/entrancePages.tsx`。行のボタンの決まりは `runActions`（`ui/replayRule.ts` のまま）、図鑑を合わせるのは `mergeCodexBooks`。同じ PC からは `GET /api/ops/codex`（PROTOCOL §9.15））。以下は S10 のときの形: `#/` 拠点・`#/records` 記録・`#/ops` 運用（前の「ほかのラン」と、鍵を外す）は同じ `Lobby` のタブ（読み込んだ中身を保つ）。`#/prepare/<runId>` 支度は `screens/Prepare.tsx`。上のタブは `ui/hub.tsx` の `HubNav`（拠点・記録と、隅の歯車。線で描いた SVG）。遊ぶ・観戦・巻き戻し・シーズンの結果の道は、そのまま。知らない道と前の「出撃」は拠点。
 - **札の文とボタン**は画面から離した関数（`ui/hubState.ts` の `hubCard`。§58.4 の表の 6 つの状態と、人間が自分で遊ぶ冒険者・招かれていない冒険者。テストは `client/test/hub.test.ts`）。入れるのは、持ち主の口の一覧の行（`OwnerRunRow`。AI の観測と同じ関数で作った札・決めていないもの・希望の数・AI との行き来）と、プロフィールの `seasons` だけ。どのシーズンの札にするかは `pickSeason`（その冒険者のランがあるシーズン → 招かれた開催中のシーズン → …）。
 - **鍵**（`ui/keys.ts`）: このブラウザに覚えてある鍵（`profileToken` と、前の版の `seasonToken.<id>`）ごとに、`GET /api/owner/runs` と `GET /api/profile` を呼ぶ（同じプロフィールは 1 枚に）。鍵が無ければ、拠点の真ん中に入れる欄（入れる前に `GET /api/profile` で確かめる。見つからなければ覚えない）。外すのは運用の画面から。鍵は見出しでだけ渡し、画面・URL・console に出さない。
 - **運用者の札**: 同じ機械から開いているとき（`OwnerRunsResponse.local`）、今シーズンのランで、このブラウザの鍵の冒険者でないものを「この機械の冒険者（運用者として）」に小さい札で出す（支度は鍵なしの持ち主の口）。シーズンでないランの運用者の枠（`OwnerRunCard`）は運用の画面に。

@@ -392,6 +392,9 @@ describe('S0 §2.6: records and replay', () => {
       // 起動し直したサーバーが、シーズンの記録を読み直す
       const m2 = manager(dir);
       expect(m2.seasons.list().map((x) => x.id)).toEqual([SID]);
+      // 一覧に開いた時刻（S16d: 入口のプルダウンの「開催の新しい順」）。シードは無い
+      expect(typeof m2.seasons.list()[0].openedAt).toBe('number');
+      expect(JSON.stringify(m2.seasons.list())).not.toContain('seed');
       expect(m2.seasons.standings(SID)!.standings[0].used).toBe(st.standings[0].used);
       m2.closeAll();
     } finally {

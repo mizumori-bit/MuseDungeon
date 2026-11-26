@@ -14,7 +14,7 @@ import type { SessionManager } from '../session/SessionManager';
 import { seasonReplayError } from '../session/SessionManager';
 import { WsHub } from '../ws/hub';
 import { allowLocalHosts, isLocalRequest, jsonContentType, sameOrigin } from './local';
-import { internalError, opsAddAdventurer, opsEnroll, opsOpenSeason, opsRoster, opsUninvite } from '../session/ops';
+import { internalError, opsAddAdventurer, opsCodex, opsEnroll, opsOpenSeason, opsRoster, opsUninvite } from '../session/ops';
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
@@ -123,10 +123,12 @@ export function createApp(manager: SessionManager, config: ServerConfig): App {
     }
     // 拠点の運用者の口（S12b。SEASON.md §63.7。PROTOCOL §9.15）: 名簿・シーズンを始める・冒険者を足す・鍵のある冒険者を今のシーズンに加える。
     // サーバーと同じ PC からだけ（鍵があっても、ほかの PC からは断る。判定は isLocalRequest の 1 つ。状態を変えるものは、上の守り（同じ origin・JSON だけ）を通った後）
-    if (p === '/api/ops/roster' || p === '/api/ops/season' || p === '/api/ops/adventurers' || p === '/api/ops/enroll' || p === '/api/ops/uninvite') {
-      const post = p !== '/api/ops/roster';
+    // S16b（SEASON.md §70.4 の 4）: /api/ops/codex（このサーバーのプロフィールの全員の図鑑と実績。読むだけ。鍵・シードは返さない。json() は no-store）
+    if (p === '/api/ops/roster' || p === '/api/ops/codex' || p === '/api/ops/season' || p === '/api/ops/adventurers' || p === '/api/ops/enroll' || p === '/api/ops/uninvite') {
+      const post = p !== '/api/ops/roster' && p !== '/api/ops/codex';
       if (post !== (m === 'POST')) return fail(res, 405, actionError('bad_request', `${post ? 'POST' : 'GET'} ${p}`, ''));
       if (!isLocalRequest(req)) return fail(res, 403, actionError('bad_request', 'only from the same PC as the server / サーバーと同じ PC からだけ', ''));
+      if (p === '/api/ops/codex') return json(res, 200, opsCodex(manager, url.searchParams.get('locale') === 'en' ? 'en' : 'ja'));
       if (!post) return json(res, 200, opsRoster(manager));
       const BAD = Symbol('bad');
       const body = await readBody(req, 16_000).catch(() => BAD);

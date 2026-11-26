@@ -49,7 +49,7 @@ describe('S10 §58.4: the adventurer card on the hub', () => {
     expect(local.action).toEqual({ label: 'このシーズンに加える', enroll: true });
     // 加えられない（名簿を読めない・シーズンが開催中でない）: ボタンは出さず、記録へ
     const noRoster = hubCard({ ...base, row: null, membership: null, local: true });
-    expect(noRoster.action).toEqual({ label: '記録を見る', href: '#/records' });
+    expect(noRoster.action).toEqual({ label: 'シーズンを見る', href: '#/season/s4' });
     const endedSeason = hubCard({ ...base, season: { ...season, status: 'ended' }, row: null, membership: null, local: true, canEnroll: true });
     expect(endedSeason.text).toBe('このシーズンは、もう名簿に加えられない（開催中のシーズンだけ）');
     expect(endedSeason.action?.enroll).toBeUndefined();
@@ -61,9 +61,10 @@ describe('S10 §58.4: the adventurer card on the hub', () => {
   });
 
   it('no season running (S12a・S12b): from the server PC, start one with the button below; from another PC, who opens it', () => {
-    expect(noSeasonText(true)).toBe('下の「新しいシーズンを始める」で始めると、ここに冒険者の札が出る。シーズンでない冒険は、右上の歯車（運用）から。');
-    expect(noSeasonText(true, true)).toBe('記録が読めないシーズンがあるので、新しいシーズンは始められない（運用の道具で、直してから）。シーズンでない冒険は、右上の歯車（運用）から。');
-    expect(noSeasonText(false)).toBe('シーズンを開いた人が、次のシーズンを開いたら、ここに冒険者の札が出る。シーズンでない冒険は、右上の歯車（運用）から。');
+    // S16b: シーズンでない冒険の入口は外した（歯車の案内はしない）
+    expect(noSeasonText(true)).toBe('下の「新しいシーズンを始める」で始めると、ここに冒険者の札が出る。');
+    expect(noSeasonText(true, true)).toBe('記録が読めないシーズンがあるので、新しいシーズンは始められない（運用の道具で、直してから）。');
+    expect(noSeasonText(false)).toBe('シーズンを開いた人が、次のシーズンを開いたら、ここに冒険者の札が出る。');
     // ほかの PC からは、読めない記録の話をしない（同じ PC の運用者だけが直せる）
     expect(noSeasonText(false, true)).toBe(noSeasonText(false));
   });
@@ -251,7 +252,8 @@ describe('S10a: the inspection fixes', () => {
     const stale = hubCard({ ...base, row: row({ oldVersion: true, continuable: false, hold: ['objective'], prep: { state: 'pending' } }) });
     expect(stale.state).toBe('stale');
     expect(stale.where).toBe('前の版の冒険（続きは、遊べない）');
-    expect(stale.action).toEqual({ label: '記録を見る', href: '#/records' });
+    // S16b: 前の「記録を見る」は、シーズンのタブの、そのシーズン
+    expect(stale.action).toEqual({ label: 'シーズンを見る', href: '#/season/s4' });
     expect(stale.highlight).toBe(false);
     // 版が違えば、人間のランでも「続きを遊ぶ」は出さない
     expect(hubCard({ ...base, playable: true, row: row({ oldVersion: true, eligible: false }) }).state).toBe('stale');

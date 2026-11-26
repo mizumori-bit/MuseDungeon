@@ -11,7 +11,8 @@ import { api } from '../api';
 import { bellProblem, bellRingOf, bellView, readBellConfig, ringPort, type BellRing, type BellView } from '../ui/bell';
 import { ErrorBanner, Header, useCatalog, useLocaleRefresh } from '../ui/common';
 import { BoonChoicePanel, PerkChoicePanel } from '../ui/build';
-import { OfferCard, rulesOf } from '../ui/expedition';
+import { DecideCard, ObjectiveList, offerTextsOf } from '../ui/campCards';
+import { rulesOf } from '../ui/expedition';
 import { HubNav, HubPill } from '../ui/hub';
 import { keyForRun } from '../ui/keys';
 import { statChangeText } from '../ui/owner';
@@ -45,20 +46,18 @@ function PrepSection({ item, held, line, editable, locked, busy, onToggle, wish,
   wish?: ComponentChildren; children?: ComponentChildren;
 }) {
   const can = editable && !locked && !busy;
+  // 札は、自分で潜るときのキャンプの段と同じ部品（S16c: ui/campCards.tsx の DecideCard）
   return (
-    <section class={`prep-sec ${held ? 'is-held' : ''} ${locked ? 'is-locked' : ''}`}>
-      <header class="prep-sechead">
-        <h3 class="prep-sectitle">{prepItemName(item)}</h3>
-        <div class="prep-toggle" role="group" aria-label={prepItemName(item)}>
-          <button type="button" class={!held ? 'on' : ''} aria-pressed={!held} disabled={!can || !held} onClick={() => onToggle(false)}>{tr('任せる', 'Leave it')}</button>
-          <button type="button" class={held ? 'on' : ''} aria-pressed={held} disabled={!can || held} onClick={() => onToggle(true)}>{tr('自分で', 'Decide')}</button>
-        </div>
-      </header>
-      <p class="prep-line">{line}</p>
+    <DecideCard title={prepItemName(item)} held={held} locked={locked} line={line} aside={(
+      <div class="prep-toggle" role="group" aria-label={prepItemName(item)}>
+        <button type="button" class={!held ? 'on' : ''} aria-pressed={!held} disabled={!can || !held} onClick={() => onToggle(false)}>{tr('任せる', 'Leave it')}</button>
+        <button type="button" class={held ? 'on' : ''} aria-pressed={held} disabled={!can || held} onClick={() => onToggle(true)}>{tr('自分で', 'Decide')}</button>
+      </div>
+    )}>
       {!held && editable && !locked && <p class="prep-cost">{prepItemCost(item)}</p>}
       {wish && <div class={locked ? 'prep-locked' : ''} inert={locked}>{wish}</div>}
       {children && <div class={`prep-body ${locked ? 'prep-locked' : ''}`} inert={locked}>{children}</div>}
-    </section>
+    </DecideCard>
   );
 }
 
@@ -366,20 +365,10 @@ export function Prepare({ runId }: { runId: string }) {
                 <>
                   <PrepSection item="objective" held={hold.includes('objective')} line={lineOf('objective')} editable={editable} locked={locked} busy={busy} onToggle={(on) => toggle('objective', on)} wish={wishOf('objective')}>
                     {decideHere('objective') && view.camp && (
-                      <ul class="offers cards prep-offers">
-                        {view.camp.offers.map((o) => (
-                          <OfferCard key={o.index} o={o} rules={rules} level={view.self.level} view={view} catalog={catalog} chosen={chosen === o.index} disabled={busy}
-                            actionLabel={tr('この目的にする', 'Choose this')} onStart={(i) => void act({ type: 'prepare', objective: i })} />
-                        ))}
-                        <li class={`offer endless ${chosen === 'endless' ? 'chosen' : ''}`}>
-                          <div class="ohead">
-                            <span class="otext">{tr('endless) 目的なし。できるだけ深く潜る', 'endless) No objective: descend as deep as you can')}</span>
-                            {chosen === 'endless'
-                              ? <span class="tag chosen">{tr('選んだ', 'Chosen')}</span>
-                              : <button class="small" disabled={busy} onClick={() => void act({ type: 'prepare', objective: 'endless' })}>{tr('目的なしにする', 'Choose endless')}</button>}
-                          </div>
-                        </li>
-                      </ul>
+                      // 目的の札は、自分で潜るときのキャンプと同じ部品（S16c）。押すと、その目的を選ぶ（前と同じ prepare。準備完了は、下のボタン）
+                      <ObjectiveList offers={view.camp.offers} rules={rules} level={view.self.level} view={view} catalog={catalog} fullTexts={offerTextsOf(obs.camp)}
+                        chosen={chosen} disabled={busy} selectLabel={tr('この目的にする', 'Choose this')}
+                        onSelect={(i) => { if (chosen !== i) void act({ type: 'prepare', objective: i }); }} />
                     )}
                   </PrepSection>
 
@@ -427,7 +416,7 @@ export function Prepare({ runId }: { runId: string }) {
                     {note && <p class="prep-ok">{note}</p>}
                     {head.kind === 'pending' && (
                       <>
-                        <button class="hub-btn primary big" disabled={busy || objectiveUnchosen} onClick={markReady}>{tr('準備完了', 'Ready')}</button>
+                        <button class="hub-btn primary big" disabled={busy || objectiveUnchosen} onClick={markReady}>{hold.includes('objective') && chosen !== undefined ? tr('この目的で、準備完了', 'Ready with this objective') : tr('準備完了', 'Ready')}</button>
                         {objectiveUnchosen && <p class="hub-note">{tr('目的を選ぶと、準備完了にできる。', 'Choose an objective to mark ready.')}</p>}
                         <p class="hub-note">{tr(`${name}は、それまで出発しない。`, `${name} does not set out until then.`)}</p>
                       </>

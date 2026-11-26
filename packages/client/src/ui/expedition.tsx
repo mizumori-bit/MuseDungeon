@@ -1,19 +1,18 @@
 // 遠征まわりの表示部品: 目的と進捗、戦利品（未確定の点）、ブリーフィング、手番の状態行と変化、休憩の見積もり、キャンプ、観戦用の要約、AI の応答待ち。
 // 文章と数値は shared の expedition.ts / turn.ts / catalog.ts / observation.ts で作る。ここでは並べて見せるだけで、ゲームの判定はしない。
 import type {
-  Catalog, CatalogRules, Change, Dir, Expedition, ExpeditionOffer, ExpeditionView, HaulParts, ObsExpedition, ObsSeason, Observation, OfferSlot, PlayerView,
+  Catalog, CatalogRules, Change, Dir, Expedition, ExpeditionView, HaulParts, ObsExpedition, Observation, OfferSlot, PlayerView,
   RestEstimate, World,
 } from '@muse/shared';
 import {
-  bountyForecastText, briefingLines, buildObservation, campDepthOf, CHECKPOINT_NOTES, gearVsArmorText, offerGuardianHp, currentExpedition, dirLabel, endReasonText, guardianForecastText, haulTotal, latestExpedition, multText, nameOf,
-  nextCampOf, nextOverreach, objectiveText, offerFloorTraitsText, offerGap, offerText, offerWardenExtra, overreachPoints, partsText, progressText, recordsCampLine, resultText, slaysAt, slayGroupText, slayShortGroupText, slotName,
+  briefingLines, buildObservation, campDepthOf, CHECKPOINT_NOTES, currentExpedition, dirLabel, endReasonText, haulTotal, latestExpedition, multText, nameOf,
+  nextCampOf, nextOverreach, objectiveText, offerText, overreachPoints, partsText, progressText, recordsCampLine, resultText, slotName,
 } from '@muse/shared';
 import { api } from '../api';
 import { useEffect, useState } from 'preact/hooks';
 import { getLocale, tr } from '../util';
 import { keyForRun } from './keys';
 import { DIR_ARROW, expStatusLabel, extractBlockLabel, lifelineEffectText, worstTurnText } from './labels';
-import { SeasonCampPanel } from './season';
 
 /** 守護者を倒す・遺物を持ち帰る等の目的を、自分が extract したら達成になる状態か（表示用。最終判定はサーバー） */
 export function completesOnExtract(x: ExpeditionView): boolean {
@@ -34,28 +33,7 @@ export function SlotBadge({ slot }: { slot: OfferSlot | null | undefined }) {
   return <span class={`slot-badge ${slot}`}>{slotName(getLocale(), slot)}</span>;
 }
 
-const signed = (n: number): string => (n > 0 ? `+${n}` : `${n}`);
-
-/**
- * 候補の難しさ（V3-2R §14.4）: 推奨レベルと自分のレベルの差、条件の危険度の合計。段階に丸めない。
- * 「推奨 Lv6・あなた Lv2（差 +4）／条件 +1」。差が正（推奨より低い）なら強調する
- */
-export function OfferGap({ rec, level, gap, traitDanger }: { rec: number | null; level: number; gap: number | null; traitDanger: number }) {
-  if (rec === null && !traitDanger) return null;
-  const cls = gap === null ? '' : gap >= 3 ? 'over far' : gap > 0 ? 'over' : 'ok';
-  return (
-    <span class={`ogap ${cls}`} title={tr('推奨レベル: その深さに着いたときのレベルの目安（公開の表）。差が正なら推奨より低い。条件: 遠征の条件の危険度の合計',
-      'Recommended level: the typical level on arrival at that depth (public table). A positive gap means you are below it. Traits: sum of the traits\' danger')}>
-      {rec !== null && (
-        <>
-          {tr(`推奨 Lv${rec}・あなた Lv${level}`, `recommended Lv${rec}, you Lv${level}`)}
-          {gap !== null && <b class="gapn">{tr(`（差 ${signed(gap)}）`, ` (gap ${signed(gap)})`)}</b>}
-        </>
-      )}
-      {traitDanger !== 0 && <span class="tdanger">{rec !== null ? tr('／', ' / ') : ''}{tr(`条件 ${signed(traitDanger)}`, `traits ${signed(traitDanger)}`)}</span>}
-    </span>
-  );
-}
+// 候補の難しさ（V3-2R §14.4: 推奨レベルとの差・条件の危険度。段階に丸めない）は、目的の札（ui/campCards.tsx・ui/objectiveCard.ts の gapClass）が出す（S16d: 前の OfferGap は外した）
 
 /** 条件（traits）: 名前と倍率を並べ、説明は本文に出す */
 export function TraitList({ traits, rules, compact }: { traits: readonly string[]; rules: CatalogRules | undefined; compact?: boolean }) {
@@ -401,71 +379,10 @@ export function RestEstimateLine({ est }: { est: RestEstimate }) {
 }
 
 /**
- * 遠征の候補の 1 枚。支度の画面（S10。SEASON.md §58.4）でも使う: actionLabel（ボタンの文。省くと「この遠征に出る」）・chosen（選んだ候補。ボタンの代わりに印）・
- * disabled（押せない）
- */
-export function OfferCard({ o, rules, level, onStart, view, catalog, actionLabel, chosen, disabled }: {
-  o: ExpeditionOffer; rules: CatalogRules | undefined; level: number; onStart: (offer: number) => void; view?: PlayerView; catalog?: Catalog | null;
-  actionLabel?: string; chosen?: boolean; disabled?: boolean;
-}) {
-  const L = getLocale();
-  // 大守護者と、通り道の群れている階も危険度に入れる（AI の候補と同じ。V4-0e §8.1）
-  const g = rules ? offerGap(rules, o.objective.targetDepth, o.traits ?? [], level, offerWardenExtra(o)) : null;
-  const ft = offerFloorTraitsText(L, rules, o);
-  const guarded = o.objective.type === 'retrieve_relic' && o.relicGuarded ? tr('（守護者付き）', ' (guarded)') : '';
-  return (
-    <li class={`offer ${o.slot ?? ''} ${chosen ? 'chosen' : ''}`}>
-      <div class="ohead">
-        <span class="oidx">{o.index})</span>
-        <SlotBadge slot={o.slot} />
-        <span class="otext">{objectiveText(L, o.objective)}{guarded}</span>
-        {chosen
-          ? <span class="tag chosen">{tr('選んだ', 'Chosen')}</span>
-          : <button class="small primary" disabled={disabled} onClick={() => onStart(o.index)}>{actionLabel ?? tr('この遠征に出る', 'Start')}</button>}
-      </div>
-      <div class="ometa">
-        <span>{tr(`基礎 +${o.points}`, `base +${o.points}`)}</span>
-        <span class="omult" title={tr('帰還（達成）したとき戦利品に掛かる倍率', 'Multiplier on the haul when you extract with the objective complete')}>
-          {tr('倍率', 'multiplier')} {multText(o.multiplierPct ?? 100)}
-        </span>
-        {g && <OfferGap rec={g.recommendedLevel} level={level} gap={g.levelGap} traitDanger={g.traitDanger} />}
-        {o.guardian && (
-          <span class={`oguard r${o.guardian.rank}`}
-            title={tr('守護者の見込み: 格（枠で決まる。格が高いほど体力が多い）と見れば分かる特徴。種族は会うまで分からない', 'Guardian forecast: rank (set by the slot; higher ranks have more HP) and visible traits. The species stays unknown until you meet it')}>
-            {guardianForecastText(L, o.guardian)}
-          </span>
-        )}
-        {o.bounty && (
-          <span class="oguard r2" title={tr('賞金首: 名前付きの強敵。種族・接辞・名前は候補の時点で分かる', 'Bounty: a named elite. Its kind, affixes and name are known from the offer')}>
-            {bountyForecastText(L, o.bounty)}
-          </span>
-        )}
-        {o.vault && <span class="oguard">{tr('宝物庫: 鍵を持つ敵が階にいる', 'vault: a monster on the floor carries the key')}</span>}
-        {o.scar ? <span class="oguard" title={tr('前の挑戦で与えたダメージの 4 分の 1 が残っている', 'A quarter of the damage you dealt last time stays')}>{tr(`傷跡で体力 −${o.scar}`, `scars: −${o.scar} HP`)}</span> : null}
-        {ft ? <span class="oguard" title={tr('前の遠征の条件で作られた階は、その性質のまま残っている（まだ作られていない階については出ない）', 'Floors made under an earlier expedition\'s traits keep them (floors not made yet are not listed)')}>{ft}</span> : null}
-      </div>
-      {/* いまの持ち物で 1 回に通る目安（守護者・賞金首。AI の候補の文と同じ。V3-8a §56.1） */}
-      {/* 大守護者も（S3a）。記録庫で体力が分かっていれば命中の回数・護られし者は火の間の装甲（S3b §30.3 の 4） */}
-      {view && catalog && (o.bounty || o.guardian?.armor !== undefined) && (
-        <div class="ometa"><span>{o.bounty
-          ? gearVsArmorText(L, catalog, view, o.bounty.armor, Math.max(1, o.bounty.hp - (o.scar ?? 0)))
-          : gearVsArmorText(L, catalog, view, o.guardian!.armor!, offerGuardianHp(view, o), o.guardian!.types ?? [])}</span></div>
-      )}
-      {/* 討伐の記録（S4 §35.5）: まだ倒していない大守護者を倒す候補に、先に倒した参加者の戦いの事実（AI の候補の文と同じ短い形。S5a。全文はキャンプの記録庫の枠） */}
-      {view && catalog && o.objective.type === 'slay_warden' && o.objective.targetDepth !== null && !(view.milestonesCleared ?? []).includes(o.objective.targetDepth)
-        && slaysAt(L, catalog, view, o.objective.targetDepth).length > 0 && (
-        <div class="ometa slay"><span>{slayShortGroupText(L, slaysAt(L, catalog, view, o.objective.targetDepth))}</span></div>
-      )}
-      <TraitList traits={o.traits ?? []} rules={rules} />
-    </li>
-  );
-}
-
-/**
  * プロフィールの記録の 1 行（V3-7 §7.2。AI のキャンプの観測と同じ文）。鍵は、そのランの冒険者のもの（S12c: 覚えてある鍵の全部から、
  * そのランを自分のものとして返す鍵を探す。別の冒険者の記録を出さない）。無ければ出さない。遠征が終わるたび（nextNo が変わる）に読み直す
  */
-function CampRecords({ runId, nextNo }: { runId: string; nextNo: number }) {
+export function CampRecords({ runId, nextNo }: { runId: string; nextNo: number }) {
   const [line, setLine] = useState<string | null>(null);
   useEffect(() => {
     let alive = true;
@@ -478,7 +395,8 @@ function CampRecords({ runId, nextNo }: { runId: string; nextNo: number }) {
     return () => { alive = false; };
   }, [runId, nextNo]);
   if (!line) return null;
-  return <p class="muted records-line">{line} <a href="#/records">{tr('（ホームの「記録」で全文）', '(full text in Home > Records)')}</a></p>;
+  // 全文は、図鑑のタブの冒険者ごとの札（S16d: 「記録」のタブは無くなった）
+  return <p class="muted records-line">{line} <a href="#/codex">{tr('（全文は、拠点の「図鑑」の冒険者ごとの札）', '(full text: Codex tab, by adventurer)')}</a></p>;
 }
 
 /**
@@ -492,73 +410,6 @@ export function NotesBlock({ notes, who }: { notes: readonly string[]; who?: str
     <div class="notes">
       <h3>{who ? tr(`${who} のメモ（新しい順）`, `${who}'s notes (newest first)`) : tr('あなたのメモ（新しい順）', 'Your notes (newest first)')}{notes.length > shown.length ? tr(`・全 ${notes.length} 件のうち ${shown.length} 件`, ` — ${shown.length} of ${notes.length}`) : ''}</h3>
       <ul>{shown.map((n) => <li key={n.index}><small>{n.index}</small> {n.text}</li>)}</ul>
-    </div>
-  );
-}
-
-/** キャンプ（遠征と遠征の間）。成績・前の遠征の払い戻し・候補を出し、次の遠征を選ぶか、ここで終える */
-export function CampPanel({ runId, view, catalog, onStart, onRetire, season, canReport, onReport }: {
-  /** そのラン（キャンプの記録の 1 行は、そのランの冒険者の鍵で読む。S12c） */
-  runId: string;
-  view: PlayerView; catalog?: Catalog | null; onStart: (offer: number | 'endless') => void; onRetire: () => void;
-  /** シーズン（S2 §18.1）: キャンプの観測の賞・報告・自分の火。報告は AI と同じ report_stairs */
-  season?: ObsSeason; canReport?: boolean; onReport?: () => void;
-}) {
-  const x = view.expedition;
-  const camp = view.camp;
-  const rules = rulesOf(catalog);
-  const rec = view.record;
-  // 最初のキャンプ（new_run で objective を省いた）: 前の遠征も成績もまだ無い
-  const first = !x;
-  return (
-    <div class="campbox">
-      <h2>{first ? tr('キャンプ — 最初の遠征を選ぶ', 'Camp — choose your first expedition') : tr('キャンプ', 'Camp')}</h2>
-      {!first && (
-        <div class="record">
-          <span>{tr('確定点', 'Banked')} <b>{rec.banked}</b></span>
-          <span>{tr('達成した遠征', 'Expeditions completed')} <b>{rec.expeditions}</b></span>
-          {rec.lost > 0 && <span class="lost">{tr('失った戦利品', 'Haul lost')} <b>{rec.lost}</b></span>}
-        </div>
-      )}
-      {x?.result && <ResultBlock x={x} playerId={view.playerId} rules={rules} />}
-      <p class="muted">
-        {first
-          ? tr(`盤面の外にいる（時間は進まない）。HP ${view.self.stats.hp}/${view.self.stats.maxHp}・Lv${view.self.level}。目標の深さ・推奨レベル・条件を比べて、3 つの候補から最初の遠征を選ぶ。`,
-            `You are off the board (time does not pass). HP ${view.self.stats.hp}/${view.self.stats.maxHp}, Lv${view.self.level}. Compare depth, recommended level and traits, and pick your first expedition.`)
-          : tr(`盤面の外にいる（時間は進まない）。HP ${view.self.stats.hp}/${view.self.stats.maxHp}・Lv${view.self.level}。最深到達: 地下${view.deepestDepth}階。ここで終えてもよい。`,
-            `You are off the board (time does not pass). HP ${view.self.stats.hp}/${view.self.stats.maxHp}, Lv${view.self.level}. Deepest: ${view.deepestDepth}. You may stop here.`)}
-      </p>
-      {camp && <CampRecords runId={runId} nextNo={camp.nextNo} />}
-      <NotesBlock notes={view.notes} />
-      {season && <SeasonCampPanel season={season} canReport={!!canReport} onReport={() => onReport?.()} />}
-      {/* 討伐の記録（S4 §35.5）: キャンプの記録庫の行（節目ごと。AI のキャンプの観測と同じ文） */}
-      {catalog && (view.season?.slays ?? []).length > 0 && (
-        <div class="slays">
-          <h3>{tr('記録庫・討伐の記録', 'Archive: warden kills')}</h3>
-          <ul>{[...new Set((view.season?.slays ?? []).map((s) => s.depth))].sort((a, b) => a - b).map((depth) => (
-            <li key={depth}><b>{tr(`地下${depth}階`, `Depth ${depth}`)}</b>{slaysAt(getLocale(), catalog, view, depth).map((r, i) => <div key={i} class="slay">{slayGroupText(getLocale(), [r])}</div>)}</li>
-          ))}</ul>
-        </div>
-      )}
-      {camp ? (
-        <>
-          <h3>{first ? tr(`最初の遠征の候補（遠征 ${camp.nextNo}）`, `Offers for expedition ${camp.nextNo}`) : tr(`次の遠征の候補（遠征 ${camp.nextNo}）`, `Offers for expedition ${camp.nextNo}`)}</h3>
-          <ul class="offers cards">
-            {camp.offers.map((o) => <OfferCard key={o.index} o={o} rules={rules} level={view.self.level} onStart={onStart} view={view} catalog={catalog} />)}
-            <li class="offer endless">
-              <div class="ohead">
-                <span class="otext">{tr('endless) 目的なし。できるだけ深く潜る', 'endless) No objective: descend as deep as you can')}</span>
-                <button class="small" onClick={() => onStart('endless')}>{tr('目的なしで出る', 'Start endless')}</button>
-              </div>
-            </li>
-          </ul>
-        </>
-      ) : (
-        <p>{tr('仲間の遠征が終わるまで、次の遠征は選べない。', 'The next expedition can be chosen when your allies finish.')}</p>
-      )}
-      <div class="row">
-        <button class="small danger" onClick={onRetire}>{tr('引退してランを終える', 'Retire (end the run)')}</button>
-      </div>
     </div>
   );
 }
