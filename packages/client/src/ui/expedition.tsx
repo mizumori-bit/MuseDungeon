@@ -9,7 +9,6 @@ import {
   nextCampOf, nextOverreach, objectiveText, offerFloorTraitsText, offerGap, offerText, offerWardenExtra, overreachPoints, partsText, progressText, recordsCampLine, resultText, slaysAt, slayGroupText, slayShortGroupText, slotName,
 } from '@muse/shared';
 import { api } from '../api';
-import type { RefObject } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
 import { getLocale, tr } from '../util';
 import { keyForRun } from './keys';
@@ -704,18 +703,15 @@ export function ExpeditionStatusPanel({ info }: { info: ExpInfo | null }) {
 }
 
 /**
- * 「AI の応答待ち（n 秒）」。probe は今の手番が AI 操作のプレイヤーならその名前を返す。
- * lastRef は最後にイベント・AI の記録を受け取った時刻（performance.now）。1 秒ごとに更新する。
+ * 観戦の待っている間の札（S13。SEASON.md §65.1 の 4: 「考えている… N 秒」「持ち主の支度を、待っている」）。
+ * probe が出す文を返す（出さないときは null）。1 秒ごとに読み直す
  */
-export function AgentWaitBadge({ probe, lastRef, thresholdS = 3 }: { probe: () => { name: string } | null; lastRef: RefObject<number>; thresholdS?: number }) {
+export function AgentWaitBadge({ probe }: { probe: () => string | null }) {
   const [, setTick] = useState(0);
   useEffect(() => {
     const t = setInterval(() => setTick((n) => n + 1), 1000);
     return () => clearInterval(t);
   }, []);
-  const info = probe();
-  if (!info || lastRef.current === null) return null;
-  const s = Math.floor((performance.now() - lastRef.current) / 1000);
-  if (s < thresholdS) return null;
-  return <div class="aiwait">{tr(`AI の応答待ち（${s} 秒）`, `Waiting for the AI (${s}s)`)} — {info.name}</div>;
+  const text = probe();
+  return text ? <div class="aiwait">{text}</div> : null;
 }

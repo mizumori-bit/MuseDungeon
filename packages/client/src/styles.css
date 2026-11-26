@@ -200,6 +200,11 @@ button.exit { border-color: #2e8a4e; background: #1f4a30; }
 .notes ul { margin: 2px 0 6px; padding-left: 18px; font-size: 13px; }
 .notes li small { color: var(--muted, #999); margin-right: 4px; }
 .aiwait { position: absolute; left: 8px; top: 8px; background: rgba(40,24,60,0.92); border: 1px solid #8e6cc8; border-radius: 6px; padding: 3px 10px; font-size: 13px; }
+/* 観戦の再生の速さと、おくれ（S13。SEASON.md §65.1） */
+.seg.playspeed { align-items: center; gap: 2px; }
+.seg.playspeed .muted { font-size: 11px; margin-right: 2px; }
+.playlag { display: inline-flex; align-items: center; gap: 6px; }
+.tag.lag { font-size: 11px; padding: 1px 8px; margin-left: 0; background: #4a3a10; color: #ffe08a; }
 .pstate.at_camp { color: #a8d8a0; }
 .inv em.relic { color: #ffd54f; }
 .tag.ongoing { background: #2a4a5a; }
