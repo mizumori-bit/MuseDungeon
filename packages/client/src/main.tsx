@@ -29,7 +29,8 @@ function App() {
     return () => window.removeEventListener('hashchange', h);
   }, []);
   if (route.page === 'play') return <Play key={route.id} runId={route.id} />;
-  if (route.page === 'watch') return <Watch key={route.id} runId={route.id} />;
+  // 見返し（S17）: #/watch/<runId>?exp=N。同じ観戦の画面で、遠征を選び直す・今に戻る（画面を作り直さない）
+  if (route.page === 'watch') return <Watch key={route.id} runId={route.id} exp={route.exp ?? null} />;
   if (route.page === 'replay') return <Replay key={route.id} runId={route.id} />;
   // 支度（S10。SEASON.md §58.4。ただ 1 つの出撃の窓口）
   if (route.page === 'prepare') return <Prepare key={route.id} runId={route.id} />;

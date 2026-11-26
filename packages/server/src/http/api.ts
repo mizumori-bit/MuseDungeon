@@ -223,6 +223,27 @@ export function createApp(manager: SessionManager, config: ServerConfig): App {
         else if (sub === '/owner/pace') result = ownerSetPace(acc.session, acc.pid, body!.pace, (id, pace) => manager.profiles.setPace(id, pace));
         return json(res, 200, { ...ownerView(acc.session, acc.pid), continuable: manager.continuable(acc.session, acc.pid), ...(result ? { result } : {}) });
       }
+      // 見返し（S17。SEASON.md §70.6・PROTOCOL §9.16）: 終わった遠征を、冒険者の目線で（その場の観戦と同じ見え方と出来事）。読むだけの GET。
+      // 門は、その場の観戦と同じ（持ち主の鍵は Authorization の見出しでだけ。URL に出さない）。巻き戻しの口（下の spectatorBlocked）とは別の口で、その守りは変えない。
+      // 持ち主の様子（S11）には数えない。応答は no-store。サーバーの記録には、道だけ（問い合わせ・見出しは出さない）
+      const rv = /^\/review(?:\/(\d{1,6}))?$/.exec(sub);
+      if (rv) {
+        if (m !== 'GET' && m !== 'HEAD') return fail(res, 405, actionError('bad_request', `GET ${sub}`, ''));
+        const follow = url.searchParams.get('follow') ?? undefined;
+        const ask = { local: isLocalRequest(req), ...ownerToken(req), ...(follow !== undefined ? { follow } : {}) };
+        if (!rv[1]) {
+          const r = await manager.review.list(runId, ask);
+          return r.ok ? json(res, 200, r.body) : fail(res, r.status, r.error);
+        }
+        const afterRaw = url.searchParams.get('after');
+        const after = afterRaw === null ? undefined : Number(afterRaw);
+        if (after !== undefined && !Number.isSafeInteger(after)) return fail(res, 400, actionError('bad_request', 'after must be an integer (the previous response\'s next)', ''));
+        const r = await manager.review.page(runId, Number(rv[1]), { ...ask, ...(after !== undefined ? { after } : {}) });
+        if (!r.ok) return fail(res, r.status, r.error);
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+        res.end(r.body);
+        return;
+      }
       const live = manager.get(runId);
       if (!live && !store?.exists(runId)) return fail(res, 404, actionError('no_session', `unknown run ${runId}`, ''));
       if (sub === '/meta') {

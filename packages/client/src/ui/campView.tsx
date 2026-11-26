@@ -19,7 +19,7 @@ import { InventoryPanel, MessageLog, ObsPartyPanel, StatusPanel, carriedCount, t
 import { prepLine } from './prepState';
 import { SeasonCampPanel } from './season';
 
-export function CampView({ runId, view, obs, catalog, theme, perkFocused, perkSent, onChoosePerk, onChooseBoon, onStart, onRetire, onReport, log, onSay, notice, turnText, changes, onDialog }: {
+export function CampView({ runId, view, obs, catalog, theme, perkFocused, perkSent, onChoosePerk, onChooseBoon, onStart, onRetire, onReport, log, onSay, notice, changes, onDialog }: {
   runId: string; view: PlayerView; obs: Observation | null; catalog: Catalog | null; theme: Theme | null;
   /** p で特技の候補に番号の受付を向けている・選んで返事を待っている */
   perkFocused: boolean; perkSent: boolean;
@@ -28,8 +28,11 @@ export function CampView({ runId, view, obs, catalog, theme, perkFocused, perkSe
   log: LogLine[]; onSay: (text: string) => void;
   /** 断りと知らせ（遊ぶ画面の flash。S16d: 主のボタンのすぐ下に出す。出発の断り＝協力の still_inside・予算・シーズンの終わり など） */
   notice?: ComponentChildren;
-  /** ▶ の状態行と、前の手番からの変化（S16d: キャンプに着いた手番の変化＝レベルが上がった・持ち主が決めた・納めた欠片 など。前の遠征の結果の札の中に出す） */
-  turnText?: string; changes?: readonly Change[];
+  /**
+   * 前の手番からの変化（S16d: キャンプに着いた手番の変化＝レベルが上がった・持ち主が決めた・納めた欠片 など。前の遠征の結果の札の中に出す）。
+   * AI 向けの ▶ の状態行は、渡さない（S17 と一緒に: 人間の画面には出さない）
+   */
+  changes?: readonly Change[];
   /** 確かめの窓を開いた・閉じた（S16d: 開いている間は、遊ぶ画面のキーの受け口を止める） */
   onDialog?: (open: boolean) => void;
 }) {
@@ -103,7 +106,8 @@ export function CampView({ runId, view, obs, catalog, theme, perkFocused, perkSe
                 <ul>{changes!.map((c, i) => <li key={`${c.code}-${i}`} class={`chg ${c.code}`}>{c.text}</li>)}</ul>
               </div>
             )}
-            {turnText && <p class="camp-turnline" title={turnText}>{turnText}</p>}
+            {/* AI 向けの ▶ の状態行（「最初の遠征を 3 つの候補から start_expedition { offer } で選びます…」）は、人間の画面には出さない（S17 と一緒に直した。
+                すぐ下に、目的の札と、主のボタンがある。変化は、すぐ上の「前の手番からの変化」に出る） */}
           </section>
 
           {/* 今、決めること 1: 特技・加護の候補（手番を使わない。遠征の中でも選べる: 特技は p、加護は地図の上の枠） */}

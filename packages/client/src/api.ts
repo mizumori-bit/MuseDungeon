@@ -1,7 +1,7 @@
 // HTTP API（docs/PROTOCOL.md §8）。失敗は ApiError で投げ、画面側でバナー表示する。
 import type {
   ActionError, Catalog, Command, CommandRecord, DirectiveItem, GameEvent, JoinedResponse, JoinRunRequest, LeaderboardEntry,
-  NewRunRequest, OpsAdventurerAdded, OpsCodexResponse, OpsEnrolled, OpsRosterResponse, OpsSeasonOpened, OwnerPace, OwnerRunsResponse, OwnerViewResponse, ProfileRecords, ProfileSeasonEntry, RunIndex, RunListing, RunMetaFile, SeasonListing, SeasonStandingsResponse, SeasonWatchResponse,
+  NewRunRequest, OpsAdventurerAdded, OpsCodexResponse, OpsEnrolled, OpsRosterResponse, OpsSeasonOpened, OwnerPace, OwnerRunsResponse, OwnerViewResponse, ProfileRecords, ProfileSeasonEntry, ReviewListResponse, ReviewPageResponse, RunIndex, RunListing, RunMetaFile, SeasonListing, SeasonStandingsResponse, SeasonWatchResponse,
   SpectatorPolicy, World,
 } from '@muse/shared';
 
@@ -88,6 +88,18 @@ export const api = {
   /** いま観戦できる進行中のラン（S3 §25.1）。参加者のトークンは見出しで渡す（URL に出さない） */
   seasonWatch: async (id: string, profileToken?: string) => (await (await request(`/api/seasons/${enc(id)}/watch`, profileToken ? bearer(profileToken) : undefined)).json()) as SeasonWatchResponse,
   config: () => getJSON<{ spectatorPolicy: SpectatorPolicy }>('/api/config'),
+  /**
+   * 見返し（S17。SEASON.md §70.6・PROTOCOL §9.16）: 終わった遠征の一覧と、遠征 1 つのコマ（その場の観戦の追従と同じ中身）。
+   * 持ち主の鍵は見出しで渡す（URL に出さない。無ければ見出しを付けない: 同じ PC からなら、それで通る）。follow はプレイヤーの ID（鍵ではない）
+   */
+  reviewList: (runId: string, token?: string, follow?: string) => ownerGet<ReviewListResponse>(`/api/runs/${enc(runId)}/review${follow ? `?follow=${enc(follow)}` : ''}`, token),
+  reviewPage: (runId: string, no: number, o: { after?: number | null; follow?: string; token?: string } = {}) => {
+    const q = new URLSearchParams();
+    if (o.after !== undefined && o.after !== null) q.set('after', String(o.after));
+    if (o.follow) q.set('follow', o.follow);
+    const qs = q.toString();
+    return ownerGet<ReviewPageResponse>(`/api/runs/${enc(runId)}/review/${no}${qs ? `?${qs}` : ''}`, o.token);
+  },
   /** プロフィールの記録（V3-7 §7.2。MCP の records と同じ中身） */
   /** プロフィールの表示名・要約・称号（S2 §18.2。MCP の profile と同じ中身） */
   /** seasons（S10。SEASON.md §58.4）: そのプロフィールが招かれたシーズン（拠点の冒険者の札） */

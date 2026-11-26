@@ -12,7 +12,7 @@ import type {
 import {
   DIRECTIVE_ITEMS, OWNER_COMMANDS, actionError, applyEvent, buildExpeditionReport, canonicalHash, guardianDisplayName, compareReports, emptyWorld, filterEventsForPlayer, FREE_COMMANDS, MACRO_COMMANDS,
   CHECKPOINT_EVERY, checkpointCamp, checkpointStep, monsterInView,
-  fleeOptionsText, fleeRiskText, macroNext, macroProbe, macroStart, macroStopError, narrate, projectPlayerView, publicStairsAt, riskText, fightRiskStop, fightThreats, threatEstimate, seasonReportable, seasonReportableSpots, seasonFinalText, selfTurnMarks, t,
+  fleeOptionsText, fleeRiskText, macroNext, macroProbe, macroStart, macroStopError, narrate, publicStairsAt, riskText, fightRiskStop, fightThreats, threatEstimate, seasonReportable, seasonReportableSpots, seasonFinalText, selfTurnMarks, t,
 } from '@muse/shared';
 import type { SeasonHooks } from '../season/SeasonService';
 import type { ServerConfig } from '../config';
@@ -22,6 +22,8 @@ import { boundaryKeyframeMissing, cutEventsAfter, isRunMeta, keyframeFromEvents,
 import { readJsonStable } from '../log/atomicWrite';
 import { summaryMarkdown } from './summary';
 import { buildAttempts, incapStatuses } from '../season/slays';
+import { followViewOf, narrateContext, perceiveCommit } from './followFrames';
+import type { CommitInfo } from './followFrames';
 import type { ProfileHooks } from './profiles';
 import { basename, join } from 'node:path';
 import { rmSync } from 'node:fs';
@@ -37,7 +39,8 @@ export interface SessionDeps {
 }
 
 export interface SessionListener {
-  onEvents?(events: GameEvent[]): void;
+  /** info（S17）: その確定の種類（マクロの途中の手か。追従の観戦の 1 コマの区切りに使う: session/followFrames.ts） */
+  onEvents?(events: GameEvent[], info: CommitInfo): void;
   onAgent?(a: AgentActivity): void;
   onMacro?(m: { playerId: PlayerId; kind: string; state: 'running' | 'stopped'; steps: number; reason?: string }): void;
 }
@@ -434,7 +437,10 @@ export class RunSession {
         for (const pid of this.world.playerOrder) if (this.world.players[pid].state === 'at_camp') void this.enqueue(() => this.seasonSyncNow(pid, 'camp'));
       }
     }
-    if (events.length) this.notify((l) => l.onEvents?.(events));
+    if (events.length) {
+      const info: CommitInfo = { macroStep: rec.parent !== undefined };
+      this.notify((l) => l.onEvents?.(events, info));
+    }
     for (const w of [...this.waiters]) w();
     this.scheduleTimeouts();
   }
@@ -524,14 +530,10 @@ export class RunSession {
 
   private appendMessages(pid: PlayerId, events: GameEvent[]): void {
     if (!events.length) return;
-    const view = projectPlayerView(this.world, pid);
-    const pe = filterEventsForPlayer(events, pid, view);
-    const ctx = this.narrateCtx(view);
+    // 届いた出来事のうち、文になったもの（見返しのコマの出来事も、同じ関数で作る。S17: session/followFrames.ts）
+    const { messages } = perceiveCommit(this.world, pid, events, this.deps.catalog);
     const log = this.messageLogs.get(pid) ?? [];
-    for (const e of pe) {
-      const text = narrate(e, ctx);
-      if (text) log.push({ seq: e.seq, type: e.type, text, event: e });
-    }
+    log.push(...messages);
     if (log.length > MESSAGE_LOG_CAP) log.splice(0, log.length - MESSAGE_LOG_CAP);
     this.messageLogs.set(pid, log);
   }
@@ -544,9 +546,7 @@ export class RunSession {
   }
 
   narrateCtx(view: PlayerView) {
-    const playerNames: Record<string, string> = {};
-    for (const m of view.party) { playerNames[m.entityId] = m.name; playerNames[m.playerId] = m.name; }
-    return { locale: view.locale, catalog: this.deps.catalog, selfId: view.self.id, selfPlayerId: view.playerId, playerNames, selfPos: view.self.pos };
+    return narrateContext(view, this.deps.catalog);
   }
 
   // ---------- 直列化 ----------
@@ -653,11 +653,15 @@ export class RunSession {
     return this.tokens.has(token);
   }
 
+  /** このランのプレイヤーのトークン（S17: 見返しの、AI の呼び出しの記録から伏せるため。サーバーの中だけで使う。外へ出さない） */
+  knownTokens(): string[] {
+    return [...this.tokens.keys()];
+  }
+
   view(pid: PlayerId): PlayerView {
-    const v = projectPlayerView(this.world, pid);
-    // 確定したシーズンのラン（S9b）: World の写しは確定の前のまま（取り込みも止めた）なので、見え方だけ「閉じた」にする（engine と World は変えない）
-    if (v.season && this.seasonFinal()) v.season = { ...v.season, ended: true, final: true };
-    return v;
+    // 確定したシーズンのラン（S9b）: World の写しは確定の前のまま（取り込みも止めた）なので、見え方だけ「閉じた」にする（engine と World は変えない）。
+    // 見返し（S17）のコマの見え方も、同じ関数で作る
+    return followViewOf(this.world, pid, this.seasonFinal());
   }
 
   isTurn(pid: PlayerId): boolean {

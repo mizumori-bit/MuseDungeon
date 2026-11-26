@@ -1,10 +1,12 @@
 // ライブ観戦。スナップショット＋イベントを shared の applyEvent で畳む（リプレイと同じ経路）。
 // 俯瞰: World そのまま。追従: projectPlayerView。spectatorPolicy=follow_only ではサーバーの PlayerView フレームのみ。
 // 届いた歩は再生の列（ui/playback.ts。S13 §65.1）に入れ、決まった間隔で 1 歩ずつ描く。音・吹き出し・演出・思考の欄は、その歩を描いたときに出る
-import type { AgentActivity, GameEvent, PerceivedEvent, PlayerView, RunListing, RunSummary, ServerMsg, SpectatorPolicy, World } from '@muse/shared';
+// 見返し（S17。SEASON.md §70.6。#/watch/<runId>?exp=N）: WS の代わりに、サーバーの見返しの口から取ってきたコマ（追従だけの枠と同じ中身）を、
+// 同じ受け口（onMsg）に流す。描き方・行動ごとの 1 行・場面の帯・音は、その場の観戦と同じ。再生・一時停止・速さ・頭から・遠征の選び直し・今に戻る
+import type { AgentActivity, GameEvent, PerceivedEvent, PlayerView, ReviewListResponse, RunListing, RunSummary, ServerMsg, SpectatorPolicy, World } from '@muse/shared';
 import { applyEvent, buildObservation, filterEventsForPlayer, formatObservationText, ownerWaitOpen, projectPlayerView, seasonClosedView } from '@muse/shared';
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { api, errorText } from '../api';
+import { api, ApiError, errorText } from '../api';
 import { connectWs, type WsStatus } from '../net/ws';
 import type { Canvas2DRenderer } from '../render/canvas2d';
 import { toViewEvents } from '../render/events';
@@ -21,8 +23,11 @@ import {
   animSpeed, CallRanges, DEFAULT_SPEED, HeldCalls, lagText, PlaybackQueue, readSpeed, sameThought, speedLabel, stepActor, waitText, WATCH_SPEEDS, type Delivery, type WatchSpeed,
 } from '../ui/playback';
 import { rewindAllowed } from '../ui/replayGate';
+import {
+  needMore, pickReviewNo, REVIEW_SPEEDS, reviewExpLabel, reviewHref, reviewInsteadOfRewind, reviewMessages, reviewNowText, reviewProgress, reviewSpeedOf, reviewTitle, type ExpParam,
+} from '../ui/review';
 import { actionLine, BANNER_MAX, BANNER_MS, bannerSnap, insertBySeq, isWorldTool, returnedOf, sceneBanners, type BannerSnap, type SceneBanner } from '../ui/watchLines';
-import { getLocale, getPref, setPref, tr } from '../util';
+import { getLocale, getPref, inLocale, navigate, setPref, tr } from '../util';
 
 interface Bubble { id: string; text: string; until: number }
 /** 描いた出来事の控え（命令の行の、結果の 1 文の重なりと、帰り方を見る。S15）。text: その出来事の、欄の文 */
@@ -81,11 +86,23 @@ function SceneBanners({ items }: { items: ShownBanner[] }) {
   );
 }
 
-export function Watch({ runId }: { runId: string }) {
+/** 見返しの進み（読み込み中・流している・終わりまで見た・見返せる遠征が無い） */
+type ReviewPhase = 'loading' | 'playing' | 'done' | 'none';
+
+export function Watch({ runId, exp = null }: { runId: string; exp?: ExpParam }) {
   useLocaleRefresh();
   const { catalog, error: catErr } = useCatalog();
   const th = useTheme(catalog);
   const [policy, setPolicy] = useState<SpectatorPolicy | null>(null);
+  /** 見返し（S17）: 見返せる遠征の一覧（門を通らなければ null）・シーズンの様子・頭からの回数・一時停止・進み */
+  const [reviewList, setReviewList] = useState<ReviewListResponse | null>(null);
+  const [reviewListLoaded, setReviewListLoaded] = useState(false);
+  const [seasonInfo, setSeasonInfo] = useState<{ season: string | null; final: boolean } | null>(null);
+  const [reviewEpoch, setReviewEpoch] = useState(0);
+  const [paused, setPausedState] = useState(false);
+  const [reviewPhase, setReviewPhase] = useState<ReviewPhase>('loading');
+  const [reviewRange, setReviewRange] = useState<{ startSeq: number; endSeq: number } | null>(null);
+  const pausedRef = useRef(false);
   const [listing, setListing] = useState<RunListing | null>(null);
   const [mode, setModeState] = useState<'director' | 'follow'>(getPref('watchMode', 'director') === 'follow' ? 'follow' : 'director');
   const [follow, setFollow] = useState<string | null>(null);
@@ -171,10 +188,43 @@ export function Watch({ runId }: { runId: string }) {
       setPolicy(pol);
       // 巻き戻しのボタン（S15）: 開けるランだけ（確定したシーズンのランは、だれでも。確定する前は、同じ PC から、終わったランだけ。§25.1）
       setCanRewind(!!r && rewindAllowed({ season: r.season ?? null, status: r.status, final: !!sw?.final, local: !!sw?.local, policy: server }));
-    }).catch(async (e) => { setError(errorText(e)); setPolicy(await conf); });
+      setSeasonInfo({ season: r?.season ?? null, final: !!sw?.final });
+    }).catch(async (e) => { setError(errorText(e)); setPolicy(await conf); setSeasonInfo({ season: null, final: false }); });
   }, [runId]);
 
-  const followOnly = policy === 'follow_only';
+  // 見返せる遠征の一覧（S17）: 鍵が分かってから（seasonInfo が来た後）。見返している間は 20 秒ごとに読み直す（今の居場所の知らせ）。
+  // 門を通らない（鍵が無い・ほかの PC から）なら null（「今／遠征」の切り替えを出さない）
+  const reviewing = exp !== null;
+  useEffect(() => {
+    if (!seasonInfo) return;
+    let alive = true;
+    const load = () => api.reviewList(runId, seasonTokRef.current ?? undefined)
+      .then((l) => { if (alive) { setReviewList(l); setReviewListLoaded(true); } })
+      .catch(() => { if (alive) { setReviewList(null); setReviewListLoaded(true); } });
+    void load();
+    const t = setInterval(() => { if (!document.hidden) void load(); }, reviewing ? 20_000 : 60_000);
+    return () => { alive = false; clearInterval(t); };
+  }, [runId, seasonInfo, reviewing]);
+
+  /** 見返す遠征（道の exp と一覧から）。null: その場の観戦（か、見返せる遠征が無い） */
+  const reviewNo = reviewing && reviewList ? pickReviewNo(reviewList.expeditions, exp) : null;
+  const reviewExp = reviewNo !== null ? reviewList?.expeditions.find((x) => x.no === reviewNo) ?? null : null;
+  // ?exp=last は、開いた遠征の番号に書き換える（履歴を増やさない。読み直しても同じ遠征）
+  useEffect(() => {
+    if (exp === 'last' && reviewNo !== null) window.history.replaceState(null, '', reviewHref(runId, reviewNo));
+  }, [exp, reviewNo, runId]);
+  // シーズンでないラン・確定したシーズンのランは、今までどおり、巻き戻しへ（§70.6 の 10）
+  useEffect(() => {
+    if (reviewing && seasonInfo && !reviewInsteadOfRewind({ season: seasonInfo.season, final: seasonInfo.final, rewind: canRewind })) window.location.replace(`#/replay/${runId}`);
+  }, [reviewing, seasonInfo, canRewind, runId]);
+  // 見返しの遠征を開いたら、その冒険者を追う（持ち主の鍵なら、サーバーもその冒険者だけを返す）
+  useEffect(() => { if (reviewNo !== null && reviewList && follow !== reviewList.playerId) setFollow(reviewList.playerId); }, [reviewNo, reviewList?.playerId]);
+
+  const setPaused = (v: boolean) => { pausedRef.current = v; setPausedState(v); if (!v) pumpRef.current?.(); };
+
+  // 見返している間は、追従だけ（その場の観戦の追従だけの枠と同じ中身）
+  const effPolicy: SpectatorPolicy | null = reviewNo !== null ? 'follow_only' : policy;
+  const followOnly = effPolicy === 'follow_only';
 
   /** 表示中のフロア（追従中はそのプレイヤーのフロア、俯瞰は選択または自動） */
   const featuredFloor = (w: World): string | null => {
@@ -313,7 +363,9 @@ export function Watch({ runId }: { runId: string }) {
   };
 
   useEffect(() => {
-    if (policy === null) return;
+    if (effPolicy === null) return;
+    // 見返し: 見返す遠征が決まるまで、つながない（その場の観戦へ、つないでしまわない）
+    if (reviewing && reviewNo === null) return;
     if (followOnly && !follow) return;
     worldRef.current = null;
     viewRef.current = null;
@@ -321,8 +373,23 @@ export function Watch({ runId }: { runId: string }) {
     recentRef.current = [];
     bannerPrevRef.current = null;
     setLog([]);
+    setThoughts([]);
+    thoughtsRef.current = [];
+    setActivities([]);
+    actKeysRef.current = new Set();
     const queue = queueRef.current!;
     queue.clear();
+    // 見返しは、選んだ速さのまま流す（追いつかない・今の所へ飛ばない。「すぐに」は使わない）
+    const review = reviewNo !== null;
+    queue.catchUp = !review;
+    queue.speed = review ? reviewSpeedOf(speed) : speed;
+    // 遠征を選び直した・頭から・今に戻った: 一時停止を解き、前の遠征の吹き出しと帯を残さない
+    pausedRef.current = false;
+    setPausedState(false);
+    bubblesRef.current = [];
+    bannersRef.current = [];
+    setBanners([]);
+    if (review) { setReviewPhase('loading'); setReviewRange(null); }
     let timer: ReturnType<typeof setTimeout> | null = null;
     /** 描いた出来事を控える（命令の行に使う。S15） */
     const remember = (items: RecentEv[]) => {
@@ -547,18 +614,51 @@ export function Watch({ runId }: { runId: string }) {
       else sound([], true);
     };
     const stop = () => { if (timer) { clearTimeout(timer); timer = null; } };
-    /** 列を進める: 出すものを出して、次に呼ぶ時刻を決める（隠れている間は溜めるだけ） */
+    /** 見返し（S17）: 続きの印（null: もう無い。undefined: まだ最初の求めを出していない）・取りにいっている最中・やめた */
+    let next: number | null | undefined;
+    let fetching = false;
+    let cancelled = false;
+    let retry: ReturnType<typeof setTimeout> | null = null;
+    /** 列を進める: 出すものを出して、次に呼ぶ時刻を決める（隠れている間は溜めるだけ。見返しの一時停止の間は、進めない） */
     const pump = () => {
       stop();
+      if (review && pausedRef.current) return;
       const t0 = performance.now();
       const r = queue.tick(t0, { hidden: document.hidden });
       if (r.jumped) applyJump(r.out);
       else deliverAll(r.out);
       // 間は、この歩を出した時刻から数える（描くのにかかった時間で、間が伸びていかないように）
       if (r.next !== null) timer = setTimeout(pump, Math.max(0, r.next - (performance.now() - t0)));
+      if (review) {
+        // 列が少なくなったら、続きを取りにいく。取ってくる物も、列も無くなったら、終わりまで見た
+        if (needMore({ next: next ?? null, fetching, queued: queue.size })) void fetchMore();
+        else if (next === null && !fetching && queue.empty) setReviewPhase('done');
+      }
     };
     /** 足したとき: 待っている時計が無ければ、すぐ進める（しばらく何も無かった後の 1 歩は、すぐ描く） */
     const kick = () => { if (!timer) pump(); };
+    /** 見返し: 次のコマを取ってきて、その場の観戦と同じ受け口に流す（混んでいる 503 は、少し待って、もう一度） */
+    const fetchMore = async (): Promise<void> => {
+      if (fetching || cancelled || next === null || reviewNo === null) return;
+      fetching = true;
+      try {
+        const page = await api.reviewPage(runId, reviewNo, { after: next, follow: follow ?? undefined, token: seasonTokRef.current ?? undefined });
+        if (cancelled) return;
+        setReviewRange(page.range);
+        next = page.next;
+        setReviewPhase('playing');
+        for (const msg of reviewMessages(page)) onMsg(msg);
+        if (next === null && queue.empty) setReviewPhase('done');
+      } catch (e) {
+        if (cancelled) return;
+        if (e instanceof ApiError && e.status === 503 && !e.error?.code?.startsWith('recovery')) { retry = setTimeout(() => { retry = null; void fetchMore(); }, 1500); return; }
+        setError(inLocale(errorText(e)));
+        next = null;
+        setReviewPhase(queue.empty ? 'none' : 'playing');
+      } finally {
+        fetching = false;
+      }
+    };
     pumpRef.current = pump;
     jumpRef.current = () => { stop(); applyJump(queue.flush(performance.now()).out); };
     const onVisible = () => { if (!document.hidden) pump(); };
@@ -665,9 +765,18 @@ export function Watch({ runId }: { runId: string }) {
           break;
       }
     };
-    const ws = connectWs(hello, onMsg, (s) => { wsStatusRef.current = s; setWsStatus(s); });
+    // 見返し（S17）: WS の代わりに、見返しの口から取ってきたコマを流す（つながっている印は、つながない）
+    if (review) {
+      wsStatusRef.current = 'closed';
+      setWsStatus('closed');
+      onMsg({ t: 'welcome', role: 'spectator', runId, contentVersion: '', policy: 'follow_only', mode: 'follow' });
+      void fetchMore();
+    }
+    const ws = review ? null : connectWs(hello, onMsg, (s) => { wsStatusRef.current = s; setWsStatus(s); });
     return () => {
-      ws.close();
+      cancelled = true;
+      if (retry) clearTimeout(retry);
+      ws?.close();
       stop();
       queue.clear();
       pumpRef.current = null;
@@ -675,7 +784,7 @@ export function Watch({ runId }: { runId: string }) {
       document.removeEventListener('visibilitychange', onVisible);
       soundDirector.leave();
     };
-  }, [runId, policy, followOnly ? follow : null]);
+  }, [runId, effPolicy, followOnly ? follow : null, reviewNo, reviewEpoch]);
 
   // 俯瞰つきで見ている相手を替えたら、列を今の所まで進め（途中は描かない。§65.1 の 5。追従だけの観戦は、つなぎ直しで列を捨てる）、「考えている」を数え直す
   useEffect(() => {
@@ -689,15 +798,24 @@ export function Watch({ runId }: { runId: string }) {
   useEffect(() => { if (!followOnly) sound([], true); }, [catalog, follow]);
 
   const setMode = (m: 'director' | 'follow') => { setPref('watchMode', m); setModeState(m); setLog([]); };
-  /** 速さ（§65.1 の 5。ブラウザに覚える）。「すぐに」に替えたら、溜まった分は今の所へ飛ぶ */
+  /** 速さ（§65.1 の 5。ブラウザに覚える）。「すぐに」に替えたら、溜まった分は今の所へ飛ぶ（見返しには「すぐに」は無い） */
   const changeSpeed = (s: WatchSpeed) => {
     setPref('watchSpeed', s);
     setSpeedState(s);
     const q = queueRef.current!;
-    q.speed = s;
-    if (s === 'instant') jumpRef.current?.();
+    q.speed = reviewNo !== null ? reviewSpeedOf(s) : s;
+    if (s === 'instant' && reviewNo === null) jumpRef.current?.();
     else pumpRef.current?.();
   };
+  /** 見返し: 頭から（同じ遠征を、最初のコマから取り直す） */
+  const restart = () => { pausedRef.current = false; setPausedState(false); setReviewEpoch((n) => n + 1); };
+  /** 見る遠征を選ぶ（now: 今＝その場の観戦） */
+  const pickExp = (v: string) => navigate(v === 'now' ? `#/watch/${runId}` : reviewHref(runId, Number(v)));
+  // 「今／遠征 N」の切り替えを出すか: 見返せる遠征があり、このランが見返しの画面を使うラン（開催中のシーズンのラン。ほかは巻き戻し: §70.6 の 10）
+  const canReview = !!reviewList && reviewList.expeditions.length > 0 && !!seasonInfo && reviewInsteadOfRewind({ season: seasonInfo.season, final: seasonInfo.final, rewind: canRewind });
+  const inReview = reviewNo !== null;
+  const reviewName = reviewList?.name ?? viewRef.current?.self.name ?? null;
+  const nowText = inReview && reviewList ? reviewNowText(reviewList.now, reviewList.name) : null;
 
   const w = worldRef.current;
   let obsText: string | null = null;
@@ -744,11 +862,12 @@ export function Watch({ runId }: { runId: string }) {
   const players = w ? w.playerOrder.map((pid) => ({ id: pid, name: w.players[pid].name })) : (listing?.players ?? []).map((p) => ({ id: p.id, name: p.name }));
 
   return (
-    <div class="page watch">
-      <Header title={`${tr('観戦', 'Spectate')} ${runId}`} back>
+    <div class={`page watch ${inReview ? 'is-review' : ''}`}>
+      <Header title={inReview ? reviewTitle(reviewNo!, reviewName) : `${tr('観戦', 'Spectate')} ${runId}`} back>
         {/* 見出しの道具は 1 つの束（S16a §70.3 の 5）: 広い幅では 1 段、狭い幅では、束ごと 2 段目に 1 行で（はみ出したら横に送る） */}
         <span class="hdr-tools">
-          <span class={`ws ${wsStatus}`}>{wsStatus}</span>
+          {/* 見返している間は、つながっている印の代わりに「見返し」（その場の観戦と、取り違えない） */}
+          {inReview ? <span class="tag reviewmark">{tr('見返し（記録から）', 'Looking back (from the records)')}</span> : <span class={`ws ${wsStatus}`}>{wsStatus}</span>}
           <ThemePicker themes={th.themes} themeId={th.themeId} onChange={th.setThemeId} />
           <SoundControls />
           {/* 巻き戻しは、開けるランだけ（S15。開催中のシーズンの、終わっていないランは、確定するまで見返せない: §25.1） */}
@@ -757,19 +876,45 @@ export function Watch({ runId }: { runId: string }) {
       </Header>
       <ErrorBanner error={error ?? catErr ?? th.error} onClose={() => setError(null)} />
       <div class="toolbar">
-        {!followOnly && (
+        {/* 今／遠征 N（S17）: 見返せる遠征があるときだけ */}
+        {(canReview || reviewing) && (
+          <label class="inline reviewpick">{tr('見る', 'Show')}
+            <select value={inReview ? String(reviewNo) : 'now'} onChange={(e) => pickExp((e.target as HTMLSelectElement).value)}>
+              <option value="now">{tr('今（その場の観戦）', 'Now (live)')}</option>
+              {(reviewList?.expeditions ?? []).map((x) => <option key={x.no} value={String(x.no)}>{reviewExpLabel(x)}</option>)}
+            </select>
+          </label>
+        )}
+        {inReview && (
+          <>
+            {/* 終わりまで見た後は「もう一度」（頭から） */}
+            <button class="small reviewplay" onClick={() => (reviewPhase === 'done' ? restart() : setPaused(!paused))}>
+              {reviewPhase === 'done' ? tr('▶ もう一度', '▶ Again') : paused ? tr('▶ 再生', '▶ Play') : tr('❚❚ 一時停止', '❚❚ Pause')}
+            </button>
+            <button class="small" onClick={restart}>{tr('頭から', 'From the start')}</button>
+            <span class="seg playspeed" title={tr('再生の速さ（1 手番の間）', 'Playback speed (time per turn)')}>
+              <span class="muted">{tr('速さ', 'Speed')}</span>
+              {REVIEW_SPEEDS.map((s) => <button key={s} class={`small ${reviewSpeedOf(speed) === s ? 'on' : ''}`} onClick={() => changeSpeed(s)}>{speedLabel(s)}</button>)}
+            </span>
+            <span class="reviewprog" title={tr('遠征の中の、今描いている所', 'Where in the expedition this is')}><span style={{ width: `${reviewProgress(viewRef.current?.seq, reviewRange ?? reviewExp)}%` }} /></span>
+            <button class="small primary" onClick={() => navigate(`#/watch/${runId}`)}>{tr('今に戻る', 'Back to now')}</button>
+          </>
+        )}
+        {!inReview && !followOnly && (
           <span class="seg">
             <button class={`small ${mode === 'director' ? 'on' : ''}`} onClick={() => setMode('director')}>{tr('俯瞰', 'Director')}</button>
             <button class={`small ${mode === 'follow' ? 'on' : ''}`} onClick={() => setMode('follow')}>{tr('追従', 'Follow')}</button>
           </span>
         )}
-        {followOnly && <span class="muted">{tr('公開設定により追従視点のみ', 'Follow view only (server policy)')}</span>}
-        <label class="inline">{tr('対象', 'Player')}
-          <select value={follow ?? ''} onChange={(e) => setFollow((e.target as HTMLSelectElement).value || null)}>
-            {players.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-          </select>
-        </label>
-        {!followOnly && mode === 'director' && floors.length > 1 && (
+        {!inReview && !reviewing && followOnly && <span class="muted">{tr('公開設定により追従視点のみ', 'Follow view only (server policy)')}</span>}
+        {!inReview && !reviewing && (
+          <label class="inline">{tr('対象', 'Player')}
+            <select value={follow ?? ''} onChange={(e) => setFollow((e.target as HTMLSelectElement).value || null)}>
+              {players.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </label>
+        )}
+        {!inReview && !followOnly && mode === 'director' && floors.length > 1 && (
           <label class="inline">{tr('フロア', 'Floor')}
             <select value={floorSel ?? ''} onChange={(e) => setFloorSel((e.target as HTMLSelectElement).value || null)}>
               <option value="">{tr('自動', 'auto')}</option>
@@ -777,12 +922,14 @@ export function Watch({ runId }: { runId: string }) {
             </select>
           </label>
         )}
-        <span class="seg playspeed" title={tr('再生の速さ（1 手番の間）。「すぐに」は、届いたときに描く', 'Playback speed (time per turn). "Instant" draws each turn as it arrives')}>
-          <span class="muted">{tr('再生', 'Playback')}</span>
-          {WATCH_SPEEDS.map((s) => <button key={s} class={`small ${speed === s ? 'on' : ''}`} onClick={() => changeSpeed(s)}>{speedLabel(s)}</button>)}
-        </span>
-        {speed !== 'instant' && <PlaybackLag queue={queueRef.current!} onJump={() => jumpRef.current?.()} />}
-        {w && <span class="muted">seq {w.seq} {w.status === 'ended' ? tr('（終了）', '(ended)') : ''}</span>}
+        {!inReview && !reviewing && (
+          <span class="seg playspeed" title={tr('再生の速さ（1 手番の間）。「すぐに」は、届いたときに描く', 'Playback speed (time per turn). "Instant" draws each turn as it arrives')}>
+            <span class="muted">{tr('再生', 'Playback')}</span>
+            {WATCH_SPEEDS.map((s) => <button key={s} class={`small ${speed === s ? 'on' : ''}`} onClick={() => changeSpeed(s)}>{speedLabel(s)}</button>)}
+          </span>
+        )}
+        {!inReview && !reviewing && speed !== 'instant' && <PlaybackLag queue={queueRef.current!} onJump={() => jumpRef.current?.()} />}
+        {!inReview && w && <span class="muted">seq {w.seq} {w.status === 'ended' ? tr('（終了）', '(ended)') : ''}</span>}
       </div>
       <div class="layout">
         <div class="main">
@@ -792,8 +939,26 @@ export function Watch({ runId }: { runId: string }) {
             overlay={
               <>
                 {followCamp && <CampScene theme={th.theme} />}
-                <AgentWaitBadge probe={waitProbe} />
+                {!reviewing && <AgentWaitBadge probe={waitProbe} />}
                 <SceneBanners items={banners} />
+                {/* 見返し（S17）: 今、その場で起きていること（押すと、今に戻る）・終わりまで見た・見返せる遠征が無い。地図の上に重ねる（枠の高さを変えない: S15） */}
+                {inReview && nowText && (
+                  <button class="reviewnow" onClick={() => navigate(`#/watch/${runId}`)} title={tr('押すと、今（その場の観戦）に戻る', 'Back to now (live)')}>{nowText} — {tr('今に戻る', 'back to now')}</button>
+                )}
+                {inReview && reviewPhase === 'loading' && <div class="reviewend">{tr('記録から作り直している…', 'Rebuilding from the records…')}</div>}
+                {inReview && reviewPhase === 'done' && (
+                  <div class="reviewend">
+                    <span>{tr(`遠征 ${reviewNo} を、終わりまで見た`, `End of expedition ${reviewNo}`)}</span>
+                    <button class="small" onClick={restart}>{tr('頭から', 'From the start')}</button>
+                    <button class="small primary" onClick={() => navigate(`#/watch/${runId}`)}>{tr('今に戻る', 'Back to now')}</button>
+                  </div>
+                )}
+                {reviewing && reviewListLoaded && reviewNo === null && (
+                  <div class="replaymsg">
+                    <p>{reviewList ? tr('この遠征は、見返せない（見返せるのは、終わった遠征だけ。進行中の遠征は、今の観戦で見る）。', 'This expedition cannot be looked back on (only ended ones; watch the one in progress live).') : tr('見返せない（見返せるのは、その冒険者の持ち主の鍵か、サーバーと同じ PC から）。', 'Cannot look back (only with the adventurer\'s owner key, or from the PC running the server).')}</p>
+                    <button class="small primary" onClick={() => navigate(`#/watch/${runId}`)}>{tr('今に戻る', 'Back to now')}</button>
+                  </div>
+                )}
                 {/* 自動行動の知らせは、地図の上に重ねる（S15: 上の段で出入りすると、地図の枠の高さが変わっていた） */}
                 {campNote
                   ? <div class="macro">{campNote}</div>

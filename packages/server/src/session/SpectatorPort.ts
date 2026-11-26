@@ -3,6 +3,8 @@
 import type { AgentActivity, GameEvent, PerceivedEvent, PlayerId, PlayerView, SpectatorPolicy, World } from '@muse/shared';
 import { applyEvent, filterEventsForPlayer, stripSecret } from '@muse/shared';
 import { spectatorEvent } from '../log/RunStore';
+import { followFrameDue, liveVisibleUpTo } from './followFrames';
+import type { CommitInfo } from './followFrames';
 import type { RunSession } from './RunSession';
 
 export class SpectatorPort {
@@ -26,10 +28,9 @@ export class SpectatorPort {
     return !!this.owner || (this.policy === 'follow_only' && this.summary() === null);
   }
 
+  /** いま見せている所（見返し（S17）も、同じ関数で「その場の観戦が、まだ見せていない所」を決める） */
   private visibleUpTo(): number {
-    const w = this.session.world;
-    if (this.policy === 'delayed' && w.status === 'active') return Math.max(0, w.seq - this.delaySeq);
-    return w.seq;
+    return liveVisibleUpTo(this.session.world, this.policy, this.delaySeq);
   }
 
   snapshot(): { seq: number; world: World } {
@@ -86,10 +87,13 @@ export class SpectatorPort {
     return this.session.messages(pid).filter((m) => m.seq > seq);
   }
 
-  /** この出来事の中に、追従の相手が知覚したもの（filterEventsForPlayer に残るもの）があるか。view はその相手の今の PlayerView */
-  followPerceives(pid: PlayerId, events: readonly GameEvent[], view: PlayerView): boolean {
+  /**
+   * この確定で、追従の相手に 1 コマを送るか（この出来事の中に、相手が知覚したもの（filterEventsForPlayer に残るもの）があるか）。view はその相手の今の PlayerView。
+   * 決まりは followFrameDue の 1 つ（見返し（S17）のコマも、同じ関数で区切る）
+   */
+  followPerceives(pid: PlayerId, events: readonly GameEvent[], view: PlayerView, info: CommitInfo): boolean {
     if (!this.hasPlayer(pid)) return false;
-    return filterEventsForPlayer(events, pid, view).length > 0;
+    return followFrameDue(filterEventsForPlayer(events, pid, view), info);
   }
 
   players(): PlayerId[] {
@@ -112,9 +116,9 @@ export class SpectatorPort {
     return this.session.addListener({ onEvents: () => cb() });
   }
 
-  /** 命令が 1 回確定するたび（世界が 1 回進むたび）に、その確定で出た出来事を受け取る。World はもう進んだ後 */
-  onCommit(cb: (events: readonly GameEvent[]) => void): () => void {
-    return this.session.addListener({ onEvents: (events) => cb(events) });
+  /** 命令が 1 回確定するたび（世界が 1 回進むたび）に、その確定で出た出来事と、確定の種類を受け取る。World はもう進んだ後 */
+  onCommit(cb: (events: readonly GameEvent[], info: CommitInfo) => void): () => void {
+    return this.session.addListener({ onEvents: (events, info) => cb(events, info) });
   }
 
   summary() { return this.session.summary(); }

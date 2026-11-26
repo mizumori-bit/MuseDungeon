@@ -61,10 +61,11 @@ export function SeasonView(p: SeasonViewProps) {
   const seasonRuns = (p.runs ?? []).filter((r) => r.season === s.id);
   const { byRow, unmatched: unmatched0 } = runsForRows(rows0, seasonRuns, p.participantOf);
   const unmatched = unmatched0.filter((x) => !(p.onlyMine && !p.myRunIds.has(x.runId)));
-  /** そのランのボタン（S17 で「見返す」が足される所） */
+  /** そのランのボタン（S17: 開催中の自分のランに「見返す」。終わった遠征の数は、観戦できるランの一覧から） */
+  const endedOf = (runId: string) => sw?.runs.find((r) => r.runId === runId)?.expeditionsEnded ?? 0;
   const actionsOf = (x: RunListing | string): RunAction[] => runActions(typeof x === 'string'
-    ? { season: s.id, final, local: !!sw?.local, runId: x, status: null, watchable: sw?.runs.map((r) => r.runId) ?? null }
-    : { season: s.id, final, local: !!sw?.local, runId: x.runId, status: x.status, recoveryFailed: !!x.recoveryFailed, watchable: sw?.runs.map((r) => r.runId) ?? null });
+    ? { season: s.id, final, local: !!sw?.local, runId: x, status: null, watchable: sw?.runs.map((r) => r.runId) ?? null, ended: endedOf(x) }
+    : { season: s.id, final, local: !!sw?.local, runId: x.runId, status: x.status, recoveryFailed: !!x.recoveryFailed, watchable: sw?.runs.map((r) => r.runId) ?? null, ended: endedOf(x.runId) });
   const rowButtons = (xs: readonly (RunListing | string)[]) => <RunButtons runs={xs} actionsOf={actionsOf} />;
   const titles = data.result?.titles ?? [];
   const nm = (x: { name: { ja: string; en: string } }) => (L === 'en' ? x.name.en : x.name.ja);
@@ -94,7 +95,7 @@ export function SeasonView(p: SeasonViewProps) {
       {/* 同じ PC からは、終わったランに「見返す」が出る（§25.1。runActions）: 注記を、そこに合わせる（S16d） */}
       {!final && <p class="hub-note">{sw?.local
         ? tr('開催中は、今の順位と、もう公開されたもの（階段・特別な場所・共有層に載った火・討伐）だけを出す。この PC はサーバーと同じなので、終わったランは、今も見返せる（ほかの PC からは、確定した後）。', 'While it runs, only the current standings and what is already public (stairs, special places, shared campfires, warden kills) are shown. This PC runs the server, so ended runs can be looked back on now (from other PCs, once it is final).')
-        : tr('開催中は、今の順位と、もう公開されたもの（階段・特別な場所・共有層に載った火・討伐）だけを出す。ランを見返せるのは、確定した後。', 'While it runs, only the current standings and what is already public (stairs, special places, shared campfires, warden kills) are shown. Runs can be looked back on once it is final.')}</p>}
+        : tr('開催中は、今の順位と、もう公開されたもの（階段・特別な場所・共有層に載った火・討伐）だけを出す。ランの全体を見返せるのは、確定した後（自分の冒険者の終わった遠征は、今も、冒険者の目線で見返せる）。', 'While it runs, only the current standings and what is already public (stairs, special places, shared campfires, warden kills) are shown. Whole runs can be looked back on once it is final (your own adventurer\'s ended expeditions can be looked back on now, through their eyes).')}</p>}
 
       <section class="ent-sec">
         <div class="ent-sechead">

@@ -4,7 +4,7 @@ import type { ActionError, Command, CommandRecord } from './commands';
 import type { GameEvent } from './events';
 import type { PerceivedEvent } from './filter';
 import type { TurnBlock } from './turn';
-import type { Controller, DirectiveItem, ExpeditionBrief, Locale, Names, ObjectiveType, PlayerId, PlayerState, RunSummary, SeasonSlay, World } from './types';
+import type { Controller, DirectiveItem, ExpeditionBrief, ExpeditionEndReason, Locale, Names, Objective, ObjectiveType, PlayerId, PlayerState, RunSummary, SeasonSlay, World } from './types';
 import type { PlayerView } from './view';
 import type { DirectiveUndecided, Observation } from './observation';
 import type { OwnerPace } from './directive';
@@ -273,7 +273,48 @@ export interface SeasonResultView {
  * GET /api/seasons/:id/watch（S3。SEASON.md §25.1・PROTOCOL §9.7）: いま観戦できる、そのシーズンの進行中のラン。
  * local: サーバーと同じ機械からの接続、final: シーズンの結果が確定している（どちらも、すべてのランを見られる）。name は順位の表の名前
  */
-export interface SeasonWatchResponse { local: boolean; final: boolean; runs: { runId: string; name: string }[] }
+export interface SeasonWatchResponse {
+  local: boolean; final: boolean;
+  /** expeditionsEnded（S17）: そのランの、見ている者が見返せる冒険者の、終わった遠征の数（シーズンの表の「見返す」を出すか） */
+  runs: { runId: string; name: string; expeditionsEnded?: number }[];
+}
+
+// ---- 見返し（S17。SEASON.md §70.6。PROTOCOL §9.16）----
+/**
+ * 見返せる遠征（終わったもの。その場の観戦が、もう見せた所まで）。中身は、そのプレイヤーの見え方（PlayerView の expedition）に出ているものだけ。
+ * banked: その遠征で、そのプレイヤーが確定した点（分からなければ null）
+ */
+export interface ReviewExpedition {
+  no: number; objective: Objective; status: 'in_progress' | 'objective_complete' | 'ended'; endReason: ExpeditionEndReason | null;
+  startSeq: number; endSeq: number; deepest: number | null; banked: number | null;
+}
+/**
+ * GET /api/runs/:id/review（S17）: 見返せる遠征の一覧（古い順）と、今の冒険者の居場所（見返している間に、その場で起きていることの小さい知らせ）。
+ * 門は、その場の観戦と同じ（そのランの持ち主の鍵か、サーバーと同じ PC から。シーズンでないラン・確定したシーズンのランは、だれでも）
+ */
+export interface ReviewListResponse {
+  runId: string; playerId: PlayerId; name: string;
+  season: string | null; final: boolean;
+  expeditions: ReviewExpedition[];
+  /** 今（見返している間の知らせ）: state は冒険者の状態。expedition は、いま進めている遠征の番号（迷宮の中のときだけ） */
+  now: { state: 'at_camp' | 'in_dungeon' | 'dead' | 'ended'; expedition: number | null };
+  /** 1 回の求めで返すコマの上限 */
+  pageFrames: number;
+}
+/** 見返しの 1 コマ（その場の観戦の追従だけの枠 `{ t: 'view' }` と同じ中身: その時点の見え方と、前のコマより後に届いた出来事） */
+export interface ReviewFrame { view: PlayerView; events: PerceivedEvent[] }
+/**
+ * GET /api/runs/:id/review/:no（S17）: 遠征 1 つのコマ。after を省いた最初の求めは、遠征を始める前（キャンプ）の見え方を最初のコマ（出来事なし。
+ * その場の観戦の、つないだ直後の枠と同じ）にする。agent: その間の AI の呼び出しの記録（命令の記録から。考え・命令・引数。応答の文は記録に無いので空）。
+ * next: 続きがあれば、次の求めの after（最後のコマの見え方の seq）。無ければ null
+ */
+export interface ReviewPageResponse {
+  runId: string; playerId: PlayerId; no: number;
+  frames: ReviewFrame[];
+  agent: AgentActivity[];
+  next: number | null;
+  range: { startSeq: number; endSeq: number };
+}
 
 // ---- 持ち主の口（S8。SEASON.md §54.5。PROTOCOL §9.14）----
 /**

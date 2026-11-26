@@ -6,25 +6,29 @@
 import type { ProfileRecords, RunListing, SeasonListing, SeasonStandingRow } from '@muse/shared';
 import { tr } from '../util';
 import { rewindAllowed, watchAllowed } from './replayRule';
+import { parseExpParam, reviewHref, type ExpParam } from './review';
 
 // ---------------- 道 ----------------
 
 export type EntryPage = 'hub' | 'leaderboard' | 'season' | 'codex' | 'settings' | 'legacy';
 export type Route =
   | { page: EntryPage; id: string | null; redirect?: string }
-  | { page: 'play' | 'watch' | 'replay' | 'prepare'; id: string; redirect?: undefined };
+  /** exp（S17）: 観戦の画面で見返す遠征（#/watch/<runId>?exp=3 か ?exp=last）。無ければ null（その場の観戦） */
+  | { page: 'play' | 'watch' | 'replay' | 'prepare'; id: string; redirect?: undefined; exp?: ExpParam };
 
 /**
  * ハッシュを読む。#/season と #/season/<id> はシーズンのタブ。前の道は redirect（そこへ送る。古いリンクを切らない）:
- * #/records → #/season、#/ops → #/settings。知らない道は拠点
+ * #/records → #/season、#/ops → #/settings。知らない道は拠点。#/watch/<runId>?exp=N は、遠征 N の見返し（S17）
  */
 export function parseRoute(hash: string): Route {
   // 壊れた ID（%E0%A4%A など）は decodeURIComponent が例外を出す: 白い画面にせず、拠点へ送る（S16d）
   const toHub: Route = { page: 'hub', id: null, redirect: '#/' };
-  const m = /^#\/(play|watch|replay|prepare)\/([^/?#]+)/.exec(hash);
+  const m = /^#\/(play|watch|replay|prepare)\/([^/?#]+)(\?[^#]*)?/.exec(hash);
   if (m) {
     const id = safeDecode(m[2]);
-    return id === null ? toHub : { page: m[1] as 'play' | 'watch' | 'replay' | 'prepare', id };
+    if (id === null) return toHub;
+    if (m[1] === 'watch') { const exp = parseExpParam(m[3]); return exp !== null ? { page: 'watch', id, exp } : { page: 'watch', id }; }
+    return { page: m[1] as 'play' | 'replay' | 'prepare', id };
   }
   // 末尾が違う形（#/season/s4/x・#/season/s4?x）も、前と同じに、その ID のシーズンを開く（S16d）
   const s = /^#\/season(?:\/([^/?#]+))?(?:[/?#].*)?$/.exec(hash);
@@ -75,23 +79,25 @@ export function pickSeasonId(list: readonly SeasonListing[], requested: string |
   return { id: (open ?? sorted[0])?.season.id ?? null, missing: !!requested };
 }
 
-/** 行のボタン（S17 で、開催中の自分のランの「見返す」を足す。種類を足しやすいように、並びで返す） */
-export interface RunAction { kind: 'watch' | 'rewind'; label: string; href: string }
+/** 行のボタン（種類を足しやすいように、並びで返す）。review（S17）: 開催中の自分のランの、冒険者の目線の見返し */
+export interface RunAction { kind: 'watch' | 'review' | 'rewind'; label: string; href: string }
 
 /**
  * そのランに出すボタン。決まりは今のまま（§25.1。ui/replayRule.ts）:
- * - 確定する前のシーズンの、進行中のランで、観戦できるもの（`watchAllowed`）: 「見守る」（その場の観戦。拠点と同じ言葉）
- * - 巻き戻しを開けるもの（`rewindAllowed`。確定したシーズンのランと、同じ PC から開いたときの、終わったラン）: 「見返す」
+ * - 確定する前のシーズンの、進行中のランで、観戦できるもの（`watchAllowed`）: 「見守る」（その場の観戦。拠点と同じ言葉）。
+ *   そのうち、終わった遠征が 1 つでもあるもの（S17。`ended`: GET /api/seasons/:id/watch の expeditionsEnded）: 「見返す」（冒険者の目線。最後の遠征を開く）
+ * - 巻き戻しを開けるもの（`rewindAllowed`。確定したシーズンのランと、同じ PC から開いたときの、終わったラン）: 「見返す」（全体が見える）
  * - どちらでもないもの（開催中で、見られないラン）: 何も出さない
  * status: 一覧に無く、ID だけ分かるランは null（確定したシーズンなら巻き戻せる。そうでなければ出さない）。
- * recoveryFailed: 起動時に復旧できなかったラン（見守るは出さない。記録は残っているので、見返すは決まりのまま）
+ * recoveryFailed: 起動時に復旧できなかったラン（見守る・冒険者の目線の見返しは出さない。記録は残っているので、巻き戻しは決まりのまま）
  */
-export function runActions(x: { season: string; final: boolean; local: boolean; runId: string; status: 'active' | 'ended' | null; recoveryFailed?: boolean; watchable: readonly string[] | null }): RunAction[] {
+export function runActions(x: { season: string; final: boolean; local: boolean; runId: string; status: 'active' | 'ended' | null; recoveryFailed?: boolean; watchable: readonly string[] | null; ended?: number }): RunAction[] {
   const out: RunAction[] = [];
+  const rewind = x.status === null ? x.final : rewindAllowed({ season: x.season, status: x.status, final: x.final, local: x.local });
   if (!x.final && x.status === 'active' && !x.recoveryFailed && watchAllowed({ season: x.season, runId: x.runId, watchable: x.watchable })) {
     out.push({ kind: 'watch', label: tr('見守る', 'Watch'), href: `#/watch/${x.runId}` });
+    if ((x.ended ?? 0) > 0 && !rewind) out.push({ kind: 'review', label: tr('見返す', 'Look back'), href: reviewHref(x.runId, 'last') });
   }
-  const rewind = x.status === null ? x.final : rewindAllowed({ season: x.season, status: x.status, final: x.final, local: x.local });
   if (rewind) out.push({ kind: 'rewind', label: tr('見返す', 'Look back'), href: `#/replay/${x.runId}` });
   return out;
 }

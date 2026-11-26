@@ -76,13 +76,15 @@ export function AdventurerCard({ name, className, model, operator, onDive, onEnr
         {st.budget && <div><dt>{tr('残りの手番', 'Turns left')}</dt><dd class={st.budget.left < Math.min(100, Math.ceil(st.budget.limit / 10)) ? 'low' : ''}>{st.budget.left}<small> / {st.budget.limit}</small></dd></div>}
         <div><dt>{tr('冒険賞', 'Adventure')}</dt><dd>{st.rank !== null ? tr(`${st.rank} 位`, `#${st.rank}`) : '-'}</dd></div>
       </dl>
-      {model.action && (
+      {(model.action || model.secondary) && (
         <div class="hub-actions">
-          {model.action.href
+          {model.action && (model.action.href
             ? <a class="hub-btn primary" href={model.action.href}>{model.action.label}</a>
             : model.action.uninvite
               ? (onUninvite ? <button class="hub-btn small" disabled={busy} onClick={onUninvite}>{model.action.label}</button> : null)
-              : <button class="hub-btn primary" disabled={busy} onClick={model.action.enroll ? onEnroll : onDive}>{model.action.label}</button>}
+              : <button class="hub-btn primary" disabled={busy} onClick={model.action.enroll ? onEnroll : onDive}>{model.action.label}</button>)}
+          {/* 見返す（S17）: 小さい、2 番目のボタン（主のボタンは 1 つのまま） */}
+          {model.secondary?.href && <a class="hub-btn small hub-review" href={model.secondary.href} title={tr('終わった遠征を、冒険者の目線で見返す', 'Look back on an ended expedition, through the adventurer\'s eyes')}>{model.secondary.label}</a>}
         </div>
       )}
       {/* 続けて遊ばせる（S14。ui/keepGoingUi.tsx の KeepGoingBox） */}
