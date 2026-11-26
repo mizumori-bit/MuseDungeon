@@ -683,3 +683,29 @@ ul.ocost { margin: 0; padding-left: 18px; }
   .hub-nav { padding: 0 8px; }
   .hub-btn.big { align-self: stretch; }
 }
+/* S14（SEASON.md §65.4）: 続けて遊ばせる（札の中の段・上の帯の印・呼び鈴を鳴らせなかったかもしれないときの帯）と、支度の「進め方」の段 */
+.kg-box { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--hub-line); display: flex; flex-direction: column; gap: 6px; }
+.kg-box.is-running { border-top-color: rgba(147, 195, 156, 0.45); }
+.kg-box > .hub-btn { align-self: flex-start; }
+.kg-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.kg-title { color: var(--hub-green); font-size: 14px; letter-spacing: 0.04em; overflow-wrap: anywhere; min-width: 0; }
+.kg-alert { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.kg-held { margin-top: 10px; }
+.hub-card.kg-alertcard { border-color: var(--hub-amber); animation: kg-glow 1.6s ease-in-out infinite; }
+@keyframes kg-glow { 0%, 100% { box-shadow: 0 0 0 0 rgba(224, 162, 74, 0.0); } 50% { box-shadow: 0 0 0 4px rgba(224, 162, 74, 0.45); } }
+@media (prefers-reduced-motion: reduce) { .hub-card.kg-alertcard { animation: none; box-shadow: 0 0 0 3px rgba(224, 162, 74, 0.45); } }
+.kg-navmark { margin-right: 6px; padding: 2px 10px; border: 1px solid rgba(147, 195, 156, 0.55); border-radius: 999px; color: var(--hub-green); font-size: 12px; text-decoration: none; white-space: nowrap; }
+.kg-navmark.is-alert { border-color: var(--hub-amber); color: var(--hub-amber); }
+.kg-bar { position: fixed; left: 12px; right: 12px; bottom: 12px; z-index: 60; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
+.kg-barrow { pointer-events: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; max-width: 720px; margin: 0 auto; padding: 12px 14px; background: var(--hub-card2); color: var(--hub-parch); border: 1px solid var(--hub-amber); border-radius: 12px; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45); }
+.kg-bartext { flex: 1 1 260px; margin: 0; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; min-width: 0; }
+.prep-pace .prep-toggle button { white-space: normal; }
+@media (max-width: 480px) {
+  .kg-navmark { margin-right: 2px; padding: 1px 6px; font-size: 11px; }
+  .kg-bar { left: 8px; right: 8px; bottom: 8px; }
+}
+/* S14a: 呼び鈴の受け口の設定（運用の画面） */
+.kg-bellform { display: flex; flex-direction: column; gap: 6px; margin: 6px 0; }
+.kg-bellform label.inline { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.kg-bellform input[type="text"] { flex: 1 1 220px; min-width: 0; font-family: ui-monospace, Consolas, monospace; }
+.kg-bellform input[type="number"] { width: 8em; }

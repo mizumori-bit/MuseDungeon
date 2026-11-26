@@ -7,6 +7,7 @@ import type { TurnBlock } from './turn';
 import type { Controller, DirectiveItem, ExpeditionBrief, Locale, Names, ObjectiveType, PlayerId, PlayerState, RunSummary, SeasonSlay, World } from './types';
 import type { PlayerView } from './view';
 import type { DirectiveUndecided, Observation } from './observation';
+import type { OwnerPace } from './directive';
 
 export type SpectatorPolicy = 'omniscient' | 'follow_only' | 'delayed';
 
@@ -300,6 +301,10 @@ export interface OwnerRunRow {
    */
   continuable?: boolean;
   oldVersion?: true;
+  /** 進め方の希望（S14。SEASON.md §65.4 の 2。プロフィールの控え。指図を出せる冒険者だけ。無ければ self） */
+  pace?: OwnerPace;
+  /** 終わった遠征の数（S14。このプレイヤーが参加して、終わったもの。拠点の「続けて遊ばせる」が、回数を数える） */
+  expeditionsEnded?: number;
 }
 export interface OwnerRunsResponse { local: boolean; runs: OwnerRunRow[] }
 /** GET /api/runs/:id/owner/view・POST …/owner/directive・…/owner/act の応答。result: POST の結果（断りなら error） */
@@ -310,6 +315,8 @@ export interface OwnerViewResponse {
   /** 続きを遊べるか・違う版で始まったラン（S10a。OwnerRunRow と同じ） */
   continuable?: boolean;
   oldVersion?: true;
+  /** 進め方の希望（S14。OwnerRunRow と同じ） */
+  pace?: OwnerPace;
   view: PlayerView; observation: Observation; text: string;
   result?: { ok: true } | { ok: false; error: ActionError };
 }

@@ -117,6 +117,19 @@ export function ownerPresenceText(L: Locale, agoMs: number | null): string {
     `${head}. Your owner is a person and may take a few minutes to decide. You may repeat wait_for_turn timeout_s=60`);
 }
 
+/**
+ * 進め方（S14。SEASON.md §65.4 の 2）: 持ち主の希望。self 自分で考えて進む（既定）・pilot pilot で進めてほしい。
+ * 握る項目ではない（伝言と同じ扱い）。プロフィールに覚える（World に入れない。決まりに効かない）。ゲームは、AI が pilot を使ったかを確かめない
+ */
+export type OwnerPace = 'self' | 'pilot';
+export const OWNER_PACES: readonly OwnerPace[] = ['self', 'pilot'];
+
+/** 進め方の希望が pilot のとき、本人の応答に足す 1 行（S14。キャンプの観測と、遠征を始めた直後の応答。self のときは何も出さない） */
+export function ownerPaceText(L: Locale): string {
+  return t(L, '持ち主の希望（進め方）: pilot で進めてほしい（pilot は、AI の側の道具。持っていなければ、自分で進めてよい。ゲームは、どちらも同じに扱う）',
+    'Your owner\'s wish (how to play): please play with pilot (pilot is a tool on the AI\'s side; if you do not have it, play on your own. The game treats both the same)');
+}
+
 /** ownerPresenceText の文（日英。後ろの句点まで）に当たる正規表現（観戦に流す文から除く） */
 const PRESENCE_RE = new RegExp([
   '(持ち主は、今、支度の画面を開いている|持ち主が、最後に支度の画面を開いたのは、[0-9]+ (分|時間)前|持ち主は、まだ、支度の画面を開いていない（このサーバーが起動してから）)。持ち主は人で、決めるのに数分かかることがある。wait_for_turn timeout_s=60 を、くり返してよい。?',

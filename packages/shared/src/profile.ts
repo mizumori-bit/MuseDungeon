@@ -5,6 +5,7 @@ import type { LegacyMonster } from './commands';
 import type { ExpeditionReport } from './expeditionStats';
 import type { ProjectedEvent } from './filter';
 import type { DirectiveItem, Locale, Names } from './types';
+import type { OwnerPace } from './directive';
 import { t } from './util';
 
 // ---------------- 図鑑 ----------------
@@ -154,6 +155,11 @@ export interface ProfileData {
    * このプロフィールの新しいランは、作った直後に、これを持ち主の口の命令として入れる。握っていなければ無い
    */
   hold?: DirectiveItem[];
+  /**
+   * 進め方の希望（S14。SEASON.md §65.4 の 2）: 持ち主の口（…/owner/pace）で、キャンプでだけ変わる。無ければ self（自分で考えて進む）。
+   * 握る項目ではない。World に入れない（決まりに効かない）。このプロフィールの新しいランにも、そのまま効く
+   */
+  pace?: OwnerPace;
 }
 
 // ---------------- 継承（§7.3） ----------------

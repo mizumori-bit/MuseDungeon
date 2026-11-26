@@ -1,6 +1,6 @@
 // 支度の画面（S10。SEASON.md §58.4）の、上の状態と、段ごとの今の状態の 1 行。画面から離した関数（テストする）。
 // 中身は、そのプレイヤーの PlayerView と観測（持ち主の口の …/owner/view）から取ったものだけ（持ち主に、プレイヤーより多くを見せない）。
-import type { DirectiveItem } from '@muse/shared';
+import type { DirectiveItem, OwnerPace } from '@muse/shared';
 import { DIRECTIVE_ITEMS } from '@muse/shared';
 import { tr } from '../util';
 import type { HubTone } from './hubState';
@@ -102,6 +102,29 @@ export function messageSave(fresh: DirectiveNow | null | undefined, message: str
   const m = [...message].slice(0, max).join('');
   if (m === (fresh?.message ?? '')) return null;
   return { hold, message: m };
+}
+
+/**
+ * 進め方の段（S14。SEASON.md §65.4 の 2）: 持ち主の希望。握る項目ではない（伝言と同じ扱い。札は戻らない。準備完了の間も変えられる）。
+ * 段の今の状態の 1 行。pace が分からない（読み込み前・古いサーバー）ときは、既定（self）として書く
+ */
+export function paceLine(pace: OwnerPace | undefined, name: string): string {
+  return pace === 'pilot'
+    ? tr(`pilot で進めてほしい、と${name}に伝えている（希望）`, `You have asked ${name} to play with pilot (a wish)`)
+    : tr(`${name}が、自分で考えて進む（既定）`, `${name} plays on their own (the default)`);
+}
+
+/** 進め方の段の補足（S14）。どう進めるかは、AI の側が決める */
+export function paceNote(name: string): string {
+  return tr(`希望として、${name}に伝わる。どう進めるかは、${name}の側が決める。pilot は、AI の側に置く道具（README）`,
+    `It reaches ${name} as a wish. How to play is up to ${name}'s side. pilot is a tool kept on the AI's side (see the README)`);
+}
+
+/** 進め方を変えた後の 1 行（S14） */
+export function paceSavedNote(pace: OwnerPace, name: string): string {
+  return pace === 'pilot'
+    ? tr(`pilot で進めてほしい、と${name}に伝える（キャンプの観測と、遠征を始めた直後の応答に出る）。`, `${name} will be asked to play with pilot (in the camp observation and right after an expedition starts).`)
+    : tr(`${name}が、自分で考えて進む（何も伝えない）。`, `${name} plays on their own (nothing is passed on).`);
 }
 
 /** 段の名前 */

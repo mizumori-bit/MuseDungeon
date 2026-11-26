@@ -10,7 +10,8 @@ import type { LeaderboardEntry, Locale, OpsRosterResponse, OwnerRunRow, ProfileR
 import { endReasonText, kindName, nameOf, objectiveText } from '@muse/shared';
 import { useEffect, useState } from 'preact/hooks';
 import { ApiError, api, errorText } from '../api';
-import { readBell, saveBell, type BellMode } from '../ui/bell';
+import { bellOn, bellProblem, readBellConfig, type BellConfig } from '../ui/bell';
+import { BellSettings } from '../ui/bellSettings';
 import { ErrorBanner, Header, useCatalog, useLocaleRefresh } from '../ui/common';
 import { normName, SeasonSharedFlow, sortStandings, STANDING_SORTS, standingSortName, StandingsTable, type StandingSort } from '../ui/home';
 import { AddAdventurerDialog, AdventurerCard, DiveDialog, HubNav, KeyEntry, KeyOnceDialog, OpenSeasonDialog, UninviteDialog } from '../ui/hub';
@@ -19,6 +20,8 @@ import { screenErr } from '../ui/screenErr';
 import { addKey, forgetKeys, keepKey, primaryKey, retireMainKey, storedKeys } from '../ui/keys';
 import { FIRST_EXPEDITION_CHOICES, playerStateLabel, type FirstExpeditionChoice } from '../ui/labels';
 import { OwnerRunCard } from '../ui/owner';
+import type { KgState } from '../ui/keepGoing';
+import { KeepGoingBox, useKeepGoing } from '../ui/keepGoingUi';
 import { fmtTime, getLocale, getPref, getToken, inLocale, navigate, saveToken, setPref, tr } from '../util';
 
 export type HomeTab = 'hub' | 'records' | 'ops';
@@ -74,8 +77,10 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
   // 鍵を 1 回だけ見せる窓（AI に任せる冒険者を足した直後。このブラウザには覚えない。閉じたら消える）
   const [keyOnce, setKeyOnce] = useState<{ name: string; seasonId: string; key: string } | null>(null);
   // 呼び鈴の設定（S12b。SEASON.md §63.6。このブラウザにだけ覚える）
-  const [bell, setBellState] = useState<BellMode>(readBell());
-  const setBell = (m: BellMode) => { saveBell(m); setBellState(m); };
+  // S14a: 鳴らし方は 3 つ（使わない・リンク・この PC の受け口）
+  const [bellCfg, setBellCfg] = useState<BellConfig>(readBellConfig());
+  // 続けて遊ばせる（S14）: このブラウザに覚えてある状態（鳴らす役は、アプリの根の KeepGoingRunner）
+  const kgStates = useKeepGoing();
   // プロフィールの記録の直近のラン（自分のランを見分ける。トークンごと）
   const [recentMine, setRecentMine] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -503,7 +508,8 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
   const classNameOf = (id: string | undefined) => (id ? (catalog ? kindName(catalog, L, id) : id) : null);
 
   // ---- 拠点（S10。SEASON.md §58.4） ----
-  interface HubEntry { key: string; runId: string | null; name: string; className: string | null; model: HubCardModel; participant: string | null; seasonId: string; onDive?: () => void; onEnroll?: () => void; onUninvite?: () => void }
+  /** row: 持ち主の口の一覧の行（続けて遊ばせる（S14）が読む。無ければ null） */
+  interface HubEntry { key: string; runId: string | null; row: OwnerRunRow | null; name: string; className: string | null; model: HubCardModel; participant: string | null; seasonId: string; onDive?: () => void; onEnroll?: () => void; onUninvite?: () => void }
   /** 今のシーズン（S12b: サーバーと同じ PC から開いていて、名簿を読めたときだけ。冒険者を足す先） */
   const rosterSeason = owner.local && roster?.season ? roster.season : null;
   /** 鍵の冒険者ごとの札（ふつうは 1 枚）。開催中のシーズンが無ければ無い */
@@ -520,7 +526,7 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
     const st = current.find((x) => x.season.id === sd.id)?.standings.find((r) => participant && normName(r.name) === normName(participant));
     const nm = row?.name ?? mem?.name ?? a.name;
     myCards.push({
-      key: `adv-${a.id ?? i}-${sd.id}`, runId: row?.runId ?? null, name: nm, className: classNameOf(row?.classId), participant, seasonId: sd.id,
+      key: `adv-${a.id ?? i}-${sd.id}`, runId: row?.runId ?? null, row, name: nm, className: classNameOf(row?.classId), participant, seasonId: sd.id,
       model: hubCard({ name: nm, season: sd, membership: mem, row, playable: !!(row && getToken(row.runId)), rank: st?.adventure.rank ?? null, banked: st?.banked, local: owner.local, canEnroll: rosterSeason?.id === sd.id }),
       onDive: () => { setDiveErr(null); setDive({ seasonId: sd.id, token: a.token, name: mem?.name ?? nm }); },
       onEnroll: () => void enroll(a.token),
@@ -537,7 +543,7 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
     const row = e.runId ? owner.rows.find((r) => r.runId === e.runId && !owner.mine.has(r.runId) && !myCardRuns.has(r.runId)) ?? null : null;
     const st = current.find((x) => x.season.id === sd.id)?.standings.find((r) => normName(r.name) === normName(e.name));
     return {
-      key: `ros-${e.profileId}`, runId: row?.runId ?? null, name: row?.name ?? e.name, className: classNameOf(row?.classId), participant: e.name, seasonId: sd.id,
+      key: `ros-${e.profileId}`, runId: row?.runId ?? null, row, name: row?.name ?? e.name, className: classNameOf(row?.classId), participant: e.name, seasonId: sd.id,
       model: hubCard({
         name: row?.name ?? e.name, season: sd, membership: { used: e.used, budget: e.budget, died: e.died, runs: e.runs, ...(e.failed ? { failed: true as const } : {}) },
         row, playable: !!(row && getToken(row.runId)), rank: st?.adventure.rank ?? null, banked: st?.banked, local: true, roster: { kind: e.kind },
@@ -554,9 +560,14 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
       const sd = current.find((x) => x.season.id === row.season!.id)!.season;
       const participant = row.season?.participant ?? row.name;
       const st = current.find((x) => x.season.id === sd.id)?.standings.find((r) => normName(r.name) === normName(participant));
-      return { key: row.runId, runId: row.runId, name: row.name, className: classNameOf(row.classId), participant, seasonId: sd.id, model: hubCard({ name: row.name, season: sd, row, playable: !!getToken(row.runId), rank: st?.adventure.rank ?? null }) };
+      return { key: row.runId, runId: row.runId, row, name: row.name, className: classNameOf(row.classId), participant, seasonId: sd.id, model: hubCard({ name: row.name, season: sd, row, playable: !!getToken(row.runId), rank: st?.adventure.rank ?? null }) };
     }) : [])];
   const waitingCount = [...myCards, ...operatorCards].filter((c) => c.model.state === 'camp_pending').length;
+  // 続けて遊ばせる（S14。SEASON.md §65.4）: 札のランの状態。ランが終わって札にランが無いとき（倒れた など）は、同じシーズンの同じ名前の、止まった状態を出す（止まった理由の 1 行）
+  const cardRunIds = new Set([...myCards, ...operatorCards].map((c) => c.runId).filter((x): x is string => !!x));
+  const kgFor = (c: HubEntry): KgState | null => (c.runId ? kgStates[c.runId] : undefined)
+    ?? Object.values(kgStates).find((s) => s.status === 'stopped' && s.seasonId === c.seasonId && s.name === c.name && !cardRunIds.has(s.runId)) ?? null;
+  const kgBox = (c: HubEntry) => <KeepGoingBox row={c.row} name={c.name} bellOn={bellOn(bellCfg)} problem={bellProblem(bellCfg)} via={bellCfg.mode === 'port' ? 'port' : 'link'} port={bellCfg.port} st={kgFor(c)} />;
   const badKeys = (advs ?? []).filter((a) => !a.ok).length;
   const needKey = !hasKey || (advs !== null && advs.length > 0 && advs.every((a) => !a.ok));
   /** 順位を出すシーズン: 札のシーズン（無ければ、いちばん上の開催中のシーズン） */
@@ -587,14 +598,14 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
                 冒険者を足せるなら、札の下に小さい 1 行（S10a b・S12b） */}
             {needKey && !operatorCards.length && !rosterSeason && <KeyEntry onKeep={keepOwnerTok} />}
             {hasKey && advs === null && <p class="hub-note">{tr('読み込み中…', 'Loading…')}</p>}
-            {myCards.map((c) => <AdventurerCard key={c.key} name={c.name} className={c.className} model={c.model} onDive={c.onDive} onEnroll={c.onEnroll} busy={busy} />)}
+            {myCards.map((c) => <AdventurerCard key={c.key} name={c.name} className={c.className} model={c.model} onDive={c.onDive} onEnroll={c.onEnroll} busy={busy} extra={kgBox(c)} alert={!!kgFor(c)?.attention} />)}
             {badKeys > 0 && <p class="hub-note warn">{tr('覚えてある鍵のうち、使えないものがある（歯車の「運用」で外せる）。', 'A key kept in this browser does not work (remove it under the gear, Operations).')}</p>}
             {operatorCards.length > 0 && (
               <section class="hub-operator">
                 <h3 class="hub-sechead">{tr('この PC の冒険者（運用者として）', 'Adventurers on this PC (as the operator)')}</h3>
                 <p class="hub-note">{tr('サーバーと同じ PC から開いているので、鍵の無い冒険者も、支度ができる。自分の冒険者と、取り違えないこと。', 'Opened on the server PC, so you can prepare adventurers you hold no key for. Do not mistake them for your own.')}</p>
                 <div class="hub-grid">
-                  {operatorCards.map((c) => <AdventurerCard key={c.key} name={c.name} className={c.className} model={c.model} operator onUninvite={c.onUninvite} busy={busy} />)}
+                  {operatorCards.map((c) => <AdventurerCard key={c.key} name={c.name} className={c.className} model={c.model} operator onUninvite={c.onUninvite} busy={busy} extra={kgBox(c)} alert={!!kgFor(c)?.attention} />)}
                 </div>
                 {needKey && !rosterSeason && <KeyEntry compact onKeep={keepOwnerTok} />}
               </section>
@@ -660,16 +671,8 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
         <p class="muted small">{tr('AI を招いたときのプロフィールのトークン（運用者から受け取った鍵）。このブラウザにだけ覚え、画面と URL には出さない。覚えると、そのプロフィールのランが、拠点（今シーズンのもの）とこの画面（シーズンでないもの）に、自分のものとして出る。', 'The profile token from when your AI was invited (the key the operator gave you). It is kept only in this browser and never shown on screen or in a URL. With it, that profile\'s runs show up as yours on the hub (this season) and here (other runs).')}</p>
       </section>
 
-      {/* 呼び鈴（S12b。SEASON.md §63.6）: このブラウザにだけ覚える。サーバーへは送らない */}
-      <section class="panel seasonbox">
-        <h3>{tr('呼び鈴', 'Bell')}</h3>
-        <div class="row" role="radiogroup" aria-label={tr('呼び鈴', 'Bell')}>
-          <label class="check"><input type="radio" name="bell" checked={bell === 'off'} onChange={() => setBell('off')} />{tr('使わない', 'Off')}</label>
-          <label class="check"><input type="radio" name="bell" checked={bell === 'tool'} onChange={() => setBell('tool')} />{tr('自分の道具を呼ぶ', 'Call your own tool')}</label>
-        </div>
-        <p class="muted small">{tr('「準備完了」を押したとき、このブラウザが、決まった文字列（musedungeon-bell://ready?season=…&run=…。入るのは、シーズンとランの ID だけ）を開く。動くのは、押した人の PC の上で、ゲームは、何も送らない。', 'When you press "Ready", this browser opens a fixed string (musedungeon-bell://ready?season=…&run=…, carrying only the season and run IDs). It runs on the PC of whoever pressed it; the game sends nothing.')}</p>
-        <p class="muted small">{tr('受け取って AI に知らせる道具は、自分で用意する（README の「呼び鈴」）。この設定は、このブラウザにだけ覚える。', 'You provide the tool that receives it and tells your AI (see "Bell" in the README). This setting is kept only in this browser.')}</p>
-      </section>
+      {/* 呼び鈴（S12b・S14a。SEASON.md §63.6・§65.4）: このブラウザにだけ覚える。サーバーへは送らない */}
+      <BellSettings cfg={bellCfg} onChange={setBellCfg} />
 
       {/* AI が決定を待っているランがあれば、最初から開く（S8b。畳んだ・開いた操作は覚える。待っているランが新しく出たら開き直す） */}
       {operatorRows.length > 0 && (

@@ -1,7 +1,7 @@
 // HTTP API（docs/PROTOCOL.md §8）。失敗は ApiError で投げ、画面側でバナー表示する。
 import type {
   ActionError, Catalog, Command, CommandRecord, DirectiveItem, GameEvent, JoinedResponse, JoinRunRequest, LeaderboardEntry,
-  NewRunRequest, OpsAdventurerAdded, OpsEnrolled, OpsRosterResponse, OpsSeasonOpened, OwnerRunsResponse, OwnerViewResponse, ProfileRecords, ProfileSeasonEntry, RunIndex, RunListing, RunMetaFile, SeasonListing, SeasonStandingsResponse, SeasonWatchResponse,
+  NewRunRequest, OpsAdventurerAdded, OpsEnrolled, OpsRosterResponse, OpsSeasonOpened, OwnerPace, OwnerRunsResponse, OwnerViewResponse, ProfileRecords, ProfileSeasonEntry, RunIndex, RunListing, RunMetaFile, SeasonListing, SeasonStandingsResponse, SeasonWatchResponse,
   SpectatorPolicy, World,
 } from '@muse/shared';
 
@@ -102,6 +102,8 @@ export const api = {
   ownerDirective: (runId: string, d: { hold: DirectiveItem[]; message: string }, token?: string) => ownerPost<OwnerViewResponse>(`/api/runs/${enc(runId)}/owner/directive`, d, token),
   /** 握った項目の命令（start_expedition・equip・unequip・choose_perk・choose_boon）。断りは result.error */
   ownerAct: (runId: string, command: Command, token?: string) => ownerPost<OwnerViewResponse>(`/api/runs/${enc(runId)}/owner/act`, { command }, token),
+  /** 進め方の希望（S14。SEASON.md §65.4 の 2）。キャンプでだけ通る。断りは result.error。札は戻らない */
+  ownerPace: (runId: string, pace: OwnerPace, token?: string) => ownerPost<OwnerViewResponse>(`/api/runs/${enc(runId)}/owner/pace`, { pace }, token),
   /**
    * 拠点の運用者の口（S12b。SEASON.md §63.7）: サーバーと同じ PC からだけ（画面は、持ち主の口の一覧が local のときだけ呼ぶ）。
    * 名簿・新しいシーズン・冒険者を足す（AI に任せるときの鍵は、この応答の 1 回だけ。このブラウザには覚えない）・鍵のある冒険者を今のシーズンに加える（鍵は見出しで）

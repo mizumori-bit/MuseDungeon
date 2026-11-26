@@ -3,12 +3,12 @@
 // 命令は、プレイヤーと同じ Command を持ち主の口へ送る（通るか・断るかはサーバー（engine）が決め、断りの文はそのまま出す）。
 // 鍵は、そのランを返したもの（このブラウザに覚えてある鍵のうち、そのランの冒険者のもの）を Authorization の見出しでだけ渡す。無ければ同じ PC から。
 // 5 秒ごとに読み直す。開いている段（「自分で」にした段）と、書きかけの伝言は、読み直しで消えない。
-import type { ActionError, Command, DirectiveItem, DirectiveWish, OwnerViewResponse } from '@muse/shared';
+import type { ActionError, Command, DirectiveItem, DirectiveWish, OwnerPace, OwnerViewResponse } from '@muse/shared';
 import { DIRECTIVE_ITEMS, activeWishes, itemDisplayName, kindName, nameOf, ownerOfferText, prepStateView, wishCommand, wishItemOf, wishLabel } from '@muse/shared';
 import type { ComponentChildren } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { api } from '../api';
-import { bellAllowedNow, bellUrl, bellView, readBell, ringBell, type BellView } from '../ui/bell';
+import { bellAllowedNow, bellProblem, bellRingOf, bellView, readBellConfig, ringBell, ringPort, type BellRing, type BellView } from '../ui/bell';
 import { ErrorBanner, Header, useCatalog, useLocaleRefresh } from '../ui/common';
 import { BoonChoicePanel, PerkChoicePanel } from '../ui/build';
 import { OfferCard, rulesOf } from '../ui/expedition';
@@ -17,7 +17,7 @@ import { keyForRun } from '../ui/keys';
 import { statChangeText } from '../ui/owner';
 import { aiPresenceText, readyCheck } from '../ui/ownerCheck';
 import { InventoryPanel, type InvAction } from '../ui/panels';
-import { directiveToggle, messageSave, prepHead, prepItemCost, prepItemName, prepLine, readyNudge, type ReadyNudge } from '../ui/prepState';
+import { directiveToggle, messageSave, paceLine, paceNote, paceSavedNote, prepHead, prepItemCost, prepItemName, prepLine, readyNudge, type ReadyNudge } from '../ui/prepState';
 import { screenErr } from '../ui/screenErr';
 import { getLocale, getToken, tr } from '../util';
 
@@ -61,6 +61,28 @@ function PrepSection({ item, held, line, editable, locked, busy, onToggle, wish,
   );
 }
 
+/**
+ * 進め方の段（S14。SEASON.md §65.4 の 2）: 「自分で考えて進む（既定）／pilot で進める」。持ち主の希望として AI の応答に 1 行が出る（どう進めるかは AI の側が決める）。
+ * 握る項目ではないので、準備完了の間も押せる（locked を受けない）。キャンプにいないときは、見るだけ（editable が false）
+ */
+function PaceSection({ name, pace, editable, busy, onChange }: { name: string; pace: OwnerPace | undefined; editable: boolean; busy: boolean; onChange: (p: OwnerPace) => void }) {
+  const pilot = pace === 'pilot';
+  const can = editable && !busy && pace !== undefined;
+  return (
+    <section class={`prep-sec prep-pace ${pilot ? 'is-held' : ''}`}>
+      <header class="prep-sechead">
+        <h3 class="prep-sectitle">{tr('進め方', 'How to play')}</h3>
+        <div class="prep-toggle" role="group" aria-label={tr('進め方', 'How to play')}>
+          <button type="button" class={!pilot ? 'on' : ''} aria-pressed={!pilot} disabled={!can || !pilot} onClick={() => onChange('self')}>{tr('自分で考えて進む（既定）', 'On their own (default)')}</button>
+          <button type="button" class={pilot ? 'on' : ''} aria-pressed={pilot} disabled={!can || pilot} onClick={() => onChange('pilot')}>{tr('pilot で進める', 'With pilot')}</button>
+        </div>
+      </header>
+      <p class="prep-line">{paceLine(pace, name)}</p>
+      <p class="prep-cost">{paceNote(name)}</p>
+    </section>
+  );
+}
+
 export function Prepare({ runId }: { runId: string }) {
   useLocaleRefresh();
   const { catalog, error: catErr } = useCatalog();
@@ -82,8 +104,18 @@ export function Prepare({ runId }: { runId: string }) {
   useEffect(() => { if (confirmReady) backRef.current?.focus(); }, [confirmReady]);
   // 準備完了の後の窓（S12a。SEASON.md §63.2 の 2）: 押して通ったときだけ。既定のボタンは「拠点へ戻る」（S12b: 呼び鈴をまだ鳴らしていなければ「呼び鈴を鳴らす」）
   const [nudge, setNudge] = useState<ReadyNudge | null>(null);
-  // 呼び鈴（S12b。SEASON.md §63.6）: 鳴らす文字列（使わない・AI がもう待っている・ID の形が違うときは null）と、この窓で鳴らした回数
-  const [bell, setBell] = useState<{ url: string | null; rung: number }>({ url: null, rung: 0 });
+  // 呼び鈴（S12b。SEASON.md §63.6）: 鳴らすもの（使わない・AI がもう待っている・ID の形が違うときは null）と、この窓で鳴らした回数。
+  // S14a: 受け口の設定なら、送る要求。送れなかったら、そのポート（「受け口が、動いていない」）
+  // problem（S14b）: 覚えた受け口のポート・合言葉の形が違う（鳴らさずに「呼び鈴の設定を見直す」）
+  const [bell, setBell] = useState<{ ring: BellRing | null; rung: number; failedPort: number | null; problem?: string | null }>({ ring: null, rung: 0, failedPort: null });
+  /** 鳴らす。リンクは、自動のとき（押した流れの中）はブラウザが許すときだけ。受け口は、人の操作が要らないので、いつも送る */
+  const ringNow = (r: BellRing, auto: boolean) => {
+    if (r.via === 'link') {
+      if ((!auto || bellAllowedNow()) && ringBell(r.url)) setBell((b) => ({ ...b, rung: b.rung + 1 }));
+      return;
+    }
+    void ringPort(r).then((ok) => { if (aliveRef.current) setBell((b) => ({ ...b, rung: ok ? b.rung + 1 : b.rung, failedPort: ok ? null : r.port })); });
+  };
 
   // そのランの冒険者の鍵を探す（持ち主の口の一覧で、その鍵の冒険者のランとして返るもの）。無ければ鍵なし（同じ PC から）
   useEffect(() => {
@@ -182,10 +214,12 @@ export function Prepare({ runId }: { runId: string }) {
           aiWaiting: !!before?.ai?.waitingNow || !!after.ai?.waitingNow,
         });
         if (n) {
-          // 呼び鈴（S12b）: AI がまだ待っていないときだけ。準備完了を押した流れの中で、ブラウザが許すなら、自動で 1 回鳴らす（許されなければ、何もしない）
-          const url = n.copy ? bellUrl(readBell(), { season: after.view.season?.id ?? null, run: runId }) : null;
-          const rung = url && bellAllowedNow() && ringBell(url) ? 1 : 0;
-          setBell({ url, rung });
+          // 呼び鈴（S12b）: AI がまだ待っていないときだけ。準備完了を押した流れの中で、ブラウザが許すなら、自動で 1 回鳴らす（許されなければ、何もしない）。
+          // 受け口（S14a）は、同じ流れで送る
+          const cfg = readBellConfig();
+          const ring = n.copy ? bellRingOf(cfg, { season: after.view.season?.id ?? null, run: runId, pace: after.pace }) : null;
+          setBell({ ring, rung: 0, failedPort: null, problem: n.copy ? bellProblem(cfg) : null });
+          if (ring) ringNow(ring, true);
           setNudge(n);
         }
         setNote(command.ready === true
@@ -204,6 +238,12 @@ export function Prepare({ runId }: { runId: string }) {
     if (busyRef.current) return;
     if (a === 'equip') void act({ type: 'equip', slot });
     else if (a === 'unequip') void act({ type: 'unequip', slot });
+  };
+
+  /** 進め方の希望（S14。SEASON.md §65.4 の 2）: 押したら、すぐ送る。握る項目ではないので、準備完了の間も変えられる（札は戻らない） */
+  const setPace = (pace: OwnerPace) => {
+    if (!data || busyRef.current) return;
+    void post(() => api.ownerPace(runId, pace, tok ?? undefined), () => setNote(paceSavedNote(pace, name)));
   };
 
   /** 伝言を残す（S10a §1: 握る項目は、送る直前に読み直したサーバーの値のまま。準備完了の間も残せる: 札は戻らない） */
@@ -367,6 +407,9 @@ export function Prepare({ runId }: { runId: string }) {
                     )}
                   </PrepSection>
 
+                  {/* 4 段目: 進め方（S14。持ち主の希望。握る項目ではない: 準備完了の間も変えられ、札は戻らない。キャンプにいないときは、見るだけ） */}
+                  <PaceSection name={name} pace={data.pace} editable={editable} busy={busy} onChange={setPace} />
+
                   <section class="prep-final">
                     <label class="prep-msglabel" for="prep-msg">{tr(`${name}への伝言`, `Message to ${name}`)}</label>
                     <textarea id="prep-msg" class="prep-msg" rows={3} maxLength={MESSAGE_MAX} value={msg} disabled={!editable || busy}
@@ -420,8 +463,8 @@ export function Prepare({ runId }: { runId: string }) {
         </div>
       )}
       {nudge && !confirmReady && (
-        <ReadyNudgeDialog nudge={nudge} bell={bellView({ url: bell.url, aiWaiting: !nudge.copy, rung: bell.rung })}
-          onRing={() => { if (bell.url && ringBell(bell.url)) setBell((b) => ({ ...b, rung: b.rung + 1 })); }} onStay={() => setNudge(null)} />
+        <ReadyNudgeDialog nudge={nudge} bell={bellView({ url: bell.ring?.url ?? null, aiWaiting: !nudge.copy, rung: bell.rung, failedPort: bell.failedPort })} bellProblem={bell.problem ?? null}
+          onRing={() => { if (bell.ring) ringNow(bell.ring, false); }} onStay={() => setNudge(null)} />
       )}
     </div>
   );
@@ -432,7 +475,7 @@ export function Prepare({ runId }: { runId: string }) {
  * 写せる 1 文は、押すとクリップボードに写る。写せない環境（http の別の PC から など）では、選んで写せる文として出す。
  * bell（S12b）: 呼び鈴のボタン（使わない・AI がもう待っているときは null）。まだ鳴らしていなければ、既定のボタン。鳴らした後は「鳴らした」と「もう一度鳴らす」
  */
-function ReadyNudgeDialog({ nudge, bell, onRing, onStay }: { nudge: ReadyNudge; bell: BellView | null; onRing: () => void; onStay: () => void }) {
+function ReadyNudgeDialog({ nudge, bell, bellProblem: problem, onRing, onStay }: { nudge: ReadyNudge; bell: BellView | null; bellProblem?: string | null; onRing: () => void; onStay: () => void }) {
   const hubRef = useRef<HTMLButtonElement>(null);
   const bellRef = useRef<HTMLButtonElement>(null);
   // 既定のボタンに、はじめの 1 回だけ移る（鳴らした後に、もう一度鳴らすへ移らない）
@@ -464,6 +507,7 @@ function ReadyNudgeDialog({ nudge, bell, onRing, onStay }: { nudge: ReadyNudge; 
           </div>
         )}
         {bell?.note && <p class="prep-bellnote">{bell.note}</p>}
+        {problem && <p class="prep-bellnote">{problem}</p>}
         <div class="hub-dactions">
           {bell && <button ref={bellRef} type="button" class={`hub-btn ${bell.primary ? 'primary' : ''}`} onClick={onRing}>{bell.label}</button>}
           <button ref={hubRef} type="button" class={`hub-btn ${bell?.primary ? '' : 'primary'}`} onClick={toHub}>{tr('拠点へ戻る', 'Back to the hub')}</button>
