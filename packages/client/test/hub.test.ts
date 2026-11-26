@@ -2,8 +2,8 @@
 // §58.4 の表の 6 つの状態・人間が自分で遊ぶ冒険者・運用者の札・招かれていない冒険者
 import { describe, expect, it } from 'vitest';
 import type { OwnerRunRow } from '@muse/shared';
-import { awardCell, hubCard, membershipFor, participantName, pickSeason, seasonLeftText } from '../src/ui/hubState';
-import { directiveToggle, messageSave, prepHead, prepLine } from '../src/ui/prepState';
+import { awardCell, hubCard, membershipFor, noSeasonText, participantName, pickSeason, seasonLeftText } from '../src/ui/hubState';
+import { directiveToggle, messageSave, prepHead, prepLine, readyNudge, readyNudgeCopy } from '../src/ui/prepState';
 import { screenErrOf } from '../src/ui/screenErr';
 
 const season = { id: 's4', status: 'open' as const, budget: 1000 };
@@ -34,11 +34,26 @@ describe('S10 §58.4: the adventurer card on the hub', () => {
     expect(hubCard({ ...base, row: null, membership: undefined }).state).toBe('not_joined');
   });
 
-  it('not invited: says so, no way to go down', () => {
+  it('not invited (S12a): says what is happening and what to do, without the word "not invited"; no way to go down', () => {
     const m = hubCard({ ...base, row: null, membership: null });
     expect(m.state).toBe('not_invited');
-    expect(m.where).toBe('このシーズンには、まだ招かれていない');
+    expect(m.where).toBe('このシーズンの名簿に、まだ入っていない');
+    expect(m.pill.text).toBe('名簿に無い');
+    // ほかの PC から（local が無い・false）
+    expect(m.text).toBe('このシーズンを開いた人に、加えてもらう');
     expect(m.action.dive).toBeUndefined();
+    // サーバーと同じ PC から: 自分が開いたなら、運用の道具で招く
+    const local = hubCard({ ...base, row: null, membership: null, local: true });
+    expect(local.text).toBe('このシーズンを開いたのが自分なら、運用の道具で、冒険者を招く（README の「開発用コマンド」の season）');
+    for (const x of [m, local]) {
+      expect(`${x.pill.text} ${x.where} ${x.text}`).not.toContain('招かれていない');
+      expect(`${x.pill.text} ${x.where} ${x.text}`).not.toContain('機械');
+    }
+  });
+
+  it('no season running (S12a): from the server PC, how to open one; from another PC, who opens it', () => {
+    expect(noSeasonText(true)).toBe('シーズンは、運用の道具で開く（README の「開発用コマンド」の season）。シーズンでない冒険は、右上の歯車（運用）から。');
+    expect(noSeasonText(false)).toBe('シーズンを開いた人が、次のシーズンを開いたら、ここに冒険者の札が出る。シーズンでない冒険は、右上の歯車（運用）から。');
   });
 
   it('at camp, nothing held: the AI decides and sets out; the button is to prepare', () => {
@@ -213,7 +228,7 @@ describe('S10a: the inspection fixes', () => {
     expect(screenErrOf(404, 'no_session', 'unknown or finished run')).toBe('この冒険者は、見つからない（冒険が終わったか、このサーバーに無い）');
     expect(screenErrOf(409, 'run_ended', '')).toBe('この冒険は、終わった。記録で見返せる');
     expect(screenErrOf(503, 'recovery_failed', '')).toBe('この冒険は、サーバーの起動時に読み込めなかった（運用者に知らせる）');
-    expect(screenErrOf(409, 'season_unavailable', 'このプロフィール（prof_x）は、シーズン s4 に招かれていない。… / not invited')).toBe('この冒険者は、このシーズンに招かれていない。運用者に、招いてもらう');
+    expect(screenErrOf(409, 'season_unavailable', 'このプロフィール（prof_x）は、シーズン s4 に招かれていない。… / not invited')).toBe('この冒険者は、このシーズンの名簿に、まだ入っていない。このシーズンを開いた人に、加えてもらう');
     expect(screenErrOf(409, 'season_unavailable', 'このシーズンの行動予算（60 手番）を使い切っている / budget used up')).toBe('このシーズンの手番を、使い切った');
     expect(screenErrOf(409, 'season_unavailable', 'シーズン s4 は終わっている / season s4 has ended')).toBe('このシーズンは、終わった');
     expect(screenErrOf(409, 'season_unavailable', 'something else')).toBe('このシーズンには、いま入れない（運用者に確かめる）');
@@ -233,5 +248,30 @@ describe('S10a: the inspection fixes', () => {
     expect(awardCell({ value: 3, rank: 2 }, String)).toEqual({ rank: '2 位', value: '3' });
     expect(awardCell({ value: 0, rank: 1 }, String)).toEqual({ rank: null, value: '—' });
     expect(awardCell(undefined, String)).toEqual({ rank: null, value: '—' });
+  });
+});
+
+describe('S12a §63.2 の 2: the window after "Ready"', () => {
+  const x = { name: 'ミュゼ美', sent: true, ok: true, before: 'pending' as const, after: 'ready' as const, aiWaiting: false };
+  it('pressing Ready and passing: "let (name) know", what to do, and a sentence to copy', () => {
+    expect(readyNudge(x)).toEqual({
+      title: 'ミュゼ美に、声をかける',
+      body: '支度は済んだ。ミュゼ美が来たら、出発する。画面からは、ミュゼ美を呼べない。チャットなどで、遊ぶように伝える',
+      copy: '支度ができたよ。MuseDungeon の続きを遊んで。',
+    });
+    expect(readyNudgeCopy()).toBe('支度ができたよ。MuseDungeon の続きを遊んで。');
+  });
+  it('the AI is already waiting: it sets out at once, nothing to copy', () => {
+    expect(readyNudge({ ...x, aiWaiting: true })).toEqual({ title: 'ミュゼ美に、声をかける', body: 'ミュゼ美は、今、待っている。すぐに出発する', copy: null });
+  });
+  it('not shown: refused, not pressing Ready (review / choosing an objective), already ready, or still not ready', () => {
+    expect(readyNudge({ ...x, ok: false })).toBeNull();
+    expect(readyNudge({ ...x, sent: false })).toBeNull();
+    // 決めるものが無くて、最初から準備完了だったキャンプ（押していない・押す前から準備完了）
+    expect(readyNudge({ ...x, before: 'ready' })).toBeNull();
+    expect(readyNudge({ ...x, after: 'pending' })).toBeNull();
+    expect(readyNudge({ ...x, after: null })).toBeNull();
+    // 前の読み込みが無くても、押して準備完了になったら出す
+    expect(readyNudge({ ...x, before: null })).not.toBeNull();
   });
 });

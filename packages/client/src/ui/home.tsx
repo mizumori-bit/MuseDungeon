@@ -1,5 +1,5 @@
 // ホーム（S8 の H2。SEASON.md §54.7・HUMAN.md §5）の部品: シーズンの順位の表（自分の行・指図の印・リプレイの口）・共有層の出来事。
-// 中身は GET /api/seasons/:id のものを並べるだけ。だれが何を見られるか（開催中は名前だけ・巻き戻しは同じ機械から: §25.1・§27）は変えない。
+// 中身は GET /api/seasons/:id のものを並べるだけ。だれが何を見られるか（開催中は名前だけ・巻き戻しは同じ PC から: §25.1・§27）は変えない。
 import type { ComponentChildren } from 'preact';
 import type { Catalog, SeasonAward, SeasonStandingRow, SeasonStandingsResponse } from '@muse/shared';
 import { kindName } from '@muse/shared';

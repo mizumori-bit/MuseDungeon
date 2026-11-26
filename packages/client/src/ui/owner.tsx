@@ -66,7 +66,7 @@ function itemLabel(x: DirectiveItem): { name: string; cost: string } {
 const ordered = (xs: readonly DirectiveItem[]): DirectiveItem[] => DIRECTIVE_ITEMS.filter((x) => xs.includes(x));
 
 /**
- * 持ち主の枠。row: GET /api/owner/runs の 1 行（親が数秒ごとに読み直す）。token: そのランを返したトークン（無ければ同じ機械から）。
+ * 持ち主の枠。row: GET /api/owner/runs の 1 行（親が数秒ごとに読み直す）。token: そのランを返したトークン（無ければ同じ PC から）。
  * onChanged: 指図・命令が通ったとき（親が一覧を読み直す）
  */
 export function OwnerRunCard({ row, token, catalog, onChanged }: { row: OwnerRunRow; token?: string; catalog: Catalog | null; onChanged: () => void }) {
@@ -287,7 +287,7 @@ export function OwnerRunCard({ row, token, catalog, onChanged }: { row: OwnerRun
               {dirty && atCamp && <button class="small" disabled={busy} onClick={() => { setHold(serverHold); setMsg(serverMsg); }}>{tr('戻す', 'Revert')}</button>}
             </div>
             <p class="muted small">{row.season
-              ? tr('伝言は、観戦している人にも見える（AI の考えと同じ。開催中のシーズンのランを観戦できるのは、持ち主とサーバーと同じ機械だけ）。', 'The message is visible to spectators too (like the AI\'s thoughts; a run of a season in progress can be watched only by its owner and from the server machine).')
+              ? tr('伝言は、観戦している人にも見える（AI の考えと同じ。開催中のシーズンのランを観戦できるのは、持ち主とサーバーと同じ PC だけ）。', 'The message is visible to spectators too (like the AI\'s thoughts; a run of a season in progress can be watched only by its owner and from the server PC).')
               : tr('伝言は、観戦している人にも見える（AI の考えと同じ）。', 'The message is visible to spectators too (like the AI\'s thoughts).')}</p>
             {!atCamp && status !== 'ended' && (
               <p class="muted">{tr('遠征の途中は、見守る（指図と伝言はキャンプでだけ変えられる）。', 'During an expedition, you watch (directives and messages change only at camp).')} <a class="button small" href={`#/watch/${row.runId}`}>{tr('観戦する', 'Watch')}</a></p>

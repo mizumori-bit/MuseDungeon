@@ -1,9 +1,9 @@
 // ホーム（S10。SEASON.md §58.4。S8 の H2 §54.7 を作り直した）: 上のタブは「拠点」「記録」の 2 つと、隅の歯車（運用）。
 // 「拠点」（最初に開く。#/）: 考え方は 1 つ「あなたには、冒険者がいる。今シーズンの迷宮へ、送り出す」。冒険者の札（このブラウザに鍵を覚えてある冒険者ごとに 1 枚。
-//   文とボタンは ui/hubState.ts）・鍵を入れる欄（鍵が無いとき）・この機械の冒険者（運用者として）・今シーズンの順位。「ラン」「トークン」の言葉を使わない。
+//   文とボタンは ui/hubState.ts）・鍵を入れる欄（鍵が無いとき）・この PC の冒険者（運用者として）・今シーズンの順位。「ラン」「トークン」の言葉を使わない。
 // 「記録」（#/records）: シーズンの一覧 → 順位 → 参加者ごとのリプレイ・結果の画面・共有層の出来事・称号・図鑑と実績・過去のラン・リーダーボード（今のまま）。
 // 「運用」（#/ops）: 前の「ほかのラン」にあったもの全部（シーズンでない新しいラン・シード・協力プレイ・最初の遠征・言語・継承・続きのある自分のラン・観戦と参加・
-//   この機械のほかのラン（運用者として））と、鍵を外す。ここでは今までの言葉（ラン・トークン）を使う。
+//   この PC のほかのラン（運用者として））と、鍵を外す。ここでは今までの言葉（ラン・トークン）を使う。
 // 持ち主のラン（GET /api/owner/runs）は、このブラウザに覚えてある鍵（プロフィールのトークンと、シーズンの招き）ごとに呼んで、ランの ID でまとめる。
 // 鍵は見出しでだけ渡し、画面・URL・console に出さない。
 import type { LeaderboardEntry, Locale, OwnerRunRow, ProfileRecords, ProfileSeasonEntry, RunListing, SeasonListing, SeasonStandingRow, SeasonStandingsResponse, SeasonWatchResponse } from '@muse/shared';
@@ -13,7 +13,7 @@ import { ApiError, api, errorText } from '../api';
 import { ErrorBanner, Header, useCatalog, useLocaleRefresh } from '../ui/common';
 import { normName, SeasonSharedFlow, sortStandings, STANDING_SORTS, standingSortName, StandingsTable, type StandingSort } from '../ui/home';
 import { AdventurerCard, DiveDialog, HubNav, KeyEntry } from '../ui/hub';
-import { hubCard, membershipFor, participantName, pickSeason, seasonLeftText, type HubCardModel } from '../ui/hubState';
+import { hubCard, membershipFor, noSeasonText, participantName, pickSeason, seasonLeftText, type HubCardModel } from '../ui/hubState';
 import { screenErr } from '../ui/screenErr';
 import { forgetKeys, keepKey, storedKeys } from '../ui/keys';
 import { FIRST_EXPEDITION_CHOICES, playerStateLabel, type FirstExpeditionChoice } from '../ui/labels';
@@ -27,7 +27,7 @@ function firstChoice(v: string): FirstExpeditionChoice {
 }
 
 /**
- * 持ち主のラン: rows（ランの ID でまとめた行）・token（そのランを返したトークン。無ければ同じ機械から）・mine（外からトークンで認められた = 自分のもの）・
+ * 持ち主のラン: rows（ランの ID でまとめた行）・token（そのランを返したトークン。無ければ同じ PC から）・mine（外からトークンで認められた = 自分のもの）・
  * byToken（鍵ごとの、その鍵の冒険者のラン。拠点の札）
  */
 interface OwnerState { rows: OwnerRunRow[]; token: Record<string, string>; mine: Set<string>; local: boolean; byToken: Record<string, OwnerRunRow[]> }
@@ -54,7 +54,7 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
   // シーズンの参加（S2 §18.1）: 前の版では、招かれたプロフィールのトークンをシーズンごとに覚えた（seasonToken.<id>）。S8b からは
   // 「AI のランの持ち主になる」の 1 つの欄（profileToken）に覚える。前に覚えたものも読む（画面には伏せて出す。URL・記録には出さない）
   const [seasonTok, setSeasonTok] = useState<Record<string, string>>({});
-  // 観戦できるラン（S3 §25.1）: 開催中のシーズンのランは、このブラウザに覚えてあるトークンのランか、同じ機械から開いているときだけ。
+  // 観戦できるラン（S3 §25.1）: 開催中のシーズンのランは、このブラウザに覚えてあるトークンのランか、同じ PC から開いているときだけ。
   // withTok: トークンを付けて訊いた（外からなら、返ったランはそのトークンのもの）
   const [watch, setWatch] = useState<Record<string, SeasonWatchResponse & { withTok: boolean }>>({});
   // 持ち主のラン（S8 §54.5）
@@ -103,7 +103,7 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
       .then((xs) => setRecentMine([...new Set(xs.flat())]));
   }, [tokKey]);
 
-  /** 持ち主のラン（S8）: トークンなしで 1 回（同じ機械なら全部返る）と、覚えてあるトークンごとに 1 回。ランの ID でまとめる */
+  /** 持ち主のラン（S8）: トークンなしで 1 回（同じ PC なら全部返る）と、覚えてあるトークンごとに 1 回。ランの ID でまとめる */
   const refreshOwner = async (seasonIds: readonly string[]) => {
     const keys = storedKeys(seasonIds);
     const calls: (string | undefined)[] = [undefined, ...keys];
@@ -126,7 +126,7 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
         const prev = rows.get(row.runId);
         if (!prev || row.updatedAt >= prev.updatedAt) rows.set(row.runId, row);
         // 以後、そのランへの持ち主の呼び出しには、そのランを返したトークンを使う
-        // 自分のラン（S8a）: サーバーが、送ったトークンのプレイヤーのランに mine を付ける（同じ機械からだけで認めたランは付かない）
+        // 自分のラン（S8a）: サーバーが、送ったトークンのプレイヤーのランに mine を付ける（同じ PC からだけで認めたランは付かない）
         if (x.t && row.mine && !token[row.runId]) token[row.runId] = x.t;
         if (row.mine) mine.add(row.runId);
         if (x.t && row.mine) (byToken[x.t] ??= []).push(row);
@@ -237,7 +237,7 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
     }
   };
 
-  /** シーズンのラン（S3 §25.1）: 観戦できるか（確定する前は、覚えてあるトークンのランか、同じ機械からだけ）・巻き戻せるか（確定する前は、同じ機械から、ランが終わった後だけ） */
+  /** シーズンのラン（S3 §25.1）: 観戦できるか（確定する前は、覚えてあるトークンのランか、同じ PC からだけ）・巻き戻せるか（確定する前は、同じ PC から、ランが終わった後だけ） */
   const canWatch = (r: RunListing) => !r.season || !!watch[r.season]?.runs.some((x) => x.runId === r.runId);
   const canRewind = (r: RunListing) => {
     if (!r.season) return true;
@@ -364,7 +364,7 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
   const current = seasons.filter((x) => x.season.status !== 'final').sort(bySeason);
   const currentIds = new Set(current.map((x) => x.season.id));
   // 自分のラン（S8a §55.6 の 11）: このブラウザのトークンのプレイヤーのラン（サーバーの mine）と、このブラウザで遊んだラン。
-  // 同じ機械からだけで認めたランは「この機械のほかのラン（運用者として）」に分けて出す（取り違えないように）
+  // 同じ PC からだけで認めたランは「この PC のほかのラン（運用者として）」に分けて出す（取り違えないように）
   const isMineRow = (row: OwnerRunRow) => myRunIds.has(row.runId);
   const mineRows = owner.rows.filter(isMineRow);
   const operatorRows = owner.rows.filter((row) => !isMineRow(row));
@@ -374,7 +374,7 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
   const otherActive = active.filter((r) => !getToken(r.runId));
   const otherWaiting = otherRows.filter((x) => x.waiting).length;
   const operatorWaiting = operatorRows.filter((x) => x.waiting).length;
-  // 「この機械のほかのラン」の開け閉め（S8b）: 既定は、AI が決定を待っているランがあれば開く。操作したら、その向きを覚える。
+  // 「この PC のほかのラン」の開け閉め（S8b）: 既定は、AI が決定を待っているランがあれば開く。操作したら、その向きを覚える。
   // 待っているランが増えたら、既定に戻す（開く）
   const [opOpen, setOpOpen] = useState<boolean | null>(null);
   const [opWaitSeen, setOpWaitSeen] = useState(0);
@@ -427,12 +427,12 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
     const nm = row?.name ?? mem?.name ?? a.name;
     myCards.push({
       key: `adv-${a.id ?? i}-${sd.id}`, runId: row?.runId ?? null, name: nm, className: classNameOf(row?.classId), participant, seasonId: sd.id,
-      model: hubCard({ name: nm, season: sd, membership: mem, row, playable: !!(row && getToken(row.runId)), rank: st?.adventure.rank ?? null, banked: st?.banked }),
+      model: hubCard({ name: nm, season: sd, membership: mem, row, playable: !!(row && getToken(row.runId)), rank: st?.adventure.rank ?? null, banked: st?.banked, local: owner.local }),
       onDive: () => { setDiveErr(null); setDive({ seasonId: sd.id, token: a.token, name: mem?.name ?? nm }); },
     });
   }
   const myCardRuns = new Set(myCards.map((c) => c.runId).filter((x): x is string => !!x));
-  /** この機械の冒険者（運用者として。同じ機械から開いているときだけ）: 今シーズンのランで、このブラウザの鍵の冒険者でないもの */
+  /** この PC の冒険者（運用者として。同じ PC から開いているときだけ）: 今シーズンのランで、このブラウザの鍵の冒険者でないもの */
   const operatorCards: HubEntry[] = owner.local ? owner.rows
     .filter((row) => row.season && currentIds.has(row.season.id) && !owner.mine.has(row.runId) && !myCardRuns.has(row.runId))
     .map((row) => {
@@ -457,7 +457,7 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
         {seasonsLoaded && !current.length && (
           <section class="hub-empty">
             <h2 class="hub-keytitle">{tr('開催中のシーズンは無い', 'No season is running')}</h2>
-            <p class="hub-note">{tr('次のシーズンが開いたら、ここに冒険者の札が出る。', 'When the next season opens, your adventurer appears here.')}</p>
+            <p class="hub-note">{noSeasonText(owner.local)}</p>
             <div class="hub-links">
               <a class="hub-btn primary" href="#/records">{tr('記録を見る', 'Records')}</a>
               <a class="hub-btn" href="#/ops">{tr('運用', 'Operations')}</a>
@@ -473,8 +473,8 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
             {badKeys > 0 && <p class="hub-note warn">{tr('覚えてある鍵のうち、使えないものがある（歯車の「運用」で外せる）。', 'A key kept in this browser does not work (remove it under the gear, Operations).')}</p>}
             {operatorCards.length > 0 && (
               <section class="hub-operator">
-                <h3 class="hub-sechead">{tr('この機械の冒険者（運用者として）', 'Adventurers on this machine (as the operator)')}</h3>
-                <p class="hub-note">{tr('サーバーと同じ機械から開いているので、鍵の無い冒険者も、支度ができる。自分の冒険者と、取り違えないこと。', 'Opened on the server machine, so you can prepare adventurers you hold no key for. Do not mistake them for your own.')}</p>
+                <h3 class="hub-sechead">{tr('この PC の冒険者（運用者として）', 'Adventurers on this PC (as the operator)')}</h3>
+                <p class="hub-note">{tr('サーバーと同じ PC から開いているので、鍵の無い冒険者も、支度ができる。自分の冒険者と、取り違えないこと。', 'Opened on the server PC, so you can prepare adventurers you hold no key for. Do not mistake them for your own.')}</p>
                 <div class="hub-grid">
                   {operatorCards.map((c) => <AdventurerCard key={c.key} name={c.name} className={c.className} model={c.model} operator />)}
                 </div>
@@ -498,7 +498,7 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
           </>
         )}
         <p class="hub-note hub-foot">
-          {tr('新しい冒険・観戦・参加・この機械のほかの冒険は、右上の歯車（', 'New adventures, watching, joining and the other adventures on this machine are under the gear at the top right (')}
+          {tr('新しい冒険・観戦・参加・この PC のほかの冒険は、右上の歯車（', 'New adventures, watching, joining and the other adventures on this PC are under the gear at the top right (')}
           <a href="#/ops">{tr('運用', 'Operations')}</a>{tr('）にある。', ').')}
         </p>
       </div>
@@ -534,11 +534,11 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
         <details class="panel others" open={opOpen ?? operatorWaiting > 0}
           onToggle={(e) => { const o = (e.currentTarget as HTMLDetailsElement).open; if (o !== (opOpen ?? operatorWaiting > 0)) setOpOpen(o); }}>
           <summary>
-            {tr('この機械のほかのラン（運用者として）', 'Other runs on this machine (as the operator)')}
+            {tr('この PC のほかのラン（運用者として）', 'Other runs on this PC (as the operator)')}
             <small>{tr(`（${operatorRows.length}）`, ` (${operatorRows.length})`)}</small>
             {operatorWaiting > 0 && <span class="waitmark inline">{tr(`AI が、持ち主の決定を待っている ${operatorWaiting}`, `${operatorWaiting} AI waiting for a decision`)}</span>}
           </summary>
-          <p class="muted small">{tr('サーバーと同じ機械から開いているので、このブラウザにトークンの無いランも、運用者として持ち主の操作ができる。自分のランと取り違えないこと。', 'Opened on the server machine, so you can act as the owner of runs this browser has no token for, as the operator. Do not mistake them for your own runs.')}</p>
+          <p class="muted small">{tr('サーバーと同じ PC から開いているので、このブラウザにトークンの無いランも、運用者として持ち主の操作ができる。自分のランと取り違えないこと。', 'Opened on the server PC, so you can act as the owner of runs this browser has no token for, as the operator. Do not mistake them for your own runs.')}</p>
           <div class="home inner">{operatorRows.map(card)}</div>
         </details>
       )}
@@ -566,7 +566,7 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
           {runs !== null && otherActive.length === 0 && <div class="muted">{tr('なし', 'None')}</div>}
           <ul class="runs">{otherActive.map(activeItem)}</ul>
           {current.some((x) => watch[x.season.id] && !watch[x.season.id].local) && (
-            <p class="muted small">{tr('開催中のシーズンのランを観戦できるのは、その参加者（招かれたプロフィールのトークンを覚えさせたブラウザ）と、サーバーと同じ機械からだけ。確定した後は、だれでも見返せる。', 'While the season is running, only its participant (a browser that keeps their invited profile token) and the server machine can watch a run. Once it is finalized, anyone can.')}</p>
+            <p class="muted small">{tr('開催中のシーズンのランを観戦できるのは、その参加者（招かれたプロフィールのトークンを覚えさせたブラウザ）と、サーバーと同じ PC からだけ。確定した後は、だれでも見返せる。', 'While the season is running, only its participant (a browser that keeps their invited profile token) and the server PC can watch a run. Once it is finalized, anyone can.')}</p>
           )}
         </section>
 
@@ -643,7 +643,7 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
     const rows0 = data.result?.standings ?? data.standings;
     const mine = myNames(s.id, rows0);
     const rows = sortStandings(onlyMine ? rows0.filter((r) => mine.has(normName(r.name))) : rows0, sortBy);
-    // 参加者（順位の表の名前）ごとの、そのシーズンのラン。行に runIds があればそれで結ぶ（確定したシーズンと、同じ機械から）。
+    // 参加者（順位の表の名前）ごとの、そのシーズンのラン。行に runIds があればそれで結ぶ（確定したシーズンと、同じ PC から）。
     // 無ければ GET /api/runs のシーズンと名前から（分かる範囲で）
     const sr = seasonRuns(s.id);
     const listing = new Map(sr.map((x) => [x.runId, x]));
@@ -669,7 +669,7 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
           <a class="button small" href={`#/season/${s.id}`}>{s.status === 'final' ? tr('結果と坑の断面・討伐の記録', 'Results, cross-section and warden kills') : tr('順位と坑の断面', 'Standings and cross-section')}</a>
         </div>
         {s.status !== 'final' && !sw?.local && (
-          <p class="muted small">{tr('開催中のシーズンのランは、確定した後に、だれでも見返せる（それまでは、サーバーと同じ機械から、終わったランだけ。観戦は参加者と同じ機械から）。', 'Runs of a running season can be replayed by anyone once it is final (until then only finished runs, from the server machine; watching is for the participant and the server machine).')}</p>
+          <p class="muted small">{tr('開催中のシーズンのランは、確定した後に、だれでも見返せる（それまでは、サーバーと同じ PC から、終わったランだけ。観戦は参加者と同じ PC から）。', 'Runs of a running season can be replayed by anyone once it is final (until then only finished runs, from the server PC; watching is for the participant and the server PC).')}</p>
         )}
         {rows0.length === 0 && <div class="muted">{tr('まだだれもランを始めていない', 'Nobody has started yet')}</div>}
         {rows0.length > 0 && !rows.length && <div class="muted">{tr('このシーズンに、自分と分かる行は無い', 'No row of yours in this season')}</div>}

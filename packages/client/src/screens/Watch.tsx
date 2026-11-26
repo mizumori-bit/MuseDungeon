@@ -92,7 +92,7 @@ export function Watch({ runId }: { runId: string }) {
       // シーズンの招きのトークンが無ければ、プロフィールのトークン（持ち主の枠から来たとき。S8 §54.5）
       seasonTokRef.current = r?.season ? getPref(`seasonToken.${r.season}`, '') || getPref('profileToken', '') || null : null;
       // シーズンのラン（S0 §9.7）は、進行中はサーバーの設定によらず追従視点だけ。
-      // 終わったランも、シーズンが確定する前で同じ機械からでなければ追従だけ（持ち主の観戦は俯瞰を送らない。S3）
+      // 終わったランも、シーズンが確定する前で同じ PC からでなければ追従だけ（持ち主の観戦は俯瞰を送らない。S3）
       let pol = await conf;
       if (r?.season) {
         if (r.status === 'active') pol = 'follow_only';
