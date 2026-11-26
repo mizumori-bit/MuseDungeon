@@ -12,6 +12,7 @@ import { soundDirector } from '../sound/director';
 import { ErrorBanner, Header, MapView, ThemePicker, useCatalog, useLocaleRefresh, useTheme } from '../ui/common';
 import { SoundControls } from '../ui/sound';
 import { CampScene } from '../ui/camp';
+import { keyForRun } from '../ui/keys';
 import { AgentWaitBadge, directorExpInfo, ExpeditionStatusPanel, followExpInfo, NotesBlock, type ExpInfo } from '../ui/expedition';
 import { narrateWorld, ownerLinesFromPerceived, perceivedLines, thoughtsFrom } from '../ui/narration';
 import { AiPanel, MessageLog, PartyPanel, SummaryDialog, type LogLine, type ThoughtLine } from '../ui/panels';
@@ -88,9 +89,9 @@ export function Watch({ runId }: { runId: string }) {
       const r = rs.find((x) => x.runId === runId) ?? null;
       setListing(r);
       if (r && !followRef.current) setFollow(r.players.find((p) => p.state === 'alive' || p.state === 'at_camp')?.id ?? r.players[0]?.id ?? null);
-      // 開催中のシーズンのラン（S3 §25.1）: このブラウザに覚えてある、招かれたプロフィールのトークンを hello に入れる（URL には出さない）。
-      // シーズンの招きのトークンが無ければ、プロフィールのトークン（持ち主の枠から来たとき。S8 §54.5）
-      seasonTokRef.current = r?.season ? getPref(`seasonToken.${r.season}`, '') || getPref('profileToken', '') || null : null;
+      // 開催中のシーズンのラン（S3 §25.1）: このブラウザに覚えてある鍵のうち、そのランの冒険者の鍵を hello に入れる（URL には出さない）。
+      // S12c: 覚えてある鍵の全部から探す（keyForRun）。別の冒険者の鍵は入れない。無ければ鍵なし（同じ PC からなら、それで見られる）
+      seasonTokRef.current = r?.season ? (await keyForRun(runId)) ?? null : null;
       // シーズンのラン（S0 §9.7）は、進行中はサーバーの設定によらず追従視点だけ。
       // 終わったランも、シーズンが確定する前で同じ PC からでなければ追従だけ（持ち主の観戦は俯瞰を送らない。S3）
       let pol = await conf;

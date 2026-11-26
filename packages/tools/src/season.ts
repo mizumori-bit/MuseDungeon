@@ -6,7 +6,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Content } from '@muse/content';
 import { createRun, ENGINE_VERSION, previewWarden } from '@muse/engine';
-import { ProfileStore, RUNS_LOCK, SeasonService, SeasonStore, SEASON_ID_RE } from '@muse/server';
+import { normalizeName, ProfileStore, RUNS_LOCK, SeasonService, SeasonStore, SEASON_ID_RE } from '@muse/server';
 import type { SeasonDef } from '@muse/server';
 
 export interface SeasonCliArgs {
@@ -63,14 +63,19 @@ export function seasonCli(content: Content, a: SeasonCliArgs, log: (s: string) =
       const endsAt = a.ends ? Date.parse(a.ends) : NaN;
       if (!Number.isFinite(endsAt)) { log('--ends が要る（ISO 8601 の時刻。例 2026-12-01T21:00:00+09:00）'); return 1; }
       if (endsAt <= Date.now()) { log(`--ends が過去の時刻: ${a.ends}`); return 1; }
+      // 名前は、名前を整える 1 つの関数で（S12c。拠点の口と同じ。32 字を超えたら、切らずに断る）
+      const nm = normalizeName(a.name ?? a.id);
+      if (!nm.ok) { log(`--name: ${nm.message}`); return 1; }
       const def: SeasonDef = {
-        id: a.id, name: (a.name ?? a.id).slice(0, 32), seed: a.seed, engineVersion: ENGINE_VERSION, contentVersion: content.version,
+        id: a.id, name: nm.name, seed: a.seed, engineVersion: ENGINE_VERSION, contentVersion: content.version,
         budget: a.budget ?? 3000, endsAt, openedAt: Date.now(),
       };
+      // 開いてよいかは、拠点の運用者の口と同じ関数で見る（S12b。SeasonService.openBlockers）
+      const blk = svc.openBlockers(def.id);
       // 同じ ID がもうあれば、前のシーズンを確定する前に断る（開けないのに閉じてしまわない）
-      if (store.ids().includes(def.id)) { log(`season ${def.id} already exists`); return 1; }
+      if (blk.exists) { log(`season ${def.id} already exists`); return 1; }
       // 記録が読めないシーズンがあれば、何も確定せず・開かない（S9b。どのシーズンの、どのファイルかを出す）
-      const broken = svc.brokenSeasons();
+      const broken = blk.broken;
       if (broken.length) {
         for (const b of broken) log(`シーズン ${b.id} の記録が読めない: ${b.files.join('・')}`);
         log('記録が読めないシーズンがあるので、新しいシーズンを開かない（何も確定していない）。直してから、もう一度 open する');
@@ -78,7 +83,7 @@ export function seasonCli(content: Content, a: SeasonCliArgs, log: (s: string) =
       }
       // シーズンの期間は重ならない（S9a。SEASON.md §57.2・§57.3 の 4）: 確定していないシーズンがほかにあれば、先に確定する（close と同じ処理）。
       // 確定は元に戻せないので、--close-previous が付いているときだけ（S9b。付いていなければ、名前と ID を並べて、何もせずに終える）
-      const unresolved = store.ids().map((id) => svc.get(id)).filter((d): d is NonNullable<typeof d> => !!d && !d.result);
+      const unresolved = blk.unresolved;
       if (unresolved.length && !a.closePrevious) {
         for (const d of unresolved) log(`開催中のシーズン ${d.def.id}「${d.def.name}」がある。新しいシーズンを開くと、それを確定する（元に戻せない）。よければ --close-previous を付ける`);
         log('（何もしていない。PowerShell では `npm.cmd run season -- open … --close-previous` と書く。`npm run` は名前付きの引数を消す）');
@@ -94,7 +99,7 @@ export function seasonCli(content: Content, a: SeasonCliArgs, log: (s: string) =
         log(`前のシーズン ${d.def.id}「${d.def.name}」を確定した（このシーズンのランは、もう命令を受けない。記録は見返せる）。冒険 ${r.winners.adventure.map((w) => w.name).join('・') || '-'}／貢献 ${r.winners.contribution.map((w) => w.name).join('・') || '-'}／生還 ${r.winners.survival.map((w) => w.name).join('・') || '-'}／支援 ${(r.winners.support ?? []).map((w) => w.name).join('・') || '-'}`);
         log(r.titles?.length ? `  称号: ${r.titles.map((x) => `${x.holder}「${x.name.ja}」`).join('・')}` : '  称号: なし');
       }
-      try { store.open(def); } catch (e) { log((e as Error).message); return 1; }
+      try { svc.open(def); } catch (e) { log((e as Error).message); return 1; }
       log(`シーズン ${def.id}「${def.name}」を開いた: 予算 ${def.budget} 手番・終わり ${new Date(def.endsAt).toISOString()}・engine ${def.engineVersion}・content ${def.contentVersion}${a.dir ? `（${a.dir}）` : ''}`);
       return 0;
     }

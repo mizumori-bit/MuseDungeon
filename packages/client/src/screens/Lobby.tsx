@@ -6,16 +6,17 @@
 //   この PC のほかのラン（運用者として））と、鍵を外す。ここでは今までの言葉（ラン・トークン）を使う。
 // 持ち主のラン（GET /api/owner/runs）は、このブラウザに覚えてある鍵（プロフィールのトークンと、シーズンの招き）ごとに呼んで、ランの ID でまとめる。
 // 鍵は見出しでだけ渡し、画面・URL・console に出さない。
-import type { LeaderboardEntry, Locale, OwnerRunRow, ProfileRecords, ProfileSeasonEntry, RunListing, SeasonListing, SeasonStandingRow, SeasonStandingsResponse, SeasonWatchResponse } from '@muse/shared';
+import type { LeaderboardEntry, Locale, OpsRosterResponse, OwnerRunRow, ProfileRecords, ProfileSeasonEntry, RunListing, SeasonListing, SeasonStandingRow, SeasonStandingsResponse, SeasonWatchResponse } from '@muse/shared';
 import { endReasonText, kindName, nameOf, objectiveText } from '@muse/shared';
 import { useEffect, useState } from 'preact/hooks';
 import { ApiError, api, errorText } from '../api';
+import { readBell, saveBell, type BellMode } from '../ui/bell';
 import { ErrorBanner, Header, useCatalog, useLocaleRefresh } from '../ui/common';
 import { normName, SeasonSharedFlow, sortStandings, STANDING_SORTS, standingSortName, StandingsTable, type StandingSort } from '../ui/home';
-import { AdventurerCard, DiveDialog, HubNav, KeyEntry } from '../ui/hub';
+import { AddAdventurerDialog, AdventurerCard, DiveDialog, HubNav, KeyEntry, KeyOnceDialog, OpenSeasonDialog, UninviteDialog } from '../ui/hub';
 import { hubCard, membershipFor, noSeasonText, participantName, pickSeason, seasonLeftText, type HubCardModel } from '../ui/hubState';
 import { screenErr } from '../ui/screenErr';
-import { forgetKeys, keepKey, storedKeys } from '../ui/keys';
+import { addKey, forgetKeys, keepKey, primaryKey, retireMainKey, storedKeys } from '../ui/keys';
 import { FIRST_EXPEDITION_CHOICES, playerStateLabel, type FirstExpeditionChoice } from '../ui/labels';
 import { OwnerRunCard } from '../ui/owner';
 import { fmtTime, getLocale, getPref, getToken, inLocale, navigate, saveToken, setPref, tr } from '../util';
@@ -64,6 +65,17 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
   // 自分で潜る窓（S10）: どのシーズンへ、どの鍵で
   const [dive, setDive] = useState<{ seasonId: string; token: string; name: string } | null>(null);
   const [diveErr, setDiveErr] = useState<string | null>(null);
+  // 拠点の運用者の口（S12b。SEASON.md §63.7）: 名簿は、サーバーと同じ PC から開いているときだけ読む（ほかの PC からは呼ばない）
+  const [roster, setRoster] = useState<OpsRosterResponse | null>(null);
+  // 運用者の窓: 新しいシーズンを始める・冒険者を足す（seasonName: 足す先、lead: 窓の上の案内）
+  // 窓は、開いたときの値を持つ（S12c: 名簿の読み直しが一時的に失敗しても、閉じない・入力が消えない）
+  const [opsDlg, setOpsDlg] = useState<{ kind: 'open'; suggested: string; days: number; budget: number } | { kind: 'add'; seasonName: string; lead?: string } | { kind: 'uninvite'; profileId: string; name: string } | null>(null);
+  const [opsErr, setOpsErr] = useState<string | null>(null);
+  // 鍵を 1 回だけ見せる窓（AI に任せる冒険者を足した直後。このブラウザには覚えない。閉じたら消える）
+  const [keyOnce, setKeyOnce] = useState<{ name: string; seasonId: string; key: string } | null>(null);
+  // 呼び鈴の設定（S12b。SEASON.md §63.6。このブラウザにだけ覚える）
+  const [bell, setBellState] = useState<BellMode>(readBell());
+  const setBell = (m: BellMode) => { saveBell(m); setBellState(m); };
   // プロフィールの記録の直近のラン（自分のランを見分ける。トークンごと）
   const [recentMine, setRecentMine] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -76,7 +88,7 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
   const [objective, setObjective] = useState<FirstExpeditionChoice>(firstChoice(getPref('firstExpedition', 'camp')));
   const [busy, setBusy] = useState(false);
   // プロフィール（V3-7 §7.1）: トークンはこのブラウザに残し、次のランに渡す（記録・図鑑・継承）
-  const [profileToken, setProfileToken] = useState(getPref('profileToken', ''));
+  const [profileToken, setProfileToken] = useState(primaryKey());
   const [legacy, setLegacy] = useState(getPref('legacy', 'on') !== 'off');
   const [records, setRecords] = useState<{ text: string; records: ProfileRecords } | null>(null);
   const [showRecords, setShowRecords] = useState(false);
@@ -88,16 +100,17 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
   const setOnlyMine = (v: boolean) => { setPref('records.onlyMine', v ? 'on' : 'off'); setOnlyMineState(v); };
   const setSortBy = (k: StandingSort) => { setPref('records.sort', k); setSortByState(k); };
   const L = getLocale();
+  // 記録と図鑑・称号の枠は、このブラウザの「自分のプロフィール」（primaryKey = profileToken）のもの。冒険者ごとの記録は、遊ぶ画面のキャンプの 1 行（そのランの鍵）
   useEffect(() => {
     if (!profileToken) { setRecords(null); return; }
     api.records(profileToken, L).then(setRecords).catch(() => setRecords(null));
     api.profile(profileToken, L).then((p) => setTitles((p.titles ?? []).map((x) => x.name))).catch(() => setTitles([]));
   }, [profileToken, L]);
   const keepProfile = (tok?: string) => { if (tok) { setPref('profileToken', tok); setProfileToken(tok); } };
-  // 自分のラン（記録のタブの「自分だけ」・順位の表の自分の行）: 覚えてあるトークンのプロフィールの直近のラン
-  const tokKey = [profileToken, ...Object.values(seasonTok)].join('\u0000');
+  // 自分のラン（記録のタブの「自分だけ」・順位の表の自分の行）: 覚えてある鍵の全部（S12c: 拠点で足した冒険者の鍵も）のプロフィールの直近のラン
+  const tokKey = [profileToken, ...Object.values(seasonTok), ...storedKeys()].join('\u0000');
   useEffect(() => {
-    const toks = [...new Set([profileToken, ...Object.values(seasonTok)].filter(Boolean))];
+    const toks = storedKeys();
     if (!toks.length) { setRecentMine([]); return; }
     Promise.all(toks.map((t) => api.records(t, L).then((r) => r.records.recent.map((x) => x.run_id)).catch(() => [] as string[])))
       .then((xs) => setRecentMine([...new Set(xs.flat())]));
@@ -143,6 +156,11 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
       if (id) seen.add(id);
       list.push({ token: t, id, name: p?.name ?? byToken[t]?.[0]?.name ?? '', ...(p?.seasons ? { seasons: p.seasons } : {}), ok });
     });
+    // 名簿（S12b）: サーバーと同じ PC から開いているときだけ、運用者の口を呼ぶ。一時的に読めなかったときは、前の名簿のまま（S12c: 開いている窓を閉じない）
+    if (local) {
+      const r = await api.opsRoster().catch(() => null);
+      if (r) setRoster(r);
+    } else if (any) setRoster(null);
     setAdvs(list);
     if (!any) return;
     const sorted = [...rows.values()].sort((a, b) => Number(b.waiting) - Number(a.waiting) || b.updatedAt - a.updatedAt);
@@ -158,11 +176,14 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
       setSeasonsLoaded(true);
       const toks = Object.fromEntries(list.map((x) => [x.season.id, getPref(`seasonToken.${x.season.id}`, '')]).filter(([, v]) => v));
       setSeasonTok(toks);
-      // 観戦の口は、シーズンの招きのトークン（無ければプロフィールのトークン）を見出しで
-      const prof = getPref('profileToken', '');
-      const ws = await Promise.all(list.map((x) => {
-        const t = toks[x.season.id] || prof || undefined;
-        return api.seasonWatch(x.season.id, t).then((r) => [x.season.id, { ...r, withTok: !!t }] as const).catch(() => null);
+      // 観戦の口は、覚えてある鍵の全部（S12c: 拠点で足した冒険者の鍵も）で訊いて、ランをまとめる（鍵は見出しで）。鍵が無ければ鍵なしで 1 回
+      const keys = storedKeys(list.map((x) => x.season.id));
+      const ws = await Promise.all(list.map(async (x) => {
+        const asks: (string | undefined)[] = keys.length ? keys : [undefined];
+        const rs = (await Promise.all(asks.map((t) => api.seasonWatch(x.season.id, t).catch(() => null)))).filter((r): r is SeasonWatchResponse => !!r);
+        if (!rs.length) return null;
+        const runs = new Map(rs.flatMap((r) => r.runs).map((r) => [r.runId, r]));
+        return [x.season.id, { ...rs[0], runs: [...runs.values()], withTok: keys.length > 0 }] as const;
       }));
       setWatch(Object.fromEntries(ws.filter((x): x is readonly [string, SeasonWatchResponse & { withTok: boolean }] => !!x)));
     }).catch(() => setSeasonsLoaded(true));
@@ -383,7 +404,8 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
     if (operatorWaiting !== opWaitSeen) setOpWaitSeen(operatorWaiting);
   }, [operatorWaiting]);
   const savedSeasonToks = Object.keys(seasonTok);
-  const hasKey = !!profileToken || savedSeasonToks.length > 0;
+  // S12b: 拠点で足した「自分で潜る」冒険者の鍵（ほかの鍵の並び）も数える
+  const hasKey = !!profileToken || savedSeasonToks.length > 0 || storedKeys().length > 0;
   /** 鍵を外す（運用の画面から。S10 §58.4）。前の版でシーズンごとに覚えた鍵も外す */
   const forgetTokens = () => {
     forgetKeys();
@@ -407,11 +429,83 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
     void refreshOwner(seasons.map((x) => x.season.id));
     return null;
   };
+  // ---- 拠点の運用者の口（S12b。サーバーと同じ PC から開いたときだけ。SEASON.md §63.7） ----
+  /** 運用者の口の断りは、サーバーの文の画面の言葉の側（運用者に向けた文。置き換えない） */
+  const opsErrText = (e: unknown) => (e instanceof ApiError && e.error ? inLocale(e.error.message) : screenErr(e));
+  /** 新しいシーズンを始める。名前が空なら送らない（サーバーが、重ならない「シーズン N」を決める。S12c）。始めたら、そのまま「冒険者を足す」の窓へ */
+  const openSeason = async (v: { name: string; days: number; budget: number }) => {
+    setBusy(true);
+    setOpsErr(null);
+    try {
+      const r = await api.opsOpenSeason({ ...(v.name.trim() ? { name: v.name.trim() } : {}), days: v.days, budget: v.budget });
+      setOpsDlg({ kind: 'add', seasonName: r.season.name, lead: tr(`シーズン「${r.season.name}」を始めた（${fmtTime(r.season.endsAt)} まで）。次は、冒険者を足す。`, `Started "${r.season.name}" (until ${fmtTime(r.season.endsAt)}). Next, add an adventurer.`) });
+      refresh();
+    } catch (e) {
+      setOpsErr(opsErrText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  /**
+   * 冒険者を足す。AI に任せる: 鍵を 1 回だけ見せる窓（このブラウザには覚えない）。自分で潜る: ランのトークンと鍵を、今までと同じ場所に覚えて、遊ぶ画面へ
+   * （鍵は、profileToken が空ならそこへ、別の鍵があれば上書きせずに、ほかの鍵の並びへ: keys.ts の addKey）
+   */
+  const addAdventurer = async (v: { kind: 'ai' | 'human'; name: string; classId: string }) => {
+    setBusy(true);
+    setOpsErr(null);
+    try {
+      const r = await api.opsAddAdventurer({ name: v.name, kind: v.kind, ...(v.kind === 'human' ? { classId: v.classId } : {}), locale: getLocale() });
+      setOpsDlg(null);
+      if (r.kind === 'human' && r.runId && r.token && r.playerId) {
+        addKey(r.profileToken);
+        setProfileToken(primaryKey());
+        setPref('class', v.classId);
+        saveToken(r.runId, { token: r.token, playerId: r.playerId, name: r.name });
+        navigate(`#/play/${r.runId}`);
+        return;
+      }
+      setKeyOnce({ name: r.name, seasonId: r.seasonId, key: r.profileToken });
+      refresh();
+    } catch (e) {
+      setOpsErr(opsErrText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  /** 招きを取り消す（S12c。鍵を無くしたときの道。ランを 1 回も始めていない招きだけ。確かめの窓から） */
+  const uninvite = async (profileId: string) => {
+    setBusy(true);
+    setOpsErr(null);
+    try {
+      await api.opsUninvite(profileId);
+      setOpsDlg(null);
+      refresh();
+    } catch (e) {
+      setOpsErr(opsErrText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  /** このブラウザの鍵の冒険者を、今のシーズンの名簿に加える（鍵は見出しで。表示名はプロフィールの名前） */
+  const enroll = async (tok: string) => {
+    setBusy(true);
+    try {
+      await api.opsEnroll(tok);
+      refresh();
+    } catch (e) {
+      setError(opsErrText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const card = (row: OwnerRunRow) => <OwnerRunCard key={row.runId} row={row} token={owner.token[row.runId]} catalog={catalog} onChanged={() => void refreshOwner(seasons.map((x) => x.season.id))} />;
   const classNameOf = (id: string | undefined) => (id ? (catalog ? kindName(catalog, L, id) : id) : null);
 
   // ---- 拠点（S10。SEASON.md §58.4） ----
-  interface HubEntry { key: string; runId: string | null; name: string; className: string | null; model: HubCardModel; participant: string | null; seasonId: string; onDive?: () => void }
+  interface HubEntry { key: string; runId: string | null; name: string; className: string | null; model: HubCardModel; participant: string | null; seasonId: string; onDive?: () => void; onEnroll?: () => void; onUninvite?: () => void }
+  /** 今のシーズン（S12b: サーバーと同じ PC から開いていて、名簿を読めたときだけ。冒険者を足す先） */
+  const rosterSeason = owner.local && roster?.season ? roster.season : null;
   /** 鍵の冒険者ごとの札（ふつうは 1 枚）。開催中のシーズンが無ければ無い */
   const myCards: HubEntry[] = [];
   for (const [i, a] of (advs ?? []).entries()) {
@@ -427,20 +521,41 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
     const nm = row?.name ?? mem?.name ?? a.name;
     myCards.push({
       key: `adv-${a.id ?? i}-${sd.id}`, runId: row?.runId ?? null, name: nm, className: classNameOf(row?.classId), participant, seasonId: sd.id,
-      model: hubCard({ name: nm, season: sd, membership: mem, row, playable: !!(row && getToken(row.runId)), rank: st?.adventure.rank ?? null, banked: st?.banked, local: owner.local }),
+      model: hubCard({ name: nm, season: sd, membership: mem, row, playable: !!(row && getToken(row.runId)), rank: st?.adventure.rank ?? null, banked: st?.banked, local: owner.local, canEnroll: rosterSeason?.id === sd.id }),
       onDive: () => { setDiveErr(null); setDive({ seasonId: sd.id, token: a.token, name: mem?.name ?? nm }); },
+      onEnroll: () => void enroll(a.token),
     });
   }
   const myCardRuns = new Set(myCards.map((c) => c.runId).filter((x): x is string => !!x));
-  /** この PC の冒険者（運用者として。同じ PC から開いているときだけ）: 今シーズンのランで、このブラウザの鍵の冒険者でないもの */
-  const operatorCards: HubEntry[] = owner.local ? owner.rows
-    .filter((row) => row.season && currentIds.has(row.season.id) && !owner.mine.has(row.runId) && !myCardRuns.has(row.runId))
+  /**
+   * この PC の冒険者の名簿（S12b。SEASON.md §63.7 の 2）: 今のシーズンに招いた者の全部のうち、このブラウザの鍵の冒険者でないもの（運用者として）。
+   * ランがあれば、持ち主の口の一覧の行で（今までの運用者の札と同じ）。まだ入っていない AI は「鍵を使って入ってくるのを、待っている」
+   */
+  const myProfileIds = new Set((advs ?? []).filter((a) => a.ok && a.id).map((a) => a.id!));
+  const rosterCards: HubEntry[] = rosterSeason ? roster!.roster.filter((e) => !myProfileIds.has(e.profileId)).map((e) => {
+    const sd = current.find((x) => x.season.id === rosterSeason.id)?.season ?? { id: rosterSeason.id, status: 'open' as const, budget: rosterSeason.budget };
+    const row = e.runId ? owner.rows.find((r) => r.runId === e.runId && !owner.mine.has(r.runId) && !myCardRuns.has(r.runId)) ?? null : null;
+    const st = current.find((x) => x.season.id === sd.id)?.standings.find((r) => normName(r.name) === normName(e.name));
+    return {
+      key: `ros-${e.profileId}`, runId: row?.runId ?? null, name: row?.name ?? e.name, className: classNameOf(row?.classId), participant: e.name, seasonId: sd.id,
+      model: hubCard({
+        name: row?.name ?? e.name, season: sd, membership: { used: e.used, budget: e.budget, died: e.died, runs: e.runs, ...(e.failed ? { failed: true as const } : {}) },
+        row, playable: !!(row && getToken(row.runId)), rank: st?.adventure.rank ?? null, banked: st?.banked, local: true, roster: { kind: e.kind },
+      }),
+      // 招きを取り消す（S12c）: まだ 1 回も入っていない招きだけ（札のボタンは hubCard が決める）
+      onUninvite: () => { setOpsErr(null); setOpsDlg({ kind: 'uninvite', profileId: e.profileId, name: e.name }); },
+    };
+  }) : [];
+  const rosterRuns = new Set(rosterCards.map((c) => c.runId).filter((x): x is string => !!x));
+  /** この PC の冒険者（運用者として。同じ PC から開いているときだけ）: 今シーズンのランで、このブラウザの鍵の冒険者でも、名簿の札でもないもの（確定待ちのシーズンなど） */
+  const operatorCards: HubEntry[] = [...rosterCards, ...(owner.local ? owner.rows
+    .filter((row) => row.season && currentIds.has(row.season.id) && !owner.mine.has(row.runId) && !myCardRuns.has(row.runId) && !rosterRuns.has(row.runId))
     .map((row) => {
       const sd = current.find((x) => x.season.id === row.season!.id)!.season;
       const participant = row.season?.participant ?? row.name;
       const st = current.find((x) => x.season.id === sd.id)?.standings.find((r) => normName(r.name) === normName(participant));
       return { key: row.runId, runId: row.runId, name: row.name, className: classNameOf(row.classId), participant, seasonId: sd.id, model: hubCard({ name: row.name, season: sd, row, playable: !!getToken(row.runId), rank: st?.adventure.rank ?? null }) };
-    }) : [];
+    }) : [])];
   const waitingCount = [...myCards, ...operatorCards].filter((c) => c.model.state === 'camp_pending').length;
   const badKeys = (advs ?? []).filter((a) => !a.ok).length;
   const needKey = !hasKey || (advs !== null && advs.length > 0 && advs.every((a) => !a.ok));
@@ -457,29 +572,45 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
         {seasonsLoaded && !current.length && (
           <section class="hub-empty">
             <h2 class="hub-keytitle">{tr('開催中のシーズンは無い', 'No season is running')}</h2>
-            <p class="hub-note">{noSeasonText(owner.local)}</p>
+            <p class="hub-note">{noSeasonText(owner.local, !!roster?.broken)}</p>
             <div class="hub-links">
-              <a class="hub-btn primary" href="#/records">{tr('記録を見る', 'Records')}</a>
+              {/* S12b: サーバーと同じ PC からは、ここで始める（確定していないシーズン・読めない記録があれば出さない） */}
+              {owner.local && roster?.canOpen && <button type="button" class="hub-btn primary" onClick={() => { setOpsErr(null); setOpsDlg({ kind: 'open', suggested: roster.next?.name ?? '', days: roster.next?.days ?? 7, budget: roster.next?.budget ?? 3000 }); }}>{tr('新しいシーズンを始める', 'Start a new season')}</button>}
+              <a class={`hub-btn ${owner.local && roster?.canOpen ? '' : 'primary'}`} href="#/records">{tr('記録を見る', 'Records')}</a>
               <a class="hub-btn" href="#/ops">{tr('運用', 'Operations')}</a>
             </div>
           </section>
         )}
         {seasonsLoaded && current.length > 0 && (
           <>
-            {/* 鍵が無い・覚えてある鍵がどれも使えない: 札も無ければ、真ん中に鍵を入れる欄 1 つ。運用者として札がもう出ていれば、札の下に小さい 1 行（S10a b） */}
-            {needKey && !operatorCards.length && <KeyEntry onKeep={keepOwnerTok} />}
+            {/* 鍵が無い・覚えてある鍵がどれも使えない: 札も無く、冒険者を足せもしなければ、真ん中に鍵を入れる欄 1 つ。運用者として札が出ているか、
+                冒険者を足せるなら、札の下に小さい 1 行（S10a b・S12b） */}
+            {needKey && !operatorCards.length && !rosterSeason && <KeyEntry onKeep={keepOwnerTok} />}
             {hasKey && advs === null && <p class="hub-note">{tr('読み込み中…', 'Loading…')}</p>}
-            {myCards.map((c) => <AdventurerCard key={c.key} name={c.name} className={c.className} model={c.model} onDive={c.onDive} />)}
+            {myCards.map((c) => <AdventurerCard key={c.key} name={c.name} className={c.className} model={c.model} onDive={c.onDive} onEnroll={c.onEnroll} busy={busy} />)}
             {badKeys > 0 && <p class="hub-note warn">{tr('覚えてある鍵のうち、使えないものがある（歯車の「運用」で外せる）。', 'A key kept in this browser does not work (remove it under the gear, Operations).')}</p>}
             {operatorCards.length > 0 && (
               <section class="hub-operator">
                 <h3 class="hub-sechead">{tr('この PC の冒険者（運用者として）', 'Adventurers on this PC (as the operator)')}</h3>
                 <p class="hub-note">{tr('サーバーと同じ PC から開いているので、鍵の無い冒険者も、支度ができる。自分の冒険者と、取り違えないこと。', 'Opened on the server PC, so you can prepare adventurers you hold no key for. Do not mistake them for your own.')}</p>
                 <div class="hub-grid">
-                  {operatorCards.map((c) => <AdventurerCard key={c.key} name={c.name} className={c.className} model={c.model} operator />)}
+                  {operatorCards.map((c) => <AdventurerCard key={c.key} name={c.name} className={c.className} model={c.model} operator onUninvite={c.onUninvite} busy={busy} />)}
                 </div>
-                {needKey && <KeyEntry compact onKeep={keepOwnerTok} />}
+                {needKey && !rosterSeason && <KeyEntry compact onKeep={keepOwnerTok} />}
               </section>
+            )}
+            {/* 冒険者を足す（S12b。名簿の下。サーバーと同じ PC から、開催中のシーズンがあるとき） */}
+            {rosterSeason && (
+              <section class="hub-add">
+                <button type="button" class="hub-btn primary" onClick={() => { setOpsErr(null); setOpsDlg({ kind: 'add', seasonName: rosterSeason.name }); }}>{tr('冒険者を足す', 'Add an adventurer')}</button>
+                <p class="hub-note">{tr(`シーズン「${rosterSeason.name}」の名簿に入れる。AI に任せるか、自分で潜るか。`, `Puts them on the roster of "${rosterSeason.name}": leave it to an AI, or go down yourself.`)}</p>
+              </section>
+            )}
+            {rosterSeason && needKey && <KeyEntry compact onKeep={keepOwnerTok} />}
+            {owner.local && roster && !rosterSeason && (roster.pending.length > 0 || roster.broken) && (
+              <p class="hub-note">{roster.broken
+                ? tr('記録が読めないシーズンがあるので、新しいシーズンは始められない（運用の道具で、直してから）。', 'A season\'s records cannot be read, so a new season cannot be started (fix it with the operator tool first).')
+                : tr(`シーズン「${roster.pending.map((x) => x.name).join('・')}」は、終わりの時刻を過ぎて、結果を待っている（全員が戻るか、1 時間たつと確定する）。確定したら、新しいシーズンを始められる。`, `"${roster.pending.map((x) => x.name).join('", "')}" is past its end and waiting for results (final once everyone is back, or after an hour). Then a new season can be started.`)}</p>
             )}
             {standingSeasons.map(({ season: s, standings }) => (
               <section key={`st-${s.id}`} class="hub-standings">
@@ -527,6 +658,17 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
         </div>
         {opsKeyErr && <div class="oerr">{opsKeyErr}</div>}
         <p class="muted small">{tr('AI を招いたときのプロフィールのトークン（運用者から受け取った鍵）。このブラウザにだけ覚え、画面と URL には出さない。覚えると、そのプロフィールのランが、拠点（今シーズンのもの）とこの画面（シーズンでないもの）に、自分のものとして出る。', 'The profile token from when your AI was invited (the key the operator gave you). It is kept only in this browser and never shown on screen or in a URL. With it, that profile\'s runs show up as yours on the hub (this season) and here (other runs).')}</p>
+      </section>
+
+      {/* 呼び鈴（S12b。SEASON.md §63.6）: このブラウザにだけ覚える。サーバーへは送らない */}
+      <section class="panel seasonbox">
+        <h3>{tr('呼び鈴', 'Bell')}</h3>
+        <div class="row" role="radiogroup" aria-label={tr('呼び鈴', 'Bell')}>
+          <label class="check"><input type="radio" name="bell" checked={bell === 'off'} onChange={() => setBell('off')} />{tr('使わない', 'Off')}</label>
+          <label class="check"><input type="radio" name="bell" checked={bell === 'tool'} onChange={() => setBell('tool')} />{tr('自分の道具を呼ぶ', 'Call your own tool')}</label>
+        </div>
+        <p class="muted small">{tr('「準備完了」を押したとき、このブラウザが、決まった文字列（musedungeon-bell://ready?season=…&run=…。入るのは、シーズンとランの ID だけ）を開く。動くのは、押した人の PC の上で、ゲームは、何も送らない。', 'When you press "Ready", this browser opens a fixed string (musedungeon-bell://ready?season=…&run=…, carrying only the season and run IDs). It runs on the PC of whoever pressed it; the game sends nothing.')}</p>
+        <p class="muted small">{tr('受け取って AI に知らせる道具は、自分で用意する（README の「呼び鈴」）。この設定は、このブラウザにだけ覚える。', 'You provide the tool that receives it and tells your AI (see "Bell" in the README). This setting is kept only in this browser.')}</p>
       </section>
 
       {/* AI が決定を待っているランがあれば、最初から開く（S8b。畳んだ・開いた操作は覚える。待っているランが新しく出たら開き直す） */}
@@ -716,7 +858,7 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
               <p class="sub">{tr(`ラン ${records.records.runs.total}・確定の最高 ${records.records.banked.best}・最深 地下${records.records.deepest}階・図鑑 ${records.records.next.codex}・実績 ${records.records.next.feats}`, `${records.records.runs.total} runs, best banked ${records.records.banked.best}, deepest ${records.records.deepest}, codex ${records.records.next.codex}, feats ${records.records.next.feats}`)}</p>
               <div class="row">
                 <button class="small" onClick={() => setShowRecords(!showRecords)}>{showRecords ? tr('閉じる', 'Hide') : tr('すべて見る', 'Show all')}</button>
-                <button class="small" onClick={() => { if (confirm(tr('このブラウザのプロフィールを外す（記録はサーバーに残る）。次のランは新しいプロフィールになる。', 'Forget this profile in this browser (records stay on the server). Your next run starts a new profile.'))) { setPref('profileToken', ''); setProfileToken(''); } }}>{tr('新しいプロフィールにする', 'Start a new profile')}</button>
+                <button class="small" onClick={() => { if (confirm(tr('次のランは、新しいプロフィールになる（記録はサーバーに残る）。今の鍵は捨てずに、拠点の冒険者の鍵として、このブラウザに残す（外すのは、運用の「鍵を外す」）。', 'Your next run starts a new profile (records stay on the server). The current key is not thrown away: it stays in this browser as a hub adventurer\'s key (remove it with "Remove the key" under Operations).'))) { retireMainKey(); setProfileToken(''); } }}>{tr('新しいプロフィールにする', 'Start a new profile')}</button>
               </div>
               {titles.length > 0 && <p class="titles">{tr('称号', 'Titles')}: {titles.map((t, i) => <span key={i} class="tag title">{t}</span>)}</p>}
               {showRecords && <pre class="records">{records.text}</pre>}
@@ -810,6 +952,18 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
         <DiveDialog name={dive.name} classId={classId} catalog={catalog} busy={busy} error={diveErr}
           onDive={(nm, cls) => { setClassId(cls); void joinSeason(dive.seasonId, dive.token, nm, cls); }} onClose={() => setDive(null)} />
       )}
+      {opsDlg?.kind === 'open' && (
+        <OpenSeasonDialog defaults={{ suggested: opsDlg.suggested, days: opsDlg.days, budget: opsDlg.budget }} busy={busy} error={opsErr}
+          onOpen={(v) => void openSeason(v)} onClose={() => setOpsDlg(null)} />
+      )}
+      {opsDlg?.kind === 'uninvite' && (
+        <UninviteDialog name={opsDlg.name} busy={busy} error={opsErr} onConfirm={() => void uninvite(opsDlg.profileId)} onClose={() => setOpsDlg(null)} />
+      )}
+      {opsDlg?.kind === 'add' && (
+        <AddAdventurerDialog seasonName={opsDlg.seasonName} lead={opsDlg.lead} catalog={catalog} classId={classId} busy={busy} error={opsErr}
+          onAdd={(v) => void addAdventurer(v)} onClose={() => setOpsDlg(null)} />
+      )}
+      {keyOnce && <KeyOnceDialog name={keyOnce.name} seasonId={keyOnce.seasonId} keyText={keyOnce.key} onClose={() => setKeyOnce(null)} />}
       {endPrev && (
         <div class="hub-modal" onClick={() => setEndPrev(null)}>
           <div class="hub-dialog" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}

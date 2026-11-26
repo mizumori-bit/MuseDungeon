@@ -1571,7 +1571,7 @@ pilot を作って分かった、構造化された項目だけでは決めら�
 - **報告と公開**: `report_stairs`（キャンプ・手番なし）は、このランで自分の目で見た下り階段を送り、サーバーに届いた順で最初の報告者に貢献 1。公開された階段は、その階に入ると地図の巻物と同じ「見ていないが分かっている」マスとして地図に載る（途中の道は分からない。下への風は自分の目で見るまで出続ける）。
 - **賞と順位**: 冒険（最深）・貢献（最初の報告の数）・生還（倒れていない者の確定点の合計）。同着は使った予算の少ないほう。キャンプの観測に賞ごとの 1 行。
 - 継承は受けないし、残さない（シーズンのランの記録は継承に使わない）。観戦は `follow_only`。
-- **参加者は招かれた者だけ**（S0a。SEASON.md §4.1・§5）: 運用者が `season -- invite` でプロフィールを招き（`seasons/<id>/invites.json`。書くのは運用の道具だけ）、シーズンのランは招かれたプロフィールの `profile_token` が無いと始められない。表示名はシーズンの中で重ならない。トークンはどの記録にも出さない。
+- **参加者は招かれた者だけ**（S0a。SEASON.md §4.1・§5）: 運用者が `season -- invite` でプロフィールを招き（`seasons/<id>/invites.json`。書くのは運用の道具と、S12b からは拠点の運用者の口: §42.21）、シーズンのランは招かれたプロフィールの `profile_token` が無いと始められない。表示名はシーズンの中で重ならない。トークンはどの記録にも出さない。
 
 ### 39.1 S0b: Muse の最初の遠征を受けた直し（SEASON.md §6.2・§7）
 
@@ -1863,4 +1863,34 @@ engine・World・出来事・命令の形・内容のデータと版は S9 の�
 - **言葉**: 画面（拠点・支度・運用・観戦・持ち主の枠）の「この機械」「同じ機械」を「この PC」「同じ PC」に（英語は machine → PC）。§42.18 の「この機械の冒険者（運用者として）」は、今は「この PC の冒険者（運用者として）」。
 - **名簿に入っていない札**（`hubCard` の `not_invited`）: ピルは「名簿に無い」、1 行は「このシーズンの名簿に、まだ入っていない」。することは、`HubCardInput.local`（持ち主の口の一覧の `local`。サーバーと同じ PC から開いている）で分ける: 同じ PC からは「このシーズンを開いたのが自分なら、運用の道具で、冒険者を招く（README の『開発用コマンド』の season）」、ほかの PC からは「このシーズンを開いた人に、加えてもらう」。「招かれていない」は、オンラインのサーバーにつながっていない、と読まれたので、札に出さない。README に「シーズン」の節は無いので、案内は開発用コマンドの表の `season` の行。開催中のシーズンが無いときの拠点の文も、同じ分け方（`noSeasonText`）。`season_unavailable`（招かれていない）の画面の文（`screenErr`）も、札と同じ言い方にした（サーバーの文は変えない。見分けるのは、今までどおりサーバーの文の「招かれていない」）。
 - **準備完了の後の窓**（`ui/prepState.ts` の `readyNudge`。窓は `Prepare.tsx` の `ReadyNudgeDialog`）: 「準備完了」を押して通り、押す前は準備完了でなく、押した後に準備完了のときだけ出す（最初から準備完了のキャンプ・「支度を見直す」・断られたときは出さない）。確かめの窓が出るときは、その後。見出し「（名前）に、声をかける」・すること・AI に渡す 1 文（`readyNudgeCopy`。押すとクリップボードに写る。`navigator.clipboard` が無い・断られたときは、選んで写せる文として出す）。ボタンは「拠点へ戻る」（既定。`#/` へ）と「ここに残る」。AI が `wait_for_turn` で待っているとき（押す前か後の `ai.waitingNow`）は、「（名前）は、今、待っている。すぐに出発する」にして、写す文は出さない。
-- **README**: 人間の画面の節の終わりに「見ていて、遅いと感じたら」（pilot は AI の側の道具・サーバーは特別扱いしない・置き場所と README・指図と一緒だと支度を待つ所で AI を起こす・リプレイで速く見返せる）。§63.2 の 3（拠点から、シーズンを始める・冒険者を足す）と、§63.3 の呼び鈴は、依頼者の返事待ちで入れていない。
+- **README**: 人間の画面の節の終わりに「見ていて、遅いと感じたら」（pilot は AI の側の道具・サーバーは特別扱いしない・置き場所と README・指図と一緒だと支度を待つ所で AI を起こす・リプレイで速く見返せる）。§63.2 の 3（拠点から、シーズンを始める・冒険者を足す）と、§63.3 の呼び鈴は、依頼者の返事待ちで入れていない（S12b で入れた: §42.21）。
+
+### 42.21 S12b: 拠点からの運用と、呼び鈴（SEASON.md §63.6・§63.7。PROTOCOL.md §9.15）
+
+engine・World・出来事・命令の形・内容のデータと版は S11 のまま（`engineVersion` 0.49.0・`eventVersion` 37・内容 `cff6932f0071`）。MCP の口と文は変えていない。pilot も変えていない。
+
+- **運用者の口**（`packages/server/src/session/ops.ts`。HTTP の道は `http/api.ts`）: `GET /api/ops/roster`・`POST /api/ops/season`・`POST /api/ops/adventurers`・`POST /api/ops/enroll`。認め方は持たない: `api.ts` が、`isLocalRequest`（§8 の S8a の 1 つの判定）を通った要求だけを渡す。状態を変えるものは、その前に、今ある「同じ origin・JSON だけ」の守りを通る。持ち主の口と違い、トークンでは認めない（鍵があっても、ほかの PC からは断る）。
+- **同じ関数**: シーズンを開くのは、運用の道具（`tools/src/season.ts` の `open`）と同じ `SeasonService.openBlockers`（同じ ID・読めない記録・確定していないシーズン）と `SeasonService.open`。運用の道具は、確定していないシーズンを `--close-previous` で確定してから開けるが、拠点の口は断るだけ（画面からは閉じない: §63.5 の 1）。招くのは `SeasonService.invite`（`kind` を足した。`invites.json` に `kind` を書く）。自分で潜る冒険者のランは `SessionManager.createRun`（`POST /api/runs` と同じ道。始められなければ `uninvite` で招きを取り消す）。
+- **ID とシード**: ID は `SeasonService.nextDefault`（`s<N>`・「シーズン<N>」）。シードは `crypto.randomBytes(16)`（base64url）で、`season.json` にだけ書く。`SeasonStore.open` の記録の 1 行（`log.jsonl` の `opened`）からシードを外した（運用の道具で開いたときも同じ）。ラン自身の記録（`events.jsonl` の `run_started`・キーフレーム）には、今までどおりシードがある（再生に要る。HTTP では、シーズンのランのシードを伏せる）。
+- **名簿**（`SeasonService.roster`）: 招いた順。使った予算・ランの数・倒れたか・いちばん新しいラン・読み込めなかったか（`memberships` と同じ数え方）。`kind` が無い者（運用の道具で招いた）は、いちばん新しいランの操作の種類で埋める（`ops.ts` の `kindOfRun`）。
+- **名前の掃除**（S12b の `cleanOpsName`。**S12c で `session/names.ts` の `normalizeName` 1 つに置き換えた**: §42.22）: C0・C1 の制御文字と、見えない書式の文字（U+200B〜200F・U+2028〜202E・U+2060〜206F・BOM）を落とし、前後の空白を除く。長さは字（コードポイント）で 32 まで。超えれば断る（切り詰めない）。
+- **画面**（`screens/Lobby.tsx`）: 持ち主の口の一覧が `local` のときだけ `GET /api/ops/roster` を呼ぶ（5 秒ごとの読み直しと一緒）。札は、鍵のある冒険者（今までどおり）と、名簿のほかの冒険者（「この PC の冒険者（運用者として）」。ランがあれば持ち主の口の一覧の行で作り、無ければ名簿の値で作る。確定待ちのシーズンのランは、今までの運用者の札）。札の文は `hubCard` に `roster`（名簿の札。`kind`）と `canEnroll` を足して決める（新しい状態 `waiting_ai`。`action` は `null` を取れるようにした: ボタンを出さない札）。人間の冒険者のボタンは「潜る」（前は「続きを遊ぶ」）。窓は `ui/hub.tsx` の `OpenSeasonDialog`・`AddAdventurerDialog`・`KeyOnceDialog`（鍵の窓は、外を押しても Escape でも閉じない）。自分で潜る冒険者の鍵は `ui/keys.ts` の `addKey`（`profileToken` が空ならそこ、別の鍵があれば `adventurerKeys` の並びへ。`storedKeys` も読む。「鍵を外す」は両方を消す）。
+- **呼び鈴**（`ui/bell.ts`。画面だけ）: 設定は `muse.pref.bell`（`off`・`tool`）。文字列は `bellUrl`（2 つの ID が `[A-Za-z0-9_-]{1,64}` のときだけ）。準備完了の後の窓（`Prepare.tsx` の `ReadyNudgeDialog`）のボタンと 1 行は `bellView`（まだなら「呼び鈴を鳴らす」が既定のボタン。鳴らした後は「呼び鈴を鳴らした」と「もう一度鳴らす」で、既定のボタンは「拠点へ戻る」）。自動で鳴らすのは、`readyNudge` が窓を出すとき（押して通り、押す前は準備完了でなかった）で、AI がまだ待っておらず、`navigator.userActivation.isActive` のときだけ（`bellAllowedNow`）。開き方は、見えない `<a>` を作って押す（`ringBell`）。メールの下書き（`mailto:`）は、依頼者の判断で入れていない（ゲームはメールアドレスを扱わない）。
+- **テスト**: `tools/test/s12b.test.ts`（ほかの PC から 4 つとも断る・`text/plain` は 415・既定の値・シードがどの応答にも記録の 1 行にも無い・確定していないシーズンと読めない記録で開かない・上限と下限・既定の番号・鍵は 1 回だけ（名簿・ほかの口・置き場所のファイルのどこにも無い）・足した AI がその鍵でシーズンのランを始める・自分で潜る冒険者の人間のラン・`enroll`）、`client/test/hub.test.ts`（名簿の札・名簿に無い札の「このシーズンに加える」・シーズンが無いときの文・「潜る」）、`client/test/bell.test.ts`（文字列・ID の検査・窓のボタン・日英・ブラウザが許すか）。
+
+### 42.22 S12c: S12b の検査の指摘の直し（PROTOCOL.md §9.15 の「S12c」）
+
+版・World・出来事・命令の形・内容のデータは変えていない（`engineVersion` 0.49.0・`eventVersion` 37・内容 `cff6932f0071`）。engine のコードも変えていない。
+
+- **職の検査**（`session/SessionManager.ts` の `isKnownClass`・`unknownClassError`）: `Object.hasOwn(classes, id)`。使う所は、`joinPrecheck`（`createPlainRun`・`createSeasonRunLocked` の頭、`joinSession` の頭）・`endPreviousRuns`・拠点の口（`ops.ts`）・MCP の `new_run`（`mcp/server.ts`）。engine の `joinPlayer` の `content.classes[classId]` も同じ形だが、サーバーのすべての参加の入口（`joinSession` を通る）で先に止めるので、engine は変えていない。
+- **同じ形の欠陥を探した結果**（外から来た文字列で、ふつうのオブジェクトを引いて「あれば通す」）: 直したのは、職（上）と、MCP の `tools/call` の前に引数を見る所の `tools[p.name]`（SDK の登録済みのツールのオブジェクト。`constructor` などで `Object.prototype` の持ち物を引いていた。今は害が無かった（形が取れずに SDK へ渡り、知らないツールで断られた）が、`Object.hasOwn` にした）。見て、直さなくてよかったもの: 命令の対象の ID（`EntityRefSchema` が `e_` と英数字 6 つに限る）・品のスロット（英小文字 1 つ）・`fight.with`（`find` で比べる）・能動技（覚えている能動技の中から `find`）・`get_rules` の `topic`（zod の列挙）・ロケール（`'en'` と比べるだけ）・観戦の `follow`（`SpectatorPort.hasPlayer` が `Object.hasOwn`）・ランとプロフィールとトークン（`Map`）・シーズンの ID（`Map` と正規表現とファイル）・画面のテーマと設定（このブラウザの localStorage の値で、外からの入力ではない）。
+- **例外の後始末**: `joinNew` が、作ったばかりのランへの参加で例外が出たら、プレイヤーがいなければランを捨てて（`discard`）投げ直す。拠点の「自分で潜る」は、例外のときも招きを取り消して 500。
+- **500**（`http/api.ts` の 1 か所）: 決まった文（`ops.ts` の `internalError`）と、サーバーのログに詳細（道は `?` より前だけ）。**MCP**: `createMcpServer` が `registerTool` を包み、ツールの中の例外を、決まった文の `errOut` にする（ログに詳細。引数は出さない）。
+- **名前**（`session/names.ts` の `normalizeName`・`NAME_MAX`）: 掃除 → NFKC → 掃除 → 前後の空白 → コードポイントで 32。見えない文字の表は PROTOCOL.md §9.15 の S12c の 3。使う所: `SeasonService.invite`・拠点のシーズンの名前・運用の道具の `open` の名前・`joinPrecheck`（冒険者の名前。渡されなかった・空の文字列は今までどおり `Muse`）・`ProfilePort.rename`。プロフィール・参加者の名前を作るときの切り方は、UTF-16 の `slice(0, 32)` をコードポイントの 32 にした（サロゲートの半分を残さない）。
+- **招き**: 上限 `INVITE_MAX`（32。`SeasonService.invite`）。取り消しの口 `POST /api/ops/uninvite`（`opsUninvite`。`SeasonService.uninvite` と同じ決まり）。
+- **画面**:
+  - 鍵を読む所を `ui/keys.ts` に寄せた: `storedKeys`（全部）・`primaryKey`（このブラウザの自分のプロフィール。シーズンでない新しいラン・記録のタブの記録と称号）・`keyForRun`（覚えてある鍵の全部から、持ち主の口の一覧でそのランを `mine` として返す鍵。見つけたものは覚える）。支度・観戦の hello・遊ぶ画面のキャンプの記録の 1 行（`CampPanel` に `runId`）は `keyForRun`。拠点の「自分だけ」の元（直近のラン）と、観戦できるランの一覧は、全部の鍵で訊いてまとめる。
+  - 「新しいプロフィールにする」は `retireMainKey`: `profileToken` を空にし、今の鍵はほかの鍵の並びへ移す（鍵は作り直せないので、黙って捨てない。外すのは運用の「鍵を外す」）。
+  - 「入ってくるのを、待っている」札（まだ 1 回も入っていない）に「招きを取り消す」（目立たないボタン・確かめの窓 `UninviteDialog`。既定は「やめる」）。鍵の窓の文は「無くしたら、この冒険者の札の『招きを取り消す』から、足し直す」。
+  - 名簿の読み直しが一時的に失敗しても、前の名簿のまま（開いている窓を閉じない）。新しいシーズンの窓は、開いたときの値を持ち、名前の欄は空（薄い文字でサーバーの見込みの名前）。空なら送らない。
+- **テスト**: `tools/test/s12c.test.ts`（4 つの名前 × 拠点・`POST /api/runs`・シーズンのラン・`…/join`・MCP の `new_run` と `join_run` で断り、ラン・プロフィール・招き・記録のフォルダが増えない／参加の途中の例外でランが残らない・500 と MCP の文に中の例外の文が無く、ログにある／名前の関数・運用の道具の断り・今ある 33 字の招きが読める・冒険者の名前・表示名の変え方／招きの取り消し・上限・空のシーズンの名前）、`client/test/keys.test.ts`、`client/test/hub.test.ts`（「招きを取り消す」）。

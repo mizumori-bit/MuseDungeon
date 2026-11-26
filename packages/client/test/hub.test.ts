@@ -41,19 +41,31 @@ describe('S10 §58.4: the adventurer card on the hub', () => {
     expect(m.pill.text).toBe('名簿に無い');
     // ほかの PC から（local が無い・false）
     expect(m.text).toBe('このシーズンを開いた人に、加えてもらう');
-    expect(m.action.dive).toBeUndefined();
-    // サーバーと同じ PC から: 自分が開いたなら、運用の道具で招く
-    const local = hubCard({ ...base, row: null, membership: null, local: true });
-    expect(local.text).toBe('このシーズンを開いたのが自分なら、運用の道具で、冒険者を招く（README の「開発用コマンド」の season）');
-    for (const x of [m, local]) {
+    expect(m.action?.dive).toBeUndefined();
+    expect(m.action?.enroll).toBeUndefined();
+    // サーバーと同じ PC から（S12b: S12a の「運用の道具で招く」の文は、ボタンに置き換えた）: 開催中のシーズンなら「このシーズンに加える」
+    const local = hubCard({ ...base, row: null, membership: null, local: true, canEnroll: true });
+    expect(local.text).toBe('名簿に加えると、ミュゼ美は、この鍵で、このシーズンに入れる（AI に任せるか、自分で潜る）');
+    expect(local.action).toEqual({ label: 'このシーズンに加える', enroll: true });
+    // 加えられない（名簿を読めない・シーズンが開催中でない）: ボタンは出さず、記録へ
+    const noRoster = hubCard({ ...base, row: null, membership: null, local: true });
+    expect(noRoster.action).toEqual({ label: '記録を見る', href: '#/records' });
+    const endedSeason = hubCard({ ...base, season: { ...season, status: 'ended' }, row: null, membership: null, local: true, canEnroll: true });
+    expect(endedSeason.text).toBe('このシーズンは、もう名簿に加えられない（開催中のシーズンだけ）');
+    expect(endedSeason.action?.enroll).toBeUndefined();
+    for (const x of [m, local, noRoster]) {
+      expect(`${x.pill.text} ${x.where} ${x.text}`).not.toContain('README');
       expect(`${x.pill.text} ${x.where} ${x.text}`).not.toContain('招かれていない');
       expect(`${x.pill.text} ${x.where} ${x.text}`).not.toContain('機械');
     }
   });
 
-  it('no season running (S12a): from the server PC, how to open one; from another PC, who opens it', () => {
-    expect(noSeasonText(true)).toBe('シーズンは、運用の道具で開く（README の「開発用コマンド」の season）。シーズンでない冒険は、右上の歯車（運用）から。');
+  it('no season running (S12a・S12b): from the server PC, start one with the button below; from another PC, who opens it', () => {
+    expect(noSeasonText(true)).toBe('下の「新しいシーズンを始める」で始めると、ここに冒険者の札が出る。シーズンでない冒険は、右上の歯車（運用）から。');
+    expect(noSeasonText(true, true)).toBe('記録が読めないシーズンがあるので、新しいシーズンは始められない（運用の道具で、直してから）。シーズンでない冒険は、右上の歯車（運用）から。');
     expect(noSeasonText(false)).toBe('シーズンを開いた人が、次のシーズンを開いたら、ここに冒険者の札が出る。シーズンでない冒険は、右上の歯車（運用）から。');
+    // ほかの PC からは、読めない記録の話をしない（同じ PC の運用者だけが直せる）
+    expect(noSeasonText(false, true)).toBe(noSeasonText(false));
   });
 
   it('at camp, nothing held: the AI decides and sets out; the button is to prepare', () => {
@@ -113,10 +125,11 @@ describe('S10 §58.4: the adventurer card on the hub', () => {
     expect(spent.stats.budget).toEqual({ left: 0, limit: 1000 });
   });
 
-  it('an adventurer the person plays: "continue" (to the play screen), no directive; watch when this browser cannot play it', () => {
+  it('an adventurer the person plays: "go down" (S12b. to the play screen), no directive; watch when this browser cannot play it', () => {
     const m = hubCard({ ...base, playable: true, row: row({ eligible: false }) });
     expect(m.state).toBe('human');
-    expect(m.action).toEqual({ label: '続きを遊ぶ', href: '#/play/run_abc' });
+    expect(m.text).toBe('あなたが、自分で潜る冒険者');
+    expect(m.action).toEqual({ label: '潜る', href: '#/play/run_abc' });
     expect(m.notes).toEqual([]);
     const far = hubCard({ ...base, playable: false, row: row({ eligible: false, status: 'in_dungeon', depth: 2 }) });
     expect(far.action).toEqual({ label: '見守る', href: '#/watch/run_abc' });
@@ -128,7 +141,39 @@ describe('S10 §58.4: the adventurer card on the hub', () => {
     const m = hubCard({ name: 'カエデ', season, row: row({ name: 'カエデ', hold: ['objective'], prep: { state: 'pending' }, undecided: { objective: true, text: '' } }), playable: false, rank: null });
     expect(m.state).toBe('camp_pending');
     expect(m.notes).toEqual(['決めていないもの: 次の遠征の目的']);
-    expect(m.action.href).toBe('#/prepare/run_abc');
+    expect(m.action?.href).toBe('#/prepare/run_abc');
+  });
+
+  it('S12b: the roster cards on the server PC (no key in this browser): an AI not in yet is waited for, with no button; a human card goes down with the run token', () => {
+    const mem = { used: 0, budget: 1000, died: false, runs: 0 };
+    const ai = hubCard({ ...base, row: null, membership: mem, local: true, roster: { kind: 'ai' } });
+    expect(ai.state).toBe('waiting_ai');
+    expect(ai.where).toBe('まだ、このシーズンに入っていない');
+    expect(ai.text).toBe('ミュゼ美が、鍵を使って入ってくるのを、待っている');
+    expect(ai.notes).toEqual(['鍵は、足したときに 1 回だけ出た。無くしたら、「招きを取り消す」から、足し直す']);
+    // S12c: まだ 1 回も入っていない招きは、取り消せる（確かめの窓を開く、目立たないボタン）
+    expect(ai.action).toEqual({ label: '招きを取り消す', uninvite: true });
+    // 運用の道具で招いた者（種類が分からない）も、同じ
+    expect(hubCard({ ...base, row: null, membership: mem, local: true, roster: { kind: null } }).state).toBe('waiting_ai');
+    // 前の冒険が倒れて終わった AI: もう一度入ってくるのを待つ（鍵の補足は出さない）
+    const again = hubCard({ ...base, row: null, membership: { ...mem, used: 200, runs: 1, died: true }, local: true, roster: { kind: 'ai' } });
+    expect(again.where).toBe('前の冒険は、倒れて終わった');
+    expect(again.text).toBe('ミュゼ美が、鍵を使って、もう一度入ってくるのを、待っている');
+    expect(again.notes).toEqual([]);
+    expect(again.action).toBeNull();
+    // 入ってきた AI は、今までの運用者の札と同じ（ランの行から）
+    expect(hubCard({ ...base, row: row(), membership: { ...mem, runs: 1 }, local: true, roster: { kind: 'ai' } }).action).toEqual({ label: '支度をする', href: '#/prepare/run_abc' });
+    // 自分で潜る冒険者: このブラウザにランのトークンがあれば「潜る」
+    const me = hubCard({ ...base, playable: true, row: row({ eligible: false }), membership: { ...mem, runs: 1 }, local: true, roster: { kind: 'human' } });
+    expect(me.action).toEqual({ label: '潜る', href: '#/play/run_abc' });
+    // ランが終わって、鍵がこのブラウザに無い: ここからは潜れない（ボタンなし）
+    const gone = hubCard({ ...base, row: null, membership: { ...mem, runs: 1, died: true }, local: true, roster: { kind: 'human' } });
+    expect(gone.state).toBe('human');
+    expect(gone.action).toBeNull();
+    // 予算切れ・読み込めなかった冒険は、名簿の札でも今までどおり
+    expect(hubCard({ ...base, row: null, membership: { ...mem, used: 1000, runs: 1 }, local: true, roster: { kind: 'ai' } }).state).toBe('over');
+    expect(hubCard({ ...base, row: null, membership: { ...mem, runs: 1, failed: true }, local: true, roster: { kind: 'ai' } }).state).toBe('unreadable');
+    for (const x of [ai, again, gone]) expect(`${x.where} ${x.text} ${x.notes.join(' ')}`).not.toContain('機械');
   });
 });
 
@@ -216,7 +261,7 @@ describe('S10a: the inspection fixes', () => {
     const failed = hubCard({ ...base, row: null, membership: { used: 10, budget: 1000, died: false, runs: 1, failed: true } });
     expect(failed.state).toBe('unreadable');
     expect(failed.where).toBe('前の冒険は、サーバーの起動時に読み込めなかった（運用者に知らせる）');
-    expect(failed.action.dive).toBeUndefined();
+    expect(failed.action?.dive).toBeUndefined();
     // 支度の画面も、見るだけ
     expect(prepHead({ name: 'ミュゼ美', eligible: true, status: 'at_camp', depth: null, hold: ['objective'], prep: 'pending', season: null, oldVersion: true }))
       .toMatchObject({ kind: 'closed', editable: false, line: '前の版で始まった冒険。このサーバーでは、続きを遊べない（記録は、見返せる）' });

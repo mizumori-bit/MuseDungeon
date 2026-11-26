@@ -11,7 +11,8 @@ import {
 import { api } from '../api';
 import type { RefObject } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
-import { getLocale, getPref, tr } from '../util';
+import { getLocale, tr } from '../util';
+import { keyForRun } from './keys';
 import { DIR_ARROW, expStatusLabel, extractBlockLabel, lifelineEffectText, worstTurnText } from './labels';
 import { SeasonCampPanel } from './season';
 
@@ -462,17 +463,21 @@ export function OfferCard({ o, rules, level, onStart, view, catalog, actionLabel
 }
 
 /**
- * プロフィールの記録の 1 行（V3-7 §7.2。AI のキャンプの観測と同じ文）。トークンはロビーで作ったランのものがブラウザに残っている。
- * 遠征が終わるたび（nextNo が変わる）に読み直す
+ * プロフィールの記録の 1 行（V3-7 §7.2。AI のキャンプの観測と同じ文）。鍵は、そのランの冒険者のもの（S12c: 覚えてある鍵の全部から、
+ * そのランを自分のものとして返す鍵を探す。別の冒険者の記録を出さない）。無ければ出さない。遠征が終わるたび（nextNo が変わる）に読み直す
  */
-function CampRecords({ nextNo }: { nextNo: number }) {
+function CampRecords({ runId, nextNo }: { runId: string; nextNo: number }) {
   const [line, setLine] = useState<string | null>(null);
   useEffect(() => {
-    const tok = getPref('profileToken', '');
-    if (!tok) { setLine(null); return; }
-    const L = getLocale();
-    api.records(tok, L).then((r) => setLine(recordsCampLine(L, r.records))).catch(() => setLine(null));
-  }, [nextNo]);
+    let alive = true;
+    void keyForRun(runId).then((tok) => {
+      if (!alive) return;
+      if (!tok) { setLine(null); return; }
+      const L = getLocale();
+      api.records(tok, L).then((r) => { if (alive) setLine(recordsCampLine(L, r.records)); }).catch(() => { if (alive) setLine(null); });
+    });
+    return () => { alive = false; };
+  }, [runId, nextNo]);
   if (!line) return null;
   return <p class="muted records-line">{line} <a href="#/records">{tr('（ホームの「記録」で全文）', '(full text in Home > Records)')}</a></p>;
 }
@@ -493,7 +498,9 @@ export function NotesBlock({ notes, who }: { notes: readonly string[]; who?: str
 }
 
 /** キャンプ（遠征と遠征の間）。成績・前の遠征の払い戻し・候補を出し、次の遠征を選ぶか、ここで終える */
-export function CampPanel({ view, catalog, onStart, onRetire, season, canReport, onReport }: {
+export function CampPanel({ runId, view, catalog, onStart, onRetire, season, canReport, onReport }: {
+  /** そのラン（キャンプの記録の 1 行は、そのランの冒険者の鍵で読む。S12c） */
+  runId: string;
   view: PlayerView; catalog?: Catalog | null; onStart: (offer: number | 'endless') => void; onRetire: () => void;
   /** シーズン（S2 §18.1）: キャンプの観測の賞・報告・自分の火。報告は AI と同じ report_stairs */
   season?: ObsSeason; canReport?: boolean; onReport?: () => void;
@@ -522,7 +529,7 @@ export function CampPanel({ view, catalog, onStart, onRetire, season, canReport,
           : tr(`盤面の外にいる（時間は進まない）。HP ${view.self.stats.hp}/${view.self.stats.maxHp}・Lv${view.self.level}。最深到達: 地下${view.deepestDepth}階。ここで終えてもよい。`,
             `You are off the board (time does not pass). HP ${view.self.stats.hp}/${view.self.stats.maxHp}, Lv${view.self.level}. Deepest: ${view.deepestDepth}. You may stop here.`)}
       </p>
-      {camp && <CampRecords nextNo={camp.nextNo} />}
+      {camp && <CampRecords runId={runId} nextNo={camp.nextNo} />}
       <NotesBlock notes={view.notes} />
       {season && <SeasonCampPanel season={season} canReport={!!canReport} onReport={() => onReport?.()} />}
       {/* 討伐の記録（S4 §35.5）: キャンプの記録庫の行（節目ごと。AI のキャンプの観測と同じ文） */}

@@ -20,6 +20,29 @@ import { SessionPlayerPort } from './PlayerPort';
 import type { PlayerPort } from './PlayerPort';
 import { RunSession } from './RunSession';
 
+/**
+ * 知っている職か（S12c）: 内容のデータの職は、ふつうのオブジェクト（Object.fromEntries）なので、`classes[id]` で引くと
+ * `constructor`・`__proto__`・`toString` などの名前が「ある」になる。外から来た文字列は、自分の持つ鍵かどうかで見る
+ */
+export function isKnownClass(classes: object, id: string): boolean {
+  return Object.hasOwn(classes, id);
+}
+
+/** 知らない職の断り（参加・new_run・拠点の口で同じ文） */
+export function unknownClassError(classes: object, id: string): ActionError {
+  return actionError('bad_request', `unknown class ${id}`, `classes: ${Object.keys(classes).join(', ')}`);
+}
+
+/**
+ * 冒険者（キャラクター）の名前（S12c）: 名前を整える 1 つの関数で（掃除 → NFKC → 掃除 → 前後の空白 → 32 字まで。長ければ切らずに断る）。
+ * 渡されなかった・空の文字列は、今までどおり 'Muse'。見えない文字だけの名前・壊れた文字は断る
+ */
+function joinName(raw: unknown): { name: string } | { error: ActionError } {
+  if (raw === undefined || raw === null || raw === '') return { name: 'Muse' };
+  const r = normalizeName(raw);
+  return r.ok ? { name: r.name } : { error: actionError('bad_request', r.message, `character_name（name）は 1〜${NAME_MAX} 字 / character_name (name) is 1-${NAME_MAX} characters`) };
+}
+
 /** 知らないプロフィールのトークン（V3-7 §7.1。黙って別のプロフィールに積まない） */
 function unknownProfileError(): ActionError {
   return actionError('no_session', 'そのプロフィールのトークンは見つからない / unknown profile_token', 'profile_token を省くと新しいプロフィールを作る / omit profile_token to create a new profile');
@@ -40,6 +63,7 @@ export function seasonReplayError(): ActionError {
 }
 import type { SessionDeps } from './RunSession';
 import { ProfilePort, ProfileService, ProfileStore } from './profiles';
+import { NAME_MAX, normalizeName } from './names';
 import { SeasonService, SeasonStore } from '../season/SeasonService';
 import type { LiveRunState } from '../season/SeasonService';
 
@@ -312,7 +336,7 @@ export class SessionManager {
     const live = this.liveRunsOf(profileId);
     if (!live.length) return null;
     // 新しいランの参加が断られると分かっているなら（知らない職業）、前のランを終わらせる前に断る
-    if (classId && !this.deps.content.classes[classId]) return actionError('bad_request', `unknown class ${classId}`, `classes: ${Object.keys(this.deps.content.classes).join(', ')}`);
+    if (classId && !isKnownClass(this.deps.content.classes, classId)) return unknownClassError(this.deps.content.classes, classId);
     if (!endPrevious) {
       const x = live[live.length - 1];
       const sid = x.session.world.meta.season?.id;
@@ -361,6 +385,9 @@ export class SessionManager {
 
   private async createPlainRun(req: NewRunRequest & { controller: Controller }, profileId: string | null): Promise<Joined | { error: ActionError }> {
     const source = req.controller.kind === 'agent' ? 'mcp' : 'ws';
+    // 参加の検査（職・名前）は、前のランを終わらせる前・ランを作る前に（S12c: 断られる参加で、何も終わらせず、ランを作らない）
+    const pre = this.joinPrecheck(req);
+    if (pre) return { error: pre };
     // 冒険者 1 人に続きは 1 つ（S9 §58.3）。トークンなしの new_run は、今までどおり新しいプロフィールを作る
     if (profileId) { const e = await this.endPreviousRuns(profileId, req.endPrevious, source, req.classId); if (e) return { error: e }; }
     // 握る項目を引き継ぐときは、キャンプから（持ち主の支度を待つ）
@@ -369,7 +396,7 @@ export class SessionManager {
     this.sessions.set(session.runId, session);
     // objective を省くとキャンプから始まる（最初の遠征も候補 3 つから選ぶ。V3-2R §14.4）
     const atCamp = req.objective === undefined || inherit.length > 0;
-    const joined = await this.joinSession(session, { name: req.name, classId: req.classId, locale: req.locale, controller: req.controller, atCamp, profileToken: req.profileToken, legacy: req.legacy }, source);
+    const joined = await this.joinNew(session, { name: req.name, classId: req.classId, locale: req.locale, controller: req.controller, atCamp, profileToken: req.profileToken, legacy: req.legacy }, source);
     // 参加が断られた（知らない職業など）: 作ったばかりのランは捨てる（一覧にも記録のフォルダにも残さない）
     if ('error' in joined) { this.sessions.delete(session.runId); session.discard(); return joined; }
     const held = await this.applyProfileHold(joined);
@@ -400,6 +427,9 @@ export class SessionManager {
 
   private async createSeasonRunLocked(req: NewRunRequest & { controller: Controller; season: string }, profileId: string | null): Promise<Joined | { error: ActionError }> {
     const source = req.controller.kind === 'agent' ? 'mcp' : 'ws';
+    // 参加の検査（職・名前）は、前のランを終わらせる前・ランを作る前に（S12c）
+    const pre = this.joinPrecheck(req);
+    if (pre) return { error: pre };
     // 始められるか（前のランを終わらせる前に。終わらせても始められないなら、何も終わらせない）。進行中のシーズンのランは、続きは 1 つの決まりで見る（S9 §58.3）
     const chk0 = this.seasons.canStart(req.season, profileId);
     if ('reason' in chk0 && !chk0.inProgress) return { error: actionError('season_unavailable', chk0.reason, profileId ? 'list_runs の seasons で開いているシーズンを確かめる / check open seasons with list_runs' : '運用者から受け取った profile_token を渡す / pass the profile_token the operator gave you') };
@@ -415,7 +445,7 @@ export class SessionManager {
     const def = chk.def;
     const session = RunSession.create(this.deps, { seed: def.seed, mode: 'solo', season: { id: def.id, name: def.name } });
     this.sessions.set(session.runId, session);
-    const joined = await this.joinSession(session, { name: req.name, classId: req.classId, locale: req.locale, controller: req.controller, atCamp: true, profileToken: req.profileToken, legacy: false }, source);
+    const joined = await this.joinNew(session, { name: req.name, classId: req.classId, locale: req.locale, controller: req.controller, atCamp: true, profileToken: req.profileToken, legacy: false }, source);
     if ('error' in joined) { this.sessions.delete(session.runId); session.discard(); return joined; }
     // 順位の表の名前は、招いたときの表示名（S0a）
     this.seasons.registerRun(def.id, joined.profile.id, chk.name, session.runId);
@@ -435,8 +465,35 @@ export class SessionManager {
     return this.joinSession(session, { ...req, atCamp: true }, req.controller.kind === 'agent' ? 'mcp' : 'ws');
   }
 
+  /**
+   * 参加の検査（S12c）: 職（自分の持つ鍵か）と、名前（名前を整える 1 つの関数。空の名前は今までどおり 'Muse'）。通れば null。
+   * ランを作る前に呼ぶ（断られる参加で、プレイヤーのいないランを作らない）。joinSession でも、もう一度見る
+   */
+  private joinPrecheck(req: { name?: unknown; classId?: unknown }): ActionError | null {
+    if (req.classId !== undefined && req.classId !== null && (typeof req.classId !== 'string' || !isKnownClass(this.deps.content.classes, req.classId))) {
+      return unknownClassError(this.deps.content.classes, String(req.classId));
+    }
+    const nm = joinName(req.name);
+    return 'error' in nm ? nm.error : null;
+  }
+
+  /**
+   * 作ったばかりのランに参加する（S12c）: 参加の途中で例外が出たら、そのランを捨ててから投げ直す（プレイヤーのいない active のランを残さない）
+   */
+  private async joinNew(session: RunSession, req: Parameters<SessionManager['joinSession']>[1], source: 'mcp' | 'ws'): Promise<Joined | { error: ActionError }> {
+    try {
+      return await this.joinSession(session, req, source);
+    } catch (e) {
+      if (!session.world.playerOrder.length) { this.sessions.delete(session.runId); session.discard(); }
+      throw e;
+    }
+  }
+
   private async joinSession(session: RunSession, req: { name: string; classId?: string; locale?: Locale; controller: Controller; atCamp?: boolean; profileToken?: string; legacy?: boolean }, source: 'mcp' | 'ws'): Promise<Joined | { error: ActionError }> {
-    const base = { type: 'join' as const, name: req.name.slice(0, 32) || 'Muse', classId: req.classId, controller: req.controller, locale: req.locale ?? 'ja', ...(req.atCamp ? { atCamp: true } : {}) };
+    const pre = this.joinPrecheck(req);
+    if (pre) return { error: pre };
+    const nm = joinName(req.name);
+    const base = { type: 'join' as const, name: 'name' in nm ? nm.name : 'Muse', classId: req.classId, controller: req.controller, locale: req.locale ?? 'ja', ...(req.atCamp ? { atCamp: true } : {}) };
     // プロフィール（V3-7 §7.1）: トークンが無ければ新しく作る。知らないトークンは拒否（黙って別のプロフィールに積まない）
     const known = req.profileToken ? this.profiles.store.resolve(req.profileToken) : null;
     if (req.profileToken && !known) return { error: unknownProfileError() };
@@ -446,7 +503,7 @@ export class SessionManager {
     let profile: { id: string; token?: string };
     if (known) profile = { id: known.id };
     else {
-      const c = this.profiles.store.create(req.name, Date.now());
+      const c = this.profiles.store.create(base.name, Date.now());
       profile = { id: c.profile.id, token: c.token };
     }
     // 継承（V3-7 §7.3）: 既定であり。サーバーの legacyPolicy が off か、legacy: false なら無し。中身は参加コマンドに入り commands.jsonl に残る
