@@ -54,11 +54,15 @@ export class Canvas2DRenderer implements Renderer {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
     this.setTheme(theme);
-    this.ro = new ResizeObserver(() => this.resize());
+    // 枠の大きさが変わった（S15。SEASON.md §68.2 の 3）: 絵の大きさ（width・height）を合わせ、その場で描き直す。
+    // width・height を書き換えると中身が消えるので、次のフレームを待つと、消えた絵（か、古い絵を新しい枠に引き伸ばした絵）が 1 フレーム以上見える
+    this.ro = new ResizeObserver(() => { if (this.resize()) this.render(performance.now()); });
     this.ro.observe(canvas);
     this.resize();
     const loop = (now: number) => {
       this.raf = requestAnimationFrame(loop);
+      // 描く前に、枠と絵の大きさが合っているかを見る（枠の大きさの知らせより先に描くフレームで、古い大きさのまま描かない）
+      if (this.resize()) this.dirty = true;
       const busy = this.fx.length > 0 || this.tweens.size > 0 || this.bumps.size > 0 || (this.theme?.animated ?? false) || this.camMoving();
       if (this.dirty || busy) {
         this.dirty = false;
@@ -224,16 +228,20 @@ export class Canvas2DRenderer implements Renderer {
     ctx.restore();
   }
 
-  private resize(): void {
-    if (!this.canvas) return;
+  /**
+   * 絵の大きさを、枠（CSS の大きさ）× 画素の比に合わせる。変えたら true（中身は消えるので、呼んだ側がすぐ描く）。
+   * マスは、いつも正方形（cs は縦横で同じ。絵と枠の縦横の比が合っていれば、引き伸ばされない）
+   */
+  private resize(): boolean {
+    if (!this.canvas) return false;
     const dpr = window.devicePixelRatio || 1;
     const w = Math.max(1, Math.round(this.canvas.clientWidth * dpr));
     const h = Math.max(1, Math.round(this.canvas.clientHeight * dpr));
-    if (this.canvas.width !== w || this.canvas.height !== h) {
-      this.canvas.width = w;
-      this.canvas.height = h;
-    }
+    if (this.canvas.width === w && this.canvas.height === h) return false;
+    this.canvas.width = w;
+    this.canvas.height = h;
     this.dirty = true;
+    return true;
   }
 
   private camMoving(): boolean {

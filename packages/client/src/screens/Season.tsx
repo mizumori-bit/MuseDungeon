@@ -6,6 +6,7 @@ import { useEffect, useState } from 'preact/hooks';
 import { api, errorText } from '../api';
 import { ErrorBanner, Header, useCatalog, useLocaleRefresh } from '../ui/common';
 import { DirectedTag } from '../ui/season';
+import { SoundControls, useHubMusic } from '../ui/sound';
 import { fmtTime, getLocale, tr } from '../util';
 
 const AWARDS: SeasonAward['id'][] = ['adventure', 'contribution', 'survival', 'support'];
@@ -29,6 +30,8 @@ function valueText(id: SeasonAward['id'], v: number): string {
 
 export function Season({ id }: { id: string }) {
   useLocaleRefresh();
+  // 拠点の曲（S15。SEASON.md §68.2 の 5）: シーズンの結果も、記録の続き
+  useHubMusic();
   const { catalog } = useCatalog();
   const [data, setData] = useState<SeasonStandingsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -51,9 +54,9 @@ export function Season({ id }: { id: string }) {
       : tr(`確定（${data?.result ? fmtTime(data.result.finalizedAt) : ''}）`, `final (${data?.result ? fmtTime(data.result.finalizedAt) : ''})`);
   return (
     <div class="page">
-      <Header title={s ? tr(`シーズン「${s.name}」`, `Season "${s.name}"`) : tr('シーズン', 'Season')}>
+      <Header title={s ? tr(`シーズン「${s.name}」`, `Season "${s.name}"`) : tr('シーズン', 'Season')} back>
+        <SoundControls />
         <a class="button small" href="#/records">{tr('記録へ', 'Records')}</a>
-        <a class="button small" href="#/">{tr('ホームへ', 'Home')}</a>
       </Header>
       <ErrorBanner error={error} onClose={() => setError(null)} />
       {!data && !error && <div class="muted">{tr('読み込み中…', 'Loading…')}</div>}

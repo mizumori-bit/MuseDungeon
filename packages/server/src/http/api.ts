@@ -82,7 +82,9 @@ export function createApp(manager: SessionManager, config: ServerConfig): App {
     if (season && !manager.seasonFinal(season) && !isLocalRequest(req)) return seasonReplayError();
     // シーズンのランは follow_only（S0 §9.7）
     if (config.spectatorPolicy !== 'follow_only' && !season) return null;
-    const ended = s ? s.world.status === 'ended' : store?.meta(runId)?.status === 'ended';
+    // 確定したシーズンのランは、だれでも見返せる（§25.1）。キャンプにいるまま確定したラン（引退していない。もう命令を受けない）も、終わったランと同じ（S15。
+    // 前は「ランが終わった」だけを見ていたので、確定したシーズンのランの大半（キャンプのまま確定する）が、巻き戻しの口で断られていた）
+    const ended = (season && manager.seasonFinal(season)) || (s ? s.world.status === 'ended' : store?.meta(runId)?.status === 'ended');
     return ended ? null : actionError('bad_request', 'spectatorPolicy=follow_only: replay data is available after the run ends', '');
   };
 

@@ -215,7 +215,8 @@ export function InventoryPanel({ view, catalog, onAction, focused, selected, onS
   );
 }
 
-export interface LogLine { seq: number; text: string; kind?: 'error' | 'info' | 'chat' | 'thought' }
+/** kind の act（S15）: 観戦の、命令ごとの 1 行（seq は、その命令の出来事の前: 前の命令の番号 + 0.5） */
+export interface LogLine { seq: number; text: string; kind?: 'error' | 'info' | 'chat' | 'thought' | 'act' }
 
 export function MessageLog({ lines, title }: { lines: LogLine[]; title?: string }) {
   const ref = useRef<HTMLDivElement>(null);

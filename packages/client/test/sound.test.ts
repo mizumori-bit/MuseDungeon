@@ -3,6 +3,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { SoundState } from '@muse/shared';
+import { hubSoundState } from '@muse/shared';
 import { degreeToFreq, matchCond, MAX_VOICES, notesAt, parseSoundDef, resolveSound } from '../src/sound/def';
 import { SoundEngine } from '../src/sound/engine';
 import { liveAt, planSteals, type VoiceSlot } from '../src/sound/voices';
@@ -46,6 +47,22 @@ describe('sound definition (format 1)', () => {
     expect(odd.tempo).toBe(1.5);
     const odd2 = resolveSound({ ...def, rules: [...def.rules, { when: { weather: 'rain' }, set: { tempo: 1.2 } }] }, base);
     expect(odd2.tempo).toBe(1);
+  });
+
+  it('S15: the hub scene (a provisional tune) is built from the camp tune, a little quieter and slower, with no drums', () => {
+    const { def } = parseSoundDef(hollow);
+    const hub = resolveSound(def, hubSoundState());
+    const camp = resolveSound(def, { ...hubSoundState(), scene: 'camp' });
+    expect(hubSoundState()).toMatchObject({ scene: 'hub', threat: 0, depth_band: 0, depth_tier: 0, biome: 'none', floor_kind: 'other', sense: 'none', stake: 0 });
+    expect(hub.scale).toBe('light');
+    expect(hub.tempo).toBeLessThan(camp.tempo);
+    for (const p of ['bass', 'pad', 'lead'] as const) {
+      expect(hub.parts[p].on).toBe(true);
+      expect(hub.parts[p].pattern).toBe(camp.parts[p].pattern);
+      expect(hub.parts[p].gain).toBeLessThan(camp.parts[p].gain);
+    }
+    expect(hub.parts.perc.on).toBe(false);
+    expect(hub.parts.glint.on).toBe(false);
   });
 
   it('conditions, degrees and pattern positions', () => {

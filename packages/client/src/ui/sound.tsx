@@ -4,6 +4,14 @@ import { useEffect, useState } from 'preact/hooks';
 import { soundDirector } from '../sound/director';
 import { tr } from '../util';
 
+/**
+ * 拠点の曲（S15。SEASON.md §68.2 の 5）: 拠点・支度・記録・運用・シーズンの結果の画面にいる間、場面 hub の音の状態を渡す。
+ * 観戦・遊ぶ・リプレイの画面へ移ると、その画面が、自分の音の状態を渡す（次の拍の頭で替わる）
+ */
+export function useHubMusic(): void {
+  useEffect(() => { soundDirector.hub(); }, []);
+}
+
 export function SoundControls() {
   const [, force] = useState(0);
   useEffect(() => soundDirector.subscribe(() => force((n) => n + 1)), []);

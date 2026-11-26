@@ -47,11 +47,11 @@ export function HubPill({ text, tone }: { text: string; tone: HubTone }) {
  * 冒険者の札。model: hubState.hubCard の結果。className: 職の名前（分からなければ null）。operator: 運用者として見る札（小さめ・取り違えない見た目）。
  * onDive: 「自分で潜る」のとき。onEnroll: 「このシーズンに加える」のとき（S12b）。busy: 押した後、終わるまで
  */
-export function AdventurerCard({ name, className, model, operator, onDive, onEnroll, onUninvite, busy, extra, alert }: { name: string; className: string | null; model: HubCardModel; operator?: boolean; onDive?: () => void; onEnroll?: () => void; onUninvite?: () => void; busy?: boolean; extra?: ComponentChildren; alert?: boolean }) {
+export function AdventurerCard({ name, className, model, operator, onDive, onEnroll, onUninvite, busy, extra }: { name: string; className: string | null; model: HubCardModel; operator?: boolean; onDive?: () => void; onEnroll?: () => void; onUninvite?: () => void; busy?: boolean; extra?: ComponentChildren }) {
   const st = model.stats;
   const sub = [className, st.level !== null ? `Lv${st.level}` : null].filter(Boolean).join(' · ');
   return (
-    <article class={`hub-card ${model.highlight ? 'is-pending' : ''} ${operator ? 'is-operator' : ''} ${alert ? 'kg-alertcard' : ''} state-${model.state}`}>
+    <article class={`hub-card ${model.highlight ? 'is-pending' : ''} ${operator ? 'is-operator' : ''} state-${model.state}`}>
       <header class="hub-cardhead">
         <div class="hub-who">
           <h2 class="hub-name">{name}</h2>

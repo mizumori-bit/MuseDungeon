@@ -1053,7 +1053,7 @@ ${tr('それでも装備しますか？', 'Equip it anyway?')}`)) send({ ...last
   if (!token) {
     return (
       <div class="page">
-        <Header title={tr('プレイ', 'Play')} />
+        <Header title={tr('プレイ', 'Play')} back />
         <div class="banner error">{tr('このランのプレイヤートークンがありません。ロビーから参加してください。', 'No player token for this run. Join from the lobby.')} <a href="#/">{tr('ロビーへ', 'Lobby')}</a> / <a href={`#/watch/${runId}`}>{tr('観戦する', 'Watch')}</a></div>
       </div>
     );
@@ -1061,7 +1061,7 @@ ${tr('それでも装備しますか？', 'Equip it anyway?')}`)) send({ ...last
 
   return (
     <div class="page play">
-      <Header title={`${tr('プレイ', 'Play')} ${runId}`}>
+      <Header title={`${tr('プレイ', 'Play')} ${runId}`} back>
         {view && <span class={`tag vstatus ${view.status}`}>{viewStatusLabel(view.status)}</span>}
         {view && (
           <span class="tag banked" title={tr('持ち帰って確定した点（スコア）。遠征中の戦利品は帰還まで未確定', 'Banked points (your score). The haul of the current expedition is unbanked until you extract')}>
@@ -1081,11 +1081,14 @@ ${tr('それでも装備しますか？', 'Equip it anyway?')}`)) send({ ...last
       <ErrorBanner error={error ?? catErr ?? th.error} onClose={() => setError(null)} />
       <div class="layout">
         <div class="main">
-          {/* 特技の候補は下の枠で選ぶので、同じ内容の注意（perk_pending）は出さない */}
-          {obs && (
-            <AlertsBar alerts={perkChoice ? obs.alerts.filter((a) => a.code !== 'perk_pending') : obs.alerts}
-              onEscape={(stairs) => send({ type: 'travel', to: stairs === 'up' ? 'stairs_up' : 'stairs_down', mode: 'flee' })} />
-          )}
+          {/* 特技の候補は下の枠で選ぶので、同じ内容の注意（perk_pending）は出さない。
+              知らせの段は、いつも同じ高さで取っておく（S15。SEASON.md §68.2 の 3: 知らせが出入りするたびに地図の枠の高さが変わり、絵が描き直されていた） */}
+          <div class="alertslot">
+            {obs && (
+              <AlertsBar alerts={perkChoice ? obs.alerts.filter((a) => a.code !== 'perk_pending') : obs.alerts}
+                onEscape={(stairs) => send({ type: 'travel', to: stairs === 'up' ? 'stairs_up' : 'stairs_down', mode: 'flee' })} />
+            )}
+          </div>
           {view && perkChoice && (
             <PerkChoicePanel choice={perkChoice} catalog={catalog} classId={view.self.classId} focused={mode === 'perk'} sent={perkSent === perkK}
               collapsed={perkHidden === perkK} onChoose={choosePerk}
@@ -1094,7 +1097,8 @@ ${tr('それでも装備しますか？', 'Equip it anyway?')}`)) send({ ...last
           {view?.self.boonChoice && (
             <BoonChoicePanel choice={view.self.boonChoice} catalog={catalog} onChoose={(option) => send({ type: 'choose_boon', option })} />
           )}
-          <TurnBar line={turnText} changes={changes} />
+          {/* 手番の行と変化も、同じ高さで取っておく（S15） */}
+          <div class="turnslot"><TurnBar line={turnText} changes={changes} /></div>
           <MapView
             theme={th.theme}
             onReady={(r) => { rRef.current = r; redraw(); }}
@@ -1252,7 +1256,7 @@ ${tr('それでも装備しますか？', 'Equip it anyway?')}`)) send({ ...last
             <button class="small" onClick={() => startThrow(null)} title="t">{tr('投げる', 'Throw')} (t)</button>
             <button class="small danger" onClick={retire}>{tr('引退', 'Retire')}</button>
           </div>
-          {restEst && !atCamp && <RestEstimateLine est={restEst} />}
+          <div class="restslot">{restEst && !atCamp && <RestEstimateLine est={restEst} />}</div>
           {obs && (
             <details class="panel valid">
               <summary>{tr('できること', 'Valid actions')} ({obs.valid_actions.length})</summary>

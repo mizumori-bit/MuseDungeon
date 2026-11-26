@@ -9,7 +9,11 @@ import type { HpState, PlayerView } from './view';
 import { hpState } from './view';
 import { cheb } from './util';
 
-export type SoundScene = 'camp' | 'explore' | 'alert' | 'combat' | 'guardian' | 'warden' | 'ended';
+/**
+ * 場面。hub（S15。SOUND_SPEC §2.1）は、拠点・支度・記録・運用の画面にいる間（遊ぶ・観戦・リプレイの外）。
+ * 視界から作らない（hubSoundState）。soundStep は hub を返さない
+ */
+export type SoundScene = 'hub' | 'camp' | 'explore' | 'alert' | 'combat' | 'guardian' | 'warden' | 'ended';
 export type SoundFloorKind = 'standard' | 'sanctuary' | 'warden_hall' | 'other';
 
 /** 続く状態（SOUND_SPEC §2.1）。音のテーマの規則の when はこの名前で書く（depth_band を含む） */
@@ -74,6 +78,17 @@ const FIGHT_TURNS = 3;
 export function soundFloorKind(floorType: string): SoundFloorKind {
   const k = floorType.split(':').pop();
   return k === 'standard' || k === 'sanctuary' || k === 'warden_hall' ? k : 'other';
+}
+
+/**
+ * 拠点・支度・記録・運用の画面の音の状態（S15。SOUND_SPEC §2.1）: どのプレイヤーの視界にも、ゲームの中の何にもよらない、決まった値。
+ * 階にいないので、深さ 0・バイオーム none・階の種類 other（キャンプと同じ）
+ */
+export function hubSoundState(): SoundState {
+  return {
+    scene: 'hub', threat: 0, hp: 'healthy', depth_band: 0, depth_tier: 0, biome: 'none', floor_kind: 'other',
+    telegraph: false, sense: 'none', stake: 0, ailment: false, boost: false,
+  };
 }
 
 /** 階の深さから depth_band と depth_tier */

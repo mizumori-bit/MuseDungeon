@@ -179,6 +179,15 @@ export class PlaybackQueue<S, N> {
     return 'tail';
   }
 
+  /**
+   * 列にある（まだ描いていない）歩のうち、出来事の番号の幅にかかるもの（S15: 命令の行を組むときに、その命令の残りの歩の出来事を見る）。列は変えない
+   */
+  stepsIn(after: number, upTo: number): S[] {
+    const out: S[] = [];
+    for (const e of this.q) if (e.kind === 'step' && e.seqs && e.seqs.last > after && e.seqs.first <= upTo) out.push(e.step);
+    return out;
+  }
+
   /** 先頭の印を、次の歩の手前まで出す */
   private takeMarks(out: Delivery<S, N>[], quiet = false): void {
     while (this.q.length && this.q[0].kind === 'mark') {

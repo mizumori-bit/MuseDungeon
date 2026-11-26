@@ -1,9 +1,9 @@
 // S14（SEASON.md §65.2・§65.4）: 続けて遊ばせる。決める所（いつ鳴らすか・止まるか・数え方・2 つのタブ）と、呼び鈴の文字列の添え書き、支度の「進め方」の文。
 // 時刻は外から渡す。画面とブラウザ（localStorage・呼び鈴を開く所）は使わない（覚える所は、差し替えた localStorage で確かめる）
 import { afterEach, describe, expect, it } from 'vitest';
-import { bellUrl } from '../src/ui/bell';
+import { bellBody } from '../src/ui/bell';
 import {
-  KG, kgAlive, kgBeat, kgClampN, kgExplainLines, kgForget, kgHeartbeat, kgLastRingText, kgLeader, kgLeave, kgLeft, kgMaybeBlocked, kgOffer, kgOnOpen, kgPortFailed, kgPortFailText, kgPortOk, kgRang, kgRead, kgReadAll, kgRunningText,
+  KG, kgAlive, kgBeat, kgClampN, kgExplainLines, kgForget, kgHeartbeat, kgLastRingText, kgLeader, kgLeave, kgLeft, kgOffer, kgOnOpen, kgPortFailed, kgPortFailText, kgPortOk, kgRang, kgRead, kgReadAll, kgRunningText,
   kgSanitize, kgStart, kgStep, kgStoppedText, kgStopText, kgViaText, kgWrite, type KgObs, type KgRow, type KgState,
 } from '../src/ui/keepGoing';
 import { paceLine, paceNote, paceSavedNote } from '../src/ui/prepState';
@@ -21,9 +21,9 @@ const on = (now: number) => ({ now, bellOn: true });
 const start = (o: { total?: number; ended?: number } = {}) => kgStart({ runId: 'run_ab12', seasonId: 's5', name: 'ミュゼ美', total: o.total ?? 3, ended: o.ended ?? 0, now: T0 });
 
 /** 鳴らす役のつもりで 1 回: 鳴らすなら、鳴らしたことを覚える */
-function tick(st: KgState, obs: KgObs, now: number, blocked = false): { st: KgState; ring: string | null } {
+function tick(st: KgState, obs: KgObs, now: number): { st: KgState; ring: string | null } {
   const r = kgStep(st, obs, on(now));
-  return { st: r.ring ? kgRang(r.state, r.ring, now, blocked) : r.state, ring: r.ring };
+  return { st: r.ring ? kgRang(r.state, r.ring, now) : r.state, ring: r.ring };
 }
 
 describe('S14 §65.2: when to ring at camp', () => {
@@ -88,11 +88,12 @@ describe('S14 §65.2: when to ring at camp', () => {
   });
 
   it('the AI waking after a ring clears the warning; a new camp starts the count again', () => {
-    let r = tick(start(), row({ ai: silentFor(2 * MIN) }), T0, true);
-    expect(r.st.attention).toEqual({ at: T0, where: 'camp' });
+    let r = tick(start(), row({ ai: silentFor(2 * MIN) }), T0);
+    r = { ...r, st: kgPortFailed(r.st, 47123, T0 + S) };
+    expect(r.st.portFail).toEqual({ at: T0 + S, port: 47123 });
     // 鳴らした後に呼び出した（黙っている時間が、鳴らしてからの時間より短い）: 起きた
     r = tick(r.st, row({ ai: silentFor(5 * S) }), T0 + 20 * S);
-    expect(r.st.attention).toBeNull();
+    expect(r.st.portFail).toBeNull();
     // 遠征を始めて、終えて、キャンプに戻った（終わった遠征が 1 つ増えた）: 数え直す
     r = tick(r.st, row({ status: 'in_dungeon', ai: silentFor(3 * S) }), T0 + 5 * MIN);
     r = tick(r.st, row({ expeditionsEnded: 1, ai: silentFor(2 * MIN) }), T0 + 30 * MIN);
@@ -165,7 +166,7 @@ describe('S14 §65.2: in the dungeon, counting, and stopping', () => {
 });
 
 describe('S14 §65.4 の 3: where the button shows', () => {
-  it('only for an owned AI adventurer with nothing held, with the bell on (a link or this PC\'s receiver)', () => {
+  it('only for an owned AI adventurer with nothing held, with the bell on (this PC\'s receiver)', () => {
     expect(kgOffer({ row: base(), bellOn: true })).toBe('start');
     expect(kgOffer({ row: base({ status: 'in_dungeon' }), bellOn: true })).toBe('start');
     expect(kgOffer({ row: base({ hold: ['objective'] }), bellOn: true })).toBe('held');
@@ -179,17 +180,15 @@ describe('S14 §65.4 の 3: where the button shows', () => {
     expect(kgClampN(0)).toBe(1);
     expect(kgClampN(11)).toBe(10);
     expect(kgClampN('x')).toBe(KG.N_DEFAULT);
-    // リンク: 知らせるので押す・席を外すなら受け口、の 1 行（S14a）。受け口: 自動で鳴らす
-    const link = kgExplainLines('ミュゼ美', 'link');
-    expect(link).toHaveLength(4);
-    expect(link[1]).toContain('AI の利用枠を使う');
-    expect(link[1]).toContain('鳴らす時が来たら、知らせるので、押す');
-    expect(link[2]).toBe('席を外すなら、運用の画面で、呼び鈴を「この PC の受け口を呼ぶ」にする。');
-    const port = kgExplainLines('ミュゼ美', 'port', 47123);
+    // 受け口だけ（S15）: 自動で鳴らす。押してもらう・席を外すなら、の行は無い
+    const port = kgExplainLines('ミュゼ美', 47123);
     expect(port).toHaveLength(3);
+    expect(port[1]).toContain('AI の利用枠を使う');
     expect(port[1]).toContain('自動で鳴らす（この PC の受け口、ポート 47123）');
     expect(port.join('')).not.toContain('席を外すなら');
-    expect(kgViaText('port', 47123)).toBe('自動で鳴らす（この PC の受け口、ポート 47123）。');
+    expect(port.join('')).not.toContain('押す');
+    expect(kgViaText(47123)).toBe('自動で鳴らす（この PC の受け口、ポート 47123）。');
+    expect(kgStopText('bell_off', 'ミュゼ美', 3)).toBe('呼び鈴が「使わない」になった（運用の画面で、この PC の受け口を決める）。');
   });
 });
 
@@ -217,7 +216,7 @@ describe('S14 §65.4 の 3: two tabs never ring twice; closing every tab stops i
   });
 
   it('a ring written by one tab keeps the other from ringing again soon (the cooldown)', () => {
-    const rung = kgRang(start(), 'dungeon', T0, false);
+    const rung = kgRang(start(), 'dungeon', T0);
     // 迷宮の中で鳴らした直後に、キャンプに戻っても、60 秒は鳴らさない
     expect(kgStep(rung, row({ expeditionsEnded: 0, ai: silentFor(10 * MIN) }), on(T0 + 30 * S)).ring).toBeNull();
     expect(kgStep(rung, row({ expeditionsEnded: 0, ai: silentFor(10 * MIN) }), on(T0 + KG.RING_COOLDOWN_MS)).ring).toBe('camp');
@@ -265,33 +264,30 @@ describe('S14 §65.4 の 3: two tabs never ring twice; closing every tab stops i
     hb = kgHeartbeat(kgHeartbeat(tabs, 'b', T0 + 10 * S).tabs, 'a', T0 + 12 * S);
     expect(hb.leader).toBe(true);
     // 2 つのタブが同じ時に鳴らそうとしても、鳴らした記録が書かれた後は、もう片方は 60 秒鳴らさない
-    const st = kgRang(start(), 'camp', T0, false);
+    const st = kgRang(start(), 'camp', T0);
     expect(kgStep({ ...st, campKey: 0, campRings: 1 }, row({ ai: silentFor(10 * MIN) }), on(T0 + 10 * S)).ring).toBeNull();
   });
 });
 
-describe('S14 §65.4 の 5: the browser may stop the bell', () => {
-  it('Chromium lets one such link through per user action: a second launch with no action in between may be stopped', () => {
-    expect(kgMaybeBlocked({ activation: null, lastLaunchAt: null, lastInputAt: null })).toBe(false);
-    expect(kgMaybeBlocked({ activation: false, lastLaunchAt: T0, lastInputAt: T0 + S })).toBe(false);
-    expect(kgMaybeBlocked({ activation: false, lastLaunchAt: T0, lastInputAt: T0 - S })).toBe(true);
-    expect(kgMaybeBlocked({ activation: null, lastLaunchAt: T0, lastInputAt: null })).toBe(true);
-    expect(kgMaybeBlocked({ activation: true, lastLaunchAt: T0, lastInputAt: null })).toBe(false);
-    const r = kgRang(start(), 'camp', T0, true);
-    expect(r.attention).toEqual({ at: T0, where: 'camp' });
-    expect(r.log).toEqual([{ at: T0, where: 'camp', maybeBlocked: true }]);
+describe('S14a・S15: the bell is this PC\'s receiver only', () => {
+  it('a ring is recorded with when and where; nothing asks to be pressed (S15: the link flow is gone)', () => {
+    const r = kgRang(start(), 'camp', T0);
+    expect(r.log).toEqual([{ at: T0, where: 'camp' }]);
+    expect(Object.keys(r)).not.toContain('attention');
     expect(kgLastRingText(r, () => '12:00')).toBe('最後に呼び鈴を鳴らした: 12:00（キャンプ。全部で 1 回）');
+    // 前の版が覚えた、リンクの印（attention・maybeBlocked・via）は、読むときに捨てる
+    const old = kgSanitize({ ...start(), attention: { at: T0, where: 'camp' }, log: [{ at: T0, where: 'camp', maybeBlocked: true }, { at: T0 + S, where: 'camp', maybeBlocked: false, via: 'port', failed: true }] }, 'run_ab12')!;
+    expect(old.log).toEqual([{ at: T0, where: 'camp' }, { at: T0 + S, where: 'camp', failed: true }]);
+    expect(Object.keys(old)).not.toContain('attention');
   });
 
-  it('S14a: the receiver on this PC needs no action, so it never asks to be pressed; a failed post says the receiver is not running, until it gets through or the AI wakes', () => {
-    // 受け口は、止めたかもしれない扱いにしない（光らせない）
+  it('a failed post says the receiver is not running, until it gets through or the AI wakes', () => {
     // 鳴らしたキャンプ（終わった遠征 0）
-    const p = kgRang({ ...start(), campKey: 0, campRings: 1 }, 'camp', T0, true, 'port');
-    expect(p.attention).toBeNull();
-    expect(p.log).toEqual([{ at: T0, where: 'camp', maybeBlocked: false, via: 'port' }]);
+    const p = kgRang({ ...start(), campKey: 0, campRings: 1 }, 'camp', T0);
+    expect(p.log).toEqual([{ at: T0, where: 'camp' }]);
     const f = kgPortFailed(p, 47123, T0 + S);
     expect(f.portFail).toEqual({ at: T0 + S, port: 47123 });
-    expect(f.log.at(-1)).toEqual({ at: T0, where: 'camp', maybeBlocked: false, via: 'port', failed: true });
+    expect(f.log.at(-1)).toEqual({ at: T0, where: 'camp', failed: true });
     expect(kgPortFailText('ミュゼ美', 47123)).toBe('ミュゼ美の呼び鈴を、受け口に送れなかった。受け口が、動いていない（ポート 47123）。受ける道具を起こしてから、「もう一度鳴らす」。');
     expect(kgPortOk(f).portFail).toBeNull();
     // AI が起きた（鳴らした後に呼び出した）: 消える
@@ -301,16 +297,15 @@ describe('S14 §65.4 の 5: the browser may stop the bell', () => {
   });
 });
 
-describe('S14 §65.4 の 2: the bell string carries the pace only as one fixed word', () => {
-  it('&mode=pilot for pilot; the same string as before for self or none', () => {
-    expect(bellUrl('tool', { season: 's5', run: 'run_ab12cd', pace: 'pilot' })).toBe('musedungeon-bell://ready?season=s5&run=run_ab12cd&mode=pilot');
-    expect(bellUrl('tool', { season: null, run: 'run_ab12cd', pace: 'pilot' })).toBe('musedungeon-bell://ready?run=run_ab12cd&mode=pilot');
-    expect(bellUrl('tool', { season: 's5', run: 'run_ab12cd', pace: 'self' })).toBe('musedungeon-bell://ready?season=s5&run=run_ab12cd');
-    expect(bellUrl('tool', { season: 's5', run: 'run_ab12cd', pace: null })).toBe('musedungeon-bell://ready?season=s5&run=run_ab12cd');
-    expect(bellUrl('tool', { season: 's5', run: 'run_ab12cd' })).toBe('musedungeon-bell://ready?season=s5&run=run_ab12cd');
-    expect(bellUrl('off', { season: 's5', run: 'run_ab12cd', pace: 'pilot' })).toBeNull();
+describe('S14 §65.4 の 2: the bell body carries the pace only as one fixed word', () => {
+  it('mode=pilot for pilot; the same body as before for self or none', () => {
+    expect(bellBody({ season: 's5', run: 'run_ab12cd', pace: 'pilot' }, null)).toBe('season=s5&run=run_ab12cd&mode=pilot');
+    expect(bellBody({ season: null, run: 'run_ab12cd', pace: 'pilot' }, null)).toBe('run=run_ab12cd&mode=pilot');
+    expect(bellBody({ season: 's5', run: 'run_ab12cd', pace: 'self' }, null)).toBe('season=s5&run=run_ab12cd');
+    expect(bellBody({ season: 's5', run: 'run_ab12cd', pace: null }, null)).toBe('season=s5&run=run_ab12cd');
+    expect(bellBody({ season: 's5', run: 'run_ab12cd' }, null)).toBe('season=s5&run=run_ab12cd');
     // 値の形の違う進め方は、添えない（決まった 1 語だけ）
-    expect(bellUrl('tool', { season: 's5', run: 'run_ab12cd', pace: 'pilot&x=1' as never })).toBe('musedungeon-bell://ready?season=s5&run=run_ab12cd');
+    expect(bellBody({ season: 's5', run: 'run_ab12cd', pace: 'pilot&x=1' as never }, null)).toBe('season=s5&run=run_ab12cd');
   });
 
   it('the "How to play" section lines (ja/en)', () => {
@@ -366,7 +361,7 @@ describe('S14: kept in this browser (localStorage)', () => {
     // 1 時間、AI が黙ったまま、同じキャンプで、10 秒ごとに様子を見る
     for (let t = T0; t < T0 + 60 * MIN && st.status === 'running'; t += 10 * S) {
       const r = kgStep(st, row({ ai: silentFor(t - T0 + 10 * MIN) }), on(t));
-      st = r.ring ? kgRang(r.state, r.ring, t, false) : r.state;
+      st = r.ring ? kgRang(r.state, r.ring, t) : r.state;
       if (r.ring) rings++;
       // 鳴らす役が替わるたびに、書いた状態を読み直す（整え直しても、増えない）
       st = kgSanitize(JSON.parse(JSON.stringify(st)), 'run_ab12')!;

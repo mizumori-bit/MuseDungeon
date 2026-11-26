@@ -48,12 +48,13 @@ describe('S14a: the receiver on this PC (POST to 127.0.0.1)', () => {
     expect(bellPortRequest(cfg({ port: 80 }), ids)).toBeNull();
     expect(bellPortRequest(cfg({ port: null }), ids)).toBeNull();
     expect(bellPortRequest({ ...cfg(), host: 'evil.example' } as unknown as BellConfig, ids)!.url).toBe('http://127.0.0.1:47123/musedungeon-bell');
-    expect(bellPortRequest(cfg({ mode: 'tool' }), ids)).toBeNull();
+    expect(bellPortRequest(cfg({ mode: 'off' }), ids)).toBeNull();
     expect(bellPortRequest(cfg({ key: 'bad key!' }), ids)).toBeNull();
-    // どちらの鳴らし方か
-    expect(bellRingOf(cfg({ mode: 'tool' }), ids)).toEqual({ via: 'link', url: 'musedungeon-bell://ready?season=s5&run=run_ab12cd' });
-    expect(bellRingOf(cfg(), ids)?.via).toBe('port');
+    // 鳴らすもの（S15: 受け口だけ）
+    expect(bellRingOf(cfg(), ids)?.url).toBe('http://127.0.0.1:47123/musedungeon-bell');
     expect(bellRingOf(cfg({ mode: 'off' }), ids)).toBeNull();
+    // 前の版のリンクの形（mode: 'tool'）が混じっても、鳴らさない
+    expect(bellRingOf({ ...cfg(), mode: 'tool' } as unknown as BellConfig, ids)).toBeNull();
     expect(bellMode(cfg({ port: null }))).toBe('off');
     expect(bellMode(cfg())).toBe('port');
   });
@@ -71,7 +72,7 @@ describe('S14a: the receiver on this PC (POST to 127.0.0.1)', () => {
       expect(bellProblem(readBellConfig())).toBeNull();
       // 合言葉は任意（空なら、合言葉なしで送る）
       put('port', '47123', '');
-      expect(bellRingOf(readBellConfig(), ids)?.via).toBe('port');
+      expect(bellRingOf(readBellConfig(), ids)?.init.body).toBe('season=s5&run=run_ab12cd');
       // 形の違う合言葉: 合言葉なしでは送らない。鳴らさず「見直す」
       put('port', '47123', 'bad key!');
       const c1 = readBellConfig();
@@ -88,10 +89,10 @@ describe('S14a: the receiver on this PC (POST to 127.0.0.1)', () => {
         expect(bellRingOf(c, ids)).toBeNull();
       }
       expect(bellPortParse(' 47123 ')).toBe(47123);
-      // リンクの設定では、受け口の値は見ない
+      // 前の版のリンクの設定（S15: 使わないとして読む）では、受け口の値は見ない・鳴らさない
       put('tool', 'junk', 'bad key!');
       expect(bellProblem(readBellConfig())).toBeNull();
-      expect(bellRingOf(readBellConfig(), ids)?.via).toBe('link');
+      expect(bellRingOf(readBellConfig(), ids)).toBeNull();
     } finally {
       if (had) Object.defineProperty(g, 'window', had);
       else delete g.window;
@@ -106,7 +107,7 @@ describe('S14a: the receiver on this PC (POST to 127.0.0.1)', () => {
     expect(seen[0].url).toBe('http://127.0.0.1:47123/musedungeon-bell');
     expect(seen[0].init.body).toBe('season=s5&run=run_ab12cd&key=Abc_def-12345678');
     expect(await ringPort(r, (async () => { throw new TypeError('Failed to fetch'); }) as unknown as typeof fetch)).toBe(false);
-    expect(bellView({ url: r.url, aiWaiting: false, rung: 0, failedPort: 47123 })).toEqual({ label: 'もう一度鳴らす', note: '受け口が、動いていない（ポート 47123）', primary: true });
+    expect(bellView({ ring: r, aiWaiting: false, rung: 0, failedPort: 47123 })).toEqual({ label: 'もう一度鳴らす', note: '受け口が、動いていない（ポート 47123）', primary: true });
     setLocale('en');
     expect(bellPortFailText(47123)).toBe('The receiver is not running (port 47123)');
   });

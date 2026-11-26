@@ -35,6 +35,9 @@ small { color: var(--muted); }
 .topbar .brand { font-weight: 700; color: var(--fg); text-decoration: none; letter-spacing: 0.5px; }
 .topbar .title { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40vw; }
 .topbar .spacer { flex: 1; }
+/* S15: 見出しの左の「← 拠点へ」（支度の「← 拠点へ」と同じ見た目: 羊皮紙色の小さい文字、触れると金） */
+.topbar .hdr-back { font-size: 13px; color: #b8ad94; text-decoration: none; letter-spacing: 0.04em; white-space: nowrap; }
+.topbar .hdr-back:hover, .topbar .hdr-back:focus-visible { color: #c9a45c; }
 .inline { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
 .ws { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: #333; }
 .ws.open { background: #1f4d2a; }
@@ -82,6 +85,8 @@ canvas.map { width: 100%; height: 100%; display: block; cursor: crosshair; }
 .line.info { color: #b4d8ff; }
 .line.chat { color: #ffe08a; }
 .line.thought { color: #d8c8ff; }
+/* S15: 観戦の、命令ごとの 1 行（見出しのように、少し目立つ色で。その下に、出来事の文） */
+.line.act { color: #ffd58a; font-weight: 600; margin-top: 3px; border-bottom-color: #3a3324; }
 .ai pre.obs, .call pre { white-space: pre-wrap; font: 11.5px/1.35 Consolas, Menlo, monospace; max-height: 360px; overflow: auto; background: #0f1015; padding: 6px; border-radius: 4px; margin: 4px 0; }
 .ai .tabs { margin-left: auto; display: inline-flex; gap: 2px; }
 .call { font-size: 12px; padding: 2px 0; border-bottom: 1px dashed #20232c; word-break: break-all; }
@@ -185,6 +190,39 @@ th, td { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--line
 
 .restest { font-size: 12px; color: #b4d8ff; padding: 0 8px 6px; }
 .restest.blocked { color: var(--muted); }
+
+/* S15（SEASON.md §68.2 の 3）: 遊ぶ画面の、地図の上下の知らせの段は、いつも同じ高さで取っておく（出入りしても、地図の枠の高さを変えない）。
+   はみ出したら、段の中で横（か縦）に送る。地図の絵は、枠の大きさが本当に変わったとき（窓の大きさを変えた）だけ描き直す（render/canvas2d.ts） */
+.alertslot { flex: none; height: 34px; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
+.alertslot .alerts { flex-wrap: nowrap; padding: 5px 8px; width: max-content; min-width: 100%; }
+.alertslot .alert { white-space: nowrap; flex: none; }
+.turnslot { flex: none; height: 50px; overflow-y: auto; overflow-x: hidden; border-bottom: 1px solid var(--line); scrollbar-width: thin; }
+.turnslot .turnbar { border-bottom: none; }
+.turnslot .turnline { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.turnslot .changes { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; }
+.turnslot .chg, .turnslot .changes .lbl { white-space: nowrap; flex: none; }
+.restslot { flex: none; height: 24px; overflow: hidden; }
+.restslot .restest { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 観戦の上の段は 1 行のまま（はみ出したら横に送る。おくれの表示・自動行動の知らせの出入りで、地図の枠の高さを変えない） */
+.watch .toolbar { flex-wrap: nowrap; overflow-x: auto; white-space: nowrap; scrollbar-width: thin; }
+.watch .toolbar > * { flex: none; }
+.watch .macro .tag { margin: 0 2px; font-size: 12px; }
+
+/* S15: リプレイを見返せないときの 1 文（開催中のシーズンの、終わっていないラン・版が古く畳めないラン） */
+.replaymsg { position: absolute; left: 50%; top: 30%; transform: translateX(-50%); max-width: calc(100% - 32px); width: 520px; padding: 14px 18px; background: rgba(12, 14, 20, 0.92); border: 1px solid var(--line); border-radius: 8px; text-align: center; z-index: 4; }
+.replaymsg p { margin: 0 0 8px; }
+
+/* S15: 場面の帯（遠征を始めた・階を移った・目的を達成した・帰還した・撤退した・帰還の綱で戻った・倒れた）。地図の上に重ねて、2.5 秒ほどで消える */
+.scenebanners { position: absolute; left: 50%; top: 16%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 8px; pointer-events: none; z-index: 4; width: max-content; max-width: calc(100% - 32px); }
+.scenebanner { padding: 8px 26px; font-size: 18px; letter-spacing: 0.12em; text-align: center; color: #f1e7cf; background: rgba(12, 14, 20, 0.86); border-top: 1px solid #c9a45c; border-bottom: 1px solid #c9a45c; overflow-wrap: anywhere; animation: scenebanner 2.5s ease forwards; }
+.scenebanner.tone-floor { border-color: #4fc3f7; }
+.scenebanner.tone-objective, .scenebanner.tone-return { border-color: #93c39c; color: #e3f4e6; }
+.scenebanner.tone-withdraw { border-color: #b8ad94; }
+.scenebanner.tone-lifeline { border-color: #d7b47a; }
+.scenebanner.tone-death { border-color: #ef5350; color: #ffd0d0; }
+@keyframes scenebanner { 0% { opacity: 0; transform: translateY(-6px); } 12% { opacity: 1; transform: none; } 78% { opacity: 1; } 100% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .scenebanner { animation: scenebanner-still 2.5s linear forwards; } @keyframes scenebanner-still { 0%, 90% { opacity: 1; } 100% { opacity: 0; } } }
+@media (max-width: 480px) { .scenebanner { font-size: 15px; padding: 6px 14px; letter-spacing: 0.06em; } }
 .resthp { display: inline-flex; gap: 2px; align-items: center; }
 .resthp input { width: 56px; font-size: 12px; padding: 2px 4px; }
 button.exit { border-color: #2e8a4e; background: #1f4a30; }
@@ -598,7 +636,7 @@ ul.ocost { margin: 0; padding-left: 18px; }
 .hub-tablewrap tr.mine td { background: rgba(201, 164, 92, 0.1); }
 .hub-tablewrap .tag.you { background: var(--hub-gold); color: var(--hub-gold-ink); }
 .hub-foot { text-align: center; margin-top: 8px; }
-.hub-foot a, .prep-back:hover { color: var(--hub-gold); }
+.hub-foot a { color: var(--hub-gold); }
 
 /* 窓（自分で潜る・続きのある冒険・決めていないもの） */
 .hub-modal { position: fixed; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(5, 7, 12, 0.72); }
@@ -619,7 +657,6 @@ ul.ocost { margin: 0; padding-left: 18px; }
 .prep-bellnote { margin: 0; font-size: 13px; color: var(--hub-green); }
 
 /* 支度（#/prepare/<runId>） */
-.prep-back { align-self: flex-start; font-size: 13px; color: var(--hub-parch2); text-decoration: none; letter-spacing: 0.04em; }
 .prep-headline { margin: 8px 0 0; font-size: 16px; font-weight: 600; color: var(--hub-parch); }
 .prep-headline.tone-amber { color: var(--hub-amber); }
 .prep-headline.tone-green { color: var(--hub-green); }
@@ -683,7 +720,7 @@ ul.ocost { margin: 0; padding-left: 18px; }
   .hub-nav { padding: 0 8px; }
   .hub-btn.big { align-self: stretch; }
 }
-/* S14（SEASON.md §65.4）: 続けて遊ばせる（札の中の段・上の帯の印・呼び鈴を鳴らせなかったかもしれないときの帯）と、支度の「進め方」の段 */
+/* S14（SEASON.md §65.4）: 続けて遊ばせる（札の中の段・上の帯の印・受け口に送れなかったときの帯）と、支度の「進め方」の段 */
 .kg-box { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--hub-line); display: flex; flex-direction: column; gap: 6px; }
 .kg-box.is-running { border-top-color: rgba(147, 195, 156, 0.45); }
 .kg-box > .hub-btn { align-self: flex-start; }
@@ -691,9 +728,6 @@ ul.ocost { margin: 0; padding-left: 18px; }
 .kg-title { color: var(--hub-green); font-size: 14px; letter-spacing: 0.04em; overflow-wrap: anywhere; min-width: 0; }
 .kg-alert { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
 .kg-held { margin-top: 10px; }
-.hub-card.kg-alertcard { border-color: var(--hub-amber); animation: kg-glow 1.6s ease-in-out infinite; }
-@keyframes kg-glow { 0%, 100% { box-shadow: 0 0 0 0 rgba(224, 162, 74, 0.0); } 50% { box-shadow: 0 0 0 4px rgba(224, 162, 74, 0.45); } }
-@media (prefers-reduced-motion: reduce) { .hub-card.kg-alertcard { animation: none; box-shadow: 0 0 0 3px rgba(224, 162, 74, 0.45); } }
 .kg-navmark { margin-right: 6px; padding: 2px 10px; border: 1px solid rgba(147, 195, 156, 0.55); border-radius: 999px; color: var(--hub-green); font-size: 12px; text-decoration: none; white-space: nowrap; }
 .kg-navmark.is-alert { border-color: var(--hub-amber); color: var(--hub-amber); }
 .kg-bar { position: fixed; left: 12px; right: 12px; bottom: 12px; z-index: 60; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
