@@ -8,7 +8,7 @@ import { DIRECTIVE_ITEMS, activeWishes, itemDisplayName, kindName, nameOf, owner
 import type { ComponentChildren } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { api } from '../api';
-import { bellAllowedNow, bellRingOf, bellView, readBellConfig, ringBell, ringPort, type BellRing, type BellView } from '../ui/bell';
+import { bellAllowedNow, bellProblem, bellRingOf, bellView, readBellConfig, ringBell, ringPort, type BellRing, type BellView } from '../ui/bell';
 import { ErrorBanner, Header, useCatalog, useLocaleRefresh } from '../ui/common';
 import { BoonChoicePanel, PerkChoicePanel } from '../ui/build';
 import { OfferCard, rulesOf } from '../ui/expedition';
@@ -106,7 +106,8 @@ export function Prepare({ runId }: { runId: string }) {
   const [nudge, setNudge] = useState<ReadyNudge | null>(null);
   // 呼び鈴（S12b。SEASON.md §63.6）: 鳴らすもの（使わない・AI がもう待っている・ID の形が違うときは null）と、この窓で鳴らした回数。
   // S14a: 受け口の設定なら、送る要求。送れなかったら、そのポート（「受け口が、動いていない」）
-  const [bell, setBell] = useState<{ ring: BellRing | null; rung: number; failedPort: number | null }>({ ring: null, rung: 0, failedPort: null });
+  // problem（S14b）: 覚えた受け口のポート・合言葉の形が違う（鳴らさずに「呼び鈴の設定を見直す」）
+  const [bell, setBell] = useState<{ ring: BellRing | null; rung: number; failedPort: number | null; problem?: string | null }>({ ring: null, rung: 0, failedPort: null });
   /** 鳴らす。リンクは、自動のとき（押した流れの中）はブラウザが許すときだけ。受け口は、人の操作が要らないので、いつも送る */
   const ringNow = (r: BellRing, auto: boolean) => {
     if (r.via === 'link') {
@@ -215,8 +216,9 @@ export function Prepare({ runId }: { runId: string }) {
         if (n) {
           // 呼び鈴（S12b）: AI がまだ待っていないときだけ。準備完了を押した流れの中で、ブラウザが許すなら、自動で 1 回鳴らす（許されなければ、何もしない）。
           // 受け口（S14a）は、同じ流れで送る
-          const ring = n.copy ? bellRingOf(readBellConfig(), { season: after.view.season?.id ?? null, run: runId, pace: after.pace }) : null;
-          setBell({ ring, rung: 0, failedPort: null });
+          const cfg = readBellConfig();
+          const ring = n.copy ? bellRingOf(cfg, { season: after.view.season?.id ?? null, run: runId, pace: after.pace }) : null;
+          setBell({ ring, rung: 0, failedPort: null, problem: n.copy ? bellProblem(cfg) : null });
           if (ring) ringNow(ring, true);
           setNudge(n);
         }
@@ -461,7 +463,7 @@ export function Prepare({ runId }: { runId: string }) {
         </div>
       )}
       {nudge && !confirmReady && (
-        <ReadyNudgeDialog nudge={nudge} bell={bellView({ url: bell.ring?.url ?? null, aiWaiting: !nudge.copy, rung: bell.rung, failedPort: bell.failedPort })}
+        <ReadyNudgeDialog nudge={nudge} bell={bellView({ url: bell.ring?.url ?? null, aiWaiting: !nudge.copy, rung: bell.rung, failedPort: bell.failedPort })} bellProblem={bell.problem ?? null}
           onRing={() => { if (bell.ring) ringNow(bell.ring, false); }} onStay={() => setNudge(null)} />
       )}
     </div>
@@ -473,7 +475,7 @@ export function Prepare({ runId }: { runId: string }) {
  * 写せる 1 文は、押すとクリップボードに写る。写せない環境（http の別の PC から など）では、選んで写せる文として出す。
  * bell（S12b）: 呼び鈴のボタン（使わない・AI がもう待っているときは null）。まだ鳴らしていなければ、既定のボタン。鳴らした後は「鳴らした」と「もう一度鳴らす」
  */
-function ReadyNudgeDialog({ nudge, bell, onRing, onStay }: { nudge: ReadyNudge; bell: BellView | null; onRing: () => void; onStay: () => void }) {
+function ReadyNudgeDialog({ nudge, bell, bellProblem: problem, onRing, onStay }: { nudge: ReadyNudge; bell: BellView | null; bellProblem?: string | null; onRing: () => void; onStay: () => void }) {
   const hubRef = useRef<HTMLButtonElement>(null);
   const bellRef = useRef<HTMLButtonElement>(null);
   // 既定のボタンに、はじめの 1 回だけ移る（鳴らした後に、もう一度鳴らすへ移らない）
@@ -505,6 +507,7 @@ function ReadyNudgeDialog({ nudge, bell, onRing, onStay }: { nudge: ReadyNudge; 
           </div>
         )}
         {bell?.note && <p class="prep-bellnote">{bell.note}</p>}
+        {problem && <p class="prep-bellnote">{problem}</p>}
         <div class="hub-dactions">
           {bell && <button ref={bellRef} type="button" class={`hub-btn ${bell.primary ? 'primary' : ''}`} onClick={onRing}>{bell.label}</button>}
           <button ref={hubRef} type="button" class={`hub-btn ${bell?.primary ? '' : 'primary'}`} onClick={toHub}>{tr('拠点へ戻る', 'Back to the hub')}</button>

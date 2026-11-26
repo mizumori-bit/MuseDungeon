@@ -114,10 +114,11 @@ describe('S14 §65.4 の 2: the pace wish (self by default changes nothing; pilo
     const st = await act(r.port, { type: 'start_expedition', offer: 1 });
     const stText = r.port.formatActionText(st);
     expect(stText.split('\n').filter((l) => l === PACE_JA)).toHaveLength(1);
-    expect(st.ok && st.observation.self.owner_pace?.pace).toBe('pilot');
+    // 構造化した値: 始めた直後の 1 回は文つき、迷宮の中のほかの応答は値だけ（S14b）
+    expect(st.ok && st.observation.self.owner_pace).toEqual({ pace: 'pilot', text: PACE_JA });
     const w1 = await act(r.port, { type: 'wait' });
     expect(r.port.formatActionText(w1)).not.toContain(PACE_JA);
-    expect(w1.ok && w1.observation.self.owner_pace?.pace).toBe('pilot');
+    expect(w1.ok && w1.observation.self.owner_pace).toEqual({ pace: 'pilot' });
     // 帰ったキャンプにも出る
     await lifelineHome(r);
     expect(campText(r)).toContain(PACE_JA);

@@ -3,8 +3,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { bellUrl } from '../src/ui/bell';
 import {
-  KG, kgAlive, kgBeat, kgClampN, kgExplainLines, kgForget, kgLastRingText, kgLeader, kgLeft, kgMaybeBlocked, kgOffer, kgOnOpen, kgPortFailed, kgPortFailText, kgPortOk, kgRang, kgRead, kgReadAll, kgRunningText, kgViaText,
-  kgStart, kgStep, kgStoppedText, kgStopText, kgWrite, type KgObs, type KgRow, type KgState,
+  KG, kgAlive, kgBeat, kgClampN, kgExplainLines, kgForget, kgHeartbeat, kgLastRingText, kgLeader, kgLeave, kgLeft, kgMaybeBlocked, kgOffer, kgOnOpen, kgPortFailed, kgPortFailText, kgPortOk, kgRang, kgRead, kgReadAll, kgRunningText,
+  kgSanitize, kgStart, kgStep, kgStoppedText, kgStopText, kgViaText, kgWrite, type KgObs, type KgRow, type KgState,
 } from '../src/ui/keepGoing';
 import { paceLine, paceNote, paceSavedNote } from '../src/ui/prepState';
 import { setLocale } from '../src/util';
@@ -27,55 +27,75 @@ function tick(st: KgState, obs: KgObs, now: number, blocked = false): { st: KgSt
 }
 
 describe('S14 §65.2: when to ring at camp', () => {
-  it('30 s after the AI\'s last call; every 2 min at the same camp, 3 times; then stops with "does not wake"', () => {
+  it('2 min after the AI\'s last call (S14b: not 30 s, which an AI thinking over a long camp observation passes); every 2 min at the same camp, 3 times; then stops with "does not wake"', () => {
+    expect(KG.CAMP_SILENT_MS).toBe(2 * MIN);
     let st = start();
-    // 呼び出しの直後は、鳴らさない
+    // 呼び出しの直後も、考えている間（30 秒・1 分 59 秒）も、鳴らさない
     let r = tick(st, row({ ai: silentFor(10 * S) }), T0 + 10 * S);
     expect(r.ring).toBeNull();
-    // 30 秒たった: 1 回目
     r = tick(r.st, row({ ai: silentFor(30 * S) }), T0 + 30 * S);
+    expect(r.ring).toBeNull();
+    r = tick(r.st, row({ ai: silentFor(2 * MIN - S) }), T0 + 2 * MIN - S);
+    expect(r.ring).toBeNull();
+    // 2 分たった: 1 回目
+    r = tick(r.st, row({ ai: silentFor(2 * MIN) }), T0 + 2 * MIN);
     expect(r.ring).toBe('camp');
     expect(r.st.campRings).toBe(1);
     expect(r.st.rings).toBe(1);
     st = r.st;
     // 2 分たつまでは、鳴らさない
-    r = tick(st, row({ ai: silentFor(90 * S) }), T0 + 90 * S);
+    r = tick(st, row({ ai: silentFor(3 * MIN) }), T0 + 3 * MIN);
     expect(r.ring).toBeNull();
-    r = tick(r.st, row({ ai: silentFor(2 * MIN + 29 * S) }), T0 + 2 * MIN + 29 * S);
+    r = tick(r.st, row({ ai: silentFor(4 * MIN - S) }), T0 + 4 * MIN - S);
     expect(r.ring).toBeNull();
-    // 2 回目・3 回目
-    r = tick(r.st, row({ ai: silentFor(2 * MIN + 30 * S) }), T0 + 2 * MIN + 30 * S);
+    // 2 回目・3 回目（2 分おき）
+    r = tick(r.st, row({ ai: silentFor(4 * MIN) }), T0 + 4 * MIN);
     expect(r.ring).toBe('camp');
-    r = tick(r.st, row({ ai: silentFor(4 * MIN + 30 * S) }), T0 + 4 * MIN + 30 * S);
+    r = tick(r.st, row({ ai: silentFor(6 * MIN) }), T0 + 6 * MIN);
     expect(r.ring).toBe('camp');
     expect(r.st.campRings).toBe(3);
     // 3 回鳴らしても、遠征が始まらない: 2 分後に止まる（4 回目は鳴らさない）
-    r = tick(r.st, row({ ai: silentFor(5 * MIN + 30 * S) }), T0 + 5 * MIN + 30 * S);
+    r = tick(r.st, row({ ai: silentFor(7 * MIN) }), T0 + 7 * MIN);
     expect(r.ring).toBeNull();
     expect(r.st.status).toBe('running');
-    r = tick(r.st, row({ ai: silentFor(6 * MIN + 30 * S) }), T0 + 6 * MIN + 30 * S);
+    r = tick(r.st, row({ ai: silentFor(8 * MIN) }), T0 + 8 * MIN);
     expect(r.ring).toBeNull();
     expect(r.st.status).toBe('stopped');
     expect(r.st.stop?.reason).toBe('no_wake');
     expect(kgStoppedText(r.st)).toBe('続けて遊ばせる、は止まった: ミュゼ美が、起きない（同じキャンプで、呼び鈴を 3 回鳴らしても、遠征が始まらなかった）。');
   });
 
-  it('never while the AI is calling or waiting; a never-called AI (since the server started) counts as silent', () => {
+  it('never while the AI is calling or waiting; an unknown last call (right after a server restart) counts from when it was first seen unknown (S14b)', () => {
     const st = start();
     expect(tick(st, row({ ai: { lastCallAgoS: 600, waitingNow: true } }), T0).ring).toBeNull();
-    expect(tick(st, row({ ai: { lastCallAgoS: null, waitingNow: false } }), T0).ring).toBe('camp');
-    expect(tick(st, row({ ai: undefined }), T0).ring).toBe('camp');
+    for (const ai of [{ lastCallAgoS: null, waitingNow: false }, undefined]) {
+      // 分からないのを最初に見た: すぐには鳴らさず、その時刻を覚える
+      let r = tick(st, row({ ai }), T0);
+      expect(r.ring).toBeNull();
+      expect(r.st.unknownSince).toBe(T0);
+      r = tick(r.st, row({ ai }), T0 + 2 * MIN - S);
+      expect(r.ring).toBeNull();
+      r = tick(r.st, row({ ai }), T0 + 2 * MIN);
+      expect(r.ring).toBe('camp');
+      // 分かるようになったら、消える
+      expect(tick(r.st, row({ ai: silentFor(5 * S) }), T0 + 3 * MIN).st.unknownSince).toBeNull();
+    }
+    // 迷宮の中も同じ（5 分）
+    let d = tick(st, row({ status: 'in_dungeon', ai: { lastCallAgoS: null, waitingNow: false } }), T0);
+    expect(d.ring).toBeNull();
+    d = tick(d.st, row({ status: 'in_dungeon', ai: { lastCallAgoS: null, waitingNow: false } }), T0 + 5 * MIN);
+    expect(d.ring).toBe('dungeon');
   });
 
   it('the AI waking after a ring clears the warning; a new camp starts the count again', () => {
-    let r = tick(start(), row({ ai: silentFor(40 * S) }), T0, true);
+    let r = tick(start(), row({ ai: silentFor(2 * MIN) }), T0, true);
     expect(r.st.attention).toEqual({ at: T0, where: 'camp' });
     // 鳴らした後に呼び出した（黙っている時間が、鳴らしてからの時間より短い）: 起きた
     r = tick(r.st, row({ ai: silentFor(5 * S) }), T0 + 20 * S);
     expect(r.st.attention).toBeNull();
     // 遠征を始めて、終えて、キャンプに戻った（終わった遠征が 1 つ増えた）: 数え直す
     r = tick(r.st, row({ status: 'in_dungeon', ai: silentFor(3 * S) }), T0 + 5 * MIN);
-    r = tick(r.st, row({ expeditionsEnded: 1, ai: silentFor(31 * S) }), T0 + 30 * MIN);
+    r = tick(r.st, row({ expeditionsEnded: 1, ai: silentFor(2 * MIN) }), T0 + 30 * MIN);
     expect(r.ring).toBe('camp');
     expect(r.st.campKey).toBe(1);
     expect(r.st.campRings).toBe(1);
@@ -99,11 +119,11 @@ describe('S14 §65.2: in the dungeon, counting, and stopping', () => {
     // キャンプで始めた: あと 2 回
     let st = start({ total: 2, ended: 4 });
     expect(kgLeft(st, 4)).toBe(2);
-    let r = tick(st, row({ expeditionsEnded: 5, ai: silentFor(31 * S) }), T0 + 40 * MIN);
+    let r = tick(st, row({ expeditionsEnded: 5, ai: silentFor(2 * MIN) }), T0 + 40 * MIN);
     expect(r.ring).toBe('camp');
     expect(kgLeft(r.st, 5)).toBe(1);
     expect(kgRunningText(kgLeft(r.st, 5))).toBe('続けて遊ばせている（あと 1 回）');
-    r = tick(r.st, row({ expeditionsEnded: 6, ai: silentFor(31 * S) }), T0 + 80 * MIN);
+    r = tick(r.st, row({ expeditionsEnded: 6, ai: silentFor(2 * MIN) }), T0 + 80 * MIN);
     expect(r.ring).toBeNull();
     expect(r.st.stop?.reason).toBe('done');
     expect(kgStopText('done', 'ミュゼ美', 2)).toBe('決めた回数（2 回）の遠征が終わった。');
@@ -128,6 +148,9 @@ describe('S14 §65.2: in the dungeon, counting, and stopping', () => {
     expect(reason(row({ status: 'in_dungeon', continuable: false }))).toBeNull();
     expect(reason(row({ hold: ['perks'] }))).toBe('held');
     expect(reason(row(), false)).toBe('bell_off');
+    // 覚えた受け口の設定の形が違う（S14b）: 鳴らさずに止める
+    expect(kgStep(st, row({ ai: silentFor(10 * MIN) }), { now: T0, bellOn: true, bellSetup: true })).toEqual({ state: expect.objectContaining({ status: 'stopped', stop: { reason: 'bell_setup', at: T0 } }), ring: null });
+    expect(kgStopText('bell_setup', 'ミュゼ美', 3)).toContain('呼び鈴の設定を見直す');
     expect(reason(row({ eligible: false }))).toBe('not_owner');
     expect(kgStep(st, { kind: 'error' }, on(T0)).state).toBe(st);
     // 一覧に無い（持ち主と認められないかもしれない）: 続けて 2 回で止める
@@ -142,7 +165,7 @@ describe('S14 §65.2: in the dungeon, counting, and stopping', () => {
 });
 
 describe('S14 §65.4 の 3: where the button shows', () => {
-  it('only for an owned AI adventurer with nothing held, with the bell set to call your own tool', () => {
+  it('only for an owned AI adventurer with nothing held, with the bell on (a link or this PC\'s receiver)', () => {
     expect(kgOffer({ row: base(), bellOn: true })).toBe('start');
     expect(kgOffer({ row: base({ status: 'in_dungeon' }), bellOn: true })).toBe('start');
     expect(kgOffer({ row: base({ hold: ['objective'] }), bellOn: true })).toBe('held');
@@ -177,7 +200,7 @@ describe('S14 §65.4 の 3: two tabs never ring twice; closing every tab stops i
     expect(kgLeader(tabs, T0 + 2 * S)).toBe('a');
     // 2 つのタブが、同じ時に様子を見ても、鳴らすのは 1 つ
     const st = start();
-    const rings = ['a', 'b'].filter((me) => kgLeader(tabs, T0 + 40 * S) === me && kgStep(st, row({ ai: silentFor(40 * S) }), on(T0 + 40 * S)).ring);
+    const rings = ['a', 'b'].filter((me) => kgLeader(tabs, T0 + 20 * S) === me && kgStep(st, row({ ai: silentFor(2 * MIN) }), on(T0 + 20 * S)).ring);
     expect(rings).toEqual(['a']);
     // a が、閉じるときの知らせ（pagehide）を出さずに消えた: 印が 30 秒より古くなれば、b が鳴らす役になる（捨てるのは 3 分後）
     const t1 = T0 + KG.TAB_FRESH_MS + 5 * S;
@@ -200,21 +223,50 @@ describe('S14 §65.4 の 3: two tabs never ring twice; closing every tab stops i
     expect(kgStep(rung, row({ expeditionsEnded: 0, ai: silentFor(10 * MIN) }), on(T0 + KG.RING_COOLDOWN_MS)).ring).toBe('camp');
   });
 
-  it('on opening: no other live tab and not a reload means every tab was closed (it does not restart by itself)', () => {
+  it('on opening: no other live tab and not a reload (the browser says "reload") means every tab was closed (it does not restart by itself)', () => {
     const st = start();
-    const closed = kgOnOpen(st, { a: T0 - KG.TAB_OPEN_MS - S }, null, T0);
+    const fresh = { reloadAt: null, type: 'navigate' };
+    const closed = kgOnOpen(st, { a: T0 - KG.TAB_OPEN_MS - S }, 'n', fresh, T0);
     expect(closed.status).toBe('stopped');
     expect(closed.stop?.reason).toBe('tabs_closed');
     expect(kgStoppedText(closed)).toBe('続けて遊ばせる、は止まっている（タブを閉じたため）。もう一度始める？');
-    expect(kgOnOpen(st, {}, null, T0).stop?.reason).toBe('tabs_closed');
-    // ほかのタブが生きている・このタブの読み直し: 続ける
-    expect(kgOnOpen(st, { a: T0 - 30 * S }, null, T0)).toBe(st);
-    expect(kgOnOpen(st, {}, T0 - 5 * S, T0)).toBe(st);
-    expect(kgOnOpen(st, {}, T0 - KG.RELOAD_GRACE_MS - S, T0).stop?.reason).toBe('tabs_closed');
+    expect(kgOnOpen(st, {}, 'n', fresh, T0).stop?.reason).toBe('tabs_closed');
+    // ほかのタブが生きている: 続ける
+    expect(kgOnOpen(st, { a: T0 - 30 * S }, 'n', fresh, T0)).toBe(st);
+    // 読み直し（F5）: ブラウザが reload と言い、閉じる直前の時刻か、自分の印が残っている
+    expect(kgOnOpen(st, {}, 'm', { reloadAt: T0 - 5 * S, type: 'reload' }, T0)).toBe(st);
+    expect(kgOnOpen(st, { m: T0 - 8 * S }, 'm', { reloadAt: null, type: 'reload' }, T0)).toBe(st);
+    expect(kgOnOpen(st, {}, 'm', { reloadAt: T0 - KG.RELOAD_GRACE_MS - S, type: 'reload' }, T0).stop?.reason).toBe('tabs_closed');
+    // S14b: 閉じたタブをすぐ開き直した・セッションの復元（sessionStorage と自分の古い印が残っていても、reload でなければ続けない）
+    expect(kgOnOpen(st, { m: T0 - 8 * S }, 'm', { reloadAt: T0 - 5 * S, type: 'back_forward' }, T0).stop?.reason).toBe('tabs_closed');
+    expect(kgOnOpen(st, {}, 'm', { reloadAt: T0 - 5 * S, type: 'navigate' }, T0).stop?.reason).toBe('tabs_closed');
+    expect(kgOnOpen(st, {}, 'm', { reloadAt: T0 - 5 * S, type: null }, T0).stop?.reason).toBe('tabs_closed');
     const stopped = { ...st, status: 'stopped' as const, stop: { reason: 'by_owner' as const, at: T0 } };
-    expect(kgOnOpen(stopped, {}, null, T0)).toBe(stopped);
+    expect(kgOnOpen(stopped, {}, 'n', fresh, T0)).toBe(stopped);
     setLocale('en');
     expect(kgStoppedText(closed)).toBe('"Keep them going" is stopped (The tab was closed). Start it again?');
+  });
+
+  it('handing over the ringer (S14b): heartbeat, closing with pagehide, closing without it, and a reload', () => {
+    // a と b が開いている: a が鳴らす役
+    let tabs = kgHeartbeat({}, 'b', T0).tabs;
+    let hb = kgHeartbeat(tabs, 'a', T0 + S);
+    tabs = hb.tabs;
+    expect(hb.leader).toBe(true);
+    expect(kgHeartbeat(tabs, 'b', T0 + 2 * S).leader).toBe(false);
+    // a を閉じた（pagehide が来た）: 印が外れ、b が次の様子見で、すぐ引き継ぐ
+    const left = kgLeave(tabs, 'a');
+    expect(Object.keys(left)).toEqual(['b']);
+    expect(kgHeartbeat(left, 'b', T0 + 3 * S).leader).toBe(true);
+    // a が pagehide を出さずに消えた: 印が 30 秒より古くなるまでは a のまま、その後は b
+    expect(kgHeartbeat(tabs, 'b', T0 + 20 * S).leader).toBe(false);
+    expect(kgHeartbeat(tabs, 'b', T0 + S + KG.TAB_FRESH_MS + S).leader).toBe(true);
+    // a の読み直し（同じ ID）: 印が残っていれば、また a が鳴らす役
+    hb = kgHeartbeat(kgHeartbeat(tabs, 'b', T0 + 10 * S).tabs, 'a', T0 + 12 * S);
+    expect(hb.leader).toBe(true);
+    // 2 つのタブが同じ時に鳴らそうとしても、鳴らした記録が書かれた後は、もう片方は 60 秒鳴らさない
+    const st = kgRang(start(), 'camp', T0, false);
+    expect(kgStep({ ...st, campKey: 0, campRings: 1 }, row({ ai: silentFor(10 * MIN) }), on(T0 + 10 * S)).ring).toBeNull();
   });
 });
 
@@ -291,9 +343,40 @@ describe('S14: kept in this browser (localStorage)', () => {
       expect(Object.keys(kgReadAll())).toEqual(['run_ab12']);
       kgForget('run_ab12');
       expect(kgRead('run_ab12')).toBeNull();
+      // S14b: 書き換えた状態も、読むときに整える（数は範囲の中に・知らない形は捨てる）
+      const tampered = { ...start(), total: 1e9, campRings: -50, startEnded: -3.7, lastRingAt: -1, rings: 2.9, missing: -9, log: [...Array(40)].map(() => ({ at: T0, where: 'camp', maybeBlocked: false })) };
+      mem.set('muse.pref.keepGoing', JSON.stringify({ run_ab12: tampered, run_x: { ...start(), runId: 'run_x', total: 'many' }, run_y: { ...start(), runId: 'run_y', lastRingAt: 'soon' }, 'bad id!': { ...start(), runId: 'bad id!' } }));
+      const read = kgReadAll();
+      expect(Object.keys(read)).toEqual(['run_ab12']);
+      const t = read.run_ab12;
+      expect([t.total, t.campRings, t.startEnded, t.lastRingAt, t.rings, t.missing, t.log.length]).toEqual([KG.N_MAX, 0, 0, 0, 2, 0, 5]);
     } finally {
       if (had) Object.defineProperty(g, 'window', had);
       else delete g.window;
     }
+  });
+
+  it('S14b: a tampered state does not keep ringing (the camp count is capped; it stops as "does not wake")', () => {
+    // キャンプで鳴らした回数を負に・回数を大きく書き換えた
+    const s0 = kgSanitize({ ...start(), total: 999, campKey: 0, campRings: -1000, lastRingAt: 0 }, 'run_ab12')!;
+    expect(s0.total).toBe(KG.N_MAX);
+    expect(s0.campRings).toBe(0);
+    let st = s0;
+    let rings = 0;
+    // 1 時間、AI が黙ったまま、同じキャンプで、10 秒ごとに様子を見る
+    for (let t = T0; t < T0 + 60 * MIN && st.status === 'running'; t += 10 * S) {
+      const r = kgStep(st, row({ ai: silentFor(t - T0 + 10 * MIN) }), on(t));
+      st = r.ring ? kgRang(r.state, r.ring, t, false) : r.state;
+      if (r.ring) rings++;
+      // 鳴らす役が替わるたびに、書いた状態を読み直す（整え直しても、増えない）
+      st = kgSanitize(JSON.parse(JSON.stringify(st)), 'run_ab12')!;
+    }
+    expect(rings).toBe(KG.CAMP_RINGS_MAX);
+    expect(st.stop?.reason).toBe('no_wake');
+    // 形の違うもの: 捨てる
+    for (const bad of [null, 'x', [], { ...start(), v: 2 }, { ...start(), status: 'paused' }, { ...start(), status: 'stopped', stop: null }, { ...start(), stop: { reason: 'whatever', at: T0 } }, { ...start(), seasonId: 's 5' }, { ...start(), log: [{ at: T0, where: 'moon' }] }, { ...start(), startEnded: Number.NaN }]) {
+      expect(kgSanitize(bad, 'run_ab12')).toBeNull();
+    }
+    expect(kgSanitize(start(), 'run_other')).toBeNull();
   });
 });

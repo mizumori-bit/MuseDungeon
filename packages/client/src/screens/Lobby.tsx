@@ -10,7 +10,7 @@ import type { LeaderboardEntry, Locale, OpsRosterResponse, OwnerRunRow, ProfileR
 import { endReasonText, kindName, nameOf, objectiveText } from '@muse/shared';
 import { useEffect, useState } from 'preact/hooks';
 import { ApiError, api, errorText } from '../api';
-import { bellMode, readBellConfig, type BellConfig } from '../ui/bell';
+import { bellOn, bellProblem, readBellConfig, type BellConfig } from '../ui/bell';
 import { BellSettings } from '../ui/bellSettings';
 import { ErrorBanner, Header, useCatalog, useLocaleRefresh } from '../ui/common';
 import { normName, SeasonSharedFlow, sortStandings, STANDING_SORTS, standingSortName, StandingsTable, type StandingSort } from '../ui/home';
@@ -567,7 +567,7 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
   const cardRunIds = new Set([...myCards, ...operatorCards].map((c) => c.runId).filter((x): x is string => !!x));
   const kgFor = (c: HubEntry): KgState | null => (c.runId ? kgStates[c.runId] : undefined)
     ?? Object.values(kgStates).find((s) => s.status === 'stopped' && s.seasonId === c.seasonId && s.name === c.name && !cardRunIds.has(s.runId)) ?? null;
-  const kgBox = (c: HubEntry) => <KeepGoingBox row={c.row} name={c.name} bellOn={bellMode(bellCfg) !== 'off'} via={bellCfg.mode === 'port' ? 'port' : 'link'} port={bellCfg.port} st={kgFor(c)} />;
+  const kgBox = (c: HubEntry) => <KeepGoingBox row={c.row} name={c.name} bellOn={bellOn(bellCfg)} problem={bellProblem(bellCfg)} via={bellCfg.mode === 'port' ? 'port' : 'link'} port={bellCfg.port} st={kgFor(c)} />;
   const badKeys = (advs ?? []).filter((a) => !a.ok).length;
   const needKey = !hasKey || (advs !== null && advs.length > 0 && advs.every((a) => !a.ok));
   /** 順位を出すシーズン: 札のシーズン（無ければ、いちばん上の開催中のシーズン） */

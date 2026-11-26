@@ -524,6 +524,8 @@ export class SessionPlayerPort implements PlayerPort {
     // 進め方の希望（S14）: 遠征を始めた直後の応答（迷宮の中の最初の応答。前の基準が無い応答も）にも 1 回。キャンプでは観測の文に出ている
     const paceStart = !!ownerPace && p.changes === true && view.status !== 'at_camp' && !!view.expedition && view.expedition.status !== 'ended'
       && cur.expNo !== null && (!prev || prev.expNo !== cur.expNo);
+    // 構造化した値も、この 1 回だけ文つき（S14b。迷宮の中のほかの応答は { pace } だけ）
+    if (paceStart && observation.self.owner_pace) observation.self.owner_pace = { pace: 'pilot', text: ownerPace };
     const text = [body, paceStart ? ownerPace : '', changesLine(L, turn.changes), turnLine(view, turn, !long)].filter(Boolean).join('\n');
     return { observation, text, turn };
   }

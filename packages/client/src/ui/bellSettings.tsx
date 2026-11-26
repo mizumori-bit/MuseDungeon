@@ -2,13 +2,13 @@
 // このブラウザにだけ覚える（サーバーへは送らない）。受け口の送り先の名前は、いつも 127.0.0.1（変えられるのは、ポートだけ）。
 import { useEffect, useState } from 'preact/hooks';
 import { tr } from '../util';
-import { BELL_HOST, BELL_PATH, BELL_PORT_MAX, BELL_PORT_MIN, bellKeyValid, bellPortValid, newBellKey, saveBellConfig, type BellConfig, type BellMode } from './bell';
+import { BELL_HOST, BELL_PATH, BELL_PORT_MAX, BELL_PORT_MIN, bellKeyValid, bellPortParse, bellProblem, newBellKey, saveBellConfig, type BellConfig, type BellMode } from './bell';
 
 /** 受け口の設定の入力を確かめる（画面から離した関数）。合えば設定、違えば断りの文 */
 export function bellPortDraft(portText: string, keyText: string): { ok: true; port: number; key: string | null } | { ok: false; error: string } {
-  const p = portText.trim();
-  const port = /^\d+$/.test(p) ? Number(p) : NaN;
-  if (!bellPortValid(port)) return { ok: false, error: tr(`ポートは ${BELL_PORT_MIN}〜${BELL_PORT_MAX} の数`, `The port is a number from ${BELL_PORT_MIN} to ${BELL_PORT_MAX}`) };
+  // 覚えた値の読み方（readBellConfig）と同じ: 数字だけで、範囲の中（S14b）
+  const port = bellPortParse(portText);
+  if (port === null) return { ok: false, error: tr(`ポートは ${BELL_PORT_MIN}〜${BELL_PORT_MAX} の数`, `The port is a number from ${BELL_PORT_MIN} to ${BELL_PORT_MAX}`) };
   const k = keyText.trim();
   if (k && !bellKeyValid(k)) return { ok: false, error: tr('合言葉は、英数字と - _ で 8〜64 字（空でもよい）', 'The passphrase is 8-64 letters, digits, - or _ (or empty)') };
   return { ok: true, port, key: k || null };
@@ -18,10 +18,13 @@ export function BellSettings({ cfg, onChange }: { cfg: BellConfig; onChange: (c:
   // 受け口を選んでいる（まだ保存していない間も、入力の欄を出す）
   const [pick, setPick] = useState<BellMode>(cfg.mode);
   const [portText, setPortText] = useState(cfg.port ? String(cfg.port) : '');
+  // 覚えた合言葉の形が違えば、欄は空から（S14b。違う値を出さない）
   const [keyText, setKeyText] = useState(cfg.key ?? '');
   const [err, setErr] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [showKey, setShowKey] = useState(false);
   useEffect(() => { setPick(cfg.mode); }, [cfg.mode]);
+  const problem = bellProblem(cfg);
   const set = (c: BellConfig) => { saveBellConfig(c); onChange(c); };
   const choose = (m: BellMode) => {
     setPick(m);
@@ -61,14 +64,17 @@ export function BellSettings({ cfg, onChange }: { cfg: BellConfig; onChange: (c:
             <input type="number" min={BELL_PORT_MIN} max={BELL_PORT_MAX} step={1} value={portText} onInput={(e) => { setPortText((e.target as HTMLInputElement).value); setSaved(false); }} />
           </label>
           <label class="inline">{tr('合言葉（任意。英数字と - _ で 8〜64 字）', 'Passphrase (optional; 8-64 letters, digits, - or _)')}
-            <input type="text" autocomplete="off" spellcheck={false} maxLength={64} value={keyText} onInput={(e) => { setKeyText((e.target as HTMLInputElement).value); setSaved(false); }} />
+            {/* 画面に平文で出し続けない（S14b）: 伏せて出し、「見る」で切り替え */}
+            <input type={showKey ? 'text' : 'password'} autocomplete="off" spellcheck={false} maxLength={64} value={keyText} onInput={(e) => { setKeyText((e.target as HTMLInputElement).value); setSaved(false); }} />
           </label>
           <div class="row">
+            <button type="button" class="small" aria-pressed={showKey} onClick={() => setShowKey(!showKey)}>{showKey ? tr('伏せる', 'Hide') : tr('見る', 'Show')}</button>
             <button type="button" class="small" onClick={() => { setKeyText(newBellKey()); setSaved(false); }}>{tr('作る', 'Generate')}</button>
             <button type="submit" class="small primary">{tr('覚える', 'Save')}</button>
             {saved && <span class="muted small">{tr('覚えた。', 'Saved.')}</span>}
           </div>
           {err && <div class="oerr">{err}</div>}
+          {problem && !saved && <div class="oerr">{problem}</div>}
           <p class="muted small">{tr(`届く本文: season=<ID>&run=<ID>（pilot で進める冒険者は &mode=pilot）${shownKey ? '&key=（合言葉）' : ''}。送り先: http://${BELL_HOST}:${shownPort}${BELL_PATH}。つながらなければ「受け口が、動いていない」と出す。`, `Body: season=<ID>&run=<ID> (&mode=pilot for "With pilot")${shownKey ? '&key=(passphrase)' : ''}. Sent to http://${BELL_HOST}:${shownPort}${BELL_PATH}. If it cannot connect, you see "The receiver is not running".`)}</p>
           <p class="muted small">{tr('どのウェブのページからでも、この受け口に送れてしまう。受ける道具は、合言葉を確かめ、合わなければ何もしない（README の「呼び鈴」）。', 'Any web page can post to this receiver. Your receiving tool should check the passphrase and do nothing if it does not match (see "Bell" in the README).')}</p>
           {cfg.mode !== 'port' && <p class="muted small">{tr('「覚える」まで、前の設定のまま。', 'The previous setting stays until you press Save.')}</p>}

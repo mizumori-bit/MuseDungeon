@@ -40,7 +40,7 @@ export function KeepGoingNavMark() {
  * 札の中の段（拠点の冒険者の札）: 動いている間は「続けて遊ばせている（あと 2 回）」と「止める」、止まったら理由の 1 行、
  * 動いていなければ「続けて遊ばせる」（出せる冒険者だけ）か、握っている項目があるときの小さい 1 行
  */
-export function KeepGoingBox({ row, name, bellOn, via, port, st }: { row: OwnerRunRow | null; name: string; bellOn: boolean; via: BellVia; port: number | null; st: KgState | null }) {
+export function KeepGoingBox({ row, name, bellOn, problem, via, port, st }: { row: OwnerRunRow | null; name: string; bellOn: boolean; problem?: string | null; via: BellVia; port: number | null; st: KgState | null }) {
   const [dlg, setDlg] = useState<number | null>(null);
   const ended = row?.expeditionsEnded ?? st?.seen?.ended ?? 0;
   const offer = kgOffer({ row, bellOn });
@@ -78,17 +78,21 @@ export function KeepGoingBox({ row, name, bellOn, via, port, st }: { row: OwnerR
       </div>
     );
   } else if (st?.status === 'stopped') {
-    const again = st.stop?.reason === 'tabs_closed' && offer === 'start';
+    const again = st.stop?.reason === 'tabs_closed' && offer === 'start' && !problem;
     body = (
       <div class="kg-box is-stopped">
         <p class="hub-note">{kgStoppedText(st)}</p>
+        {problem && offer === 'start' && <p class="hub-note warn">{problem}</p>}
         <div class="kg-head">
           {again && <button type="button" class="hub-btn small primary" onClick={() => setDlg(kgLeft(st, ended) || KG.N_DEFAULT)}>{tr('もう一度始める', 'Start again')}</button>}
-          {!again && offer === 'start' && <button type="button" class="hub-btn small" onClick={() => setDlg(KG.N_DEFAULT)}>{tr('続けて遊ばせる', 'Keep them going')}</button>}
+          {!again && offer === 'start' && !problem && <button type="button" class="hub-btn small" onClick={() => setDlg(KG.N_DEFAULT)}>{tr('続けて遊ばせる', 'Keep them going')}</button>}
           <button type="button" class="hub-linkbtn" onClick={() => kgForget(st.runId)}>{tr('閉じる', 'Dismiss')}</button>
         </div>
       </div>
     );
+  } else if (offer === 'start' && problem) {
+    // 覚えた受け口の設定の形が違う（S14b）: 始めさせずに、見直すように出す
+    body = <p class="hub-note warn kg-held">{problem}</p>;
   } else if (offer === 'start') {
     body = (
       <div class="kg-box">

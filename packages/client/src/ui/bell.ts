@@ -12,8 +12,11 @@ import { getPref, setPref, tr } from '../util';
 
 /** 設定: 使わない（既定）・自分の道具を呼ぶ（リンク）・この PC の受け口を呼ぶ（S14a） */
 export type BellMode = 'off' | 'tool' | 'port';
-/** 設定の全部（port: 受け口のポート。key: 合言葉。どちらも検査を通ったものだけ。無ければ null） */
-export interface BellConfig { mode: BellMode; port: number | null; key: string | null }
+/**
+ * 設定の全部（port: 受け口のポート。key: 合言葉。どちらも検査を通ったものだけ。無ければ null）。
+ * bad（S14b）: 覚えてあるポートか合言葉が、形の検査を通らない（書き換えられた など）。受け口の設定では鳴らさず、「呼び鈴の設定を見直す」と出す
+ */
+export interface BellConfig { mode: BellMode; port: number | null; key: string | null; bad?: 'port' | 'key' }
 /** 鳴らし方（札と窓の文を変える）: link リンク・port 受け口 */
 export type BellVia = 'link' | 'port';
 
@@ -48,11 +51,32 @@ export function newBellKey(bytes?: Uint8Array): string {
   return out;
 }
 
+/** ポートの文字（入力の欄と、覚えた値で同じ読み方: 数字だけで、範囲の中）。読めなければ null */
+export function bellPortParse(text: string): number | null {
+  const t = text.trim();
+  if (!/^\d+$/.test(t)) return null;
+  const n = Number(t);
+  return bellPortValid(n) ? n : null;
+}
+
 export function readBellConfig(): BellConfig {
   const m = getPref(PREF, 'off');
-  const port = Number(getPref(PREF_PORT, ''));
-  const key = getPref(PREF_KEY, '');
-  return { mode: m === 'tool' || m === 'port' ? m : 'off', port: bellPortValid(port) ? port : null, key: bellKeyValid(key) ? key : null };
+  const mode: BellMode = m === 'tool' || m === 'port' ? m : 'off';
+  const portText = getPref(PREF_PORT, '');
+  const keyText = getPref(PREF_KEY, '');
+  const port = bellPortParse(portText);
+  const key = bellKeyValid(keyText) ? keyText : null;
+  // 覚えてある値が、形の検査を通らない（空は「無い」で、合言葉は任意）
+  const bad = mode === 'port' ? (port === null ? 'port' as const : keyText && key === null ? 'key' as const : undefined) : undefined;
+  return { mode, port, key, ...(bad ? { bad } : {}) };
+}
+
+/** 受け口の設定に足りない・違う所があるときの 1 行（S14b。無ければ null） */
+export function bellProblem(c: BellConfig): string | null {
+  if (c.mode !== 'port' || !c.bad) return null;
+  return c.bad === 'key'
+    ? tr('呼び鈴の設定を見直す（覚えた合言葉の形が違う。運用の画面で、決め直す）', 'Check the bell settings (the saved passphrase is not valid; set it again on the Operations screen)')
+    : tr('呼び鈴の設定を見直す（受け口のポートが決まっていない。運用の画面で、決める）', 'Check the bell settings (the receiver port is not set; set it on the Operations screen)');
 }
 
 /** 設定を覚える（検査を通らないポート・合言葉は覚えない） */
@@ -68,6 +92,11 @@ export function readBell(): BellMode {
 }
 export function bellMode(c: BellConfig): BellMode {
   return c.mode === 'port' && c.port === null ? 'off' : c.mode;
+}
+
+/** 呼び鈴を使う設定か（「使わない」でない。設定に違う所があっても true: 鳴らす時に「見直す」と出す） */
+export function bellOn(c: BellConfig): boolean {
+  return c.mode !== 'off';
 }
 
 export function saveBell(mode: BellMode): void {
@@ -108,7 +137,8 @@ export function bellBody(ids: BellIds, key: string | null | undefined): string |
 export interface BellPortRequest { port: number; url: string; init: RequestInit }
 
 export function bellPortRequest(c: BellConfig, ids: BellIds): BellPortRequest | null {
-  if (c.mode !== 'port' || !bellPortValid(c.port)) return null;
+  // 覚えた合言葉・ポートの形が違う（S14b）: 合言葉なしで送らない。鳴らさない
+  if (c.mode !== 'port' || c.bad || !bellPortValid(c.port)) return null;
   const body = bellBody(ids, c.key);
   if (body === null) return null;
   return {

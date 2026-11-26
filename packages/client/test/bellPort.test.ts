@@ -1,7 +1,7 @@
 // S14a（SEASON.md §65.4。呼び鈴の鳴らし方を、もう 1 つ）: この PC の受け口（http://127.0.0.1:<ポート>/musedungeon-bell）へ、1 行の本文を送る。
 // ポートの範囲・合言葉の検査・本文の形・送り先が固定であること・つながらないときの文。画面から離した関数のテスト
 import { afterEach, describe, expect, it } from 'vitest';
-import { bellBody, bellKeyValid, bellMode, bellPortFailText, bellPortRequest, bellPortValid, bellRingOf, bellView, newBellKey, ringPort, type BellConfig } from '../src/ui/bell';
+import { bellBody, bellKeyValid, bellMode, bellOn, bellPortFailText, bellPortParse, bellPortRequest, bellPortValid, bellProblem, bellRingOf, bellView, newBellKey, readBellConfig, ringPort, type BellConfig } from '../src/ui/bell';
 import { bellPortDraft } from '../src/ui/bellSettings';
 import { setLocale } from '../src/util';
 
@@ -56,6 +56,46 @@ describe('S14a: the receiver on this PC (POST to 127.0.0.1)', () => {
     expect(bellRingOf(cfg({ mode: 'off' }), ids)).toBeNull();
     expect(bellMode(cfg({ port: null }))).toBe('off');
     expect(bellMode(cfg())).toBe('port');
+  });
+
+  it('S14b: saved values are read like the input (digits only, in range); a saved passphrase that fails the check means no ring and "check the bell settings", never a ring without it', () => {
+    const g = globalThis as { window?: unknown };
+    const had = Object.getOwnPropertyDescriptor(g, 'window');
+    const mem = new Map<string, string>();
+    const ls = { getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => void mem.set(k, v), removeItem: (k: string) => void mem.delete(k), key: (i: number) => [...mem.keys()][i] ?? null, get length() { return mem.size; } };
+    const put = (mode: string, port: string, key: string) => { mem.set('muse.pref.bell', mode); mem.set('muse.pref.bell.port', port); mem.set('muse.pref.bell.key', key); };
+    try {
+      Object.defineProperty(g, 'window', { value: { localStorage: ls }, configurable: true });
+      put('port', '47123', 'Abc_def-12345678');
+      expect(readBellConfig()).toEqual({ mode: 'port', port: 47123, key: 'Abc_def-12345678' });
+      expect(bellProblem(readBellConfig())).toBeNull();
+      // 合言葉は任意（空なら、合言葉なしで送る）
+      put('port', '47123', '');
+      expect(bellRingOf(readBellConfig(), ids)?.via).toBe('port');
+      // 形の違う合言葉: 合言葉なしでは送らない。鳴らさず「見直す」
+      put('port', '47123', 'bad key!');
+      const c1 = readBellConfig();
+      expect(c1.bad).toBe('key');
+      expect(bellRingOf(c1, ids)).toBeNull();
+      expect(bellProblem(c1)).toContain('呼び鈴の設定を見直す');
+      expect(bellOn(c1)).toBe(true);
+      // ポートの読み方は、入力と同じ（数字だけ・範囲の中）
+      for (const p of ['4.7e4', '47123abc', '0x1000', '80', '', '-47123', '99999']) {
+        put('port', p, '');
+        const c = readBellConfig();
+        expect(c.port).toBeNull();
+        expect(c.bad).toBe('port');
+        expect(bellRingOf(c, ids)).toBeNull();
+      }
+      expect(bellPortParse(' 47123 ')).toBe(47123);
+      // リンクの設定では、受け口の値は見ない
+      put('tool', 'junk', 'bad key!');
+      expect(bellProblem(readBellConfig())).toBeNull();
+      expect(bellRingOf(readBellConfig(), ids)?.via).toBe('link');
+    } finally {
+      if (had) Object.defineProperty(g, 'window', had);
+      else delete g.window;
+    }
   });
 
   it('a failed connection is "the receiver is not running"; the reply is never read', async () => {

@@ -3,9 +3,9 @@
 // タブを 2 つ開いていても、鳴らすのは、生きているタブのうち 1 つ（kgLeader）。タブを全部閉じたら止まり、次に開いても、自動では再開しない（kgOnOpen）。
 // 鳴らす時が来て、ブラウザが止めたかもしれないときは、どの画面でも、下の帯と札を光らせ、短い音を鳴らし、「今、鳴らす」を押してもらう。
 import { useEffect } from 'preact/hooks';
-import { bellMode, bellRingOf, readBellConfig } from './bell';
+import { bellOn, bellProblem, bellRingOf, readBellConfig } from './bell';
 import {
-  KG, kgBeat, kgBlockedText, kgLastInput, kgLastLaunch, kgLeader, kgMaybeBlocked, kgNoteInput, kgOnOpen, kgPace, kgPortFailText, kgRead, kgReadAll, kgReadTabs,
+  KG, kgBlockedText, kgHeartbeat, kgLastInput, kgLastLaunch, kgLeader, kgLeave, kgMaybeBlocked, kgNoteInput, kgOnOpen, kgPace, kgPortFailText, kgRead, kgReadAll, kgReadTabs,
   kgStep, kgStopped, kgWrite, kgWriteTabs, type KgState,
 } from './keepGoing';
 import { activationNow, kgChime, kgObserveRun, kgRingNow, kgRingVia } from './keepGoingRing';
@@ -39,20 +39,31 @@ function takeReloadAt(): number | null {
   }
 }
 
+/** ブラウザの言う、このページの開き方（reload・navigate・back_forward など。分からなければ null） */
+function navType(): string | null {
+  try {
+    const e = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined;
+    return e?.type ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /** アプリの根に置く: 鳴らす役と、呼び鈴を鳴らせなかったかもしれないときの帯（どの画面でも） */
 export function KeepGoingRunner() {
   const states = useKeepGoing();
   useEffect(() => {
     const me = tabId();
-    const reloadAt = takeReloadAt();
+    const nav = { reloadAt: takeReloadAt(), type: navType() };
     const now0 = Date.now();
-    // 開いたとき: ほかに生きているタブが無く、読み直しでもなければ、動いていたものは「タブを閉じたため」止まっている（自動では再開しない）
+    // 開いたとき: ほかに生きているタブが無く、このタブの読み直し（ブラウザが reload と言う）でもなければ、動いていたものは「タブを閉じたため」止まっている
+    // （自動では再開しない。S14b: 閉じたタブをすぐ開き直す・セッションの復元は、続けない）
     const tabs0 = kgReadTabs();
     for (const st of Object.values(kgReadAll())) {
-      const n = kgOnOpen(st, tabs0, reloadAt, now0);
+      const n = kgOnOpen(st, tabs0, me, nav, now0);
       if (n !== st) kgWrite(n);
     }
-    kgWriteTabs(kgBeat(tabs0, me, now0));
+    kgWriteTabs(kgHeartbeat(tabs0, me, now0).tabs);
     let busy = false;
     let lastInput = 0;
     const onInput = () => {
@@ -63,9 +74,9 @@ export function KeepGoingRunner() {
     };
     const tick = async () => {
       const now = Date.now();
-      const tabs = kgBeat(kgReadTabs(), me, now);
-      kgWriteTabs(tabs);
-      if (busy || kgLeader(tabs, now) !== me) return;
+      const hb = kgHeartbeat(kgReadTabs(), me, now);
+      kgWriteTabs(hb.tabs);
+      if (busy || !hb.leader) return;
       const running = Object.values(kgReadAll()).filter((s) => s.status === 'running');
       if (!running.length) return;
       busy = true;
@@ -77,14 +88,15 @@ export function KeepGoingRunner() {
           if (!fresh || fresh.status !== 'running') continue;
           const t = Date.now();
           const cfg = readBellConfig();
-          const { state: s1, ring } = kgStep(fresh, obs, { now: t, bellOn: bellMode(cfg) !== 'off' });
+          // 覚えた受け口のポート・合言葉の形が違う（S14b）: 鳴らさずに止めて、「呼び鈴の設定を見直す」
+          const { state: s1, ring } = kgStep(fresh, obs, { now: t, bellOn: bellOn(cfg), bellSetup: !!bellProblem(cfg) });
           const pace = obs.kind === 'row' ? kgPace(obs.row) : fresh.pace ?? null;
           const state: KgState = { ...s1, pace };
           if (!ring) { kgWrite(state); continue; }
           // 鳴らす直前に、もう一度、鳴らす役か確かめる（ほかのタブが開いた直後など）
           if (kgLeader(kgReadTabs(), t) !== me) continue;
           const r = bellRingOf(cfg, { season: state.seasonId, run: state.runId, pace });
-          if (!r) { kgWrite(kgStopped(state, 'bell_off', t)); continue; }
+          if (!r) { kgWrite(kgStopped(state, 'bell_setup', t)); continue; }
           // リンク: ブラウザが止めたかもしれないなら、光らせて押してもらう。受け口（S14a）: 人の操作が要らないので、そのまま送る
           const blocked = r.via === 'link' && kgMaybeBlocked({ activation: activationNow(), lastLaunchAt: kgLastLaunch(), lastInputAt: kgLastInput() });
           await kgRingVia(r, state, ring, t, blocked);
@@ -98,12 +110,10 @@ export function KeepGoingRunner() {
     const timer = setInterval(() => void tick(), KG.TICK_MS);
     // 閉じる・読み直す: このタブの印を外す（読み直しなら、この時刻で、同じタブとして続ける）
     const onHide = () => {
-      const t = kgReadTabs();
-      delete t[me];
-      kgWriteTabs(t);
+      kgWriteTabs(kgLeave(kgReadTabs(), me));
       try { window.sessionStorage.setItem(RELOAD_KEY, String(Date.now())); } catch { /* 覚えられない */ }
     };
-    const onShow = () => { kgWriteTabs(kgBeat(kgReadTabs(), me, Date.now())); };
+    const onShow = () => { kgWriteTabs(kgHeartbeat(kgReadTabs(), me, Date.now()).tabs); };
     window.addEventListener('pointerdown', onInput, true);
     window.addEventListener('keydown', onInput, true);
     window.addEventListener('pagehide', onHide);

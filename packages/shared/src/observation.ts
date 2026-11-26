@@ -383,9 +383,10 @@ export interface Observation {
     directive?: { hold: DirectiveItem[]; message?: string; message_new?: boolean; message_kept?: boolean; decided?: DirectiveItem[]; undecided?: DirectiveUndecided; prep?: ObsDirectivePrep; text: string };
     /**
      * 持ち主の希望（進め方。S14。SEASON.md §65.4 の 2）: pilot で進めてほしい、のときだけ（self 既定のときは無い）。握る項目ではない（待たなくてよい）。
-     * サーバーが、プロフィールの控えから、本人の応答にだけ足す（World に入れない）。text はキャンプの観測の文に出る 1 行（遠征を始めた直後の応答にも 1 回）
+     * サーバーが、プロフィールの控えから、本人の応答にだけ足す（World に入れない）。text はキャンプの観測の文に出る 1 行（遠征を始めた直後の応答にも 1 回）。
+     * 迷宮の中のほかの応答は、値だけ（S14b: 長い文を毎回付けない）
      */
-    owner_pace?: { pace: 'pilot'; text: string };
+    owner_pace?: { pace: 'pilot'; text?: string };
   };
   /** items_omitted: 記憶の中の遠いアイテムのうち省いた件数 */
   visible: { monsters: ObsMonster[]; items: ObsItem[]; players: ObsPlayer[]; features: ObsFeature[]; items_omitted?: number };
@@ -2489,7 +2490,8 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
     }
   }
   // 持ち主の希望（進め方。S14）: サーバーが渡したときだけ（pilot のとき。self のときは何も足さない）
-  if (opts.ownerPace && view.status !== 'dead' && view.status !== 'ended') obs.self.owner_pace = { pace: 'pilot', text: opts.ownerPace };
+  // 迷宮の中は値だけ（S14b。遠征を始めた直後の 1 回は、サーバーが文を足す）
+  if (opts.ownerPace && view.status !== 'dead' && view.status !== 'ended') obs.self.owner_pace = view.status === 'at_camp' ? { pace: 'pilot', text: opts.ownerPace } : { pace: 'pilot' };
   // fight の被弾の前の判定の数（S2a §20.10 の 5: pilot がマクロと同じ判定をするため）
   if (me.pos && view.status !== 'at_camp') {
     const threats = fightThreats(catalog, view.entities.filter((e) => e.cat === 'monster'), me.pos);
@@ -3292,7 +3294,7 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
         ? t(L, `持ち主から（前のキャンプと同じ伝言）: ${s.directive.message}`, `From your owner (same message as at the last camp): ${s.directive.message}`)
         : t(L, `持ち主から: ${s.directive.message}`, `From your owner: ${s.directive.message}`));
     // 持ち主の希望（進め方。S14）: 伝言の行の次に（pilot のときだけ。サーバーが本人の応答にだけ足す）
-    if (s.owner_pace) lines.push(s.owner_pace.text);
+    if (s.owner_pace?.text) lines.push(s.owner_pace.text);
     if (obs.checkpoint) lines.push(...checkpointLines(L, obs.checkpoint));
     return lines.join('\n');
   }
