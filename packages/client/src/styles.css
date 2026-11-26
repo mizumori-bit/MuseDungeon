@@ -643,6 +643,85 @@ ul.ocost { margin: 0; padding-left: 18px; }
 .hub-foot { text-align: center; margin-top: 8px; }
 .hub-foot a { color: var(--hub-gold); }
 
+/* 入口のタブ（S16b。SEASON.md §70.4）: リーダーボード・シーズン・図鑑・設定。拠点と同じ地・札・見出し・金の差し色 1 つ（.ent- の接頭辞だけ） */
+.hub-nav { overflow-x: auto; scrollbar-width: none; }
+.hub-nav::-webkit-scrollbar { display: none; }
+.hub-tab { white-space: nowrap; flex: none; }
+.hub-col.is-wide { max-width: 980px; }
+.ent-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px 20px; flex-wrap: wrap; }
+.ent-headtext { min-width: 0; flex: 1 1 320px; }
+.ent-title { margin: 0; font-family: var(--hub-serif); font-weight: 600; font-size: 30px; line-height: 1.2; color: var(--hub-parch); letter-spacing: 0.02em; overflow-wrap: anywhere; }
+.ent-head .hub-sub { margin-top: 8px; line-height: 1.7; }
+.ent-pick { display: flex; flex-direction: column; gap: 4px; min-width: 200px; flex: 0 1 280px; }
+.ent-picklabel { font-size: 11px; color: var(--hub-faint); letter-spacing: 0.1em; }
+.ent-sec { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.ent-sechead { display: flex; align-items: center; justify-content: space-between; gap: 8px 14px; flex-wrap: wrap; }
+.ent-tools { display: flex; align-items: center; gap: 8px 14px; flex-wrap: wrap; }
+.ent-check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--hub-parch2); cursor: pointer; }
+.ent-check input { accent-color: var(--hub-gold); }
+.hub-input.ent-select { width: auto; padding: 6px 10px; font-size: 13px; border-radius: 8px; }
+.ent-card { background: var(--hub-card); border: 1px solid var(--hub-line); border-radius: 14px; padding: 16px 20px; min-width: 0; }
+.ent-card ul.sflow, .ent-card ul.slays { margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.8; color: var(--hub-parch); }
+.ent-card ul.slays .slay { color: var(--hub-parch2); font-size: 12.5px; }
+.ent-fold > summary { cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--hub-parch); list-style: none; }
+.ent-fold > summary::-webkit-details-marker { display: none; }
+.ent-fold > summary::after { content: '＋'; color: var(--hub-faint); font-size: 12px; }
+.ent-fold[open] > summary::after { content: '－'; }
+.ent-fold[open] > summary { margin-bottom: 10px; }
+.ent-runbtns { display: inline-flex; align-items: center; gap: 6px; }
+.hub-input.ent-older { max-width: 12em; padding: 4px 8px; font-size: 12px; }
+.ent-unrun { display: inline-flex; align-items: center; gap: 6px; margin: 4px 12px 0 0; }
+.ent-titles { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.ent-titles li { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 10px; background: var(--hub-card); border: 1px solid rgba(201, 164, 92, 0.32); }
+.ent-holder { font-family: var(--hub-serif); font-size: 15px; color: var(--hub-parch); }
+.hub-tablewrap td.num, .hub-tablewrap th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.hub-tablewrap td.rank { color: var(--hub-faint); }
+.hub-tablewrap td.wrap { white-space: normal; min-width: 8em; }
+.hub-tablewrap td { vertical-align: middle; }
+.hub-tablewrap .board.section tr.milestone td:first-child { color: var(--hub-amber); }
+.hub-tablewrap .board.section .fire { color: #e8b07a; }
+.hub-tablewrap td.replays { text-align: right; }
+.hub-tablewrap td.primary-col { color: var(--hub-gold); }
+.ent-who { color: var(--hub-parch); }
+.ent-class { margin-left: 6px; color: var(--hub-faint); }
+.ent-more { align-self: flex-start; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+.ent-meta { font-size: 12.5px; color: var(--hub-faint); font-variant-numeric: tabular-nums; letter-spacing: 0.04em; }
+/* 図鑑: 分類ごとの進み・項目（名前と、小さく、見つけた人） */
+.ent-count { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.ent-countnum { font-family: var(--hub-serif); font-size: 34px; color: var(--hub-gold); line-height: 1; font-variant-numeric: tabular-nums; }
+.ent-counttotal { font-size: 15px; color: var(--hub-parch2); font-variant-numeric: tabular-nums; }
+.ent-countwho { flex-basis: 100%; font-size: 12px; color: var(--hub-faint); letter-spacing: 0.04em; }
+.ent-bar { height: 3px; border-radius: 2px; background: var(--hub-line); overflow: hidden; }
+.ent-bar > span { display: block; height: 100%; background: var(--hub-gold); }
+.ent-entries { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; }
+.ent-entry { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 10px; background: var(--hub-card); border: 1px solid var(--hub-line); min-width: 0; }
+.ent-entryname { font-size: 14px; color: var(--hub-parch); overflow-wrap: anywhere; }
+.ent-finders { font-size: 11.5px; color: var(--hub-faint); letter-spacing: 0.03em; overflow-wrap: anywhere; }
+.ent-feats { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; align-items: start; }
+.ent-featlist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.ent-featlist li { display: flex; flex-direction: column; gap: 1px; }
+.ent-featname { font-size: 13.5px; color: var(--hub-gold); }
+.ent-featdesc { font-size: 12px; color: var(--hub-parch2); line-height: 1.55; }
+/* 設定: 鍵・呼び鈴（呼び鈴の部品は運用の画面のもの。札の中で、地と枠を外す） */
+.ent-setting { display: flex; flex-direction: column; gap: 10px; }
+.ent-keyrow { display: flex; align-items: center; justify-content: space-between; gap: 8px 14px; flex-wrap: wrap; }
+.ent-keystate { font-size: 14px; color: var(--hub-parch); font-variant-numeric: tabular-nums; }
+.hub-keyform.ent-keyform { max-width: 480px; }
+.ent-bell > .panel { background: transparent; border: none; padding: 0; margin: 0; color: var(--hub-parch); }
+.ent-bell > .panel > h3 { margin: 0 0 8px; font-family: var(--hub-serif); font-size: 19px; font-weight: 600; color: var(--hub-parch); }
+.ent-bell .muted { color: var(--hub-parch2); }
+.ent-bell input, .ent-bell button { background: var(--hub-card2); border-color: var(--hub-line); color: var(--hub-parch); }
+.ent-bell button.primary { background: var(--hub-gold); border-color: var(--hub-gold); color: var(--hub-gold-ink); }
+.ent-bell input[type="radio"] { accent-color: var(--hub-gold); }
+/* 古い入口（#/legacy）の見出しの 1 行 */
+.legacy-head { margin: 0; padding: 8px 12px; border: 1px dashed var(--line); border-radius: 8px; color: var(--muted); font-size: 13px; }
+@media (max-width: 800px) {
+  .ent-title { font-size: 26px; }
+  .ent-pick { flex: 1 1 100%; }
+  .hub-tab { padding: 12px 10px 10px; letter-spacing: 0.06em; }
+}
+
 /* 窓（自分で潜る・続きのある冒険・決めていないもの） */
 .hub-modal { position: fixed; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(5, 7, 12, 0.72); }
 .hub-dialog { width: 100%; max-width: 460px; max-height: calc(100vh - 32px); overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding: 24px; background: var(--hub-card); color: var(--hub-parch); border: 1px solid var(--hub-line); border-radius: 14px; }

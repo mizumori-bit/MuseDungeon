@@ -9,9 +9,10 @@ import { getLocale, tr } from '../util';
 import type { HubCardModel, HubTone } from './hubState';
 import { KeepGoingNavMark } from './keepGoingUi';
 
-export type HubTab = 'hub' | 'records' | 'ops' | null;
+/** 上のタブ（S16b。SEASON.md §70.4 の 1）: 拠点・リーダーボード・シーズン・図鑑と、隅の歯車（設定）。古い入口（#/legacy）は、どのタブでもない */
+export type HubTab = 'hub' | 'leaderboard' | 'season' | 'codex' | 'settings' | 'legacy' | null;
 
-/** 歯車（運用）。絵文字を使わず、線で描く */
+/** 歯車（設定）。絵文字を使わず、線で描く */
 export function GearIcon() {
   return (
     <svg class="hub-gearicon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
@@ -22,19 +23,24 @@ export function GearIcon() {
   );
 }
 
-/** 上のタブ: 拠点・記録の 2 つと、隅の歯車（運用）。waiting: 支度を待っている冒険者の数（拠点のタブに印） */
+/** 上のタブ: 拠点・リーダーボード・シーズン・図鑑と、隅の歯車（設定）。waiting: 支度を待っている冒険者の数（拠点のタブに印） */
 export function HubNav({ tab, waiting = 0 }: { tab: HubTab; waiting?: number }) {
+  const t = (id: HubTab, href: string, label: string) => (
+    <a class={`hub-tab ${tab === id ? 'on' : ''}`} href={href} aria-current={tab === id ? 'page' : undefined}>{label}</a>
+  );
   return (
     <nav class="hub-nav" aria-label={tr('画面', 'Screens')}>
-      <a class={`hub-tab ${tab === 'hub' ? 'on' : ''}`} href="#/">
+      <a class={`hub-tab ${tab === 'hub' ? 'on' : ''}`} href="#/" aria-current={tab === 'hub' ? 'page' : undefined}>
         {tr('拠点', 'Hub')}
         {waiting > 0 && <span class="hub-count" title={tr('あなたの支度を待っている冒険者', 'Adventurers waiting for your preparations')}>{waiting}</span>}
       </a>
-      <a class={`hub-tab ${tab === 'records' ? 'on' : ''}`} href="#/records">{tr('記録', 'Records')}</a>
+      {t('leaderboard', '#/leaderboard', tr('リーダーボード', 'Leaderboard'))}
+      {t('season', '#/season', tr('シーズン', 'Seasons'))}
+      {t('codex', '#/codex', tr('図鑑', 'Codex'))}
       <span class="hub-navspace" />
       {/* 続けて遊ばせている冒険者がいれば、上の帯にも（S14） */}
       <KeepGoingNavMark />
-      <a class={`hub-gear ${tab === 'ops' ? 'on' : ''}`} href="#/ops" title={tr('運用', 'Operations')} aria-label={tr('運用', 'Operations')}><GearIcon /></a>
+      <a class={`hub-gear ${tab === 'settings' ? 'on' : ''}`} href="#/settings" title={tr('設定', 'Settings')} aria-label={tr('設定', 'Settings')}><GearIcon /></a>
     </nav>
   );
 }

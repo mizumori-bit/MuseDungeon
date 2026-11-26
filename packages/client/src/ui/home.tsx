@@ -39,7 +39,7 @@ function AwardTd({ c, valueText, none }: { c: { value: number; rank: number } | 
 }
 
 /**
- * 順位の表（4 つの賞）。mine: 自分の行の名前（normName）。replay: 行の終わりに出すもの（記録のタブのリプレイの口）。
+ * 順位の表（4 つの賞）。mine: 自分の行の名前（normName）。replay: 行の終わりに出すもの（シーズンのタブの「見守る」「見返す」。S16b）。
  * 名前の横に称号と、指図の印（S8 §54.6）
  */
 export function StandingsTable({ rows, mine, replay }: { rows: readonly SeasonStandingRow[]; mine: ReadonlySet<string>; replay?: (r: SeasonStandingRow) => ComponentChildren }) {
@@ -51,8 +51,9 @@ export function StandingsTable({ rows, mine, replay }: { rows: readonly SeasonSt
         <th title={tr('最初に報告した階段の数', 'Stairs reported first')}>{tr('貢献', 'Contribution')}</th>
         <th title={tr('一度も倒れていない者の確定点', 'Banked points of those who never died')}>{tr('生還', 'Survival')}</th>
         <th title={tr('自分の野営の火が、ほかの参加者に使われた回数（S1）', 'Uses of your campfires by others (S1)')}>{tr('支援', 'Support')}</th>
-        <th>{tr('使った予算', 'Budget used')}</th><th>{tr('ラン', 'Runs')}</th>
-        {replay && <th>{tr('リプレイ', 'Replay')}</th>}
+        <th class="num">{tr('使った予算', 'Budget used')}</th><th class="num">{tr('ラン', 'Runs')}</th>
+        {/* S16b: 行のボタン（見守る・見返す） */}
+        {replay && <th><span class="sr-only">{tr('見る', 'View')}</span></th>}
       </tr></thead>
       <tbody>{rows.map((r) => {
         const me = mine.has(normName(r.name));
@@ -67,7 +68,7 @@ export function StandingsTable({ rows, mine, replay }: { rows: readonly SeasonSt
             <AwardTd c={r.contribution} valueText={(v) => String(v)} />
             <AwardTd c={r.survival} valueText={(v) => String(v)} none={tr('対象外（倒れた）', 'out (fell)')} />
             <AwardTd c={r.support} valueText={(v) => String(v)} />
-            <td>{r.used}</td><td>{r.runs}</td>
+            <td class="num">{r.used}</td><td class="num">{r.runs}</td>
             {replay && <td class="replays">{replay(r)}</td>}
           </tr>
         );

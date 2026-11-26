@@ -8,6 +8,7 @@ import type { Controller, DirectiveItem, ExpeditionBrief, Locale, Names, Objecti
 import type { PlayerView } from './view';
 import type { DirectiveUndecided, Observation } from './observation';
 import type { OwnerPace } from './directive';
+import type { ProfileRecords } from './profile';
 
 export type SpectatorPolicy = 'omniscient' | 'follow_only' | 'delayed';
 
@@ -388,6 +389,13 @@ export interface OpsAdventurerAdded {
 }
 /** POST /api/ops/enroll の応答。already: もう招かれていた */
 export interface OpsEnrolled { seasonId: string; name: string; profileId: string; already?: true }
+/**
+ * GET /api/ops/codex の 1 人分（S16b。SEASON.md §70.4 の 4）: そのサーバーのプロフィールの、図鑑と実績だけ（`GET /api/profile/records` の `codex`・`feats` と同じ形）。
+ * 鍵（トークンもそのハッシュも）・シード・ランの一覧・最高到達などの 1 人ずつの記録は入れない
+ */
+export interface OpsCodexProfile { profileId: string; name: string; codex: ProfileRecords['codex']; feats: ProfileRecords['feats'] }
+/** GET /api/ops/codex の応答（サーバーと同じ PC からだけ）。図鑑か実績が 1 つでもあるプロフィールだけ。プロフィールの作られた順 */
+export interface OpsCodexResponse { profiles: OpsCodexProfile[] }
 
 /** /api/runs/:id/commands の 1 行 */
 export type CommandLine = CommandRecord;
