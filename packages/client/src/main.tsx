@@ -8,6 +8,7 @@ import { Replay } from './screens/Replay';
 import { Season } from './screens/Season';
 import { Watch } from './screens/Watch';
 import { KeepGoingRunner } from './ui/KeepGoingRunner';
+import { SoundHint } from './ui/sound';
 import './styles.css';
 
 function parse(hash: string): { page: string; runId: string | null } {
@@ -39,4 +40,5 @@ function App() {
 }
 
 // 続けて遊ばせる（S14。SEASON.md §65.4）の鳴らす役は、画面の外（根）に置く: どの画面にいても、タブが開いていれば続く
-render(<><App /><KeepGoingRunner /></>, document.getElementById('app')!);
+// 音の案内（S16a。§70.3 の 1）も根に 1 つ: 音のある、どの画面でも出る
+render(<><App /><KeepGoingRunner /><SoundHint /></>, document.getElementById('app')!);

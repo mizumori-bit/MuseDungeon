@@ -70,6 +70,13 @@ export interface SceneMark { x: number; y: number; kind: 'public_stairs' | 'publ
 export type ViewEvent =
   | { kind: 'move'; id: string; from: Pos; to: Pos; teleport?: boolean }
   | { kind: 'attack'; id: string | null; from: Pos | null; to: Pos; hit: boolean; crit: boolean; ranged: boolean }
+  /**
+   * 当たった一撃（S16a。SEASON.md §70.3 の 2）: 攻撃の出来事が届いていない、被害の出来事（近接・射撃）から。位置は描く側が、届いた見え方から引く。
+   * 遊ぶ画面と追従だけの観戦の枠には、文になる出来事だけが届く（会心でない当たりの attack は文にならないので、届かない）
+   */
+  | { kind: 'strike'; id: string; target: string; ranged: boolean }
+  /** 能動技・敵の大きな行動の名前（S16a）。使った者の頭の上に短く出す */
+  | { kind: 'ability'; id: string; name: string }
   | { kind: 'damage'; id: string; amount: number }
   | { kind: 'heal'; id: string; amount: number }
   | { kind: 'die'; id: string; pos: Pos }

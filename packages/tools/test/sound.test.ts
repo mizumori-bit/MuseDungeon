@@ -193,6 +193,36 @@ describe('sound cues (SOUND_SPEC §2.2)', () => {
     t.manager.closeAll();
   });
 
+  it('foe_down (S16a §70.3 の 3): a seen enemy felled by someone else; not with kill, guardian_down or warden_down; not for unseen deaths or players', async () => {
+    const t = await newRun('sound-foe');
+    await t.start();
+    const v = t.view();
+    const me = v.self.id;
+    const m0 = soundStep(null, v, [], catalog).memory;
+    const step = (evs: Record<string, unknown>[], mem = m0) => soundStep(mem, v, evs.map(ev), catalog).cues;
+    // 見えていた敵が、ほかの者（罠・毒・仲間）の手で倒れた
+    expect(step([{ type: 'died', id: 'e_x', kind: 'core:goblin', killer: 'e_y', via: 'melee' }])).toEqual(['foe_down']);
+    expect(step([{ type: 'died', id: 'e_x', kind: 'core:goblin', killer: null, via: 'poison' }])).toEqual(['foe_down']);
+    // 自分が倒した: kill だけ（重ねない）
+    expect(step([{ type: 'died', id: 'e_x', kind: 'core:goblin', killer: me, via: 'melee' }])).toEqual(['kill']);
+    // 見えていない死（id と種族が伏せられた）: 鳴らさない
+    expect(step([{ type: 'died', id: null, kind: null, killer: null, via: 'poison' }])).toEqual([]);
+    // ほかのプレイヤーが倒れた（体の種類は職）: 敵の撃破ではない
+    expect(step([{ type: 'died', id: 'e_ally1', kind: 'core:warrior', killer: 'e_x', via: 'melee' }])).toEqual([]);
+    // 見えていた守護者・大守護者: その合図だけ
+    const g = { id: 'e_g', cat: 'monster' as const, kind: 'core:goblin', appearanceId: null, pos: { x: 1, y: 1 }, awareness: 'hunting' as const, guardian: { name: { ja: 'グ', en: 'G' }, types: [] } };
+    const w = { ...g, id: 'e_w', guardian: { ...g.guardian, warden: true } };
+    const seen = soundStep(m0, { ...v, entities: [g, w] } as PlayerView, [], catalog).memory;
+    expect(step([{ type: 'died', id: 'e_g', kind: 'core:goblin', killer: 'e_y' }], seen)).toEqual(['guardian_down']);
+    expect(step([{ type: 'died', id: 'e_w', kind: 'core:goblin', killer: null }], seen)).toEqual(['warden_down']);
+    // 攻撃の出来事が届かない当たり（遊ぶ画面・追従だけの観戦の枠: 会心でない当たりの attack は文にならない）: 被害から hit_dealt。attack が届いていれば 1 回だけ
+    expect(step([{ type: 'ability_used', actor: me, ability: 'core:bash' }, { type: 'damaged', target: 'e_x', source: me, via: 'melee' }, { type: 'died', id: 'e_x', kind: 'core:goblin', killer: me }])).toEqual(['hit_dealt', 'kill']);
+    expect(step([{ type: 'attack', attacker: me, target: 'e_x', hit: true, crit: false }, { type: 'damaged', target: 'e_x', source: me, via: 'melee' }])).toEqual(['hit_dealt']);
+    // 同じ手に 2 体倒れたら 2 回（まとめるのは鳴らす側: 0.15 秒以内の同じ合図は 1 つ）
+    expect(step([{ type: 'died', id: 'e_a', kind: 'core:goblin', killer: 'e_y' }, { type: 'died', id: 'e_b', kind: 'core:goblin', killer: 'e_y' }])).toEqual(['foe_down', 'foe_down']);
+    t.manager.closeAll();
+  });
+
   it('only takes the player view and events (not the World)', () => {
     const fn = (w: World) => {
       // @ts-expect-error World は PlayerView ではない（音の状態は視界のデータからだけ作る。SOUND_SPEC §7）

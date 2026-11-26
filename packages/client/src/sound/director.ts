@@ -70,6 +70,27 @@ export class SoundDirector {
       void this.loadDef(this.settings.theme);
       this.hookGesture();
     }
+    // 裏のタブから戻った（S16a）: ブラウザが音を止めていたら（iOS の interrupted・端末の切り替え など）、鳴らし直しを試み、だめなら次の操作で始める。
+    // 予約は、裏にいた間の分を飛ばす（engine.advance）ので、すぐ 1 回進める
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState !== 'visible' || this.settings.theme === 'none') return;
+        if (this.ctx && this.ctx.state !== 'running') this.ensureContext();
+        this.tick();
+        this.emit();
+      });
+    }
+  }
+
+  /** 音のテーマが入っていて、まだ鳴らせない（ブラウザが、人の操作を待っている。S16a: 画面の下の案内の札） */
+  get waitingForGesture(): boolean {
+    return this.settings.theme !== 'none' && !this.error && this.ctx?.state !== 'running';
+  }
+
+  /** 画面の操作の中から呼ぶ（S16a: 案内の札を押した）。鳴らし始める */
+  unlock(): void {
+    if (this.settings.theme !== 'none') this.ensureContext();
+    this.emit();
   }
 
   /** 設定と状態が変わったら呼ばれる（設定の画面の再描画） */
@@ -207,14 +228,22 @@ export class SoundDirector {
     if (!C) { this.error = 'Web Audio is not available'; return; }
     if (!this.ctx) {
       this.ctx = new C();
-      this.ctx.onstatechange = () => this.emit();
+      // 止まった（S16a: 裏のタブ・端末の切り替え・iOS の interrupted）: 次の操作で鳴らし直す。案内の札を出し直す
+      this.ctx.onstatechange = () => {
+        if (this.ctx && this.ctx.state !== 'running' && this.ctx.state !== 'closed' && this.settings.theme !== 'none') this.hookGesture();
+        this.emit();
+      };
     }
-    if (this.ctx.state === 'suspended') {
+    // suspended だけでなく、iOS の interrupted も（S16a）。閉じた文脈は鳴らし直さない（テーマを切ったとき）
+    const st = this.ctx.state as string;
+    if (st !== 'running' && st !== 'closed') {
       // ブラウザが操作の外だとみなしたら、次の操作で始める
       void this.ctx.resume().then(() => this.emit()).catch(() => undefined);
-      if (this.ctx.state === 'suspended') this.hookGesture();
+      if ((this.ctx.state as string) !== 'running') this.hookGesture();
     }
     if (!this.engine) this.startEngine();
+    // 作った文脈が、すぐ running のこともある（状態の変わりの知らせが来ない）: 案内の札を消すために知らせる
+    this.emit();
   }
 
   private startEngine(): void {

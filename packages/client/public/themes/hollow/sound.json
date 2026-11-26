@@ -936,6 +936,16 @@
         { "at": 0.12, "degree": 1, "len": 0.35 }
       ]
     },
+    "foe_down": {
+      "start": "now",
+      "gain": 0.2,
+      "octave": 1,
+      "voice": { "wave": "triangle", "attack": 0.003, "decay": 0.18, "sustain": 0.25, "release": 0.18 },
+      "notes": [
+        { "at": 0, "degree": 3, "len": 0.1 },
+        { "at": 0.1, "degree": 1, "len": 0.28 }
+      ]
+    },
     "level_up": {
       "start": "beat",
       "gain": 0.22,
