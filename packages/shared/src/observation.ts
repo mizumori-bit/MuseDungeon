@@ -14,10 +14,10 @@ import type { ReportCompare } from './expeditionStats';
 import { kindName } from './narrate';
 import type { NavGrid } from './nav';
 import { buildNavGrid, distanceField, findFrontiers } from './nav';
-import type { Dir, DirectiveItem, EntityRole, Expedition, ExpeditionOffer, HaulParts, Locale, MonsterMemory, Names, ObjectiveType, OfferSlot, Pos, SeasonAward, SeasonSlay, SeasonSlayFacts, SlayOpening, SupplyPlace } from './types';
+import type { Dir, DirectiveItem, EntityRole, Expedition, ExpeditionOffer, HaulParts, Locale, MonsterMemory, Names, ObjectiveType, OfferSlot, Pos, SeasonAward, SeasonSlay, SeasonSlayFacts, SlayOpening, SupplyPlace, WishItem } from './types';
 import { awardName, awardText, fireUsedDepths, myCampfires, publicSpotAt, publicStairsAt, seasonBudgetText, SUPPLY_CATEGORIES, supplyPlaceName } from './season';
 import type { SupplyView } from './season';
-import { DIRS, DIR_VEC, prepStateOf } from './types';
+import { DIRS, DIR_VEC, prepStateOf, WISH_LIMIT } from './types';
 import { prepNeedsParts } from './directive';
 import { addDiceBonus, cheb, ceilDiv, compassDir, damageRangeVs, dirTo, floorDiv, formatDice, parseDice, t } from './util';
 import type { EntityView, HpState, ItemView, PlayerView, ViewStatus } from './view';
@@ -2642,7 +2642,7 @@ export function directivePrepObs(view: PlayerView, catalog: Catalog | undefined)
   if (st === 'pending') {
     const parts = u ? prepNeedsParts(L, u) : [];
     const what = parts.length ? t(L, `決めていないもの: ${parts.join('・')}`, `not yet decided: ${parts.join('; ')}`) : t(L, '持ち主が、支度を見直している', 'your owner is going over the preparations');
-    const wish = wishHowText(L, view);
+    const wish = wishHowText(L, view, catalog);
     return { state: 'pending', text: t(L, `持ち主の支度: まだ（${what}）。準備完了になるまで、start_expedition は断られる。待つなら wait_for_turn${wish ? `。${wish}` : ''}`, `Your owner's preparations: not ready (${what}). Until they are, start_expedition is refused. To wait, use wait_for_turn${wish ? `. ${wish}` : ''}`) };
   }
   const hold = d!.hold;
@@ -2672,14 +2672,19 @@ export function directivePrepObs(view: PlayerView, catalog: Catalog | undefined)
  * 札が「まだ」のときの、希望の出し方（S11）: 「決めてほしいものがあれば、その命令を出す（断られるが、希望として持ち主に届く）: start_expedition offer=N・choose_perk option=N」。
  * 握られている項目の分だけ（特技と加護は、いま候補があるものだけ）。無ければ空
  */
-function wishHowText(L: Locale, view: PlayerView): string {
+function wishHowText(L: Locale, view: PlayerView, catalog: Catalog | undefined): string {
   const hold = view.directive?.hold ?? [];
+  // 届かないものは言わない（S11a）: その項目の希望を、このキャンプまでに使い切った・装備は、着けられる品（外せる品）が無い
+  const left = (w: WishItem) => (view.directive?.wishCount?.[w] ?? 0) < WISH_LIMIT;
+  const canEquip = !!catalog && view.inventory.some((i) => !i.equipped && !!equipSlotOf(catalog, i));
+  const canUnequip = view.inventory.some((i) => !!i.equipped);
   const cmds = [
-    hold.includes('objective') ? 'start_expedition offer=N' : '',
-    hold.includes('loadout') ? ['equip slot=x', 'unequip slot=x'] : [],
-    hold.includes('perks') && perkChoice(view) ? 'choose_perk option=N' : '',
-    hold.includes('perks') && view.self.boonChoice?.options.length ? 'choose_boon option=N' : '',
-  ].flat().filter(Boolean);
+    hold.includes('objective') && left('objective') ? 'start_expedition offer=N' : '',
+    hold.includes('loadout') && left('loadout') && canEquip ? 'equip slot=x' : '',
+    hold.includes('loadout') && left('loadout') && canUnequip ? 'unequip slot=x' : '',
+    hold.includes('perks') && left('perk') && perkChoice(view) ? 'choose_perk option=N' : '',
+    hold.includes('perks') && left('boon') && view.self.boonChoice?.options.length ? 'choose_boon option=N' : '',
+  ].filter(Boolean);
   if (!cmds.length) return '';
   return t(L, `決めてほしいものがあれば、その命令を出す（断られるが、希望として持ち主に届く）: ${cmds.join('・')}`,
     `If you want something decided, send that command (it is refused, but reaches your owner as a wish): ${cmds.join(', ')}`);

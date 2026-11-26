@@ -4,7 +4,7 @@ import type {
   CampState, Controller, Entity, EntityId, EntityRole, EquipSlot, Expedition, ExpeditionEndReason, ExpeditionResult, FloorKey,
   Locale, MonsterMemory, Objective, OfferSlot, PlayerBuild, PlayerId, PlayerState, Pos, RememberedEntity, SeasonState, Stats, StatusInst, World, Sense, FloorHint, Names, Intent, RelicInfo, MilestoneInfo,
 } from './types';
-import type { Dir, DirectiveItem, DirectivePrep, DirectiveWish } from './types';
+import type { Dir, DirectiveItem, DirectivePrep, DirectiveWish, WishItem } from './types';
 import { cheb, compassDir } from './util';
 import { projectSupplies, seasonBudgetLeft, seasonStairsCounts } from './season';
 import type { SupplyTakenView, SupplyView } from './season';
@@ -265,7 +265,8 @@ export interface PlayerView {
    * ほかの参加者の指図は入らない
    */
   /** prep: 支度の札（S9 §58.1）・wishes: 自分の希望（S9 §58.2。本人と、その持ち主にだけ見える） */
-  directive?: { hold: DirectiveItem[]; message: string; decided: DirectiveItem[]; prep?: DirectivePrep; wishes?: DirectiveWish[] };
+  /** wishCount: このキャンプからキャンプまでに、項目ごとに覚えた希望の数（S11a: 使い切った項目は、札の行で希望の出し方を言わない） */
+  directive?: { hold: DirectiveItem[]; message: string; decided: DirectiveItem[]; prep?: DirectivePrep; wishes?: DirectiveWish[]; wishCount?: Partial<Record<WishItem, number>> };
 }
 
 export function hpState(hp: number, maxHp: number): HpState {
@@ -655,6 +656,7 @@ export function projectPlayerView(world: World, playerId: PlayerId): PlayerView 
         hold: [...(rec.directive?.hold ?? [])], message: rec.directive?.message ?? '', decided: [...(rec.ownerDecided ?? [])],
         ...(rec.directive?.prep ? { prep: structuredClone(rec.directive.prep) } : {}),
         ...(rec.directive?.wishes?.length ? { wishes: structuredClone(rec.directive.wishes) } : {}),
+        ...(rec.directive?.wishCount && Object.keys(rec.directive.wishCount).length ? { wishCount: { ...rec.directive.wishCount } } : {}),
       } } : {}),
   };
 }

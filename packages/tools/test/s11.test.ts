@@ -63,6 +63,11 @@ async function lifelineHome(r: Run): Promise<void> {
 }
 const perkName = (id: string) => nameOf(catalog.perks[id]?.name, 'ja', id);
 const PRESENCE_TAIL = '。持ち主は人で、決めるのに数分かかることがある。wait_for_turn timeout_s=60 を、くり返してよい';
+// main（e601bd1）の start_expedition の引数の断り（offer が要る引数だった版の、args.ts と onBad の文）
+const MAIN_LIST = '要る: offer／要らない（任意）: なし／共通: player_token・thought・expect_seq・map・inventory・status_line';
+const MAIN_MISSING = `start_expedition には offer が要る（渡されていない）。このツールの引数: ${MAIN_LIST}。`;
+const MAIN_OPTION = `start_expedition には offer が要る（渡されていない）。start_expedition に option という名前の引数は無い。このツールの引数: ${MAIN_LIST}。`;
+const MAIN_HINT = '例: start_expedition { offer: 1 }（valid_actions の行は、書いてある形のまま呼べる。別の名前は受け付けない。thought・player_token など共通の名前は、どのツールにも付けてよい）';
 
 async function mcpClient(m: SessionManager) {
   const [x, y] = InMemoryTransport.createLinkedPair();
@@ -75,7 +80,7 @@ async function mcpClient(m: SessionManager) {
 type T = { structuredContent: { ok?: boolean; error?: { code: string; message: string; hint: string }; turn: { reason: string; changes: { code: string; text: string }[] }; observation: { valid_actions: string[] } }; content: { text: string }[]; isError?: boolean };
 
 describe('S11 の 1: start_expedition with no arguments after the preparations are ready (MCP)', () => {
-  it('objective held: refused (no wish, no turn) while not ready; starts with the owner\'s choice once ready; the action line and ▶ say "no arguments"; not held: offer is still needed', async () => {
+  it('objective held: no arguments is the argument refusal (as on main) until ready; starts with the owner\'s choice once ready; the action line and ▶ say "no arguments"', async () => {
     expect(ENGINE_VERSION).toBe('0.49.0');
     expect(EVENT_VERSION).toBe(37);
     const m = manager();
@@ -83,23 +88,24 @@ describe('S11 の 1: start_expedition with no arguments after the preparations a
     const nr = (await client.callTool({ name: 'new_run', arguments: { character_name: 'Mw' } })) as unknown as { structuredContent: { run_id: string; player_token: string; player_id: string } };
     const { run_id, player_token, player_id } = nr.structuredContent;
     const s = m.get(run_id)!;
-    // 目的を握られていない: 今までどおり offer が要る（引数の断り）
+    // 目的を握られていない: main（e601bd1）と 1 字も違わない引数の断り（引数なし・名前違い）
     const n0 = (await client.callTool({ name: 'start_expedition', arguments: { player_token } })) as unknown as T;
-    expect(n0.structuredContent.error?.code).toBe('bad_request');
-    expect(n0.content[0].text).toContain('start_expedition には offer が要る');
+    expect(n0.structuredContent.error).toEqual({ code: 'bad_request', message: MAIN_MISSING, hint: MAIN_HINT });
+    const n0b = (await client.callTool({ name: 'start_expedition', arguments: { player_token, option: 1 } })) as unknown as T;
+    expect(n0b.structuredContent.error).toEqual({ code: 'bad_request', message: MAIN_OPTION, hint: MAIN_HINT });
     expect(s.view(player_id).status).toBe('at_camp');
-    // 目的を握られていて、まだ準備完了でない: 断る。希望にはならない（指した候補が無い）。手番は使わない
+    // 目的を握られていて、まだ準備完了でない: 同じ引数の断り（希望にはならない。手番も出来事も無い）
     expect(errCode(await s.submit(player_id, { type: 'set_directive', hold: ['objective'] }, { source: 'owner' }))).toBe('ok');
     const seq0 = s.world.seq;
     const turns0 = meOf(s.world, player_id).actor?.turns ?? 0;
     const n1 = (await client.callTool({ name: 'start_expedition', arguments: { player_token } })) as unknown as T;
-    expect(n1.structuredContent.error?.code).toBe('held_by_owner');
-    expect(n1.structuredContent.error?.message).toContain('持ち主の支度は、まだ（決めていないもの: 次の遠征の目的）');
-    // 持ち主の様子（S11 の 2）も、断りの hint に
-    expect(n1.structuredContent.error?.hint).toContain(`持ち主は、まだ、支度の画面を開いていない（このサーバーが起動してから）${PRESENCE_TAIL}`);
+    expect(n1.structuredContent.error).toEqual({ code: 'bad_request', message: MAIN_MISSING, hint: MAIN_HINT });
     expect(s.world.seq).toBe(seq0);
     expect(s.world.players[player_id].directive?.wishes).toBeUndefined();
     expect(meOf(s.world, player_id).actor?.turns ?? 0).toBe(turns0);
+    // 目的を選んだが、まだ準備完了でない: 同じ
+    expect(errCode(await s.submit(player_id, { type: 'prepare', objective: 2 }, { source: 'owner' }))).toBe('ok');
+    expect(((await client.callTool({ name: 'start_expedition', arguments: { player_token } })) as unknown as T).structuredContent.error?.message).toBe(MAIN_MISSING);
     // 準備完了: 「できること」と ▶ 行は、引数なし
     expect(errCode(await s.submit(player_id, { type: 'prepare', objective: 2, ready: true }, { source: 'owner' }))).toBe('ok');
     const offer2 = s.view(player_id).camp!.offers.find((o) => o.index === 2)!;
@@ -127,7 +133,7 @@ describe('S11 の 1: start_expedition with no arguments after the preparations a
     const client = await mcpClient(m);
     const tools = (await client.listTools()).tools;
     const se = tools.find((x) => x.name === 'start_expedition')!;
-    expect(se.description).toContain('引数なし（offer を省く）で、持ち主が選んだ目的で始まる');
+    expect(se.description).toContain('offer: 候補の番号（目的を持ち主が決めていて、支度が準備完了のときだけ、省ける）');
     expect((se.inputSchema as { required?: string[] }).required ?? []).not.toContain('offer');
     const rules = (await client.callTool({ name: 'get_rules', arguments: { topic: 'directive' } })) as unknown as { content: { text: string }[] };
     expect(rules.content[0].text).toContain('準備完了の後は、引数なしの start_expedition で、持ち主が選んだ目的で始まる');
@@ -204,10 +210,19 @@ describe('S11 の 2: telling a waiting AI how its owner is doing', () => {
       // 外から（認められない）: 控えない
       expect((await fetch(base + v, { headers: { 'x-forwarded-for': '203.0.113.9' } })).status).toBe(403);
       expect(r.session.lastOwnerCallAt(r.playerId)).toBeNull();
-      // 同じ機械から: 控える
-      const before = Date.now();
+      // 同じ機械から、印の無い読み込み（拠点・運用の札の自動の読み直し）: 控えない（S11a）
       expect((await fetch(base + v)).status).toBe(200);
-      expect(r.session.lastOwnerCallAt(r.playerId)).toBeGreaterThanOrEqual(before);
+      expect(r.session.lastOwnerCallAt(r.playerId)).toBeNull();
+      // 支度の画面の読み込み（?at=prepare）: 控える
+      const before = Date.now();
+      expect((await fetch(base + v + '?at=prepare')).status).toBe(200);
+      const t1 = r.session.lastOwnerCallAt(r.playerId)!;
+      expect(t1).toBeGreaterThanOrEqual(before);
+      // 持ち主の決定（POST）: 控える
+      await new Promise((res) => setTimeout(res, 5));
+      const pd = await fetch(base + `/api/runs/${r.session.runId}/owner/directive`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ hold: ['objective'], message: 'よろしく' }) });
+      expect(pd.status).toBe(200);
+      expect(r.session.lastOwnerCallAt(r.playerId)!).toBeGreaterThan(t1);
       // AI の wait_for_turn（時間切れ）の応答に
       const client = await mcpClient(m);
       const w = (await client.callTool({ name: 'wait_for_turn', arguments: { player_token: r.token, timeout_s: 1 } })) as unknown as T;
@@ -263,8 +278,14 @@ describe('S11 の 3: the owner\'s decisions show in the changes, with the AI\'s 
     c.port.observeWithTurn('observed');
     expect(errCode(await owner(c, { type: 'choose_perk', option: 1 }))).toBe('ok');
     expect(ownerLines(c.port.observeWithTurn('observed'))).toContain(`持ち主が、特技を選んだ: ${perkName(opts3[0])}`);
-    // 前のキャンプで決めた後の、新しい決定には、前の希望を添えない
-    expect(ownerLines(b.port.observeWithTurn('observed'))).toEqual([]);
+    // 決めた後の、次のキャンプの新しい決定には、前の希望を添えない（S11a の 9: 実際に、次のキャンプで別の決定をして）
+    expect(errCode(await owner(b, { type: 'prepare', ready: true }))).toBe('ok');
+    expect(errCode(await act(b.port, { type: 'start_expedition', offer: 1 }))).toBe('ok');
+    const opts4 = offerPerks(b, 3);
+    await lifelineHome(b);
+    expect(b.port.observeWithTurn('observed').observation.self.directive?.prep?.state).toBe('pending');
+    expect(errCode(await owner(b, { type: 'choose_perk', option: 2 }))).toBe('ok');
+    expect(ownerLines(b.port.observeWithTurn('observed'))).toEqual([`持ち主が、特技を選んだ: ${perkName(opts4[1])}`]);
     await client.close();
     m.closeAll();
   });
@@ -331,7 +352,7 @@ describe('S11 の 4: a message unchanged since the last camp', () => {
 });
 
 describe('S11 の 6: one way to wish, on the not-ready line', () => {
-  it('lists the commands of the held items only (perk and boon only with offers); the directive line drops its own wish clause meanwhile; English too', async () => {
+  it('lists the commands of the held items only (perk and boon only with offers; equip only with gear to wear); the directive line drops its own wish clause meanwhile; English too', async () => {
     const m = manager();
     const r = await campRun(m, 's11-howto');
     expect(errCode(await owner(r, { type: 'set_directive', hold: ['objective', 'perks'] }))).toBe('ok');
@@ -351,7 +372,7 @@ describe('S11 の 6: one way to wish, on the not-ready line', () => {
     if ('error' in e) throw new Error(e.error.message);
     expect(errCode(await e.session.submit(e.playerId, { type: 'set_directive', hold: ['loadout', 'objective'] }, { source: 'owner' }))).toBe('ok');
     const oe = e.port.observeWithTurn('observed');
-    expect(oe.observation.self.directive?.prep?.text).toMatch(/\. If you want something decided, send that command \(it is refused, but reaches your owner as a wish\): start_expedition offer=N, equip slot=x, unequip slot=x$/);
+    expect(oe.observation.self.directive?.prep?.text).toMatch(/\. If you want something decided, send that command \(it is refused, but reaches your owner as a wish\): start_expedition offer=N, unequip slot=x$/);
     expect(oe.text).toContain('Your owner has not opened the preparations screen yet (since this server started).');
     m.closeAll();
   });
@@ -362,5 +383,126 @@ describe('S11: the versions stay', () => {
     expect(ENGINE_VERSION).toBe('0.49.0');
     expect(EVENT_VERSION).toBe(37);
     expect(content.version).toBe('cff6932f0071');
+  });
+});
+
+describe('S11a: the inspection fixes', () => {
+  it('3: a wish dropped by releasing the objective is not added to the decision after holding it again', async () => {
+    const m = manager();
+    const r = await campRun(m, 's11a-rehold');
+    expect(errCode(await owner(r, { type: 'set_directive', hold: ['objective'] }))).toBe('ok');
+    r.port.observeWithTurn('observed');
+    expect(errCode(await act(r.port, { type: 'start_expedition', offer: 3 }))).toBe('held_by_owner');
+    expect(r.session.world.players[r.playerId].directive?.wishes?.length).toBe(1);
+    expect(errCode(await owner(r, { type: 'set_directive', hold: [] }))).toBe('ok');
+    expect(errCode(await owner(r, { type: 'set_directive', hold: ['objective'] }))).toBe('ok');
+    // 握り直した後に伝言だけを変えても、止まるのは握るのをやめた所
+    expect(errCode(await owner(r, { type: 'set_directive', hold: ['objective'], message: 'よろしく' }))).toBe('ok');
+    expect(errCode(await owner(r, { type: 'prepare', objective: 2, ready: true }))).toBe('ok');
+    const offer2 = r.port.view().camp!.offers.find((o) => o.index === 2)!;
+    const st = await act(r.port, { type: 'start_expedition', offer: 2 });
+    expect(errCode(st)).toBe('ok');
+    if (st.ok) expect(ownerLines(st)[0]).toBe(`持ち主が決めた目的で始めた: 遠征 1（${objectiveText('ja', offer2.objective)}）`);
+    // 目的を選んだ後に伝言を変えても、その遠征の希望は添える（握るのをやめていない）
+    const c = await campRun(m, 's11a-rehold-2');
+    expect(errCode(await owner(c, { type: 'set_directive', hold: ['objective'] }))).toBe('ok');
+    c.port.observeWithTurn('observed');
+    expect(errCode(await act(c.port, { type: 'start_expedition', offer: 3 }))).toBe('held_by_owner');
+    expect(errCode(await owner(c, { type: 'prepare', objective: 2 }))).toBe('ok');
+    expect(errCode(await owner(c, { type: 'set_directive', hold: ['objective'], message: '静かに' }))).toBe('ok');
+    expect(errCode(await owner(c, { type: 'prepare', ready: true }))).toBe('ok');
+    const sc = await act(c.port, { type: 'start_expedition', offer: 2 });
+    expect(errCode(sc)).toBe('ok');
+    if (sc.ok) expect(ownerLines(sc)[0]).toMatch(/（あなたの希望は、候補 3: [^）]+）$/);
+    m.closeAll();
+  });
+
+  it('4: a message rewritten at this camp (cleared and set again, or changed and changed back) is not "the same as at the last camp"', async () => {
+    const m = manager();
+    for (const [seed, steps] of [['s11a-msg-clear', ['', 'A']], ['s11a-msg-back', ['B', 'A']]] as const) {
+      const r = await campRun(m, seed);
+      expect(errCode(await owner(r, { type: 'set_directive', hold: [], message: 'A' }))).toBe('ok');
+      r.port.observeWithTurn('observed');
+      expect(errCode(await act(r.port, { type: 'start_expedition', offer: 1 }))).toBe('ok');
+      await lifelineHome(r);
+      for (const msg of steps) expect(errCode(await owner(r, { type: 'set_directive', hold: [], message: msg }))).toBe('ok');
+      const o = r.port.observeWithTurn('observed');
+      expect(o.text).toContain('持ち主から: A');
+      expect(o.text).not.toContain('前のキャンプと同じ伝言');
+      expect(o.observation.self.directive?.message_kept).toBeUndefined();
+    }
+    m.closeAll();
+  });
+
+  it('5: "as you wished" for gear only for the very item wished (another of the same kind says what was wished)', async () => {
+    const m = manager();
+    const r = await campRun(m, 's11a-gear');
+    expect(errCode(await owner(r, { type: 'set_directive', hold: ['loadout'] }))).toBe('ok');
+    const a = giveGear(r, 'core:dagger');
+    const b = giveGear(r, 'core:dagger');
+    r.port.observeWithTurn('observed');
+    expect(errCode(await act(r.port, { type: 'equip', slot: a.slot }))).toBe('held_by_owner');
+    expect(errCode(await owner(r, { type: 'equip', slot: b.slot }))).toBe('ok');
+    expect(r.port.view().inventory.find((i) => i.id === b.id)?.equipped).toBe('weapon');
+    const line = ownerLines(r.port.observeWithTurn('observed')).find((x) => x.startsWith('持ち主が、装備を決めた。'))!;
+    expect(line).not.toContain('希望どおり');
+    expect(line).toMatch(/（あなたの希望は、.+を装備する）$/);
+    m.closeAll();
+  });
+
+  it('6: the not-ready line does not offer a wish that cannot reach the owner (used up for this camp; no gear to wear)', async () => {
+    const m = manager();
+    const r = await campRun(m, 's11a-howto');
+    expect(errCode(await owner(r, { type: 'set_directive', hold: ['perks'] }))).toBe('ok');
+    offerPerks(r, 3);
+    expect(errCode(await owner(r, { type: 'prepare', ready: false }))).toBe('ok');
+    expect(r.port.observeWithTurn('observed').observation.self.directive?.prep?.text).toMatch(/: choose_perk option=N$/);
+    // 覚え直せる回数（8 回）を使い切る
+    for (let i = 0; i < 8; i++) expect(errCode(await act(r.port, { type: 'choose_perk', option: (i % 2) + 1 }))).toBe('held_by_owner');
+    expect(r.session.world.players[r.playerId].directive?.wishCount?.perk).toBe(8);
+    const t = r.port.observeWithTurn('observed').observation.self.directive?.prep?.text ?? '';
+    expect(t).toContain('持ち主の支度: まだ');
+    expect(t).not.toContain('決めてほしいもの');
+    // 装備: 着けられる品が無ければ equip は言わない。持ち帰れば言う
+    const g = await campRun(m, 's11a-howto-gear');
+    expect(errCode(await owner(g, { type: 'set_directive', hold: ['loadout', 'objective'] }))).toBe('ok');
+    expect(g.port.observeWithTurn('observed').observation.self.directive?.prep?.text).toMatch(/: start_expedition offer=N・unequip slot=x$/);
+    giveGear(g);
+    expect(g.port.observeWithTurn('observed').observation.self.directive?.prep?.text).toMatch(/: start_expedition offer=N・equip slot=x・unequip slot=x$/);
+    m.closeAll();
+  });
+
+  it('7・8: with no arguments, the queue checks again (refused with no wish and no event if the owner went back to "not ready"; the current choice is used); outside camp, the same refusal as with an offer', async () => {
+    const m = manager();
+    const r = await campRun(m, 's11a-race');
+    expect(errCode(await owner(r, { type: 'set_directive', hold: ['objective'] }))).toBe('ok');
+    expect(errCode(await owner(r, { type: 'prepare', objective: 2, ready: true }))).toBe('ok');
+    expect(r.port.bareStartOk()).toBe(true);
+    // 確かめた後、列に入る前に、持ち主が「まだ」に戻した
+    expect(errCode(await owner(r, { type: 'prepare', ready: false }))).toBe('ok');
+    const seq0 = r.session.world.seq;
+    const x = await r.port.act({ type: 'start_expedition', offer: 2 }, { source: 'mcp', bareStart: true });
+    expect(errCode(x)).toBe('held_by_owner');
+    expect(r.session.world.seq).toBe(seq0);
+    expect(r.session.world.players[r.playerId].directive?.wishes).toBeUndefined();
+    expect(r.port.view().status).toBe('at_camp');
+    // 持ち主が目的を選び直して準備完了: 列の中で、今の選択を入れる（確かめた時の候補ではない）
+    expect(errCode(await owner(r, { type: 'prepare', objective: 3, ready: true }))).toBe('ok');
+    const y = await r.port.act({ type: 'start_expedition', offer: 2 }, { source: 'mcp', bareStart: true });
+    expect(errCode(y)).toBe('ok');
+    expect([...r.session.history].reverse().find((e) => e.type === 'owner_decided')).toMatchObject({ offer: 3, asked: 3 });
+    // 迷宮の中: offer を渡したときと同じ断り
+    const a = await r.port.act({ type: 'start_expedition', offer: 1 }, { source: 'mcp' });
+    const b = await r.port.act({ type: 'start_expedition', offer: 1 }, { source: 'mcp', bareStart: true });
+    expect(errCode(a)).not.toBe('ok');
+    expect(errCode(b)).toBe(errCode(a));
+    if (!a.ok && !b.ok) expect(b.error.message).toBe(a.error.message);
+    // 引退した後: 同じ
+    expect(errCode(await act(r.port, { type: 'retire' }))).toBe('ok');
+    const c = await r.port.act({ type: 'start_expedition', offer: 1 }, { source: 'mcp' });
+    const d = await r.port.act({ type: 'start_expedition', offer: 1 }, { source: 'mcp', bareStart: true });
+    expect(errCode(c)).not.toBe('ok');
+    expect(errCode(d)).toBe(errCode(c));
+    m.closeAll();
   });
 });

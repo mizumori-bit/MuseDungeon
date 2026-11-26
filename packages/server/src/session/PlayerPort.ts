@@ -6,10 +6,10 @@ import type {
 import {
   actionError, briefingLines, briefingShort, buildObservation, checkpointChangeText, withdrawText, buildTurnBlock, campLines, changesLine, compareLines, describeInventory, describeTarget, diffChanges, progressLines, reportLines,
   cheb, compassDir, dirLabel, formatObservationText, guardianDisplayName, kindName, lastWithoutXp, MACRO_COMPLETED_STOPS, mapTextLines, memoryCombatText, memoryKey, mineCount, nameOf, nearDirs, pickableItems, progressText, renderAsciiMap, resultText, t,
-  turnLine, turnSnapshot, turnStateOf, ownerMessageIsNew, ownerMessageKept, ownerPresenceText, ownerWaitOpen, wishItemOf, wishLabel, wishNoteText, fightThreats, fleeRiskText, riskText, threatEstimate, DIR_VEC, collectTargets, collectWhatOf, itemDisplayName, slayGroupText, slaysAt,
+  turnLine, turnSnapshot, turnStateOf, ownerMessageIsNew, ownerMessageKept, ownerPresenceText, ownerWaitOpen, prepStateView, seasonClosedView, wishItemOf, wishLabel, wishNoteText, fightThreats, fleeRiskText, riskText, threatEstimate, DIR_VEC, collectTargets, collectWhatOf, itemDisplayName, slayGroupText, slaysAt,
 } from '@muse/shared';
 import type { MacroReport } from './RunSession';
-import { bareStartRefusal, compareVersions, ENGINE_VERSION } from '@muse/engine';
+import { compareVersions, ENGINE_VERSION } from '@muse/engine';
 import type { PlayerOptions } from './RunSession';
 import type { MacroStop } from '@muse/shared';
 import type { RunSession, SubmitOpts } from './RunSession';
@@ -70,10 +70,10 @@ export interface PlayerPort {
   /** キャンプで持ち主の支度の札が「まだ」のとき、準備完了になるまで待つ（S8 §54.4 の 5。S9 §58.1） */
   waitForOwner(timeoutMs: number): Promise<'ready' | 'started' | 'released' | 'timeout' | 'ended'>;
   /**
-   * 引数（offer）なしの start_expedition（S11）: 目的を握られていて準備完了なら、持ち主が選んだ候補（offer）。持ち主の選んだ目的で今は始められないなら、その断り。
-   * どちらでもない（目的を握られていない）なら空（offer が要る）
+   * 引数（offer）なしの start_expedition を受けられるか（S11・S11a）: キャンプで、目的を握られ、支度が準備完了で、持ち主が目的を選んである（次の遠征を始められる）。
+   * 受けられないときは、引数の断り（offer が要る。握られていないランと同じ文）
    */
-  bareStart(): { offer?: number | 'endless'; error?: ActionError };
+  bareStartOk(): boolean;
   /** held_by_owner の断りの hint に、持ち主の様子を足す（S11。キャンプで札が「まだ」のときだけ） */
   withOwnerPresence(e: ActionError): ActionError;
   /** 持ち主の様子の 1 行（S11。キャンプで札が「まだ」のときだけ。now はテストで差し替える） */
@@ -502,7 +502,8 @@ export class SessionPlayerPort implements PlayerPort {
     // 伝言が前の応答から変わった（S8b）: キャンプの「持ち主から」の行に「（新しい）」。変化を出す応答だけ（基準と比べる）
     if (p.changes && observation.self.directive && ownerMessageIsNew(prev, view)) observation.self.directive.message_new = true;
     // 前のキャンプから変わっていない伝言（S11）: 「（前のキャンプと同じ伝言）」
-    else if (p.changes && observation.self.directive?.message && ownerMessageKept(prev, view)) observation.self.directive.message_kept = true;
+    // S11a: このキャンプで伝言を動かした（消して同じ文に戻した など）なら、添えない
+    else if (p.changes && observation.self.directive?.message && ownerMessageKept(prev, view) && !this.session.ownerMessageMovedAtCamp(this.playerId, observation.self.directive.message)) observation.self.directive.message_kept = true;
     const turn = buildTurnBlock(view, { reason, interruptedBy: p.interruptedBy, changes, expeditionEndedNow: p.expeditionEndedNow, waitedMs: p.waitedMs });
     // 地図: auto は、階が変わった・新しいセルを知った・敵の出入りがあった応答だけ
     let mapMode: 'show' | 'unchanged' | 'none' = 'show';
@@ -552,7 +553,10 @@ export class SessionPlayerPort implements PlayerPort {
         const w = this.session.wishBeforeDecision(this.playerId, d.seq);
         if (!w || w.wish.item !== 'loadout') continue;
         const wish = w.wish;
-        const same = decided.some((x) => { const y = raw(x.seq); return !!y && y.item === 'loadout' && y.act === wish.act && !!y.kind && y.kind === w.kind; });
+        // 品の ID で比べる（S11a: 同じ種類の別の品は、希望どおりではない）。比べられない付け替えがあって、ほかに当たりが無ければ、添えない
+        const gear = decided.map((x) => raw(x.seq)).filter((y): y is NonNullable<typeof y> => !!y && y.item === 'loadout').map((y) => ({ act: y.act, item: this.session.decidedItemOf(this.playerId, y.seq) }));
+        const same = gear.some((y) => y.act === wish.act && y.item === wish.target);
+        if (!same && gear.some((y) => y.item === null)) continue;
         out[d.seq] = wishNoteText(L, same, wishLabel(L, this.catalog, wish, wishItemOf(view, wish)));
         continue;
       }
@@ -587,18 +591,11 @@ export class SessionPlayerPort implements PlayerPort {
     return this.session.waitForOwner(this.playerId, timeoutMs);
   }
 
-  bareStart(): { offer?: number | 'endless'; error?: ActionError } {
-    const pr = this.session.world.players[this.playerId];
-    if (!pr) return {};
-    const error = bareStartRefusal(this.session.world, this.session.deps.content, pr);
-    if (error) return { error };
+  bareStartOk(): boolean {
     const view = this.view();
     const d = view.directive;
-    if (!d?.hold.includes('objective')) return {};
-    // 準備完了で、持ち主が選んだ目的（S9 §58.1。step も同じものに差し替える）
-    if (d.prep?.objective !== undefined) return { offer: d.prep.objective };
-    // 予算切れ・時間切れのキャンプ・迷宮の中（step の今の断りに任せる。どの候補を入れても、始まらない）
-    return { offer: view.camp?.offers[0]?.index ?? 'endless' };
+    return view.status === 'at_camp' && view.runStatus !== 'ended' && !!view.camp && !seasonClosedView(view) && !!d?.hold.includes('objective')
+      && prepStateView(view) === 'ready' && d.prep?.objective !== undefined;
   }
 
   withOwnerPresence(e: ActionError): ActionError {

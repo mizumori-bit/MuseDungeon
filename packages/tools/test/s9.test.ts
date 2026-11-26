@@ -116,7 +116,10 @@ describe('S9 §58.1: the preparations card', () => {
     expect(prepOf(r)).toEqual({ state: 'pending', seen: expect.any(Array) });
     // 観測の 1 行・「できること」・▶ 行・待ち方
     let o = r.port.observeWithTurn('observed');
-    expect(o.observation.self.directive?.prep).toMatchObject({ state: 'pending', text: '持ち主の支度: まだ（決めていないもの: 次の遠征の目的）。準備完了になるまで、start_expedition は断られる。待つなら wait_for_turn。決めてほしいものがあれば、その命令を出す（断られるが、希望として持ち主に届く）: start_expedition offer=N' });
+    // 持ち主の様子（S11: owner_presence）は除いて、ほかは完全に
+    const { owner_presence: _presence, ...prep0 } = o.observation.self.directive!.prep!;
+    expect(_presence).toBeDefined();
+    expect(prep0).toEqual({ state: 'pending', text: '持ち主の支度: まだ（決めていないもの: 次の遠征の目的）。準備完了になるまで、start_expedition は断られる。待つなら wait_for_turn。決めてほしいものがあれば、その命令を出す（断られるが、希望として持ち主に届く）: start_expedition offer=N' });
     const lines = o.text.split('\n');
     expect(lines[lines.findIndex((l) => l.startsWith('指図: ')) + 1]).toBe(o.observation.self.directive!.prep!.text);
     expect(o.observation.valid_actions.some((l) => l.startsWith('start_expedition'))).toBe(false);
