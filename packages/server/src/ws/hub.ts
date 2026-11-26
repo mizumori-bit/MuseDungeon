@@ -9,6 +9,7 @@ import type { ServerConfig } from '../config';
 import { isLocalRequest } from '../http/local';
 import type { SessionManager } from '../session/SessionManager';
 import { SpectatorPort } from '../session/SpectatorPort';
+import { followFlushAtMacroEnd, livePolicyFor } from '../session/followFrames';
 import { attachPlayerSocket } from './playerSocket';
 
 /** 追従だけの観戦で、送りがこれより詰まっている（遅い回線）間は、手ごとの枠をやめて 40ms でまとめる */
@@ -59,8 +60,8 @@ export class WsHub {
     // 開催中のシーズンのランは、その参加者のトークンか、同じ機械からの接続だけ（S3。SEASON.md §25.1）。確定した後は、だれでも
     const gate = this.manager.seasonWatchAccess(session, { local, profileToken: typeof msg.profileToken === 'string' ? msg.profileToken : undefined });
     if ('error' in gate) { send({ t: 'error', error: gate.error }); ws.close(); return; }
-    // シーズンのランは follow_only（S0 §9.7: 俯瞰から公開されていない階段が分からないように）
-    const spec = new SpectatorPort(session, session.world.meta.season ? 'follow_only' : this.config.spectatorPolicy, this.config.spectatorDelaySeq, gate.access === 'owner' ? gate.pid : null);
+    // シーズンのランは follow_only（S0 §9.7: 俯瞰から公開されていない階段が分からないように）。見返し（S17）も、同じ関数で方針を決める
+    const spec = new SpectatorPort(session, livePolicyFor(session.world, this.config.spectatorPolicy), this.config.spectatorDelaySeq, gate.access === 'owner' ? gate.pid : null, this.manager.isSecret);
     // 追う相手（持ち主の観戦は、持ち主を追うので見ない）: 渡されたら、そのランのプレイヤーの ID でなければ断る。無ければ最初のプレイヤー
     const follow: unknown = gate.access === 'owner' ? gate.pid : msg.follow ?? undefined;
     if (follow !== undefined && !spec.hasPlayer(follow)) {
@@ -98,13 +99,16 @@ export class WsHub {
     send({ t: 'welcome', role: 'spectator', runId: spec.runId, contentVersion: spec.contentVersion, policy, mode });
     if (spec.viewOnly()) {
       // 追従のみ: World ではなく、追従の相手の PlayerView と、その人に届いた出来事（遊ぶ画面の WS と同じ中身）だけを送る。
-      // 追従の相手が知覚した手は、命令の確定 1 回（世界が 1 回進む）ごとに、その時点の view とその手の出来事で 1 枠（マクロの途中の手を 1 枚にまとめない）。
-      // 相手が知覚しない確定（ほかの階の者の手など）と、送りが詰まっている間は、40ms でまとめる（出来事は次の枠に入る）
+      // 1 コマの区切りは、見返し（S17。session/review.ts）と同じ関数（session/followFrames.ts の followFrameDue）: 相手が知覚した確定と、マクロの途中の手でない確定は、
+      // その時点の view とその手の出来事で 1 枠（マクロの途中の手を 1 枚にまとめない）。マクロの途中の手で、相手が知覚しないもの（休む・待つの手など）は、
+      // ためて、次の枠か、そのマクロの終わりに 1 枠。送りが詰まっている間だけは、40ms でまとめる（出来事は次の枠に入る）
       const pid = follow ?? spec.players()[0];
       let timer: NodeJS.Timeout | null = null;
       let lastSent = 0;
+      let unsent = false;
       const sendFrame = (v: PlayerView | null, withEvents: boolean) => {
         if (timer) { clearTimeout(timer); timer = null; }
+        unsent = false;
         if (!pid || !v) return;
         const events = withEvents ? spec.followPerceivedSince(pid, lastSent) : [];
         lastSent = v.seq;
@@ -113,11 +117,16 @@ export class WsHub {
       // 接続した直後は、出来事なしの今の view（つなぎ直しで前の出来事をくり返さない）
       sendFrame(pid ? spec.followView(pid) : null, false);
       const flushLater = guarded(() => sendFrame(spec.followView(pid), true));
-      unsubs.push(spec.onCommit(guarded((events) => {
+      unsubs.push(spec.onCommit(guarded((events, info) => {
         if (!pid) return;
         const v = spec.followView(pid);
-        if (v && ws.bufferedAmount < FOLLOW_BACKLOG_BYTES && spec.followPerceives(pid, events, v)) sendFrame(v, true);
-        else if (!timer) timer = setTimeout(flushLater, 40);
+        if (ws.bufferedAmount >= FOLLOW_BACKLOG_BYTES) { unsent = true; if (!timer) timer = setTimeout(flushLater, 40); return; }
+        if (v && spec.followPerceives(pid, events, v, info)) sendFrame(v, true);
+        else unsent = true;
+      })));
+      // マクロが終わった: ためた確定があれば 1 枠（見返しも、同じ所で 1 コマにする）
+      unsubs.push(spec.onMacro(guarded((m) => {
+        if (pid && m.state === 'stopped' && followFlushAtMacroEnd(unsent) && !timer) sendFrame(spec.followView(pid), true);
       })));
       unsubs.push(() => { if (timer) clearTimeout(timer); timer = null; });
       unsubs.push(spec.onAgent(guarded((a) => { if (a.playerId === pid) send({ t: 'agent', activity: a }); })));

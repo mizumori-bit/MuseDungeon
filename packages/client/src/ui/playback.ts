@@ -103,6 +103,11 @@ export class PlaybackQueue<S, N> {
   /** 隠れている間に tick された（表に戻った最初の tick で、溜まった先頭の印を静かに出す） */
   private wasHidden = false;
   speed: WatchSpeed;
+  /**
+   * 追いつくか（その場の観戦: true）。見返し（S17）は false: 取ってきたコマを、選んだ速さのまま流す（おくれで間を縮めない・今の所へ飛ばない。
+   * 一時停止で溜まっても、おくれに数えない）。列の上限（MAX_QUEUED）でも飛ばない（見返しは、取ってくる数を画面が決める）
+   */
+  catchUp = true;
 
   constructor(speed: WatchSpeed = DEFAULT_SPEED, private readonly merge?: (a: S, b: S) => S) {
     this.speed = speed;
@@ -119,9 +124,9 @@ export class PlaybackQueue<S, N> {
     return 0;
   }
 
-  /** いまの 1 歩の間（おくれで縮めた後） */
+  /** いまの 1 歩の間（おくれで縮めた後。追いつかない列は、設定のまま） */
   interval(now: number): number {
-    return stepInterval(this.speed, this.lag(now));
+    return stepInterval(this.speed, this.catchUp ? this.lag(now) : 0);
   }
 
   /** 終わりの印（final）より前の、最後の位置 */
@@ -219,7 +224,7 @@ export class PlaybackQueue<S, N> {
       this.wasHidden = false;
       return { out, jumped: false, next: null };
     }
-    if (this.q.length > MAX_QUEUED || (!o.hidden && this.lag(now) > JUMP_LAG_MS)) return this.flush(now);
+    if (this.catchUp && (this.q.length > MAX_QUEUED || (!o.hidden && this.lag(now) > JUMP_LAG_MS))) return this.flush(now);
     if (o.hidden) {
       this.wasHidden = true;
       return { out: [], jumped: false, next: null };

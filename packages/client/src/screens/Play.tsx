@@ -1106,7 +1106,7 @@ ${tr('それでも装備しますか？', 'Equip it anyway?')}`)) send({ ...last
         <CampView runId={runId} view={view} obs={obs} catalog={catalog} theme={th.theme}
           perkFocused={mode === 'perk'} perkSent={perkSent === perkK} onChoosePerk={choosePerk} onChooseBoon={(option) => send({ type: 'choose_boon', option })}
           onStart={startExpedition} onRetire={retire} onReport={() => send({ type: 'report_stairs' })}
-          log={log} onSay={(text) => send({ type: 'say', text })} notice={noticeEl} turnText={turnText} changes={changes}
+          log={log} onSay={(text) => send({ type: 'say', text })} notice={noticeEl} changes={changes}
           onDialog={(open) => { dialogRef.current = open; if (open && modeRef.current !== 'normal') setMode('normal'); }} />
       ) : (
       <div class="layout">

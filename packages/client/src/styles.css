@@ -237,6 +237,24 @@ th, td { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--line
 }
 .watch .macro .tag { margin: 0 2px; font-size: 12px; }
 
+/* S17: 見返し（開催中のランの、終わった遠征を、冒険者の目線で）。見出しの帯の色と印で、その場の観戦と取り違えない。
+   知らせ（今の居場所・終わりまで見た）は地図の上に重ねる（上の段の高さ・地図の枠の大きさを変えない: S15） */
+.watch.is-review .topbar { background: #1b1626; border-bottom-color: #6b55a8; }
+.watch.is-review .toolbar { background: #141120; }
+.tag.reviewmark { background: #3b2d63; color: #e4dcff; font-size: 11px; padding: 1px 8px; margin-left: 0; }
+.reviewpick select { max-width: 360px; }
+.reviewplay { min-width: 7.5em; }
+.reviewprog { display: inline-block; width: 120px; height: 6px; background: #222833; border-radius: 3px; overflow: hidden; vertical-align: middle; }
+.reviewprog > span { display: block; height: 100%; background: #8e6cc8; transition: width 0.2s linear; }
+.reviewnow { position: absolute; right: 8px; top: 8px; z-index: 5; font-size: 12px; padding: 3px 10px; background: rgba(20, 24, 34, 0.92); border: 1px solid #4fc3f7; border-radius: 6px; color: #cfe9f7; max-width: calc(100% - 16px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.reviewend { position: absolute; left: 50%; bottom: 44px; transform: translateX(-50%); display: flex; gap: 8px; align-items: center; background: rgba(10, 10, 14, 0.92); border: 1px solid #8e6cc8; border-radius: 6px; padding: 6px 12px; font-size: 13px; z-index: 5; white-space: nowrap; max-width: calc(100% - 16px); overflow: hidden; }
+.hub-btn.small.hub-review { align-self: center; }
+/* 狭い幅でも、見返しの道具（今に戻るまで）が 1 行に入るように、遠征を選ぶ欄と進み具合を細くする */
+@media (max-width: 900px) {
+  .reviewpick select { max-width: 200px; }
+  .reviewprog { width: 64px; }
+}
+
 /* S15: リプレイを見返せないときの 1 文（開催中のシーズンの、終わっていないラン・版が古く畳めないラン） */
 .replaymsg { position: absolute; left: 50%; top: 30%; transform: translateX(-50%); max-width: calc(100% - 32px); width: 520px; padding: 14px 18px; background: rgba(12, 14, 20, 0.92); border: 1px solid var(--line); border-radius: 8px; text-align: center; z-index: 4; }
 .replaymsg p { margin: 0 0 8px; }
@@ -869,7 +887,6 @@ ul.ocost { margin: 0; padding-left: 18px; }
 .camp-changes ul { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 6px; }
 .camp-changes .chg { font-size: 12px; color: var(--hub-parch); overflow-wrap: anywhere; }
 .camp-changeshead { font-size: 12px; color: var(--hub-faint); letter-spacing: 0.04em; }
-.camp-turnline { margin: 8px 0 0; font-size: 12px; color: var(--hub-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* S16d: シーズンの ID の小さい字・図鑑の冒険者ごとの札の、1 人ずつの記録（目立たせない） */
 .ent-title .ent-id { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 13px; font-weight: normal; color: var(--hub-faint); letter-spacing: 0; }
 .ent-record { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--hub-line); display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }

@@ -3,6 +3,7 @@
 import type { OwnerRunRow, ProfileSeasonEntry, SeasonListing } from '@muse/shared';
 import { tr } from '../util';
 import { aiPresenceText, undecidedLine } from './ownerCheck';
+import { reviewHref } from './review';
 
 /**
  * 札の状態（§58.4 の表の 6 つと、人間が自分で遊ぶ冒険者・招かれていない冒険者。S10a: 前の版の冒険（続きは遊べない）・
@@ -33,6 +34,11 @@ export interface HubCardModel {
   highlight: boolean;
   /** 主のボタン。null: ボタンを出さない（S12b: 鍵を使って入ってくる AI を待っている札） */
   action: HubAction | null;
+  /**
+   * 2 番目の、小さいボタン（S17。SEASON.md §70.6 の 9）: 「見返す」（終わった遠征を、冒険者の目線で。いちばん新しい終わった遠征を開く）。
+   * 開催中のシーズンのランで、終わった遠征が 1 つでもあるときだけ。主のボタンは、今までどおり 1 つ
+   */
+  secondary?: HubAction;
   stats: { level: number | null; banked: number; budget: { left: number; limit: number } | null; rank: number | null };
 }
 
@@ -82,8 +88,23 @@ function seasonAction(id?: string | null): HubAction {
 
 const depthText = (d: number | null) => (d !== null ? tr(`地下${d}階を進んでいる`, `Making their way through depth ${d}`) : tr('迷宮を進んでいる', 'Making their way through the dungeon'));
 
-/** 札を決める（§58.4 の表） */
+/**
+ * 札の「見返す」（S17）: 開催中のシーズンのランで、終わった遠征が 1 つでもあるとき（持ち主の口の一覧の expeditionsEnded）。
+ * 確定したシーズン・シーズンでないランは、今までどおり巻き戻し（シーズンのタブの「見返す」）なので、札には出さない
+ */
+export function hubReview(row: Pick<OwnerRunRow, 'runId' | 'season' | 'expeditionsEnded'> | null, season: Pick<SeasonListing, 'status'> | null): HubAction | undefined {
+  if (!row?.season || (row.expeditionsEnded ?? 0) < 1 || season?.status === 'final') return undefined;
+  return { label: tr('見返す', 'Look back'), href: reviewHref(row.runId, 'last') };
+}
+
+/** 札を決める（§58.4 の表）。見返す（S17）は、ランのある札に、2 番目のボタンとして足す */
 export function hubCard(x: HubCardInput): HubCardModel {
+  const m = hubCardMain(x);
+  const secondary = hubReview(x.row, x.season);
+  return secondary ? { ...m, secondary } : m;
+}
+
+function hubCardMain(x: HubCardInput): HubCardModel {
   const n = x.name;
   const row = x.row;
   const s = x.season;

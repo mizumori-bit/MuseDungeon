@@ -66,6 +66,9 @@ import { ProfilePort, ProfileService, ProfileStore } from './profiles';
 import { NAME_MAX, normalizeName } from './names';
 import { SeasonService, SeasonStore } from '../season/SeasonService';
 import type { LiveRunState } from '../season/SeasonService';
+import { ReviewService, reviewExpeditions } from './review';
+import { TOKEN_CHARS } from './secretMask';
+import { livePolicyFor, liveVisibleUpTo } from './followFrames';
 
 /** profile: そのプレイヤーのプロフィール（token は新しく作ったときだけ） */
 /** inherited: プロフィールの握る項目を引き継いだ（S9 §58.3。応答に理由を出す） */
@@ -81,6 +84,8 @@ export class SessionManager {
   readonly seasons: SeasonService;
   /** MCP の呼び出しの時間の控え（S7 §52.1 の 2。メモリだけ） */
   readonly calls = new CallLog();
+  /** 見返し（S17。開催中のランの、終わった遠征を、冒険者の目線で。読むだけ） */
+  readonly review: ReviewService;
   private seasonTimer: NodeJS.Timeout | null = null;
 
   constructor(content: Content, readonly config: ServerConfig) {
@@ -91,6 +96,17 @@ export class SessionManager {
     this.seasons.continues = (runId) => { const s = this.sessions.get(runId); return !!s && s.world.playerOrder.some((pid) => this.continuable(s, pid)); };
     this.deps = { content, catalog: this.catalog, config, profiles: this.profiles, season: this.seasons };
     this.store = config.runsDir ? new RunStore(config.runsDir) : null;
+    // 見返し（S17。SEASON.md §70.6）: 門は、その場の観戦と同じ関数。読むだけ
+    this.review = new ReviewService({
+      catalog: this.catalog, store: this.store, policy: config.spectatorPolicy, delaySeq: config.spectatorDelaySeq,
+      live: (runId) => this.sessions.get(runId),
+      gateLive: (s, o) => this.seasonWatchAccess(s, o),
+      gateStored: (subject, o) => this.watchAccess(subject, o),
+      seasonFinal: (sid) => this.seasonFinal(sid),
+      recoveryFailed: (runId) => this.recoveryFailedError(runId),
+      storedRunProfile: (sid, runId) => this.seasonRunProfile(sid, runId),
+      isSecret: this.isSecret,
+    });
     // 終わりの時刻の後の確定（SEASON.md §2.1）: 1 分ごとに見る
     this.seasonTimer = setInterval(() => this.seasons.tick(), 60_000);
     this.seasonTimer.unref?.();
@@ -535,6 +551,20 @@ export class SessionManager {
     return null;
   }
 
+  /**
+   * このサーバーが知っているトークンか（S17a。考えの文などに書かれた鍵を伏せる: session/secretMask.ts）: 読み込んであるプロフィールの鍵（ハッシュと照らす）か、
+   * 動いているランのプレイヤーのトークン。base64url の 24 字だけを見る
+   */
+  isKnownToken(c: string): boolean {
+    if (c.length !== TOKEN_CHARS) return false;
+    if (this.profiles.store.knows(c)) return true;
+    for (const s of this.sessions.values()) if (s.hasToken(c)) return true;
+    return false;
+  }
+
+  /** 伏せる関数（その場の観戦・見返し・巻き戻しが、同じものを使う） */
+  readonly isSecret = (c: string): boolean => this.isKnownToken(c);
+
   portForToken(token: string): PlayerPort | null {
     const r = this.resolveToken(token);
     return r ? new SessionPlayerPort(r.session, r.playerId) : null;
@@ -620,10 +650,17 @@ export class SessionManager {
    * そのランを観戦できるか（S3。SEASON.md §25.1・PROTOCOL §9.7）。確定する前のシーズンのランは、そのランの参加者のトークン（owner: その参加者を追う）か、
    * サーバーと同じ機械からの接続（local）だけ。シーズンのランでない・確定したシーズンのランは public（今までどおり）
    */
-  seasonWatchAccess(session: RunSession, o: { local: boolean; profileToken?: string }): { access: 'public' | 'local' } | { access: 'owner'; pid: PlayerId } | { error: ActionError } {
-    const sid = session.world.meta.season?.id;
+  seasonWatchAccess(session: RunSession, o: { local: boolean; profileToken?: string }): WatchAccess {
+    return this.watchAccess(watchSubjectOf(session), o);
+  }
+
+  /**
+   * 観戦の門の中身（S17: 動いているランは seasonWatchAccess から。記録だけの終わったランの見返しは、記録の参加者で、この同じ関数を通す。条件を書き写さない）
+   */
+  watchAccess(run: WatchSubject, o: { local: boolean; profileToken?: string }): WatchAccess {
+    const sid = run.seasonId;
     if (!sid || this.seasonFinal(sid)) return { access: 'public' };
-    const who = this.ownerOf(session, o);
+    const who = this.ownerOfSubject(run, o);
     if (who) return who;
     return { error: seasonWatchError(!!o.profileToken) };
   }
@@ -633,9 +670,13 @@ export class SessionManager {
    * そのランのプレイヤーのプロフィールのトークン（owner: そのプレイヤー）。どちらでもなければ null
    */
   ownerOf(session: RunSession, o: { local: boolean; profileToken?: string }): { access: 'local' } | { access: 'owner'; pid: PlayerId } | null {
+    return this.ownerOfSubject(watchSubjectOf(session), o);
+  }
+
+  private ownerOfSubject(run: WatchSubject, o: { local: boolean; profileToken?: string }): { access: 'local' } | { access: 'owner'; pid: PlayerId } | null {
     if (o.local) return { access: 'local' };
     const prof = o.profileToken ? this.profiles.store.resolve(o.profileToken) : null;
-    const pid = prof ? session.world.playerOrder.find((p) => session.profileOf(p) === prof.id) : undefined;
+    const pid = prof ? run.players.find((p) => run.profileOf(p) === prof.id) : undefined;
     return pid ? { access: 'owner', pid } : null;
   }
 
@@ -684,6 +725,14 @@ export class SessionManager {
     return { local: o.local, runs: runs.sort((a, b) => Number(b.waiting) - Number(a.waiting) || b.updatedAt - a.updatedAt) };
   }
 
+  /**
+   * シーズンのランを足した参加者のプロフィールの ID（S17a の B: 記録だけのランの見返しの門を、命令の記録を読まずに決める。シーズンの記録の、参加者ごとのランから。
+   * 参加の命令の profile と同じ値: SessionManager.createSeasonRunLocked が、同じプロフィールで registerRun する）。見つからなければ null
+   */
+  seasonRunProfile(seasonId: string, runId: string): string | null {
+    return this.seasons.get(seasonId)?.participants.find((p) => p.runs.some((r) => r.runId === runId))?.profileId ?? null;
+  }
+
   /** いま観戦できる、そのシーズンの進行中のラン（S3。GET /api/seasons/:id/watch。人間の画面のロビーの「観戦」） */
   seasonWatchable(seasonId: string, o: { local: boolean; profileToken?: string }): SeasonWatchResponse | null {
     const d = this.seasons.get(seasonId);
@@ -697,9 +746,30 @@ export class SessionManager {
       const owners = w.playerOrder.map((p) => s.profileOf(p));
       if (!final && !o.local && !(prof && owners.includes(prof.id))) continue;
       const name = d.participants.find((p) => owners.includes(p.profileId))?.name ?? w.players[w.playerOrder[0]]?.name ?? '?';
-      runs.push({ runId: s.runId, name });
+      // 見返せる遠征の数（S17。見返しの一覧と同じ数え方: 持ち主の鍵ならその冒険者、ほかは最初のプレイヤー。その場の観戦がもう見せた所まで）
+      const mine = prof ? w.playerOrder.find((p) => s.profileOf(p) === prof.id) : undefined;
+      const pid = mine ?? w.playerOrder[0];
+      const ended = pid ? reviewExpeditions(w, pid, liveVisibleUpTo(w, livePolicyFor(w, this.config.spectatorPolicy), this.config.spectatorDelaySeq)).length : 0;
+      runs.push({ runId: s.runId, name, expeditionsEnded: ended });
     }
-    return { local: o.local, final, runs: runs.sort((a, b) => a.name.localeCompare(b.name) || (a.runId < b.runId ? -1 : 1)) };
+    // 終わった自分のラン（S17a の G）: 開催中のシーズンで、持ち主の鍵を示したときだけ（同じ PC からは、巻き戻しで全体を見返せる）。
+    // その鍵の参加者のランのうち、終わったもの。数えるのは、動いているランは World、記録だけのランは要約（summary.json。小さい）の遠征
+    const review: { runId: string; expeditionsEnded: number }[] = [];
+    const part = !final && !o.local && prof ? d.participants.find((p) => p.profileId === prof.id) : undefined;
+    for (const r of part?.runs ?? []) {
+      const s = this.sessions.get(r.runId);
+      if (s) {
+        if (s.world.status !== 'ended') continue;
+        const pid = s.world.playerOrder.find((p) => s.profileOf(p) === prof!.id);
+        const n = pid ? reviewExpeditions(s.world, pid, s.world.seq).length : 0;
+        if (n) review.push({ runId: r.runId, expeditionsEnded: n });
+        continue;
+      }
+      if (this.store?.meta(r.runId)?.status !== 'ended') continue;
+      const n = (this.store.summary(r.runId)?.expeditions ?? []).filter((x) => x.endSeq !== null).length;
+      if (n) review.push({ runId: r.runId, expeditionsEnded: n });
+    }
+    return { local: o.local, final, runs: runs.sort((a, b) => a.name.localeCompare(b.name) || (a.runId < b.runId ? -1 : 1)), ...(review.length ? { review } : {}) };
   }
 
   /** AI パネル用のツール呼び出し記録（観戦にのみ流す） */
@@ -714,6 +784,16 @@ export class SessionManager {
     this.seasons.flush();
     if (this.seasonTimer) { clearInterval(this.seasonTimer); this.seasonTimer = null; }
   }
+}
+
+/** 観戦の門の答え（S3 §25.1）: public（だれでも）・local（サーバーと同じ機械から）・owner（そのプレイヤーの持ち主の鍵）・断り */
+export type WatchAccess = { access: 'public' | 'local' } | { access: 'owner'; pid: PlayerId } | { error: ActionError };
+
+/** 観戦の門が見るもの（S17）: シーズンの ID・プレイヤー・プレイヤーのプロフィールの ID。動いているランも、記録だけのランも、同じ形で門に渡す */
+export interface WatchSubject { seasonId: string | null | undefined; players: readonly PlayerId[]; profileOf(pid: PlayerId): string | null }
+
+export function watchSubjectOf(session: RunSession): WatchSubject {
+  return { seasonId: session.world.meta.season?.id, players: session.world.playerOrder, profileOf: (p) => session.profileOf(p) };
 }
 
 /** 開催中のシーズンのランの、復旧に失敗した理由の代わりの文（S3b §30.3 の 3） */

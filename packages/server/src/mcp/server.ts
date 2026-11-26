@@ -10,6 +10,7 @@ import type { PlayerPort, ActionPayload } from '../session/PlayerPort';
 import type { SessionManager } from '../session/SessionManager';
 import { isKnownClass } from '../session/SessionManager';
 import { internalError } from '../session/ops';
+import { maskTokensDeep, maskTokensIn } from '../session/secretMask';
 import { rulesText, RULE_TOPICS } from './rules';
 import type { RulesTopic } from './rules';
 
@@ -120,9 +121,10 @@ export function createMcpServer(ctx: McpContext): McpServer {
     const { player_token: _t, profile_token: _p, ...rest } = args;
     // 引数のトークン（名前に token を含む引数・トークンの値）は、どの深さでも記録に残さない（S7 §52.1 の 1: 観戦の「直前の命令」に引数を出す）
     const all = [_t, _p, ...secrets, ...(ctx.boundToken ? [ctx.boundToken] : [])];
-    const safe = stripTokenArgs(rest, all) as Record<string, unknown>;
+    // 考えの文などに書かれた、このサーバーの知っているトークン（プロフィールの鍵はハッシュと照らす）も伏せる（S17a の E。見返しの記録と同じ関数）
+    const safe = maskTokensDeep(stripTokenArgs(rest, all), manager.isSecret) as Record<string, unknown>;
     // 持ち主の様子（S11）は本人にだけ出す文なので、観戦に流す記録からは除く
-    manager.recordActivity(port.runId, { playerId: port.playerId, seq: port.view().seq, tool, args: safe, text: withoutTokens(withoutOwnerPresence(text), all), wall: Date.now() });
+    manager.recordActivity(port.runId, { playerId: port.playerId, seq: port.view().seq, tool, args: safe, text: maskTokensIn(withoutTokens(withoutOwnerPresence(text), all), manager.isSecret), wall: Date.now() });
   };
 
   const act = async (tool: string, args: Record<string, unknown>, cmd: Command, extra: { bareStart?: boolean } = {}) => {

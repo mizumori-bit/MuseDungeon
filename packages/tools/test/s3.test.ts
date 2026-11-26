@@ -174,7 +174,8 @@ describe('S3 §25.1: a run of a season in progress can be watched only by its pa
       const w0 = (await (await get(`/api/seasons/${SID}/watch`, REMOTE)).json()) as W;
       expect(w0).toEqual({ local: false, final: false, runs: [] });
       const wb = (await (await get(`/api/seasons/${SID}/watch`, { ...REMOTE, authorization: `Bearer ${b.ptoken}` })).json()) as W;
-      expect(wb.runs).toEqual([{ runId: b.session.runId, name: 'Ben' }]);
+      // expeditionsEnded（S17）: 見返せる遠征の数（Ben は、まだ遠征を終えていない）
+      expect(wb.runs).toEqual([{ runId: b.session.runId, name: 'Ben', expeditionsEnded: 0 }]);
       // 終わったランは一覧に入らない（進行中のランだけ）
       const wa = (await (await get(`/api/seasons/${SID}/watch`, { ...REMOTE, authorization: `Bearer ${a.ptoken}` })).json()) as W;
       expect(wa.runs).toEqual([]);
