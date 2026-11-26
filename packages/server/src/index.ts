@@ -9,7 +9,7 @@ export { intentStopText, SessionPlayerPort, towardNote } from './session/PlayerP
 export type { PlayerPort, ActionPayload } from './session/PlayerPort';
 export { SpectatorPort } from './session/SpectatorPort';
 export { activitiesFrom, commitEndIn, REVIEW_LIMITS, ReviewService, reviewExpeditions } from './session/review';
-export { maskThoughtEvent, maskTokensDeep, maskTokensIn, TOKEN_CHARS } from './session/secretMask';
+export { MASK_CHECKS_MAX, maskThoughtEvent, maskTokensDeep, maskTokensIn, TOKEN_CHARS } from './session/secretMask';
 export type { ReviewLimits } from './session/review';
 export { followFlushAtMacroEnd, followFrameDue, followViewOf, livePolicyFor, liveVisibleUpTo, perceiveCommit, splitCommits } from './session/followFrames';
 export { readJsonl, RunStore, spectatorEvent } from './log/RunStore';

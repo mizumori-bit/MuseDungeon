@@ -11,16 +11,33 @@ const RUN = /[A-Za-z0-9_-]{24,}/g;
 const MASK = '••••';
 
 /**
+ * 1 つの文で、確かめる候補（24 字の窓）の数の上限（S17b）。確かめるたびに、ハッシュを計算するので、上限が無いと、長い base64url の並び 1 つ
+ * （引数には、長さの上限の無いものがある。本文は 4MB まで受ける）で、サーバーが数秒止まる。越えた後の並びは、確かめずに、まるごと伏せる
+ * （24 字以上の、区切りの無い英数字の並びが、1 つの文に、これだけ並ぶのは、人の読む文ではない）
+ */
+export const MASK_CHECKS_MAX = 64;
+
+/**
  * 文の中の、知っているトークンを伏せる。isToken: その 24 字が、このサーバーの知っているトークンか。
- * 24 字より長い並び（区切りの無い所に書かれたトークン）は、24 字の窓を 1 つずつ確かめる
+ * 24 字より長い並び（区切りの無い所に書かれたトークン）は、24 字の窓を 1 つずつ確かめる（文 1 つにつき、MASK_CHECKS_MAX 回まで）
  */
 export function maskTokensIn(s: string, isToken: (candidate: string) => boolean): string {
+  return maskWith(s, isToken, { left: MASK_CHECKS_MAX });
+}
+
+/** 確かめる数の残り（1 つの文、か、1 つの値の全体で、共有する） */
+interface MaskBudget { left: number }
+
+function maskWith(s: string, isToken: (candidate: string) => boolean, budget: MaskBudget): string {
   if (s.length < TOKEN_CHARS) return s;
   return s.replace(RUN, (run) => {
-    if (run.length === TOKEN_CHARS) return isToken(run) ? MASK : run;
+    // 確かめ切れない並びは、まるごと伏せる
+    if (run.length - TOKEN_CHARS + 1 > budget.left) { budget.left = 0; return MASK; }
+    if (run.length === TOKEN_CHARS) { budget.left -= 1; return isToken(run) ? MASK : run; }
     const hits: string[] = [];
     for (let i = 0; i + TOKEN_CHARS <= run.length; i++) {
       const c = run.slice(i, i + TOKEN_CHARS);
+      budget.left -= 1;
       if (isToken(c)) { hits.push(c); i += TOKEN_CHARS - 1; }
     }
     let out = run;
@@ -29,19 +46,29 @@ export function maskTokensIn(s: string, isToken: (candidate: string) => boolean)
   });
 }
 
-/** 値の中の文字列を、どの深さでも伏せる（引数の記録など。深さ 6 まで） */
-export function maskTokensDeep(v: unknown, isToken: (candidate: string) => boolean, depth = 0): unknown {
-  if (typeof v === 'string') return maskTokensIn(v, isToken);
+/**
+ * 値の中の文字列を、どの深さでも伏せる（引数の記録など。深さ 6 まで）。確かめる数の上限は、値の全体で 1 つ（MASK_CHECKS_MAX の 4 倍。S17b:
+ * 文字列ごとの上限だと、要素の多い配列で、ふくらむ）
+ */
+export function maskTokensDeep(v: unknown, isToken: (candidate: string) => boolean): unknown {
+  return deep(v, isToken, { left: MASK_CHECKS_MAX * 4 }, 0);
+}
+
+function deep(v: unknown, isToken: (candidate: string) => boolean, budget: MaskBudget, depth: number): unknown {
+  if (typeof v === 'string') return maskWith(v, isToken, budget);
   if (depth > 6 || v === null || typeof v !== 'object') return v;
-  if (Array.isArray(v)) return v.map((x) => maskTokensDeep(x, isToken, depth + 1));
+  if (Array.isArray(v)) return v.map((x) => deep(x, isToken, budget, depth + 1));
   const out: Record<string, unknown> = {};
-  for (const [k, x] of Object.entries(v as Record<string, unknown>)) out[k] = maskTokensDeep(x, isToken, depth + 1);
+  for (const [k, x] of Object.entries(v as Record<string, unknown>)) out[k] = deep(x, isToken, budget, depth + 1);
   return out;
 }
 
-/** 考えの出来事（thought）の文を伏せる（ほかの出来事は、そのまま） */
+/**
+ * 考え（thought）と、話した文（chat。S17b）の出来事の文を伏せる（ほかの出来事は、そのまま）。
+ * どちらも、World を変えない出来事（reducer は、何もしない）なので、文を伏せても、巻き戻しの畳み込みと hash は、変わらない
+ */
 export function maskThoughtEvent<E extends GameEvent>(ev: E, isToken: (candidate: string) => boolean): E {
-  if (ev.type !== 'thought') return ev;
+  if (ev.type !== 'thought' && ev.type !== 'chat') return ev;
   const text = maskTokensIn(ev.text, isToken);
   return text === ev.text ? ev : { ...ev, text };
 }

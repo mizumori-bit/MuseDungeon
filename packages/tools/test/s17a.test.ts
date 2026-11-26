@@ -14,7 +14,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { loadContent } from '@muse/content';
 import { ENGINE_VERSION } from '@muse/engine';
-import { commitEndIn, createApp, loadConfig, maskTokensDeep, maskTokensIn, SessionManager } from '@muse/server';
+import { commitEndIn, createApp, loadConfig, MASK_CHECKS_MAX, maskThoughtEvent, maskTokensDeep, maskTokensIn, SessionManager } from '@muse/server';
 import type { App, PlayerPort } from '@muse/server';
 import type { Command, CommandRecord, GameEvent, ReviewListResponse, ReviewPageResponse, SeasonWatchResponse, ServerMsg, SpectatorPolicy } from '@muse/shared';
 
@@ -183,6 +183,37 @@ describe('S17a E: tokens written in a thought are masked wherever spectators can
     expect(maskTokensIn('普通の文 abcdefghijklmnopqrstuvwxyz0123', isTok)).toBe('普通の文 abcdefghijklmnopqrstuvwxyz0123');
     expect(maskTokensIn('短い', isTok)).toBe('短い');
     expect(maskTokensDeep({ a: ['zz_yy-xx_ww-vv_uu-tt_ss1'], b: 3 }, isTok)).toEqual({ a: ['••••'], b: 3 });
+  });
+
+  // S17b（S17a の検査の指摘）: 確かめる数に上限（確かめるたびに、ハッシュを計算する。長い並び 1 つで、サーバーを止めない）
+  it('a huge run of token-like characters is masked whole after a bounded number of checks; chat text is masked like thoughts', () => {
+    let calls = 0;
+    const isTok = (c: string) => { calls += 1; return c === 'AbCdEfGhIjKlMnOpQrStUv12'; };
+    // 400 万字の並び（窓が 400 万）: 確かめずに、まるごと伏せる
+    const big = 'a'.repeat(4_000_000);
+    const t0 = Date.now();
+    expect(maskTokensIn(big, isTok)).toBe('••••');
+    expect(calls).toBeLessThanOrEqual(MASK_CHECKS_MAX);
+    expect(Date.now() - t0).toBeLessThan(1000);
+    // 24 字の並びを、たくさん: 上限まで確かめ、残りは伏せる（知っている鍵が、後ろにあっても、出ない）
+    calls = 0;
+    const many = `${Array.from({ length: 5000 }, (_, i) => String(i).padStart(24, 'x')).join(' ')} AbCdEfGhIjKlMnOpQrStUv12`;
+    const out = maskTokensIn(many, isTok);
+    expect(calls).toBeLessThanOrEqual(MASK_CHECKS_MAX);
+    expect(out).not.toContain('AbCdEfGhIjKlMnOpQrStUv12');
+    // ふつうの長さの考え（280 字まで）は、今までどおり、知っている鍵だけを伏せる
+    expect(maskTokensIn(`${'あ'.repeat(200)} xAbCdEfGhIjKlMnOpQrStUv12y abcdefghijklmnopqrstuvwxyz0123`, isTok)).toBe(`${'あ'.repeat(200)} x••••y abcdefghijklmnopqrstuvwxyz0123`);
+    // 値の全体でも、上限は 1 つ（要素の多い配列で、ふくらまない）
+    calls = 0;
+    const arr = maskTokensDeep({ kinds: Array.from({ length: 20000 }, (_, i) => String(i).padStart(60, 'y')), last: 'AbCdEfGhIjKlMnOpQrStUv12' }, isTok) as { kinds: string[]; last: string };
+    expect(calls).toBeLessThanOrEqual(MASK_CHECKS_MAX * 4);
+    expect(arr.last).toBe('••••');
+    expect(arr.kinds).toHaveLength(20000);
+    // 話した文（chat）の出来事も伏せる。ほかの出来事は、そのまま
+    const chat = { type: 'chat', seq: 1, player: 'p_1', name: 'A', text: '鍵は AbCdEfGhIjKlMnOpQrStUv12' } as unknown as GameEvent;
+    expect((maskThoughtEvent(chat, isTok) as unknown as { text: string }).text).toBe('鍵は ••••');
+    const other = { type: 'noise', seq: 2, text: 'AbCdEfGhIjKlMnOpQrStUv12' } as unknown as GameEvent;
+    expect(maskThoughtEvent(other, isTok)).toBe(other);
   });
 
   it('a profile key and a player token written in thoughts never reach the live agent records, the director thought events, the look-back, or the rewind', async () => {
