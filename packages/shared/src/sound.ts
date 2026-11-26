@@ -45,6 +45,8 @@ export interface SoundState {
 export const SOUND_CUES = [
   'hit_dealt', 'hit_taken', 'miss', 'crit_dealt', 'crit_taken', 'kill', 'telegraph_start', 'pickup', 'treasure', 'discovery',
   'level_up', 'stairs', 'objective', 'extract', 'lifeline', 'guardian_down', 'warden_down', 'boon', 'near_death', 'death',
+  // S16a（SEASON.md §70.3 の 3）: 見えている敵が、自分のほかの手で倒れた（罠・毒・仲間など。自分が倒したら kill。守護者・大守護者は guardian_down・warden_down だけ）
+  'foe_down',
 ] as const;
 export type SoundCue = (typeof SOUND_CUES)[number];
 
@@ -101,7 +103,7 @@ export function soundDepth(depth: number): { depth_band: 0 | 1 | 2 | 3; depth_ti
  * 音の状態と合図を作る。prev: 前の呼び出しが返した記憶（最初は null）。events: 前の呼び出しの後に、このプレイヤーに届いた出来事（プレイヤー向けに伏せたもの）。
  * 合図は出来事の順。同じ一撃から「当たった」と「会心」は両方は出ない
  */
-export function soundStep(prev: SoundMemory | null, view: PlayerView, events: readonly ProjectedEvent[], catalog: Pick<Catalog, 'statuses' | 'items'> & { rules?: Catalog['rules'] }): SoundStep {
+export function soundStep(prev: SoundMemory | null, view: PlayerView, events: readonly ProjectedEvent[], catalog: Pick<Catalog, 'statuses' | 'items'> & { rules?: Catalog['rules']; classes?: Catalog['classes'] }): SoundStep {
   const p = prev && prev.playerId === view.playerId ? prev : null;
   const me = view.self.id;
   const turnsNow = view.self.turns;
@@ -142,7 +144,9 @@ export function soundStep(prev: SoundMemory | null, view: PlayerView, events: re
         if (d.target === me && d.via !== 'poison' && !(prevAttack && prevAttack.target === me)) {
           if (d.via === 'melee' || d.via === 'ranged' || d.via === 'thrown') fightTurns = turnsNow;
           push('hit_taken');
-        } else if (d.source === me && d.target !== me && d.via === 'thrown' && !(prevAttack && prevAttack.attacker === me)) {
+        } else if (d.source === me && d.target !== me && (d.via === 'thrown' || d.via === 'melee' || d.via === 'ranged') && !(prevAttack && prevAttack.attacker === me)) {
+          // 投げた物の当たりと、攻撃の出来事が届いていない当たり（S16a: 遊ぶ画面・追従だけの観戦の枠には、会心でない当たりの attack が届かない。
+          // 届いた被害から鳴らす。attack が届いていれば、そちらで鳴っている）
           fightTurns = turnsNow;
           push('hit_dealt');
         }
@@ -154,11 +158,14 @@ export function soundStep(prev: SoundMemory | null, view: PlayerView, events: re
         break;
       }
       case 'died': {
-        const d = ev as unknown as { id: string; killer: string | null };
+        const d = ev as unknown as { id: string | null; kind: string | null; killer: string | null };
         if (d.id === me) { push('death', 'death'); break; }
         if (d.killer === me) push('kill');
-        if (wardens.has(d.id)) push('warden_down', `warden:${d.id}`);
-        else if (guardians.has(d.id)) push('guardian_down', `guardian:${d.id}`);
+        if (d.id && wardens.has(d.id)) push('warden_down', `warden:${d.id}`);
+        else if (d.id && guardians.has(d.id)) push('guardian_down', `guardian:${d.id}`);
+        // 撃破の合図（S16a）: 見えていた敵（id と種族が伏せられていない。プレイヤーの体ではない）が、自分のほかの手で倒れた。
+        // 自分が倒したときは kill が鳴るので重ねない（どちらで倒れても、見えていれば、どちらかが鳴る）
+        else if (d.id && d.kind && d.killer !== me && !catalog.classes?.[d.kind]) push('foe_down');
         break;
       }
       case 'warden_slain': push('warden_down', `warden:${(ev as unknown as { id: string }).id}`); break;

@@ -11,7 +11,9 @@ type Fx =
   | { t: 'text'; x: number; y: number; text: string; color: string; start: number; dur: number }
   | { t: 'proj'; from: Pos; to: Pos; ref?: AssetRef; start: number; dur: number }
   | { t: 'ghost'; ent: SceneEntity; x: number; y: number; start: number; dur: number }
-  | { t: 'ring'; x: number; y: number; color: string; start: number; dur: number };
+  | { t: 'ring'; x: number; y: number; color: string; start: number; dur: number }
+  /** 能動技の名前（S16a）: 使った者の頭の上に、動きについて出す（id が盤面に無ければ x,y） */
+  | { t: 'label'; id: string; x: number; y: number; text: string; start: number; dur: number };
 
 interface Tween { from: Pos; to: Pos; start: number; dur: number }
 interface Bump { dx: number; dy: number; start: number; dur: number }
@@ -144,6 +146,22 @@ export class Canvas2DRenderer implements Renderer {
           if (ev.hit) add({ t: 'flash', ...ev.to, color: ev.crit ? 'rgba(255,240,80,0.8)' : 'rgba(255,60,60,0.6)', start: now, dur: 220 * k });
           else if (!fast) add({ t: 'text', ...ev.to, text: 'miss', color: '#bbbbbb', start: now, dur: 600 * k });
           if (ev.crit) add({ t: 'text', ...ev.to, text: 'CRIT!', color: '#ffe060', start: now, dur: 700 * k });
+          break;
+        }
+        case 'strike': {
+          // 攻撃の出来事が届かなかった当たり（S16a）: 通常の攻撃と同じ踏み込みと、当たりの光。位置は届いた見え方から
+          const from = posOf(ev.id), to = posOf(ev.target);
+          if (!from || !to) break;
+          const dx = Math.sign(to.x - from.x), dy = Math.sign(to.y - from.y);
+          if (dx) this.facing.set(ev.id, dx > 0 ? 'e' : 'w');
+          if (ev.ranged) { if (!fast) add({ t: 'proj', from, to, start: now, dur: 160 * k }); }
+          else if (!fast && (dx || dy)) { this.bumps.set(ev.id, { dx, dy, start: now, dur: 140 * k }); maxDur = Math.max(maxDur, 140 * k); }
+          add({ t: 'flash', ...to, color: 'rgba(255,60,60,0.6)', start: now, dur: 220 * k });
+          break;
+        }
+        case 'ability': {
+          const p = posOf(ev.id);
+          if (p) add({ t: 'label', id: ev.id, ...p, text: ev.name, start: now, dur: (fast ? 700 : 1100) * k });
           break;
         }
         case 'damage': {
@@ -481,6 +499,16 @@ export class Canvas2DRenderer implements Renderer {
       ctx.fillText(f.text, tx, ty);
       ctx.globalAlpha = 1;
     }
+    // 能動技の名前（S16a）: 使った者の頭の上の小さな札。動きについていき、終わりの 3 割で薄れる
+    for (const f of this.fx) {
+      if (f.t !== 'label') continue;
+      const p = (now - f.start) / f.dur;
+      const ent = s.entities.find((x) => x.id === f.id);
+      const at = ent ? this.entPos(ent, now) : { x: f.x, y: f.y };
+      ctx.globalAlpha = p < 0.7 ? 1 : Math.max(0, (1 - p) / 0.3);
+      this.drawLabel(ctx, f.text, sx(at.x) + cs / 2, sy(at.y) - cs * 0.18, cs, W);
+      ctx.globalAlpha = 1;
+    }
     for (const b of s.bubbles) {
       const e = s.entities.find((x) => x.id === b.id);
       if (!e || !inView(e)) continue;
@@ -811,5 +839,30 @@ export class Canvas2DRenderer implements Renderer {
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
     lines.forEach((l, i) => ctx.fillText(l, x + fs / 2, y + fs * 0.25 + i * fs * 1.25));
+  }
+
+  /** 能動技の名前の札（S16a）: 1 行・短く（長い名前は「…」で切る）。下端が bottom */
+  private drawLabel(ctx: CanvasRenderingContext2D, text: string, cx: number, bottom: number, cs: number, W: number): void {
+    const fs = Math.max(10, Math.round(cs * 0.36));
+    ctx.font = `bold ${fs}px sans-serif`;
+    const maxW = Math.max(fs * 4, Math.min(W - 4, fs * 9));
+    let s = text;
+    while (s.length > 1 && ctx.measureText(s).width > maxW) s = s.slice(0, -1);
+    if (s !== text) s = `${s.slice(0, -1)}…`;
+    const w = ctx.measureText(s).width + fs * 0.9;
+    const h = fs * 1.45;
+    const x = Math.max(2, Math.min(W - w - 2, cx - w / 2));
+    const y = bottom - h;
+    ctx.fillStyle = 'rgba(20,16,8,0.9)';
+    ctx.strokeStyle = '#d7b47a';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.roundRect(x, y, w, h, fs * 0.35);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#ffe6a8';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(s, x + w / 2, y + h / 2 + 0.5);
   }
 }

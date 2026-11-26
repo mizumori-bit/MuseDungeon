@@ -196,6 +196,22 @@ describe('sound engine (Web Audio, faked)', () => {
     expect(sources.length - before).toBe(notes.length);
   });
 
+  it('S16a: hollow has a provisional foe_down cue: short, quieter than kill, within the 16-voice limit; it sounds', () => {
+    const { def } = parseSoundDef(hollow);
+    const c = def.cues.foe_down;
+    expect(c).toBeDefined();
+    expect(c.gain!).toBeLessThan(def.cues.kill.gain!);
+    const end = Math.max(...c.notes.map((n) => n.at + (n.len ?? 0))) + (c.voice?.release ?? 0);
+    expect(end).toBeLessThanOrEqual(0.6);
+    const { ctx, sources } = fakeContext();
+    const eng = new SoundEngine(ctx as unknown as BaseAudioContext, def, ctx.destination as unknown as AudioNode);
+    eng.setState(base);
+    eng.advance(0.1);
+    const before = sources.length;
+    eng.cue('foe_down');
+    expect(sources.length - before).toBe(c.notes.length);
+  });
+
   it('S15a: silence stops scheduling music until the next state; the parts come back in on the next state', () => {
     const { def } = parseSoundDef(hollow);
     const { ctx, sources } = fakeContext();
@@ -240,6 +256,44 @@ describe('sound engine (Web Audio, faked)', () => {
       expect(d.snapshot().state?.scene).toBe('hub');
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it('S16a: the sound hint is up while a theme is on and the browser has not let it play; a click or key starts it; a later interruption brings the hint back', () => {
+    const d = new SoundDirector();
+    expect(d.waitingForGesture).toBe(false);
+    d.settings = { ...d.settings, theme: 'hollow' };
+    expect(d.waitingForGesture).toBe(true);
+    class FakeCtx {
+      state = 'suspended';
+      onstatechange: (() => void) | null = null;
+      resume() { this.state = 'running'; this.onstatechange?.(); return Promise.resolve(); }
+      close() { this.state = 'closed'; return Promise.resolve(); }
+    }
+    const listeners: string[] = [];
+    vi.stubGlobal('window', { AudioContext: FakeCtx, addEventListener: (t: string) => listeners.push(t), removeEventListener: () => undefined });
+    try {
+      let n = 0;
+      d.subscribe(() => n++);
+      d.unlock();
+      expect(d.waitingForGesture).toBe(false);
+      expect(d.snapshot().running).toBe(true);
+      expect(n).toBeGreaterThan(0);
+      // iOS の interrupted（裏のタブ・電話 など）: 札が戻り、次の操作で鳴らし直す
+      const ctx = (d as unknown as { ctx: FakeCtx }).ctx;
+      ctx.state = 'interrupted';
+      ctx.onstatechange?.();
+      expect(d.waitingForGesture).toBe(true);
+      expect(listeners).toContain('pointerdown');
+      expect(listeners).toContain('keydown');
+      d.unlock();
+      expect(d.waitingForGesture).toBe(false);
+      // 読めなかったテーマ（error）では札を出さない（見出しに理由が出る）
+      ctx.state = 'suspended';
+      d.error = 'hollow: HTTP 404';
+      expect(d.waitingForGesture).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
     }
   });
 

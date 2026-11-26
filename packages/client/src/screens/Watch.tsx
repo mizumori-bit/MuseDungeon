@@ -746,11 +746,14 @@ export function Watch({ runId }: { runId: string }) {
   return (
     <div class="page watch">
       <Header title={`${tr('観戦', 'Spectate')} ${runId}`} back>
-        <span class={`ws ${wsStatus}`}>{wsStatus}</span>
-        <ThemePicker themes={th.themes} themeId={th.themeId} onChange={th.setThemeId} />
-        <SoundControls />
-        {/* 巻き戻しは、開けるランだけ（S15。開催中のシーズンの、終わっていないランは、確定するまで見返せない: §25.1） */}
-        {canRewind && <a class="button small" href={`#/replay/${runId}`}>{tr('巻き戻し', 'Rewind')}</a>}
+        {/* 見出しの道具は 1 つの束（S16a §70.3 の 5）: 広い幅では 1 段、狭い幅では、束ごと 2 段目に 1 行で（はみ出したら横に送る） */}
+        <span class="hdr-tools">
+          <span class={`ws ${wsStatus}`}>{wsStatus}</span>
+          <ThemePicker themes={th.themes} themeId={th.themeId} onChange={th.setThemeId} />
+          <SoundControls />
+          {/* 巻き戻しは、開けるランだけ（S15。開催中のシーズンの、終わっていないランは、確定するまで見返せない: §25.1） */}
+          {canRewind && <a class="button small" href={`#/replay/${runId}`}>{tr('巻き戻し', 'Rewind')}</a>}
+        </span>
       </Header>
       <ErrorBanner error={error ?? catErr ?? th.error} onClose={() => setError(null)} />
       <div class="toolbar">
