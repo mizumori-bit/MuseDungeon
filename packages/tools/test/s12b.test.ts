@@ -10,7 +10,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { loadContent } from '@muse/content';
 import { ENGINE_VERSION } from '@muse/engine';
 import { createApp, loadConfig, SessionManager } from '@muse/server';
-import { cleanOpsName, opsOpenSeason } from '../../server/src/session/ops';
+import { normalizeName } from '../../server/src/session/names';
+import { opsOpenSeason } from '../../server/src/session/ops';
 
 const content = loadContent();
 const agent = { kind: 'agent' as const, label: 'test' };
@@ -176,7 +177,7 @@ describe('S12b §63.7 の 1: starting a season from the hub', () => {
     expect(opsOpenSeason(m, { name: 'あ'.repeat(33) }).status).toBe(400);
     expect(opsOpenSeason(m, { name: 3 }).status).toBe(400);
     expect(m.seasons.store.ids()).toEqual([]);
-    expect(cleanOpsName('‮名前\u0000\r\n')).toBe('名前');
+    expect(normalizeName('‮名前\u0000\r\n')).toEqual({ ok: true, name: '名前' });
     // 32 字ちょうど・端の値は通る
     const ok = opsOpenSeason(m, { name: '𠮷'.repeat(32), days: 60, budget: 20_000 });
     expect(ok.status).toBe(200);

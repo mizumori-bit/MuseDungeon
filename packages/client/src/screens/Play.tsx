@@ -1158,7 +1158,7 @@ ${tr('それでも装備しますか？', 'Equip it anyway?')}`)) send({ ...last
                 {view && view.status === 'waiting_others' && <div class="macro">{tr('他のプレイヤーの手番を待っています…', 'Waiting for other players…')}</div>}
                 {/* キャンプにいる間は地図を隠してキャンプの絵（ASSET_SPEC §7.7）。パネルはその上 */}
                 {view && atCamp && <CampScene theme={th.theme} />}
-                {view && atCamp && <div class="campwrap"><CampPanel view={view} catalog={catalog} onStart={startExpedition} onRetire={retire} season={obs?.season} canReport={!!obs?.valid_actions.some((l) => l.startsWith('report_stairs'))} onReport={() => send({ type: 'report_stairs' })} /></div>}
+                {view && atCamp && <div class="campwrap"><CampPanel runId={runId} view={view} catalog={catalog} onStart={startExpedition} onRetire={retire} season={obs?.season} canReport={!!obs?.valid_actions.some((l) => l.startsWith('report_stairs'))} onReport={() => send({ type: 'report_stairs' })} /></div>}
                 {exp && expActive && briefingNo === exp.no && <BriefingCard x={exp} catalog={catalog} onClose={() => setBriefingNo(null)} />}
                 {view && view.status === 'dead' && !summary && (
                   <div class="deadbox">{tr('あなたは倒れた。', 'You have fallen.')} <a href={`#/watch/${runId}`}>{tr('観戦を続ける', 'Keep watching')}</a> / <a href={`#/replay/${runId}`}>{tr('リプレイ', 'Replay')}</a></div>

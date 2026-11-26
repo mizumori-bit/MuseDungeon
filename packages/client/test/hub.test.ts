@@ -150,8 +150,9 @@ describe('S10 §58.4: the adventurer card on the hub', () => {
     expect(ai.state).toBe('waiting_ai');
     expect(ai.where).toBe('まだ、このシーズンに入っていない');
     expect(ai.text).toBe('ミュゼ美が、鍵を使って入ってくるのを、待っている');
-    expect(ai.notes).toEqual(['鍵は、足したときに 1 回だけ出た。無くしたら、足し直す']);
-    expect(ai.action).toBeNull();
+    expect(ai.notes).toEqual(['鍵は、足したときに 1 回だけ出た。無くしたら、「招きを取り消す」から、足し直す']);
+    // S12c: まだ 1 回も入っていない招きは、取り消せる（確かめの窓を開く、目立たないボタン）
+    expect(ai.action).toEqual({ label: '招きを取り消す', uninvite: true });
     // 運用の道具で招いた者（種類が分からない）も、同じ
     expect(hubCard({ ...base, row: null, membership: mem, local: true, roster: { kind: null } }).state).toBe('waiting_ai');
     // 前の冒険が倒れて終わった AI: もう一度入ってくるのを待つ（鍵の補足は出さない）

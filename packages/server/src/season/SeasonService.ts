@@ -9,6 +9,7 @@ import type {
 import { awardName, DIRECTIVE_ITEMS, SeasonSlaySchema } from '@muse/shared';
 import type { RunSession } from '../session/RunSession';
 import type { ProfileStore } from '../session/profiles';
+import { normalizeName } from '../session/names';
 import { buildSlays, incapStatuses } from './slays';
 import type { SlayFacts } from './slays';
 
@@ -140,6 +141,8 @@ export const TITLE_MIN_ENTRANTS = 2;
 /** 終わりの時刻の後、全員がキャンプに戻らなくても、この時間で確定する（SEASON.md §2.1） */
 export const SEASON_GRACE_MS = 60 * 60 * 1000;
 export const SEASON_ID_RE = /^[a-z0-9][a-z0-9_-]{0,31}$/;
+/** 1 つのシーズンに招ける数（S12c） */
+export const INVITE_MAX = 32;
 
 /** 読めないファイルの印（無いファイルの null と分ける。SEASON.md §33.1 の 4） */
 const BROKEN: unique symbol = Symbol('broken');
@@ -479,9 +482,14 @@ export class SeasonService implements SeasonHooks {
     if (this.store.invitesBroken(id)) return { error: `シーズン ${id} の invites.json が読めない。直してから / invites.json of season ${id} is unreadable` };
     const existing = token ? profiles.resolve(token) : null;
     if (token && !existing) return { error: 'そのプロフィールのトークンは見つからない / unknown profile token' };
-    const display = (name || existing?.name || '').normalize('NFKC').trim().slice(0, 32);
-    if (!display) return { error: '--name が要る（表示名。同じシーズンの中で重ならないこと） / --name is required' };
+    if (!name && !existing?.name) return { error: '--name が要る（表示名。同じシーズンの中で重ならないこと） / --name is required' };
+    // 表示名は、名前を整える 1 つの関数で（S12c: 掃除 → NFKC → 掃除 → 前後の空白 → コードポイントで 32 字まで。長ければ切らずに断る）
+    const nm = normalizeName(name || existing?.name || '');
+    if (!nm.ok) return { error: nm.message };
+    const display = nm.name;
     const invites = this.store.invites(id);
+    // 1 つのシーズンに招けるのは INVITE_MAX まで（S12c。運用の道具でも同じ）
+    if (invites.length >= INVITE_MAX) return { error: `シーズン ${id} には、もう ${INVITE_MAX} 人を招いてある（上限）。招きを取り消してから / season ${id} already has ${INVITE_MAX} invitations (the limit)` };
     if (invites.some((x) => nameKey(x.name) === nameKey(display))) return { error: `表示名「${display}」は、このシーズンですでに使われている / the display name is taken in this season` };
     if (existing && invites.some((x) => x.profileId === existing.id)) return { error: `そのプロフィール（${existing.id}）は、もう招いてある / already invited` };
     const now = this.now();
@@ -625,7 +633,7 @@ export class SeasonService implements SeasonHooks {
     let p = this.participant(d, profileId);
     const wall = this.now();
     if (!p) {
-      p = { profileId, name: name.slice(0, 32) || 'Muse', joinedAt: wall, runs: [], best: { depth: 1, used: 0 }, firstReports: 0, lastFirstUsed: 0, died: false };
+      p = { profileId, name: [...name].slice(0, 32).join('') || 'Muse', joinedAt: wall, runs: [], best: { depth: 1, used: 0 }, firstReports: 0, lastFirstUsed: 0, died: false };
       d.participants.push(p);
       this.store.log(id, { type: 'joined', profileId, name: p.name });
     }

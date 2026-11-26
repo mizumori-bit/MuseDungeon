@@ -13,10 +13,10 @@ import { ApiError, api, errorText } from '../api';
 import { readBell, saveBell, type BellMode } from '../ui/bell';
 import { ErrorBanner, Header, useCatalog, useLocaleRefresh } from '../ui/common';
 import { normName, SeasonSharedFlow, sortStandings, STANDING_SORTS, standingSortName, StandingsTable, type StandingSort } from '../ui/home';
-import { AddAdventurerDialog, AdventurerCard, DiveDialog, HubNav, KeyEntry, KeyOnceDialog, OpenSeasonDialog } from '../ui/hub';
+import { AddAdventurerDialog, AdventurerCard, DiveDialog, HubNav, KeyEntry, KeyOnceDialog, OpenSeasonDialog, UninviteDialog } from '../ui/hub';
 import { hubCard, membershipFor, noSeasonText, participantName, pickSeason, seasonLeftText, type HubCardModel } from '../ui/hubState';
 import { screenErr } from '../ui/screenErr';
-import { addKey, forgetKeys, keepKey, storedKeys } from '../ui/keys';
+import { addKey, forgetKeys, keepKey, primaryKey, retireMainKey, storedKeys } from '../ui/keys';
 import { FIRST_EXPEDITION_CHOICES, playerStateLabel, type FirstExpeditionChoice } from '../ui/labels';
 import { OwnerRunCard } from '../ui/owner';
 import { fmtTime, getLocale, getPref, getToken, inLocale, navigate, saveToken, setPref, tr } from '../util';
@@ -68,7 +68,8 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
   // 拠点の運用者の口（S12b。SEASON.md §63.7）: 名簿は、サーバーと同じ PC から開いているときだけ読む（ほかの PC からは呼ばない）
   const [roster, setRoster] = useState<OpsRosterResponse | null>(null);
   // 運用者の窓: 新しいシーズンを始める・冒険者を足す（seasonName: 足す先、lead: 窓の上の案内）
-  const [opsDlg, setOpsDlg] = useState<{ kind: 'open' } | { kind: 'add'; seasonName: string; lead?: string } | null>(null);
+  // 窓は、開いたときの値を持つ（S12c: 名簿の読み直しが一時的に失敗しても、閉じない・入力が消えない）
+  const [opsDlg, setOpsDlg] = useState<{ kind: 'open'; suggested: string; days: number; budget: number } | { kind: 'add'; seasonName: string; lead?: string } | { kind: 'uninvite'; profileId: string; name: string } | null>(null);
   const [opsErr, setOpsErr] = useState<string | null>(null);
   // 鍵を 1 回だけ見せる窓（AI に任せる冒険者を足した直後。このブラウザには覚えない。閉じたら消える）
   const [keyOnce, setKeyOnce] = useState<{ name: string; seasonId: string; key: string } | null>(null);
@@ -87,7 +88,7 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
   const [objective, setObjective] = useState<FirstExpeditionChoice>(firstChoice(getPref('firstExpedition', 'camp')));
   const [busy, setBusy] = useState(false);
   // プロフィール（V3-7 §7.1）: トークンはこのブラウザに残し、次のランに渡す（記録・図鑑・継承）
-  const [profileToken, setProfileToken] = useState(getPref('profileToken', ''));
+  const [profileToken, setProfileToken] = useState(primaryKey());
   const [legacy, setLegacy] = useState(getPref('legacy', 'on') !== 'off');
   const [records, setRecords] = useState<{ text: string; records: ProfileRecords } | null>(null);
   const [showRecords, setShowRecords] = useState(false);
@@ -99,16 +100,17 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
   const setOnlyMine = (v: boolean) => { setPref('records.onlyMine', v ? 'on' : 'off'); setOnlyMineState(v); };
   const setSortBy = (k: StandingSort) => { setPref('records.sort', k); setSortByState(k); };
   const L = getLocale();
+  // 記録と図鑑・称号の枠は、このブラウザの「自分のプロフィール」（primaryKey = profileToken）のもの。冒険者ごとの記録は、遊ぶ画面のキャンプの 1 行（そのランの鍵）
   useEffect(() => {
     if (!profileToken) { setRecords(null); return; }
     api.records(profileToken, L).then(setRecords).catch(() => setRecords(null));
     api.profile(profileToken, L).then((p) => setTitles((p.titles ?? []).map((x) => x.name))).catch(() => setTitles([]));
   }, [profileToken, L]);
   const keepProfile = (tok?: string) => { if (tok) { setPref('profileToken', tok); setProfileToken(tok); } };
-  // 自分のラン（記録のタブの「自分だけ」・順位の表の自分の行）: 覚えてあるトークンのプロフィールの直近のラン
-  const tokKey = [profileToken, ...Object.values(seasonTok)].join('\u0000');
+  // 自分のラン（記録のタブの「自分だけ」・順位の表の自分の行）: 覚えてある鍵の全部（S12c: 拠点で足した冒険者の鍵も）のプロフィールの直近のラン
+  const tokKey = [profileToken, ...Object.values(seasonTok), ...storedKeys()].join('\u0000');
   useEffect(() => {
-    const toks = [...new Set([profileToken, ...Object.values(seasonTok)].filter(Boolean))];
+    const toks = storedKeys();
     if (!toks.length) { setRecentMine([]); return; }
     Promise.all(toks.map((t) => api.records(t, L).then((r) => r.records.recent.map((x) => x.run_id)).catch(() => [] as string[])))
       .then((xs) => setRecentMine([...new Set(xs.flat())]));
@@ -154,11 +156,11 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
       if (id) seen.add(id);
       list.push({ token: t, id, name: p?.name ?? byToken[t]?.[0]?.name ?? '', ...(p?.seasons ? { seasons: p.seasons } : {}), ok });
     });
-    // 名簿（S12b）: サーバーと同じ PC から開いているときだけ、運用者の口を呼ぶ
+    // 名簿（S12b）: サーバーと同じ PC から開いているときだけ、運用者の口を呼ぶ。一時的に読めなかったときは、前の名簿のまま（S12c: 開いている窓を閉じない）
     if (local) {
       const r = await api.opsRoster().catch(() => null);
-      setRoster(r);
-    } else setRoster(null);
+      if (r) setRoster(r);
+    } else if (any) setRoster(null);
     setAdvs(list);
     if (!any) return;
     const sorted = [...rows.values()].sort((a, b) => Number(b.waiting) - Number(a.waiting) || b.updatedAt - a.updatedAt);
@@ -174,11 +176,14 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
       setSeasonsLoaded(true);
       const toks = Object.fromEntries(list.map((x) => [x.season.id, getPref(`seasonToken.${x.season.id}`, '')]).filter(([, v]) => v));
       setSeasonTok(toks);
-      // 観戦の口は、シーズンの招きのトークン（無ければプロフィールのトークン）を見出しで
-      const prof = getPref('profileToken', '');
-      const ws = await Promise.all(list.map((x) => {
-        const t = toks[x.season.id] || prof || undefined;
-        return api.seasonWatch(x.season.id, t).then((r) => [x.season.id, { ...r, withTok: !!t }] as const).catch(() => null);
+      // 観戦の口は、覚えてある鍵の全部（S12c: 拠点で足した冒険者の鍵も）で訊いて、ランをまとめる（鍵は見出しで）。鍵が無ければ鍵なしで 1 回
+      const keys = storedKeys(list.map((x) => x.season.id));
+      const ws = await Promise.all(list.map(async (x) => {
+        const asks: (string | undefined)[] = keys.length ? keys : [undefined];
+        const rs = (await Promise.all(asks.map((t) => api.seasonWatch(x.season.id, t).catch(() => null)))).filter((r): r is SeasonWatchResponse => !!r);
+        if (!rs.length) return null;
+        const runs = new Map(rs.flatMap((r) => r.runs).map((r) => [r.runId, r]));
+        return [x.season.id, { ...rs[0], runs: [...runs.values()], withTok: keys.length > 0 }] as const;
       }));
       setWatch(Object.fromEntries(ws.filter((x): x is readonly [string, SeasonWatchResponse & { withTok: boolean }] => !!x)));
     }).catch(() => setSeasonsLoaded(true));
@@ -427,12 +432,12 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
   // ---- 拠点の運用者の口（S12b。サーバーと同じ PC から開いたときだけ。SEASON.md §63.7） ----
   /** 運用者の口の断りは、サーバーの文の画面の言葉の側（運用者に向けた文。置き換えない） */
   const opsErrText = (e: unknown) => (e instanceof ApiError && e.error ? inLocale(e.error.message) : screenErr(e));
-  /** 新しいシーズンを始める。始めたら、そのまま「冒険者を足す」の窓へ */
+  /** 新しいシーズンを始める。名前が空なら送らない（サーバーが、重ならない「シーズン N」を決める。S12c）。始めたら、そのまま「冒険者を足す」の窓へ */
   const openSeason = async (v: { name: string; days: number; budget: number }) => {
     setBusy(true);
     setOpsErr(null);
     try {
-      const r = await api.opsOpenSeason(v);
+      const r = await api.opsOpenSeason({ ...(v.name.trim() ? { name: v.name.trim() } : {}), days: v.days, budget: v.budget });
       setOpsDlg({ kind: 'add', seasonName: r.season.name, lead: tr(`シーズン「${r.season.name}」を始めた（${fmtTime(r.season.endsAt)} まで）。次は、冒険者を足す。`, `Started "${r.season.name}" (until ${fmtTime(r.season.endsAt)}). Next, add an adventurer.`) });
       refresh();
     } catch (e) {
@@ -453,13 +458,27 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
       setOpsDlg(null);
       if (r.kind === 'human' && r.runId && r.token && r.playerId) {
         addKey(r.profileToken);
-        setProfileToken(getPref('profileToken', ''));
+        setProfileToken(primaryKey());
         setPref('class', v.classId);
         saveToken(r.runId, { token: r.token, playerId: r.playerId, name: r.name });
         navigate(`#/play/${r.runId}`);
         return;
       }
       setKeyOnce({ name: r.name, seasonId: r.seasonId, key: r.profileToken });
+      refresh();
+    } catch (e) {
+      setOpsErr(opsErrText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  /** 招きを取り消す（S12c。鍵を無くしたときの道。ランを 1 回も始めていない招きだけ。確かめの窓から） */
+  const uninvite = async (profileId: string) => {
+    setBusy(true);
+    setOpsErr(null);
+    try {
+      await api.opsUninvite(profileId);
+      setOpsDlg(null);
       refresh();
     } catch (e) {
       setOpsErr(opsErrText(e));
@@ -484,7 +503,7 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
   const classNameOf = (id: string | undefined) => (id ? (catalog ? kindName(catalog, L, id) : id) : null);
 
   // ---- 拠点（S10。SEASON.md §58.4） ----
-  interface HubEntry { key: string; runId: string | null; name: string; className: string | null; model: HubCardModel; participant: string | null; seasonId: string; onDive?: () => void; onEnroll?: () => void }
+  interface HubEntry { key: string; runId: string | null; name: string; className: string | null; model: HubCardModel; participant: string | null; seasonId: string; onDive?: () => void; onEnroll?: () => void; onUninvite?: () => void }
   /** 今のシーズン（S12b: サーバーと同じ PC から開いていて、名簿を読めたときだけ。冒険者を足す先） */
   const rosterSeason = owner.local && roster?.season ? roster.season : null;
   /** 鍵の冒険者ごとの札（ふつうは 1 枚）。開催中のシーズンが無ければ無い */
@@ -523,6 +542,8 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
         name: row?.name ?? e.name, season: sd, membership: { used: e.used, budget: e.budget, died: e.died, runs: e.runs, ...(e.failed ? { failed: true as const } : {}) },
         row, playable: !!(row && getToken(row.runId)), rank: st?.adventure.rank ?? null, banked: st?.banked, local: true, roster: { kind: e.kind },
       }),
+      // 招きを取り消す（S12c）: まだ 1 回も入っていない招きだけ（札のボタンは hubCard が決める）
+      onUninvite: () => { setOpsErr(null); setOpsDlg({ kind: 'uninvite', profileId: e.profileId, name: e.name }); },
     };
   }) : [];
   const rosterRuns = new Set(rosterCards.map((c) => c.runId).filter((x): x is string => !!x));
@@ -554,7 +575,7 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
             <p class="hub-note">{noSeasonText(owner.local, !!roster?.broken)}</p>
             <div class="hub-links">
               {/* S12b: サーバーと同じ PC からは、ここで始める（確定していないシーズン・読めない記録があれば出さない） */}
-              {owner.local && roster?.canOpen && <button type="button" class="hub-btn primary" onClick={() => { setOpsErr(null); setOpsDlg({ kind: 'open' }); }}>{tr('新しいシーズンを始める', 'Start a new season')}</button>}
+              {owner.local && roster?.canOpen && <button type="button" class="hub-btn primary" onClick={() => { setOpsErr(null); setOpsDlg({ kind: 'open', suggested: roster.next?.name ?? '', days: roster.next?.days ?? 7, budget: roster.next?.budget ?? 3000 }); }}>{tr('新しいシーズンを始める', 'Start a new season')}</button>}
               <a class={`hub-btn ${owner.local && roster?.canOpen ? '' : 'primary'}`} href="#/records">{tr('記録を見る', 'Records')}</a>
               <a class="hub-btn" href="#/ops">{tr('運用', 'Operations')}</a>
             </div>
@@ -573,7 +594,7 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
                 <h3 class="hub-sechead">{tr('この PC の冒険者（運用者として）', 'Adventurers on this PC (as the operator)')}</h3>
                 <p class="hub-note">{tr('サーバーと同じ PC から開いているので、鍵の無い冒険者も、支度ができる。自分の冒険者と、取り違えないこと。', 'Opened on the server PC, so you can prepare adventurers you hold no key for. Do not mistake them for your own.')}</p>
                 <div class="hub-grid">
-                  {operatorCards.map((c) => <AdventurerCard key={c.key} name={c.name} className={c.className} model={c.model} operator />)}
+                  {operatorCards.map((c) => <AdventurerCard key={c.key} name={c.name} className={c.className} model={c.model} operator onUninvite={c.onUninvite} busy={busy} />)}
                 </div>
                 {needKey && !rosterSeason && <KeyEntry compact onKeep={keepOwnerTok} />}
               </section>
@@ -837,7 +858,7 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
               <p class="sub">{tr(`ラン ${records.records.runs.total}・確定の最高 ${records.records.banked.best}・最深 地下${records.records.deepest}階・図鑑 ${records.records.next.codex}・実績 ${records.records.next.feats}`, `${records.records.runs.total} runs, best banked ${records.records.banked.best}, deepest ${records.records.deepest}, codex ${records.records.next.codex}, feats ${records.records.next.feats}`)}</p>
               <div class="row">
                 <button class="small" onClick={() => setShowRecords(!showRecords)}>{showRecords ? tr('閉じる', 'Hide') : tr('すべて見る', 'Show all')}</button>
-                <button class="small" onClick={() => { if (confirm(tr('このブラウザのプロフィールを外す（記録はサーバーに残る）。次のランは新しいプロフィールになる。', 'Forget this profile in this browser (records stay on the server). Your next run starts a new profile.'))) { setPref('profileToken', ''); setProfileToken(''); } }}>{tr('新しいプロフィールにする', 'Start a new profile')}</button>
+                <button class="small" onClick={() => { if (confirm(tr('次のランは、新しいプロフィールになる（記録はサーバーに残る）。今の鍵は捨てずに、拠点の冒険者の鍵として、このブラウザに残す（外すのは、運用の「鍵を外す」）。', 'Your next run starts a new profile (records stay on the server). The current key is not thrown away: it stays in this browser as a hub adventurer\'s key (remove it with "Remove the key" under Operations).'))) { retireMainKey(); setProfileToken(''); } }}>{tr('新しいプロフィールにする', 'Start a new profile')}</button>
               </div>
               {titles.length > 0 && <p class="titles">{tr('称号', 'Titles')}: {titles.map((t, i) => <span key={i} class="tag title">{t}</span>)}</p>}
               {showRecords && <pre class="records">{records.text}</pre>}
@@ -931,9 +952,12 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
         <DiveDialog name={dive.name} classId={classId} catalog={catalog} busy={busy} error={diveErr}
           onDive={(nm, cls) => { setClassId(cls); void joinSeason(dive.seasonId, dive.token, nm, cls); }} onClose={() => setDive(null)} />
       )}
-      {opsDlg?.kind === 'open' && roster?.next && (
-        <OpenSeasonDialog defaults={{ name: tr(`シーズン${roster.next.number}`, `Season ${roster.next.number}`), days: roster.next.days, budget: roster.next.budget }} busy={busy} error={opsErr}
+      {opsDlg?.kind === 'open' && (
+        <OpenSeasonDialog defaults={{ suggested: opsDlg.suggested, days: opsDlg.days, budget: opsDlg.budget }} busy={busy} error={opsErr}
           onOpen={(v) => void openSeason(v)} onClose={() => setOpsDlg(null)} />
+      )}
+      {opsDlg?.kind === 'uninvite' && (
+        <UninviteDialog name={opsDlg.name} busy={busy} error={opsErr} onConfirm={() => void uninvite(opsDlg.profileId)} onClose={() => setOpsDlg(null)} />
       )}
       {opsDlg?.kind === 'add' && (
         <AddAdventurerDialog seasonName={opsDlg.seasonName} lead={opsDlg.lead} catalog={catalog} classId={classId} busy={busy} error={opsErr}

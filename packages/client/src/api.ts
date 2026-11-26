@@ -110,6 +110,8 @@ export const api = {
   opsOpenSeason: (b: { name?: string; days?: number; budget?: number }) => postJSON<OpsSeasonOpened>('/api/ops/season', b),
   opsAddAdventurer: (b: { name: string; kind: 'ai' | 'human'; classId?: string; locale?: string }) => postJSON<OpsAdventurerAdded>('/api/ops/adventurers', b),
   opsEnroll: (token: string, name?: string) => ownerPost<OpsEnrolled>('/api/ops/enroll', name ? { name } : {}, token),
+  /** 招きを取り消す（S12c。ランを 1 回も始めていない招きだけ） */
+  opsUninvite: (profileId: string) => postJSON<{ seasonId: string; name: string; profileId: string }>('/api/ops/uninvite', { profileId }),
 };
 
 let catalogPromise: Promise<Catalog> | null = null;

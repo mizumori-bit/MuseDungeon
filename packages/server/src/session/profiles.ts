@@ -11,6 +11,7 @@ import type {
 } from '@muse/shared';
 import { DIRECTIVE_ITEMS, abilityName, buildRecords, codexCount, emptyCodex, evalFeatCond, expeditionBest, floorsUnhurt, kindName, legacyFrom, mergeCodex, recordsCampLine, recordsLines, t } from '@muse/shared';
 import type { RunSession } from './RunSession';
+import { normalizeName } from './names';
 
 interface ProfileFile extends ProfileData { version: 1; tokenHash: string }
 
@@ -65,7 +66,7 @@ export class ProfileStore {
 
   create(name: string, wall: number): { token: string; profile: ProfileData } {
     const token = randomBytes(18).toString('base64url');
-    const p: ProfileFile = { version: 1, id: newProfileId(), tokenHash: hashToken(token), name: name.slice(0, 32) || 'Muse', createdAt: wall, updatedAt: wall, runs: [], feats: [] };
+    const p: ProfileFile = { version: 1, id: newProfileId(), tokenHash: hashToken(token), name: [...name].slice(0, 32).join('') || 'Muse', createdAt: wall, updatedAt: wall, runs: [], feats: [] };
     this.byId.set(p.id, p);
     this.byHash.set(p.tokenHash, p.id);
     this.save(p);
@@ -141,10 +142,12 @@ export class ProfilePort {
     return { text: lines.join('\n'), data: { profile_id: p.id, name: p.name, summary, titles, runs } };
   }
 
+  /** 表示名を変える（S12c: 名前を整える 1 つの関数で。整えられなければ false） */
   rename(name: string): boolean {
     const p = this.service.store.get(this.id);
-    if (!p || !name.trim()) return false;
-    p.name = name.trim().slice(0, 32);
+    const nm = normalizeName(name);
+    if (!p || !nm.ok) return false;
+    p.name = nm.name;
     this.service.store.save(p);
     return true;
   }

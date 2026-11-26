@@ -13,7 +13,7 @@ import { ErrorBanner, Header, useCatalog, useLocaleRefresh } from '../ui/common'
 import { BoonChoicePanel, PerkChoicePanel } from '../ui/build';
 import { OfferCard, rulesOf } from '../ui/expedition';
 import { HubNav, HubPill } from '../ui/hub';
-import { storedKeys } from '../ui/keys';
+import { keyForRun } from '../ui/keys';
 import { statChangeText } from '../ui/owner';
 import { aiPresenceText, readyCheck } from '../ui/ownerCheck';
 import { InventoryPanel, type InvAction } from '../ui/panels';
@@ -88,15 +88,7 @@ export function Prepare({ runId }: { runId: string }) {
   // そのランの冒険者の鍵を探す（持ち主の口の一覧で、その鍵の冒険者のランとして返るもの）。無ければ鍵なし（同じ PC から）
   useEffect(() => {
     let alive = true;
-    void (async () => {
-      for (const t of storedKeys()) {
-        try {
-          const r = await api.ownerRuns(t);
-          if (r.runs.some((x) => x.runId === runId && x.mine)) { if (alive) setTok(t); return; }
-        } catch { /* 次の鍵 */ }
-      }
-      if (alive) setTok(undefined);
-    })();
+    void keyForRun(runId).then((t) => { if (alive) setTok(t); });
     return () => { alive = false; };
   }, [runId]);
 

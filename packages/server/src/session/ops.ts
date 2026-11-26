@@ -6,6 +6,8 @@ import { randomBytes } from 'node:crypto';
 import type { ActionError, Controller, Locale, OpsAdventurerAdded, OpsEnrolled, OpsRosterEntry, OpsRosterResponse, OpsSeasonOpened } from '@muse/shared';
 import { actionError } from '@muse/shared';
 import type { SeasonDef } from '../season/SeasonService';
+import { normalizeName } from './names';
+import { isKnownClass } from './SessionManager';
 import type { SessionManager } from './SessionManager';
 
 /** 上限と下限（SEASON.md §63.7 の 1。日数・予算は整数） */
@@ -14,20 +16,6 @@ export const OPS_LIMITS = { days: { min: 1, max: 60, def: 7 }, budget: { min: 10
 export type OpsResult<T> = { status: 200; body: T } | { status: number; error: ActionError };
 
 const DAY_MS = 86_400_000;
-
-/** 制御文字（C0・C1）と、見えない書式の文字（ゼロ幅・行と段落の区切り・向きの指定・BOM） */
-const invisibleChar = (c: number) => c <= 0x1f || (c >= 0x7f && c <= 0x9f) || (c >= 0x200b && c <= 0x200f) || (c >= 0x2028 && c <= 0x202e) || (c >= 0x2060 && c <= 0x206f) || c === 0xfeff;
-
-/**
- * 名前の掃除（シーズンの名前・冒険者の名前）: 制御文字と、見えない書式の文字（ゼロ幅・向きの指定）を落とし、前後の空白を除く。
- * 文字列でなければ null。長さは数えない（呼ぶ側が、字＝コードポイントで数える）
- */
-export function cleanOpsName(raw: unknown): string | null {
-  if (typeof raw !== 'string') return null;
-  return [...raw].filter((ch) => !invisibleChar(ch.codePointAt(0)!)).join('').trim();
-}
-
-const charCount = (s: string) => [...s].length;
 
 /** 整数で、範囲の中か。省けば既定 */
 function intIn(v: unknown, lim: { min: number; max: number; def: number }): number | null {
@@ -90,12 +78,12 @@ export function opsOpenSeason(m: SessionManager, body: unknown, now = Date.now()
   if (blk.broken.length) return conflict(`記録が読めないシーズン（${blk.broken.map((x) => x.id).join('・')}）があるので、新しいシーズンは始めない（運用の道具で、直してから） / a season's records are unreadable; no new season is opened`);
   if (blk.unresolved.length) return conflict(UNRESOLVED, '終わりの時刻を過ぎたシーズンは、全員が戻るか、1 時間たつと確定する / a season past its end is finalized once everyone is back, or after an hour');
   const nx = svc.nextDefault();
+  // 名前は、名前を整える 1 つの関数で（S12c）。省いた・空（空白だけ）なら、サーバーが決める（重ならない「シーズン N」）
   let name = nx.name;
-  if (b.name !== undefined && b.name !== null) {
-    const nm = cleanOpsName(b.name);
-    if (nm === null) return bad('名前は文字列 / name must be a string');
-    if (charCount(nm) > OPS_LIMITS.name) return bad(`名前は ${OPS_LIMITS.name} 字まで / the name is up to ${OPS_LIMITS.name} characters`);
-    if (nm) name = nm;
+  if (b.name !== undefined && b.name !== null && !(typeof b.name === 'string' && !b.name.trim())) {
+    const nm = normalizeName(b.name, OPS_LIMITS.name);
+    if (!nm.ok) return bad(nm.message, '{ name?, days?, budget? }');
+    name = nm.name;
   }
   const def: SeasonDef = {
     id: nx.id, name, seed: randomBytes(16).toString('base64url'), engineVersion: svc.versions.engineVersion, contentVersion: svc.versions.contentVersion,
@@ -110,12 +98,16 @@ export function opsOpenSeason(m: SessionManager, body: unknown, now = Date.now()
   return { status: 200, body: { season: { id: def.id, name: def.name, budget: def.budget, endsAt: def.endsAt } } };
 }
 
-/** 冒険者の名前（掃除して、1〜32 字） */
+/** 冒険者の名前（名前を整える 1 つの関数で。1〜32 字。招くときの invite も、同じ関数でもう一度見る） */
 function adventurerName(raw: unknown): string | { status: number; error: ActionError } {
-  const nm = cleanOpsName(raw);
-  if (!nm) return bad('名前が要る / name is required', '{ name, kind: "ai" | "human", classId? }');
-  if (charCount(nm) > OPS_LIMITS.name) return bad(`名前は ${OPS_LIMITS.name} 字まで / the name is up to ${OPS_LIMITS.name} characters`);
-  return nm;
+  if (raw === undefined || raw === null || raw === '') return bad('名前が要る / name is required', '{ name, kind: "ai" | "human", classId? }');
+  const nm = normalizeName(raw, OPS_LIMITS.name);
+  return nm.ok ? nm.name : bad(nm.message, '{ name, kind: "ai" | "human", classId? }');
+}
+
+/** 内部のエラーの決まった文（S12c: 中の例外の文は、応答に出さない。詳細はサーバーのログ） */
+export function internalError(): ActionError {
+  return actionError('bad_request', '内部のエラー（詳細はサーバーのログ） / internal error (details are in the server log)', '');
 }
 
 /** 冒険者を足す先（今のシーズン。版がこのサーバーと同じこと） */
@@ -140,7 +132,8 @@ export async function opsAddAdventurer(m: SessionManager, body: unknown): Promis
   if (typeof nm !== 'string') return nm;
   let classId: string | undefined;
   if (kind === 'human' && b.classId !== undefined && b.classId !== null) {
-    if (typeof b.classId !== 'string' || !m.deps.content.classes[b.classId]) return bad('知らない職 / unknown class', `classes: ${Object.keys(m.deps.content.classes).join(', ')}`);
+    // 自分の持つ鍵かどうかで見る（S12c: constructor・__proto__ などの名前を「知っている職」にしない）
+    if (typeof b.classId !== 'string' || !isKnownClass(m.deps.content.classes, b.classId)) return bad('知らない職 / unknown class', `classes: ${Object.keys(m.deps.content.classes).join(', ')}`);
     classId = b.classId;
   }
   const locale: Locale = b.locale === 'en' ? 'en' : 'ja';
@@ -151,12 +144,34 @@ export async function opsAddAdventurer(m: SessionManager, body: unknown): Promis
   const profileToken = inv.token!;
   const base = { seasonId: t.id, name: inv.name, profileId: inv.profileId, kind, profileToken };
   if (kind === 'ai') return { status: 200, body: base };
-  const r = await m.createRun({ name: inv.name, ...(classId ? { classId } : {}), locale, controller: { kind: 'human', label: 'browser' }, season: t.id, profileToken });
+  // ランを始められない・途中で例外が出たときは、招きを取り消す（できたランは、createRun が捨てる。S12c）
+  let r: Awaited<ReturnType<SessionManager['createRun']>>;
+  try {
+    r = await m.createRun({ name: inv.name, ...(classId ? { classId } : {}), locale, controller: { kind: 'human', label: 'browser' }, season: t.id, profileToken });
+  } catch (e) {
+    console.error(`[ops] 自分で潜る冒険者のランを始められなかった（招きは取り消した）: ${String((e as Error)?.stack ?? e)}`);
+    m.seasons.uninvite(t.id, { profileId: inv.profileId });
+    return { status: 500, error: internalError() };
+  }
   if ('error' in r) {
     m.seasons.uninvite(t.id, { profileId: inv.profileId });
     return { status: r.error.code === 'season_unavailable' || r.error.code === 'run_in_progress' ? 409 : 400, error: r.error };
   }
   return { status: 200, body: { ...base, runId: r.session.runId, playerId: r.playerId, token: r.token } };
+}
+
+/**
+ * POST /api/ops/uninvite `{ profileId }`（S12c。鍵を無くしたときの道）: 今のシーズンの招きを取り消す。ランを 1 回も始めていない招きだけ
+ * （運用の道具の uninvite と同じ関数・同じ決まり）。プロフィールは残る（その鍵では、もうこのシーズンに入れない）
+ */
+export function opsUninvite(m: SessionManager, body: unknown): OpsResult<{ seasonId: string; name: string; profileId: string }> {
+  const b = (body && typeof body === 'object' ? body : {}) as { profileId?: unknown };
+  if (typeof b.profileId !== 'string' || !/^prof_[0-9a-f]{1,32}$/.test(b.profileId)) return bad('profileId が要る（名簿の profileId） / profileId is required', '{ profileId }');
+  const t = targetSeason(m);
+  if ('error' in t) return t;
+  const r = m.seasons.uninvite(t.id, { profileId: b.profileId });
+  if ('error' in r) return { status: r.error.includes('始めている') ? 409 : 400, error: actionError('bad_request', r.error, '') };
+  return { status: 200, body: { seasonId: t.id, name: r.name, profileId: r.profileId } };
 }
 
 /**

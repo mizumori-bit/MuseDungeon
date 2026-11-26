@@ -6,7 +6,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Content } from '@muse/content';
 import { createRun, ENGINE_VERSION, previewWarden } from '@muse/engine';
-import { ProfileStore, RUNS_LOCK, SeasonService, SeasonStore, SEASON_ID_RE } from '@muse/server';
+import { normalizeName, ProfileStore, RUNS_LOCK, SeasonService, SeasonStore, SEASON_ID_RE } from '@muse/server';
 import type { SeasonDef } from '@muse/server';
 
 export interface SeasonCliArgs {
@@ -63,8 +63,11 @@ export function seasonCli(content: Content, a: SeasonCliArgs, log: (s: string) =
       const endsAt = a.ends ? Date.parse(a.ends) : NaN;
       if (!Number.isFinite(endsAt)) { log('--ends が要る（ISO 8601 の時刻。例 2026-12-01T21:00:00+09:00）'); return 1; }
       if (endsAt <= Date.now()) { log(`--ends が過去の時刻: ${a.ends}`); return 1; }
+      // 名前は、名前を整える 1 つの関数で（S12c。拠点の口と同じ。32 字を超えたら、切らずに断る）
+      const nm = normalizeName(a.name ?? a.id);
+      if (!nm.ok) { log(`--name: ${nm.message}`); return 1; }
       const def: SeasonDef = {
-        id: a.id, name: (a.name ?? a.id).slice(0, 32), seed: a.seed, engineVersion: ENGINE_VERSION, contentVersion: content.version,
+        id: a.id, name: nm.name, seed: a.seed, engineVersion: ENGINE_VERSION, contentVersion: content.version,
         budget: a.budget ?? 3000, endsAt, openedAt: Date.now(),
       };
       // 開いてよいかは、拠点の運用者の口と同じ関数で見る（S12b。SeasonService.openBlockers）

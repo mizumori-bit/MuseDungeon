@@ -8,6 +8,8 @@ import type { ActionError, Command, Controller, InheritedHold, ObjectiveChoice, 
 import { actionError, CommandSchema, directiveItemsText, ownerWaitOpen, seasonFinalView, stripTokenArgs, t, withoutOwnerPresence } from '@muse/shared';
 import type { PlayerPort, ActionPayload } from '../session/PlayerPort';
 import type { SessionManager } from '../session/SessionManager';
+import { isKnownClass } from '../session/SessionManager';
+import { internalError } from '../session/ops';
 import { rulesText, RULE_TOPICS } from './rules';
 import type { RulesTopic } from './rules';
 
@@ -86,6 +88,16 @@ export function createMcpServer(ctx: McpContext): McpServer {
     },
   );
   const { manager } = ctx;
+  // ツールの中の例外（S12c）: SDK は例外の文をそのまま返すので、ここで受けて、決まった文にする（詳細はサーバーのログ。引数は出さない）
+  const register = server.registerTool.bind(server);
+  server.registerTool = ((name: string, config: unknown, cb: (...a: unknown[]) => unknown) => register(name, config as never, (async (...a: unknown[]) => {
+    try {
+      return await cb(...a);
+    } catch (e) {
+      console.error(`[mcp] ${name}: 内部のエラー: ${String((e as Error)?.stack ?? e)}`);
+      return errOut(internalError());
+    }
+  }) as never)) as typeof server.registerTool;
   const waitMs = manager.config.waitOthersMs;
   // 野営の火の数（S1c。ツールの説明に出す）
   const fireRules = manager.catalog.rules.seasonFire;
@@ -228,7 +240,8 @@ export function createMcpServer(ctx: McpContext): McpServer {
   }, async (args) => {
     const controller: Controller = { kind: 'agent', label: ctx.clientLabel };
     const classId = normClass(args.class);
-    if (classId && !manager.catalog.classes[classId]) {
+    // 自分の持つ鍵かどうかで見る（S12c: constructor・__proto__ などの名前を「知っている職」にしない）
+    if (classId && !isKnownClass(manager.catalog.classes, classId)) {
       const list = Object.entries(manager.catalog.classes).map(([id, c]) => `${id.split(':')[1]}（${c.name.ja}）`).join(' / ');
       return errOut(actionError('bad_request', `不明な職業 ${args.class} / unknown class`, `class は ${list}。詳しくは get_rules topic=classes`));
     }
@@ -691,7 +704,8 @@ function interceptArgs(server: McpServer, shapeFor: (tool: string, args: Record<
   if (!inner._requestHandlers || !tools || !orig) return;
   inner._requestHandlers.set('tools/call', async (req, extra) => {
     const p = (req as { params?: { name?: string; arguments?: Record<string, unknown> } }).params;
-    const tool = p?.name ? tools[p.name] : undefined;
+    // ツールの名前は、登録した名前だけ（S12c: constructor などで、ふつうのオブジェクトの持ち物を引かない）
+    const tool = p?.name && Object.hasOwn(tools, p.name) ? tools[p.name] : undefined;
     const shape0 = tool ? argShape(tool.inputSchema) : null;
     const shape = p?.name && shape0 ? shapeFor(p.name, p.arguments ?? {}, shape0) : shape0;
     if (p?.name && shape) {

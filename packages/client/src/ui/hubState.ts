@@ -12,8 +12,11 @@ export type HubCardState = 'not_joined' | 'not_invited' | 'camp_free' | 'camp_pe
 /** 状態の札の色: amber 支度が「まだ」・green 準備完了・blue 迷宮の中・gold 印（希望）・muted ふつう・operator 運用者として（S10a） */
 export type HubTone = 'amber' | 'green' | 'blue' | 'gold' | 'muted' | 'operator';
 
-/** 主のボタン: href へ移る、か dive（自分で潜る窓を開く）、か enroll（S12b: このブラウザの鍵の冒険者を、今のシーズンの名簿に加える） */
-export interface HubAction { label: string; href?: string; dive?: true; enroll?: true }
+/**
+ * 主のボタン: href へ移る、か dive（自分で潜る窓を開く）、か enroll（S12b: このブラウザの鍵の冒険者を、今のシーズンの名簿に加える）、
+ * か uninvite（S12c: まだ入っていない招きを取り消す。確かめの窓を開く。目立たないボタン）
+ */
+export interface HubAction { label: string; href?: string; dive?: true; enroll?: true; uninvite?: true }
 
 export interface HubCardModel {
   state: HubCardState;
@@ -191,8 +194,9 @@ export function hubCard(x: HubCardInput): HubCardModel {
     return {
       ...base, state: 'waiting_ai', pill: { text: tr('まだ入っていない', 'Not in yet'), tone: 'muted' }, where,
       text: again ? tr(`${n}が、鍵を使って、もう一度入ってくるのを、待っている`, `Waiting for ${n} to come in again with their key`) : tr(`${n}が、鍵を使って入ってくるのを、待っている`, `Waiting for ${n} to come in with their key`),
-      notes: again ? [] : [tr('鍵は、足したときに 1 回だけ出た。無くしたら、足し直す', 'The key was shown once, when you added them. If it is lost, add them again')],
-      action: null,
+      notes: again ? [] : [tr('鍵は、足したときに 1 回だけ出た。無くしたら、「招きを取り消す」から、足し直す', 'The key was shown once, when you added them. If it is lost, use "Withdraw the invitation" and add them again')],
+      // 招きを取り消せるのは、まだ 1 回も入っていないときだけ（S12c。今ある uninvite の決まり）
+      action: again ? null : { label: tr('招きを取り消す', 'Withdraw the invitation'), uninvite: true },
     };
   }
   return {

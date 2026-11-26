@@ -14,7 +14,7 @@ import type { SessionManager } from '../session/SessionManager';
 import { seasonReplayError } from '../session/SessionManager';
 import { WsHub } from '../ws/hub';
 import { allowLocalHosts, isLocalRequest, jsonContentType, sameOrigin } from './local';
-import { opsAddAdventurer, opsEnroll, opsOpenSeason, opsRoster } from '../session/ops';
+import { internalError, opsAddAdventurer, opsEnroll, opsOpenSeason, opsRoster, opsUninvite } from '../session/ops';
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
@@ -121,7 +121,7 @@ export function createApp(manager: SessionManager, config: ServerConfig): App {
     }
     // 拠点の運用者の口（S12b。SEASON.md §63.7。PROTOCOL §9.15）: 名簿・シーズンを始める・冒険者を足す・鍵のある冒険者を今のシーズンに加える。
     // サーバーと同じ PC からだけ（鍵があっても、ほかの PC からは断る。判定は isLocalRequest の 1 つ。状態を変えるものは、上の守り（同じ origin・JSON だけ）を通った後）
-    if (p === '/api/ops/roster' || p === '/api/ops/season' || p === '/api/ops/adventurers' || p === '/api/ops/enroll') {
+    if (p === '/api/ops/roster' || p === '/api/ops/season' || p === '/api/ops/adventurers' || p === '/api/ops/enroll' || p === '/api/ops/uninvite') {
       const post = p !== '/api/ops/roster';
       if (post !== (m === 'POST')) return fail(res, 405, actionError('bad_request', `${post ? 'POST' : 'GET'} ${p}`, ''));
       if (!isLocalRequest(req)) return fail(res, 403, actionError('bad_request', 'only from the same PC as the server / サーバーと同じ PC からだけ', ''));
@@ -132,7 +132,8 @@ export function createApp(manager: SessionManager, config: ServerConfig): App {
       if (body === BAD || (body !== undefined && (body === null || typeof body !== 'object' || Array.isArray(body)))) return fail(res, 400, actionError('bad_request', 'JSON の本文（オブジェクト）が要る / a JSON object body is required', ''));
       const r = p === '/api/ops/season' ? opsOpenSeason(manager, body)
         : p === '/api/ops/adventurers' ? await opsAddAdventurer(manager, body)
-          : opsEnroll(manager, ownerToken(req).profileToken, body);
+          : p === '/api/ops/uninvite' ? opsUninvite(manager, body)
+            : opsEnroll(manager, ownerToken(req).profileToken, body);
       return 'error' in r ? fail(res, r.status, r.error) : json(res, 200, r.body);
     }
     if (p === '/api/content/catalog') return json(res, 200, manager.catalog);
@@ -288,7 +289,9 @@ export function createApp(manager: SessionManager, config: ServerConfig): App {
 
   const server = createServer((req, res) => {
     route(req, res).catch((e) => {
-      if (!res.headersSent) fail(res, 500, actionError('bad_request', `internal error: ${(e as Error).message}`, ''));
+      // 中の例外の文は応答に出さない（S12c: 文に、置き場所のパスや中の値が入りうる）。詳細はサーバーのログへ（道だけ。問い合わせの文字列・見出しは出さない）
+      console.error(`[http] 内部のエラー ${req.method ?? '?'} ${(req.url ?? '').split('?')[0]}: ${String((e as Error)?.stack ?? e)}`);
+      if (!res.headersSent) fail(res, 500, internalError());
       else res.end();
     });
   });
