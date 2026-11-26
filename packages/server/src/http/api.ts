@@ -5,7 +5,7 @@ import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import { extname, join, normalize, resolve } from 'node:path';
 import type { ActionError, Controller, GameEvent, JoinRunRequest, NewRunRequest, OwnerViewResponse, World } from '@muse/shared';
 import { actionError, stripSecret } from '@muse/shared';
-import { ownerAct, ownerView } from '../session/OwnerPort';
+import { ownerAct, ownerSetPace, ownerView } from '../session/OwnerPort';
 import type { ServerConfig } from '../config';
 import { McpHttpHandler } from '../mcp/http';
 import { feedToken, handleFeed } from './feed';
@@ -201,11 +201,12 @@ export function createApp(manager: SessionManager, config: ServerConfig): App {
       }
       // 持ち主の口（S8 §54.1・§54.5）: 見る（GET …/owner/view）・指図（POST …/owner/directive）・握った項目の命令（POST …/owner/act）。
       // 認め方は観戦と同じ（そのプレイヤーのプロフィールのトークンか、同じ機械）。トークンは見出しか本文で受け、応答にも記録にも出さない
-      if (sub === '/owner/view' || sub === '/owner/directive' || sub === '/owner/act') {
+      // 進め方の希望（S14。SEASON.md §65.4 の 2。POST …/owner/pace { pace }）: 同じ認め方・同じ守り（同じ origin・JSON だけ）。プロフィールに控えるだけ（World に入れない）
+      if (sub === '/owner/view' || sub === '/owner/directive' || sub === '/owner/act' || sub === '/owner/pace') {
         const post = sub !== '/owner/view';
         if (post !== (m === 'POST')) return fail(res, 405, actionError('bad_request', `${post ? 'POST' : 'GET'} ${sub}`, ''));
         const body = post ? ((await readBody(req, 16_000).catch(() => null)) as Record<string, unknown> | null) : null;
-        if (post && (!body || typeof body !== 'object')) return fail(res, 400, actionError('bad_request', 'JSON body is required', sub === '/owner/directive' ? '{ hold: ["objective"|"loadout"|"perks"], message? }' : '{ command }'));
+        if (post && (!body || typeof body !== 'object')) return fail(res, 400, actionError('bad_request', 'JSON body is required', sub === '/owner/directive' ? '{ hold: ["objective"|"loadout"|"perks"], message? }' : sub === '/owner/pace' ? '{ pace: "self" | "pilot" }' : '{ command }'));
         const bodyTok = typeof body?.profileToken === 'string' ? body.profileToken : undefined;
         const acc = manager.ownerAccess(runId, { local: isLocalRequest(req), ...ownerToken(req, bodyTok) });
         if ('error' in acc) return fail(res, acc.status, acc.error);
@@ -215,6 +216,7 @@ export function createApp(manager: SessionManager, config: ServerConfig): App {
         let result: OwnerViewResponse['result'];
         if (sub === '/owner/directive') result = await ownerAct(acc.session, acc.pid, { type: 'set_directive', hold: body!.hold, ...(body!.message !== undefined ? { message: body!.message } : {}) });
         else if (sub === '/owner/act') result = await ownerAct(acc.session, acc.pid, body!.command);
+        else if (sub === '/owner/pace') result = ownerSetPace(acc.session, acc.pid, body!.pace, (id, pace) => manager.profiles.setPace(id, pace));
         return json(res, 200, { ...ownerView(acc.session, acc.pid), continuable: manager.continuable(acc.session, acc.pid), ...(result ? { result } : {}) });
       }
       const live = manager.get(runId);

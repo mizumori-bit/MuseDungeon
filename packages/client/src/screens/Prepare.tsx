@@ -3,7 +3,7 @@
 // 命令は、プレイヤーと同じ Command を持ち主の口へ送る（通るか・断るかはサーバー（engine）が決め、断りの文はそのまま出す）。
 // 鍵は、そのランを返したもの（このブラウザに覚えてある鍵のうち、そのランの冒険者のもの）を Authorization の見出しでだけ渡す。無ければ同じ PC から。
 // 5 秒ごとに読み直す。開いている段（「自分で」にした段）と、書きかけの伝言は、読み直しで消えない。
-import type { ActionError, Command, DirectiveItem, DirectiveWish, OwnerViewResponse } from '@muse/shared';
+import type { ActionError, Command, DirectiveItem, DirectiveWish, OwnerPace, OwnerViewResponse } from '@muse/shared';
 import { DIRECTIVE_ITEMS, activeWishes, itemDisplayName, kindName, nameOf, ownerOfferText, prepStateView, wishCommand, wishItemOf, wishLabel } from '@muse/shared';
 import type { ComponentChildren } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
@@ -17,7 +17,7 @@ import { keyForRun } from '../ui/keys';
 import { statChangeText } from '../ui/owner';
 import { aiPresenceText, readyCheck } from '../ui/ownerCheck';
 import { InventoryPanel, type InvAction } from '../ui/panels';
-import { directiveToggle, messageSave, prepHead, prepItemCost, prepItemName, prepLine, readyNudge, type ReadyNudge } from '../ui/prepState';
+import { directiveToggle, messageSave, paceLine, paceNote, paceSavedNote, prepHead, prepItemCost, prepItemName, prepLine, readyNudge, type ReadyNudge } from '../ui/prepState';
 import { screenErr } from '../ui/screenErr';
 import { getLocale, getToken, tr } from '../util';
 
@@ -57,6 +57,28 @@ function PrepSection({ item, held, line, editable, locked, busy, onToggle, wish,
       {!held && editable && !locked && <p class="prep-cost">{prepItemCost(item)}</p>}
       {wish && <div class={locked ? 'prep-locked' : ''} inert={locked}>{wish}</div>}
       {children && <div class={`prep-body ${locked ? 'prep-locked' : ''}`} inert={locked}>{children}</div>}
+    </section>
+  );
+}
+
+/**
+ * 進め方の段（S14。SEASON.md §65.4 の 2）: 「自分で考えて進む（既定）／pilot で進める」。持ち主の希望として AI の応答に 1 行が出る（どう進めるかは AI の側が決める）。
+ * 握る項目ではないので、準備完了の間も押せる（locked を受けない）。キャンプにいないときは、見るだけ（editable が false）
+ */
+function PaceSection({ name, pace, editable, busy, onChange }: { name: string; pace: OwnerPace | undefined; editable: boolean; busy: boolean; onChange: (p: OwnerPace) => void }) {
+  const pilot = pace === 'pilot';
+  const can = editable && !busy && pace !== undefined;
+  return (
+    <section class={`prep-sec prep-pace ${pilot ? 'is-held' : ''}`}>
+      <header class="prep-sechead">
+        <h3 class="prep-sectitle">{tr('進め方', 'How to play')}</h3>
+        <div class="prep-toggle" role="group" aria-label={tr('進め方', 'How to play')}>
+          <button type="button" class={!pilot ? 'on' : ''} aria-pressed={!pilot} disabled={!can || !pilot} onClick={() => onChange('self')}>{tr('自分で考えて進む（既定）', 'On their own (default)')}</button>
+          <button type="button" class={pilot ? 'on' : ''} aria-pressed={pilot} disabled={!can || pilot} onClick={() => onChange('pilot')}>{tr('pilot で進める', 'With pilot')}</button>
+        </div>
+      </header>
+      <p class="prep-line">{paceLine(pace, name)}</p>
+      <p class="prep-cost">{paceNote(name)}</p>
     </section>
   );
 }
@@ -183,7 +205,7 @@ export function Prepare({ runId }: { runId: string }) {
         });
         if (n) {
           // 呼び鈴（S12b）: AI がまだ待っていないときだけ。準備完了を押した流れの中で、ブラウザが許すなら、自動で 1 回鳴らす（許されなければ、何もしない）
-          const url = n.copy ? bellUrl(readBell(), { season: after.view.season?.id ?? null, run: runId }) : null;
+          const url = n.copy ? bellUrl(readBell(), { season: after.view.season?.id ?? null, run: runId, pace: after.pace }) : null;
           const rung = url && bellAllowedNow() && ringBell(url) ? 1 : 0;
           setBell({ url, rung });
           setNudge(n);
@@ -204,6 +226,12 @@ export function Prepare({ runId }: { runId: string }) {
     if (busyRef.current) return;
     if (a === 'equip') void act({ type: 'equip', slot });
     else if (a === 'unequip') void act({ type: 'unequip', slot });
+  };
+
+  /** 進め方の希望（S14。SEASON.md §65.4 の 2）: 押したら、すぐ送る。握る項目ではないので、準備完了の間も変えられる（札は戻らない） */
+  const setPace = (pace: OwnerPace) => {
+    if (!data || busyRef.current) return;
+    void post(() => api.ownerPace(runId, pace, tok ?? undefined), () => setNote(paceSavedNote(pace, name)));
   };
 
   /** 伝言を残す（S10a §1: 握る項目は、送る直前に読み直したサーバーの値のまま。準備完了の間も残せる: 札は戻らない） */
@@ -366,6 +394,9 @@ export function Prepare({ runId }: { runId: string }) {
                       </>
                     )}
                   </PrepSection>
+
+                  {/* 4 段目: 進め方（S14。持ち主の希望。握る項目ではない: 準備完了の間も変えられ、札は戻らない。キャンプにいないときは、見るだけ） */}
+                  <PaceSection name={name} pace={data.pace} editable={editable} busy={busy} onChange={setPace} />
 
                   <section class="prep-final">
                     <label class="prep-msglabel" for="prep-msg">{tr(`${name}への伝言`, `Message to ${name}`)}</label>

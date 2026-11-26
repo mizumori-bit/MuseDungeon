@@ -1,8 +1,10 @@
 // 呼び鈴（S12b。SEASON.md §63.6）: 準備完了を押した人のブラウザが、決まった文字列 `musedungeon-bell://ready?season=<ID>&run=<ID>` を開く。
+// S14（§65.4）: 持ち主の希望（進め方）が pilot のときは `&mode=pilot` を添える。「続けて遊ばせる」（ui/keepGoing.ts）の間も、同じ文字列を開く。
 // サーバーは何も変わらない（送り先も資格も持たず、何も実行しない）。受け取って、AI にどう知らせるかは、その PC の持ち主の道具が決める（ゲームでは用意しない）。
 // 入れるのは、シーズンとランの 2 つの ID だけ（[A-Za-z0-9_-] だけであることを確かめてから。合わなければ鳴らさない）。冒険者の名前・伝言など、
 // だれかが決めた文は入れない（受ける道具と、その先の AI への、差し込みの口を作らない）。設定は、このブラウザにだけ覚える（サーバーへ送らない）。
 // 文字列を組む関数と、窓の文は、画面から離した関数（テストする）。
+import type { OwnerPace } from '@muse/shared';
 import { getPref, setPref, tr } from '../util';
 
 /** 設定: 使わない（既定）・自分の道具を呼ぶ */
@@ -23,13 +25,15 @@ const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
 /**
  * 呼び鈴の文字列（自分の道具を呼ぶ）。使わない・ID の形が違う（入れられない文字がある）ときは null（鳴らさない）。
- * シーズンでない冒険（season が null）は season を省く（`musedungeon-bell://ready?run=<ID>`）
+ * シーズンでない冒険（season が null）は season を省く（`musedungeon-bell://ready?run=<ID>`）。
+ * pace（S14。SEASON.md §65.4 の 2）: 持ち主の希望（進め方）が pilot のときだけ、決まった 1 語 `&mode=pilot` を添える（self・無いときは、今までと同じ文字列）
  */
-export function bellUrl(mode: BellMode, ids: { season: string | null | undefined; run: string }): string | null {
+export function bellUrl(mode: BellMode, ids: { season: string | null | undefined; run: string; pace?: OwnerPace | null }): string | null {
   if (mode !== 'tool') return null;
   if (!ID_RE.test(ids.run)) return null;
   if (ids.season !== null && ids.season !== undefined && !ID_RE.test(ids.season)) return null;
-  return ids.season ? `musedungeon-bell://ready?season=${ids.season}&run=${ids.run}` : `musedungeon-bell://ready?run=${ids.run}`;
+  const base = ids.season ? `musedungeon-bell://ready?season=${ids.season}&run=${ids.run}` : `musedungeon-bell://ready?run=${ids.run}`;
+  return ids.pace === 'pilot' ? `${base}&mode=pilot` : base;
 }
 
 /** 準備完了の後の窓の、呼び鈴のボタンと 1 行。出さないなら null（使わない・AI がもう待っている・鳴らせない） */

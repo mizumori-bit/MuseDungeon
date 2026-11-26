@@ -7,6 +7,7 @@ import { Prepare } from './screens/Prepare';
 import { Replay } from './screens/Replay';
 import { Season } from './screens/Season';
 import { Watch } from './screens/Watch';
+import { KeepGoingRunner } from './ui/KeepGoingRunner';
 import './styles.css';
 
 function parse(hash: string): { page: string; runId: string | null } {
@@ -37,4 +38,5 @@ function App() {
   return <Lobby tab={route.page === 'records' ? 'records' : route.page === 'ops' ? 'ops' : 'hub'} />;
 }
 
-render(<App />, document.getElementById('app')!);
+// 続けて遊ばせる（S14。SEASON.md §65.4）の鳴らす役は、画面の外（根）に置く: どの画面にいても、タブが開いていれば続く
+render(<><App /><KeepGoingRunner /></>, document.getElementById('app')!);

@@ -7,6 +7,7 @@ import type { ComponentChildren } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { getLocale, tr } from '../util';
 import type { HubCardModel, HubTone } from './hubState';
+import { KeepGoingNavMark } from './keepGoingUi';
 
 export type HubTab = 'hub' | 'records' | 'ops' | null;
 
@@ -31,6 +32,8 @@ export function HubNav({ tab, waiting = 0 }: { tab: HubTab; waiting?: number }) 
       </a>
       <a class={`hub-tab ${tab === 'records' ? 'on' : ''}`} href="#/records">{tr('記録', 'Records')}</a>
       <span class="hub-navspace" />
+      {/* 続けて遊ばせている冒険者がいれば、上の帯にも（S14） */}
+      <KeepGoingNavMark />
       <a class={`hub-gear ${tab === 'ops' ? 'on' : ''}`} href="#/ops" title={tr('運用', 'Operations')} aria-label={tr('運用', 'Operations')}><GearIcon /></a>
     </nav>
   );
@@ -44,11 +47,11 @@ export function HubPill({ text, tone }: { text: string; tone: HubTone }) {
  * 冒険者の札。model: hubState.hubCard の結果。className: 職の名前（分からなければ null）。operator: 運用者として見る札（小さめ・取り違えない見た目）。
  * onDive: 「自分で潜る」のとき。onEnroll: 「このシーズンに加える」のとき（S12b）。busy: 押した後、終わるまで
  */
-export function AdventurerCard({ name, className, model, operator, onDive, onEnroll, onUninvite, busy }: { name: string; className: string | null; model: HubCardModel; operator?: boolean; onDive?: () => void; onEnroll?: () => void; onUninvite?: () => void; busy?: boolean }) {
+export function AdventurerCard({ name, className, model, operator, onDive, onEnroll, onUninvite, busy, extra, alert }: { name: string; className: string | null; model: HubCardModel; operator?: boolean; onDive?: () => void; onEnroll?: () => void; onUninvite?: () => void; busy?: boolean; extra?: ComponentChildren; alert?: boolean }) {
   const st = model.stats;
   const sub = [className, st.level !== null ? `Lv${st.level}` : null].filter(Boolean).join(' · ');
   return (
-    <article class={`hub-card ${model.highlight ? 'is-pending' : ''} ${operator ? 'is-operator' : ''} state-${model.state}`}>
+    <article class={`hub-card ${model.highlight ? 'is-pending' : ''} ${operator ? 'is-operator' : ''} ${alert ? 'kg-alertcard' : ''} state-${model.state}`}>
       <header class="hub-cardhead">
         <div class="hub-who">
           <h2 class="hub-name">{name}</h2>
@@ -76,6 +79,8 @@ export function AdventurerCard({ name, className, model, operator, onDive, onEnr
               : <button class="hub-btn primary" disabled={busy} onClick={model.action.enroll ? onEnroll : onDive}>{model.action.label}</button>}
         </div>
       )}
+      {/* 続けて遊ばせる（S14。ui/keepGoingUi.tsx の KeepGoingBox） */}
+      {extra}
     </article>
   );
 }

@@ -3,11 +3,11 @@
 import { randomBytes } from 'node:crypto';
 import type { Catalog } from '@muse/shared';
 import type { Content } from '@muse/content';
-import { bareStartRefusal, createRun, directiveRefusal, isPlayersTurn, joinPlayer, prepStateWorld, resumeSeq, seasonSync, step } from '@muse/engine';
+import { bareStartRefusal, createRun, directiveRefusal, directiveTarget, isPlayersTurn, joinPlayer, prepStateWorld, resumeSeq, seasonSync, step } from '@muse/engine';
 import type {
   ActionError, AgentActivity, Command, CommandRecord, CommandSource, Dir, Expedition, ExpeditionReport, GameEvent, JoinCommand, LegacyMonster, MacroStop, ProjectedEvent,
   PerceivedEvent, PlayerId, PlayerView, Pos, ReportCall, RunMetaFile, RunSummary, SeasonSlay, SeasonSlayFacts, SeasonSyncCommand, SeqResumeCommand, TurnSnapshot, World,
-  CheckpointLedger, DirectiveItem, DirectiveWish,
+  CheckpointLedger, DirectiveItem, DirectiveWish, OwnerPace,
 } from '@muse/shared';
 import {
   DIRECTIVE_ITEMS, OWNER_COMMANDS, actionError, applyEvent, buildExpeditionReport, canonicalHash, guardianDisplayName, compareReports, emptyWorld, filterEventsForPlayer, FREE_COMMANDS, MACRO_COMMANDS,
@@ -815,6 +815,16 @@ export class RunSession {
   /** 持ち主の口が最後に来た時刻（S11。このサーバーの起動の後に来ていなければ null） */
   lastOwnerCallAt(pid: PlayerId): number | null {
     return this.ownerCall.get(pid) ?? null;
+  }
+
+  /**
+   * 持ち主の希望（進め方。S14。SEASON.md §65.4 の 2）: プロフィールの控え。指図を出せないプレイヤー（人間が自分で遊ぶ・協力プレイ）と、
+   * プロフィールの無いプレイヤーは、いつも self（World に入れない。決まりに効かない）
+   */
+  ownerPace(pid: PlayerId): OwnerPace {
+    const pr = this.world.players[pid];
+    if (!pr || !directiveTarget(this.world, pr)) return 'self';
+    return this.deps.profiles?.paceOf?.(this.profileOf(pid)) ?? 'self';
   }
 
   /**

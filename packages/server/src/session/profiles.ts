@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { readJsonStable, writeFileAtomicLogged } from '../log/atomicWrite';
 import type { Content } from '@muse/content';
 import type {
-  Catalog, CodexIndex, CodexRun, DirectiveItem, FeatContext, FeatDefLite, FeatRecord, GameEvent, LegacyMonster, Locale, PlayerId, ProfileData, ProfileRecords, ProfileRun, SeasonTitle,
+  Catalog, CodexIndex, CodexRun, DirectiveItem, FeatContext, FeatDefLite, FeatRecord, GameEvent, LegacyMonster, Locale, OwnerPace, PlayerId, ProfileData, ProfileRecords, ProfileRun, SeasonTitle,
 } from '@muse/shared';
 import { DIRECTIVE_ITEMS, abilityName, buildRecords, codexCount, emptyCodex, evalFeatCond, expeditionBest, floorsUnhurt, kindName, legacyFrom, mergeCodex, recordsCampLine, recordsLines, t } from '@muse/shared';
 import type { RunSession } from './RunSession';
@@ -160,6 +160,8 @@ export interface ProfileHooks {
   /** firstOf: このランの最初のキャンプなら、そのランの ID（前のランまでの記録を先頭に出す。V3-8 §53.5） */
   campLine(profileId: string, L: Locale, firstOf?: string): string | null;
   featsOf(profileId: string | null, runId: string, no: number, L: Locale): string[];
+  /** 進め方の希望（S14。SEASON.md §65.4 の 2。プロフィールの控え。無ければ self） */
+  paceOf?(profileId: string | null): OwnerPace;
 }
 
 export class ProfileService implements ProfileHooks {
@@ -208,6 +210,25 @@ export class ProfileService implements ProfileHooks {
     if ((prof.hold ?? []).join(',') === next.join(',')) return;
     if (next.length) prof.hold = next; else delete prof.hold;
     this.store.save(prof);
+  }
+
+  /** 進め方の希望（S14。無ければ self。プロフィールが無ければ self） */
+  paceOf(profileId: string | null): OwnerPace {
+    const prof = profileId ? this.store.get(profileId) : null;
+    return prof?.pace === 'pilot' ? 'pilot' : 'self';
+  }
+
+  /**
+   * 進め方の希望を控える（S14。持ち主の口から。self は消す: 無ければ self）。返り値: 変わったか。プロフィールが無ければ null。
+   * World には入れない（出来事も足さない）。握る項目ではないので、支度の札にも関わらない
+   */
+  setPace(profileId: string | null, pace: OwnerPace): boolean | null {
+    const prof = profileId ? this.store.get(profileId) : null;
+    if (!prof) return null;
+    if (this.paceOf(profileId) === pace) return false;
+    if (pace === 'pilot') prof.pace = 'pilot'; else delete prof.pace;
+    this.store.save(prof);
+    return true;
   }
 
   /** そのランの記録を作り直し、実績を判定して保存する。返り値: 新しく取った実績 */

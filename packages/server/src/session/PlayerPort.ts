@@ -6,7 +6,7 @@ import type {
 import {
   actionError, briefingLines, briefingShort, buildObservation, checkpointChangeText, withdrawText, buildTurnBlock, campLines, changesLine, compareLines, describeInventory, describeTarget, diffChanges, progressLines, reportLines,
   cheb, compassDir, dirLabel, formatObservationText, guardianDisplayName, kindName, lastWithoutXp, MACRO_COMPLETED_STOPS, mapTextLines, memoryCombatText, memoryKey, mineCount, nameOf, nearDirs, pickableItems, progressText, renderAsciiMap, resultText, t,
-  turnLine, turnSnapshot, turnStateOf, ownerMessageIsNew, ownerMessageKept, ownerPresenceText, ownerWaitOpen, prepStateView, seasonClosedView, wishItemOf, wishLabel, wishNoteText, fightThreats, fleeRiskText, riskText, threatEstimate, DIR_VEC, collectTargets, collectWhatOf, itemDisplayName, slayGroupText, slaysAt,
+  turnLine, turnSnapshot, turnStateOf, ownerMessageIsNew, ownerMessageKept, ownerPaceText, ownerPresenceText, ownerWaitOpen, prepStateView, seasonClosedView, wishItemOf, wishLabel, wishNoteText, fightThreats, fleeRiskText, riskText, threatEstimate, DIR_VEC, collectTargets, collectWhatOf, itemDisplayName, slayGroupText, slaysAt,
 } from '@muse/shared';
 import type { MacroReport } from './RunSession';
 import { compareVersions, ENGINE_VERSION } from '@muse/engine';
@@ -479,7 +479,9 @@ export class SessionPlayerPort implements PlayerPort {
     const shots = unseenShots(p.recent, view.self.id);
     // 持ち主の様子（S11）: キャンプで札が「まだ」のとき、本人の応答にだけ（観測だけを作る observe（持ち主の画面の写し）には付けない）
     const ownerPresence = this.ownerPresence(view);
-    const observation = buildObservation(view, this.catalog, { detail: p.detail ?? 'brief', map: true, recent: lastWithoutXp(p.recent, 10), lifelineShort, boonsShort, campCompare: this.campCompare(view), ...this.campSlayExtras(view), offerNotes: this.offerNotes(view), records: this.campRecords(view), ...(versionNote ? { versionNote } : {}), ...(shots.length ? { unseenShots: shots } : {}), ...(ownerPresence ? { ownerPresence } : {}) });
+    // 持ち主の希望（進め方。S14）: pilot のとき、本人の応答にだけ（観測だけを作る observe（持ち主の画面の写し）には付けない）。self のときは何も足さない
+    const ownerPace = this.paceText(view);
+    const observation = buildObservation(view, this.catalog, { detail: p.detail ?? 'brief', map: true, recent: lastWithoutXp(p.recent, 10), lifelineShort, boonsShort, campCompare: this.campCompare(view), ...this.campSlayExtras(view), offerNotes: this.offerNotes(view), records: this.campRecords(view), ...(versionNote ? { versionNote } : {}), ...(shots.length ? { unseenShots: shots } : {}), ...(ownerPresence ? { ownerPresence } : {}), ...(ownerPace ? { ownerPace } : {}) });
     const state = turnStateOf(view, p.expeditionEndedNow ?? false).state;
     const cur = turnSnapshot(view, observation, state);
     const longLife = observation.valid_actions.some((a) => a.includes('次の遠征はこの遠征を始めた階段から') || a.includes('the next expedition starts from where this one began'));
@@ -519,8 +521,22 @@ export class SessionPlayerPort implements PlayerPort {
     const expShort = !long && !!prev?.expHead && prev.expHead === cur.expHead;
     const body = view.status === 'at_camp' || !observation.self.pos ? formatObservationText(observation, L)
       : formatObservationText(observation, L, { inventory: invShow, map: mapMode === 'unchanged' ? 'unchanged' : 'show', expedition: expShort ? 'short' : 'full' });
-    const text = [body, changesLine(L, turn.changes), turnLine(view, turn, !long)].filter(Boolean).join('\n');
+    // 進め方の希望（S14）: 遠征を始めた直後の応答（迷宮の中の最初の応答。前の基準が無い応答も）にも 1 回。キャンプでは観測の文に出ている
+    const paceStart = !!ownerPace && p.changes === true && view.status !== 'at_camp' && !!view.expedition && view.expedition.status !== 'ended'
+      && cur.expNo !== null && (!prev || prev.expNo !== cur.expNo);
+    const text = [body, paceStart ? ownerPace : '', changesLine(L, turn.changes), turnLine(view, turn, !long)].filter(Boolean).join('\n');
     return { observation, text, turn };
+  }
+
+  /**
+   * 持ち主の希望（進め方）の 1 行（S14。SEASON.md §65.4 の 2）: pilot のときだけ。指図を出せない冒険者（人間・協力プレイ）・終わったラン・
+   * 新しい遠征を始められないキャンプ（予算切れ・終わりの時刻の後・確定したシーズン）には出さない
+   */
+  private paceText(view: PlayerView): string | undefined {
+    if (this.session.ownerPace(this.playerId) !== 'pilot') return undefined;
+    if (view.status === 'dead' || view.status === 'ended' || view.runStatus === 'ended' || view.season?.final) return undefined;
+    if (view.status === 'at_camp' && seasonClosedView(view)) return undefined;
+    return ownerPaceText(view.locale);
   }
 
   /** 持ち主の様子の 1 行（S11。キャンプで札が「まだ」のときだけ。持ち主の口の最後の呼び出しの控えから。World に入れない） */
