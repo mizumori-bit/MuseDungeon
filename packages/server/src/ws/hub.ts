@@ -61,7 +61,7 @@ export class WsHub {
     const gate = this.manager.seasonWatchAccess(session, { local, profileToken: typeof msg.profileToken === 'string' ? msg.profileToken : undefined });
     if ('error' in gate) { send({ t: 'error', error: gate.error }); ws.close(); return; }
     // シーズンのランは follow_only（S0 §9.7: 俯瞰から公開されていない階段が分からないように）。見返し（S17）も、同じ関数で方針を決める
-    const spec = new SpectatorPort(session, livePolicyFor(session.world, this.config.spectatorPolicy), this.config.spectatorDelaySeq, gate.access === 'owner' ? gate.pid : null);
+    const spec = new SpectatorPort(session, livePolicyFor(session.world, this.config.spectatorPolicy), this.config.spectatorDelaySeq, gate.access === 'owner' ? gate.pid : null, this.manager.isSecret);
     // 追う相手（持ち主の観戦は、持ち主を追うので見ない）: 渡されたら、そのランのプレイヤーの ID でなければ断る。無ければ最初のプレイヤー
     const follow: unknown = gate.access === 'owner' ? gate.pid : msg.follow ?? undefined;
     if (follow !== undefined && !spec.hasPlayer(follow)) {

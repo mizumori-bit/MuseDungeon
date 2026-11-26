@@ -5,6 +5,7 @@ import { applyEvent, filterEventsForPlayer, stripSecret } from '@muse/shared';
 import { spectatorEvent } from '../log/RunStore';
 import { followFrameDue, liveVisibleUpTo } from './followFrames';
 import type { CommitInfo } from './followFrames';
+import { maskThoughtEvent } from './secretMask';
 import type { RunSession } from './RunSession';
 
 export class SpectatorPort {
@@ -12,7 +13,9 @@ export class SpectatorPort {
    * owner（S3。SEASON.md §25.1）: 開催中のシーズンのランを、その参加者のトークンで見ている。その参加者の PlayerView だけを送り、
    * ランが終わった後も俯瞰（World）は送らない（まだ見ていない地図と階段が分かるため）
    */
-  constructor(private readonly session: RunSession, readonly policy: SpectatorPolicy, private readonly delaySeq: number, readonly owner: PlayerId | null = null) {}
+  /** isSecret（S17a の E）: 考えの出来事の文に書かれた、このサーバーの知っているトークンを伏せる（session/secretMask.ts） */
+  constructor(private readonly session: RunSession, readonly policy: SpectatorPolicy, private readonly delaySeq: number, readonly owner: PlayerId | null = null,
+    private readonly isSecret: (candidate: string) => boolean = () => false) {}
 
   get runId(): string { return this.session.runId; }
   get contentVersion(): string { return this.session.world.meta.contentVersion; }
@@ -59,7 +62,7 @@ export class SpectatorPort {
         if (ev.seq <= sent) continue;
         if (ev.seq > upTo) break;
         const se = spectatorEvent(ev, ended);
-        if (se) out.push(se);
+        if (se) out.push(maskThoughtEvent(se, this.isSecret));
       }
       sent = upTo;
       if (out.length) cb(out);

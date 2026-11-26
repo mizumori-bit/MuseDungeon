@@ -272,7 +272,7 @@ describe('S17 2: what the look-back returns is what the live follow showed', () 
         expect(list.cache).toBe('no-store');
         expect(list.body.expeditions.map((x) => x.no)).toEqual([1, 2, 3]);
         let unperceivedFrames = 0;
-        expect(list.body.now.state).toBe('at_camp');
+        expect(list.body.now?.state).toBe('at_camp');
         for (const x of list.body.expeditions) {
           const { pages, texts } = await allPages(base, a.session.runId, x.no, auth);
           const frames = pages.flatMap((p) => p.frames);
@@ -324,7 +324,8 @@ describe('S17 3-6: delay, page limits, no writes, no waiting', () => {
   it('a delayed server does not return an expedition the live view has not shown yet', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'muse-s17-'));
     try {
-      for (const [delay, want] of [[100000, 0], [1, 1]] as const) {
+      // S17a: 遅れが 1 でも、遠征の終わりの確定（終わりの後の、次の候補の出来事まで）が見せた所を越えるので、見返せない。遅れ 0 なら見返せる
+      for (const [delay, want] of [[100000, 0], [1, 0], [0, 1]] as const) {
         const m = manager(join(dir, String(delay)), { policy: 'delayed', delay });
         const r = await m.createRun({ name: 'Dot', controller: agent, seed: 's17-delay-1' });
         if ('error' in r) throw new Error(r.error.message);
@@ -456,7 +457,7 @@ describe('S17 7: a run that ended and is only on disk goes through the same gate
         const list = await getJson<ReviewListResponse>(base, `/api/runs/${runId}/review`, own);
         expect(list.status, list.text).toBe(200);
         expect(list.body.expeditions.map((x) => x.no)).toEqual([1]);
-        expect(list.body.now.state).toBe('ended');
+        expect(list.body.now?.state).toBe('ended');
         const { pages, texts } = await allPages(base, runId, 1, own);
         const frames = pages.flatMap((p) => p.frames);
         expect(frames.length).toBeGreaterThan(2);

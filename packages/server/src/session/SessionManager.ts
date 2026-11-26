@@ -67,6 +67,7 @@ import { NAME_MAX, normalizeName } from './names';
 import { SeasonService, SeasonStore } from '../season/SeasonService';
 import type { LiveRunState } from '../season/SeasonService';
 import { ReviewService, reviewExpeditions } from './review';
+import { TOKEN_CHARS } from './secretMask';
 import { livePolicyFor, liveVisibleUpTo } from './followFrames';
 
 /** profile: そのプレイヤーのプロフィール（token は新しく作ったときだけ） */
@@ -103,6 +104,8 @@ export class SessionManager {
       gateStored: (subject, o) => this.watchAccess(subject, o),
       seasonFinal: (sid) => this.seasonFinal(sid),
       recoveryFailed: (runId) => this.recoveryFailedError(runId),
+      storedRunProfile: (sid, runId) => this.seasonRunProfile(sid, runId),
+      isSecret: this.isSecret,
     });
     // 終わりの時刻の後の確定（SEASON.md §2.1）: 1 分ごとに見る
     this.seasonTimer = setInterval(() => this.seasons.tick(), 60_000);
@@ -548,6 +551,20 @@ export class SessionManager {
     return null;
   }
 
+  /**
+   * このサーバーが知っているトークンか（S17a。考えの文などに書かれた鍵を伏せる: session/secretMask.ts）: 読み込んであるプロフィールの鍵（ハッシュと照らす）か、
+   * 動いているランのプレイヤーのトークン。base64url の 24 字だけを見る
+   */
+  isKnownToken(c: string): boolean {
+    if (c.length !== TOKEN_CHARS) return false;
+    if (this.profiles.store.knows(c)) return true;
+    for (const s of this.sessions.values()) if (s.hasToken(c)) return true;
+    return false;
+  }
+
+  /** 伏せる関数（その場の観戦・見返し・巻き戻しが、同じものを使う） */
+  readonly isSecret = (c: string): boolean => this.isKnownToken(c);
+
   portForToken(token: string): PlayerPort | null {
     const r = this.resolveToken(token);
     return r ? new SessionPlayerPort(r.session, r.playerId) : null;
@@ -708,6 +725,14 @@ export class SessionManager {
     return { local: o.local, runs: runs.sort((a, b) => Number(b.waiting) - Number(a.waiting) || b.updatedAt - a.updatedAt) };
   }
 
+  /**
+   * シーズンのランを足した参加者のプロフィールの ID（S17a の B: 記録だけのランの見返しの門を、命令の記録を読まずに決める。シーズンの記録の、参加者ごとのランから。
+   * 参加の命令の profile と同じ値: SessionManager.createSeasonRunLocked が、同じプロフィールで registerRun する）。見つからなければ null
+   */
+  seasonRunProfile(seasonId: string, runId: string): string | null {
+    return this.seasons.get(seasonId)?.participants.find((p) => p.runs.some((r) => r.runId === runId))?.profileId ?? null;
+  }
+
   /** いま観戦できる、そのシーズンの進行中のラン（S3。GET /api/seasons/:id/watch。人間の画面のロビーの「観戦」） */
   seasonWatchable(seasonId: string, o: { local: boolean; profileToken?: string }): SeasonWatchResponse | null {
     const d = this.seasons.get(seasonId);
@@ -727,7 +752,24 @@ export class SessionManager {
       const ended = pid ? reviewExpeditions(w, pid, liveVisibleUpTo(w, livePolicyFor(w, this.config.spectatorPolicy), this.config.spectatorDelaySeq)).length : 0;
       runs.push({ runId: s.runId, name, expeditionsEnded: ended });
     }
-    return { local: o.local, final, runs: runs.sort((a, b) => a.name.localeCompare(b.name) || (a.runId < b.runId ? -1 : 1)) };
+    // 終わった自分のラン（S17a の G）: 開催中のシーズンで、持ち主の鍵を示したときだけ（同じ PC からは、巻き戻しで全体を見返せる）。
+    // その鍵の参加者のランのうち、終わったもの。数えるのは、動いているランは World、記録だけのランは要約（summary.json。小さい）の遠征
+    const review: { runId: string; expeditionsEnded: number }[] = [];
+    const part = !final && !o.local && prof ? d.participants.find((p) => p.profileId === prof.id) : undefined;
+    for (const r of part?.runs ?? []) {
+      const s = this.sessions.get(r.runId);
+      if (s) {
+        if (s.world.status !== 'ended') continue;
+        const pid = s.world.playerOrder.find((p) => s.profileOf(p) === prof!.id);
+        const n = pid ? reviewExpeditions(s.world, pid, s.world.seq).length : 0;
+        if (n) review.push({ runId: r.runId, expeditionsEnded: n });
+        continue;
+      }
+      if (this.store?.meta(r.runId)?.status !== 'ended') continue;
+      const n = (this.store.summary(r.runId)?.expeditions ?? []).filter((x) => x.endSeq !== null).length;
+      if (n) review.push({ runId: r.runId, expeditionsEnded: n });
+    }
+    return { local: o.local, final, runs: runs.sort((a, b) => a.name.localeCompare(b.name) || (a.runId < b.runId ? -1 : 1)), ...(review.length ? { review } : {}) };
   }
 
   /** AI パネル用のツール呼び出し記録（観戦にのみ流す） */

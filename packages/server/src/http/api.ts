@@ -15,6 +15,7 @@ import { seasonReplayError } from '../session/SessionManager';
 import { WsHub } from '../ws/hub';
 import { allowLocalHosts, isLocalRequest, jsonContentType, sameOrigin } from './local';
 import { internalError, opsAddAdventurer, opsCodex, opsEnroll, opsOpenSeason, opsRoster, opsUninvite } from '../session/ops';
+import { maskThoughtEvent, maskTokensIn } from '../session/secretMask';
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
@@ -265,7 +266,8 @@ export function createApp(manager: SessionManager, config: ServerConfig): App {
           if (ev.seq < from || ev.seq > to) continue;
           // シーズンのラン（S0）は終わってもシードを出さない
           const se = spectatorEvent(ev, src.ended && !(live?.world.meta.season ?? store?.meta(runId)?.season));
-          if (se) lines.push(JSON.stringify(se));
+          // 考えの文に書かれた、このサーバーの知っているトークンを伏せる（S17a の E。その場の観戦・見返しと同じ関数）
+          if (se) lines.push(JSON.stringify(maskThoughtEvent(se, manager.isSecret)));
         }
         res.writeHead(200, { 'content-type': 'application/x-ndjson; charset=utf-8', 'cache-control': 'no-store' });
         res.end(lines.length ? lines.join('\n') + '\n' : '');
@@ -282,15 +284,17 @@ export function createApp(manager: SessionManager, config: ServerConfig): App {
         return json(res, 200, w);
       }
       if (sub === '/index') {
+        // 印の考えの文も、同じに伏せる（S17a の E）
         if (live) {
           const mb = new MarkerBuilder();
-          for (const ev of live.history) mb.add(ev);
+          for (const ev of live.history) mb.add(maskThoughtEvent(ev, manager.isSecret));
           return json(res, 200, { runId, lastSeq: live.world.seq, markers: mb.markers, keyframes: store?.keyframeSeqs(runId) ?? [], expeditions: mb.expeditions });
         }
-        return json(res, 200, store!.index(runId, store!.coveredEvents(runId)));
+        return json(res, 200, store!.index(runId, store!.coveredEvents(runId).map((ev) => maskThoughtEvent(ev, manager.isSecret))));
       }
       if (sub === '/commands') {
-        const recs = store?.commands(runId) ?? [];
+        // 命令の記録の考えの文も、同じに伏せる（S17a の E）
+        const recs = (store?.commands(runId) ?? []).map((r) => (r.thought ? { ...r, thought: maskTokensIn(r.thought, manager.isSecret) } : r));
         res.writeHead(200, { 'content-type': 'application/x-ndjson; charset=utf-8', 'cache-control': 'no-store' });
         res.end(recs.map((r) => JSON.stringify(r)).join('\n') + (recs.length ? '\n' : ''));
         return;

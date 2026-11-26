@@ -94,10 +94,14 @@ export interface RunAction { kind: 'watch' | 'review' | 'rewind'; label: string;
 export function runActions(x: { season: string; final: boolean; local: boolean; runId: string; status: 'active' | 'ended' | null; recoveryFailed?: boolean; watchable: readonly string[] | null; ended?: number }): RunAction[] {
   const out: RunAction[] = [];
   const rewind = x.status === null ? x.final : rewindAllowed({ season: x.season, status: x.status, final: x.final, local: x.local });
+  const review: RunAction = { kind: 'review', label: tr('見返す', 'Look back'), href: reviewHref(x.runId, 'last') };
   if (!x.final && x.status === 'active' && !x.recoveryFailed && watchAllowed({ season: x.season, runId: x.runId, watchable: x.watchable })) {
     out.push({ kind: 'watch', label: tr('見守る', 'Watch'), href: `#/watch/${x.runId}` });
-    if ((x.ended ?? 0) > 0 && !rewind) out.push({ kind: 'review', label: tr('見返す', 'Look back'), href: reviewHref(x.runId, 'last') });
+    if ((x.ended ?? 0) > 0 && !rewind) out.push(review);
   }
+  // 終わった（引退した・倒れた）自分のラン（S17a の G）: 開催中のシーズンで、見返せる遠征があれば（ended は、サーバーが門を通した者にだけ返す数）。
+  // 巻き戻し（全体が見える）を開けるとき（同じ PC から）は、巻き戻しが先
+  if (!x.final && x.status === 'ended' && (x.ended ?? 0) > 0 && !rewind) out.push(review);
   if (rewind) out.push({ kind: 'rewind', label: tr('見返す', 'Look back'), href: `#/replay/${x.runId}` });
   return out;
 }

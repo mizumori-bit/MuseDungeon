@@ -24,7 +24,8 @@ import {
 } from '../ui/playback';
 import { rewindAllowed } from '../ui/replayGate';
 import {
-  needMore, pickReviewNo, REVIEW_SPEEDS, reviewExpLabel, reviewHref, reviewInsteadOfRewind, reviewMessages, reviewNowText, reviewProgress, reviewSpeedOf, reviewTitle, type ExpParam,
+  needMore, nextReviewList, resolveReviewNo, REVIEW_SPEEDS, reviewExpLabel, reviewHref, reviewInsteadOfRewind, reviewMessages, reviewNowText, reviewProgress, reviewSpeedOf, reviewTitle,
+  watchSource, type ExpParam,
 } from '../ui/review';
 import { actionLine, BANNER_MAX, BANNER_MS, bannerSnap, insertBySeq, isWorldTool, returnedOf, sceneBanners, type BannerSnap, type SceneBanner } from '../ui/watchLines';
 import { getLocale, getPref, inLocale, navigate, setPref, tr } from '../util';
@@ -198,20 +199,26 @@ export function Watch({ runId, exp = null }: { runId: string; exp?: ExpParam }) 
   useEffect(() => {
     if (!seasonInfo) return;
     let alive = true;
+    let first = true;
+    // 読み直しが 1 回失敗しただけでは、前の一覧を残す（S17a の D。最初の失敗と、鍵が無くなった 401・403 は、null で理由を出す）
     const load = () => api.reviewList(runId, seasonTokRef.current ?? undefined)
-      .then((l) => { if (alive) { setReviewList(l); setReviewListLoaded(true); } })
-      .catch(() => { if (alive) { setReviewList(null); setReviewListLoaded(true); } });
+      .then((l) => { if (alive) { setReviewList((prev) => nextReviewList(prev, { ok: true, list: l }, first)); setReviewListLoaded(true); first = false; } })
+      .catch((e: unknown) => { if (alive) { const status = e instanceof ApiError ? e.status : 0; setReviewList((prev) => nextReviewList(prev, { ok: false, status }, first)); setReviewListLoaded(true); first = false; } });
     void load();
     const t = setInterval(() => { if (!document.hidden) void load(); }, reviewing ? 20_000 : 60_000);
     return () => { alive = false; clearInterval(t); };
   }, [runId, seasonInfo, reviewing]);
 
+  /** last で開いて決めた番号（S17a の A: 次の遠征が終わって一覧が読み直されても、見ている遠征を替えない） */
+  const pinRef = useRef<number | null>(null);
+  if (exp !== 'last') pinRef.current = null;
   /** 見返す遠征（道の exp と一覧から）。null: その場の観戦（か、見返せる遠征が無い） */
-  const reviewNo = reviewing && reviewList ? pickReviewNo(reviewList.expeditions, exp) : null;
+  const reviewNo = reviewing && reviewList ? resolveReviewNo(reviewList.expeditions, exp, pinRef.current) : null;
+  if (exp === 'last' && reviewNo !== null) pinRef.current = reviewNo;
   const reviewExp = reviewNo !== null ? reviewList?.expeditions.find((x) => x.no === reviewNo) ?? null : null;
-  // ?exp=last は、開いた遠征の番号に書き換える（履歴を増やさない。読み直しても同じ遠征）
+  // ?exp=last は、開いた遠征の番号の道に置き換える（履歴を増やさない。hashchange が起き、画面の exp も番号になる。読み直しても同じ遠征）
   useEffect(() => {
-    if (exp === 'last' && reviewNo !== null) window.history.replaceState(null, '', reviewHref(runId, reviewNo));
+    if (exp === 'last' && reviewNo !== null) window.location.replace(reviewHref(runId, reviewNo));
   }, [exp, reviewNo, runId]);
   // シーズンでないラン・確定したシーズンのランは、今までどおり、巻き戻しへ（§70.6 の 10）
   useEffect(() => {
@@ -362,10 +369,11 @@ export function Watch({ runId, exp = null }: { runId: string; exp?: ExpParam }) 
     }, BANNER_MS + 50);
   };
 
+  // 見え方をどこから取るか（S17a の H。決まりは watchSource）。見返す遠征が決まるまで・見返せる遠征が無いときは、つながない（その場の観戦へ、つないでしまわない）
+  const source = watchSource({ exp, reviewNo, listLoaded: reviewListLoaded });
   useEffect(() => {
     if (effPolicy === null) return;
-    // 見返し: 見返す遠征が決まるまで、つながない（その場の観戦へ、つないでしまわない）
-    if (reviewing && reviewNo === null) return;
+    if (source === 'wait' || source === 'none') return;
     if (followOnly && !follow) return;
     worldRef.current = null;
     viewRef.current = null;
@@ -380,7 +388,7 @@ export function Watch({ runId, exp = null }: { runId: string; exp?: ExpParam }) 
     const queue = queueRef.current!;
     queue.clear();
     // 見返しは、選んだ速さのまま流す（追いつかない・今の所へ飛ばない。「すぐに」は使わない）
-    const review = reviewNo !== null;
+    const review = source === 'review';
     queue.catchUp = !review;
     queue.speed = review ? reviewSpeedOf(speed) : speed;
     // 遠征を選び直した・頭から・今に戻った: 一時停止を解き、前の遠征の吹き出しと帯を残さない
@@ -784,7 +792,7 @@ export function Watch({ runId, exp = null }: { runId: string; exp?: ExpParam }) 
       document.removeEventListener('visibilitychange', onVisible);
       soundDirector.leave();
     };
-  }, [runId, effPolicy, followOnly ? follow : null, reviewNo, reviewEpoch]);
+  }, [runId, effPolicy, followOnly ? follow : null, reviewNo, reviewEpoch, source]);
 
   // 俯瞰つきで見ている相手を替えたら、列を今の所まで進め（途中は描かない。§65.1 の 5。追従だけの観戦は、つなぎ直しで列を捨てる）、「考えている」を数え直す
   useEffect(() => {

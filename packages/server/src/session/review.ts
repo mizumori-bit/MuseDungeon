@@ -16,6 +16,7 @@ import { actionError, applyEvent, emptyWorld, stripTokenArgs } from '@muse/share
 import type { RunStore } from '../log/RunStore';
 import { logBounds } from '../log/repair';
 import { followFlushAtMacroEnd, followFrameDue, followViewOf, livePolicyFor, liveVisibleUpTo, perceiveCommit, splitCommits, withSeasonClosed } from './followFrames';
+import { maskTokensDeep } from './secretMask';
 import type { RunSession } from './RunSession';
 import type { WatchAccess, WatchSubject } from './SessionManager';
 
@@ -51,6 +52,13 @@ export interface ReviewDeps {
   gateStored(subject: WatchSubject, o: ReviewAsk): WatchAccess;
   seasonFinal(seasonId: string | null | undefined): boolean;
   recoveryFailed(runId: string): ActionError | null;
+  /**
+   * 記録だけのシーズンのランの、持ち主のプロフィールの ID（S17a の B: 門は、重い読み込みの前に、軽いもので決める。シーズンの記録の、参加者ごとのランから。
+   * 命令の記録の参加の命令と同じ値。見つからなければ null）
+   */
+  storedRunProfile(seasonId: string, runId: string): string | null;
+  /** その 24 字が、このサーバーの知っているトークンか（S17a の E: 考えの文に書かれた鍵を伏せる。session/secretMask.ts） */
+  isSecret(candidate: string): boolean;
 }
 
 export interface ReviewAsk { local: boolean; profileToken?: string }
@@ -66,13 +74,15 @@ interface Subject {
   final: boolean;
   /** その場の観戦が、もう見せた所 */
   upTo: number;
+  /** 遠征の終わりの出来事を含む確定の、最後の番号（S17a の C。記録だけのランは終わったランなので、終わりの番号のまま） */
+  endOf: (endSeq: number) => number;
   pid: PlayerId;
   /** AI の呼び出しの記録から伏せるトークン（このランのプレイヤーのトークンと、求めの鍵） */
   secrets: string[];
 }
 
 /** 記録だけのランの、読んだもの（覚えておく。ファイルの大きさが変われば読み直す） */
-interface StoredInfo { at: number; size: number; commands: CommandRecord[]; profiles: Map<PlayerId, string>; world: World | null; covers: (seq: number) => boolean; tokens: string[] }
+interface StoredInfo { at: number; size: number; commands: CommandRecord[]; world: World | null; covers: (seq: number) => boolean; tokens: string[] }
 
 /** 覚えておく、作り直した World（その遠征の、続きの求めの after の所） */
 interface CacheEntry { key: string; world: World; at: number }
@@ -106,7 +116,7 @@ function argsOf(cmd: Record<string, unknown>): Record<string, unknown> {
  * seq は、その命令の出来事の最後の番号（マクロは最後の手の）。thought は記録のもの。応答の文（text）は記録に無いので空。
  * 世界が動かない呼び出し（observe など）は、命令の記録に無いので、出ない
  */
-export function activitiesFrom(commands: readonly CommandRecord[], pid: PlayerId, secrets: readonly string[]): (AgentActivity & { first: number })[] {
+export function activitiesFrom(commands: readonly CommandRecord[], pid: PlayerId, secrets: readonly string[], isSecret: (candidate: string) => boolean = () => false): (AgentActivity & { first: number })[] {
   const ofParent = new Map<number, [number, number]>();
   const before = new Map<number, number>();
   let last = 0;
@@ -130,15 +140,21 @@ export function activitiesFrom(commands: readonly CommandRecord[], pid: PlayerId
     const b = before.get(r.cseq) ?? 0;
     const args = cmd.type === 'season_sync' ? {} : argsOf(cmd);
     if (r.thought) args.thought = r.thought;
-    out.push({ playerId: pid, seq: span ? span[1] : b, first: span ? span[0] : b + 1, tool, args: stripTokenArgs(args, secrets) as Record<string, unknown>, text: '', wall: r.wall });
+    // トークン: 名前に token を含む引数を落とし、知っている値を伏せる（stripTokenArgs）。考えの文に書かれた、プロフィールの鍵（ハッシュと照らす）・
+    // 動いているランのプレイヤーのトークンも伏せる（S17a の E。その場の観戦の記録と同じ関数）
+    const safe = maskTokensDeep(stripTokenArgs(args, secrets), isSecret) as Record<string, unknown>;
+    out.push({ playerId: pid, seq: span ? span[1] : b, first: span ? span[0] : b + 1, tool, args: safe, text: '', wall: r.wall });
   }
   return out.sort((a, b) => a.seq - b.seq);
 }
 
-/** 見返せる遠征（そのプレイヤーが参加して、終わり、その場の観戦がもう見せたもの）。中身は PlayerView の expedition に出ているものだけ */
-export function reviewExpeditions(world: World, pid: PlayerId, upTo: number): ReviewExpedition[] {
+/**
+ * 見返せる遠征（そのプレイヤーが参加して、終わり、その場の観戦がもう見せたもの）。中身は PlayerView の expedition に出ているものだけ。
+ * endOf（S17a の C）: 遠征の終わりの出来事を含む確定の、最後の番号（コマは確定を丸ごと返すので、その確定の全部が、見せた所より前であること）。省くと終わりの番号
+ */
+export function reviewExpeditions(world: World, pid: PlayerId, upTo: number, endOf: (endSeq: number) => number = (s) => s): ReviewExpedition[] {
   return (world.expeditions ?? [])
-    .filter((x): x is Expedition & { endSeq: number } => x.participants.includes(pid) && x.endSeq !== null && x.endSeq <= upTo)
+    .filter((x): x is Expedition & { endSeq: number } => x.participants.includes(pid) && x.endSeq !== null && x.endSeq <= upTo && endOf(x.endSeq) <= upTo)
     .map((x) => {
       const pay = x.result?.payout;
       const banked = pay ? pay.players.find((p) => p.player === pid)?.banked ?? (x.participants.length === 1 ? pay.banked : null) : null;
@@ -147,6 +163,17 @@ export function reviewExpeditions(world: World, pid: PlayerId, upTo: number): Re
         startSeq: x.startSeq, endSeq: x.endSeq, deepest: x.result?.deepest ?? null, banked,
       };
     });
+}
+
+/** 出来事の並び（seq の順）で、seq を含む確定（同じ cause の、続いた出来事）の、最後の番号。seq が無ければ seq */
+export function commitEndIn(events: readonly GameEvent[], seq: number): number {
+  let lo = 0, hi = events.length;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (events[mid].seq < seq) lo = mid + 1; else hi = mid; }
+  const e = events[lo];
+  if (!e || e.seq !== seq) return seq;
+  let i = lo;
+  while (i + 1 < events.length && events[i + 1].cause === e.cause) i++;
+  return events[i].seq;
 }
 
 /** 同時に作る数の上限（待つのは queued まで） */
@@ -197,24 +224,28 @@ export class ReviewService {
     const w = sub.world;
     const pr = w.players[sub.pid];
     const latest = (w.expeditions ?? []).filter((x) => x.participants.includes(sub.pid)).at(-1);
-    const state: ReviewListResponse['now']['state'] = w.status === 'ended' ? 'ended' : pr?.state === 'at_camp' ? 'at_camp' : pr?.state === 'alive' ? 'in_dungeon' : 'dead';
+    const state: NonNullable<ReviewListResponse['now']>['state'] = w.status === 'ended' ? 'ended' : pr?.state === 'at_camp' ? 'at_camp' : pr?.state === 'alive' ? 'in_dungeon' : 'dead';
     return {
       ok: true,
       body: {
         runId, playerId: sub.pid, name: pr?.name ?? sub.pid, season: sub.season, final: sub.final,
-        expeditions: reviewExpeditions(w, sub.pid, sub.upTo),
-        now: { state, expedition: state === 'in_dungeon' && latest && latest.endSeq === null ? latest.no : null },
+        expeditions: reviewExpeditions(w, sub.pid, sub.upTo, sub.endOf),
+        // 今の居場所: その場の観戦が、まだ見せていない時点の状態は出さない（S17a の C: 遅らせる観戦では null）
+        now: sub.upTo < w.seq ? null : { state, expedition: state === 'in_dungeon' && latest && latest.endSeq === null ? latest.no : null },
         pageFrames: this.limits.pageFrames,
       },
     };
   }
+
+  /** 記録だけのランの重い読み込みをした回数（S17a の B のテスト: 門で断る求めは、読まない） */
+  heavyReads = 0;
 
   /** GET /api/runs/:id/review/:no: 遠征 1 つのコマ（after より後。省けば頭から）。body は応答の JSON の文（ReviewPageResponse） */
   async page(runId: string, no: number, o: ReviewAsk & { follow?: string; after?: number }): Promise<ReviewResult<string>> {
     const s = await this.subject(runId, o);
     if (!s.ok) return s;
     const sub = s.body;
-    const x = reviewExpeditions(sub.world, sub.pid, sub.upTo).find((e) => e.no === no);
+    const x = reviewExpeditions(sub.world, sub.pid, sub.upTo, sub.endOf).find((e) => e.no === no);
     if (!x) return fail(404, 'bad_request', `見返せる遠征 ${no} が無い（終わった遠征だけ。進行中の遠征は、その場の観戦で見る） / no expedition ${no} to look back on (only ended ones; watch the one in progress live)`, 'GET /api/runs/:id/review');
     if (o.after !== undefined && (!Number.isInteger(o.after) || o.after < x.startSeq - 1 || o.after > x.endSeq + 1000)) return fail(400, 'bad_request', 'after は、前の応答の next の値 / after must be the previous response\'s next', '');
     if (!(await this.limiter.acquire())) return fail(503, 'bad_request', '見返しの求めが混んでいる。少し待って、もう一度 / too many look-back requests right now; try again shortly', '');
@@ -234,34 +265,49 @@ export class ReviewService {
     let season: string | null;
     let secrets: string[];
     let upTo: number;
+    let endOf: (endSeq: number) => number = (s) => s;
     if (live) {
       // その場の観戦の門と同じ関数（ws/hub.ts と同じ）
       gate = this.deps.gateLive(live, o);
+      if ('error' in gate) return { ok: false, status: 403, error: gate.error };
       world = live.world;
       season = world.meta.season?.id ?? null;
       secrets = live.knownTokens();
       upTo = liveVisibleUpTo(world, livePolicyFor(world, this.deps.policy), this.deps.delaySeq);
+      const h = live.history;
+      endOf = (s) => commitEndIn(h, s);
     } else {
       const store = this.deps.store;
       if (!store?.exists(runId)) {
         const f = this.deps.recoveryFailed(runId);
         return f ? { ok: false, status: 503, error: f } : fail(404, 'no_session', `unknown run ${runId}`, '');
       }
+      // 軽いもの（meta.json と、シーズンの記録の参加者ごとのラン）で、先に門を決める（S17a の B: 断る求めでは、命令の記録もキーフレームも読まない）
       const meta = store.meta(runId);
       // 記録だけで、終わっていないラン（起動時に復旧できなかった）: その場の観戦も開けないので、見返しも開かない
       if (!meta || meta.status !== 'ended') {
         const f = this.deps.recoveryFailed(runId);
         return f ? { ok: false, status: 503, error: f } : fail(404, 'no_session', 'run is not live', '');
       }
-      const info = await this.storedInfo(runId);
-      if (!info.world) return fail(503, 'bad_request', '記録から作り直せない（読めるキーフレームが無い） / cannot rebuild this run from its records', '');
       season = meta.season ?? null;
-      gate = this.deps.gateStored({ seasonId: season, players: meta.players.map((p) => p.id), profileOf: (p) => info.profiles.get(p) ?? null }, o);
+      const sid = season;
+      const first = meta.players[0]?.id;
+      // シーズンのランは 1 人（S0 §9.1）。そのプレイヤーの持ち主は、シーズンの記録が、そのランを足した参加者（参加の命令の profile と同じ値）
+      gate = this.deps.gateStored({ seasonId: season, players: meta.players.map((p) => p.id), profileOf: (p) => (sid && p === first ? this.deps.storedRunProfile(sid, runId) : null) }, o);
+      if ('error' in gate) return { ok: false, status: 403, error: gate.error };
+      // 門を通った後だけ、重い読み込み（同時に作る数の上限の中で）
+      if (!(await this.limiter.acquire())) return fail(503, 'bad_request', '見返しの求めが混んでいる。少し待って、もう一度 / too many look-back requests right now; try again shortly', '');
+      let info: StoredInfo;
+      try {
+        info = await this.storedInfo(runId);
+      } finally {
+        this.limiter.release();
+      }
+      if (!info.world) return fail(503, 'bad_request', '記録から作り直せない（読めるキーフレームが無い） / cannot rebuild this run from its records', '');
       world = info.world;
       secrets = info.tokens;
       upTo = world.seq;
     }
-    if ('error' in gate) return { ok: false, status: 403, error: gate.error };
     // 追う相手: 持ち主の鍵なら、その冒険者（その場の観戦と同じ。follow は見ない）。ほかは follow（そのランのプレイヤー）か、最初のプレイヤー
     let pid: PlayerId | undefined;
     if (gate.access === 'owner') pid = gate.pid;
@@ -271,7 +317,7 @@ export class ReviewService {
     } else pid = world.playerOrder[0];
     if (!pid) return fail(404, 'no_session', 'no player in this run', '');
     if (o.profileToken) secrets = [...secrets, o.profileToken];
-    return { ok: true, body: { runId, session: live ?? null, season, world, final: this.deps.seasonFinal(season), upTo, pid, secrets } };
+    return { ok: true, body: { runId, session: live ?? null, season, world, final: this.deps.seasonFinal(season), upTo, endOf, pid, secrets } };
   }
 
   /** 記録だけの終わったランの、命令の記録（参加者のプロフィール）・最後のキーフレーム・トークン。覚えておく（命令の記録の大きさが変われば読み直す） */
@@ -281,18 +327,19 @@ export class ReviewService {
     const size = await stat(join(dir, 'commands.jsonl')).then((st) => st.size, () => 0);
     const hit = this.stored.get(runId);
     if (hit && hit.size === size && Date.now() - hit.at < this.limits.cacheMs) return hit;
+    this.heavyReads++;
     const commands = await readJsonlAsync<CommandRecord>(join(dir, 'commands.jsonl'), this.limits.sliceMs);
-    const profiles = new Map<PlayerId, string>();
-    for (const r of commands) if (r.command.type === 'join' && r.assigned && (r.command as { profile?: string }).profile) profiles.set(r.assigned, (r.command as { profile: string }).profile);
     const b = logBounds([], commands);
-    // 最後の、読めて、記録が覆っているキーフレーム（名前を替えたり、消したりしない）
+    // 最後の、読めて、記録が覆っているキーフレーム（名前を替えたり、消したりしない。読むのは、譲りながら）
     let world: World | null = null;
     for (const k of store.keyframeSeqs(runId).reverse()) {
       if (k > b.covered) continue;
-      const kf = store.keyframe(runId, k);
-      if (kf && kf.seq === k && kf.world?.seq === k) { world = kf.world; break; }
+      try {
+        const kf = JSON.parse(await readFile(join(dir, 'keyframes', `${k}.json`), 'utf8')) as { seq?: number; world?: World };
+        if (kf && kf.seq === k && kf.world?.seq === k) { world = kf.world; break; }
+      } catch { /* 読めない: 1 つ前へ */ }
     }
-    const info: StoredInfo = { at: Date.now(), size, commands, profiles, world, covers: b.covers, tokens: Object.keys(store.tokens(runId)) };
+    const info: StoredInfo = { at: Date.now(), size, commands, world, covers: b.covers, tokens: Object.keys(store.tokens(runId)) };
     this.stored.set(runId, info);
     while (this.stored.size > this.limits.storedRuns) this.stored.delete(this.stored.keys().next().value!);
     return info;
@@ -361,6 +408,8 @@ export class ReviewService {
     const endAt = commits.findIndex((c) => c[0].seq <= x.endSeq && c[c.length - 1].seq >= x.endSeq);
     const startAt = commits.findIndex((c) => c[c.length - 1].seq >= x.startSeq);
     if (endAt < 0 || startAt < 0) return fail(503, 'bad_request', '記録から作り直せない（遠征の始まりか終わりの出来事が無い） / cannot rebuild this expedition from its records', '');
+    // 遅らせる観戦（S17a の C）: 終わりの確定の全部が、その場の観戦がもう見せた所より前でなければ、返さない（確定の途中で切らない）
+    if (commits[endAt][commits[endAt].length - 1].seq > sub.upTo) return fail(404, 'bad_request', `見返せる遠征 ${x.no} が無い（その場の観戦が、まだ見せていない） / expedition ${x.no} is not shown live yet`, '');
     // 食い違いの後の続きの境目（S3h）をまたいで畳まない（境目のキーフレームが読めないとき）
     if (events.some((e) => e.type === 'seq_resumed' && e.seq <= target)) return fail(503, 'bad_request', '記録から作り直せない（境目のキーフレームが読めない） / cannot rebuild this run from its records (a boundary keyframe is unreadable)', '');
     // 出発の所まで畳む（after なら、after で終わる確定まで。頭からなら、遠征を始めた確定の手前まで）
@@ -382,10 +431,11 @@ export class ReviewService {
       bytes += s0.length;
     }
     const records = await this.commandsOf(sub);
-    // 確定（命令の番号 = 出来事の cause）→ マクロの元の呼び出しの番号（マクロの途中の手だけ）
+    // 確定（命令の番号 = 出来事の cause）→ マクロの元の呼び出しの番号（マクロの途中の手だけ）と、マクロの最後の手（どの冒険者のマクロでも）
     const parents = new Map<number, number>();
-    for (const r of records) if (r.parent !== undefined) parents.set(r.cseq, r.parent);
-    const parentOf = (c: readonly GameEvent[] | undefined) => (c && c[0].cause !== null ? parents.get(c[0].cause) : undefined);
+    const lastStepOf = new Map<number, number>();
+    for (const r of records) if (r.parent !== undefined) { parents.set(r.cseq, r.parent); lastStepOf.set(r.parent, r.cseq); }
+    const lastSteps = new Set(lastStepOf.values());
     let pending: PerceivedEvent[] = [];
     let unsent = false;
     let count = 0;
@@ -397,10 +447,11 @@ export class ReviewService {
       // RunSession のメッセージの記録と同じ関数）。コマの見え方は、その確定の後の見え方（RunSession.view と同じ: 確定したシーズンは「閉じた」見え方）
       const { view, perceived, messages } = perceiveCommit(world, sub.pid, c, this.deps.catalog);
       pending.push(...messages);
-      const parent = parentOf(c);
-      const info = { macroStep: parent !== undefined };
-      // マクロの終わり: 次の確定が、同じマクロの手でない（その場の観戦は、マクロの止まった知らせで、ためた確定を 1 枠にする）
-      const macroEnds = info.macroStep && parentOf(commits[i + 1]) !== parent;
+      const cause = c[0].cause;
+      const info = { macroStep: cause !== null && parents.has(cause) };
+      // マクロの終わり: この確定が、どれかのマクロ（どの冒険者のものでも）の最後の手（S17a の F。その場の観戦は、どのマクロの止まった知らせでも、
+      // ためた確定を 1 枠にする。協力のランで、ほかの者の命令が、止まった知らせの前に割り込んだときだけは、ずれうる: 時刻による）
+      const macroEnds = cause !== null && lastSteps.has(cause);
       const due = followFrameDue(perceived, info);
       if (!due) unsent = true;
       if (due || (macroEnds && followFlushAtMacroEnd(unsent))) {
@@ -421,7 +472,7 @@ export class ReviewService {
     const end = more ? lastFrameSeq : commits[endAt][commits[endAt].length - 1].seq;
     // AI の呼び出しの記録: その命令の最初の出来事が、このコマの幅に入るもの（マクロは、始まったコマの求めに入る: 考えは、その行動を描く時に出る）
     const from = after ?? base;
-    const agent = activitiesFrom(records, sub.pid, sub.secrets).filter((a) => a.first > from && a.first <= end).map(({ first: _f, ...a }) => a);
+    const agent = activitiesFrom(records, sub.pid, sub.secrets, this.deps.isSecret).filter((a) => a.first > from && a.first <= end).map(({ first: _f, ...a }) => a);
     const body = `{"runId":${JSON.stringify(sub.runId)},"playerId":${JSON.stringify(sub.pid)},"no":${x.no},"frames":[${frames.join(',')}],"agent":${JSON.stringify(agent)},"next":${more ? lastFrameSeq : 'null'},"range":${JSON.stringify({ startSeq: x.startSeq, endSeq: x.endSeq })}}`;
     return { ok: true, body };
   }

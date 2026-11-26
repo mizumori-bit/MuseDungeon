@@ -15,8 +15,10 @@ export function parseExpParam(query: string | null | undefined): ExpParam {
   const m = /(?:^|[?&])exp=([^&#]*)/.exec(query ?? '');
   if (!m) return null;
   if (m[1] === 'last') return 'last';
+  // 数字だけ（1e3・+5・0x10 などの書き方は受けない: その場の観戦になる）
+  if (!/^[0-9]{1,6}$/.test(m[1])) return null;
   const n = Number(m[1]);
-  return Number.isInteger(n) && n >= 1 && n <= 999_999 ? n : null;
+  return n >= 1 ? n : null;
 }
 
 /** 見返しの道（鍵は入れない） */
@@ -32,6 +34,36 @@ export function pickReviewNo(list: readonly Pick<ReviewExpedition, 'no'>[], requ
   if (requested === null || !list.length) return null;
   if (requested === 'last') return list[list.length - 1].no;
   return list.some((x) => x.no === requested) ? requested : null;
+}
+
+/**
+ * 見返す遠征を決める（S17a の A）。last で開いて、いったん決めた番号（pinned）は、その後に次の遠征が終わって一覧が読み直されても、替えない
+ * （替えると、見ている途中で、新しい遠征の頭からやり直しになる）。決めた番号が一覧から消えたとき（読み直しで見返せなくなった）は、決め直す
+ */
+export function resolveReviewNo(list: readonly Pick<ReviewExpedition, 'no'>[], requested: ExpParam, pinned: number | null): number | null {
+  if (requested === 'last' && pinned !== null && list.some((x) => x.no === pinned)) return pinned;
+  return pickReviewNo(list, requested);
+}
+
+/**
+ * 一覧を読み直した後の一覧（S17a の D）: 読めたら新しい一覧。読み直しが 1 回失敗しただけなら、前の一覧を残す（見返しを止めない）。
+ * 最初の読み込みの失敗と、鍵が無くなった・認められなくなった（401・403）は、null（画面は「見返せない」と理由を出す）
+ */
+export function nextReviewList<T>(prev: T | null, r: { ok: true; list: T } | { ok: false; status: number }, first: boolean): T | null {
+  if (r.ok) return r.list;
+  if (first || r.status === 401 || r.status === 403) return null;
+  return prev;
+}
+
+/**
+ * 観戦の画面が、どこから見え方を取るか（S17a の H）: exp が無ければ WS（その場の観戦）。exp があれば、見返す遠征が決まったら見返しの口、
+ * 一覧を読んでいる間は待つ（WS につながない）、読んだが見返せる遠征が無ければ、つながずに理由を出す（「今に戻る」で、その場の観戦へ）。
+ * 道の exp が読めない書き方（?exp=でたらめ）は、parseRoute が exp を付けないので、その場の観戦になる
+ */
+export function watchSource(x: { exp: ExpParam; reviewNo: number | null; listLoaded: boolean }): 'ws' | 'review' | 'wait' | 'none' {
+  if (x.exp === null) return 'ws';
+  if (x.reviewNo !== null) return 'review';
+  return x.listLoaded ? 'none' : 'wait';
 }
 
 /**

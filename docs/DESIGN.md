@@ -1946,3 +1946,13 @@ engine・World・出来事・命令の形・内容のデータと版は S11 の�
 4. **入口**: 拠点の札（`ui/hubState.ts` の `hubReview` → `HubCardModel.secondary`。`ui/hub.tsx` が主のボタンの隣に小さく）: 開催中のシーズンのランで、終わった遠征が 1 つでもあるとき（`OwnerRunRow.expeditionsEnded`）。シーズンの表（`ui/entrance.ts` の `runActions` に `kind: 'review'`）: 見守れるランで、`GET /api/seasons/:id/watch` の `expeditionsEnded` が 1 以上のとき（巻き戻しが開けるランには出さない）。言葉はどれも「見返す」。
 5. あわせて: 自分で潜るときのキャンプ（`ui/campView.tsx`）の、いちばん上の札に出ていた AI 向けの ▶ の状態行を、出さないようにした（すぐ下に目的の札がある）。
 - **テスト**: `tools/test/s17.test.ts`（門: 鍵 5 通り × 接続元 7 通り × 開催中・シーズンでない・確定の後を、WS の追従と見返しの両方に聞いて同じ答え。巻き戻しの口は今までどおり。中身: 本物の engine で 3 つの遠征を進め、外から持ち主の鍵でその場で集めたコマと、後から見返したコマが、同じ並び・同じ中身（見え方の hash・出来事の JSON）。知覚しない確定のコマも含む。シード・トークン・World の項目が無い。遅れ・量の上限とつなぎ・覚えた World の続きと作り直しの続きが同じ・同時に作る数・書かない（置き場所の全部のファイルの hash）・見返しの最中に命令とほかの求めが通る・記録だけの終わったランを同じ門で）。`client/test/review.test.ts`（道・遠征の選び方・巻き戻しへ送るか・文・コマを列に流して考えがその命令の最初の歩に出る・追いつかない列・続きを取る時・進み具合・拠点の札とシーズンの表のボタン）。
+- **S17a（S17 の検査の指摘の直し）**:
+  - A. `?exp=last` で開いた遠征は、決めた番号で固定する（`ui/review.ts` の `resolveReviewNo`。道は `location.replace` で番号の道に置き換え、`hashchange` で画面の `exp` も番号になる）。前は `history.replaceState` だったので、画面の `exp` が `last` のままで、一覧の読み直し（20 秒）の間に次の遠征が終わると、再生がその遠征の頭へ飛んでいた。
+  - B. 記録だけのランの門は、`meta.json` とシーズンの記録（参加者ごとのラン: `SessionManager.seasonRunProfile`）で先に決める。重い読み込み（`storedInfo`: 命令の記録と最後のキーフレーム。キーフレームも譲りながら読む）は、通った後に、同時に作る数の上限の中で。`ReviewService.heavyReads` で、断る求めが読まないことをテストが確かめる。
+  - C. 遅らせる観戦では、一覧の `now` を `null` に。遠征は、終わりの出来事を含む確定の最後（`commitEndIn`）が、見せた所より前のときだけ。
+  - D. 一覧の読み直しが 1 回失敗しても、前の一覧を残す（`nextReviewList`。最初の読み込みの失敗と 401・403 は `null`）。
+  - E. 考えの文などに書かれたトークンを伏せる 1 つの関数（`server/src/session/secretMask.ts` の `maskTokensIn`・`maskTokensDeep`・`maskThoughtEvent`）。サーバーはプロフィールの鍵そのものを持たない（ハッシュだけ）ので、文の中の base64url の 24 字を拾い、ハッシュと照らす（`ProfileStore.knows`: 読み込んであるものだけ。知らない候補でファイルを読み直さない）か、動いているランのプレイヤーのトークンと比べる（`SessionManager.isKnownToken`）。使う所: MCP の呼び出しの記録（`mcp/server.ts`）・俯瞰の観戦の出来事（`SpectatorPort`）・見返しの `agent`・巻き戻しの `events`・`index`・`commands`。記録のファイルは変えない。
+  - F. 1 コマの区切りの、マクロの終わりは、どの冒険者のマクロでも、その最後の手の確定（命令の記録の `parent` の最後）。その場の観戦の、どのマクロの止まった知らせでも 1 枠にするのと同じ。協力のランで、止まった知らせの前に、ほかの者の命令が割り込んだときだけ、ずれうる（協力は凍結中なので、そこまでは合わせない）。
+  - G. 終わった（引退した・倒れた）自分のランの、シーズンの表の「見返す」: `GET /api/seasons/:id/watch` の `review`（持ち主の鍵を示したときだけ。数えるのは、動いているランは World、記録だけのランは要約の遠征）と、`runActions` の `status: 'ended'`。同じ PC から（巻き戻しを開ける）なら、巻き戻しが先。
+  - H. 見え方をどこから取るか（`watchSource`: WS・見返し・待つ・出さない）。見返しの間・見返せる遠征が無いときは、WS につながない。
+  - テスト: `tools/test/s17a.test.ts`（B・C・E・G）、`client/test/review.test.ts` に A・D・G・H。

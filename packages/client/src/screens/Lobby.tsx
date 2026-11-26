@@ -214,7 +214,9 @@ export function Lobby({ tab = 'hub', seasonId = null }: { tab?: HomeTab; seasonI
         const rs = (await Promise.all(asks.map((t) => api.seasonWatch(x.season.id, t).catch(() => null)))).filter((r): r is SeasonWatchResponse => !!r);
         if (!rs.length) return null;
         const runs = new Map(rs.flatMap((r) => r.runs).map((r) => [r.runId, r]));
-        return [x.season.id, { ...rs[0], runs: [...runs.values()], withTok: keys.length > 0 }] as const;
+        // 終わった自分のランの見返し（S17a の G）も、鍵ごとの答えをまとめる
+        const review = new Map(rs.flatMap((r) => r.review ?? []).map((r) => [r.runId, r]));
+        return [x.season.id, { ...rs[0], runs: [...runs.values()], ...(review.size ? { review: [...review.values()] } : {}), withTok: keys.length > 0 }] as const;
       }));
       setWatch(Object.fromEntries(ws.filter((x): x is readonly [string, SeasonWatchResponse & { withTok: boolean }] => !!x)));
     }).catch(() => setSeasonsLoaded(true));

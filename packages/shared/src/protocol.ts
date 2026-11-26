@@ -277,6 +277,11 @@ export interface SeasonWatchResponse {
   local: boolean; final: boolean;
   /** expeditionsEnded（S17）: そのランの、見ている者が見返せる冒険者の、終わった遠征の数（シーズンの表の「見返す」を出すか） */
   runs: { runId: string; name: string; expeditionsEnded?: number }[];
+  /**
+   * 終わった（引退した・倒れた）ランのうち、見ている者が、冒険者の目線で見返せるもの（S17a の G。開催中のシーズンで、持ち主の鍵を示したときだけ。
+   * 同じ PC から・確定の後は、巻き戻しで全体を見返せるので入れない）。expeditionsEnded: 見返せる遠征の数
+   */
+  review?: { runId: string; expeditionsEnded: number }[];
 }
 
 // ---- 見返し（S17。SEASON.md §70.6。PROTOCOL §9.16）----
@@ -296,8 +301,11 @@ export interface ReviewListResponse {
   runId: string; playerId: PlayerId; name: string;
   season: string | null; final: boolean;
   expeditions: ReviewExpedition[];
-  /** 今（見返している間の知らせ）: state は冒険者の状態。expedition は、いま進めている遠征の番号（迷宮の中のときだけ） */
-  now: { state: 'at_camp' | 'in_dungeon' | 'dead' | 'ended'; expedition: number | null };
+  /**
+   * 今（見返している間の知らせ）: state は冒険者の状態。expedition は、いま進めている遠征の番号（迷宮の中のときだけ）。
+   * null（S17a）: その場の観戦が遅らせて見せている（遅らせる観戦 delayed の、進行中のラン）ので、今の状態は出さない
+   */
+  now: { state: 'at_camp' | 'in_dungeon' | 'dead' | 'ended'; expedition: number | null } | null;
   /** 1 回の求めで返すコマの上限 */
   pageFrames: number;
 }

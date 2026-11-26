@@ -73,6 +73,14 @@ export class ProfileStore {
     return { token, profile: p };
   }
 
+  /**
+   * そのトークンが、読み込んであるプロフィールのものか（S17a: 考えの文に書かれた鍵を伏せる）。ハッシュと照らすだけで、知らなくてもファイルを読み直さない
+   * （resolve は、知らないトークンでファイルを読み直す。文の中の候補ごとに読み直さないように、別にした）
+   */
+  knows(token: string): boolean {
+    return this.byHash.has(hashToken(token));
+  }
+
   resolve(token: string): ProfileData | null {
     const h = hashToken(token);
     let id = this.byHash.get(h);

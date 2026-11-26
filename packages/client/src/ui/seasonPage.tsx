@@ -62,7 +62,8 @@ export function SeasonView(p: SeasonViewProps) {
   const { byRow, unmatched: unmatched0 } = runsForRows(rows0, seasonRuns, p.participantOf);
   const unmatched = unmatched0.filter((x) => !(p.onlyMine && !p.myRunIds.has(x.runId)));
   /** そのランのボタン（S17: 開催中の自分のランに「見返す」。終わった遠征の数は、観戦できるランの一覧から） */
-  const endedOf = (runId: string) => sw?.runs.find((r) => r.runId === runId)?.expeditionsEnded ?? 0;
+  // 進行中のランは観戦できるランの一覧から、終わった自分のラン（S17a の G）は、見返せる終わったランの一覧（review）から
+  const endedOf = (runId: string) => sw?.runs.find((r) => r.runId === runId)?.expeditionsEnded ?? sw?.review?.find((r) => r.runId === runId)?.expeditionsEnded ?? 0;
   const actionsOf = (x: RunListing | string): RunAction[] => runActions(typeof x === 'string'
     ? { season: s.id, final, local: !!sw?.local, runId: x, status: null, watchable: sw?.runs.map((r) => r.runId) ?? null, ended: endedOf(x) }
     : { season: s.id, final, local: !!sw?.local, runId: x.runId, status: x.status, recoveryFailed: !!x.recoveryFailed, watchable: sw?.runs.map((r) => r.runId) ?? null, ended: endedOf(x.runId) });

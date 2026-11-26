@@ -8,7 +8,8 @@ import { parseRoute, runActions } from '../src/ui/entrance';
 import { hubCard, hubReview } from '../src/ui/hubState';
 import { CallRanges, PlaybackQueue, SPEED_MS, type Delivery } from '../src/ui/playback';
 import {
-  needMore, parseExpParam, pickReviewNo, REVIEW_PREFETCH_AT, reviewExpLabel, reviewHref, reviewInsteadOfRewind, reviewMessages, reviewNowText, reviewProgress, reviewSpeedOf, reviewTitle,
+  needMore, nextReviewList, parseExpParam, pickReviewNo, resolveReviewNo, REVIEW_PREFETCH_AT, reviewExpLabel, reviewHref, reviewInsteadOfRewind, reviewMessages, reviewNowText, reviewProgress,
+  reviewSpeedOf, reviewTitle, watchSource,
 } from '../src/ui/review';
 import { setLocale } from '../src/util';
 
@@ -187,5 +188,57 @@ describe('S17: the entrances ("Look back")', () => {
     expect(runActions({ ...base, local: true, final: false, status: 'ended', ended: 2 })).toEqual([{ kind: 'rewind', label: '見返す', href: '#/replay/run_a' }]);
     // 復旧できなかったラン: 見守る・冒険者の目線の見返しは出さない
     expect(runActions({ ...base, final: false, status: 'active', ended: 2, recoveryFailed: true })).toEqual([]);
+  });
+
+  it('S17a G: your own ended (retired / fallen) run of a season in progress gets "Look back" too; from the server PC the rewind stays first', () => {
+    const base = { season: 's4', runId: 'run_a', watchable: [] as string[] };
+    // ほかの PC から、持ち主の鍵で（サーバーが、見返せる遠征の数を返した）
+    expect(runActions({ ...base, local: false, final: false, status: 'ended', ended: 3 })).toEqual([{ kind: 'review', label: '見返す', href: '#/watch/run_a?exp=last' }]);
+    // 見返せる遠征が無い・数が分からない（鍵が無く、サーバーが返さない）: 出さない
+    expect(runActions({ ...base, local: false, final: false, status: 'ended', ended: 0 })).toEqual([]);
+    expect(runActions({ ...base, local: false, final: false, status: 'ended' })).toEqual([]);
+    // 同じ PC から: 今までどおり、巻き戻し（全体が見える）
+    expect(runActions({ ...base, local: true, final: false, status: 'ended', ended: 3 })).toEqual([{ kind: 'rewind', label: '見返す', href: '#/replay/run_a' }]);
+    // 確定したシーズン: 巻き戻し
+    expect(runActions({ ...base, local: false, final: true, status: 'ended', ended: 3 })).toEqual([{ kind: 'rewind', label: '見返す', href: '#/replay/run_a' }]);
+  });
+});
+
+describe('S17a A・D・H: the look-back screen\'s rules', () => {
+  it('A: once "last" has opened an expedition, a newly ended one does not take over the playback', () => {
+    const one = [exp(1), exp(2)];
+    const no = resolveReviewNo(one, 'last', null);
+    expect(no).toBe(2);
+    // 20 秒後の読み直しで、遠征 3 が終わっていた: 見ている遠征は 2 のまま
+    expect(resolveReviewNo([...one, exp(3)], 'last', no)).toBe(2);
+    // 決めた遠征が一覧から消えた（見返せなくなった）: 決め直す
+    expect(resolveReviewNo([exp(1), exp(3)], 'last', 2)).toBe(3);
+    // 番号で開いたときは、その番号
+    expect(resolveReviewNo([...one, exp(3)], 2, null)).toBe(2);
+  });
+
+  it('D: one failed reload keeps the list; the first load failing, or the key no longer accepted (401/403), clears it', () => {
+    const prev = { n: 1 };
+    expect(nextReviewList(prev, { ok: false, status: 0 }, false)).toBe(prev);
+    expect(nextReviewList(prev, { ok: false, status: 503 }, false)).toBe(prev);
+    expect(nextReviewList(prev, { ok: false, status: 500 }, false)).toBe(prev);
+    expect(nextReviewList(prev, { ok: false, status: 403 }, false)).toBeNull();
+    expect(nextReviewList(prev, { ok: false, status: 401 }, false)).toBeNull();
+    expect(nextReviewList(null, { ok: false, status: 503 }, true)).toBeNull();
+    expect(nextReviewList(prev, { ok: true, list: { n: 2 } }, false)).toEqual({ n: 2 });
+  });
+
+  it('H: no exp (or an unreadable one) is the live watch; while looking back, the WS is never opened', () => {
+    // ?exp=でたらめ は、道の読み方で exp が付かない → その場の観戦
+    for (const junk of ['abc', '-1', '0', '1e3', '%E0%A4', '']) {
+      const r = parseRoute(`#/watch/run_abc?exp=${junk}`);
+      expect(r, junk).toEqual({ page: 'watch', id: 'run_abc' });
+      const exp = r.page === 'watch' ? r.exp ?? null : null;
+      expect(watchSource({ exp, reviewNo: null, listLoaded: false })).toBe('ws');
+    }
+    // 見返しの道: 一覧を読むまで待つ・見返す遠征が決まれば見返しの口・見返せる遠征が無ければ、つながない（どれも WS ではない）
+    expect(watchSource({ exp: 'last', reviewNo: null, listLoaded: false })).toBe('wait');
+    expect(watchSource({ exp: 3, reviewNo: 3, listLoaded: true })).toBe('review');
+    expect(watchSource({ exp: 99, reviewNo: null, listLoaded: true })).toBe('none');
   });
 });
