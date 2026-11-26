@@ -376,12 +376,12 @@ export function TurnBar({ line, changes }: { line: string; changes: Change[] }) 
   const rest = changes.filter((c) => c.code !== 'guardian_slain');
   return (
     <div class="turnbar">
-      {line && <div class="turnline">{line}</div>}
+      {line && <div class="turnline" title={line}>{line}</div>}
       {head.map((c, i) => <div key={`head-${i}`} class="chg-head guardian_slain">{c.text}</div>)}
       {rest.length > 0 && (
         <div class="changes">
           <span class="lbl">{tr('前の手番からの変化', 'Since your last turn')}:</span>
-          {rest.map((c, i) => <span key={`${c.code}-${i}`} class={`chg ${c.code}`}>{c.text}</span>)}
+          {rest.map((c, i) => <span key={`${c.code}-${i}`} class={`chg ${c.code}`} title={c.text}>{c.text}</span>)}
         </div>
       )}
     </div>

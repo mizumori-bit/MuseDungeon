@@ -18,7 +18,8 @@ import { filterEventsForPlayer } from '@muse/shared';
 import { soundDirector } from '../sound/director';
 import { SoundControls } from '../ui/sound';
 import { CampScene } from '../ui/camp';
-import { oldVersionText, replayErrText } from '../ui/replayGate';
+import { oldVersionText, replayErrText, watchAllowed } from '../ui/replayGate';
+import { keyForRun } from '../ui/keys';
 
 const CHUNK = 5000;
 const SPEEDS = [0.25, 0.5, 1, 2, 4, 8, 16];
@@ -73,6 +74,8 @@ export function Replay({ runId }: { runId: string }) {
    */
   const [blocked, setBlocked] = useState<string | null>(null);
   const [old, setOld] = useState<string | null>(null);
+  /** 断られたとき、その場で観戦できる人か（S15a。「見守る」を出す） */
+  const [canWatch, setCanWatch] = useState(false);
   const metaRef = useRef<RunMetaFile | null>(null);
 
   const eventsRef = useRef<GameEvent[]>([]);
@@ -250,7 +253,19 @@ export function Replay({ runId }: { runId: string }) {
       } catch (e) {
         // 巻き戻しの口が断った（開催中のシーズンの、終わっていないラン など）: 理由を地図の場所に（S15）
         if (alive) {
-          if (!indexRef.current) setBlocked(replayErrText(e, m?.season ?? null));
+          if (!indexRef.current) {
+            setBlocked(replayErrText(e, m?.season ?? null));
+            // 「見守る」は、その場で観戦できる人（持ち主の鍵か、同じ PC）にだけ（S15a）。シーズンのランは、観戦できるランの一覧で確かめる。分からなければ出さない
+            if (m?.status === 'active') {
+              let watchable: string[] | null = null;
+              if (m.season) {
+                const tok = await keyForRun(runId).catch(() => undefined);
+                const sw = await api.seasonWatch(m.season, tok ?? undefined).catch(() => null);
+                watchable = sw ? sw.runs.map((r) => r.runId) : null;
+              }
+              if (alive) setCanWatch(watchAllowed({ season: m.season ?? null, runId, watchable }));
+            }
+          }
           else setError(errorText(e));
         }
       }
@@ -475,7 +490,7 @@ export function Replay({ runId }: { runId: string }) {
                 {(blocked || old) && (
                   <div class="replaymsg" role="status">
                     <p>{blocked ?? old}</p>
-                    {blocked && meta?.status === 'active' && <a class="button small" href={`#/watch/${runId}`}>{tr('見守る', 'Watch')}</a>}
+                    {blocked && canWatch && <a class="button small" href={`#/watch/${runId}`}>{tr('見守る', 'Watch')}</a>}
                   </div>
                 )}
               </>

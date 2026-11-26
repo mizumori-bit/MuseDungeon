@@ -1,7 +1,7 @@
 // S15（SEASON.md §68.2 の 6・§25.1）: 巻き戻しを開けるか（画面のボタン）と、開けないときの理由の文。画面から離した関数（ui/replayGate.ts）
 import { afterEach, describe, expect, it } from 'vitest';
 import { ApiError } from '../src/api';
-import { oldVersionText, replayBlockedText, replayErrText, rewindAllowed } from '../src/ui/replayGate';
+import { oldVersionText, replayBlockedText, replayErrText, rewindAllowed, watchAllowed } from '../src/ui/replayGate';
 import { setLocale } from '../src/util';
 
 afterEach(() => setLocale('ja'));
@@ -19,6 +19,14 @@ describe('S15 §68.2 の 6: who can rewind (the §25.1 rule, unchanged)', () => 
     expect(rewindAllowed({ season: null, status: 'active', final: false, local: false })).toBe(true);
     expect(rewindAllowed({ season: null, status: 'active', final: false, local: false, policy: 'follow_only' })).toBe(false);
     expect(rewindAllowed({ season: null, status: 'ended', final: false, local: false, policy: 'follow_only' })).toBe(true);
+  });
+
+  it('S15a: "Watch" on a refused replay only for those who can watch live (the season\'s watch list); unknown means no', () => {
+    expect(watchAllowed({ season: null, runId: 'run_a', watchable: null })).toBe(true);
+    expect(watchAllowed({ season: 's4', runId: 'run_a', watchable: ['run_a', 'run_b'] })).toBe(true);
+    expect(watchAllowed({ season: 's4', runId: 'run_a', watchable: ['run_b'] })).toBe(false);
+    expect(watchAllowed({ season: 's4', runId: 'run_a', watchable: [] })).toBe(false);
+    expect(watchAllowed({ season: 's4', runId: 'run_a', watchable: null })).toBe(false);
   });
 
   it('a refusal is said in the screen\'s words; an old run that cannot be folded says so with its engine version', () => {

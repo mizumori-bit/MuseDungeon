@@ -192,19 +192,24 @@ th, td { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--line
 .restest.blocked { color: var(--muted); }
 
 /* S15（SEASON.md §68.2 の 3）: 遊ぶ画面の、地図の上下の知らせの段は、いつも同じ高さで取っておく（出入りしても、地図の枠の高さを変えない）。
-   はみ出したら、段の中で横（か縦）に送る。地図の絵は、枠の大きさが本当に変わったとき（窓の大きさを変えた）だけ描き直す（render/canvas2d.ts） */
-.alertslot { flex: none; height: 34px; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
-.alertslot .alerts { flex-wrap: nowrap; padding: 5px 8px; width: max-content; min-width: 100%; }
-.alertslot .alert { white-space: nowrap; flex: none; }
-.turnslot { flex: none; height: 50px; overflow-y: auto; overflow-x: hidden; border-bottom: 1px solid var(--line); scrollbar-width: thin; }
+   段の中は折り返さず、はみ出した分は、右を「…」で切る（S15a: 段の中で送る形だと、場所を取るスクロールバーが文字に重なる。全文は、指を置くと出る）。
+   地図の絵は、枠の大きさが本当に変わったとき（窓の大きさを変えた）だけ描き直す（render/canvas2d.ts） */
+.alertslot { flex: none; height: 34px; overflow: hidden; }
+.alertslot .alerts { flex-wrap: nowrap; padding: 5px 8px; overflow: hidden; }
+.alertslot .alert { white-space: nowrap; flex: 0 1 auto; min-width: 3em; overflow: hidden; text-overflow: ellipsis; }
+.alertslot .alert.escape { flex-shrink: 0; }
+.turnslot { flex: none; height: 50px; overflow: hidden; border-bottom: 1px solid var(--line); }
 .turnslot .turnbar { border-bottom: none; }
-.turnslot .turnline { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.turnslot .changes { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; }
-.turnslot .chg, .turnslot .changes .lbl { white-space: nowrap; flex: none; }
+.turnslot .turnline, .turnslot .chg-head { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.turnslot .changes { flex-wrap: nowrap; overflow: hidden; }
+.turnslot .changes .lbl { white-space: nowrap; flex: none; }
+.turnslot .chg { white-space: nowrap; flex: 0 1 auto; min-width: 3em; overflow: hidden; text-overflow: ellipsis; }
 .restslot { flex: none; height: 24px; overflow: hidden; }
 .restslot .restest { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* 観戦の上の段は 1 行のまま（はみ出したら横に送る。おくれの表示・自動行動の知らせの出入りで、地図の枠の高さを変えない） */
-.watch .toolbar { flex-wrap: nowrap; overflow-x: auto; white-space: nowrap; scrollbar-width: thin; }
+/* 観戦の上の段は 1 行のまま（はみ出したら横に送る。おくれの表示・自動行動の知らせの出入りで、地図の枠の高さを変えない）。
+   スクロールバーは場所を取らない（出入りで段の高さが変わらないように。横には、ホイール・指で送れる） */
+.watch .toolbar { flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; white-space: nowrap; scrollbar-width: none; }
+.watch .toolbar::-webkit-scrollbar { display: none; }
 .watch .toolbar > * { flex: none; }
 .watch .macro .tag { margin: 0 2px; font-size: 12px; }
 

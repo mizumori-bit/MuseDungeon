@@ -23,7 +23,7 @@ import { OwnerRunCard } from '../ui/owner';
 import type { KgState } from '../ui/keepGoing';
 import { KeepGoingBox, useKeepGoing } from '../ui/keepGoingUi';
 import { SoundControls, useHubMusic } from '../ui/sound';
-import { rewindAllowed } from '../ui/replayGate';
+import { rewindAllowed, watchAllowed } from '../ui/replayGate';
 import { fmtTime, getLocale, getPref, getToken, inLocale, navigate, saveToken, setPref, tr } from '../util';
 
 export type HomeTab = 'hub' | 'records' | 'ops';
@@ -268,7 +268,7 @@ export function Lobby({ tab = 'hub' }: { tab?: HomeTab }) {
   };
 
   /** シーズンのラン（S3 §25.1）: 観戦できるか（確定する前は、覚えてあるトークンのランか、同じ PC からだけ）・巻き戻せるか（確定する前は、同じ PC から、ランが終わった後だけ） */
-  const canWatch = (r: RunListing) => !r.season || !!watch[r.season]?.runs.some((x) => x.runId === r.runId);
+  const canWatch = (r: RunListing) => watchAllowed({ season: r.season, runId: r.runId, watchable: r.season ? watch[r.season]?.runs.map((x) => x.runId) ?? null : null });
   // 巻き戻しを開けるか（S15: 画面とサーバーの決まりを 1 つの関数に。ui/replayGate.ts）
   const canRewind = (r: RunListing) => {
     if (!r.season) return true;

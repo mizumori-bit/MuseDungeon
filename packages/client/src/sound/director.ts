@@ -26,6 +26,8 @@ const CUE_MERGE_MS = 150;
 /** 予約の先読み（秒）と、予約の間隔（ミリ秒） */
 const LOOKAHEAD = 0.2;
 const TICK_MS = 50;
+/** 拠点の曲の画面を離れてから、止めるまでの待ち（次の画面が開く間。拠点の曲どうしの画面なら、その間に取りやめる） */
+const HUB_GRACE_MS = 300;
 const BASE = (import.meta as unknown as { env?: { BASE_URL?: string } }).env?.BASE_URL ?? '/';
 
 type Ctor = typeof AudioContext;
@@ -58,6 +60,8 @@ export class SoundDirector {
   private readonly lastCue = new Map<string, number>();
   private readonly listeners = new Set<() => void>();
   private gestureHooked = false;
+  /** 拠点の曲を止めるまでの待ち（S15a。leaveHub） */
+  private hubTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     if (typeof window === 'undefined') return;
@@ -109,6 +113,8 @@ export class SoundDirector {
    * 音を出すかどうかは今までどおり（音のテーマが「切」なら何もしない。ブラウザは、人が 1 回操作するまで鳴らさない）
    */
   hub(): void {
+    // 拠点の曲どうしの画面を移った（拠点 → 支度 → 記録）: 止めるのを取りやめ、途切れずに続ける
+    if (this.hubTimer) { clearTimeout(this.hubTimer); this.hubTimer = null; }
     if (this.stream === 'hub' && this.latest?.scene === 'hub') return;
     this.stream = 'hub';
     this.memory = null;
@@ -116,6 +122,21 @@ export class SoundDirector {
     this.pending = null;
     this.latest = hubSoundState();
     this.commit();
+  }
+
+  /**
+   * 拠点の曲の画面を離れた（S15a）: 少し待って（HUB_GRACE_MS）、その間に次の画面が音の状態を渡さず（観戦が断られた・鍵が無い・最初の見え方の前 など）、
+   * 拠点の曲の画面にも戻らなければ、音楽を止める（次の画面が音の状態を渡すまで、無音）。拠点の曲どうしの画面を移るときは、hub() が取りやめる
+   */
+  leaveHub(): void {
+    if (this.stream !== 'hub') return;
+    if (this.hubTimer) clearTimeout(this.hubTimer);
+    this.hubTimer = setTimeout(() => {
+      this.hubTimer = null;
+      if (this.stream !== 'hub') return;
+      this.leave();
+      this.engine?.silence();
+    }, HUB_GRACE_MS);
   }
 
   /** 画面を離れた（次に開いた画面の最初の視界は、新しい流れとして扱う） */

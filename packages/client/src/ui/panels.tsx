@@ -255,7 +255,7 @@ export function AlertsBar({ alerts, onEscape }: { alerts: Alert[]; onEscape?: (s
         const worst = stairs && typeof a.data?.worst_if_chased === 'number' ? a.data.worst_if_chased : null;
         const deadly = worst !== null && typeof a.data?.hp === 'number' && worst >= a.data.hp;
         return (
-          <span key={a.code} class={`alert ${a.code} ${URGENT_ALERTS.includes(a.code) ? 'urgent' : ''}`}>
+          <span key={a.code} class={`alert ${a.code} ${URGENT_ALERTS.includes(a.code) ? 'urgent' : ''}`} title={a.text}>
             {a.code === 'lethal_range' || a.code === 'lethal_2turns' ? `⚠ ${a.text}` : a.text}
             {stairs && onEscape && (
               <button class={`tiny flee aact ${deadly ? 'danger' : ''}`} onClick={() => onEscape(stairs)}

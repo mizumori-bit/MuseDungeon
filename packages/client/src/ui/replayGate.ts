@@ -1,15 +1,9 @@
 // 巻き戻し（リプレイ）を開けるか、開けないときの理由（S15。SEASON.md §68.2 の 6・§25.1）。画面から離した関数（テストする: test/replayGate.test.ts）。
-// 決まり（サーバーの巻き戻しの口と同じ。だれが何を見られるかは、変えない）:
-//  - シーズンでないラン: サーバーの観戦の方針が follow_only なら、終わったランだけ。ほかは、いつでも。
-//  - シーズンのラン: 確定したシーズンなら、だれでも（キャンプにいるまま確定した、引退していないランも）。確定する前は、同じ PC から、終わったランだけ。
-import type { SpectatorPolicy } from '@muse/shared';
+// 開けるかの決まりは ui/replayRule.ts（サーバーの決まりを写したもの。そろっていることは tools/test/s15a.test.ts で確かめる）。ここは、断られたときの文
 import { ApiError, errorText } from '../api';
 import { tr } from '../util';
 
-export function rewindAllowed(x: { season: string | null | undefined; status: 'active' | 'ended'; final: boolean; local: boolean; policy?: SpectatorPolicy | null }): boolean {
-  if (x.season) return x.final || (x.local && x.status === 'ended');
-  return x.policy !== 'follow_only' || x.status === 'ended';
-}
+export { rewindAllowed, watchAllowed } from './replayRule';
 
 /**
  * 巻き戻しの口が断ったときの、画面の言葉の文（置き換えないものは null: 呼ぶ側がサーバーの文を出す）。

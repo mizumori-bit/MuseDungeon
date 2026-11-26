@@ -56,6 +56,21 @@ export class SoundEngine {
   /** 次の切り替えの頭で使う音の状態 */
   setState(s: SoundState): void { this.state = s; }
 
+  /**
+   * 音楽を止める（S15a: 拠点の曲の画面を離れ、次の画面が音の状態を渡すまで、無音）。パートの音量を短く絞り、予約をやめる。
+   * 次に setState されたら、パートの出入りを最初から当て直す（cur を捨てる）
+   */
+  silence(): void {
+    this.state = null;
+    this.cur = null;
+    const t = this.ctx.currentTime;
+    const tau = Math.max(0.005, this.def.fade / 3);
+    for (const g of this.partGain.values()) {
+      g.gain.cancelScheduledValues(t);
+      g.gain.setTargetAtTime(0, t, tau);
+    }
+  }
+
   /** 音楽・合図を出すか（バスの音量で。切っても予約は続けるので、入れ直すと位置がずれない） */
   setBus(which: 'music' | 'cues', on: boolean): void {
     const g = (which === 'music' ? this.music : this.cueBus).gain;
