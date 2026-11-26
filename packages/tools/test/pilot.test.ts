@@ -1051,8 +1051,9 @@ describe('pilot をサーバーにつないで動かす（§10.8）', () => {
     ].join('\n'));
     const p = start(h, { wakeCmd: `node ${JSON.stringify(script)} ${JSON.stringify(marker)}` });
     // コマンドの返事（orders.json）で、遠征を始めて動き出す
-    await until(() => rows(h.dir).some((r) => r.source === 'queue' && r.tool === 'start_expedition' && r.ok === true), 20000);
-    await until(() => rows(h.dir).some((r) => r.source === 'pilot'), 20000);
+    // 待ちの上限は長めに（S17: 全部のテストを一緒に回すと、別のプロセスの起動が遅れて、20 秒では足りないことがあった。単独では通る）
+    await until(() => rows(h.dir).some((r) => r.source === 'queue' && r.tool === 'start_expedition' && r.ok === true), 60000);
+    await until(() => rows(h.dir).some((r) => r.source === 'pilot'), 60000);
     const calls = readFileSync(marker, 'utf-8').trim().split('\n').map((l) => JSON.parse(l) as { level: string; reason: string; state: string; orders: string; stdin: string });
     const camp = calls.find((c) => c.reason === 'camp')!;
     expect(camp).toBeTruthy();
@@ -1064,7 +1065,7 @@ describe('pilot をサーバーにつないで動かす（§10.8）', () => {
     expect(camp.stdin).toContain('キャンプ');
     await p.stop();
     await h.close();
-  }, 40000);
+  }, 150000);
 
   it('--wake-url: 起こすたびに JSON を POST する（段・理由・summary・2 つのファイルのパス・state）。受け口が書いた orders.json の返事で動き出す', async () => {
     const h = await harness();
