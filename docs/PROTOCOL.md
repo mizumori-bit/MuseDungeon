@@ -49,7 +49,7 @@ ActionError {
 - **共通の名前**（`thought`・`player_token`・`expect_seq`・`map`・`inventory`・`status_line`）は、どのツールでも受ける（そのツールの定義に無ければ捨てる。`thought` は、記録できるツールでは今までどおり記録する）。
 - 断るのは、**要る引数が足りないとき**（「move には dir が要る（渡されていない）」。知らない名前もあわせて書く）と、**共通でない知らない名前が来たとき**（「travel_to に target という名前の引数は無い」）。`message` にこのツールの引数の一覧（要る・要らない・共通。定義の上では任意でも実際に要るもの（`throw_item` の `target`）は「要る」に書く）、`hint` に呼び方の例（`travel_to { to: 'stairs_down' } / …`）。別名は受け付けない。ツール一覧（tools/list）の「要る引数」は変えない。
 - 断った呼び出しの活動の記録（観戦の AI パネル）には、知らない名前の引数の**値**を残さない（名前だけ `unknown_args` に）。名前違いでトークンを渡された場合のため。
-- 名前は合っていて形が違う（型・値の範囲。`move { dir: 'north' }`）ときは、今までどおり SDK の入力の検査が断る（`isError: true`、文は `MCP error -32602: Input validation error: Invalid arguments for tool move: …`。`structuredContent` は付かない。S0b で確かめた。SEASON.md §7.3）。
+- 名前は合っていて形が違う（型・値の範囲・選べる値。`move { dir: 'north' }`・`travel_to { hp_floor: 0.5 }`・`mode: 'flea'`）ときも、S16d から、**同じゲームの断りの形**で返す（前は SDK の入力の検査が `Input validation error: …` の文だけで断り、`structuredContent`・`valid_actions`・`turn` が無く、活動の記録にも残らなかった）。検査は、登録した inputSchema で、SDK と同じに先に行う。`message` は「travel_to の引数の形が違う: hp_floor は整数（0.5 が来た）。受ける形: 整数（0 以上）」のように、どの引数が、どう違うか（名前に token を含む引数の値は出さない）。`hint` に呼び方の例と引数の一覧。手番は使わない。断った呼び出しは、観戦の AI パネルの活動の記録に残る（トークンは残さない）。ツール一覧の inputSchema は変えない。
 
 `recovery_failed`（V4-1m）: サーバーの起動時の復旧（記録の再生）に失敗したランのトークンで再開・行動しようとした（MCP の `resume_run` とトークンを使うツール、`GET /api/player/feed`、WebSocket の `hello`（プレイヤー・観戦）、`join_run`・`POST /api/runs/:id/join`）。「見つからない」（`no_session`）とは分ける。`message` に、そのランの ID と失敗の理由（1 行）。ランの記録は消えていないので、サーバーを直して起動し直せば、同じトークンで再開できる。HTTP は 503
 
@@ -1315,7 +1315,7 @@ SeasonSyncCommand {
 
 ### 9.8 HTTP
 
-- `GET /api/seasons` → `{ seasons: { id, name, budget, endsAt, status: 'open'|'ended'|'final', participants, invited }[] }`（`participants`: 1 回でもランを始めた数、`invited`: 招いた数）
+- `GET /api/seasons` → `{ seasons: { id, name, budget, endsAt, openedAt?, status: 'open'|'ended'|'final', participants, invited }[] }`（`participants`: 1 回でもランを始めた数、`invited`: 招いた数、`openedAt`: 開いた時刻（S16d。入口のプルダウンの「開催の新しい順」に使う。記録に無い古いシーズンには無い。MCP の `list_runs` の `seasons` には足していない））
 - `GET /api/seasons/:id` → `SeasonStandingsResponse { season, standings: SeasonStandingRow[], result?: SeasonResultView, section: SeasonSectionRow[] }`（公開された階段の位置は出さない。人間の画面のロビーの順位の表と、結果の画面。S2 §9.11）
   - `SeasonStandingRow { name, runs, used, died, adventure: { value, rank }, contribution: { value, rank }, survival: { value, rank } | null, support?, banked?, titles? }`。`banked`（S2）は確定した点の合計（倒れた者も。火の費用を引いた後）。`titles`（S2）は、その参加者が確定したすべてのシーズンで得た称号（`SeasonTitle`）。
   - `result`（確定したシーズンだけ）: `{ finalizedAt, reason, winners, standings, titles?: (SeasonTitle & { holder })[], deeds?: { depth, name }[] }`。

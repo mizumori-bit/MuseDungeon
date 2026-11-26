@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import type { CatalogRules, ExpeditionOffer } from '@muse/shared';
 import { offerText } from '@muse/shared';
-import { campClosedOf, campHeadline, campStart, dangerOf, levelText, objectiveCardModel, objectiveShort, pickFor } from '../src/ui/objectiveCard';
+import { campClosedOf, campHeadline, campStart, gapClass, gapTitle, levelText, objectiveCardModel, objectiveShort, pickFor } from '../src/ui/objectiveCard';
 
 // 札に要る分だけのルール（推奨レベルの表と、条件 2 つ）
 const rules = {
@@ -17,42 +17,36 @@ function offer(p: Partial<ExpeditionOffer> = {}): ExpeditionOffer {
   return { index: 1, objective: { type: 'retrieve_relic', targetDepth: 4 }, points: 600, relicGuarded: false, slot: 'standard', traits: [], multiplierPct: 100, ...p } as ExpeditionOffer;
 }
 
-describe('S16c: the danger mark on an objective card', () => {
-  it('uses the gap to the recommended level and the traits\' danger (the same numbers the AI gets)', () => {
-    expect(dangerOf(null, 0)).toBeNull();
-    expect(dangerOf(-1, 0)).toEqual({ tone: 'ok', label: '届いている' });
-    expect(dangerOf(0, 0)?.tone).toBe('ok');
-    expect(dangerOf(1, 0)).toEqual({ tone: 'warn', label: '背伸び' });
-    expect(dangerOf(0, 1)?.tone).toBe('warn');
-    expect(dangerOf(3, 0)).toEqual({ tone: 'high', label: '危険' });
-    // 差と条件を合わせて 4 以上も「危険」
-    expect(dangerOf(2, 2)?.tone).toBe('high');
-    expect(dangerOf(2, 1)?.tone).toBe('warn');
-    // 推奨が分からなくても、条件の危険度があれば出す
-    expect(dangerOf(null, 1)?.tone).toBe('warn');
+describe('S16d: danger is shown as the gap itself, coloured only (no "dangerous / a stretch" steps: IMPROVEMENTS_V3 §14.4)', () => {
+  it('the colour follows the old OfferGap rule: gap <= 0 ok, > 0 over, >= 3 over far; unknown gap no colour', () => {
+    expect(gapClass(null)).toBe('');
+    expect(gapClass(-1)).toBe('ok');
+    expect(gapClass(0)).toBe('ok');
+    expect(gapClass(1)).toBe('over');
+    expect(gapClass(2)).toBe('over');
+    expect(gapClass(3)).toBe('over far');
+    expect(gapTitle()).toContain('その深さに着いたときのレベルの目安');
   });
 });
 
 describe('S16c: what an objective card shows large, small and folded', () => {
-  it('large: where, what, base points, the recommended level against yours, the danger mark', () => {
+  it('large: where, what, base points, the recommended level against yours (the gap as a number)', () => {
     const m = objectiveCardModel(offer({ relicGuarded: true }), { level: 2, rules });
     expect(m.where).toBe('地下4階');
     expect(m.what).toBe('遺物を持ち帰る（守護者付き）');
     expect(m.points).toBe(600);
     expect(m.level).toEqual({ rec: 4, you: 2, gap: 2 });
     expect(levelText(m.level)).toBe('推奨 Lv4・あなた Lv2（差 +2）');
-    expect(m.danger).toEqual({ tone: 'warn', label: '背伸び' });
     expect(m.slotLabel).toBe('標準');
     expect(m.how).toBe('地下4階の遺物を見つけ、持ったまま階段から帰還する');
   });
 
-  it('small: the multiplier, the trait names and the forecasts in short; the danger counts the traits', () => {
+  it('small: the multiplier, the trait names and the forecasts in short; the traits\' danger as a number', () => {
     const m = objectiveCardModel(offer({
       objective: { type: 'slay_guardian', targetDepth: 3 }, traits: ['dark', 'swarm'], multiplierPct: 156,
       guardian: { rank: 2, traits: [] }, guardianBounty: 80, repeatNo: 2, repeatPct: 50, scar: 5,
     }), { level: 3, rules });
     expect(m.traitDanger).toBe(3);
-    expect(m.danger?.tone).toBe('warn');
     expect(m.facts).toEqual(['倍率 ×1.56', '暗い', '群れ', '守護者 格 2', '守護者の賞金 +80', 'この階は 2 回目（50%）', '傷跡で体力 −5']);
   });
 
@@ -69,7 +63,6 @@ describe('S16c: what an objective card shows large, small and folded', () => {
   it('without the public rules (an old server): no recommended level, only your level', () => {
     const m = objectiveCardModel(offer(), { level: 2 });
     expect(m.level).toEqual({ rec: null, you: 2, gap: null });
-    expect(m.danger).toBeNull();
     expect(levelText(m.level)).toBe('あなた Lv2');
   });
 

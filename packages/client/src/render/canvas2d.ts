@@ -505,6 +505,8 @@ export class Canvas2DRenderer implements Renderer {
       const p = (now - f.start) / f.dur;
       const ent = s.entities.find((x) => x.id === f.id);
       const at = ent ? this.entPos(ent, now) : { x: f.x, y: f.y };
+      // カメラの外の者の札は描かない（端に押し込んで出さない。吹き出しと同じ。S16d）
+      if (!inView({ x: Math.round(at.x), y: Math.round(at.y) })) continue;
       ctx.globalAlpha = p < 0.7 ? 1 : Math.max(0, (1 - p) / 0.3);
       this.drawLabel(ctx, f.text, sx(at.x) + cs / 2, sy(at.y) - cs * 0.18, cs, W);
       ctx.globalAlpha = 1;

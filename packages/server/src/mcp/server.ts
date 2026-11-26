@@ -3,7 +3,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { ZodTypeAny } from 'zod';
-import { argListText, argProblems, argShape, exampleOf } from './args';
+import { argListText, argProblems, argShape, exampleOf, issueTexts, type ArgIssue } from './args';
 import type { ActionError, Command, Controller, InheritedHold, ObjectiveChoice, TurnBlock } from '@muse/shared';
 import { actionError, CommandSchema, directiveItemsText, ownerWaitOpen, seasonFinalView, stripTokenArgs, t, withoutOwnerPresence } from '@muse/shared';
 import type { PlayerPort, ActionPayload } from '../session/PlayerPort';
@@ -652,10 +652,16 @@ export function createMcpServer(ctx: McpContext): McpServer {
     // 足りない要る引数があれば、それを先に言い、知らない名前もあわせて書く（S1d §17.1）
     const unknown = names.unknown, missing = names.missing;
     const unk = unknown.length ? (ja ? `${tool} に ${unknown.join('・')} という名前の引数は無い。` : `${tool} has no argument named ${unknown.join(', ')}. `) : '';
-    const msg = missing.length
-      ? (ja ? `${tool} には ${missing.join('・')} が要る（渡されていない）。${unk}このツールの引数: ${list}。` : `${tool} needs ${missing.join(', ')} (not given). ${unk}Its arguments: ${list}.`)
-      : (ja ? `${unk}このツールの引数: ${list}。` : `${unk}Its arguments: ${list}.`);
-    const err = actionError('bad_request', msg, ja ? `例: ${ex}（valid_actions の行は、書いてある形のまま呼べる。別の名前は受け付けない。thought・player_token など共通の名前は、どのツールにも付けてよい）` : `e.g. ${ex} (valid_actions lines can be called as written; other names are not accepted; common names such as thought and player_token are fine on any tool)`);
+    // 引数の形の誤り（S16d）: どの引数が、どう違うか（受ける形）。手番は使わない
+    const bad = names.invalid.length ? issueTexts(names.invalid, shape, args, ja) : [];
+    const msg = bad.length
+      ? (ja ? `${tool} の引数の形が違う: ${bad.join('／')}。` : `${tool}: invalid argument: ${bad.join('; ')}.`)
+      : missing.length
+        ? (ja ? `${tool} には ${missing.join('・')} が要る（渡されていない）。${unk}このツールの引数: ${list}。` : `${tool} needs ${missing.join(', ')} (not given). ${unk}Its arguments: ${list}.`)
+        : (ja ? `${unk}このツールの引数: ${list}。` : `${unk}Its arguments: ${list}.`);
+    const err = bad.length
+      ? actionError('bad_request', msg, ja ? `例: ${ex}（valid_actions の行は、書いてある形のまま呼べる）。このツールの引数: ${list}` : `e.g. ${ex} (valid_actions lines can be called as written). Its arguments: ${list}`)
+      : actionError('bad_request', msg, ja ? `例: ${ex}（valid_actions の行は、書いてある形のまま呼べる。別の名前は受け付けない。thought・player_token など共通の名前は、どのツールにも付けてよい）` : `e.g. ${ex} (valid_actions lines can be called as written; other names are not accepted; common names such as thought and player_token are fine on any tool)`);
     if (!port) return out(`Error [${err.code}] ${err.message}\nHint: ${err.hint}`, { ok: false, error: err }, true);
     const tb = port.turnBlock('action_rejected');
     const va = port.observe({ map: false }).observation.valid_actions;
@@ -697,7 +703,7 @@ function timeCalls(server: McpServer, done: (tool: string, args: Record<string, 
  * 無ければ SDK の処理（検査・ハンドラ）へそのまま渡す。ツール一覧（tools/list）は変えない。
  * SDK 1.32.2 の内部（McpServer の _registeredTools・Server の _requestHandlers）を使う。形が違えば何もしない（今までどおり SDK が断る）
  */
-function interceptArgs(server: McpServer, shapeFor: (tool: string, args: Record<string, unknown>, shape: Record<string, ZodTypeAny>) => Record<string, ZodTypeAny>, onBad: (tool: string, args: Record<string, unknown>, names: { unknown: string[]; missing: string[] }, shape: Record<string, ZodTypeAny>) => ToolResult | Promise<ToolResult>): void {
+function interceptArgs(server: McpServer, shapeFor: (tool: string, args: Record<string, unknown>, shape: Record<string, ZodTypeAny>) => Record<string, ZodTypeAny>, onBad: (tool: string, args: Record<string, unknown>, names: { unknown: string[]; missing: string[]; invalid: ArgIssue[] }, shape: Record<string, ZodTypeAny>) => ToolResult | Promise<ToolResult>): void {
   const inner = server.server as unknown as { _requestHandlers?: Map<string, (req: unknown, extra: unknown) => Promise<unknown>> };
   const tools = (server as unknown as { _registeredTools?: Record<string, { inputSchema?: unknown }> })._registeredTools;
   const orig = inner._requestHandlers?.get('tools/call');
@@ -710,7 +716,14 @@ function interceptArgs(server: McpServer, shapeFor: (tool: string, args: Record<
     const shape = p?.name && shape0 ? shapeFor(p.name, p.arguments ?? {}, shape0) : shape0;
     if (p?.name && shape) {
       const pr = argProblems(shape, p.arguments);
-      if (pr.unknown.length || pr.missing.length) return onBad(p.name, p.arguments ?? {}, pr, shape);
+      if (pr.unknown.length || pr.missing.length) return onBad(p.name, p.arguments ?? {}, { ...pr, invalid: [] }, shape);
+      // 引数の形（型・値の範囲・選べる値）の誤り（S16d）: SDK の検査と同じ inputSchema で先に確かめ、同じ形の断りで返す
+      // （SDK のままだと「Input validation error: …」の文だけで、ok・error・valid_actions・turn が無く、活動の記録にも残らない）
+      const schema = tool?.inputSchema as { safeParseAsync?: (v: unknown) => Promise<{ success: boolean; error?: { issues?: ArgIssue[] } }> } | undefined;
+      if (typeof schema?.safeParseAsync === 'function') {
+        const res = await schema.safeParseAsync(p.arguments ?? {});
+        if (!res.success && res.error?.issues?.length) return onBad(p.name, p.arguments ?? {}, { unknown: [], missing: [], invalid: res.error.issues }, shape);
+      }
     }
     return orig(req, extra);
   });

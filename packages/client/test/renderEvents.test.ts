@@ -44,6 +44,15 @@ describe('S16a §70.3 の 2: abilities and blows on the map', () => {
     expect(toViewEvents([{ ...dmg, source: 'e_o', target: 'e_me', via: 'ranged' }], catalog)[0]).toEqual({ kind: 'strike', id: 'e_o', target: 'e_me', ranged: true });
     // なぎ払い: 隣の 2 体にそれぞれ
     expect(toViewEvents([dmg, { ...dmg, target: 'e_h' }], catalog).filter((e) => e.kind === 'strike')).toHaveLength(2);
+    // 同じ組の、会心でない当たりが 2 回（attack は届かない）: 当たりごとに踏み込み（S16d）
+    expect(toViewEvents([dmg, dmg], catalog).filter((e) => e.kind === 'strike')).toHaveLength(2);
+    // 会心の 1 回だけ attack が届き、もう 1 回は届かない: attack の 1 回と、被害からの 1 回。間に別の出来事が挟まってもよい
+    const crit = { ...attack, crit: true };
+    const v2 = toViewEvents([crit, { type: 'monster_woke', id: 'e_g' }, dmg, dmg], catalog);
+    expect(v2.filter((e) => e.kind === 'attack')).toHaveLength(1);
+    expect(v2.filter((e) => e.kind === 'strike')).toHaveLength(1);
+    // 外れた攻撃は、後の当たりの被害の踏み込みを打ち消さない
+    expect(toViewEvents([{ ...attack, hit: false }, dmg], catalog).filter((e) => e.kind === 'strike')).toHaveLength(1);
     // 見えていない打ち手（source が伏せてある）・毒・罠・投げた物（飛ぶものは item_thrown から）では作らない
     expect(toViewEvents([{ ...dmg, source: null }, { ...dmg, via: 'poison' }, { ...dmg, via: 'trap', source: null }, { ...dmg, via: 'thrown' }], catalog).filter((e) => e.kind === 'strike')).toEqual([]);
   });

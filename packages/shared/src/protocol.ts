@@ -203,8 +203,8 @@ export interface ProfileSeasonEntry {
 }
 
 /** シーズンの一覧の 1 行（S0。GET /api/seasons・list_runs の seasons） */
-/** participants: 1 回でもランを始めた参加者の数、invited: 招いた数（S0a） */
-export interface SeasonListing { id: string; name: string; budget: number; endsAt: number; status: 'open' | 'ended' | 'final'; participants: number; invited: number }
+/** participants: 1 回でもランを始めた参加者の数、invited: 招いた数（S0a）。openedAt: 開いた時刻（S16d。一覧の並びに使う。記録に無い古いシーズンは無い） */
+export interface SeasonListing { id: string; name: string; budget: number; endsAt: number; openedAt?: number; status: 'open' | 'ended' | 'final'; participants: number; invited: number }
 
 /** シーズンの順位の表の 1 行（S0。GET /api/seasons/:id。公開された階段の位置は入れない） */
 export interface SeasonStandingRow {

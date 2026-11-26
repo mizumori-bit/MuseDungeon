@@ -123,10 +123,18 @@ export function Lobby({ tab = 'hub', seasonId = null }: { tab?: HomeTab; seasonI
   useEffect(() => {
     const toks = storedKeys();
     if (!toks.length) { setRecentMine([]); setKeyBooks([]); return; }
-    Promise.all(toks.map((t) => api.records(t, L).then((r) => r.records).catch(() => null))).then((xs) => {
-      const got = xs.filter((r): r is NonNullable<typeof r> => !!r);
-      setRecentMine([...new Set(got.flatMap((r) => r.recent.map((x) => x.run_id)))]);
-      setKeyBooks(got.map((r) => ({ id: r.profile.id, name: r.profile.name, codex: r.codex, feats: r.feats })));
+    // 1 人ずつの記録（S16d: 前の「記録」のタブの 1 行・全文・称号）は、図鑑のタブの冒険者ごとの札に出す。称号はプロフィールの口から（図鑑のタブのときだけ呼ぶ）
+    const withTitles = tab === 'codex';
+    Promise.all(toks.map((t) => Promise.all([
+      api.records(t, L).catch(() => null),
+      withTitles ? api.profile(t, L).then((p) => (p.titles ?? []).map((x) => x.name)).catch(() => [] as string[]) : Promise.resolve([] as string[]),
+    ]))).then((xs) => {
+      const got = xs.filter((x): x is [NonNullable<(typeof x)[0]>, string[]] => !!x[0]?.records);
+      setRecentMine([...new Set(got.flatMap(([r]) => r.records.recent.map((x) => x.run_id)))]);
+      setKeyBooks(got.map(([{ text, records: r }, titles]) => ({
+        id: r.profile.id, name: r.profile.name, codex: r.codex, feats: r.feats,
+        record: { runs: r.runs.total, bestBanked: r.banked.best, deepest: r.deepest, text, titles },
+      })));
     });
   }, [tokKey, L, tab === 'codex']);
   // 運用者の図鑑（S16b）: 図鑑のタブで、サーバーと同じ PC から開いているときだけ呼ぶ（判定は持ち主の口の一覧の local。サーバーも isLocalRequest で断る）

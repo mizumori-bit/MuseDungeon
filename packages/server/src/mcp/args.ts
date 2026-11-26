@@ -1,6 +1,6 @@
 // 引数の名前の断り（S1c §14.4 の 2。§8.9 の 1 を改める）: ツールの定義に無い名前の引数・要る引数が無いときは、MCP の SDK の入力の検査の前に受けて、
 // ゲームの断りの形（code・hint に呼び方の例・valid_actions・turn・structuredContent）で返す。ツール一覧の「要る引数」は変えない（SDK の検査はそのまま後ろに残る）。
-// 別名は足さない。引数の形が違う（型・値の範囲）は、今までどおり SDK の検査が断る
+// 別名は足さない。引数の形が違う（型・値の範囲・選べる値）も、S16d から同じ形で断る（検査そのものは、登録した inputSchema で、SDK と同じに行う）
 import type { ZodTypeAny } from 'zod';
 
 /** ツールの引数の形（zod の object の shape）。取れなければ null */
@@ -79,6 +79,117 @@ export function exampleOf(tool: string, shape: Record<string, ZodTypeAny>): stri
   const reqNames = new Set(requiredArgs(tool, shape));
   const req = Object.entries(shape).filter(([k]) => reqNames.has(k));
   return req.length ? `${tool} { ${req.map(([k, z]) => `${k}: ${placeholder(z)}`).join(', ')} }` : `${tool} {}`;
+}
+
+/** zod の検査の 1 件（v3 の ZodIssue の、ここで読む所だけ） */
+export interface ArgIssue {
+  code: string;
+  path: (string | number)[];
+  expected?: unknown;
+  received?: unknown;
+  options?: unknown[];
+  minimum?: unknown;
+  maximum?: unknown;
+  type?: string;
+  inclusive?: boolean;
+  validation?: unknown;
+  message?: string;
+}
+
+/** 正規表現の文字列の、読める書き方（よく使う形だけ。ほかは /…/） */
+function regexForm(src: string): string {
+  if (src === '^e_[0-9a-z]{6}$') return "'e_xxxxxx'";
+  if (src === '^[a-z]$') return "'a'〜'z'";
+  if (src === '^[sl][0-9]{1,6}$') return "'s12' / 'l1'";
+  return `/${src}/`;
+}
+
+/** 引数の受ける形の短い文（断りの文に出す。ツール一覧の説明は変えない） */
+export function formOf(z: ZodTypeAny | undefined, ja: boolean): string {
+  const def = (z as unknown as { _def?: { typeName?: string; values?: unknown[]; options?: ZodTypeAny[]; innerType?: ZodTypeAny; schema?: ZodTypeAny; value?: unknown; checks?: { kind: string; value?: unknown; regex?: RegExp }[]; shape?: () => Record<string, ZodTypeAny>; type?: ZodTypeAny } } | undefined)?._def;
+  switch (def?.typeName) {
+    case 'ZodEnum': return (def.values ?? []).map((v) => `'${String(v)}'`).join(' / ');
+    case 'ZodLiteral': return JSON.stringify(def.value);
+    case 'ZodBoolean': return 'true / false';
+    case 'ZodNumber': {
+      const int = def.checks?.some((c) => c.kind === 'int');
+      const min = def.checks?.find((c) => c.kind === 'min')?.value;
+      const max = def.checks?.find((c) => c.kind === 'max')?.value;
+      const range = min !== undefined && max !== undefined ? `${String(min)}〜${String(max)}` : min !== undefined ? (ja ? `${String(min)} 以上` : `>= ${String(min)}`) : max !== undefined ? (ja ? `${String(max)} 以下` : `<= ${String(max)}`) : '';
+      const kind = int ? (ja ? '整数' : 'integer') : (ja ? '数' : 'number');
+      return range ? `${kind}（${range}）` : kind;
+    }
+    case 'ZodString': {
+      const re = def.checks?.find((c) => c.kind === 'regex')?.regex;
+      return re ? regexForm(re.source) : (ja ? '文字列' : 'string');
+    }
+    case 'ZodObject': {
+      const keys = def.shape ? Object.keys(def.shape()) : [];
+      return keys.length ? `{ ${keys.map((k) => `${k}: …`).join(', ')} }` : '{ … }';
+    }
+    case 'ZodArray': return `[${def.type ? formOf(def.type, ja) : '…'}, …]`;
+    case 'ZodUnion': return (def.options ?? []).map((o) => formOf(o, ja)).join(' / ');
+    case 'ZodOptional': case 'ZodDefault': case 'ZodNullable': return def.innerType ? formOf(def.innerType, ja) : '…';
+    case 'ZodEffects': return def.schema ? formOf(def.schema, ja) : '…';
+    default: return '…';
+  }
+}
+
+/** 断りの文に添える、渡された値（名前に token を含む引数の値は出さない。長い値は切る） */
+function shownValue(path: (string | number)[], args: Record<string, unknown>): string | null {
+  if (path.some((p) => /token/i.test(String(p)))) return null;
+  let v: unknown = args;
+  for (const p of path) v = v && typeof v === 'object' ? (v as Record<string | number, unknown>)[p] : undefined;
+  if (v === undefined) return null;
+  let s: string;
+  try { s = JSON.stringify(v) ?? String(v); } catch { s = String(v); }
+  return s.length > 40 ? `${s.slice(0, 39)}…` : s;
+}
+
+/**
+ * 引数の形の誤り（型・値の範囲・選べる値）の文（S16d）: どの引数が、どう違うか、受ける形は何か。1 件 1 文
+ */
+export function issueTexts(issues: readonly ArgIssue[], shape: Record<string, ZodTypeAny>, args: Record<string, unknown>, ja: boolean): string[] {
+  const out: string[] = [];
+  for (const i of issues) {
+    const name = i.path.length ? i.path.join('.') : (ja ? '引数' : 'arguments');
+    const val = shownValue(i.path, args);
+    const got = val !== null ? (ja ? `（${val} が来た）` : ` (got ${val})`) : '';
+    const top = typeof i.path[0] === 'string' ? shape[i.path[0]] : undefined;
+    const form = i.path.length === 1 && top ? formOf(top, ja) : '';
+    let what: string;
+    switch (i.code) {
+      case 'invalid_type':
+        what = i.expected === 'integer' ? (ja ? 'は整数' : 'must be an integer') : (ja ? `の型が違う（${String(i.expected)} を受ける）` : `has the wrong type (expects ${String(i.expected)})`);
+        break;
+      case 'invalid_enum_value':
+        what = ja ? `は ${(i.options ?? []).map((o) => `'${String(o)}'`).join(' / ')} のどれか` : `must be one of ${(i.options ?? []).map((o) => `'${String(o)}'`).join(' / ')}`;
+        break;
+      case 'invalid_literal':
+        what = ja ? `は ${JSON.stringify(i.expected)} だけ` : `must be ${JSON.stringify(i.expected)}`;
+        break;
+      case 'too_small':
+        what = i.type === 'string' ? (ja ? `は ${String(i.minimum)} 文字以上` : `must be at least ${String(i.minimum)} characters`)
+          : i.type === 'array' ? (ja ? `は ${String(i.minimum)} 個以上` : `needs at least ${String(i.minimum)} entries`)
+          : (ja ? `は ${String(i.minimum)}${i.inclusive === false ? ' より大きい' : ' 以上'}` : `must be ${i.inclusive === false ? '>' : '>='} ${String(i.minimum)}`);
+        break;
+      case 'too_big':
+        what = i.type === 'string' ? (ja ? `は ${String(i.maximum)} 文字まで` : `must be at most ${String(i.maximum)} characters`)
+          : i.type === 'array' ? (ja ? `は ${String(i.maximum)} 個まで` : `takes at most ${String(i.maximum)} entries`)
+          : (ja ? `は ${String(i.maximum)}${i.inclusive === false ? ' より小さい' : ' 以下'}` : `must be ${i.inclusive === false ? '<' : '<='} ${String(i.maximum)}`);
+        break;
+      case 'invalid_string':
+      case 'invalid_union':
+        what = ja ? 'の形が違う' : 'is not in an accepted form';
+        break;
+      default:
+        what = ja ? 'の形が違う' : 'is not in an accepted form';
+    }
+    // 選べる値を書いた文には、受ける形を重ねない
+    const formText = form && i.code !== 'invalid_enum_value' && i.code !== 'invalid_literal' ? (ja ? `。受ける形: ${form}` : `. Accepted: ${form}`) : '';
+    out.push(ja ? `${name} ${what}${got}${formText}` : `${name} ${what}${got}${formText}`);
+  }
+  return out;
 }
 
 /** 引数の一覧の文（要るもの・要らないもの）。共通の引数（player_token・thought・expect_seq と表示の 3 つ）は後ろにまとめる */

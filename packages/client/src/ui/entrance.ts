@@ -19,24 +19,44 @@ export type Route =
  * #/records → #/season、#/ops → #/settings。知らない道は拠点
  */
 export function parseRoute(hash: string): Route {
+  // 壊れた ID（%E0%A4%A など）は decodeURIComponent が例外を出す: 白い画面にせず、拠点へ送る（S16d）
+  const toHub: Route = { page: 'hub', id: null, redirect: '#/' };
   const m = /^#\/(play|watch|replay|prepare)\/([^/?#]+)/.exec(hash);
-  if (m) return { page: m[1] as 'play' | 'watch' | 'replay' | 'prepare', id: decodeURIComponent(m[2]) };
-  const s = /^#\/season(?:\/([^/?#]+))?\/?$/.exec(hash);
-  if (s) return { page: 'season', id: s[1] ? decodeURIComponent(s[1]) : null };
+  if (m) {
+    const id = safeDecode(m[2]);
+    return id === null ? toHub : { page: m[1] as 'play' | 'watch' | 'replay' | 'prepare', id };
+  }
+  // 末尾が違う形（#/season/s4/x・#/season/s4?x）も、前と同じに、その ID のシーズンを開く（S16d）
+  const s = /^#\/season(?:\/([^/?#]+))?(?:[/?#].*)?$/.exec(hash);
+  if (s) {
+    if (!s[1]) return { page: 'season', id: null };
+    const id = safeDecode(s[1]);
+    return id === null ? toHub : { page: 'season', id };
+  }
   if (/^#\/records\/?$/.test(hash)) return { page: 'season', id: null, redirect: '#/season' };
   if (/^#\/ops\/?$/.test(hash)) return { page: 'settings', id: null, redirect: '#/settings' };
   for (const p of ['leaderboard', 'codex', 'settings', 'legacy'] as const) if (new RegExp(`^#/${p}/?$`).test(hash)) return { page: p, id: null };
   return { page: 'hub', id: null };
 }
 
+/** 道の ID を戻す。壊れた書き方なら null */
+function safeDecode(s: string): string | null {
+  try { return decodeURIComponent(s); } catch { return null; }
+}
+
 // ---------------- シーズンのタブ ----------------
 
 /**
- * 開催の新しい順。シーズンの一覧には始まりの時刻が無いので、終わりの時刻の新しい順（開催中のシーズンは同時に 1 つだけで、前のシーズンが
- * 確定してから次が始まる: §63.5。終わりの時刻の順と、始まりの順は同じ）。同じなら ID の大きい順
+ * 開催の新しい順（S16d）: 開催中のシーズンが先頭。ほかは、開いた時刻（一覧の openedAt）の新しい順。
+ * 開いた時刻の無いシーズン（古い記録）が 1 つでもあれば、ID の数の大きい順（s10 > s2）。
+ * 終わりの時刻の順にはしない（期間の長いシーズンは、後から開いたものより遅く終わる: 依頼者のデータで s0 が s2 の前に来た）
  */
 export function seasonsNewestFirst<T extends { season: SeasonListing }>(xs: readonly T[]): T[] {
-  return [...xs].sort((a, b) => b.season.endsAt - a.season.endsAt || cmpId(b.season.id, a.season.id));
+  const byOpened = xs.every((x) => typeof x.season.openedAt === 'number');
+  const open = (x: T) => (x.season.status === 'open' ? 0 : 1);
+  return [...xs].sort((a, b) => open(a) - open(b)
+    || (byOpened ? (b.season.openedAt as number) - (a.season.openedAt as number) : 0)
+    || cmpId(b.season.id, a.season.id));
 }
 
 /** ID を比べる（s2 < s10。数の部分は数として） */
@@ -104,7 +124,18 @@ export function runsForRows(rows: readonly SeasonStandingRow[], runs: readonly R
 // ---------------- 図鑑のタブ ----------------
 
 /** 1 人分の図鑑（鍵ごとの `GET /api/profile/records` か、運用者の `GET /api/ops/codex` から） */
-export interface CodexBook { id: string; name: string; codex: ProfileRecords['codex']; feats: ProfileRecords['feats'] }
+export interface CodexBook { id: string; name: string; codex: ProfileRecords['codex']; feats: ProfileRecords['feats']; record?: PersonRecord }
+
+/**
+ * 1 人ずつの記録（S16d: 前の「記録」のタブにあったもの。図鑑のタブの、冒険者ごとの札に、目立たせずに残す）。
+ * 鍵ごとの口（GET /api/profile/records・/api/profile）から来たときだけ（運用者の図鑑の口には無い）
+ */
+export interface PersonRecord { runs: number; bestBanked: number; deepest: number; text: string; titles: string[] }
+
+/** 記録の 1 行（ラン数・確定の最高・最深） */
+export function personRecordLine(r: PersonRecord): string {
+  return tr(`ラン ${r.runs}・確定の最高 ${r.bestBanked}・最深 地下${r.deepest}階`, `${r.runs} runs, best banked ${r.bestBanked}, deepest B${r.deepest}`);
+}
 
 export interface MergedEntry { id: string; name: string; finders: string[]; details: { who: string; detail: string }[] }
 export interface MergedCategory { id: string; name: string; total: number; entries: MergedEntry[] }
@@ -151,10 +182,18 @@ export function findersText(names: readonly string[], max = 2): string {
   return tr(`${names.slice(0, max).join('・')} ほか ${rest} 人`, `${names.slice(0, max).join(', ')} and ${rest} more`);
 }
 
-/** 実績は、冒険者ごとに分けて（合わせない）。取った実績が 1 つ以上ある人だけ、取った数の多い順（同じなら名前の順） */
-export function featsByPerson(books0: readonly CodexBook[]): { id: string; name: string; earned: { id: string; name: string; desc: string | null }[]; total: number }[] {
+/**
+ * 実績は、冒険者ごとに分けて（合わせない）。取った実績が 1 つ以上ある人と、1 人ずつの記録がある人（S16d）だけ、取った数の多い順（同じなら名前の順）。
+ * 記録は、同じプロフィールのどの本から来てもよい（運用者の口が先に来て、鍵の口が後から来ても、記録を落とさない）
+ */
+export function featsByPerson(books0: readonly CodexBook[]): { id: string; name: string; earned: { id: string; name: string; desc: string | null }[]; total: number; record?: PersonRecord }[] {
+  const recordOf = new Map<string, PersonRecord>();
+  for (const b of books0) if (b.record && !recordOf.has(b.id)) recordOf.set(b.id, b.record);
   return uniqueBooks(books0)
-    .map((b) => ({ id: b.id, name: b.name, earned: b.feats.list.filter((f) => f.earned).map((f) => ({ id: f.id, name: f.name, desc: f.desc })), total: b.feats.total }))
-    .filter((x) => x.earned.length > 0)
+    .map((b) => {
+      const record = recordOf.get(b.id);
+      return { id: b.id, name: b.name, earned: b.feats.list.filter((f) => f.earned).map((f) => ({ id: f.id, name: f.name, desc: f.desc })), total: b.feats.total, ...(record ? { record } : {}) };
+    })
+    .filter((x) => x.earned.length > 0 || !!x.record)
     .sort((a, b) => b.earned.length - a.earned.length || a.name.localeCompare(b.name));
 }

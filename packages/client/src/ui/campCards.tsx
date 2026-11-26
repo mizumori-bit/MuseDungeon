@@ -7,7 +7,7 @@ import type { ComponentChildren } from 'preact';
 import { useEffect, useRef } from 'preact/hooks';
 import { getLocale, tr } from '../util';
 import { TraitList } from './expedition';
-import { dangerTitle, levelText, objectiveCardModel } from './objectiveCard';
+import { gapClass, gapTitle, levelText, objectiveCardModel } from './objectiveCard';
 
 /**
  * 決める段の札（支度の「目的」「装備」「特技と加護」の段と、キャンプの段）。aside: 見出しの右（支度の「任せる／自分で」など）。
@@ -42,9 +42,10 @@ export function FoldCard({ title, summary, open, children }: { title: string; su
 }
 
 /**
- * 目的の札 1 枚。大きく: 枠・危険の印・どこで・何を・基礎点・推奨のレベルと自分のレベル。小さく: 倍率・条件の名前・守護者の格など・いまの持ち物で通る目安・討伐の記録。
- * たたむ（「くわしく」）: どう達成するか・守護者や賞金首の見込みの文・階の性質・条件の説明・AI に届くのと同じ全文。
- * 札を押すと選ぶ（onSelect）。chosen: 選んでいる。selectLabel: 選ぶ前の小さい字（支度「この目的にする」・キャンプ「この目的を選ぶ」）
+ * 目的の札 1 枚。大きく: 枠・どこで・何を・基礎点・推奨のレベルと自分のレベルとの差（色分け）・条件の危険度。小さく: 倍率・条件の名前・守護者の格など・いまの持ち物で通る目安・討伐の記録。
+ * たたむ（「くわしく」）: どう達成するか・推奨のレベルの説明・守護者や賞金首の見込みの文・階の性質・条件の説明・候補の文（AI に届く形）。
+ * 札を押すと選ぶ（onSelect）。選んでいる札を押し直しても、何もしない（支度で prepare を送り直さない）。
+ * chosen: 選んでいる。selectLabel: 選ぶ前の小さい字（支度「この目的にする」・キャンプ「この目的を選ぶ」）
  */
 export function ObjectiveCard({ o, rules, level, view, catalog, fullText, chosen, disabled, selectLabel, onSelect }: {
   o: ExpeditionOffer; rules: CatalogRules | undefined; level: number; view?: PlayerView; catalog?: Catalog | null; fullText?: string;
@@ -62,21 +63,20 @@ export function ObjectiveCard({ o, rules, level, view, catalog, fullText, chosen
   // 討伐の記録（S4 §35.5・S5a）: まだ倒していない大守護者を倒す候補に、先に倒した参加者の戦いの事実（短い形。全文はキャンプの記録庫の札）
   const td = o.objective.targetDepth;
   const slays = view && catalog && o.objective.type === 'slay_warden' && td !== null && !(view.milestonesCleared ?? []).includes(td) ? slaysAt(L, catalog, view, td) : [];
-  const gapCls = m.level.gap === null ? '' : m.level.gap >= 3 ? 'over far' : m.level.gap > 0 ? 'over' : 'ok';
+  // 危険は差の数のまま、色分けだけ（S16d。段の言葉は付けない）
   return (
     <li class={`ocard ${m.slot ?? ''} ${chosen ? 'is-chosen' : ''}`}>
-      <button type="button" class="ocard-pick" aria-pressed={!!chosen} disabled={disabled} onClick={() => onSelect(o.index)}>
+      <button type="button" class="ocard-pick" aria-pressed={!!chosen} disabled={disabled} onClick={() => { if (!chosen) onSelect(o.index); }}>
         <span class="ocard-top">
           <span class="ocard-no">{m.index}</span>
           {m.slotLabel && <span class={`slot-badge ${m.slot ?? ''}`}>{m.slotLabel}</span>}
-          {m.danger && <span class={`ocard-danger tone-${m.danger.tone}`} title={dangerTitle()}>{m.danger.label}</span>}
           <span class="ocard-sel">{chosen ? tr('選んだ', 'Chosen') : selectLabel}</span>
         </span>
         {m.where && <span class="ocard-where">{m.where}</span>}
         <span class="ocard-what">{m.what}</span>
-        <span class="ocard-stats">
+        <span class="ocard-stats" title={gapTitle()}>
           <span class="ocard-pts">{tr(`基礎 +${m.points}`, `base +${m.points}`)}</span>
-          <span class={`ocard-lv ${gapCls}`}>{levelText(m.level)}</span>
+          <span class={`ocard-lv ${gapClass(m.level.gap)}`}>{levelText(m.level)}</span>
           {m.traitDanger !== 0 && <span class="ocard-td">{tr(`条件 ${m.traitDanger > 0 ? '+' : ''}${m.traitDanger}`, `traits ${m.traitDanger > 0 ? '+' : ''}${m.traitDanger}`)}</span>}
         </span>
       </button>
@@ -86,12 +86,13 @@ export function ObjectiveCard({ o, rules, level, view, catalog, fullText, chosen
       <details class="ocard-more">
         <summary>{tr('くわしく', 'Details')}</summary>
         <p class="ocard-note">{m.how}</p>
+        {m.level.rec !== null && <p class="ocard-note">{tr('推奨のレベルは、その深さに着いたときの、レベルの目安（公開の表）。差が正なら、推奨より低い。', 'The recommended level is the typical level on arrival at that depth (public table). A positive gap means you are below it.')}</p>}
         {o.guardian && <p class="ocard-note">{guardianForecastText(L, o.guardian)}</p>}
         {o.bounty && <p class="ocard-note">{bountyForecastText(L, o.bounty)}</p>}
         {o.relic && <p class="ocard-note">{relicText(L, o.relic)}</p>}
         {ft && <p class="ocard-note">{ft}</p>}
         <TraitList traits={o.traits ?? []} rules={rules} />
-        <p class="ocard-full" title={tr('AI に届く候補の文と同じ', 'The same text the AI gets for this offer')}>{m.full}</p>
+        <p class="ocard-full" title={tr('候補の文（AI に届く形）', 'The offer text (as the AI gets it)')}>{m.full}</p>
       </details>
     </li>
   );
@@ -101,7 +102,7 @@ export function ObjectiveCard({ o, rules, level, view, catalog, fullText, chosen
 export function EndlessCard({ chosen, disabled, selectLabel, onSelect }: { chosen?: boolean; disabled?: boolean; selectLabel: string; onSelect: () => void }) {
   return (
     <li class={`ocard endless ${chosen ? 'is-chosen' : ''}`}>
-      <button type="button" class="ocard-pick" aria-pressed={!!chosen} disabled={disabled} onClick={onSelect}>
+      <button type="button" class="ocard-pick" aria-pressed={!!chosen} disabled={disabled} onClick={() => { if (!chosen) onSelect(); }}>
         <span class="ocard-top">
           <span class="ocard-no">∞</span>
           <span class="ocard-sel">{chosen ? tr('選んだ', 'Chosen') : selectLabel}</span>

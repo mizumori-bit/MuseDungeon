@@ -286,6 +286,8 @@ describe('sound engine (Web Audio, faked)', () => {
       expect(d.waitingForGesture).toBe(true);
       expect(listeners).toContain('pointerdown');
       expect(listeners).toContain('keydown');
+      // 触れる画面（S16d）: pointerdown は人の操作に数えられないので、離した・押し終えたも拾う
+      for (const t of ['pointerup', 'touchend', 'click']) expect(listeners).toContain(t);
       d.unlock();
       expect(d.waitingForGesture).toBe(false);
       // 読めなかったテーマ（error）では札を出さない（見出しに理由が出る）
@@ -294,6 +296,36 @@ describe('sound engine (Web Audio, faked)', () => {
       expect(d.waitingForGesture).toBe(false);
     } finally {
       vi.unstubAllGlobals();
+    }
+  });
+
+  it('S16d: no sound hint with both music and cues off; no flash right after choosing a theme (while resume is pending), but it comes up if the browser never lets it start', () => {
+    vi.useFakeTimers();
+    class SlowCtx {
+      state = 'suspended';
+      onstatechange: (() => void) | null = null;
+      resume() { return new Promise<void>(() => undefined); }
+      close() { this.state = 'closed'; return Promise.resolve(); }
+    }
+    vi.stubGlobal('window', { AudioContext: SlowCtx, addEventListener: () => undefined, removeEventListener: () => undefined });
+    try {
+      const d = new SoundDirector();
+      d.settings = { ...d.settings, theme: 'hollow', music: false, cues: false };
+      expect(d.waitingForGesture).toBe(false);
+      d.settings = { ...d.settings, music: true };
+      expect(d.waitingForGesture).toBe(true);
+      // 操作の中で鳴らし始めた直後: 返事を待つ間は出さない
+      d.unlock();
+      expect(d.waitingForGesture).toBe(false);
+      let n = 0;
+      d.subscribe(() => n++);
+      vi.advanceTimersByTime(1000);
+      // 返事が来ない（ブラウザが操作と認めなかった）: 札を出す（知らせて描き直させる）
+      expect(d.waitingForGesture).toBe(true);
+      expect(n).toBeGreaterThan(0);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
     }
   });
 

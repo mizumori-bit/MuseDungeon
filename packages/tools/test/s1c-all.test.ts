@@ -135,10 +135,12 @@ describe('S1c §14.4 の 2: wrong argument names get a game-form refusal with th
       // 実際には要る引数（throw_item の target）は、一覧の「要る」に書く
       const thr = await client.callTool({ name: 'throw_item', arguments: { slot: 'a', targte: 'n' } }) as unknown as Res;
       expect(thr.structuredContent?.error.message).toContain('要る: slot・target');
-      // 形の違い（型）は、今までどおり SDK が断る
+      // 形の違い（型・選べる値）も、S16d から、同じゲームの断りの形で返す（SDK の「Input validation error」の文だけにしない）
       const typ = await client.callTool({ name: 'move', arguments: { dir: 'north' } }) as unknown as Res;
       expect(typ.isError).toBe(true);
-      expect(typ.content[0].text).toContain('Invalid arguments for tool move');
+      expect(typ.structuredContent?.error.code).toBe('bad_request');
+      expect(typ.structuredContent?.error.message).toContain("dir は 'n' / 'ne' / 'e' / 'se' / 's' / 'sw' / 'w' / 'nw' のどれか（\"north\" が来た）");
+      expect(typ.content[0].text).not.toContain('Input validation error');
       // 正しい呼び出しは通る
       const ok = await client.callTool({ name: 'wait', arguments: {} }) as unknown as Res;
       expect(ok.isError).toBeFalsy();

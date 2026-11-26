@@ -1,29 +1,37 @@
 // 自分で潜るときのキャンプ（S16c。SEASON.md §70.5）: 遊ぶ画面で、キャンプにいる間は、地図の代わりにこの 1 枚を出す（拠点・支度と同じ札・余白・色）。
 // 上から「今、決めること」（特技・加護の候補 → 次の遠征の目的と、主のボタン「この目的で、出発」）、その下に「見るだけのもの」（シーズン・記録庫・能力と持ち物・メモ・ログ・できること）。
-// 出す命令は前と同じ（start_expedition・choose_perk・choose_boon・report_stairs・retire・say）。出す情報も前と同じ（目的の札の「くわしく」に、AI に届く候補の全文）。
+// 出す命令は前と同じ（start_expedition・choose_perk・choose_boon・report_stairs・retire・say）。出す情報も前と同じ（目的の札の「くわしく」に、候補の文＝AI に届く形）。
+// 断りと知らせは主のボタンの下、キャンプに着いた手番の変化は前の遠征の結果の札の中（S16d）。拠点のタブは出さない（見出しの「← 拠点へ」だけ）。
 // キャンプの絵（ASSET_SPEC §7.7）は、テーマに絵があれば、いちばん上の札の帯に出す（地図は出さない。絵は情報を運ばない）。
-import type { Catalog, Observation, PlayerView } from '@muse/shared';
+import type { Catalog, Change, Observation, PlayerView } from '@muse/shared';
 import { itemDisplayName, kindName, nameOf, slayGroupText, slaysAt } from '@muse/shared';
-import { useState } from 'preact/hooks';
+import type { ComponentChildren } from 'preact';
+import { useEffect, useState } from 'preact/hooks';
 import type { Theme } from '../theme';
 import { getLocale, tr } from '../util';
 import { BoonChoicePanel, PerkChoicePanel } from './build';
 import { CampScene } from './camp';
 import { DecideCard, FoldCard, ObjectiveList, offerTextsOf, UndecidedDialog } from './campCards';
 import { CampRecords, NotesBlock, ResultBlock, rulesOf } from './expedition';
-import { HubNav, HubPill } from './hub';
+import { HubPill } from './hub';
 import { campClosedOf, campHeadline, campStart, pickFor, type CampPick } from './objectiveCard';
 import { InventoryPanel, MessageLog, ObsPartyPanel, StatusPanel, carriedCount, type LogLine } from './panels';
 import { prepLine } from './prepState';
 import { SeasonCampPanel } from './season';
 
-export function CampView({ runId, view, obs, catalog, theme, perkFocused, perkSent, onChoosePerk, onChooseBoon, onStart, onRetire, onReport, log, onSay }: {
+export function CampView({ runId, view, obs, catalog, theme, perkFocused, perkSent, onChoosePerk, onChooseBoon, onStart, onRetire, onReport, log, onSay, notice, turnText, changes, onDialog }: {
   runId: string; view: PlayerView; obs: Observation | null; catalog: Catalog | null; theme: Theme | null;
   /** p で特技の候補に番号の受付を向けている・選んで返事を待っている */
   perkFocused: boolean; perkSent: boolean;
   onChoosePerk: (option: number) => void; onChooseBoon: (option: number) => void;
   onStart: (offer: number | 'endless') => void; onRetire: () => void; onReport: () => void;
   log: LogLine[]; onSay: (text: string) => void;
+  /** 断りと知らせ（遊ぶ画面の flash。S16d: 主のボタンのすぐ下に出す。出発の断り＝協力の still_inside・予算・シーズンの終わり など） */
+  notice?: ComponentChildren;
+  /** ▶ の状態行と、前の手番からの変化（S16d: キャンプに着いた手番の変化＝レベルが上がった・持ち主が決めた・納めた欠片 など。前の遠征の結果の札の中に出す） */
+  turnText?: string; changes?: readonly Change[];
+  /** 確かめの窓を開いた・閉じた（S16d: 開いている間は、遊ぶ画面のキーの受け口を止める） */
+  onDialog?: (open: boolean) => void;
 }) {
   const L = getLocale();
   const rules = rulesOf(catalog);
@@ -33,7 +41,10 @@ export function CampView({ runId, view, obs, catalog, theme, perkFocused, perkSe
   const first = !x;
   const name = view.self.name;
   const [picked, setPicked] = useState<CampPick | null>(null);
-  const [confirm, setConfirm] = useState<string[] | null>(null);
+  const [confirm, setConfirmState] = useState<string[] | null>(null);
+  const setConfirm = (v: string[] | null) => { setConfirmState(v); onDialog?.(v !== null); };
+  // 画面を離れる（迷宮へ出た）ときは、キーの受け口を戻す
+  useEffect(() => () => onDialog?.(false), []);
   const [chat, setChat] = useState('');
   const selected = pickFor(picked, camp?.nextNo ?? null, camp?.offers ?? []);
   const closed = campClosedOf(view.season);
@@ -59,7 +70,7 @@ export function CampView({ runId, view, obs, catalog, theme, perkFocused, perkSe
 
   return (
     <>
-      <HubNav tab={null} />
+      {/* 遊ぶ画面では、拠点のタブは出さない（見出しの「← 拠点へ」だけ。S16d） */}
       <div class="hub camp">
         <div class="hub-col">
           {/* いちばん上の札: だれが・今どこに・成績・前の遠征の結果 */}
@@ -85,9 +96,17 @@ export function CampView({ runId, view, obs, catalog, theme, perkFocused, perkSe
               {view.season && <div><dt>{tr('残りの手番', 'Turns left')}</dt><dd class={view.season.budgetLeft < Math.min(100, Math.ceil(view.season.budget.limit / 10)) ? 'low' : ''}>{view.season.budgetLeft}<small> / {view.season.budget.limit}</small></dd></div>}
             </dl>
             {x?.result && <div class="camp-result"><ResultBlock x={x} playerId={view.playerId} rules={rules} /></div>}
+            {/* キャンプに着いた手番の変化（S16d。迷宮の画面の TurnBar と同じ中身: 守護者が倒れた・レベルが上がった・持ち主が決めた・納めた欠片 など） */}
+            {(changes?.length ?? 0) > 0 && (
+              <div class="camp-result camp-changes">
+                <div class="camp-changeshead">{tr('前の手番からの変化', 'Since your last turn')}</div>
+                <ul>{changes!.map((c, i) => <li key={`${c.code}-${i}`} class={`chg ${c.code}`}>{c.text}</li>)}</ul>
+              </div>
+            )}
+            {turnText && <p class="camp-turnline" title={turnText}>{turnText}</p>}
           </section>
 
-          {/* 今、決めること 1: 特技・加護の候補（手番を使わない。遠征の中でも p で選べる） */}
+          {/* 今、決めること 1: 特技・加護の候補（手番を使わない。遠征の中でも選べる: 特技は p、加護は地図の上の枠） */}
           {perk && (
             <DecideCard title={tr('特技を選ぶ', 'Choose a perk')} held line={prepLine('perks', { name, held: true, perks: perkNames, boons: boonNames })}>
               <div class="prep-body">
@@ -110,6 +129,8 @@ export function CampView({ runId, view, obs, catalog, theme, perkFocused, perkSe
             <div class="camp-go">
               <button class="hub-btn primary big" disabled={!start.canStart} onClick={press}>{start.label}</button>
               {start.hint && <p class="hub-note">{start.hint}</p>}
+              {/* 断りと知らせ（S16d C1: 押して断られたときに、何も起きないように見えないように） */}
+              {notice && <div class="camp-notice">{notice}</div>}
             </div>
           </DecideCard>
 
@@ -164,7 +185,7 @@ export function CampView({ runId, view, obs, catalog, theme, perkFocused, perkSe
       </div>
       {confirm && (
         <UndecidedDialog items={confirm}
-          note={tr('このまま出発してもよい（特技と加護は、遠征の中でも p で選べる。手番は使わない）。', 'You may set out anyway (perks and boons can be chosen during the expedition with p; it uses no turn).')}
+          note={tr('このまま出発してもよい（遠征の中でも選べる。特技は p、加護は地図の上の枠で。手番は使わない）。', 'You may set out anyway (you can still choose during the expedition: a perk with p, a boon in the box above the map; it uses no turn).')}
           goLabel={tr('このまま出発', 'Set out anyway')} onBack={() => setConfirm(null)} onGo={() => { setConfirm(null); go(); }} />
       )}
     </>

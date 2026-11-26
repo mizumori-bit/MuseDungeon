@@ -3,7 +3,7 @@
 // 順位の表の行とランを結ぶ／図鑑を合わせる・だれが見つけたか・実績は冒険者ごと
 import { describe, expect, it } from 'vitest';
 import type { ProfileRecords, RunListing, SeasonListing, SeasonStandingRow } from '@muse/shared';
-import { featsByPerson, findersText, mergeCodexBooks, parseRoute, pickSeasonId, runActions, runsForRows, seasonsNewestFirst, type CodexBook } from '../src/ui/entrance';
+import { featsByPerson, findersText, mergeCodexBooks, parseRoute, personRecordLine, pickSeasonId, runActions, runsForRows, seasonsNewestFirst, type CodexBook } from '../src/ui/entrance';
 
 const season = (id: string, status: SeasonListing['status'], endsAt: number): SeasonListing => ({ id, name: id, budget: 3000, endsAt, status, participants: 1, invited: 1 });
 
@@ -30,14 +30,32 @@ describe('S16b §70.4 の 1: the routes', () => {
     expect(parseRoute('#/nowhere')).toEqual({ page: 'hub', id: null });
     expect(parseRoute('#/codexx')).toEqual({ page: 'hub', id: null });
   });
+  it('S16d: a broken ID goes to the hub (no exception, no blank page); a different tail still opens the season', () => {
+    expect(parseRoute('#/season/%E0%A4%A')).toEqual({ page: 'hub', id: null, redirect: '#/' });
+    expect(parseRoute('#/watch/%E0%A4%A')).toEqual({ page: 'hub', id: null, redirect: '#/' });
+    expect(parseRoute('#/season/s4/x')).toEqual({ page: 'season', id: 's4' });
+    expect(parseRoute('#/season/s4?x')).toEqual({ page: 'season', id: 's4' });
+    expect(parseRoute('#/season?x')).toEqual({ page: 'season', id: null });
+    expect(parseRoute('#/season/%E3%81%82')).toEqual({ page: 'season', id: 'あ' });
+    expect(parseRoute('#/seasonx')).toEqual({ page: 'hub', id: null });
+  });
 });
 
 describe('S16b §70.4 の 2: which season the season tab shows', () => {
   const list = [season('s1', 'final', 100), season('s3', 'final', 300), season('s4', 'open', 400), season('s2', 'final', 200)];
-  it('newest first by the time it runs; opens on the running season, else the newest; the requested one if it exists', () => {
+  it('newest first by the time it opened (S16d); the running season first; by the ID number when an opened time is missing', () => {
+    // 開いた時刻の無い一覧（古いサーバー）: ID の数の大きい順。開催中は先頭
     expect(seasonsNewestFirst(list.map((s) => ({ season: s }))).map((x) => x.season.id)).toEqual(['s4', 's3', 's2', 's1']);
-    // 同じ終わりの時刻なら、ID の大きい順（s10 は s9 より後）
     expect(seasonsNewestFirst([season('s9', 'final', 5), season('s10', 'final', 5)].map((s) => ({ season: s }))).map((x) => x.season.id)).toEqual(['s10', 's9']);
+    // 依頼者のデータの形: s0 は期間が長く、s2・s3 より遅く終わる。終わりの時刻の順にはしない
+    const op = (id: string, status: SeasonListing['status'], endsAt: number, openedAt: number) => ({ season: { ...season(id, status, endsAt), openedAt } });
+    const real = [op('s0', 'final', 900, 10), op('s1', 'final', 300, 20), op('s2', 'final', 800, 30), op('s3', 'final', 950, 40), op('s4', 'open', 990, 50)];
+    expect(seasonsNewestFirst(real).map((x) => x.season.id)).toEqual(['s4', 's3', 's2', 's1', 's0']);
+    // 開いた時刻の順と ID の順が違っても、開いた時刻の順。開催中は、開いた時刻が古くても先頭
+    expect(seasonsNewestFirst([op('b', 'final', 1, 30), op('a', 'final', 1, 40), op('c', 'open', 1, 5)]).map((x) => x.season.id)).toEqual(['c', 'a', 'b']);
+    // 1 つでも開いた時刻が無ければ、ID の順（混ぜて比べない）
+    expect(seasonsNewestFirst([op('s2', 'final', 1, 99), { season: season('s3', 'final', 1) }]).map((x) => x.season.id)).toEqual(['s3', 's2']);
+    expect(pickSeasonId(real.map((x) => x.season), null)).toEqual({ id: 's4', missing: false });
     expect(pickSeasonId(list, null)).toEqual({ id: 's4', missing: false });
     expect(pickSeasonId(list, 's2')).toEqual({ id: 's2', missing: false });
     // 開催中が無ければ、いちばん新しいもの（確定待ちも含む）
@@ -121,5 +139,12 @@ describe('S16b §70.4 の 4: the codex of the adventurers on this PC, put togeth
       { id: 'prof_a', name: 'ミュゼ美', earned: [{ id: 'f1', name: 'f1', desc: 'f1の説明' }, { id: 'f2', name: 'f2', desc: 'f2の説明' }], total: 5 },
       { id: 'prof_c', name: 'カエデ', earned: [{ id: 'f1', name: 'f1', desc: 'f1の説明' }], total: 5 },
     ]);
+  });
+  it('S16d: the per-adventurer record (line, full text, titles) rides on the card, from whichever book has it; an adventurer with a record but no feat still gets a card', () => {
+    const rec = { runs: 3, bestBanked: 120, deepest: 6, text: '記録の全文', titles: ['冒険賞'] };
+    // 運用者の口（記録なし）が先、鍵の口（記録あり）が後
+    const people = featsByPerson([a, { ...a, record: rec }, { ...b, record: { ...rec, runs: 1 } }]);
+    expect(people.map((p) => [p.id, p.record?.runs])).toEqual([['prof_a', 3], ['prof_b', 1]]);
+    expect(personRecordLine(rec)).toBe('ラン 3・確定の最高 120・最深 地下6階');
   });
 });

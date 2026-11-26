@@ -6,7 +6,7 @@ import { kindName } from '@muse/shared';
 import type { JSX } from 'preact';
 import { useState } from 'preact/hooks';
 import { getLocale, tr } from '../util';
-import { featsByPerson, findersText, mergeCodexBooks, type CodexBook } from './entrance';
+import { featsByPerson, findersText, mergeCodexBooks, personRecordLine, type CodexBook, type PersonRecord } from './entrance';
 import { Shell } from './seasonPage';
 
 /** 表の行の数（それより多ければ「もっと見る」） */
@@ -143,20 +143,43 @@ export function CodexView({ books, local, loading, hasKeys }: { books: readonly 
       )}
       {people.length > 0 && (
         <section class="ent-sec">
-          <h2 class="hub-sechead">{tr('実績（冒険者ごと）', 'Feats (by adventurer)')}</h2>
+          <h2 class="hub-sechead">{tr('実績と記録（冒険者ごと）', 'Feats and records (by adventurer)')}</h2>
           <div class="ent-feats">
             {people.map((p) => (
               <details key={p.id} class="ent-card ent-fold">
-                <summary><span class="ent-who">{p.name}</span><span class="ent-meta">{tr(`${p.earned.length} / ${p.total}`, `${p.earned.length} / ${p.total}`)}</span></summary>
-                <ul class="ent-featlist">
-                  {p.earned.map((f) => <li key={f.id}><span class="ent-featname">{f.name}</span>{f.desc && <span class="ent-featdesc">{f.desc}</span>}</li>)}
-                </ul>
+                <summary><span class="ent-who">{p.name}</span><span class="ent-meta">{tr(`実績 ${p.earned.length} / ${p.total}`, `Feats ${p.earned.length} / ${p.total}`)}</span></summary>
+                {p.earned.length > 0 && (
+                  <ul class="ent-featlist">
+                    {p.earned.map((f) => <li key={f.id}><span class="ent-featname">{f.name}</span>{f.desc && <span class="ent-featdesc">{f.desc}</span>}</li>)}
+                  </ul>
+                )}
+                {p.record && <PersonRecordBlock record={p.record} />}
               </details>
             ))}
           </div>
         </section>
       )}
     </Shell>
+  );
+}
+
+/**
+ * 1 人ずつの記録（S16d: 前の「記録」のタブにあったもの）: 1 行（ラン数・確定の最高・最深）と称号、「すべて見る」で records の全文（たたむ）。
+ * 記録はシーズンで足りるので、目立たせない（無くさないだけ）
+ */
+function PersonRecordBlock({ record }: { record: PersonRecord }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div class="ent-record">
+      <p class="hub-note">{personRecordLine(record)}</p>
+      {record.titles.length > 0 && <p class="hub-note titles">{tr('称号', 'Titles')}: {record.titles.map((t, i) => <span key={i} class="tag title">{t}</span>)}</p>}
+      {record.text && (
+        <>
+          <button type="button" class="hub-linkbtn" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? tr('たたむ', 'Hide') : tr('すべて見る', 'Show all')}</button>
+          {open && <pre class="records">{record.text}</pre>}
+        </>
+      )}
+    </div>
   );
 }
 

@@ -33,28 +33,7 @@ export function SlotBadge({ slot }: { slot: OfferSlot | null | undefined }) {
   return <span class={`slot-badge ${slot}`}>{slotName(getLocale(), slot)}</span>;
 }
 
-const signed = (n: number): string => (n > 0 ? `+${n}` : `${n}`);
-
-/**
- * 候補の難しさ（V3-2R §14.4）: 推奨レベルと自分のレベルの差、条件の危険度の合計。段階に丸めない。
- * 「推奨 Lv6・あなた Lv2（差 +4）／条件 +1」。差が正（推奨より低い）なら強調する
- */
-export function OfferGap({ rec, level, gap, traitDanger }: { rec: number | null; level: number; gap: number | null; traitDanger: number }) {
-  if (rec === null && !traitDanger) return null;
-  const cls = gap === null ? '' : gap >= 3 ? 'over far' : gap > 0 ? 'over' : 'ok';
-  return (
-    <span class={`ogap ${cls}`} title={tr('推奨レベル: その深さに着いたときのレベルの目安（公開の表）。差が正なら推奨より低い。条件: 遠征の条件の危険度の合計',
-      'Recommended level: the typical level on arrival at that depth (public table). A positive gap means you are below it. Traits: sum of the traits\' danger')}>
-      {rec !== null && (
-        <>
-          {tr(`推奨 Lv${rec}・あなた Lv${level}`, `recommended Lv${rec}, you Lv${level}`)}
-          {gap !== null && <b class="gapn">{tr(`（差 ${signed(gap)}）`, ` (gap ${signed(gap)})`)}</b>}
-        </>
-      )}
-      {traitDanger !== 0 && <span class="tdanger">{rec !== null ? tr('／', ' / ') : ''}{tr(`条件 ${signed(traitDanger)}`, `traits ${signed(traitDanger)}`)}</span>}
-    </span>
-  );
-}
+// 候補の難しさ（V3-2R §14.4: 推奨レベルとの差・条件の危険度。段階に丸めない）は、目的の札（ui/campCards.tsx・ui/objectiveCard.ts の gapClass）が出す（S16d: 前の OfferGap は外した）
 
 /** 条件（traits）: 名前と倍率を並べ、説明は本文に出す */
 export function TraitList({ traits, rules, compact }: { traits: readonly string[]; rules: CatalogRules | undefined; compact?: boolean }) {
@@ -416,7 +395,8 @@ export function CampRecords({ runId, nextNo }: { runId: string; nextNo: number }
     return () => { alive = false; };
   }, [runId, nextNo]);
   if (!line) return null;
-  return <p class="muted records-line">{line} <a href="#/records">{tr('（ホームの「記録」で全文）', '(full text in Home > Records)')}</a></p>;
+  // 全文は、図鑑のタブの冒険者ごとの札（S16d: 「記録」のタブは無くなった）
+  return <p class="muted records-line">{line} <a href="#/codex">{tr('（全文は、拠点の「図鑑」の冒険者ごとの札）', '(full text: Codex tab, by adventurer)')}</a></p>;
 }
 
 /**

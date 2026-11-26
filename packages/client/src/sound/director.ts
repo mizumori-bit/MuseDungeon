@@ -28,6 +28,10 @@ const LOOKAHEAD = 0.2;
 const TICK_MS = 50;
 /** 拠点の曲の画面を離れてから、止めるまでの待ち（次の画面が開く間。拠点の曲どうしの画面なら、その間に取りやめる） */
 const HUB_GRACE_MS = 300;
+/** 音を始める操作として拾う出来事（S16d: 触れる画面では pointerdown が数えられないので、離した・押し終えたも） */
+const GESTURE_EVENTS = ['pointerdown', 'pointerup', 'touchend', 'click', 'keydown'] as const;
+/** 操作の中で鳴らし始めてから、resume の返事を待つ間（この間は、案内の札を出さない。S16d） */
+const GESTURE_GRACE_MS = 600;
 const BASE = (import.meta as unknown as { env?: { BASE_URL?: string } }).env?.BASE_URL ?? '/';
 
 type Ctor = typeof AudioContext;
@@ -60,6 +64,9 @@ export class SoundDirector {
   private readonly lastCue = new Map<string, number>();
   private readonly listeners = new Set<() => void>();
   private gestureHooked = false;
+  /** 操作の中で鳴らし始めてから、案内の札を出さない間の終わり（Date.now。S16d） */
+  private graceUntil = 0;
+  private graceTimer: ReturnType<typeof setTimeout> | null = null;
   /** 拠点の曲を止めるまでの待ち（S15a。leaveHub） */
   private hubTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -75,7 +82,7 @@ export class SoundDirector {
     if (typeof document !== 'undefined') {
       document.addEventListener('visibilitychange', () => {
         if (document.visibilityState !== 'visible' || this.settings.theme === 'none') return;
-        if (this.ctx && this.ctx.state !== 'running') this.ensureContext();
+        if (this.ctx && this.ctx.state !== 'running') this.ensureContext(false);
         this.tick();
         this.emit();
       });
@@ -84,7 +91,11 @@ export class SoundDirector {
 
   /** 音のテーマが入っていて、まだ鳴らせない（ブラウザが、人の操作を待っている。S16a: 画面の下の案内の札） */
   get waitingForGesture(): boolean {
-    return this.settings.theme !== 'none' && !this.error && this.ctx?.state !== 'running';
+    // 音楽も合図も切っているときは、鳴らすものが無いので出さない（S16d）。
+    // 操作の中で鳴らし始めた直後（resume の返事を待つ短い間）も出さない（テーマを選んだ直後に一瞬だけ出ていた。S16d）
+    if (this.settings.theme === 'none' || this.error || (!this.settings.music && !this.settings.cues)) return false;
+    if (this.ctx?.state === 'running') return false;
+    return Date.now() >= this.graceUntil;
   }
 
   /** 画面の操作の中から呼ぶ（S16a: 案内の札を押した）。鳴らし始める */
@@ -212,17 +223,18 @@ export class SoundDirector {
   private hookGesture(): void {
     if (this.gestureHooked || typeof window === 'undefined') return;
     this.gestureHooked = true;
+    // 触れる画面の pointerdown は、ブラウザの「人の操作」に数えられない（音を始めさせない）。離したとき・押し終えたときも拾う（S16d）。
+    // 1 つ目で外し、まだ鳴らせなければ ensureContext が付け直す（重ねて付けない）
     const on = () => {
-      window.removeEventListener('pointerdown', on, true);
-      window.removeEventListener('keydown', on, true);
+      for (const t of GESTURE_EVENTS) window.removeEventListener(t, on, true);
       this.gestureHooked = false;
       if (this.settings.theme !== 'none') this.ensureContext();
     };
-    window.addEventListener('pointerdown', on, true);
-    window.addEventListener('keydown', on, true);
+    for (const t of GESTURE_EVENTS) window.addEventListener(t, on, true);
   }
 
-  private ensureContext(): void {
+  /** fromGesture: 画面の操作の中から呼んだ（resume の返事を待つ短い間、案内の札を出さない。S16d） */
+  private ensureContext(fromGesture = true): void {
     if (typeof window === 'undefined') return;
     const C = (window.AudioContext ?? (window as unknown as { webkitAudioContext?: Ctor }).webkitAudioContext) as Ctor | undefined;
     if (!C) { this.error = 'Web Audio is not available'; return; }
@@ -230,6 +242,7 @@ export class SoundDirector {
       this.ctx = new C();
       // 止まった（S16a: 裏のタブ・端末の切り替え・iOS の interrupted）: 次の操作で鳴らし直す。案内の札を出し直す
       this.ctx.onstatechange = () => {
+        this.endGrace();
         if (this.ctx && this.ctx.state !== 'running' && this.ctx.state !== 'closed' && this.settings.theme !== 'none') this.hookGesture();
         this.emit();
       };
@@ -237,13 +250,26 @@ export class SoundDirector {
     // suspended だけでなく、iOS の interrupted も（S16a）。閉じた文脈は鳴らし直さない（テーマを切ったとき）
     const st = this.ctx.state as string;
     if (st !== 'running' && st !== 'closed') {
+      if (fromGesture) this.beginGrace();
       // ブラウザが操作の外だとみなしたら、次の操作で始める
-      void this.ctx.resume().then(() => this.emit()).catch(() => undefined);
+      void this.ctx.resume().then(() => { this.endGrace(); this.emit(); }).catch(() => undefined);
       if ((this.ctx.state as string) !== 'running') this.hookGesture();
     }
     if (!this.engine) this.startEngine();
     // 作った文脈が、すぐ running のこともある（状態の変わりの知らせが来ない）: 案内の札を消すために知らせる
     this.emit();
+  }
+
+  /** 案内の札を出さない短い間（resume の返事が来ないまま過ぎたら、札を出す: ブラウザが操作と認めなかった） */
+  private beginGrace(): void {
+    this.graceUntil = Date.now() + GESTURE_GRACE_MS;
+    if (this.graceTimer) clearTimeout(this.graceTimer);
+    this.graceTimer = setTimeout(() => { this.graceTimer = null; this.emit(); }, GESTURE_GRACE_MS + 20);
+  }
+
+  private endGrace(): void {
+    this.graceUntil = 0;
+    if (this.graceTimer) { clearTimeout(this.graceTimer); this.graceTimer = null; }
   }
 
   private startEngine(): void {

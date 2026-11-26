@@ -122,7 +122,25 @@ export function soundStep(prev: SoundMemory | null, view: PlayerView, events: re
   const wardens = new Set([...(p?.wardens ?? []), ...seenW]);
 
   // ---- 届いた出来事から（合図と、直前の戦い） ----
-  let last: ProjectedEvent | null = null;
+  // 同じ呼び出しに、当たった攻撃の出来事が届いている一撃（打ち手 > 相手 の組ごとの数。S16d）。
+  // その組の被害からは、当たりの合図を重ねない（attack と被害の間に、monster_woke・perk_triggered・noise などが挟まることがある）。
+  // 組ごとに数えるので、同じ組の当たりが 2 回あり、1 回だけ attack が届いたときは、残りの 1 回は被害から鳴る
+  const swung = new Map<string, number>();
+  const pairKey = (a: string | null, t: string | null) => `${a ?? '?'}>${t ?? '?'}`;
+  for (const pe of events) {
+    const ev = pe as unknown as { type: string; attacker?: string | null; target?: string | null; hit?: boolean };
+    if (ev.type === 'attack' && ev.hit) {
+      const k = pairKey(ev.attacker ?? null, ev.target ?? null);
+      swung.set(k, (swung.get(k) ?? 0) + 1);
+    }
+  }
+  const takeSwing = (a: string | null, t: string | null): boolean => {
+    const k = pairKey(a, t);
+    const n = swung.get(k) ?? 0;
+    if (n <= 0) return false;
+    swung.set(k, n - 1);
+    return true;
+  };
   for (const pe of events) {
     const ev = pe as unknown as Record<string, unknown> & { type: string };
     switch (ev.type) {
@@ -139,12 +157,13 @@ export function soundStep(prev: SoundMemory | null, view: PlayerView, events: re
       }
       case 'damaged': {
         const d = ev as unknown as { target: string; source: string | null; via: string };
-        const prevAttack = last && (last as { type: string }).type === 'attack' ? (last as unknown as { attacker: string | null; target: string | null }) : null;
+        // 当たった攻撃の出来事が同じ呼び出しに届いている被害は、そちらで鳴っている（melee・ranged だけ。投げた物は attack を出さない）
+        const swungHere = (d.via === 'melee' || d.via === 'ranged') && takeSwing(d.source ?? null, d.target);
         // 攻撃の出来事が無い被害（投げた物・罠など）。毒の刻みでは鳴らさない
-        if (d.target === me && d.via !== 'poison' && !(prevAttack && prevAttack.target === me)) {
+        if (d.target === me && d.via !== 'poison' && !swungHere) {
           if (d.via === 'melee' || d.via === 'ranged' || d.via === 'thrown') fightTurns = turnsNow;
           push('hit_taken');
-        } else if (d.source === me && d.target !== me && (d.via === 'thrown' || d.via === 'melee' || d.via === 'ranged') && !(prevAttack && prevAttack.attacker === me)) {
+        } else if (d.source === me && d.target !== me && (d.via === 'thrown' || d.via === 'melee' || d.via === 'ranged') && !swungHere) {
           // 投げた物の当たりと、攻撃の出来事が届いていない当たり（S16a: 遊ぶ画面・追従だけの観戦の枠には、会心でない当たりの attack が届かない。
           // 届いた被害から鳴らす。attack が届いていれば、そちらで鳴っている）
           fightTurns = turnsNow;
@@ -195,7 +214,6 @@ export function soundStep(prev: SoundMemory | null, view: PlayerView, events: re
       }
       default: break;
     }
-    last = pe;
   }
 
   // ---- 視界から（続く状態） ----

@@ -1,30 +1,24 @@
 // 目的の札（S16c。SEASON.md §70.5）: 支度の画面（持ち主が AI のために選ぶ）と、自分で潜るときのキャンプ（自分で選ぶ）の、両方で使う札の中身。
-// 画面から離した関数（テストする）。札に大きく出すもの（どこで・何を・基礎点・推奨のレベルと自分のレベル・危険の印）と、小さく出すもの・たたむものを分ける。
+// 画面から離した関数（テストする）。札に大きく出すもの（どこで・何を・基礎点・推奨のレベルと自分のレベルとの差・条件の危険度）と、小さく出すもの・たたむものを分ける。
 // 中身は、AI の候補の文（観測の camp.offers[].text = shared の offerText）と同じ数から作る（プレイヤーより多くを見せない・少なくも見せない）。
-// 全文（AI に届くのと同じ文）は、札の「くわしく」の中にそのまま出す。
+// 危険は、差の数をそのまま出して色分けだけにする（AI に渡していない段の言葉を、画面だけに足さない。S16d）。
+// 候補の文（AI に届く形）は、札の「くわしく」の中にそのまま出す。
 import type { CatalogRules, ExpeditionOffer, Objective, OfferSlot } from '@muse/shared';
 import { guardianDisplayName, multText, nameOf, objectiveText, offerGap, offerText, offerWardenExtra, slotName } from '@muse/shared';
 import { getLocale, tr } from '../util';
 
-/** 危険の印の段: ok 推奨に届いている・warn 背伸び・high 危険 */
-export type DangerTone = 'ok' | 'warn' | 'high';
-
 /**
- * 危険の印（推奨レベルとの差と、条件の危険度の合計から。AI の候補の recommended_level・level_gap・trait_danger と同じ数）。
- * 差が 3 以上か、差と条件の合計が 4 以上なら「危険」、差か条件が正なら「背伸び」、それ以外は「届いている」。数が無ければ null
+ * 推奨のレベルとの差の色分け（S16d）。危険度は段階ではなく差で出す（IMPROVEMENTS_V3 §14.4）ので、「危険」「背伸び」のような言葉の段は付けない。
+ * 色だけ: 差が 0 以下 ok・正 over・3 以上 over far（前の OfferGap と同じ決まり）。差が分からなければ空
  */
-export function dangerOf(gap: number | null, traitDanger: number): { tone: DangerTone; label: string } | null {
-  if (gap === null && !traitDanger) return null;
-  const g = gap ?? 0;
-  const tone: DangerTone = g >= 3 || g + traitDanger >= 4 ? 'high' : g > 0 || traitDanger > 0 ? 'warn' : 'ok';
-  const label = tone === 'high' ? tr('危険', 'Dangerous') : tone === 'warn' ? tr('背伸び', 'A stretch') : tr('届いている', 'Within reach');
-  return { tone, label };
+export function gapClass(gap: number | null): '' | 'ok' | 'over' | 'over far' {
+  return gap === null ? '' : gap >= 3 ? 'over far' : gap > 0 ? 'over' : 'ok';
 }
 
-/** 危険の印に添える説明（指を置くと出る） */
-export function dangerTitle(): string {
-  return tr('推奨レベルとの差と、条件の危険度の合計から（札に出している数と同じ）。差が 3 以上か、合わせて 4 以上で「危険」',
-    'From the gap to the recommended level and the traits\' danger (the numbers on the card). "Dangerous" at a gap of 3 or more, or 4 or more together');
+/** 推奨のレベルと条件の数に添える説明（指を置くと出る。前の OfferGap の説明） */
+export function gapTitle(): string {
+  return tr('推奨レベル: その深さに着いたときのレベルの目安（公開の表）。差が正なら推奨より低い。条件: 遠征の条件の危険度の合計',
+    'Recommended level: the typical level on arrival at that depth (public table). A positive gap means you are below it. Traits: sum of the traits\' danger');
 }
 
 /** 札の大きい字の「何を」（短く。どう達成するかの文は how に） */
@@ -58,7 +52,6 @@ export interface ObjectiveCardModel {
   level: { rec: number | null; you: number; gap: number | null };
   /** 条件の危険度の合計（AI の trait_danger） */
   traitDanger: number;
-  danger: { tone: DangerTone; label: string } | null;
   /** 小さい字の並び（倍率・条件の名前・守護者の格・くり返し・再挑戦 など）。詳しい文は「くわしく」の中（full） */
   facts: string[];
   /** AI に届くのと同じ、候補の全文（観測の camp.offers[].text。無ければ offerText で作る） */
@@ -101,7 +94,6 @@ export function objectiveCardModel(o: ExpeditionOffer, x: { level: number; rules
     points: o.points,
     level: { rec: g.recommendedLevel, you: x.level, gap: g.levelGap },
     traitDanger: g.traitDanger,
-    danger: dangerOf(g.levelGap, g.traitDanger),
     facts,
     full: x.fullText ?? offerText(L, o, r ? { rules: r, level: x.level } : undefined),
   };
@@ -158,7 +150,7 @@ export interface CampStart {
 
 /**
  * キャンプの主のボタン（S16c）: 「この目的で、出発」。押せるか・文・下の 1 行・確かめ。
- * 確かめは、特技・加護の候補を選んでいないとき（自分で潜るときは、遠征の中でも p で選べる。窓でそう伝える）
+ * 確かめは、特技・加護の候補を選んでいないとき（自分で潜るときは、遠征の中でも選べる: 特技は p、加護は地図の上の枠。窓でそう伝える）
  */
 export function campStart(x: CampStartInput): CampStart {
   const label = x.selected === 'endless' ? tr('目的なしで、出発', 'Set out with no objective') : tr('この目的で、出発', 'Set out with this objective');

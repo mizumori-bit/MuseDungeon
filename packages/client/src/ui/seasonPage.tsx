@@ -72,7 +72,7 @@ export function SeasonView(p: SeasonViewProps) {
     <Shell>
       <header class="ent-head">
         <div class="ent-headtext">
-          <h1 class="ent-title">{s.name}</h1>
+          <h1 class="ent-title">{s.name} <small class="ent-id">{s.id}</small></h1>
           <div class="hub-sub">
             {seasonStatusWord(s)}
             <span class="hub-dot" />
@@ -91,7 +91,10 @@ export function SeasonView(p: SeasonViewProps) {
         </label>
       </header>
       {pick.missing && <p class="hub-note warn">{tr(`シーズン「${p.requested}」は、見つからない。いちばん新しいシーズンを出している。`, `Season "${p.requested}" was not found; showing the latest one.`)}</p>}
-      {!final && <p class="hub-note">{tr('開催中は、今の順位と、もう公開されたもの（階段・特別な場所・共有層に載った火・討伐）だけを出す。ランを見返せるのは、確定した後。', 'While it runs, only the current standings and what is already public (stairs, special places, shared campfires, warden kills) are shown. Runs can be looked back on once it is final.')}</p>}
+      {/* 同じ PC からは、終わったランに「見返す」が出る（§25.1。runActions）: 注記を、そこに合わせる（S16d） */}
+      {!final && <p class="hub-note">{sw?.local
+        ? tr('開催中は、今の順位と、もう公開されたもの（階段・特別な場所・共有層に載った火・討伐）だけを出す。この PC はサーバーと同じなので、終わったランは、今も見返せる（ほかの PC からは、確定した後）。', 'While it runs, only the current standings and what is already public (stairs, special places, shared campfires, warden kills) are shown. This PC runs the server, so ended runs can be looked back on now (from other PCs, once it is final).')
+        : tr('開催中は、今の順位と、もう公開されたもの（階段・特別な場所・共有層に載った火・討伐）だけを出す。ランを見返せるのは、確定した後。', 'While it runs, only the current standings and what is already public (stairs, special places, shared campfires, warden kills) are shown. Runs can be looked back on once it is final.')}</p>}
 
       <section class="ent-sec">
         <div class="ent-sechead">
@@ -105,7 +108,7 @@ export function SeasonView(p: SeasonViewProps) {
         </div>
         {rows0.length === 0 && <p class="hub-note">{tr('まだ、だれも潜っていない。', 'Nobody has gone down yet.')}</p>}
         {rows0.length > 0 && !rows.length && <p class="hub-note">{tr('このシーズンに、自分と分かる行は無い（このブラウザの鍵と、このブラウザで遊んだ冒険から分かる範囲で）。', 'No row of yours in this season (as far as the keys in this browser and the adventures played here tell).')}</p>}
-        {rows.length > 0 && <div class="hub-tablewrap"><StandingsTable rows={rows} mine={mine} replay={(r) => rowButtons(byRow.get(r.name) ?? [])} /></div>}
+        {rows.length > 0 && <div class="hub-tablewrap"><StandingsTable rows={rows} mine={mine} banked replay={(r) => rowButtons(byRow.get(r.name) ?? [])} /></div>}
         {unmatched.length > 0 && (
           <p class="hub-note">
             {tr('順位の表の名前と結べなかった冒険（冒険の名前が、招いたときの名前と違う）: ', 'Adventures not matched to a row (named differently from the invitation): ')}

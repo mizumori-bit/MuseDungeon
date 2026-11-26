@@ -209,6 +209,8 @@ export function Play({ runId }: { runId: string }) {
   const eventsRef = useRef<PerceivedEvent[]>([]);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
+  /** キャンプの確かめの窓が開いている（S16d: 開いている間は、キーの受け口を止める） */
+  const dialogRef = useRef(false);
   /** target: 狙いのマスにいる敵（「投擲で決着」の対象） */
   const [aim, setAim] = useState<{ text: string; blocked: boolean; target?: string } | null>(null);
   catalogRef.current = catalog;
@@ -850,6 +852,8 @@ ${tr('それでも装備しますか？', 'Equip it anyway?')}`)) send({ ...last
       const tg = e.target as HTMLElement | null;
       if (tg && (tg.tagName === 'INPUT' || tg.tagName === 'TEXTAREA' || tg.tagName === 'SELECT')) return;
       if (e.ctrlKey || e.metaKey || e.altKey) return;
+      // キャンプの確かめの窓が開いている間は、遊ぶ画面のキーを受けない（p の後の数字で特技が選ばれないように。S16d。窓の Esc は窓が受ける）
+      if (dialogRef.current) return;
       const v = viewRef.current;
       if (!v) return;
       const md = modeRef.current;
@@ -1052,6 +1056,22 @@ ${tr('それでも装備しますか？', 'Equip it anyway?')}`)) send({ ...last
             : mode === 'ability' ? abilityModeHint()
               : mode === 'abtarget' && abPick ? abilityPickHint(abPick.name, abPick.target) : null;
 
+  // 断りと知らせ（flash）の 1 枚。迷宮では地図の重ね絵の中、キャンプでは主のボタンのすぐ下（S16d: キャンプは地図を外したので、出ていなかった）
+  const noticeEl = notice && (
+    <div class="notice" role="status">
+      ⚠ {notice.text}
+      {notice.actions && (
+        <div class="nacts">
+          {notice.actions.map((a, i) => (
+            <button key={i} class={`tiny ${a.run ? 'lifeline' : 'flee'}`} title={a.title}
+              onClick={() => { setNotice(null); if (a.run) a.run(); else if (a.command) send(a.command); }}>{a.label}</button>
+          ))}
+          <button class="tiny" onClick={() => setNotice(null)}>{tr('閉じる', 'Close')}</button>
+        </div>
+      )}
+    </div>
+  );
+
   if (!token) {
     return (
       <div class="page">
@@ -1086,7 +1106,8 @@ ${tr('それでも装備しますか？', 'Equip it anyway?')}`)) send({ ...last
         <CampView runId={runId} view={view} obs={obs} catalog={catalog} theme={th.theme}
           perkFocused={mode === 'perk'} perkSent={perkSent === perkK} onChoosePerk={choosePerk} onChooseBoon={(option) => send({ type: 'choose_boon', option })}
           onStart={startExpedition} onRetire={retire} onReport={() => send({ type: 'report_stairs' })}
-          log={log} onSay={(text) => send({ type: 'say', text })} />
+          log={log} onSay={(text) => send({ type: 'say', text })} notice={noticeEl} turnText={turnText} changes={changes}
+          onDialog={(open) => { dialogRef.current = open; if (open && modeRef.current !== 'normal') setMode('normal'); }} />
       ) : (
       <div class="layout">
         <div class="main">
@@ -1127,20 +1148,7 @@ ${tr('それでも装備しますか？', 'Equip it anyway?')}`)) send({ ...last
                         </button>
                       </div>
                     )}
-                    {notice && (
-                      <div class="notice">
-                        ⚠ {notice.text}
-                        {notice.actions && (
-                          <div class="nacts">
-                            {notice.actions.map((a, i) => (
-                              <button key={i} class={`tiny ${a.run ? 'lifeline' : 'flee'}`} title={a.title}
-                                onClick={() => { setNotice(null); if (a.run) a.run(); else if (a.command) send(a.command); }}>{a.label}</button>
-                            ))}
-                            <button class="tiny" onClick={() => setNotice(null)}>{tr('閉じる', 'Close')}</button>
-                          </div>
-                        )}
-                      </div>
-                    )}
+                    {noticeEl}
                   </div>
                 )}
                 {mode === 'pick' && pick && (

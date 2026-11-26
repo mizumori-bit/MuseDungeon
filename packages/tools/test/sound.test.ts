@@ -223,6 +223,32 @@ describe('sound cues (SOUND_SPEC §2.2)', () => {
     t.manager.closeAll();
   });
 
+  it('S16d: one blow never sounds both crit and hit, even when other events sit between the attack and the damage', async () => {
+    const t = await newRun('sound-crit-gap');
+    await t.start();
+    const v = t.view();
+    const me = v.self.id;
+    const m0 = soundStep(null, v, [], catalog).memory;
+    const step = (evs: Record<string, unknown>[]) => soundStep(m0, v, evs.map(ev), catalog).cues;
+    const crit = { type: 'attack', attacker: me, target: 'e_x', hit: true, crit: true };
+    const dmg = { type: 'damaged', target: 'e_x', source: me, via: 'melee' };
+    // attack と被害の間に、起きた・特性・物音が挟まる（engine はそうすることがある）
+    expect(step([crit, { type: 'monster_woke', id: 'e_x' }, { type: 'perk_triggered', actor: me, perk: 'core:x' }, { type: 'noise', pos: { x: 1, y: 1 } }, dmg])).toEqual(['crit_dealt']);
+    // 受ける側も同じ
+    const critIn = { type: 'attack', attacker: 'e_x', target: me, hit: true, crit: true };
+    const dmgIn = { type: 'damaged', target: me, source: 'e_x', via: 'melee' };
+    expect(step([critIn, { type: 'guardian_intel', id: 'e_x' }, dmgIn])).toEqual(['crit_taken']);
+    // 見えていない打ち手（attacker も source も伏せてある）
+    expect(step([{ ...critIn, attacker: null }, { type: 'noise' }, { ...dmgIn, source: null }])).toEqual(['crit_taken']);
+    // 同じ組の当たりが 2 回で、attack が届いたのは会心の 1 回だけ: 残りの 1 回は被害から鳴る
+    expect(step([crit, dmg, dmg])).toEqual(['crit_dealt', 'hit_dealt']);
+    // 外れた攻撃は、後の当たりの被害を打ち消さない
+    expect(step([{ ...crit, hit: false, crit: false }, dmg])).toEqual(['miss', 'hit_dealt']);
+    // 罠の被害は、前に攻撃を受けていても別に鳴る
+    expect(step([critIn, dmgIn, { type: 'damaged', target: me, source: null, via: 'trap' }])).toEqual(['crit_taken', 'hit_taken']);
+    t.manager.closeAll();
+  });
+
   it('only takes the player view and events (not the World)', () => {
     const fn = (w: World) => {
       // @ts-expect-error World は PlayerView ではない（音の状態は視界のデータからだけ作る。SOUND_SPEC §7）

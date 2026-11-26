@@ -29,9 +29,15 @@ export function abilityName(catalog: Catalog | null, id: string): string {
  */
 export function toViewEvents(events: readonly AnyEv[], catalog: Catalog | null, director = false): ViewEvent[] {
   const out: ViewEvent[] = [];
-  // 同じ束に攻撃の出来事が届いている一撃（攻撃者 > 相手）。その被害からは、踏み込みを重ねない
-  const swung = new Set<string>();
-  for (const ev of events) if (ev.type === 'attack' && ev.attacker && ev.target) swung.add(`${ev.attacker}>${ev.target}`);
+  // 同じ束に、当たった攻撃の出来事が届いている一撃（攻撃者 > 相手 の組ごとの数）。その数だけ、被害からは踏み込みを重ねない。
+  // 数え切った後の被害（同じ組の、攻撃の出来事が届いていない当たり）は、当たりごとに踏み込みを出す（S16d）
+  const swung = new Map<string, number>();
+  for (const ev of events) {
+    if (ev.type === 'attack' && ev.hit && ev.attacker && ev.target) {
+      const k = `${ev.attacker}>${ev.target}`;
+      swung.set(k, (swung.get(k) ?? 0) + 1);
+    }
+  }
   for (const ev of events) {
     switch (ev.type) {
       case 'entity_moved':
@@ -42,9 +48,11 @@ export function toViewEvents(events: readonly AnyEv[], catalog: Catalog | null, 
         break;
       case 'damaged':
         // 攻撃の出来事が届いていない当たり（会心でない当たりは文にならず、遊ぶ画面・追従だけの観戦の枠に届かない。S16a）: 被害から踏み込みを作る
-        if (ev.source && ev.target && (ev.via === 'melee' || ev.via === 'ranged') && !swung.has(`${ev.source}>${ev.target}`)) {
-          out.push({ kind: 'strike', id: ev.source, target: ev.target, ranged: ev.via === 'ranged' });
-          swung.add(`${ev.source}>${ev.target}`);
+        if (ev.source && ev.target && (ev.via === 'melee' || ev.via === 'ranged')) {
+          const k = `${ev.source}>${ev.target}`;
+          const n = swung.get(k) ?? 0;
+          if (n > 0) swung.set(k, n - 1);
+          else out.push({ kind: 'strike', id: ev.source, target: ev.target, ranged: ev.via === 'ranged' });
         }
         if (ev.amount > 0) out.push({ kind: 'damage', id: ev.target, amount: ev.amount });
         break;
