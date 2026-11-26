@@ -1,9 +1,11 @@
-// S13（SEASON.md §65.1）: 観戦の再生の列。画面から離した、時刻を外から渡す作りのテスト。
-// 等間隔・しばらく何も無かった後の 1 歩はすぐ・追いつき（8 秒から縮めて下限 40）・飛ぶ（30 秒・上限 2,000 歩・隠れていた後）・
-// AI の考えはその命令の歩を描くときに出る（もう描いた後・手番を使わない命令は、列の今の位置で）・順番が崩れない・終わりは最後・「すぐに」は今までどおり
+// S13（SEASON.md §65.1）・S13a（検査の指摘の直し）: 観戦の再生の列。画面から離した、時刻を外から渡す作りのテスト。
+// 等間隔・しばらく何も無かった後の 1 歩はすぐ・追いつき（8 秒から縮めて下限 40）・飛ぶ（30 秒・上限 2,000（歩と印）・隠れていた後）・
+// AI の考えはその命令の歩を描くときに出る（協力プレイでは、そのプレイヤーの歩に。もう描いた後・手番を使わない命令は、列の今の位置で）・
+// 順番が崩れない・終わりは最後・「すぐに（届いたときに描く）」は列を使わない・つなぎ直し・遅らせる観戦・待っている間の表示
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-  animSpeed, CATCHUP_FROM_MS, JUMP_LAG_MS, lagText, MAX_QUEUED_STEPS, MIN_STEP_MS, PlaybackQueue, readSpeed, sameThought, SPEED_MS, stepInterval, waitText,
+  animSpeed, CallRanges, CATCHUP_FROM_MS, HELD_STALE_MS, HeldCalls, JUMP_LAG_MS, lagText, MAX_QUEUED, MIN_STEP_MS, PlaybackQueue, readSpeed, sameThought, SPEED_MS, speedLabel,
+  stepActor, stepInterval, waitText,
   type Delivery,
 } from '../src/ui/playback';
 import { setLocale } from '../src/util';
@@ -190,10 +192,40 @@ describe('S13 §65.1: catching up and jumping', () => {
 
   it('more than 2,000 steps in the queue jumps, even while hidden', () => {
     const q = new PlaybackQueue<S, N>();
-    for (let i = 0; i <= MAX_QUEUED_STEPS; i++) q.push({ n: i }, 0);
+    for (let i = 0; i <= MAX_QUEUED; i++) q.push({ n: i }, 0);
     const r = q.tick(10, { hidden: true });
     expect(r.jumped).toBe(true);
-    expect(r.out).toHaveLength(MAX_QUEUED_STEPS + 1);
+    expect(r.out).toHaveLength(MAX_QUEUED + 1);
+  });
+
+  it('S13a: marks (calls that use no turn) count toward the limit too; past it, everything comes out quietly as a jump', () => {
+    const q = new PlaybackQueue<S, N>();
+    q.push({ n: 0 }, 0);
+    for (let i = 0; i < MAX_QUEUED; i++) q.mark(`observe ${i}`, i);
+    expect(q.size).toBe(1);
+    const r = q.tick(10, { hidden: true });
+    expect(r.jumped).toBe(true);
+    expect(r.out).toHaveLength(MAX_QUEUED + 1);
+    expect(q.empty).toBe(true);
+  });
+
+  it('S13a: marks piled up while hidden come out quietly when shown again (no burst of bubbles); later ones are as usual', () => {
+    const q = new PlaybackQueue<S, N>();
+    // 隠れている間に、手番を使わない呼び出しが 3 つ（歩は無い: おくれは 0 のまま）
+    for (let i = 0; i < 3; i++) q.mark(`observe ${i}`, i * 1_000);
+    expect(q.tick(2_500, { hidden: true }).out).toHaveLength(0);
+    const back = q.tick(10_000);
+    expect(back.jumped).toBe(false);
+    expect(back.out).toEqual([0, 1, 2].map((i) => ({ kind: 'mark', note: `observe ${i}`, quiet: true })));
+    // 表に戻った後に届いた印は、ふつうに出る
+    q.mark('look', 11_000);
+    expect(q.tick(11_000).out).toEqual([{ kind: 'mark', note: 'look' }]);
+    // 隠れている間に歩と印が溜まり、飛ばない（30 秒より短い）ときも、先頭の印は静かに。歩はふつうに
+    const q2 = new PlaybackQueue<S, N>();
+    q2.mark('observe', 0);
+    q2.push({ n: 1 }, 0);
+    expect(q2.tick(1_000, { hidden: true }).out).toHaveLength(0);
+    expect(q2.tick(5_000).out).toEqual([{ kind: 'mark', note: 'observe', quiet: true }, { kind: 'step', step: { n: 1 }, notes: [] }]);
   });
 
   it('"jump to now" (flush) hands over what is left; clear() throws the queue away (a new spectate target / a reconnect)', () => {
@@ -282,7 +314,8 @@ describe('S13 §65.1: AI thoughts come with the step of that command', () => {
     expect(q.tick(180).out).toEqual([{ kind: 'step', step: { n: 102 }, notes: ['t'] }]);
   });
 
-  it('"instant" does not use the queue: everything that arrived is drawn at once (with sound), as before S13', () => {
+  it('"instant (draw on arrival)" does not use the queue: everything that arrived is drawn at once, with sound and no spacing', () => {
+    expect(speedLabel('instant')).toBe('すぐに（届いたときに描く）');
     const q = new PlaybackQueue<S, N>('instant');
     for (let i = 0; i < 5; i++) q.push({ n: i }, 0);
     q.attach('explore', { after: 0, upTo: 5 }, 0);
@@ -290,9 +323,114 @@ describe('S13 §65.1: AI thoughts come with the step of that command', () => {
     expect(r.jumped).toBe(false);
     expect(r.next).toBeNull();
     expect(r.out.map((d) => d.kind)).toEqual(['step', 'step', 'step', 'step', 'step', 'mark']);
-    // 隠れていても、届いたときに描く（S13 より前と同じ）
+    // 隠れていても、届いたときに描く
     q.push({ n: 5 }, 10);
     expect(q.tick(10, { hidden: true }).out).toHaveLength(1);
+    setLocale('en');
+    expect(speedLabel('instant')).toBe('Instant (draw on arrival)');
+  });
+
+  it('S13a: with an empty queue the first step is drawn at once; the call notice that comes after binds to the next queued step, or comes at once', () => {
+    const q = new PlaybackQueue<S, N>();
+    // explore の 3 歩が届く。1 歩目は、列が空なのですぐ描く
+    q.push({ n: 1 }, 0, { seqs: { first: 11, last: 12 }, actor: 'p_1' });
+    expect(q.tick(0).out).toEqual([{ kind: 'step', step: { n: 1 }, notes: [] }]);
+    q.push({ n: 2 }, 2, { seqs: { first: 13, last: 14 }, actor: 'p_1' });
+    q.push({ n: 3 }, 4, { seqs: { first: 15, last: 16 }, actor: 'p_1' });
+    // その後に、呼び出しの知らせ（記録した時点の番号 16）: まだ描いていない、その命令の最初の歩（2 歩目）に
+    expect(q.attach('explore', { after: 10, upTo: 16, actor: 'p_1' }, 6)).toBe('step');
+    expect(q.tick(180).out).toEqual([{ kind: 'step', step: { n: 2 }, notes: ['explore'] }]);
+    // 1 歩だけの命令は、知らせより先に描き終わっている: 知らせは、列が空ならすぐ
+    q.tick(360);
+    q.push({ n: 4 }, 2_000, { seqs: { first: 17, last: 18 }, actor: 'p_1' });
+    expect(q.tick(2_000).out).toHaveLength(1);
+    expect(q.attach('move', { after: 16, upTo: 18, actor: 'p_1' }, 2_005)).toBe('tail');
+    expect(q.tick(2_005).out).toEqual([{ kind: 'mark', note: 'move' }]);
+  });
+});
+
+describe('S13a: co-op — a thought is bound to a step of the player who called', () => {
+  it('P1 / P2 / P1 steps interleaved: P1\'s call binds to P1\'s first step in range, not to P2\'s earlier step', () => {
+    const q = new PlaybackQueue<S, N>();
+    // 描いた後: P2 の手番（seq 1〜4）
+    q.push({ n: 0 }, 0, { seqs: { first: 1, last: 4 }, actor: 'p_2' });
+    q.tick(0);
+    // 列: P2 の手番・P1 の手番・P2 の手番・P1 の手番
+    q.push({ n: 1 }, 1, { seqs: { first: 5, last: 8 }, actor: 'p_2' });
+    q.push({ n: 2 }, 1, { seqs: { first: 9, last: 12 }, actor: 'p_1' });
+    q.push({ n: 3 }, 1, { seqs: { first: 13, last: 16 }, actor: 'p_2' });
+    q.push({ n: 4 }, 1, { seqs: { first: 17, last: 20 }, actor: 'p_1' });
+    // P1 の呼び出し（前の呼び出しは seq 4、記録したのは 20）: 幅にかかる最初の歩は P2 の n1 だが、P1 の n2 に結ぶ
+    expect(q.attach('P1: explore', { after: 4, upTo: 20, actor: 'p_1' }, 2)).toBe('step');
+    // P2 の呼び出し（前は 4、記録したのは 16）: P2 の n1 に
+    expect(q.attach('P2: fight', { after: 4, upTo: 16, actor: 'p_2' }, 3)).toBe('step');
+    const got = drive(q, 3, 10_000).filter((g) => g.d.kind === 'step').map((g) => g.d as { step: S; notes: N[] });
+    expect(got.map((d) => [d.step.n, d.notes])).toEqual([[1, ['P2: fight']], [2, ['P1: explore']], [3, []], [4, []]]);
+  });
+
+  it('no step of that player in range (the actor is unknown): binds to the last step in range; no step in range: at the queue\'s position', () => {
+    const q = new PlaybackQueue<S, N>();
+    q.push({ n: 0 }, 0, { seqs: { first: 1, last: 1 } });
+    q.tick(0);
+    q.push({ n: 1 }, 0, { seqs: { first: 2, last: 3 }, actor: null });
+    q.push({ n: 2 }, 0, { seqs: { first: 4, last: 5 }, actor: 'p_2' });
+    q.push({ n: 3 }, 0, { seqs: { first: 6, last: 9 }, actor: 'p_2' });
+    expect(q.attach('P1: wait', { after: 1, upTo: 5, actor: 'p_1' }, 1)).toBe('step');
+    expect(q.attach('P1: observe', { after: 9, upTo: 9, actor: 'p_1' }, 1)).toBe('tail');
+    const got = drive(q, 1, 10_000).map((g) => (g.d.kind === 'step' ? `s${g.d.step.n}${g.d.notes.length ? `+${g.d.notes.join(',')}` : ''}` : g.d.note));
+    expect(got).toEqual(['s1', 's2+P1: wait', 's3', 'P1: observe']);
+  });
+
+  it('who moved in a director-view step: the thought, else the player body that ended its turn, else the event that names a player', () => {
+    const playerOf = (id: string) => ({ e_a: 'p_1', e_b: 'p_2' } as Record<string, string>)[id];
+    // P1 の手番: 自分が動き、手番が終わり、敵が動く
+    expect(stepActor([{ type: 'entity_moved', id: 'e_a' }, { type: 'actor_scheduled', id: 'e_a', acted: true }, { type: 'actor_scheduled', id: 'e_m1' }], playerOf)).toBe('p_1');
+    // 時間切れの待ち（acted が無い）も、その者の手番
+    expect(stepActor([{ type: 'actor_scheduled', id: 'e_b' }, { type: 'entity_moved', id: 'e_m1' }], playerOf)).toBe('p_2');
+    // 考えが付いていれば、それが先
+    expect(stepActor([{ type: 'thought', player: 'p_2', text: 'x' }, { type: 'actor_scheduled', id: 'e_b' }], playerOf)).toBe('p_2');
+    // 敵の手番で P2 が倒れても、手番を打ったのは P1
+    expect(stepActor([{ type: 'actor_scheduled', id: 'e_a' }, { type: 'player_state', player: 'p_2', state: 'dead' }], playerOf)).toBe('p_1');
+    // キャンプの命令・シーズンの取り込み（体の手番が無い）: 出来事が名指すプレイヤー
+    expect(stepActor([{ type: 'season_synced', player: 'p_1' }], playerOf)).toBe('p_1');
+    expect(stepActor([{ type: 'tile_changed', x: 1, y: 1 }], playerOf)).toBeNull();
+  });
+});
+
+describe('S13a: call ranges across reconnects, and the delayed view', () => {
+  it('the range is after the player\'s previous call up to this one; a reconnect forgets the old numbers (seq that went back or jumped ahead)', () => {
+    const r = new CallRanges();
+    r.reset(100);
+    expect(r.range('p_1', 100)).toEqual({ after: 100, upTo: 100 }); // つなぐ前の記録: 幅は空
+    expect(r.range('p_1', 130)).toEqual({ after: 100, upTo: 130 });
+    expect(r.range('p_2', 140)).toEqual({ after: 100, upTo: 140 });
+    expect(r.range('p_1', 150)).toEqual({ after: 130, upTo: 150 });
+    // 順番の入れ替わった古い記録は、空の幅（前の番号を戻さない）
+    expect(r.range('p_1', 120)).toEqual({ after: 120, upTo: 120 });
+    expect(r.range('p_1', 160)).toEqual({ after: 150, upTo: 160 });
+    // つなぎ直したら、番号が戻っていた（記録から復旧したサーバー）: 前の接続の 160 を引きずらない
+    r.reset(80);
+    expect(r.range('p_1', 95)).toEqual({ after: 80, upTo: 95 });
+    // 番号が先へ飛んでいた
+    r.reset(900);
+    expect(r.range('p_1', 930)).toEqual({ after: 900, upTo: 930 });
+  });
+
+  it('a call ahead of the delayed view is held until the events reach it, and dropped when it never does', () => {
+    const h = new HeldCalls<string>();
+    h.hold('explore@320', 320, 0);
+    h.hold('fight@350', 350, 10);
+    h.hold('look@400', 400, 20);
+    expect(h.release(300, 1_000)).toEqual([]);
+    expect(h.release(330, 2_000)).toEqual(['explore@320']);
+    expect(h.release(360, 3_000)).toEqual(['fight@350']);
+    expect(h.size).toBe(1);
+    // 追いつかないまま古くなった
+    expect(h.release(370, 20 + HELD_STALE_MS + 1)).toEqual([]);
+    expect(h.size).toBe(0);
+    h.hold('x', 1, 0);
+    h.clear();
+    expect(h.size).toBe(0);
   });
 });
 
@@ -324,8 +462,23 @@ describe('S13 §65.1: what the screen shows while waiting', () => {
     expect(lagText(3_400)).toBe('3s behind');
   });
 
+  it('S13a: not while disconnected; counts from the newer of the last call and the (re)connection or a change of target', () => {
+    const base = { connected: true, queued: false, active: true, agent: true, ownerPending: false, lastAgentAt: 1_000, countFrom: 0, now: 20_000 };
+    expect(waitText(base)).toBe('考えている… 19 秒');
+    // 切れている間は出さない（持ち主の支度も）
+    expect(waitText({ ...base, connected: false })).toBeNull();
+    expect(waitText({ ...base, connected: false, ownerPending: true })).toBeNull();
+    // つなぎ直した（15 秒の時点）: 切れる前から続けて数えない
+    expect(waitText({ ...base, countFrom: 15_000 })).toBe('考えている… 5 秒');
+    expect(waitText({ ...base, countFrom: 16_000 })).toBeNull();
+    // つないだ後に呼び出しが来れば、そこから
+    expect(waitText({ ...base, countFrom: 3_000, lastAgentAt: 12_000 })).toBe('考えている… 8 秒');
+    // つないでから、まだ一度も呼び出しが来ていない
+    expect(waitText({ ...base, lastAgentAt: null, countFrom: 9_000 })).toBe('考えている… 11 秒');
+  });
+
   it('"thinking… N s" only with an empty queue, a live run, an AI adventurer, 5 s after the last call; the owner\'s preparations when known', () => {
-    const base = { queued: false, active: true, agent: true, ownerPending: false, lastAgentAt: 1_000, now: 1_000 };
+    const base = { connected: true, queued: false, active: true, agent: true, ownerPending: false, lastAgentAt: 1_000, countFrom: 0, now: 1_000 };
     expect(waitText({ ...base, now: 5_999 })).toBeNull();
     expect(waitText({ ...base, now: 6_000 })).toBe('考えている… 5 秒');
     expect(waitText({ ...base, now: 13_400 })).toBe('考えている… 12 秒');
