@@ -1,7 +1,8 @@
 // ライブ観戦。スナップショット＋イベントを shared の applyEvent で畳む（リプレイと同じ経路）。
 // 俯瞰: World そのまま。追従: projectPlayerView。spectatorPolicy=follow_only ではサーバーの PlayerView フレームのみ。
+// 届いた歩は再生の列（ui/playback.ts。S13 §65.1）に入れ、決まった間隔で 1 歩ずつ描く。音・吹き出し・演出・思考の欄は、その歩を描いたときに出る
 import type { AgentActivity, GameEvent, PerceivedEvent, PlayerView, RunListing, RunSummary, ServerMsg, SpectatorPolicy, World } from '@muse/shared';
-import { applyEvent, buildObservation, filterEventsForPlayer, formatObservationText, projectPlayerView } from '@muse/shared';
+import { applyEvent, buildObservation, filterEventsForPlayer, formatObservationText, ownerWaitOpen, projectPlayerView, seasonClosedView } from '@muse/shared';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { api, errorText } from '../api';
 import { connectWs, type WsStatus } from '../net/ws';
@@ -16,21 +17,27 @@ import { keyForRun } from '../ui/keys';
 import { AgentWaitBadge, directorExpInfo, ExpeditionStatusPanel, followExpInfo, NotesBlock, type ExpInfo } from '../ui/expedition';
 import { narrateWorld, ownerLinesFromPerceived, perceivedLines, thoughtsFrom } from '../ui/narration';
 import { AiPanel, MessageLog, PartyPanel, SummaryDialog, type LogLine, type ThoughtLine } from '../ui/panels';
+import {
+  animSpeed, CallRanges, DEFAULT_SPEED, HeldCalls, lagText, PlaybackQueue, readSpeed, sameThought, speedLabel, stepActor, waitText, WATCH_SPEEDS, type Delivery, type WatchSpeed,
+} from '../ui/playback';
 import { getLocale, getPref, setPref, tr } from '../util';
 
 interface Bubble { id: string; text: string; until: number }
 
 /**
- * 観戦の再生の待ち行列（届いた順）。AI のマクロ（explore・travel など）は 1 回の呼び出しで何十歩も一度に進むので、
- * 見る側だけ 1 手（同じ命令から出た出来事のまとまり）ずつ間を置いて見せる。AI の進みは変えない
+ * 再生の列の 1 歩。events: 俯瞰つき（World と出来事）の 1 手番（同じ命令 cause の出来事）。view: 追従だけの観戦の 1 枠
+ * （サーバーが、追従の相手が知覚した命令の確定 1 回ごとに送る。その時点の見え方と、届いた出来事）
  */
-type Frame = { t: 'events'; events: GameEvent[] } | { t: 'view'; msg: Extract<ServerMsg, { t: 'view' }> } | { t: 'ended'; summary: RunSummary };
-/** 1 手の間（ミリ秒）。届いた時点でたまっている手を、およそ PACE_DRAIN_MS で見せ終える間にする（AI の応答の待ち時間で追いつく） */
-const PACE_MAX_MS = 150;
-const PACE_MIN_MS = 25;
-const PACE_DRAIN_MS = 2500;
+type Frame = { t: 'events'; events: GameEvent[] } | { t: 'view'; msg: Extract<ServerMsg, { t: 'view' }> };
+/** 時間を使わない知らせ。agent の after: そのプレイヤーの前の呼び出しの番号（この命令の出来事は after より後） */
+type Note = { t: 'agent'; activity: AgentActivity; after: number } | { t: 'macro'; playerId: string; text: string } | { t: 'ended'; summary: RunSummary };
+/** 思考の欄の行（act: 呼び出しの知らせから作った行の、その命令の出来事の番号の幅。同じ考えを 2 回出さない） */
+type WatchThought = ThoughtLine & { act?: { after: number; upTo: number } };
 
-/** 出来事を 1 手ずつに分ける（同じ命令 cause の、続いた出来事が 1 手） */
+/** 同じ命令の出来事が 2 つの束に分かれて届いた（俯瞰の遅延）ときに、まだ描いていない歩へ足し込む */
+const mergeFrames = (a: Frame, b: Frame): Frame => (a.t === 'events' && b.t === 'events' ? { t: 'events', events: [...a.events, ...b.events] } : b);
+
+/** 出来事を 1 手番ずつに分ける（同じ命令 cause の、続いた出来事が 1 手番。プレイヤーの 1 手と、その後の敵の動き） */
 function splitSteps(events: readonly GameEvent[]): GameEvent[][] {
   const out: GameEvent[][] = [];
   for (const ev of events) {
@@ -39,6 +46,23 @@ function splitSteps(events: readonly GameEvent[]): GameEvent[][] {
     else out.push([ev]);
   }
   return out;
+}
+
+/** おくれ（1 秒を超えたら「3 秒おくれ」）と「今の所へ」。列を半秒ごとに読み直す */
+function PlaybackLag({ queue, onJump }: { queue: { lag(now: number): number }; onJump: () => void }) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setTick((n) => n + 1), 500);
+    return () => clearInterval(t);
+  }, []);
+  const text = lagText(queue.lag(performance.now()));
+  if (!text) return null;
+  return (
+    <span class="playlag">
+      <span class="tag lag">{text}</span>
+      <button class="small" onClick={onJump}>{tr('今の所へ', 'Jump to now')}</button>
+    </span>
+  );
 }
 
 export function Watch({ runId }: { runId: string }) {
@@ -58,6 +82,7 @@ export function Watch({ runId }: { runId: string }) {
   const [summary, setSummary] = useState<RunSummary | null>(null);
   const [, setTick] = useState(0);
   const [macro, setMacro] = useState<Record<string, string>>({});
+  const [speed, setSpeedState] = useState<WatchSpeed>(readSpeed(getPref('watchSpeed', DEFAULT_SPEED)));
 
   const worldRef = useRef<World | null>(null);
   const viewRef = useRef<PlayerView | null>(null);
@@ -67,14 +92,30 @@ export function Watch({ runId }: { runId: string }) {
   const followRef = useRef<string | null>(follow);
   const floorRef = useRef<string | null>(floorSel);
   const bubblesRef = useRef<Bubble[]>([]);
-  /** 最後にイベント・AI の記録を受け取った時刻（「AI の応答待ち」の秒数） */
-  const lastMsgRef = useRef<number>(performance.now());
   const macroRef = useRef<Record<string, string>>({});
-  const queueRef = useRef<Frame[]>([]);
-  const playTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const paceRef = useRef(PACE_MAX_MS);
-  /** 最後に 1 手を見せた時刻（マクロの 1 歩ずつが数ミリ秒おきに別々に届くので、届いた時ではなく、見せた時から間を数える） */
-  const lastPlayRef = useRef(0);
+  /** 再生の列（S13）。描くまで、届いた歩と知らせを持つ */
+  const queueRef = useRef<PlaybackQueue<Frame, Note> | null>(null);
+  if (!queueRef.current) queueRef.current = new PlaybackQueue<Frame, Note>(speed, mergeFrames);
+  /** 列を進める（速さを替えたとき）・今の所へ飛ぶ（ボタン・相手を替えたとき）。つないでいる間だけ */
+  const pumpRef = useRef<(() => void) | null>(null);
+  const jumpRef = useRef<(() => void) | null>(null);
+  /** つないだ時点の番号（つなぐ前の考えの見分け）と、「考えている」の数え始め（つないだ時・相手を替えた時） */
+  const connectSeqRef = useRef(0);
+  const countFromRef = useRef(performance.now());
+  /** つながっているか（つながっていない間は、待っている間の札を出さない） */
+  const wsStatusRef = useRef<WsStatus>('connecting');
+  /** サーバーの観戦の方針（welcome から）。delayed（遅らせる観戦）では、遅らせた所より先の呼び出しの記録を持っておく */
+  const wsPolicyRef = useRef<SpectatorPolicy | null>(null);
+  /** 呼び出しの知らせの、その命令の出来事の幅（つないだら数え直す）・プレイヤーごとの最後に届いた時刻・同じ知らせを 2 回入れない控え */
+  const rangesRef = useRef(new CallRanges());
+  const actAtRef = useRef<Record<string, number>>({});
+  const actKeysRef = useRef<Set<string>>(new Set());
+  /** 追従だけの観戦: 列に入れた最後の枠（次の枠の出来事は、この番号より後。この枠の手番の者が、次の枠で手番を打つ） */
+  const lastViewRef = useRef<PlayerView | null>(null);
+  /** 俯瞰つき: 体の ID → プレイヤー（歩で手番を打った者を見分ける） */
+  const entityPlayerRef = useRef<Map<string, string>>(new Map());
+  /** 思考の欄（同じ考えを 2 回出さないため、今の中身をすぐ読めるように持つ） */
+  const thoughtsRef = useRef<WatchThought[]>([]);
   /** 開催中のシーズンのランの観戦に渡すトークン（S3 §25.1） */
   const seasonTokRef = useRef<string | null>(null);
   catalogRef.current = catalog;
@@ -119,22 +160,50 @@ export function Watch({ runId }: { runId: string }) {
     return fk && w.floors[fk] ? fk : directorFloor(w, fpid).floorKey;
   };
 
-  /** 表示中のフロアの手番が AI 操作のプレイヤーなら、その名前（マクロ実行中は除く） */
-  const agentTurn = (): { name: string } | null => {
+  /**
+   * 待っている間の札（§65.1 の 4）: 列が空で、ランが続いていて、見ている相手が AI の冒険者で、その番（かキャンプ）のとき。
+   * 「考えている… N 秒」（最後の呼び出しの知らせか、つないだ時・相手を替えた時の、新しいほうから）か、キャンプで持ち主の支度が「まだ」なら「持ち主の支度を、待っている」。
+   * つながっていない間と、遅らせる観戦（delayed。呼び出しの知らせが届かず、見えている所は AI の今より前）では出さない
+   */
+  const waitProbe = (): string | null => {
+    const q = queueRef.current;
+    if (!q || wsPolicyRef.current === 'delayed') return null;
+    let name: string, pid: string, agent: boolean, active = false, ownerPending = false;
     if (followOnly) {
       const v = viewRef.current;
-      if (!v || v.runStatus === 'ended' || !v.turn.current) return null;
-      const p = v.party.find((pp) => pp.entityId === v.turn.current);
-      return p && p.controller.kind === 'agent' && p.state === 'alive' && !macroRef.current[p.playerId] ? { name: p.name } : null;
+      if (!v) return null;
+      name = v.self.name;
+      pid = v.playerId;
+      agent = v.self.controller.kind === 'agent';
+      active = v.runStatus !== 'ended' && (v.status === 'your_turn' || (v.status === 'at_camp' && !seasonClosedView(v)));
+      ownerPending = ownerWaitOpen(v);
+    } else {
+      const w = worldRef.current, fp = followRef.current;
+      const pr = w && fp ? w.players[fp] : undefined;
+      if (!w || !fp || !pr) return null;
+      name = pr.name;
+      pid = fp;
+      agent = pr.controller.kind === 'agent';
+      if (w.status !== 'ended' && !macroRef.current[fp]) {
+        if (pr.state === 'alive') {
+          const e = w.entities[pr.entityId];
+          active = !!e?.pos && w.floors[e.pos.floor]?.currentActor === e.id;
+        } else if (pr.state === 'at_camp') {
+          try {
+            const v = projectPlayerView(w, fp);
+            active = !seasonClosedView(v);
+            ownerPending = ownerWaitOpen(v);
+          } catch {
+            active = false;
+          }
+        }
+      }
     }
-    const w = worldRef.current;
-    if (!w || w.status === 'ended') return null;
-    const fk = featuredFloor(w);
-    const cur = fk ? w.floors[fk]?.currentActor : null;
-    const pid = cur ? w.entities[cur]?.player : undefined;
-    const pr = pid ? w.players[pid] : undefined;
-    if (!pid || !pr || pr.controller.kind !== 'agent' || pr.state !== 'alive' || macroRef.current[pid]) return null;
-    return { name: pr.name };
+    const text = waitText({
+      connected: wsStatusRef.current === 'open', queued: !q.empty, active, agent, ownerPending,
+      lastAgentAt: actAtRef.current[pid] ?? null, countFrom: countFromRef.current, now: performance.now(),
+    });
+    return text ? `${text} — ${name}` : null;
   };
 
   /** 音: 見ている相手のプレイヤー（追従の相手。俯瞰でも選んでいる相手）の視界と、その人に届いた出来事から（観戦者だけに見える情報は使わない） */
@@ -187,18 +256,42 @@ export function Watch({ runId }: { runId: string }) {
     if (events?.length) void r.animate(toViewEvents(events.filter((e) => e.floor === fk), c, true));
   };
 
+  /** 思考の欄に足す（同じ考えを 2 回出さない）。足した行を返す */
+  const pushThoughts = (lines: WatchThought[]): WatchThought[] => {
+    const cur = thoughtsRef.current;
+    const recent = cur.slice(-60);
+    const added: WatchThought[] = [];
+    for (const l of lines) {
+      if (recent.some((x) => sameThought(x, l)) || added.some((x) => sameThought(x, l))) continue;
+      added.push(l);
+    }
+    if (added.length) {
+      thoughtsRef.current = [...cur, ...added].sort((a, b) => a.seq - b.seq).slice(-100);
+      setThoughts(thoughtsRef.current);
+    }
+    return added;
+  };
+
   useEffect(() => {
     if (policy === null) return;
     if (followOnly && !follow) return;
     worldRef.current = null;
     viewRef.current = null;
+    lastViewRef.current = null;
     setLog([]);
+    const queue = queueRef.current!;
+    queue.clear();
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    /** 遅らせる観戦: まだ届いていない所の呼び出しの記録と、届いた出来事のいちばん大きい番号 */
+    const held = new HeldCalls<AgentActivity>();
+    let reached = 0;
     const tok = seasonTokRef.current ? { profileToken: seasonTokRef.current } : {};
     const hello = followOnly
       ? { t: 'hello' as const, role: 'spectator' as const, runId, mode: 'follow' as const, follow: follow!, ...tok }
       : { t: 'hello' as const, role: 'spectator' as const, runId, mode: 'director' as const, ...tok };
-    /** 1 手を見せる（World に畳んで描く・記録・吹き出し・音） */
-    const applyEvents = (events: GameEvent[]) => {
+
+    /** 俯瞰つき: 1 手番（か、飛ぶときは溜まった全部）を World に畳む。quiet: 飛ぶとき（描かない・音・吹き出し・演出なし。文と思考の欄には足す） */
+    const applyEvents = (events: GameEvent[], quiet: boolean) => {
       const c = catalogRef.current;
       const w = worldRef.current;
       if (!w) return;
@@ -216,97 +309,238 @@ export function Watch({ runId }: { runId: string }) {
       if (!applied.length) return;
       if (c) setLog((l) => [...l, ...narrateWorld(applied, w, c, getLocale(), modeRef.current === 'follow' ? followRef.current : null)].slice(-400));
       // AI の考えと、持ち主の決定・伝言（S8 §54.6）。吹き出しは AI の考えだけ
-      const th2 = thoughtsFrom(applied, w, c);
-      if (th2.length) {
-        setThoughts((t) => [...t, ...th2].slice(-100));
-        for (const t of th2) {
+      const added = pushThoughts(thoughtsFrom(applied, w, c));
+      if (!quiet) {
+        let bubble = false;
+        for (const t of added) {
           if (t.kind) continue;
           const eid = w.players[t.player]?.entityId;
-          if (eid) bubblesRef.current.push({ id: eid, text: t.text, until: performance.now() + 4000 });
+          if (eid) { bubblesRef.current.push({ id: eid, text: t.text, until: performance.now() + 4000 }); bubble = true; }
         }
-        setTimeout(() => render(), 4100);
+        if (bubble) setTimeout(() => render(), 4100);
       }
       setTick((n) => n + 1);
-      render(applied);
-      sound(applied);
+      if (!quiet) {
+        render(applied);
+        sound(applied);
+      }
     };
-    const applyFrame = (f: Frame) => {
-      if (f.t === 'events') applyEvents(f.events);
-      else if (f.t === 'view') {
-        const m = f.msg;
-        viewRef.current = m.view;
-        setLog((l) => [...l, ...perceivedLines(m.events)].slice(-400));
-        // 持ち主の決定と伝言（S8 §54.6）: 追従だけの観戦では、view の枠の出来事から。AI の考えと seq の順に並べる
-        const own = ownerLinesFromPerceived(m.events, m.view, catalogRef.current);
-        if (own.length) setThoughts((t) => [...t, ...own.filter((x) => !t.some((y) => y.kind === x.kind && y.seq === x.seq))].sort((a, b) => a.seq - b.seq).slice(-100));
-        setTick((n) => n + 1);
+    /** 追従だけ: 1 枠を見せる（見え方を替えて描く・文・持ち主の行・音）。quiet: 飛ぶとき */
+    const applyView = (m: Extract<ServerMsg, { t: 'view' }>, quiet: boolean) => {
+      viewRef.current = m.view;
+      setLog((l) => [...l, ...perceivedLines(m.events)].slice(-400));
+      // 持ち主の決定と伝言（S8 §54.6）: 追従だけの観戦では、view の枠の出来事から。AI の考えと seq の順に並べる
+      pushThoughts(ownerLinesFromPerceived(m.events, m.view, catalogRef.current));
+      setTick((n) => n + 1);
+      if (!quiet) {
         render(undefined, m.events);
         soundDirector.update(m.view, m.events.map((e) => e.event), catalogRef.current);
-      } else setSummary(f.summary);
-      // 「AI の応答待ち」は、画面が追いついたときから数える
-      lastMsgRef.current = performance.now();
+      }
     };
-    /** 待ち行列から 1 手ずつ見せる。前の 1 手から paceRef の間を置いて（しばらく何も無かった後の 1 手はすぐ） */
-    const play = () => {
-      const f = queueRef.current.shift();
-      if (!f) { playTimer.current = null; return; }
-      applyFrame(f);
-      lastPlayRef.current = performance.now();
-      playTimer.current = queueRef.current.length ? setTimeout(play, paceRef.current) : null;
+    /** AI の呼び出しの知らせ（その命令の歩を描くとき・列の今の位置で）: 直前の命令と、考え（吹き出しも）。吹き出しを足したら true */
+    const applyAgent = (n: Extract<Note, { t: 'agent' }>, quiet: boolean): boolean => {
+      const a = n.activity;
+      setActivities((xs) => [...xs, a].slice(-50));
+      const text = a.args?.thought;
+      if (typeof text !== 'string' || !text) return false;
+      // 名前と吹き出しの相手: 追従だけの観戦は、いま描いている view（追従の相手の PlayerView）から。俯瞰つきは World から
+      let name = a.playerId;
+      let eid: string | undefined;
+      if (followOnly) {
+        const v0 = viewRef.current;
+        if (!v0) return false;
+        const me = v0.party.find((p) => p.playerId === a.playerId);
+        name = me?.name ?? a.playerId;
+        eid = me?.entityId;
+      } else {
+        const w0 = worldRef.current;
+        if (!w0) return false;
+        name = w0.players[a.playerId]?.name ?? a.playerId;
+        eid = w0.players[a.playerId]?.entityId;
+      }
+      // 俯瞰つきでは、同じ考えが出来事（thought）からも来る（その命令の幅の中なら、同じ考えとして 2 回出さない）。
+      // 追従だけの観戦（SEASON.md §42.1）と、つなぐ前の考え・手番を使わない命令の考えは、ここからだけ分かる
+      const added = pushThoughts([{ seq: a.seq + 1, player: a.playerId, name, text, act: { after: n.after, upTo: a.seq } }]);
+      // つなぐ前の考え（俯瞰つきは、つないだときに直近の記録をまとめて受ける）は、欄にだけ出す（吹き出しを重ねない）
+      if (!added.length || quiet || !eid || (!followOnly && a.seq < connectSeqRef.current)) return false;
+      bubblesRef.current.push({ id: eid, text, until: performance.now() + 4000 });
+      setTimeout(() => render(), 4100);
+      return true;
     };
-    const enqueue = (frames: Frame[]) => {
-      queueRef.current.push(...frames);
-      // たまっている手を、およそ PACE_DRAIN_MS で見せ終える間（届くたびに決め直す）
-      paceRef.current = Math.max(PACE_MIN_MS, Math.min(PACE_MAX_MS, Math.floor(PACE_DRAIN_MS / Math.max(1, queueRef.current.length))));
-      if (playTimer.current) return;
-      const wait = paceRef.current - (performance.now() - lastPlayRef.current);
-      if (wait > 0) playTimer.current = setTimeout(play, wait);
-      else play();
+    const applyNote = (n: Note, quiet: boolean): boolean => {
+      if (n.t === 'agent') return applyAgent(n, quiet);
+      if (n.t === 'macro') setMacro((s) => ({ ...s, [n.playerId]: n.text }));
+      else setSummary(n.summary);
+      return false;
     };
+    /**
+     * 1 回の取り出しを出す（歩は描き、結んだ知らせも、このとき出す）。続けて出る印（手番を使わない呼び出しなど）は、
+     * 吹き出しを最後の考えの 1 つだけにし、描き直しは最後に 1 回。静かな印（隠れていた間に溜まったもの）は、欄に文を足すだけ
+     */
+    const deliverAll = (out: Delivery<Frame, Note>[]) => {
+      // 歩と歩の間に続けて出る印の、それぞれの続きの中で、最後の（静かでない）考えの印だけが吹き出しを出す
+      const loud = new Set<number>();
+      let lastOfRun = -1;
+      for (let i = out.length - 1; i >= -1; i--) {
+        const d = i >= 0 ? out[i] : null;
+        if (!d || d.kind === 'step') {
+          if (lastOfRun >= 0) loud.add(lastOfRun);
+          lastOfRun = -1;
+          continue;
+        }
+        if (lastOfRun < 0 && !d.quiet && d.note.t === 'agent' && typeof d.note.activity.args?.thought === 'string' && d.note.activity.args.thought) lastOfRun = i;
+      }
+      let bubble = false;
+      out.forEach((d, i) => {
+        if (d.kind === 'mark') {
+          bubble = applyNote(d.note, !!d.quiet || (d.note.t === 'agent' && !loud.has(i))) || bubble;
+          return;
+        }
+        // 演出の速さを、今の間に合わせる（間が短いときだけ速める）
+        if (rRef.current) rRef.current.speed = animSpeed(queue.interval(performance.now()));
+        if (d.step.t === 'events') applyEvents(d.step.events, false);
+        else applyView(d.step.msg, false);
+        for (const n of d.notes) bubble = applyNote(n, false) || bubble;
+      });
+      if (bubble) render();
+    };
+    /** 今の所へ飛ぶ: 途中は描かない・音も鳴らさない（文の記録と思考の欄には足す）。最後の状態を 1 回描き、音の状態だけ合わせる */
+    const applyJump = (out: Delivery<Frame, Note>[]) => {
+      if (!out.length) return;
+      const evs: GameEvent[] = [];
+      let lastView: PlayerView | null = null;
+      const lines: LogLine[] = [];
+      const owners: ThoughtLine[] = [];
+      const notes: Note[] = [];
+      for (const d of out) {
+        if (d.kind === 'mark') { notes.push(d.note); continue; }
+        if (d.step.t === 'events') evs.push(...d.step.events);
+        else {
+          const m = d.step.msg;
+          viewRef.current = m.view;
+          lastView = m.view;
+          lines.push(...perceivedLines(m.events));
+          owners.push(...ownerLinesFromPerceived(m.events, m.view, catalogRef.current));
+        }
+        notes.push(...d.notes);
+      }
+      if (evs.length) applyEvents(evs, true);
+      if (lines.length) setLog((l) => [...l, ...lines].slice(-400));
+      if (owners.length) pushThoughts(owners);
+      setTick((n) => n + 1);
+      for (const n of notes) applyNote(n, true);
+      if (rRef.current) rRef.current.speed = 1;
+      render();
+      if (followOnly) { if (lastView) soundDirector.update(lastView, [], catalogRef.current, { quiet: true }); }
+      else sound([], true);
+    };
+    const stop = () => { if (timer) { clearTimeout(timer); timer = null; } };
+    /** 列を進める: 出すものを出して、次に呼ぶ時刻を決める（隠れている間は溜めるだけ） */
+    const pump = () => {
+      stop();
+      const t0 = performance.now();
+      const r = queue.tick(t0, { hidden: document.hidden });
+      if (r.jumped) applyJump(r.out);
+      else deliverAll(r.out);
+      // 間は、この歩を出した時刻から数える（描くのにかかった時間で、間が伸びていかないように）
+      if (r.next !== null) timer = setTimeout(pump, Math.max(0, r.next - (performance.now() - t0)));
+    };
+    /** 足したとき: 待っている時計が無ければ、すぐ進める（しばらく何も無かった後の 1 歩は、すぐ描く） */
+    const kick = () => { if (!timer) pump(); };
+    pumpRef.current = pump;
+    jumpRef.current = () => { stop(); applyJump(queue.flush(performance.now()).out); };
+    const onVisible = () => { if (!document.hidden) pump(); };
+    document.addEventListener('visibilitychange', onVisible);
+
+    /** 呼び出しの知らせを、その命令の歩に結ぶ（この命令の出来事は、そのプレイヤーの前の呼び出しより後から、記録した時点の番号まで。協力プレイでは、そのプレイヤーの歩に） */
+    const attachCall = (a: AgentActivity, now: number) => {
+      const r = rangesRef.current.range(a.playerId, a.seq);
+      queue.attach({ t: 'agent', activity: a, after: r.after }, { ...r, actor: a.playerId }, now);
+    };
+    /** 俯瞰つきの体の ID → プレイヤー（スナップショットと、参加の出来事から） */
+    const learnPlayers = (w: World) => {
+      const map = new Map<string, string>();
+      for (const pid of w.playerOrder) { const p = w.players[pid]; if (p) map.set(p.entityId, pid); }
+      entityPlayerRef.current = map;
+    };
+
     const onMsg = (m: ServerMsg) => {
-      if (m.t === 'snapshot' || m.t === 'events' || m.t === 'view' || m.t === 'agent' || m.t === 'macro') lastMsgRef.current = performance.now();
+      const now = performance.now();
       switch (m.t) {
+        case 'welcome':
+          // つなぎ直し: 列を捨てて、今の所から（俯瞰つきは、この後のスナップショットから。追従だけは、次の枠から）。「考えている」も数え直す
+          stop();
+          queue.clear();
+          held.clear();
+          lastViewRef.current = null;
+          countFromRef.current = now;
+          wsPolicyRef.current = m.policy;
+          break;
         case 'snapshot':
-          // つなぎ直し: 待ち行列を捨てて、届いた World から見せ直す
-          if (playTimer.current) clearTimeout(playTimer.current);
-          playTimer.current = null;
-          queueRef.current = [];
+          stop();
+          queue.clear();
+          held.clear();
           worldRef.current = structuredClone(m.world);
+          learnPlayers(worldRef.current);
+          connectSeqRef.current = m.seq;
+          rangesRef.current.reset(m.seq);
+          reached = m.seq;
           if (worldRef.current.status === 'ended') setSummary(null);
           setTick((n) => n + 1);
           render();
           sound([], true);
           break;
-        case 'events':
-          if (worldRef.current) enqueue(splitSteps(m.events).map((events) => ({ t: 'events' as const, events })));
-          break;
-        case 'view':
-          enqueue([{ t: 'view', msg: m }]);
-          break;
-        case 'agent': {
-          setActivities((a) => [...a, m.activity].slice(-50));
-          // 接続前の thought はスナップショットに含まれないので、ツール呼び出し記録から補う
-          const text = m.activity.args?.thought;
-          const w0 = worldRef.current;
-          // 追従だけの観戦（開催中のシーズンのランなど）には World が来ない: 思考は、ここからだけ分かる（SEASON.md §42.1）。
-          // 名前と吹き出しの相手は、いま持っている view（追従の相手の PlayerView）から取る
-          const v0 = viewRef.current;
-          if (typeof text === 'string' && text && !w0 && v0) {
-            const me = v0.party.find((p) => p.playerId === m.activity.playerId);
-            const line: ThoughtLine = { seq: m.activity.seq + 1, player: m.activity.playerId, name: me?.name ?? m.activity.playerId, text };
-            setThoughts((t) => (t.some((x) => x.text === line.text && x.seq === line.seq) ? t : [...t, line].sort((a, b) => a.seq - b.seq).slice(-100)));
-            if (me?.entityId) bubblesRef.current.push({ id: me.entityId, text, until: performance.now() + 4000 });
-          } else if (typeof text === 'string' && text && w0 && m.activity.seq < w0.seq) {
-            const line: ThoughtLine = { seq: m.activity.seq + 1, player: m.activity.playerId, name: w0.players[m.activity.playerId]?.name ?? m.activity.playerId, text };
-            setThoughts((t) => (t.some((x) => x.text === line.text && x.seq === line.seq) ? t : [...t, line].sort((a, b) => a.seq - b.seq).slice(-100)));
+        case 'events': {
+          if (!worldRef.current) break;
+          const map = entityPlayerRef.current;
+          for (const events of splitSteps(m.events)) {
+            for (const ev of events) if (ev.type === 'player_joined') map.set(ev.player.entityId, ev.player.id);
+            const actor = stepActor(events as unknown as ({ type: string } & Record<string, unknown>)[], (id) => map.get(id));
+            queue.push({ t: 'events', events }, now, { seqs: { first: events[0].seq, last: events[events.length - 1].seq }, key: events[0].cause, actor });
+            reached = Math.max(reached, events[events.length - 1].seq);
           }
+          // 遅らせる観戦: 届いた出来事が追いついた呼び出しの記録を、その歩に結ぶ（追いつかないまま古くなったものは捨てる）
+          for (const a of held.release(reached, now)) attachCall(a, now);
+          kick();
+          break;
+        }
+        case 'view': {
+          // 1 枠 = 追従の相手が知覚した確定 1 回（サーバーが分けて送る）。出来事の番号は、前の枠より後から、この枠の見え方の番号まで。
+          // 手番を打った者は、前の枠で手番だった者（分かる範囲で。つないだ直後の枠・キャンプは分からない）
+          const prev = lastViewRef.current;
+          const seq = m.view.seq;
+          if (!prev) { connectSeqRef.current = seq; rangesRef.current.reset(seq); }
+          const cur = prev?.turn.current ?? null;
+          const actor = cur ? prev?.party.find((p) => p.entityId === cur)?.playerId ?? null : null;
+          queue.push({ t: 'view', msg: m }, now, { seqs: { first: prev ? Math.min(seq, prev.seq + 1) : seq, last: seq }, actor });
+          lastViewRef.current = m.view;
+          kick();
+          break;
+        }
+        case 'agent': {
+          const a = m.activity;
+          // つなぎ直しで、同じ記録がもう一度届く（俯瞰つきは、つないだときに直近の記録を受ける）
+          const k = `${a.playerId}|${a.seq}|${a.tool}|${a.wall}`;
+          if (actKeysRef.current.has(k)) break;
+          actKeysRef.current.add(k);
+          if (actKeysRef.current.size > 500) actKeysRef.current = new Set([...actKeysRef.current].slice(-250));
+          actAtRef.current[a.playerId] = now;
+          // 遅らせる観戦（delayed）: つないだときに届く直近の記録には、遅らせた所より先のものがある。届いた出来事が追いつくまで持つ
+          if (wsPolicyRef.current === 'delayed' && a.seq > reached) { held.hold(a, a.seq, now); break; }
+          attachCall(a, now);
+          kick();
           break;
         }
         case 'macro':
-          setMacro((s) => ({ ...s, [m.playerId]: m.state === 'running' ? `${m.kind} (${m.steps})` : '' }));
+          // 遅らせる観戦では、マクロの知らせは今の AI のもので、見えている所より先なので出さない
+          if (wsPolicyRef.current === 'delayed') break;
+          queue.mark({ t: 'macro', playerId: m.playerId, text: m.state === 'running' ? `${m.kind} (${m.steps})` : '' }, now);
+          kick();
           break;
         case 'ended':
-          enqueue([{ t: 'ended', summary: m.summary }]);
+          // ランの終わりは、列の最後に（後から来た歩は、この前に入る。先に「終わった」と出ない）
+          queue.mark({ t: 'ended', summary: m.summary }, now, { final: true });
+          kick();
           break;
         case 'error':
           setError(`${m.error.message}${m.error.hint ? ` — ${m.error.hint}` : ''}`);
@@ -315,21 +549,37 @@ export function Watch({ runId }: { runId: string }) {
           break;
       }
     };
-    const ws = connectWs(hello, onMsg, setWsStatus);
+    const ws = connectWs(hello, onMsg, (s) => { wsStatusRef.current = s; setWsStatus(s); });
     return () => {
       ws.close();
-      if (playTimer.current) clearTimeout(playTimer.current);
-      playTimer.current = null;
-      queueRef.current = [];
+      stop();
+      queue.clear();
+      pumpRef.current = null;
+      jumpRef.current = null;
+      document.removeEventListener('visibilitychange', onVisible);
       soundDirector.leave();
     };
   }, [runId, policy, followOnly ? follow : null]);
 
+  // 俯瞰つきで見ている相手を替えたら、列を今の所まで進め（途中は描かない。§65.1 の 5。追従だけの観戦は、つなぎ直しで列を捨てる）、「考えている」を数え直す
+  useEffect(() => {
+    countFromRef.current = performance.now();
+    if (!followOnly) jumpRef.current?.();
+  }, [follow]);
   useEffect(() => { render(); }, [catalog, mode, follow, floorSel]);
   // 見ている相手が替わったら、その人の視界で音を作り直す（合図は鳴らさない）
   useEffect(() => { if (!followOnly) sound([], true); }, [catalog, follow]);
 
   const setMode = (m: 'director' | 'follow') => { setPref('watchMode', m); setModeState(m); setLog([]); };
+  /** 速さ（§65.1 の 5。ブラウザに覚える）。「すぐに」に替えたら、溜まった分は今の所へ飛ぶ */
+  const changeSpeed = (s: WatchSpeed) => {
+    setPref('watchSpeed', s);
+    setSpeedState(s);
+    const q = queueRef.current!;
+    q.speed = s;
+    if (s === 'instant') jumpRef.current?.();
+    else pumpRef.current?.();
+  };
 
   const w = worldRef.current;
   let obsText: string | null = null;
@@ -405,6 +655,11 @@ export function Watch({ runId }: { runId: string }) {
             </select>
           </label>
         )}
+        <span class="seg playspeed" title={tr('再生の速さ（1 手番の間）。「すぐに」は、届いたときに描く', 'Playback speed (time per turn). "Instant" draws each turn as it arrives')}>
+          <span class="muted">{tr('再生', 'Playback')}</span>
+          {WATCH_SPEEDS.map((s) => <button key={s} class={`small ${speed === s ? 'on' : ''}`} onClick={() => changeSpeed(s)}>{speedLabel(s)}</button>)}
+        </span>
+        {speed !== 'instant' && <PlaybackLag queue={queueRef.current!} onJump={() => jumpRef.current?.()} />}
         {w && <span class="muted">seq {w.seq} {w.status === 'ended' ? tr('（終了）', '(ended)') : ''}</span>}
         {Object.entries(macro).filter(([, v]) => v).map(([pid, v]) => <span key={pid} class="tag">{w?.players[pid]?.name ?? pid}: {v}</span>)}
       </div>
@@ -416,7 +671,7 @@ export function Watch({ runId }: { runId: string }) {
             overlay={
               <>
                 {followCamp && <CampScene theme={th.theme} />}
-                <AgentWaitBadge probe={agentTurn} lastRef={lastMsgRef} />
+                <AgentWaitBadge probe={waitProbe} />
                 {campNote && <div class="macro">{campNote}</div>}
               </>
             }
