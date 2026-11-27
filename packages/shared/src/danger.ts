@@ -3,8 +3,34 @@
 import type { Catalog } from './catalog';
 import { memoryKey, stairsSealed } from './catalog';
 import type { MonsterMemory } from './types';
-import { ceilDiv, floorDiv } from './util';
+import { ceilDiv, cheb, floorDiv } from './util';
 import type { EntityView, PlayerView } from './view';
+
+/**
+ * 階を移ったときの追っ手（S18。SEASON.md §73.2 の 6。engine の事実: プレイヤーのいない階の時間は止まる。敵は階段を越えない）。
+ * 「取れる手」と階段までの見込みの、短い句
+ */
+export const STAIRS_STAY_JA = '敵は階段を追ってこないが、その階に残る。離れている間、その階の時間は止まり、戻ると同じ所にいる';
+export const STAIRS_STAY_EN = 'enemies do not follow you between floors, but they stay: time stops on that floor while you are away, so they are where you left them when you return';
+
+/**
+ * use_stairs の応答の 1 行（S18。SEASON.md §73.2 の 6）: 階を移る前に見えていた、追跡中で逃げていない敵の数（見えていなかった者は数えない）。
+ * 階を移っていない（断られた・同じ階）・追っ手がいなければ null。near: 階段（移る前の自分のマス）から 2 マス以内
+ */
+export function stairsLeftBehindText(L: 'ja' | 'en', before: PlayerView, after: PlayerView): string | null {
+  const from = before.self.pos, to = after.self.pos;
+  if (!from || !to || !before.floor || !after.floor || before.floor.key === after.floor.key) return null;
+  const hunters = before.entities.filter((e) => e.cat === 'monster' && e.awareness === 'hunting' && !e.fleeing);
+  if (!hunters.length) return null;
+  const near = hunters.filter((e) => cheb(e.pos, from) <= 2).length;
+  const n = hunters.length;
+  if (L === 'en') {
+    const where = near === n ? 'by the stairs on the floor you left' : near ? `on the floor you left (${near} of them by the stairs)` : 'on the floor you left';
+    return `The ${n} enem${n === 1 ? 'y' : 'ies'} hunting you stay${n === 1 ? 's' : ''} ${where} (time there stops while you are away; when you go back they are where you left them${near ? ', and the ones by the stairs are next to you again' : ''}).`;
+  }
+  const where = near === n ? '前の階の階段のそばに' : near ? `前の階に（うち ${near} 体は階段のそば）` : '前の階に';
+  return `追っていた敵 ${n} 体は、${where}残っている（離れている間、その階の時間は止まる。戻ると、離れたときの所にいる${near ? '。階段のそばの敵とは、また隣り合う' : ''}）。`;
+}
 
 /** 自分の実効の速さ（状態異常の倍率込み） */
 export function selfSpeed(view: PlayerView, catalog: Catalog): number {
@@ -229,7 +255,7 @@ export function fleeOptionsText(view: PlayerView, catalog: Catalog): string {
   const xv = view.expedition;
   const done = xv?.status === 'objective_complete' && (xv.objective.type !== 'retrieve_relic' || xv.progress.relicHeldByYou);
   const opts = [
-    stairs && !sealed ? (ja ? `階段を使う（use_stairs で${stairs === 'down' ? '降りる' : '上る'}。階を移れば敵は追ってこない）` : `the stairs (use_stairs to go ${stairs}; enemies do not follow you between floors)`) : '',
+    stairs && !sealed ? (ja ? `階段を使う（use_stairs で${stairs === 'down' ? '降りる' : '上る'}。${STAIRS_STAY_JA}）` : `the stairs (use_stairs to go ${stairs}; ${STAIRS_STAY_EN})`) : '',
     // 目的が未達なら、extract は confirm: true が無いと 1 回断られる（S6b。valid_actions の撤退の行と同じ）
     canExtract ? (done ? (ja ? 'ここで帰る（extract）' : 'go home from here (extract)') : (ja ? 'ここで帰る（extract。目的は未達: confirm: true で撤退）' : 'go home from here (extract; objective not met: withdraw with confirm: true)')) : '',
     lifeline ? (ja ? `帰還の綱（use_item { slot: '${lifeline.slot}' }）` : `the lifeline (use_item { slot: '${lifeline.slot}' })`) : '',

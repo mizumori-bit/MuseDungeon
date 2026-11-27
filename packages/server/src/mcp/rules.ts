@@ -96,7 +96,7 @@ function ja(r: CatalogRules): Record<Topic, string> {
 - 守護者は置かれた場所を持ち場にし、気づいていない間は持ち場の近くから離れない（守護者付きの遺物では遺物のそば）。追跡は他の敵と同じで、見失って捜索を終えると持ち場へ戻る。
 - 遠征を始めると、その遠征の目的ではない未討伐の守護者（大守護者を除く）と名前付きの強敵は階を去る（会ったことがあれば changes に出る。強敵のいた階の異変の文も消える）。候補の再挑戦（同じ守護者・賞金首をもう一度目的にする）の相手は残る。
 - 傷跡: 再挑戦の相手は、キャンプの間に全快せず、前の挑戦で与えたダメージの 4 分の 1 が残る（最大体力の半分まで）。候補に「傷跡で体力 −N」と出る
-- 帰還（extract）: 目的を達成したうえで、いずれかの階段（上り・下り）の上にいること。追跡中の敵が見えていてもよい（敵は階段を追ってこない。階を移れば追ってこない）。遠征は「達成」で終わる。
+- 帰還（extract）: 目的を達成したうえで、いずれかの階段（上り・下り）の上にいること。追跡中の敵が見えていてもよい（敵は階段を追ってこない。階を移れば追ってこないが、その階に、そのまま残る: use_stairs の項）。遠征は「達成」で終わる。
 - 撤退（extract confirm: true）: 目的が未達成でも同じ条件で extract できる。生還し、遠征は「撤退」で終わる。撤退でも、目的の点を除いた戦利品の ${h.withdrawPct}% は確定する（報酬なしではない）。目的なしの遠征（endless）は、extract がいつも撤退の扱い（confirm: true が要り、戦利品の ${h.withdrawPct}% が確定する）。
 - 帰還の綱: 遠征の開始時にキャンプが 1 本持たせる（余っていても 1 本、無ければ補充。坑の中では手に入らない。捨てる・投げることはできず、所持数に数えない）。use_item で使うと${r.lifeline.turns > 0 ? ` ${r.lifeline.turns} 手番のあいだ行動できず（その間の攻撃は受ける）、その後` : 'その手番で'}キャンプへ戻る。確定するのは目的を除いた戦利品の ${r.lifeline.pct}%（目的を達成済みでも目的の点は入らない。目的の点は階段の上の extract でだけ確定する）。持っている遺物は運べず、失われる。倒した守護者は倒れたまま。次の候補の深さ（目標として達成した最深の階）も上がらない。遠征は「綱で帰還」で終わる。
 - 結果の段階は 4 つ: 階段で帰還（戦利品 × 倍率）／綱で帰還（目的を除いて ${r.lifeline.pct}%）／階段で撤退（目的を除いて ${h.withdrawPct}%）／死亡（0、ランの終わり）。
@@ -179,7 +179,7 @@ ${traitsLines(r, true)}
 - set_options: 応答テキストの出し方。map（auto: 階が変わった・新しいセルを知った・敵の出入りがあった応答だけ地図を付ける）、inventory（on_change: 所持品の行は変わったときだけ）、status_line（short: 状態が変わらない間の ▶ 行を短く）。ゲームには影響しない。
 - observe は待たずに返る。自分の番を待つには wait_for_turn（COOP 用）。
 - 所持品はスロット文字 a〜z で指す。装備品は所持品に入ったまま装備される。
-- use_stairs: 足元の階段を使う。下り階段 > で 1 階深く。地下1階の上には戻れない（帰還は extract）。敵は階段を追ってこない。
+- use_stairs: 足元の階段を使う。下り階段 > で 1 階深く。地下1階の上には戻れない（帰還は extract）。敵は階段を追ってこない。ただし、その階に残る: あなたのいない階の時間は止まるので、離れている間、敵は動かず、散らない（上の階で待っても、散らない）。戻ると、離れたときの所に、追ったままいる（階段の隣にいた敵は、また隣）。守護者だけは、離れていた手番に応じて回復する。次の遠征を始めると、すべての階の敵が落ち着く（下のキャンプの項）。
 - interact: 扉の開閉（dir 指定）、泉・祭壇の操作（隣接して dir 指定か、上に乗って省略）。
 - retire: ランを終える（キャラクターは戻らない）。遠征だけを終えるなら extract。
 - 全行動ツールに expect_seq（前提とした observation の seq）を渡すと、状態が進んでいた場合 stale_turn で拒否される（二重実行防止）。`,
@@ -333,7 +333,7 @@ function en(r: CatalogRules): Record<Topic, string> {
 - A guardian keeps the place it was put as its post and, while unaware, stays near it (by the relic for a guarded relic). It hunts like any other monster, and once it loses you and ends its search it goes back to its post.
 - When an expedition starts, unslain guardians (not wardens) and named elites that are not its objective leave their floors (changes tells you if you met them; the floor-event text of an elite's floor goes too). The target of a rematch offer (the same guardian or bounty as the objective again) stays.
 - Scars: a rematch target does not heal fully at camp; a quarter of the damage you dealt last time stays (up to half its max HP). The offer shows "scars: -N HP"
-- Extract (complete): objective done and standing on any stairs (up or down). Hunting enemies in view do not prevent it (monsters never follow you between floors). The expedition ends as completed.
+- Extract (complete): objective done and standing on any stairs (up or down). Hunting enemies in view do not prevent it (monsters never follow you between floors; they stay on theirs as they were: see use_stairs). The expedition ends as completed.
 - Withdraw (extract confirm: true): same conditions without the objective; you survive and the expedition ends as withdrawn. A withdrawal still banks ${h.withdrawPct}% of the haul without the objective points (it is not "no reward"). On an expedition with no objective (endless), extracting is always a withdrawal (it needs confirm: true and banks ${h.withdrawPct}% of the haul).
 - Lifeline: camp gives each participant exactly one at the start of every expedition (extras are trimmed; none can be found in the pit; it cannot be dropped or thrown and does not count toward capacity). use_item it to return to camp${r.lifeline.turns > 0 ? ` after ${r.lifeline.turns} helpless turns (you still take hits)` : ' at once'}. It banks ${r.lifeline.pct}% of the haul without the objective (even if the objective is complete; objective points are banked only by extracting on stairs). A carried relic cannot come along and is lost; a slain guardian stays dead; the next offers' depth does not rise. The expedition ends as lifeline.
 - Four outcomes: stairs + complete (haul x multiplier) / lifeline (${r.lifeline.pct}% without the objective) / stairs withdrawal (${h.withdrawPct}% without the objective) / death (0, the run ends).
@@ -416,7 +416,7 @@ Free: choose_perk{option} / observe / wait_for_turn / expedition / review / reco
 - set_options: response verbosity (map auto/always/never, inventory on_change/always, status_line short/long). No game effect.
 - observe returns immediately; use wait_for_turn to wait for your turn (COOP).
 - Inventory slots are letters a-z. Equipped items stay in the inventory.
-- use_stairs uses the stairs underfoot. You cannot go above depth 1 (leave with extract). Monsters do not follow you up or down stairs.
+- use_stairs uses the stairs underfoot. You cannot go above depth 1 (leave with extract). Monsters do not follow you up or down stairs, but they stay on that floor: time stops on a floor with no player, so while you are away they do not move or scatter (waiting upstairs does not disperse them). When you return they are where you left them, still hunting (those next to the stairs are next to you again). Only guardians recover with the turns you were away. Starting the next expedition calms every floor (see camp below).
 - retire ends the run (the character does not come back). To end only the expedition, extract.
 - Pass expect_seq (the seq of the observation you acted on) to get stale_turn instead of double-acting.`,
     combat: `# Combat and recovery (integers only)

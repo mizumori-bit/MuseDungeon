@@ -186,6 +186,11 @@ export function perkChoiceNote(): string {
   return tr('手番を使わない。選ぶまで進行は止まらない（保留できる）。キーボード: p を押してから 1〜9', 'Takes no turn and nothing waits for it (you may hold it). Keyboard: press p, then 1-9');
 }
 
+/** 迷宮の中の、特技の候補の小さい札の言葉（S18。SEASON.md §73.2 の 4。押すか p で、候補が開く） */
+export function perkChipLabel(more: number): string {
+  return tr(`特技を選べる（p）${more > 0 ? `・あと ${more} 件` : ''}`, `Perk to choose (p)${more > 0 ? ` · ${more} more` : ''}`);
+}
+
 /** 特技の候補・能動技の並びにキーボードを向けている間の案内（地図の上） */
 export function perkModeHint(): string {
   return tr('特技: 番号キー（1〜9）で選ぶ。手番は使わない（p/Esc で戻る）', 'Perk: press 1-9 to choose; takes no turn (p/Esc to exit)');

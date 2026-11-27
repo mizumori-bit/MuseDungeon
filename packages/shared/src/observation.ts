@@ -7,7 +7,7 @@ import { floorTraitsText, guardianDisplayName, multText, objectiveText, offerTex
 import { COLLECT_WITHIN, collectTargets, isStationary, macroProbe, macroStopError, pickableItems, sameOrWorseEquip, worseEquip } from './macro';
 import type { MacroStop } from './macro';
 import type { Command } from './commands';
-import { attacksPerTurn, avgHitsOf, chaseAttacks, fightThreats, lineBlockedShooter, memoryOf, monsterSpeedOf, recordedHitsOf, selfSpeed, threatEstimate, usualEstimate } from './danger';
+import { attacksPerTurn, avgHitsOf, chaseAttacks, fightThreats, lineBlockedShooter, memoryOf, monsterSpeedOf, recordedHitsOf, selfSpeed, STAIRS_STAY_EN, STAIRS_STAY_JA, threatEstimate, usualEstimate } from './danger';
 import type { PerceivedEvent } from './filter';
 import { lastWithoutXp } from './filter';
 import type { ReportCompare } from './expeditionStats';
@@ -185,6 +185,11 @@ export interface ObsExpedition {
 
 export interface ObsCamp {
   next_no: number;
+  /**
+   * 帰還の綱を持っていないときの 1 行（S18。SEASON.md §73.2 の 8）: 遠征を始めると、キャンプが 1 本持たせる（engine の issueLifeline。費用なし。1 本まで）。
+   * 持っていれば無い
+   */
+  lifeline_text?: string;
   offers: {
     index: number; type: ObjectiveType; target_depth: number | null; points: number; text: string;
     slot?: OfferSlot; traits?: string[]; multiplier_pct: number;
@@ -384,9 +389,10 @@ export interface Observation {
     /**
      * 持ち主の希望（進め方。S14。SEASON.md §65.4 の 2）: pilot で進めてほしい、のときだけ（self 既定のときは無い）。握る項目ではない（待たなくてよい）。
      * サーバーが、プロフィールの控えから、本人の応答にだけ足す（World に入れない）。text はキャンプの観測の文に出る 1 行（遠征を始めた直後の応答にも 1 回）。
-     * 迷宮の中のほかの応答は、値だけ（S14b: 長い文を毎回付けない）
+     * 迷宮の中のほかの応答は、値だけ（S14b: 長い文を毎回付けない）。
+     * S18（§73.2 の 5）: 持ち主が pilot の希望を取り下げた後の、最初の本人の応答に 1 回だけ { pace: 'self', text }（取り下げの 1 行）
      */
-    owner_pace?: { pace: 'pilot'; text?: string };
+    owner_pace?: { pace: 'pilot' | 'self'; text?: string };
   };
   /** items_omitted: 記憶の中の遠いアイテムのうち省いた件数 */
   visible: { monsters: ObsMonster[]; items: ObsItem[]; players: ObsPlayer[]; features: ObsFeature[]; items_omitted?: number };
@@ -559,6 +565,8 @@ export interface ObservationOptions {
    * 観測だけを作ったとき（持ち主の画面の写し）には付かない）
    */
   ownerPace?: string;
+  /** 持ち主が pilot の希望を取り下げた後の、最初の本人の応答の 1 行（S18。サーバーが、プロフィールの「最後に伝えた希望」の控えから作る） */
+  ownerPaceRevoked?: string;
 }
 
 const DIR_JA: Record<Dir, string> = { n: '北', ne: '北東', e: '東', se: '南東', s: '南', sw: '南西', w: '西', nw: '北西' };
@@ -2047,8 +2055,8 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
       const faster = huntingReach.filter((m) => (m.speed_ratio ?? 1) * view.self.speed > eff).length;
       alerts.push({
         code: 'escape',
-        text: t(L, `${st.type === 'up' ? '上り' : '下り'}階段まで ${st.path_len} 歩。${faster ? `追ってくる敵のうち ${faster} 体はあなたより速い` : '追ってくる敵にあなたより速いものはいない'}（階段の上なら extract できる・階を移れば敵は追ってこない）${st.occupied_by ? `。ただし階段の上に ${(hostiles.find((m) => m.id === st.occupied_by)?.name ?? st.occupied_by)} がいて、ふさがれている` : ''}`,
-          `${st.path_len} steps to the stairs ${st.type}. ${faster ? `${faster} of your pursuers are faster than you` : 'none of your pursuers is faster than you'} (on stairs you can extract; enemies do not follow you between floors)${st.occupied_by ? `. But ${(hostiles.find((m) => m.id === st.occupied_by)?.name ?? st.occupied_by)} stands on the stairs and blocks them` : ''}`),
+        text: t(L, `${st.type === 'up' ? '上り' : '下り'}階段まで ${st.path_len} 歩。${faster ? `追ってくる敵のうち ${faster} 体はあなたより速い` : '追ってくる敵にあなたより速いものはいない'}（階段の上なら extract できる・${STAIRS_STAY_JA}）${st.occupied_by ? `。ただし階段の上に ${(hostiles.find((m) => m.id === st.occupied_by)?.name ?? st.occupied_by)} がいて、ふさがれている` : ''}`,
+          `${st.path_len} steps to the stairs ${st.type}. ${faster ? `${faster} of your pursuers are faster than you` : 'none of your pursuers is faster than you'} (on stairs you can extract; ${STAIRS_STAY_EN})${st.occupied_by ? `. But ${(hostiles.find((m) => m.id === st.occupied_by)?.name ?? st.occupied_by)} stands on the stairs and blocks them` : ''}`),
         // worst_if_chased: 追われたままなら最悪の被害（敵ごとに歩く間の攻撃回数 × 受けた最大の一撃。記録の無い敵がいれば null。V3-4b §28.5）
         // expected_if_chased: 被害の見込み（S1c §14.4 の 1）
         data: { stairs: st.type, path_len: st.path_len, faster, worst_if_chased: unrecorded ? null : chaseOf(st.path_len!).worst, expected_if_chased: unrecorded ? null : chaseOf(st.path_len!).expected, usual_if_chased: unrecorded ? null : chaseOf(st.path_len!).usual, hp: me.stats.hp },
@@ -2292,6 +2300,10 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
         })(),
       },
       next_no: view.camp.nextNo,
+      ...(!view.inventory.some((it) => it.kind === 'core:lifeline') ? {
+        lifeline_text: t(L, '帰還の綱は持っていない。次の遠征を始めると、キャンプが 1 本持たせる（費用なし。持てるのは 1 本まで）',
+          'You have no lifeline. Starting the next expedition gives you one from camp (free; you can carry only one)'),
+      } : {}),
       offers: view.camp.offers.map((o) => ({
         index: o.index, type: o.objective.type, target_depth: o.objective.targetDepth, points: o.points,
         ...(o.rechallenge ? { rechallenge: { no: o.rechallenge.no } } : {}),
@@ -2492,6 +2504,8 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
   // 持ち主の希望（進め方。S14）: サーバーが渡したときだけ（pilot のとき。self のときは何も足さない）
   // 迷宮の中は値だけ（S14b。遠征を始めた直後の 1 回は、サーバーが文を足す）
   if (opts.ownerPace && view.status !== 'dead' && view.status !== 'ended') obs.self.owner_pace = view.status === 'at_camp' ? { pace: 'pilot', text: opts.ownerPace } : { pace: 'pilot' };
+  // 取り下げの 1 行（S18）: キャンプでも迷宮の中でも、文つきで（1 回だけ。いつ出すかはサーバーが決める）
+  else if (opts.ownerPaceRevoked && view.status !== 'dead' && view.status !== 'ended') obs.self.owner_pace = { pace: 'self', text: opts.ownerPaceRevoked };
   // fight の被弾の前の判定の数（S2a §20.10 の 5: pilot がマクロと同じ判定をするため）
   if (me.pos && view.status !== 'at_camp') {
     const threats = fightThreats(catalog, view.entities.filter((e) => e.cat === 'monster'), me.pos);
@@ -3279,6 +3293,8 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
         : t(L, `次の遠征の候補（遠征 ${obs.camp.next_no}）。start_expedition { offer } で始める:`, `Offers for expedition ${obs.camp.next_no} (start with start_expedition { offer }):`));
       for (const o of obs.camp.offers) lines.push('  ' + o.text);
       lines.push('  ' + t(L, 'endless) 目的なしでひたすら潜る（offer: "endless"）', 'endless) no objective, just descend (offer: "endless")'));
+      // 帰還の綱を持っていない（S18）: 候補の並びのすぐ後に（決まりは get_rules の長い文の中にしか無く、使った後のキャンプで読まれなかった）
+      if (obs.camp.lifeline_text) lines.push(obs.camp.lifeline_text);
     }
     if (obs.recent_events.length) {
       lines.push(t(L, '直前の出来事:', 'Recent events:'));
@@ -3293,7 +3309,7 @@ export function formatObservationText(obs: Observation, locale: Locale, fmt: Tex
       : s.directive.message_kept
         ? t(L, `持ち主から（前のキャンプと同じ伝言）: ${s.directive.message}`, `From your owner (same message as at the last camp): ${s.directive.message}`)
         : t(L, `持ち主から: ${s.directive.message}`, `From your owner: ${s.directive.message}`));
-    // 持ち主の希望（進め方。S14）: 伝言の行の次に（pilot のときだけ。サーバーが本人の応答にだけ足す）
+    // 持ち主の希望（進め方。S14）: 伝言の行の次に（pilot のときと、取り下げた後の 1 回だけ。サーバーが本人の応答にだけ足す）
     if (s.owner_pace?.text) lines.push(s.owner_pace.text);
     if (obs.checkpoint) lines.push(...checkpointLines(L, obs.checkpoint));
     return lines.join('\n');

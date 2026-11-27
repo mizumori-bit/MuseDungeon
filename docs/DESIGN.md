@@ -1956,3 +1956,9 @@ engine・World・出来事・命令の形・内容のデータと版は S11 の�
   - G. 終わった（引退した・倒れた）自分のランの、シーズンの表の「見返す」: `GET /api/seasons/:id/watch` の `review`（持ち主の鍵を示したときだけ。数えるのは、動いているランは World、記録だけのランは要約の遠征）と、`runActions` の `status: 'ended'`。同じ PC から（巻き戻しを開ける）なら、巻き戻しが先。
   - H. 見え方をどこから取るか（`watchSource`: WS・見返し・待つ・出さない）。見返しの間・見返せる遠征が無いときは、WS につながない。
   - テスト: `tools/test/s17a.test.ts`（B・C・E・G）、`client/test/review.test.ts` に A・D・G・H。
+
+### 42.26 S18: s4 の遠征 5 への直し（SEASON.md §73.2。PROTOCOL.md §9.18。版は変えていない）
+
+- 画面: 音量のバーは、共通の `input` の padding と枠を、範囲の入力から外した（つまみが端まで動く）。音の設定の「合図」は画面の言葉だけ「効果音」（SFX）。観戦の待っている間の札（`ui/playback.ts` の `waitText`）は、キャンプでは「キャンプにいる（AI の最後の呼び出し: N 分前）」、迷宮の中は最後の呼び出しから 2 分を越えたら「AI の応答を待っている（最後の呼び出しから N 分）」。呼び出しの記録は、受けた時刻ではなく記録の時刻（`wall`）で数える（`callAtOf`）。見返しの間は出さない。自分で潜るとき、迷宮の中の特技・加護の候補は、地図の枠の左上の小さい札（`ChoiceChip`）。押すか p で、その場に候補の枠が開く（Esc・閉じる・選ぶで札に戻る。ほかの操作は止めない）。地図の上に行を足さない。
+- AI に届く文: 進め方の取り下げの 1 回の知らせ（プロフィールの `paceTold`。`ProfileService.paceToldOf`・`notePaceTold`、`RunSession.ownerPaceTold`・`noteOwnerPaceTold`、`SessionPlayerPort.paceRevokedText`）。use_stairs の追っ手の 1 文（`shared/src/danger.ts` の `stairsLeftBehindText`。移る前の見え方 `before` から）。規則と「取れる手」・階段までの見込みの句（`STAIRS_STAY_JA`・`STAIRS_STAY_EN`）。wait・rest の被害の内訳（`harmSourcesText`）。キャンプの綱の 1 行（`ObsCamp.lifeline_text`）。マクロの止まり方は変えていない（`wait { turns }` は careful で、見えている敵の射撃でも `attacked` で止まる）。
+- テスト: `tools/test/s18.test.ts`（取り下げの知らせ・階段の事実と 1 文・wait の止まり方と頭の文・綱の行）、`client/test/s18.test.ts`（待っている間の札・`callAtOf`）。

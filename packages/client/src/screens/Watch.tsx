@@ -20,7 +20,7 @@ import { AgentWaitBadge, directorExpInfo, ExpeditionStatusPanel, followExpInfo, 
 import { narrateWorld, ownerLinesFromPerceived, perceivedLines, thoughtsFrom } from '../ui/narration';
 import { AiPanel, MessageLog, PartyPanel, SummaryDialog, type LogLine, type ThoughtLine } from '../ui/panels';
 import {
-  animSpeed, CallRanges, DEFAULT_SPEED, HeldCalls, lagText, PlaybackQueue, readSpeed, sameThought, speedLabel, stepActor, waitText, WATCH_SPEEDS, type Delivery, type WatchSpeed,
+  animSpeed, callAtOf, CallRanges, DEFAULT_SPEED, HeldCalls, lagText, PlaybackQueue, readSpeed, sameThought, speedLabel, stepActor, waitText, WATCH_SPEEDS, type Delivery, type WatchSpeed,
 } from '../ui/playback';
 import { rewindAllowed } from '../ui/replayGate';
 import {
@@ -246,13 +246,13 @@ export function Watch({ runId, exp = null }: { runId: string; exp?: ExpParam }) 
 
   /**
    * 待っている間の札（§65.1 の 4）: 列が空で、ランが続いていて、見ている相手が AI の冒険者で、その番（かキャンプ）のとき。
-   * 「考えている… N 秒」（最後の呼び出しの知らせか、つないだ時・相手を替えた時の、新しいほうから）か、キャンプで持ち主の支度が「まだ」なら「持ち主の支度を、待っている」。
+   * 「考えている… N 秒」（最後の呼び出しの知らせか、つないだ時・相手を替えた時の、新しいほうから。2 分を越えたら「AI の応答を待っている」）、キャンプなら「キャンプにいる（AI の最後の呼び出し: N 分前）」、持ち主の支度が「まだ」なら「持ち主の支度を、待っている」（S18。文の決まりは waitText）。
    * つながっていない間と、遅らせる観戦（delayed。呼び出しの知らせが届かず、見えている所は AI の今より前）では出さない
    */
   const waitProbe = (): string | null => {
     const q = queueRef.current;
     if (!q || wsPolicyRef.current === 'delayed') return null;
-    let name: string, pid: string, agent: boolean, active = false, ownerPending = false;
+    let name: string, pid: string, agent: boolean, active = false, ownerPending = false, atCamp = false;
     if (followOnly) {
       const v = viewRef.current;
       if (!v) return null;
@@ -261,6 +261,7 @@ export function Watch({ runId, exp = null }: { runId: string; exp?: ExpParam }) 
       agent = v.self.controller.kind === 'agent';
       active = v.runStatus !== 'ended' && (v.status === 'your_turn' || (v.status === 'at_camp' && !seasonClosedView(v)));
       ownerPending = ownerWaitOpen(v);
+      atCamp = v.status === 'at_camp';
     } else {
       const w = worldRef.current, fp = followRef.current;
       const pr = w && fp ? w.players[fp] : undefined;
@@ -273,6 +274,7 @@ export function Watch({ runId, exp = null }: { runId: string; exp?: ExpParam }) 
           const e = w.entities[pr.entityId];
           active = !!e?.pos && w.floors[e.pos.floor]?.currentActor === e.id;
         } else if (pr.state === 'at_camp') {
+          atCamp = true;
           try {
             const v = projectPlayerView(w, fp);
             active = !seasonClosedView(v);
@@ -284,7 +286,7 @@ export function Watch({ runId, exp = null }: { runId: string; exp?: ExpParam }) 
       }
     }
     const text = waitText({
-      connected: wsStatusRef.current === 'open', queued: !q.empty, active, agent, ownerPending,
+      connected: wsStatusRef.current === 'open', queued: !q.empty, active, agent, ownerPending, atCamp, reviewing,
       lastAgentAt: actAtRef.current[pid] ?? null, countFrom: countFromRef.current, now: performance.now(),
     });
     return text ? `${text} — ${name}` : null;
@@ -748,7 +750,8 @@ export function Watch({ runId, exp = null }: { runId: string; exp?: ExpParam }) 
           if (actKeysRef.current.has(k)) break;
           actKeysRef.current.add(k);
           if (actKeysRef.current.size > 500) actKeysRef.current = new Set([...actKeysRef.current].slice(-250));
-          actAtRef.current[a.playerId] = now;
+          // 呼び出しの時刻（S18: つないだときに届く直近の記録は、受けた時刻ではなく、記録の時刻で。「AI の最後の呼び出し: N 分前」）
+          actAtRef.current[a.playerId] = Math.max(actAtRef.current[a.playerId] ?? Number.NEGATIVE_INFINITY, callAtOf(now, a.wall, Date.now()));
           // 遅らせる観戦（delayed）: つないだときに届く直近の記録には、遅らせた所より先のものがある。届いた出来事が追いつくまで持つ
           if (wsPolicyRef.current === 'delayed' && a.seq > reached) { held.hold(a, a.seq, now); break; }
           attachCall(a, now);

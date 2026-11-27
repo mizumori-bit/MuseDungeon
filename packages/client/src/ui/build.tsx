@@ -26,14 +26,20 @@ export function lineageDisplayName(catalog: Catalog | null | undefined, classId:
   return l ? nameOf(l.name, getLocale(), fallback) : fallback;
 }
 
-/** 加護の候補（大守護者を倒した。choose_boon。手番を使わない。V3-3 §3.2） */
-export function BoonChoicePanel({ choice, catalog, onChoose }: {
-  choice: { options: string[]; depth: number }; catalog: Catalog | null | undefined; onChoose: (option: number) => void;
+/**
+ * 加護の候補（大守護者を倒した。choose_boon。手番を使わない。V3-3 §3.2）。
+ * onClose: 渡すと、見出しに「閉じる」（迷宮の中で、地図の枠に重ねて開いたとき。S18）
+ */
+export function BoonChoicePanel({ choice, catalog, onChoose, onClose }: {
+  choice: { options: string[]; depth: number }; catalog: Catalog | null | undefined; onChoose: (option: number) => void; onClose?: () => void;
 }) {
   const L = getLocale();
   return (
     <div class="perkbox focused">
-      <div class="phead"><b>{tr(`加護を 1 つ選ぶ（地下${choice.depth}階の大守護者）`, `Choose a boon (warden of depth ${choice.depth})`)}</b></div>
+      <div class="phead">
+        <b>{tr(`加護を 1 つ選ぶ（地下${choice.depth}階の大守護者）`, `Choose a boon (warden of depth ${choice.depth})`)}</b>
+        {onClose && <button class="tiny right" onClick={onClose}>{tr('閉じる（Esc）', 'Close (Esc)')}</button>}
+      </div>
       <ul class="perkopts">
         {choice.options.map((id, i) => {
           const b = catalog?.boons?.[id];
@@ -55,10 +61,11 @@ export function BoonChoicePanel({ choice, catalog, onChoose }: {
  * focused: キーボードで番号を受け付けている（p）。sent: 選んで返事を待っている間は押せない。
  * collapsed: 「あとで」で畳んだ（1 行だけ出す）。onCollapse を渡さなければ「あとで」は出さない。
  * note: 見出しの補足（省くと遊ぶ画面の補足。持ち主の枠では、キーボードの案内の無い文を渡す。S8）
+ * collapseLabel: 「あとで」の代わりの言葉（迷宮の中で、地図の枠に重ねて開いたときは「閉じる（Esc）」。S18）
  */
-export function PerkChoicePanel({ choice, catalog, classId, focused, sent, collapsed, onChoose, onCollapse, onExpand, note }: {
+export function PerkChoicePanel({ choice, catalog, classId, focused, sent, collapsed, onChoose, onCollapse, onExpand, note, collapseLabel }: {
   choice: PerkChoice; catalog: Catalog | null | undefined; classId: string; focused?: boolean; sent?: boolean; collapsed?: boolean;
-  onChoose: (option: number) => void; onCollapse?: () => void; onExpand?: () => void; note?: string;
+  onChoose: (option: number) => void; onCollapse?: () => void; onExpand?: () => void; note?: string; collapseLabel?: string;
 }) {
   const L = getLocale();
   if (collapsed && !focused && onExpand) {
@@ -74,7 +81,7 @@ export function PerkChoicePanel({ choice, catalog, classId, focused, sent, colla
       <div class="phead">
         <b>{perkChoiceHead(choice.level, choice.more)}</b>
         <small class="muted">{note ?? perkChoiceNote()}</small>
-        {onCollapse && <button class="tiny right" onClick={onCollapse} title={tr('畳む（後で p で開く）', 'Collapse (open later with p)')}>{tr('あとで', 'Later')}</button>}
+        {onCollapse && <button class="tiny right" onClick={onCollapse} title={tr('畳む（後で p で開く）', 'Collapse (open later with p)')}>{collapseLabel ?? tr('あとで', 'Later')}</button>}
       </div>
       <ul class="perkopts">
         {choice.options.map((o) => {
@@ -99,6 +106,14 @@ export function PerkChoicePanel({ choice, catalog, classId, focused, sent, colla
       </ul>
     </div>
   );
+}
+
+/**
+ * 迷宮の中の、選べるものの小さい札（S18。SEASON.md §73.2 の 4）: 地図の枠の左上に重ねる。押すと、その場に候補が開く。
+ * 地図の上に行を足さないので、出入りで地図の枠の高さが変わらない（S15 の決まり）
+ */
+export function ChoiceChip({ label, title, onOpen }: { label: string; title?: string; onOpen: () => void }) {
+  return <button type="button" class="tiny choicechip" title={title} onClick={onOpen}>✦ {label}</button>;
 }
 
 /**

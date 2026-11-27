@@ -1,4 +1,5 @@
 // 音の設定（docs/SOUND_SPEC.md §6）: 音のテーマ（既定は切＝無音）、音量、音楽と合図を別に切る。設定は端末に覚える。
+// 画面に出す言葉は「効果音」（英語は SFX。S18: SEASON.md §73.2 の 2）。コードと文書の中の呼び名は、合図（cues）のまま。
 // 選んだ操作の中で音を始める（ブラウザは操作なしの再生を許さない）。
 import { useEffect, useState } from 'preact/hooks';
 import { soundDirector } from '../sound/director';
@@ -37,7 +38,7 @@ export function SoundControls() {
           <input type="range" min="0" max="1" step="0.05" value={String(s.volume)} aria-label={tr('音量', 'Volume')}
             onInput={(e) => soundDirector.set({ volume: Number((e.target as HTMLInputElement).value) })} />
           <label class="inline small"><input type="checkbox" checked={s.music} onChange={(e) => soundDirector.set({ music: (e.target as HTMLInputElement).checked })} />{tr('音楽', 'music')}</label>
-          <label class="inline small"><input type="checkbox" checked={s.cues} onChange={(e) => soundDirector.set({ cues: (e.target as HTMLInputElement).checked })} />{tr('合図', 'cues')}</label>
+          <label class="inline small"><input type="checkbox" checked={s.cues} onChange={(e) => soundDirector.set({ cues: (e.target as HTMLInputElement).checked })} />{tr('効果音', 'SFX')}</label>
           {soundDirector.error && <small class="error">{soundDirector.error}</small>}
         </>
       )}

@@ -832,6 +832,23 @@ export class RunSession {
   }
 
   /**
+   * 進め方の希望を、最後に AI に伝えたのは、どちらか（S18。SEASON.md §73.2 の 5。プロフィールの控え）。
+   * 指図を出せないプレイヤー・プロフィールの無いプレイヤーは null（取り下げの知らせを出さない）
+   */
+  ownerPaceTold(pid: PlayerId): OwnerPace | null {
+    const pr = this.world.players[pid];
+    if (!pr || !directiveTarget(this.world, pr)) return null;
+    return this.deps.profiles?.paceToldOf?.(this.profileOf(pid)) ?? null;
+  }
+
+  /** 進め方の希望を AI 本人の応答に出した（S18。プロフィールに控える。World に入れない） */
+  noteOwnerPaceTold(pid: PlayerId, pace: OwnerPace): void {
+    const pr = this.world.players[pid];
+    if (!pr || !directiveTarget(this.world, pr)) return;
+    this.deps.profiles?.notePaceTold?.(this.profileOf(pid), pace);
+  }
+
+  /**
    * 持ち主が決めた出来事（owner_decided）の前に、その項目に出ていた AI の希望（S11）。希望は、持ち主が決めた時点で World から消えるので、ランの記録をさかのぼって探す
    * （出来事の形は変えない）。その項目の前の決定・希望を消した指図（directive_set・持ち主の prepare の後の値に、その項目の希望が無い）に当たったら、無い。
    * 目的は、決めた遠征の番号の希望だけ（持ち主の prepare で目的を選んだ時点で消えるので、指図の値は見ない）。
