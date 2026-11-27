@@ -458,7 +458,10 @@ button.exposed { border-color: #c07a2e; }
 /* S18（SEASON.md §73.2 の 4）: 迷宮の中では、特技・加護の候補を、地図の枠の左上に重ねる（地図の上に行を足さない。S15 の決まり）。
    閉じている間は小さい札、開くと、その場に候補の枠。ほかの操作は止めない（地図は、枠の外を押せる） */
 .mapchoice { position: absolute; left: 8px; top: 8px; z-index: 4; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; max-width: calc(100% - 16px); }
-.mapchoice.open { width: min(560px, calc(100% - 16px)); max-height: calc(100% - 16px); overflow-y: auto; }
+/* 右上の拡大のボタン（.zoom: right 8px・幅およそ 64px）を覆わないように、右に 88px 空ける（S18a） */
+.mapchoice.open { width: min(560px, calc(100% - 96px)); max-height: calc(100% - 16px); overflow-y: auto; }
+/* 候補の枠が開いている間は、上の真ん中の案内・知らせを地図の下へ（自動行動の札の上）（S18a） */
+.modehint.below { top: auto; bottom: 40px; }
 .mapchoice .perkbox { margin: 0; width: 100%; box-sizing: border-box; background: rgba(28,23,48,0.97); }
 .choicechip { background: rgba(40,24,60,0.92); border-color: #8e6cc8; color: #e1d2ff; font-size: 12.5px; }
 .choicechip:hover { border-color: var(--accent); }

@@ -2300,7 +2300,8 @@ export function buildObservation(view: PlayerView, catalog: Catalog, opts: Obser
         })(),
       },
       next_no: view.camp.nextNo,
-      ...(!view.inventory.some((it) => it.kind === 'core:lifeline') ? {
+      // 新しい遠征を始められないキャンプ（予算切れ・終わりの時刻の後・確定したシーズン）では、文と同じく欄も出さない（S18a）
+      ...(!seasonClosedView(view) && !view.inventory.some((it) => it.kind === 'core:lifeline') ? {
         lifeline_text: t(L, '帰還の綱は持っていない。次の遠征を始めると、キャンプが 1 本持たせる（費用なし。持てるのは 1 本まで）',
           'You have no lifeline. Starting the next expedition gives you one from camp (free; you can carry only one)'),
       } : {}),

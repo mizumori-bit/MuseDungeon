@@ -3,18 +3,22 @@
 import type { Catalog } from './catalog';
 import { memoryKey, stairsSealed } from './catalog';
 import type { MonsterMemory } from './types';
+import { guardianDisplayName } from './expedition';
 import { ceilDiv, cheb, floorDiv } from './util';
 import type { EntityView, PlayerView } from './view';
 
 /**
- * 階を移ったときの追っ手（S18。SEASON.md §73.2 の 6。engine の事実: プレイヤーのいない階の時間は止まる。敵は階段を越えない）。
+ * 階を移ったときの追っ手（S18・S18a。SEASON.md §73.2 の 6。engine の事実: 敵は階段を越えない。プレイヤーが 1 人もいない階の時間は止まる
+ * （協力プレイで仲間が残っていれば進む）。守護者だけは、戻ったときに離れていた手番に応じて回復し、全快すれば持ち場へ戻る）。
  * 「取れる手」と階段までの見込みの、短い句
  */
-export const STAIRS_STAY_JA = '敵は階段を追ってこないが、その階に残る。離れている間、その階の時間は止まり、戻ると同じ所にいる';
-export const STAIRS_STAY_EN = 'enemies do not follow you between floors, but they stay: time stops on that floor while you are away, so they are where you left them when you return';
+export const STAIRS_STAY_JA = '敵は階段を追ってこないが、その階に残る。だれもいない階の時間は止まり（仲間が残っていれば進む）、戻ると同じ所にいる（守護者は回復し、全快なら持ち場へ戻る）';
+export const STAIRS_STAY_EN = 'enemies do not follow you between floors, but they stay: time stops on a floor with no one on it (it goes on if an ally is still there), so they are where you left them when you return (a guardian recovers, and goes back to its post once fully healed)';
 
 /**
- * use_stairs の応答の 1 行（S18。SEASON.md §73.2 の 6）: 階を移る前に見えていた、追跡中で逃げていない敵の数（見えていなかった者は数えない）。
+ * use_stairs の応答の文（S18・S18a。SEASON.md §73.2 の 6）: 階を移る前に見えていた、追跡中で逃げていない敵（見えていなかった者は数えない）。
+ * 守護者（見え方の guardian・role で分かる者）は別の句にする（戻ったとき回復し、全快なら手下は去って持ち場へ戻る。手下は見え方で見分けられないので、ほかの敵に数える）。
+ * 前の階に仲間が残っている（見え方の party の深さで分かる範囲）なら、その階の時間は進むので、時間の句と守護者の句を出さない。
  * 階を移っていない（断られた・同じ階）・追っ手がいなければ null。near: 階段（移る前の自分のマス）から 2 マス以内
  */
 export function stairsLeftBehindText(L: 'ja' | 'en', before: PlayerView, after: PlayerView): string | null {
@@ -22,14 +26,42 @@ export function stairsLeftBehindText(L: 'ja' | 'en', before: PlayerView, after: 
   if (!from || !to || !before.floor || !after.floor || before.floor.key === after.floor.key) return null;
   const hunters = before.entities.filter((e) => e.cat === 'monster' && e.awareness === 'hunting' && !e.fleeing);
   if (!hunters.length) return null;
-  const near = hunters.filter((e) => cheb(e.pos, from) <= 2).length;
-  const n = hunters.length;
+  const depth = before.floor.depth;
+  const allyLeft = after.party.some((p) => p.playerId !== after.playerId && p.state === 'alive' && p.depth === depth);
+  const isGuardian = (e: EntityView) => !!e.guardian || e.role === 'guardian';
+  const guardians = allyLeft ? [] : hunters.filter(isGuardian);
+  const others = allyLeft ? hunters : hunters.filter((e) => !isGuardian(e));
+  const n = others.length;
+  const near = others.filter((e) => cheb(e.pos, from) <= 2).length;
+  const out: string[] = [];
   if (L === 'en') {
-    const where = near === n ? 'by the stairs on the floor you left' : near ? `on the floor you left (${near} of them by the stairs)` : 'on the floor you left';
-    return `The ${n} enem${n === 1 ? 'y' : 'ies'} hunting you stay${n === 1 ? 's' : ''} ${where} (time there stops while you are away; when you go back they are where you left them${near ? ', and the ones by the stairs are next to you again' : ''}).`;
+    if (guardians.length) {
+      const names = guardians.map((g) => (g.guardian ? guardianDisplayName('en', g.guardian) : 'the guardian')).join(', ');
+      out.push(`The guardian ${names} recovers with the turns you are away; once it is back to full health, the minions it called leave and it stops hunting and goes back to its post.`);
+    }
+    if (n) {
+      const what = `${guardians.length ? 'The other ' : 'The '}${n} enem${n === 1 ? 'y' : 'ies'} hunting you stay${n === 1 ? 's' : ''}`;
+      if (allyLeft) out.push(`${what} on the floor you left (an ally is still there, so time goes on there).`);
+      else {
+        const where = near === n ? 'by the stairs on the floor you left' : near ? `on the floor you left (${near} of them by the stairs)` : 'on the floor you left';
+        out.push(`${what} ${where} (time stops on a floor with no one on it; when you go back they are where you left them${near ? ', and the ones by the stairs are right there' : ''}).`);
+      }
+    }
+    return out.join(' ');
   }
-  const where = near === n ? '前の階の階段のそばに' : near ? `前の階に（うち ${near} 体は階段のそば）` : '前の階に';
-  return `追っていた敵 ${n} 体は、${where}残っている（離れている間、その階の時間は止まる。戻ると、離れたときの所にいる${near ? '。階段のそばの敵とは、また隣り合う' : ''}）。`;
+  if (guardians.length) {
+    const names = guardians.map((g) => (g.guardian ? `「${guardianDisplayName('ja', g.guardian)}」` : '')).join('・');
+    out.push(`守護者${names}は、離れていた手番に応じて回復し、全快すれば、呼んだ手下は去り、追うのをやめて持ち場へ戻る。`);
+  }
+  if (n) {
+    const what = `${guardians.length ? 'ほかに追っていた敵' : '追っていた敵'} ${n} 体は`;
+    if (allyLeft) out.push(`${what}、前の階に残っている（仲間が残っているので、その階の時間は進む）。`);
+    else {
+      const where = near === n ? '前の階の階段のそばに' : near ? `前の階に（うち ${near} 体は階段のそば）` : '前の階に';
+      out.push(`${what}、${where}残っている（だれもいない階の時間は止まる。戻ると、離れたときの所にいる${near ? '。階段のそばの敵は、すぐ近くにいる' : ''}）。`);
+    }
+  }
+  return out.join(' ');
 }
 
 /** 自分の実効の速さ（状態異常の倍率込み） */

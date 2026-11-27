@@ -103,7 +103,7 @@ describe('S6a §50.4 の 2・4・7: a flight stops on the way once one worst tur
     // 階段の上で、ほかの行き先への逃げは断る（死にうる）。取れる手に、階段と extract
     const no = await act(a, { type: 'travel', to: { x: a.ox, y: a.oy }, mode: 'flee' });
     expect(!no.ok && no.error.code).toBe('flee_lethal');
-    if (!no.ok) expect(no.error.hint).toMatch(/^取れる手: 階段を使う（use_stairs で降りる。敵は階段を追ってこないが、その階に残る。離れている間、その階の時間は止まり、戻ると同じ所にいる）・ここで帰る（extract。目的は未達: confirm: true で撤退）・帰還の綱（use_item \{ slot: '.' \}）・.*向きを変える/);
+    if (!no.ok) expect(no.error.hint).toMatch(/^取れる手: 階段を使う（use_stairs で降りる。敵は階段を追ってこないが、その階に残る。だれもいない階の時間は止まり（仲間が残っていれば進む）、戻ると同じ所にいる（守護者は回復し、全快なら持ち場へ戻る））・ここで帰る（extract。目的は未達: confirm: true で撤退）・帰還の綱（use_item \{ slot: '.' \}）・.*向きを変える/);
     expect(fleeOptionsText(v, catalog)).toContain('use_stairs');
     // 目的が未達なので、extract は confirm: true が無いと断られる（S6b: 取れる手にそう添える）
     expect(v.expedition!.status).not.toBe('objective_complete');

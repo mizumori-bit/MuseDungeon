@@ -369,6 +369,19 @@ export function callAtOf(now: number, wall: number | undefined, wallNow: number)
   return now - Math.max(0, wallNow - wall);
 }
 
+/** つないだときの直近の記録の窓（スナップショットを受けてから、これより後に届いた記録は、その場の呼び出しとして数える） */
+export const HIST_WINDOW_MS = 1_000;
+
+/**
+ * 呼び出しの記録を受けたときの、数え始めの時刻（S18a）。つないだときに届く直近の記録（histOpenedAt から HIST_WINDOW_MS 以内で、
+ * スナップショットの後にほかの知らせを挟まず続けて届いたもの。窓が閉じていれば null）だけ、記録の時刻（callAtOf）で数える。
+ * その後に届く呼び出しは、受けた時刻（ブラウザの時計がサーバーより進んでいても、届いたばかりの呼び出しは 0 秒から）
+ */
+export function agentCallAt(o: { now: number; wall: number | undefined; wallNow: number; histOpenedAt: number | null }): number {
+  const hist = o.histOpenedAt !== null && o.now - o.histOpenedAt <= HIST_WINDOW_MS;
+  return hist ? callAtOf(o.now, o.wall, o.wallNow) : o.now;
+}
+
 /** 時間の長さの文（1 分より短ければ秒、1 時間より短ければ分、その上は時間） */
 function spanText(ms: number): string {
   const s = Math.max(0, Math.floor(ms / 1000));

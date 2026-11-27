@@ -705,6 +705,8 @@ ${tr('それでも装備しますか？', 'Equip it anyway?')}`)) send({ ...last
       flash(tr('選べる特技の候補は無い（レベルが上がると出る）。', 'No perk to choose (you get one at each level up).'));
       return;
     }
+    // 特技の枠と加護の枠は、同時に開かない（S18a）
+    setBoonOpen(false);
     setMode('perk');
   };
 
@@ -1015,6 +1017,8 @@ ${tr('それでも装備しますか？', 'Equip it anyway?')}`)) send({ ...last
   // 加護の候補が無くなったら（選んだ）、地図の枠の上に開いた枠を閉じる（S18）
   const boonChoice = view && view.status !== 'dead' && view.status !== 'ended' ? view.self.boonChoice : undefined;
   useEffect(() => { if (!boonChoice) setBoonOpen(false); }, [!!boonChoice]);
+  /** 地図の枠の上に、候補の枠（特技か加護）が開いている（S18a: 上の真ん中の案内を下げ、遠征の説明を隠す） */
+  const choiceOpen = !!view && view.status !== 'at_camp' && ((mode === 'perk' && !!perkChoice) || (boonOpen && !!boonChoice));
 
   // 前回の自分の手番以降の変化（turnSnapshot / diffChanges。撃破の判定に基準以降の出来事を渡す）
   useEffect(() => {
@@ -1135,19 +1139,20 @@ ${tr('それでも装備しますか？', 'Equip it anyway?')}`)) send({ ...last
                 {/* 特技・加護の候補（S18。SEASON.md §73.2 の 4）: 地図の枠の左上の小さい札。押すか p で、その場に候補が開く。
                     選ぶか、閉じる（Esc）と、札に戻る。ほかの操作を止める窓にはしない（閉じれば、すぐ動ける）。地図の上に行を足さない（S15） */}
                 {view && (perkChoice || boonChoice) && (
-                  <div class={`mapchoice ${mode === 'perk' || boonOpen ? 'open' : ''}`}>
+                  <div class={`mapchoice ${choiceOpen ? 'open' : ''}`}>
                     {perkChoice && (mode === 'perk'
                       ? <PerkChoicePanel choice={perkChoice} catalog={catalog} classId={view.self.classId} focused sent={perkSent === perkK}
                         onChoose={choosePerk} onCollapse={() => setMode('normal')} collapseLabel={tr('閉じる（Esc）', 'Close (Esc)')} />
                       : !boonOpen && <ChoiceChip label={perkChipLabel(perkChoice.more)} title={perkChoiceHead(perkChoice.level, perkChoice.more)}
                         onOpen={() => { setBoonOpen(false); togglePerk(); }} />)}
-                    {boonChoice && (boonOpen
+                    {boonChoice && (boonOpen && mode !== 'perk'
                       ? <BoonChoicePanel choice={boonChoice} catalog={catalog} onChoose={(option) => { setBoonOpen(false); send({ type: 'choose_boon', option }); }} onClose={() => setBoonOpen(false)} />
                       : mode !== 'perk' && <ChoiceChip label={tr('加護を選べる', 'Boon to choose')} onOpen={() => { if (modeRef.current === 'perk') setMode('normal'); setBoonOpen(true); }} />)}
                   </div>
                 )}
                 {(modeHint || notice) && (
-                  <div class="modehint">
+                  // 候補の枠が開いている間は、上の真ん中の案内・知らせを地図の下へ下げる（重ねない。S18a）
+                  <div class={`modehint ${choiceOpen ? 'below' : ''}`}>
                     {modeHint && <div>{modeHint}</div>}
                     {mode === 'target' && aim && <div class={`aim ${aim.blocked ? 'blocked' : ''}`}>{aim.text}</div>}
                     {mode === 'target' && aim?.target && (
@@ -1187,7 +1192,8 @@ ${tr('それでも装備しますか？', 'Equip it anyway?')}`)) send({ ...last
                 )}
                 {macro?.state === 'running' && <div class="macro">{tr('自動行動中', 'Auto')}: {macro.kind} ({macro.steps})</div>}
                 {view && view.status === 'waiting_others' && <div class="macro">{tr('他のプレイヤーの手番を待っています…', 'Waiting for other players…')}</div>}
-                {exp && expActive && briefingNo === exp.no && <BriefingCard x={exp} catalog={catalog} onClose={() => setBriefingNo(null)} />}
+                {/* 遠征の説明は、候補の枠が開いている間は出さない（閉じると戻る。S18a） */}
+                {exp && expActive && briefingNo === exp.no && !choiceOpen && <BriefingCard x={exp} catalog={catalog} onClose={() => setBriefingNo(null)} />}
                 {view && view.status === 'dead' && !summary && (
                   <div class="deadbox">{tr('あなたは倒れた。', 'You have fallen.')} <a href={`#/watch/${runId}`}>{tr('観戦を続ける', 'Keep watching')}</a> / <a href={`#/replay/${runId}`}>{tr('リプレイ', 'Replay')}</a></div>
                 )}

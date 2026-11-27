@@ -296,10 +296,11 @@ function harmSummary(events: readonly GameEvent[], selfId: string): { hits: numb
 }
 
 /**
- * 受けた攻撃の被害の内訳（S18。待つ・休む応答の頭に）: 「被害の内訳: 投石兵 e_x 6・見えていない相手 3」。
- * プレイヤーに見えている出来事（伏せた相手は source が null）から。攻撃（近接・射撃・投擲）だけ。1 つも無ければ null
+ * 受けた攻撃の被害の内訳（S18。待つ・休む応答の頭に）: 「被害の内訳: 投石兵 e_x から 6・見えていない相手から 3」。
+ * プレイヤーに見えている出来事（伏せた相手は source が null）から。攻撃（近接・射撃・投擲）だけ。1 つも無ければ null。
+ * 守護者は、ほかの文と同じ呼び名（今の見え方にいれば。S18a）
  */
-function harmSourcesText(L: Locale, catalog: Catalog, events: readonly PerceivedEvent[], selfId: string): string | null {
+function harmSourcesText(L: Locale, catalog: Catalog, events: readonly PerceivedEvent[], selfId: string, view?: PlayerView): string | null {
   const by = new Map<string, { name: string; dmg: number }>();
   let unseen = 0;
   for (const e of events) {
@@ -310,12 +311,14 @@ function harmSourcesText(L: Locale, catalog: Catalog, events: readonly Perceived
     if (!ev.source || !ev.sourceKind) { unseen += d; continue; }
     const cur = by.get(ev.source);
     if (cur) { cur.dmg += d; continue; }
+    const g = view?.entities.find((x) => x.id === ev.source)?.guardian;
     const base = nameOf(catalog.monsters[ev.sourceKind]?.name, L, ev.sourceKind);
     const af = (ev.sourceAffixes ?? []).map((a) => nameOf(catalog.affixes?.[a]?.name, L, '')).filter(Boolean);
-    by.set(ev.source, { name: `${af.length ? (L === 'en' ? `${af.join(' ')} ${base}` : `${af.join('')}${base}`) : base} ${ev.source}`, dmg: d });
+    const plain = af.length ? (L === 'en' ? `${af.join(' ')} ${base}` : `${af.join('')}${base}`) : base;
+    by.set(ev.source, { name: `${g ? t(L, `守護者「${guardianDisplayName(L, g)}」`, `the guardian ${guardianDisplayName(L, g)}`) : plain} ${ev.source}`, dmg: d });
   }
-  const parts = [...by.values()].map((x) => `${x.name} ${x.dmg}`);
-  if (unseen) parts.push(t(L, `見えていない相手 ${unseen}`, `unseen attacker ${unseen}`));
+  const parts = [...by.values()].map((x) => t(L, `${x.name} から ${x.dmg}`, `${x.dmg} from ${x.name}`));
+  if (unseen) parts.push(t(L, `見えていない相手から ${unseen}`, `${unseen} from an unseen attacker`));
   return parts.length ? t(L, `被害の内訳: ${parts.join('・')}。`, `Damage from: ${parts.join(', ')}.`) : null;
 }
 
@@ -486,6 +489,8 @@ export class SessionPlayerPort implements PlayerPort {
    */
   private render(view: PlayerView, reason: TurnReason, p: {
     detail?: 'brief' | 'full'; recent: PerceivedEvent[]; changes: boolean | 'peek'; interruptedBy?: string; expeditionEndedNow?: boolean; waitedMs?: number;
+    /** 進め方の希望を「伝えた」と控えるか（S18a）。観測と本文を AI に返す応答だけ。断りの応答（観測も本文も返さない）は false。既定は changes === true */
+    tellPace?: boolean;
   }): ObserveResult {
     const L = view.locale;
     const opts = this.options();
@@ -552,8 +557,9 @@ export class SessionPlayerPort implements PlayerPort {
       && cur.expNo !== null && (!prev || prev.expNo !== cur.expNo);
     // 構造化した値も、この 1 回だけ文つき（S14b。迷宮の中のほかの応答は { pace } だけ）
     if (paceStart && observation.self.owner_pace) observation.self.owner_pace = { pace: 'pilot', text: ownerPace };
-    // 伝えた希望を控える（S18）: 本人の応答（基準を進める応答）だけ。観戦の先読み（peek）・照会（false）では控えない
-    if (p.changes === true) {
+    // 伝えた希望を控える（S18）: 本人の応答（基準を進める応答）で、観測と本文を実際に返すものだけ。観戦の先読み（peek）・照会（false）・
+    // 断りの応答（S18a: 返すのは error と valid_actions だけで、文が届かない）では控えない
+    if (p.tellPace ?? p.changes === true) {
       if (ownerPace) this.session.noteOwnerPaceTold(this.playerId, 'pilot');
       else if (paceRevoked) this.session.noteOwnerPaceTold(this.playerId, 'self');
     }
@@ -686,7 +692,7 @@ export class SessionPlayerPort implements PlayerPort {
           const L0 = before.locale;
           const error = actionError('no_target', t(L0, `${prev.hostiles[id]}は逃げて見えなくなった${at ? `（最後に見た位置 (${at.x},${at.y})）` : ''}。`, `${prev.hostiles[id]} fled out of sight${at ? ` (last seen at (${at.x},${at.y}))` : ''}.`),
             t(L0, '追うなら travel_to で最後に見た位置へ。ほかの相手なら visible.monsters の id を指定する。', 'To chase it, travel_to where you last saw it; otherwise give an id from visible.monsters.'));
-          const res = this.render(before, 'action_rejected', { recent: [], changes: true });
+          const res = this.render(before, 'action_rejected', { recent: [], changes: true, tellPace: false });
           return { ok: false, error, valid_actions: res.observation.valid_actions, turn: res.turn };
         }
         cmd = { ...cmd, lostOk: true };
@@ -697,7 +703,7 @@ export class SessionPlayerPort implements PlayerPort {
     if (r.ok && opts.waitTurnMs && this.view().status === 'waiting_others') await this.session.waitForTurn(this.playerId, opts.waitTurnMs);
     const view = this.view();
     if (!r.ok) {
-      const res = this.render(view, 'action_rejected', { recent: [], changes: true });
+      const res = this.render(view, 'action_rejected', { recent: [], changes: true, tellPace: false });
       // その方角に行ける境界が無いと断った explore toward の行は、同じ応答の「できること」に出さない（S2a §20.6 の 2。観測は境界の数だけで出すので、方角の境界までは見ない）
       const toward = cmd.type === 'explore' && cmd.toward && (r.error.details as { stop?: string } | undefined)?.stop === 'toward_exhausted' ? `explore toward:${cmd.toward}` : null;
       const valid = toward ? res.observation.valid_actions.filter((l) => !l.startsWith(toward)) : res.observation.valid_actions;
@@ -990,7 +996,7 @@ export class SessionPlayerPort implements PlayerPort {
     // 待つ・休む間の被害の内訳（S18。SEASON.md §73.2 の 7: 待っている間に撃たれ続けても、だれからかが応答の頭に無かった）。
     // プレイヤーに見えている出来事から（見えていない相手は「見えていない相手」とだけ）
     if ((cmd.type === 'wait' || cmd.type === 'rest') && harm.total > harm.other) {
-      const from = harmSourcesText(L, this.catalog, mine, view.self.id);
+      const from = harmSourcesText(L, this.catalog, mine, view.self.id, view);
       if (from) outcome += ' ' + from;
     }
     const endedNow = r.events.some((e) => e.type === 'expedition_ended');

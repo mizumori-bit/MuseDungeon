@@ -1,7 +1,7 @@
 // S18（SEASON.md §73.2 の 3）: 観戦の待っている間の札。キャンプでは「考えている」と言わない・迷宮の中で 2 分を越えたら「AI の応答を待っている」・
 // 持ち主の支度が「まだ」なら「持ち主の支度を、待っている」・見返しの間は出さない
 import { afterEach, describe, expect, it } from 'vitest';
-import { callAtOf, THINK_LONG_MS, waitText } from '../src/ui/playback';
+import { agentCallAt, callAtOf, THINK_LONG_MS, waitText } from '../src/ui/playback';
 import { setLocale } from '../src/util';
 
 afterEach(() => setLocale('ja'));
@@ -49,5 +49,20 @@ describe('S18: the time of a call record', () => {
     // 時計がずれて未来の記録になっても、受けた時刻より後にはしない
     expect(callAtOf(100_000, 1_000_500, 1_000_000)).toBe(100_000);
     expect(callAtOf(100_000, undefined, 1_000_000)).toBe(100_000);
+  });
+});
+
+describe('S18a D: a live call is counted from when it arrived, even if the browser clock runs ahead', () => {
+  it('a browser clock 10 minutes ahead: a call that just arrived starts at 0 s; only records right after the snapshot use their own time', () => {
+    const ahead = 10 * 60_000;
+    const serverNow = 1_000_000;
+    // つないだ後に届いた、その場の呼び出し（窓は閉じている）
+    const at = agentCallAt({ now: 50_000, wall: serverNow, wallNow: serverNow + ahead, histOpenedAt: null });
+    expect(at).toBe(50_000);
+    expect(waitText({ ...base, atCamp: true, lastAgentAt: at, countFrom: 0, now: 50_000 + 6_000 })).toBe('キャンプにいる（AI の最後の呼び出し: 6 秒前）');
+    // 窓は開いていても、1 秒を過ぎて届いたものは、その場の呼び出し
+    expect(agentCallAt({ now: 52_000, wall: serverNow, wallNow: serverNow + ahead, histOpenedAt: 50_000 })).toBe(52_000);
+    // スナップショットのすぐ後に届いた直近の記録（時計がそろっている）: 記録の時刻で
+    expect(agentCallAt({ now: 50_100, wall: serverNow - 90_000, wallNow: serverNow, histOpenedAt: 50_000 })).toBe(50_100 - 90_000);
   });
 });
