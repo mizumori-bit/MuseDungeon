@@ -356,16 +356,67 @@ export function lagText(lagMs: number): string | null {
   return tr(`${s} 秒おくれ`, `${s}s behind`);
 }
 
+/** 迷宮の中で、これを越えたら「考えている」と言い切らず、「AI の応答を待っている」に変える（S18。SEASON.md §73.2 の 3） */
+export const THINK_LONG_MS = 120_000;
+
 /**
- * 待っている間の表示（§65.1 の 4）。つながっていて、列が空で、ランが続いていて、AI が操作する冒険者の番（かキャンプ）のときだけ。
- * ownerPending: キャンプで、持ち主の支度が「まだ」（見え方から分かる）。
- * 数え始めは、最後の AI の呼び出しの知らせ（lastAgentAt。無ければ null）と、countFrom（つないだ時・相手を替えた時）の新しいほう
+ * AI の呼び出しの記録を受けたときの、その呼び出しの時刻（画面の時計 performance.now() の上で。S18）。
+ * つないだときに届く直近の記録は、受けた時刻ではなく、記録の時刻（wall。サーバーの時計）から直す。
+ * 時計がずれていて未来になるなら、受けた時刻（now）にする
  */
-export function waitText(o: { connected: boolean; queued: boolean; active: boolean; agent: boolean; ownerPending: boolean; lastAgentAt: number | null; countFrom: number; now: number }): string | null {
-  if (!o.connected || o.queued || !o.active || !o.agent) return null;
+export function callAtOf(now: number, wall: number | undefined, wallNow: number): number {
+  if (wall === undefined || !Number.isFinite(wall)) return now;
+  return now - Math.max(0, wallNow - wall);
+}
+
+/** つないだときの直近の記録の窓（スナップショットを受けてから、これより後に届いた記録は、その場の呼び出しとして数える） */
+export const HIST_WINDOW_MS = 1_000;
+
+/**
+ * 呼び出しの記録を受けたときの、数え始めの時刻（S18a）。つないだときに届く直近の記録（histOpenedAt から HIST_WINDOW_MS 以内で、
+ * スナップショットの後にほかの知らせを挟まず続けて届いたもの。窓が閉じていれば null）だけ、記録の時刻（callAtOf）で数える。
+ * その後に届く呼び出しは、受けた時刻（ブラウザの時計がサーバーより進んでいても、届いたばかりの呼び出しは 0 秒から）
+ */
+export function agentCallAt(o: { now: number; wall: number | undefined; wallNow: number; histOpenedAt: number | null }): number {
+  const hist = o.histOpenedAt !== null && o.now - o.histOpenedAt <= HIST_WINDOW_MS;
+  return hist ? callAtOf(o.now, o.wall, o.wallNow) : o.now;
+}
+
+/** 時間の長さの文（1 分より短ければ秒、1 時間より短ければ分、その上は時間） */
+function spanText(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return tr(`${s} 秒`, `${s}s`);
+  if (s < 3600) return tr(`${Math.floor(s / 60)} 分`, `${Math.floor(s / 60)} min`);
+  return tr(`${Math.floor(s / 3600)} 時間`, `${Math.floor(s / 3600)} h`);
+}
+
+/**
+ * 待っている間の表示（§65.1 の 4。S18 で §73.2 の 3 に合わせて分けた）。つながっていて、列が空で、ランが続いていて、AI が操作する冒険者の番（かキャンプ）のときだけ。
+ * 見返し（reviewing。S17）の間は出さない。
+ * - ownerPending: キャンプで、持ち主の支度が「まだ」（見え方から分かる）→「持ち主の支度を、待っている」
+ * - atCamp: キャンプにいる → 「キャンプにいる（AI の最後の呼び出し: N 分前）」（キャンプは、AI が区切りで手を止める場所なので、「考えている」と言わない）。
+ *   呼び出しの記録を 1 つも受けていなければ、「つないでから N、AI の呼び出しは無い」
+ * - 迷宮の中: 「考えている… N 秒」。最後の呼び出しから 2 分を越えたら「AI の応答を待っている（最後の呼び出しから N 分）」
+ * 札を出すかと「考えている… N 秒」は、最後の AI の呼び出し（lastAgentAt。無ければ null）と、countFrom（つないだ時・相手を替えた時）の新しいほうから数える（S13a）。
+ * 「最後の呼び出しから」は、呼び出しの時刻そのもの（lastAgentAt。つないだときに届く直近の記録の時刻も、画面の側が記録の時刻に直して渡す: callAtOf）
+ */
+export function waitText(o: { connected: boolean; queued: boolean; active: boolean; agent: boolean; ownerPending: boolean; lastAgentAt: number | null; countFrom: number; now: number; atCamp?: boolean; reviewing?: boolean }): string | null {
+  if (o.reviewing || !o.connected || o.queued || !o.active || !o.agent) return null;
   if (o.ownerPending) return tr('持ち主の支度を、待っている', 'Waiting for the owner\'s preparations');
   const ms = o.now - Math.max(o.lastAgentAt ?? Number.NEGATIVE_INFINITY, o.countFrom);
   if (ms < THINK_SHOW_MS) return null;
+  // 最後の呼び出しからの時間（記録を受けていなければ null）
+  const since = o.lastAgentAt !== null ? o.now - o.lastAgentAt : null;
+  if (o.atCamp) {
+    return since !== null
+      ? tr(`キャンプにいる（AI の最後の呼び出し: ${spanText(since)}前）`, `At camp (last call from the AI: ${spanText(since)} ago)`)
+      : tr(`キャンプにいる（つないでから ${spanText(ms)}、AI の呼び出しは無い）`, `At camp (no call from the AI in the ${spanText(ms)} since connecting)`);
+  }
+  if ((since ?? ms) > THINK_LONG_MS) {
+    return since !== null
+      ? tr(`AI の応答を待っている（最後の呼び出しから ${spanText(since)}）`, `Waiting for the AI (${spanText(since)} since its last call)`)
+      : tr(`AI の応答を待っている（つないでから ${spanText(ms)}）`, `Waiting for the AI (${spanText(ms)} since connecting)`);
+  }
   const s = Math.floor(ms / 1000);
   return tr(`考えている… ${s} 秒`, `Thinking… ${s}s`);
 }

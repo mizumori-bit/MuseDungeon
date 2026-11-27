@@ -130,6 +130,15 @@ export function ownerPaceText(L: Locale): string {
     'Your owner\'s wish (how to play): please play with pilot (pilot is a tool on the AI\'s side; if you do not have it, play on your own. The game treats both the same)');
 }
 
+/**
+ * 持ち主が、進め方の希望（pilot）を取り下げた後の、最初の本人の応答に 1 回だけ足す 1 行（S18。SEASON.md §73.2 の 5。
+ * 希望が変わったのか、表示の仕様が変わったのかを、AI が見分けられるように）
+ */
+export function ownerPaceRevokedText(L: Locale): string {
+  return t(L, '持ち主は、進め方の希望（pilot）を取り下げた。自分で進めてよい',
+    'Your owner withdrew the wish on how to play (pilot). You may play on your own');
+}
+
 /** ownerPresenceText の文（日英。後ろの句点まで）に当たる正規表現（観戦に流す文から除く） */
 const PRESENCE_RE = new RegExp([
   '(持ち主は、今、支度の画面を開いている|持ち主が、最後に支度の画面を開いたのは、[0-9]+ (分|時間)前|持ち主は、まだ、支度の画面を開いていない（このサーバーが起動してから）)。持ち主は人で、決めるのに数分かかることがある。wait_for_turn timeout_s=60 を、くり返してよい。?',

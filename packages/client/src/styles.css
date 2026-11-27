@@ -455,6 +455,16 @@ button.exposed { border-color: #c07a2e; }
 .perkopts .pab { font-size: 11px; color: #8fe0a0; }
 .perkopts .pdesc { color: #cfd6e6; flex: 1; }
 .perkopts button { align-self: flex-start; }
+/* S18（SEASON.md §73.2 の 4）: 迷宮の中では、特技・加護の候補を、地図の枠の左上に重ねる（地図の上に行を足さない。S15 の決まり）。
+   閉じている間は小さい札、開くと、その場に候補の枠。ほかの操作は止めない（地図は、枠の外を押せる） */
+.mapchoice { position: absolute; left: 8px; top: 8px; z-index: 4; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; max-width: calc(100% - 16px); }
+/* 右上の拡大のボタン（.zoom: right 8px・幅およそ 64px）を覆わないように、右に 88px 空ける（S18a） */
+.mapchoice.open { width: min(560px, calc(100% - 96px)); max-height: calc(100% - 16px); overflow-y: auto; }
+/* 候補の枠が開いている間は、上の真ん中の案内・知らせを地図の下へ（自動行動の札の上）（S18a） */
+.modehint.below { top: auto; bottom: 40px; }
+.mapchoice .perkbox { margin: 0; width: 100%; box-sizing: border-box; background: rgba(28,23,48,0.97); }
+.choicechip { background: rgba(40,24,60,0.92); border-color: #8e6cc8; color: #e1d2ff; font-size: 12.5px; }
+.choicechip:hover { border-color: var(--accent); }
 /* 能動技の並び（地図の下） */
 .abilitybar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 6px 8px; border-top: 1px solid var(--line); }
 .abilitybar.focused { background: rgba(79,195,247,0.07); }
@@ -484,7 +494,8 @@ label.check { display: flex; gap: 0.4rem; align-items: center; }
 
 /* 音の設定（docs/SOUND_SPEC.md §6） */
 .soundctl { display: inline-flex; align-items: center; gap: 6px; }
-.soundctl input[type='range'] { width: 72px; }
+.soundctl input[type='range'] { width: 72px; padding: 0; border: 0; background: transparent; margin: 0; }
+/* S18（SEASON.md §73.2 の 1）: 共通の input の padding（左右 10px）と枠が、範囲の入力にも掛かっていた。つまみは、その内側しか動かず、最小・最大で、見えている枠の端に届かなかった。範囲の入力だけ外す */
 .soundctl small.error { color: #e49a8a; }
 /* 音の案内（S16a。SEASON.md §70.3 の 1）: 画面の左下に重ねる札（場所を取らない: 地図の枠の高さを変えない）。
    地図の自動行動の知らせ（下の中央）と、右上の拡大の釦を避ける。押すか、キーを打つと消える */

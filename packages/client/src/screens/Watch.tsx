@@ -20,7 +20,7 @@ import { AgentWaitBadge, directorExpInfo, ExpeditionStatusPanel, followExpInfo, 
 import { narrateWorld, ownerLinesFromPerceived, perceivedLines, thoughtsFrom } from '../ui/narration';
 import { AiPanel, MessageLog, PartyPanel, SummaryDialog, type LogLine, type ThoughtLine } from '../ui/panels';
 import {
-  animSpeed, CallRanges, DEFAULT_SPEED, HeldCalls, lagText, PlaybackQueue, readSpeed, sameThought, speedLabel, stepActor, waitText, WATCH_SPEEDS, type Delivery, type WatchSpeed,
+  agentCallAt, animSpeed, CallRanges, DEFAULT_SPEED, HeldCalls, lagText, PlaybackQueue, readSpeed, sameThought, speedLabel, stepActor, waitText, WATCH_SPEEDS, type Delivery, type WatchSpeed,
 } from '../ui/playback';
 import { rewindAllowed } from '../ui/replayGate';
 import {
@@ -147,6 +147,8 @@ export function Watch({ runId, exp = null }: { runId: string; exp?: ExpParam }) 
   /** 呼び出しの知らせの、その命令の出来事の幅（つないだら数え直す）・プレイヤーごとの最後に届いた時刻・同じ知らせを 2 回入れない控え */
   const rangesRef = useRef(new CallRanges());
   const actAtRef = useRef<Record<string, number>>({});
+  /** つないだときの直近の記録の窓を開いた時刻（スナップショットを受けた時。閉じていれば null。S18a） */
+  const histRef = useRef<number | null>(null);
   const actKeysRef = useRef<Set<string>>(new Set());
   /** 追従だけの観戦: 列に入れた最後の枠（次の枠の出来事は、この番号より後。この枠の手番の者が、次の枠で手番を打つ） */
   const lastViewRef = useRef<PlayerView | null>(null);
@@ -246,13 +248,13 @@ export function Watch({ runId, exp = null }: { runId: string; exp?: ExpParam }) 
 
   /**
    * 待っている間の札（§65.1 の 4）: 列が空で、ランが続いていて、見ている相手が AI の冒険者で、その番（かキャンプ）のとき。
-   * 「考えている… N 秒」（最後の呼び出しの知らせか、つないだ時・相手を替えた時の、新しいほうから）か、キャンプで持ち主の支度が「まだ」なら「持ち主の支度を、待っている」。
+   * 「考えている… N 秒」（最後の呼び出しの知らせか、つないだ時・相手を替えた時の、新しいほうから。2 分を越えたら「AI の応答を待っている」）、キャンプなら「キャンプにいる（AI の最後の呼び出し: N 分前）」、持ち主の支度が「まだ」なら「持ち主の支度を、待っている」（S18。文の決まりは waitText）。
    * つながっていない間と、遅らせる観戦（delayed。呼び出しの知らせが届かず、見えている所は AI の今より前）では出さない
    */
   const waitProbe = (): string | null => {
     const q = queueRef.current;
     if (!q || wsPolicyRef.current === 'delayed') return null;
-    let name: string, pid: string, agent: boolean, active = false, ownerPending = false;
+    let name: string, pid: string, agent: boolean, active = false, ownerPending = false, atCamp = false;
     if (followOnly) {
       const v = viewRef.current;
       if (!v) return null;
@@ -261,6 +263,7 @@ export function Watch({ runId, exp = null }: { runId: string; exp?: ExpParam }) 
       agent = v.self.controller.kind === 'agent';
       active = v.runStatus !== 'ended' && (v.status === 'your_turn' || (v.status === 'at_camp' && !seasonClosedView(v)));
       ownerPending = ownerWaitOpen(v);
+      atCamp = v.status === 'at_camp';
     } else {
       const w = worldRef.current, fp = followRef.current;
       const pr = w && fp ? w.players[fp] : undefined;
@@ -273,6 +276,7 @@ export function Watch({ runId, exp = null }: { runId: string; exp?: ExpParam }) 
           const e = w.entities[pr.entityId];
           active = !!e?.pos && w.floors[e.pos.floor]?.currentActor === e.id;
         } else if (pr.state === 'at_camp') {
+          atCamp = true;
           try {
             const v = projectPlayerView(w, fp);
             active = !seasonClosedView(v);
@@ -284,7 +288,7 @@ export function Watch({ runId, exp = null }: { runId: string; exp?: ExpParam }) 
       }
     }
     const text = waitText({
-      connected: wsStatusRef.current === 'open', queued: !q.empty, active, agent, ownerPending,
+      connected: wsStatusRef.current === 'open', queued: !q.empty, active, agent, ownerPending, atCamp, reviewing,
       lastAgentAt: actAtRef.current[pid] ?? null, countFrom: countFromRef.current, now: performance.now(),
     });
     return text ? `${text} — ${name}` : null;
@@ -686,6 +690,8 @@ export function Watch({ runId, exp = null }: { runId: string; exp?: ExpParam }) 
 
     const onMsg = (m: ServerMsg) => {
       const now = performance.now();
+      // つないだときの直近の記録の窓（S18a）: スナップショットのすぐ後に続けて届く呼び出しの記録だけ。ほかの知らせが来たら閉じる
+      if (m.t !== 'agent' && m.t !== 'snapshot') histRef.current = null;
       switch (m.t) {
         case 'welcome':
           // つなぎ直し: 列を捨てて、今の所から（俯瞰つきは、この後のスナップショットから。追従だけは、次の枠から）。「考えている」も数え直す
@@ -707,6 +713,7 @@ export function Watch({ runId, exp = null }: { runId: string; exp?: ExpParam }) 
           connectSeqRef.current = m.seq;
           rangesRef.current.reset(m.seq);
           reached = m.seq;
+          histRef.current = now;
           recentRef.current = [];
           bannerPrevRef.current = worldSnap();
           if (worldRef.current.status === 'ended') setSummary(null);
@@ -748,7 +755,9 @@ export function Watch({ runId, exp = null }: { runId: string; exp?: ExpParam }) 
           if (actKeysRef.current.has(k)) break;
           actKeysRef.current.add(k);
           if (actKeysRef.current.size > 500) actKeysRef.current = new Set([...actKeysRef.current].slice(-250));
-          actAtRef.current[a.playerId] = now;
+          // 呼び出しの時刻（S18・S18a: つないだときに届く直近の記録だけ、記録の時刻で数える。「AI の最後の呼び出し: N 分前」。
+          // その後に届く呼び出しは、受けた時刻（ブラウザの時計がサーバーとずれていても、届いたばかりの呼び出しは 0 秒から））
+          actAtRef.current[a.playerId] = Math.max(actAtRef.current[a.playerId] ?? Number.NEGATIVE_INFINITY, agentCallAt({ now, wall: a.wall, wallNow: Date.now(), histOpenedAt: histRef.current }));
           // 遅らせる観戦（delayed）: つないだときに届く直近の記録には、遅らせた所より先のものがある。届いた出来事が追いつくまで持つ
           if (wsPolicyRef.current === 'delayed' && a.seq > reached) { held.hold(a, a.seq, now); break; }
           attachCall(a, now);

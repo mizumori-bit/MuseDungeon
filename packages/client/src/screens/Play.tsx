@@ -20,9 +20,9 @@ import { ErrorBanner, Header, MapView, ThemePicker, useCatalog, useLocaleRefresh
 import { SoundControls } from '../ui/sound';
 import { CampView } from '../ui/campView';
 import { BriefingCard, completesOnExtract, ExpeditionPanel, extractConfirmText, lifelineConfirmText, RestEstimateLine, rulesOf, TurnBar } from '../ui/expedition';
-import { abilityDisplayName, AbilityBar, BoonChoicePanel, DirPad, PerkChoicePanel } from '../ui/build';
+import { abilityDisplayName, AbilityBar, BoonChoicePanel, ChoiceChip, DirPad, PerkChoicePanel } from '../ui/build';
 import {
-  abilityModeHint, abilityNoTargetText, abilityNotReadyText, abilityPickHint, abilityReady, cursedRemoveText, DIR_ARROW, extractBlockLabel, lifelineEffectText, perkModeHint, reachAttackLabel,
+  abilityModeHint, abilityNoTargetText, abilityNotReadyText, abilityPickHint, abilityReady, cursedRemoveText, DIR_ARROW, extractBlockLabel, lifelineEffectText, perkChipLabel, perkChoiceHead, reachAttackLabel,
   reachAttackTitle, viewStatusLabel,
 } from '../ui/labels';
 import { perceivedLines } from '../ui/narration';
@@ -176,9 +176,10 @@ export function Play({ runId }: { runId: string }) {
   const [pick, setPickState] = useState<{ slot: string; options: { slot: string; name: string }[] } | null>(null);
   /** 能動技の対象の候補（abtarget モードの間だけ） */
   const [abPick, setAbPickState] = useState<AbPick | null>(null);
-  /** 選んで返事を待っている特技の候補（同じ候補を二度選ばない）と、「あとで」で畳んだ候補（perkKey） */
+  /** 選んで返事を待っている特技の候補（同じ候補を二度選ばない。perkKey） */
   const [perkSent, setPerkSentState] = useState<string | null>(null);
-  const [perkHidden, setPerkHidden] = useState<string | null>(null);
+  /** 迷宮の中で、加護の候補を、地図の枠の上に開いているか（S18。特技は mode === 'perk' が開いている印） */
+  const [boonOpen, setBoonOpen] = useState(false);
 
   const viewRef = useRef<PlayerView | null>(null);
   const catalogRef = useRef(catalog);
@@ -704,7 +705,8 @@ ${tr('それでも装備しますか？', 'Equip it anyway?')}`)) send({ ...last
       flash(tr('選べる特技の候補は無い（レベルが上がると出る）。', 'No perk to choose (you get one at each level up).'));
       return;
     }
-    setPerkHidden(null);
+    // 特技の枠と加護の枠は、同時に開かない（S18a）
+    setBoonOpen(false);
     setMode('perk');
   };
 
@@ -859,7 +861,7 @@ ${tr('それでも装備しますか？', 'Equip it anyway?')}`)) send({ ...last
       const md = modeRef.current;
       const dir = MOVE_KEYS[e.key];
       let handled = true;
-      if (e.key === 'Escape') { throwSlotRef.current = null; setMode('normal'); setBriefingNo(null); }
+      if (e.key === 'Escape') { throwSlotRef.current = null; setMode('normal'); setBriefingNo(null); setBoonOpen(false); }
       else if (md === 'target') {
         if (dir && cursorRef.current) {
           const d = DIR_D[dir];
@@ -1012,6 +1014,11 @@ ${tr('それでも装備しますか？', 'Equip it anyway?')}`)) send({ ...last
   useEffect(() => {
     if (modeRef.current === 'perk' && !perkChoice) setMode('normal');
   }, [perkK]);
+  // 加護の候補が無くなったら（選んだ）、地図の枠の上に開いた枠を閉じる（S18）
+  const boonChoice = view && view.status !== 'dead' && view.status !== 'ended' ? view.self.boonChoice : undefined;
+  useEffect(() => { if (!boonChoice) setBoonOpen(false); }, [!!boonChoice]);
+  /** 地図の枠の上に、候補の枠（特技か加護）が開いている（S18a: 上の真ん中の案内を下げ、遠征の説明を隠す） */
+  const choiceOpen = !!view && view.status !== 'at_camp' && ((mode === 'perk' && !!perkChoice) || (boonOpen && !!boonChoice));
 
   // 前回の自分の手番以降の変化（turnSnapshot / diffChanges。撃破の判定に基準以降の出来事を渡す）
   useEffect(() => {
@@ -1052,7 +1059,8 @@ ${tr('それでも装備しますか？', 'Equip it anyway?')}`)) send({ ...last
     : mode === 'dir' ? tr('操作する方向を選ぶ（. で足元、Esc 取消）', 'Pick a direction (. for here, Esc cancels)')
       : mode === 'inv' ? tr('スロットの文字で既定の操作（i/Esc で戻る）', 'Press a slot letter (i/Esc to exit)')
         : mode === 'pick' ? tr('鑑定する品のスロットの文字を押す（Esc 取消）', 'Press the slot letter of the item to identify (Esc cancels)')
-          : mode === 'perk' ? perkModeHint()
+          // 特技の番号の受付は、地図の枠の上に開いた候補の枠が、自分の案内を出す（S18。上の真ん中の案内と重ねない）
+          : mode === 'perk' ? null
             : mode === 'ability' ? abilityModeHint()
               : mode === 'abtarget' && abPick ? abilityPickHint(abPick.name, abPick.target) : null;
 
@@ -1111,7 +1119,7 @@ ${tr('それでも装備しますか？', 'Equip it anyway?')}`)) send({ ...last
       ) : (
       <div class="layout">
         <div class="main">
-          {/* 特技の候補は下の枠で選ぶので、同じ内容の注意（perk_pending）は出さない。
+          {/* 特技の候補は地図の枠の左上の札で選ぶので、同じ内容の注意（perk_pending）は出さない。
               知らせの段は、いつも同じ高さで取っておく（S15。SEASON.md §68.2 の 3: 知らせが出入りするたびに地図の枠の高さが変わり、絵が描き直されていた） */}
           <div class="alertslot">
             {obs && (
@@ -1119,14 +1127,6 @@ ${tr('それでも装備しますか？', 'Equip it anyway?')}`)) send({ ...last
                 onEscape={(stairs) => send({ type: 'travel', to: stairs === 'up' ? 'stairs_up' : 'stairs_down', mode: 'flee' })} />
             )}
           </div>
-          {view && perkChoice && (
-            <PerkChoicePanel choice={perkChoice} catalog={catalog} classId={view.self.classId} focused={mode === 'perk'} sent={perkSent === perkK}
-              collapsed={perkHidden === perkK} onChoose={choosePerk}
-              onCollapse={() => { setPerkHidden(perkK); if (mode === 'perk') setMode('normal'); }} onExpand={() => setPerkHidden(null)} />
-          )}
-          {view?.self.boonChoice && (
-            <BoonChoicePanel choice={view.self.boonChoice} catalog={catalog} onChoose={(option) => send({ type: 'choose_boon', option })} />
-          )}
           {/* 手番の行と変化も、同じ高さで取っておく（S15） */}
           <div class="turnslot"><TurnBar line={turnText} changes={changes} /></div>
           <MapView
@@ -1136,8 +1136,23 @@ ${tr('それでも装備しますか？', 'Equip it anyway?')}`)) send({ ...last
             onCellClick={onClick}
             overlay={
               <>
+                {/* 特技・加護の候補（S18。SEASON.md §73.2 の 4）: 地図の枠の左上の小さい札。押すか p で、その場に候補が開く。
+                    選ぶか、閉じる（Esc）と、札に戻る。ほかの操作を止める窓にはしない（閉じれば、すぐ動ける）。地図の上に行を足さない（S15） */}
+                {view && (perkChoice || boonChoice) && (
+                  <div class={`mapchoice ${choiceOpen ? 'open' : ''}`}>
+                    {perkChoice && (mode === 'perk'
+                      ? <PerkChoicePanel choice={perkChoice} catalog={catalog} classId={view.self.classId} focused sent={perkSent === perkK}
+                        onChoose={choosePerk} onCollapse={() => setMode('normal')} collapseLabel={tr('閉じる（Esc）', 'Close (Esc)')} />
+                      : !boonOpen && <ChoiceChip label={perkChipLabel(perkChoice.more)} title={perkChoiceHead(perkChoice.level, perkChoice.more)}
+                        onOpen={() => { setBoonOpen(false); togglePerk(); }} />)}
+                    {boonChoice && (boonOpen && mode !== 'perk'
+                      ? <BoonChoicePanel choice={boonChoice} catalog={catalog} onChoose={(option) => { setBoonOpen(false); send({ type: 'choose_boon', option }); }} onClose={() => setBoonOpen(false)} />
+                      : mode !== 'perk' && <ChoiceChip label={tr('加護を選べる', 'Boon to choose')} onOpen={() => { if (modeRef.current === 'perk') setMode('normal'); setBoonOpen(true); }} />)}
+                  </div>
+                )}
                 {(modeHint || notice) && (
-                  <div class="modehint">
+                  // 候補の枠が開いている間は、上の真ん中の案内・知らせを地図の下へ下げる（重ねない。S18a）
+                  <div class={`modehint ${choiceOpen ? 'below' : ''}`}>
                     {modeHint && <div>{modeHint}</div>}
                     {mode === 'target' && aim && <div class={`aim ${aim.blocked ? 'blocked' : ''}`}>{aim.text}</div>}
                     {mode === 'target' && aim?.target && (
@@ -1177,7 +1192,8 @@ ${tr('それでも装備しますか？', 'Equip it anyway?')}`)) send({ ...last
                 )}
                 {macro?.state === 'running' && <div class="macro">{tr('自動行動中', 'Auto')}: {macro.kind} ({macro.steps})</div>}
                 {view && view.status === 'waiting_others' && <div class="macro">{tr('他のプレイヤーの手番を待っています…', 'Waiting for other players…')}</div>}
-                {exp && expActive && briefingNo === exp.no && <BriefingCard x={exp} catalog={catalog} onClose={() => setBriefingNo(null)} />}
+                {/* 遠征の説明は、候補の枠が開いている間は出さない（閉じると戻る。S18a） */}
+                {exp && expActive && briefingNo === exp.no && !choiceOpen && <BriefingCard x={exp} catalog={catalog} onClose={() => setBriefingNo(null)} />}
                 {view && view.status === 'dead' && !summary && (
                   <div class="deadbox">{tr('あなたは倒れた。', 'You have fallen.')} <a href={`#/watch/${runId}`}>{tr('観戦を続ける', 'Keep watching')}</a> / <a href={`#/replay/${runId}`}>{tr('リプレイ', 'Replay')}</a></div>
                 )}

@@ -179,6 +179,10 @@ export interface ProfileHooks {
   featsOf(profileId: string | null, runId: string, no: number, L: Locale): string[];
   /** 進め方の希望（S14。SEASON.md §65.4 の 2。プロフィールの控え。無ければ self） */
   paceOf?(profileId: string | null): OwnerPace;
+  /** 進め方の希望を、最後に AI に伝えたのは、どちらか（S18。§73.2 の 5。無ければ null = まだ何も伝えていない） */
+  paceToldOf?(profileId: string | null): OwnerPace | null;
+  /** 最後に AI に伝えた進め方を控える（S18。変わったときだけ保存する） */
+  notePaceTold?(profileId: string | null, pace: OwnerPace): void;
 }
 
 export class ProfileService implements ProfileHooks {
@@ -246,6 +250,20 @@ export class ProfileService implements ProfileHooks {
     if (pace === 'pilot') prof.pace = 'pilot'; else delete prof.pace;
     this.store.save(prof);
     return true;
+  }
+
+  /** 進め方の希望を、最後に AI に伝えたのは、どちらか（S18。無ければ null: 古いプロフィールも「まだ何も伝えていない」） */
+  paceToldOf(profileId: string | null): OwnerPace | null {
+    const prof = profileId ? this.store.get(profileId) : null;
+    return prof?.paceTold === 'pilot' || prof?.paceTold === 'self' ? prof.paceTold : null;
+  }
+
+  /** 最後に AI に伝えた進め方を控える（S18。プロフィールが無ければ何もしない。同じなら書かない） */
+  notePaceTold(profileId: string | null, pace: OwnerPace): void {
+    const prof = profileId ? this.store.get(profileId) : null;
+    if (!prof || prof.paceTold === pace) return;
+    prof.paceTold = pace;
+    this.store.save(prof);
   }
 
   /** そのランの記録を作り直し、実績を判定して保存する。返り値: 新しく取った実績 */
